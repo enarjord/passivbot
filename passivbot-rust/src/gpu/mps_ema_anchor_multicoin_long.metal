@@ -193,6 +193,45 @@ struct EmaMulticoinSideConfig {
     bool coin_hsl_mode;
 };
 
+// Shared fill accounting is separate from strategy-side state so a fused
+// long+short kernel can apply both directional fill passes to one account and
+// one chronology without reconstructing totals from directional summaries.
+struct EmaMulticoinFillState {
+    float pnl_recovery_peak;
+    float pnl_recovery_peak_k;
+    float pnl_recovery_max_min;
+    float profit_sum;
+    float loss_sum;
+    float fill_count;
+    float fill_count_entry;
+    float fill_count_long;
+    float held_max_min;
+    float held_sum_min;
+    float held_count;
+    float position_unchanged_max_min;
+    float day_volume;
+    float day_fill_count;
+};
+
+inline EmaMulticoinFillState init_ema_multicoin_fill_state() {
+    EmaMulticoinFillState fills;
+    fills.pnl_recovery_peak = -INFINITY;
+    fills.pnl_recovery_peak_k = -1.0f;
+    fills.pnl_recovery_max_min = 0.0f;
+    fills.profit_sum = 0.0f;
+    fills.loss_sum = 0.0f;
+    fills.fill_count = 0.0f;
+    fills.fill_count_entry = 0.0f;
+    fills.fill_count_long = 0.0f;
+    fills.held_max_min = 0.0f;
+    fills.held_sum_min = 0.0f;
+    fills.held_count = 0.0f;
+    fills.position_unchanged_max_min = 0.0f;
+    fills.day_volume = 0.0f;
+    fills.day_fill_count = 0.0f;
+    return fills;
+}
+
 inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     constant float* params,
     int po
@@ -493,6 +532,256 @@ inline bool ema_multicoin_side_has_position(
     return false;
 }
 
+inline bool process_ema_multicoin_side_fills(
+    thread EmaMulticoinSideState& side,
+    thread JointPortfolioAccount& account,
+    thread EmaMulticoinFillState& fills,
+    constant float* bars,
+    constant int* fill_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    device float* coin_fill_counts,
+    int candidate_index,
+    int k,
+    int coin_count,
+    bool short_side,
+    bool alive,
+    bool collect_coin_fill_counts,
+    bool loss_gate_enabled,
+    float max_realized_loss_pct,
+    float market_order_slippage_pct,
+    bool hsl_panic_market,
+    float hsl_equity_before_fills
+) {
+    thread HslState& hsl = side.hsl;
+    thread HslState* coin_hsl = side.coin_hsl;
+    const bool coin_hsl_mode = hsl.signal_mode == HSL_SIGNAL_COIN;
+    thread float* psize = side.psize;
+    thread float* pprice = side.pprice;
+    thread float* last_increase_k = side.last_increase_k;
+    thread float* entry_qty = side.entry_qty;
+    thread float* close_qty = side.close_qty;
+    thread float* secondary_close_qty = side.secondary_close_qty;
+    thread float* position_open_k = side.position_open_k;
+    thread float* position_last_fill_k = side.position_last_fill_k;
+    thread int* entry_tick = side.entry_tick;
+    thread int* close_tick = side.close_tick;
+    thread int* secondary_close_tick = side.secondary_close_tick;
+    thread bool* close_is_unstuck_reducer = side.close_is_unstuck_reducer;
+    thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
+    thread float* coin_realized_pnl = side.coin_realized_pnl;
+    thread float& balance = account.balance;
+    thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
+    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
+
+    bool any_fill = false;
+    for (int c = 0; c < coin_count; ++c) {
+        const int coin_offset = c * COIN_COLS;
+        const int bar_offset = (k * coin_count + c) * 4;
+        const int tick_offset = (k * coin_count + c) * 2;
+        const float high = bars[bar_offset + 0];
+        const float low = bars[bar_offset + 1];
+        const float close = bars[bar_offset + 2];
+        const int first_valid = int(coin_settings[coin_offset + 6]);
+        const int last_valid = int(coin_settings[coin_offset + 7]);
+        const bool valid = k >= first_valid && k <= last_valid
+            && finite_positive(high) && finite_positive(low)
+            && finite_positive(close);
+        if (!valid || !alive) continue;
+        const float qty_step = coin_settings[coin_offset + 0];
+        const float price_step = coin_settings[coin_offset + 1];
+        const float c_mult = coin_settings[coin_offset + 4];
+        const float maker_fee = coin_settings[coin_offset + 5];
+        const float taker_fee = coin_settings[coin_offset + 11];
+
+        bool coin_hsl_panic_market = coin_hsl_mode
+            ? coin_override_or(
+                coin_overrides, c, HSL_OVERRIDE_START + 9,
+                hsl_panic_market ? 1.0f : 0.0f
+            ) > 0.5f
+            : hsl_panic_market;
+        bool primary_market_panic = close_is_hsl_panic[c]
+            && coin_hsl_panic_market;
+        bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
+            && (primary_market_panic || (short_side
+                ? close_tick[c] > fill_ticks[tick_offset + 1]
+                : close_tick[c] <= fill_ticks[tick_offset + 0]));
+        bool filled_secondary_close = secondary_close_qty[c] > 0.0f
+            && psize[c] > 0.0f
+            && (short_side
+                ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
+                : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
+        bool secondary_first = filled_secondary_close
+            && (!filled_close || (short_side
+                ? secondary_close_tick[c] > close_tick[c]
+                : secondary_close_tick[c] < close_tick[c]));
+        bool executed_close = false;
+        for (int close_rank = 0; close_rank < 2; ++close_rank) {
+            bool use_secondary = secondary_first
+                ? close_rank == 0 : close_rank == 1;
+            bool reachable = use_secondary
+                ? filled_secondary_close : filled_close;
+            if (!reachable || psize[c] <= 0.0f) continue;
+            int executed_tick = use_secondary
+                ? secondary_close_tick[c] : close_tick[c];
+            float requested_qty = use_secondary
+                ? secondary_close_qty[c] : close_qty[c];
+            bool market_panic = !use_secondary && primary_market_panic;
+            float fill_price = market_panic
+                ? fmax(
+                    short_side
+                        ? ceil_step(
+                            close * (1.0f + market_order_slippage_pct),
+                            price_step
+                        )
+                        : floor_step(
+                            close * (1.0f - market_order_slippage_pct),
+                            price_step
+                        ),
+                    price_step
+                )
+                : float(executed_tick) * price_step;
+            float adjusted = fmin(
+                round_step(requested_qty, qty_step), psize[c]
+            );
+            if (!(adjusted > 0.0f)) continue;
+            float pnl = adjusted * c_mult * (short_side
+                ? pprice[c] - fill_price
+                : fill_price - pprice[c]);
+            float net_pnl = pnl
+                - adjusted * fill_price * c_mult
+                    * (market_panic ? taker_fee : maker_fee);
+            bool is_unstuck = !use_secondary
+                && close_is_unstuck_reducer[c];
+            bool is_hsl_panic = !use_secondary
+                && close_is_hsl_panic[c];
+            if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
+                    adjusted, fill_price, pprice[c], short_side,
+                    c_mult, maker_fee, is_unstuck, loss_gate_enabled,
+                    balance, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_max, max_realized_loss_pct
+                )) {
+                continue;
+            }
+            if (is_hsl_panic) {
+                if (coin_hsl_mode) {
+                    record_hsl_panic_fill(
+                        coin_hsl[c], net_pnl, hsl_equity_before_fills
+                    );
+                } else {
+                    record_hsl_panic_fill(
+                        hsl, net_pnl, hsl_equity_before_fills
+                    );
+                }
+            }
+            record_gross_pnl(pnl, fills.profit_sum, fills.loss_sum);
+            record_realized_net(
+                net_pnl, account,
+                fills.day_fill_count, fills.fill_count,
+                fills.fill_count_entry, fills.fill_count_long,
+                fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
+                fills.pnl_recovery_max_min, float(k),
+                false, !short_side
+            );
+            coin_realized_pnl[c] += net_pnl;
+            if (coin_hsl_mode) {
+                record_coin_hsl_realized_fill(
+                    coin_hsl[c], coin_realized_pnl[c]
+                );
+                advance_coin_hsl_equity_after_close_fill(
+                    hsl_equity_before_fills,
+                    net_pnl, adjusted, pprice[c], close,
+                    c_mult, short_side
+                );
+            }
+            if (collect_coin_fill_counts) {
+                coin_fill_counts[candidate_index * coin_count + c] += 1.0f;
+            }
+            float new_size = fmax(
+                round_step(psize[c] - adjusted, qty_step), 0.0f
+            );
+            bool went_flat = new_size <= 0.0f;
+            psize[c] = new_size;
+            if (went_flat) {
+                pprice[c] = 0.0f;
+                if (position_open_k[c] >= 0.0f) {
+                    float held_min = float(k) - position_open_k[c];
+                    fills.held_max_min = fmax(
+                        fills.held_max_min, held_min
+                    );
+                    fills.held_sum_min += held_min;
+                    fills.held_count += 1.0f;
+                }
+                position_open_k[c] = -1.0f;
+            }
+            fills.day_volume += fabs(adjusted) * fill_price * c_mult / balance;
+            if (use_secondary) {
+                secondary_close_qty[c] = 0.0f;
+            } else {
+                close_qty[c] = 0.0f;
+                close_is_unstuck_reducer[c] = false;
+                close_is_hsl_panic[c] = false;
+            }
+            executed_close = true;
+        }
+        if (executed_close) any_fill = true;
+
+        bool was_flat = psize[c] <= 0.0f;
+        bool filled_entry = entry_qty[c] > 0.0f
+            && (short_side
+                ? entry_tick[c] <= fill_ticks[tick_offset + 0]
+                : entry_tick[c] > fill_ticks[tick_offset + 1]);
+        if (filled_entry) {
+            float fill_price = float(entry_tick[c]) * price_step;
+            float adjusted = round_step(entry_qty[c], qty_step);
+            float fee = adjusted * fill_price * c_mult * maker_fee;
+            record_realized_net(
+                -fee, account,
+                fills.day_fill_count, fills.fill_count,
+                fills.fill_count_entry, fills.fill_count_long,
+                fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
+                fills.pnl_recovery_max_min, float(k),
+                true, !short_side
+            );
+            coin_realized_pnl[c] -= fee;
+            if (coin_hsl_mode) {
+                record_coin_hsl_realized_fill(
+                    coin_hsl[c], coin_realized_pnl[c]
+                );
+                advance_coin_hsl_equity_after_entry_fill(
+                    hsl_equity_before_fills,
+                    fee, adjusted, fill_price, close,
+                    c_mult, short_side
+                );
+            }
+            if (collect_coin_fill_counts) {
+                coin_fill_counts[candidate_index * coin_count + c] += 1.0f;
+            }
+            float new_size = round_step(psize[c] + adjusted, qty_step);
+            float new_price = was_flat ? fill_price
+                : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))
+                    + fill_price * (adjusted / fmax(new_size, 1.0e-12f));
+            if (was_flat) position_open_k[c] = float(k);
+            psize[c] = new_size;
+            pprice[c] = new_price;
+            last_increase_k[c] = float(k);
+            fills.day_volume += fabs(adjusted) * fill_price * c_mult / balance;
+            entry_qty[c] = 0.0f;
+            any_fill = true;
+        }
+        if (executed_close || filled_entry) {
+            if (position_last_fill_k[c] >= 0.0f) {
+                fills.position_unchanged_max_min = fmax(
+                    fills.position_unchanged_max_min,
+                    float(k) - position_last_fill_k[c]
+                );
+            }
+            position_last_fill_k[c] = psize[c] > 0.0f ? float(k) : -1.0f;
+        }
+    }
+    return any_fill;
+}
+
 inline void passivbot_ema_anchor_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -613,14 +902,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float& balance = account.balance;
     thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
     thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
-    float pnl_recovery_peak = -INFINITY;
-    float pnl_recovery_peak_k = -1.0f;
-    float pnl_recovery_max_min = 0.0f;
-    float profit_sum = 0.0f;
-    float loss_sum = 0.0f;
-    float fill_count = 0.0f;
-    float fill_count_entry = 0.0f;
-    float fill_count_long = 0.0f;
+    EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
+    thread float& pnl_recovery_peak = fills.pnl_recovery_peak;
+    thread float& pnl_recovery_peak_k = fills.pnl_recovery_peak_k;
+    thread float& pnl_recovery_max_min = fills.pnl_recovery_max_min;
+    thread float& profit_sum = fills.profit_sum;
+    thread float& loss_sum = fills.loss_sum;
+    thread float& fill_count = fills.fill_count;
+    thread float& fill_count_entry = fills.fill_count_entry;
+    thread float& fill_count_long = fills.fill_count_long;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     bool alive = true;
@@ -633,10 +923,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
-    float held_max_min = 0.0f;
-    float held_sum_min = 0.0f;
-    float held_count = 0.0f;
-    float position_unchanged_max_min = 0.0f;
+    thread float& held_max_min = fills.held_max_min;
+    thread float& held_sum_min = fills.held_sum_min;
+    thread float& held_count = fills.held_count;
+    thread float& position_unchanged_max_min = fills.position_unchanged_max_min;
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
@@ -658,11 +948,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float day_end = 0.0f;
     float day_min = INFINITY;
     float day_dd = 0.0f;
-    float day_volume = 0.0f;
+    thread float& day_volume = fills.day_volume;
     float day_has_fill = 0.0f;
     float day_min_balance = INFINITY;
     float day_start_balance = balance;
-    float day_fill_count = 0.0f;
+    thread float& day_fill_count = fills.day_fill_count;
 
     for (int k = 1; k < stop_k; ++k) {
         const int day_index = (start_day_minute + k) / 1440;
@@ -691,211 +981,18 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_fill_count = 0.0f;
         }
 
-        bool any_fill = false;
         float hsl_equity_before_fills =
             accumulate_ema_multicoin_side_unrealized_pnl(
                 side, bars, coin_settings, k, C, short_side, balance
             );
-        for (int c = 0; c < C; ++c) {
-            const int coin_offset = c * COIN_COLS;
-            const int bar_offset = (k * C + c) * 4;
-            const int tick_offset = (k * C + c) * 2;
-            const float high = bars[bar_offset + 0];
-            const float low = bars[bar_offset + 1];
-            const float close = bars[bar_offset + 2];
-            const int first_valid = int(coin_settings[coin_offset + 6]);
-            const int last_valid = int(coin_settings[coin_offset + 7]);
-            const bool valid = k >= first_valid && k <= last_valid
-                && finite_positive(high) && finite_positive(low) && finite_positive(close);
-            if (!valid || !alive) continue;
-            const float qty_step = coin_settings[coin_offset + 0];
-            const float price_step = coin_settings[coin_offset + 1];
-            const float c_mult = coin_settings[coin_offset + 4];
-            const float maker_fee = coin_settings[coin_offset + 5];
-            const float taker_fee = coin_settings[coin_offset + 11];
-
-            bool coin_hsl_panic_market = coin_hsl_mode
-                ? coin_override_or(
-                    coin_overrides, c, HSL_OVERRIDE_START + 9,
-                    hsl_panic_market ? 1.0f : 0.0f
-                ) > 0.5f
-                : hsl_panic_market;
-            bool primary_market_panic = close_is_hsl_panic[c]
-                && coin_hsl_panic_market;
-            bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
-                && (primary_market_panic || (short_side
-                    ? close_tick[c] > fill_ticks[tick_offset + 1]
-                    : close_tick[c] <= fill_ticks[tick_offset + 0]));
-            bool filled_secondary_close = secondary_close_qty[c] > 0.0f
-                && psize[c] > 0.0f
-                && (short_side
-                    ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
-                    : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
-            bool secondary_first = filled_secondary_close
-                && (!filled_close || (short_side
-                    ? secondary_close_tick[c] > close_tick[c]
-                    : secondary_close_tick[c] < close_tick[c]));
-            bool executed_close = false;
-            for (int close_rank = 0; close_rank < 2; ++close_rank) {
-                bool use_secondary = secondary_first
-                    ? close_rank == 0 : close_rank == 1;
-                bool reachable = use_secondary
-                    ? filled_secondary_close : filled_close;
-                if (!reachable || psize[c] <= 0.0f) continue;
-                int executed_tick = use_secondary
-                    ? secondary_close_tick[c] : close_tick[c];
-                float requested_qty = use_secondary
-                    ? secondary_close_qty[c] : close_qty[c];
-                bool market_panic = !use_secondary && primary_market_panic;
-                float fill_price = market_panic
-                    ? fmax(
-                        short_side
-                            ? ceil_step(
-                                close * (1.0f + market_order_slippage_pct),
-                                price_step
-                            )
-                            : floor_step(
-                                close * (1.0f - market_order_slippage_pct),
-                                price_step
-                            ),
-                        price_step
-                    )
-                    : float(executed_tick) * price_step;
-                float adjusted = fmin(
-                    round_step(requested_qty, qty_step), psize[c]
-                );
-                if (!(adjusted > 0.0f)) continue;
-                float pnl = adjusted * c_mult * (short_side
-                    ? pprice[c] - fill_price
-                    : fill_price - pprice[c]);
-                float net_pnl = pnl
-                    - adjusted * fill_price * c_mult
-                        * (market_panic ? taker_fee : maker_fee);
-                bool is_unstuck = !use_secondary
-                    && close_is_unstuck_reducer[c];
-                bool is_hsl_panic = !use_secondary
-                    && close_is_hsl_panic[c];
-                if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
-                        adjusted, fill_price, pprice[c], short_side,
-                        c_mult, maker_fee, is_unstuck, loss_gate_enabled,
-                        balance, realized_pnl_cumsum_last,
-                        realized_pnl_cumsum_max, max_realized_loss_pct
-                    )) {
-                    continue;
-                }
-                if (is_hsl_panic) {
-                    if (coin_hsl_mode) {
-                        record_hsl_panic_fill(
-                            coin_hsl[c], net_pnl,
-                            hsl_equity_before_fills
-                        );
-                    } else {
-                        record_hsl_panic_fill(
-                            hsl, net_pnl, hsl_equity_before_fills
-                        );
-                    }
-                }
-                record_gross_pnl(pnl, profit_sum, loss_sum);
-                record_realized_net(
-                    net_pnl, account,
-                    day_fill_count, fill_count, fill_count_entry, fill_count_long,
-                    pnl_recovery_peak, pnl_recovery_peak_k,
-                    pnl_recovery_max_min, float(k),
-                    false, !short_side
-                );
-                coin_realized_pnl[c] += net_pnl;
-                if (coin_hsl_mode) {
-                    record_coin_hsl_realized_fill(
-                        coin_hsl[c], coin_realized_pnl[c]
-                    );
-                    advance_coin_hsl_equity_after_close_fill(
-                        hsl_equity_before_fills,
-                        net_pnl, adjusted, pprice[c], close,
-                        c_mult, short_side
-                    );
-                }
-                if (collect_coin_fill_counts) {
-                    coin_fill_counts[int(b) * C + c] += 1.0f;
-                }
-                float new_size = fmax(round_step(psize[c] - adjusted, qty_step), 0.0f);
-                bool went_flat = new_size <= 0.0f;
-                psize[c] = new_size;
-                if (went_flat) {
-                    pprice[c] = 0.0f;
-                    if (position_open_k[c] >= 0.0f) {
-                        float held_min = float(k) - position_open_k[c];
-                        held_max_min = fmax(held_max_min, held_min);
-                        held_sum_min += held_min;
-                        held_count += 1.0f;
-                    }
-                    position_open_k[c] = -1.0f;
-                }
-                day_volume += fabs(adjusted) * fill_price * c_mult / balance;
-                if (use_secondary) {
-                    secondary_close_qty[c] = 0.0f;
-                } else {
-                    close_qty[c] = 0.0f;
-                    close_is_unstuck_reducer[c] = false;
-                    close_is_hsl_panic[c] = false;
-                }
-                executed_close = true;
-            }
-            if (executed_close) {
-                any_fill = true;
-            }
-
-            bool was_flat = psize[c] <= 0.0f;
-            bool filled_entry = entry_qty[c] > 0.0f
-                && (short_side
-                    ? entry_tick[c] <= fill_ticks[tick_offset + 0]
-                    : entry_tick[c] > fill_ticks[tick_offset + 1]);
-            if (filled_entry) {
-                float fill_price = float(entry_tick[c]) * price_step;
-                float adjusted = round_step(entry_qty[c], qty_step);
-                float fee = adjusted * fill_price * c_mult * maker_fee;
-                record_realized_net(
-                    -fee, account,
-                    day_fill_count, fill_count, fill_count_entry, fill_count_long,
-                    pnl_recovery_peak, pnl_recovery_peak_k,
-                    pnl_recovery_max_min, float(k),
-                    true, !short_side
-                );
-                coin_realized_pnl[c] -= fee;
-                if (coin_hsl_mode) {
-                    record_coin_hsl_realized_fill(
-                        coin_hsl[c], coin_realized_pnl[c]
-                    );
-                    advance_coin_hsl_equity_after_entry_fill(
-                        hsl_equity_before_fills,
-                        fee, adjusted, fill_price, close,
-                        c_mult, short_side
-                    );
-                }
-                if (collect_coin_fill_counts) {
-                    coin_fill_counts[int(b) * C + c] += 1.0f;
-                }
-                float new_size = round_step(psize[c] + adjusted, qty_step);
-                float new_price = was_flat ? fill_price
-                    : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))
-                        + fill_price * (adjusted / fmax(new_size, 1.0e-12f));
-                if (was_flat) position_open_k[c] = float(k);
-                psize[c] = new_size;
-                pprice[c] = new_price;
-                last_increase_k[c] = float(k);
-                day_volume += fabs(adjusted) * fill_price * c_mult / balance;
-                entry_qty[c] = 0.0f;
-                any_fill = true;
-            }
-            if (executed_close || filled_entry) {
-                if (position_last_fill_k[c] >= 0.0f) {
-                    position_unchanged_max_min = fmax(
-                        position_unchanged_max_min,
-                        float(k) - position_last_fill_k[c]
-                    );
-                }
-                position_last_fill_k[c] = psize[c] > 0.0f ? float(k) : -1.0f;
-            }
-        }
+        bool any_fill = process_ema_multicoin_side_fills(
+            side, account, fills,
+            bars, fill_ticks, coin_settings, coin_overrides,
+            coin_fill_counts, int(b), k, C, short_side, alive,
+            collect_coin_fill_counts, loss_gate_enabled,
+            max_realized_loss_pct, market_order_slippage_pct,
+            hsl_panic_market, hsl_equity_before_fills
+        );
         if (any_fill) {
             day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {
