@@ -20,11 +20,17 @@ All notable user-facing changes will be documented in this file.
   same rolling-window rule as exact Rust instead of retaining an all-history peak; bounded GPU
   scratch overflow fails the affected candidate closed, and exact Rust remains authoritative.
 
+- Added fused shared-account dual-side multi-coin Trailing Martingale screening to Apple MPS
+  optimization. Long and short candidates now run in one portfolio kernel for unified, pside,
+  and coin HSL, including shared event/tier metrics, directional PnL, coin overrides, forager
+  selection, and the existing TM entry/close behavior. Exact Rust remains authoritative;
+  dual-side auto-unstuck and exposure repair remain fail closed pending their global cross-side
+  parity slices.
+
 - Added fused shared-account dual-side multi-coin EMA Anchor screening to Apple MPS optimization.
   Unified, pside, and coin HSL now run inside one portfolio kernel, including per-coin HSL
   overrides and shared event/tier scoring metrics. Exact Rust remains authoritative, dual-side
-  auto-unstuck and exposure repair remain fail closed, and dual-side multi-coin Trailing
-  Martingale remains on its existing pside-only directional proxy.
+  auto-unstuck and exposure repair remain fail closed.
 
 - Added dual-side single-coin `unified` HSL to Apple MPS optimization for EMA Anchor and
   Trailing Martingale. Both Metal controllers now consume account-wide realized and unrealized

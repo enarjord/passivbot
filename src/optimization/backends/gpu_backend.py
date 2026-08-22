@@ -1041,9 +1041,7 @@ def _validate_scope_config(
             coin_count=coin_count,
             enabled_side_count=len(enabled_sides),
             shared_account_controller=(
-                coin_count > 1
-                and len(enabled_sides) == 2
-                and strategy_kind == "ema_anchor"
+                coin_count > 1 and len(enabled_sides) == 2
             ),
         )
         for side in hsl_enabled_sides:
@@ -1073,11 +1071,19 @@ def _validate_scope_config(
 
 
 def _validate_dual_multicoin_metrics(
-    needed_metrics, *, coin_count: int, enabled_sides
+    needed_metrics,
+    *,
+    coin_count: int,
+    enabled_sides,
+    shared_account_controller: bool = False,
 ) -> None:
     """Reject metrics which cannot be reconstructed from directional summaries."""
 
-    if int(coin_count) <= 1 or len(set(enabled_sides)) != 2:
+    if (
+        int(coin_count) <= 1
+        or len(set(enabled_sides)) != 2
+        or shared_account_controller
+    ):
         return
     unsupported = sorted(
         set(needed_metrics)
@@ -3247,15 +3253,16 @@ def run_backend(
         enabled_sides=enabled_sides,
         hard_stop_metrics=HARD_STOP_PROXY_METRICS,
         shared_account_controller=(
-            max_coin_count > 1
-            and len(enabled_sides) == 2
-            and strategy_kind == "ema_anchor"
+            max_coin_count > 1 and len(enabled_sides) == 2
         ),
     )
     _validate_dual_multicoin_metrics(
         needed_metrics,
         coin_count=max_coin_count,
         enabled_sides=enabled_sides,
+        shared_account_controller=(
+            max_coin_count > 1 and len(enabled_sides) == 2
+        ),
     )
 
     if suite_enabled:

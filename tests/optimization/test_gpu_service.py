@@ -36,6 +36,7 @@ from optimization.gpu.service import (
     _directional_gross_pnl_outputs,
     _hsl_params,
     _mps_dispatch_batch_size,
+    _multicoin_exposure_eligible_coins,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
     _require_multicoin_metric_topology,
@@ -262,6 +263,26 @@ def test_dual_side_multicoin_intraday_cutoff_metrics_fail_closed(metric):
 
     _require_multicoin_metric_topology(["long"], {metric})
     _require_multicoin_metric_topology(["long", "short"], {"adg_strategy_eq"})
+    _require_multicoin_metric_topology(
+        ["long", "short"],
+        {metric},
+        shared_account_controller=True,
+    )
+
+
+def test_multicoin_exposure_eligibility_unions_fused_sides():
+    long = np.zeros((3, 2), dtype=np.float32)
+    short = np.zeros((3, 2), dtype=np.float32)
+    short[1, 1] = 0.5
+    short[2, 1] = np.nan
+
+    eligible = _multicoin_exposure_eligible_coins(
+        {"long": long, "short": short},
+        ["long", "short"],
+        1,
+    )
+
+    assert eligible.tolist() == [False, True, True]
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -638,7 +659,19 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
 
 
-def test_multicoin_ema_proxy_routes_dual_side_batch_through_fused_runner():
+@pytest.mark.parametrize(
+    ("param_keys", "candidate_key"),
+    [
+        (EMA_ANCHOR_MULTICOIN_PARAM_KEYS, "offset"),
+        (
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
+            "entry_initial_qty_pct",
+        ),
+    ],
+)
+def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
+    param_keys, candidate_key
+):
     torch = pytest.importorskip("torch")
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
     proxy.batch_size = 2
@@ -648,11 +681,11 @@ def test_multicoin_ema_proxy_routes_dual_side_batch_through_fused_runner():
     proxy.run = SimpleNamespace()
     proxy.sides = ["long", "short"]
     proxy.needed_metrics = {"hard_stop_triggers"}
-    proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    proxy.param_keys = param_keys
     proxy.base_params = {
         side: {
             key: float(index + (100 if side == "short" else 0))
-            for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+            for index, key in enumerate(param_keys)
         }
         for side in ("long", "short")
     }
@@ -687,8 +720,8 @@ def test_multicoin_ema_proxy_routes_dual_side_batch_through_fused_runner():
 
     proxy._compute_objectives = reduce
     candidates = [
-        {"long_offset": 0.25, "short_offset": 0.5},
-        {"long_offset": 0.75, "short_offset": 1.0},
+        {f"long_{candidate_key}": 0.25, f"short_{candidate_key}": 0.5},
+        {f"long_{candidate_key}": 0.75, f"short_{candidate_key}": 1.0},
     ]
 
     assert proxy.evaluate(candidates) == [
@@ -697,16 +730,35 @@ def test_multicoin_ema_proxy_routes_dual_side_batch_through_fused_runner():
     ]
     assert seen["params"].shape == (
         2,
-        len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS) * 2,
+        len(param_keys) * 2,
     )
-    offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
-    side_width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
-    assert seen["params"][:, offset_index].tolist() == [0.25, 0.75]
-    assert seen["params"][:, side_width + offset_index].tolist() == [0.5, 1.0]
+    parameter_index = param_keys.index(candidate_key)
+    side_width = len(param_keys)
+    assert seen["params"][:, parameter_index].tolist() == [0.25, 0.75]
+    assert seen["params"][:, side_width + parameter_index].tolist() == [0.5, 1.0]
     assert seen["kwargs"] == {"profile": False}
 
 
-def test_multicoin_ema_proxy_constructs_fused_shared_account_runner(monkeypatch):
+@pytest.mark.parametrize(
+    ("strategy_kind", "runner_name", "override_cols", "proxy_mode"),
+    [
+        (
+            "ema_anchor",
+            "MpsEmaAnchorMulticoinFusedRunner",
+            29,
+            "shared-account-fused-ema-v1",
+        ),
+        (
+            "trailing_martingale",
+            "MpsTrailingMartingaleMulticoinFusedRunner",
+            44,
+            "shared-account-fused-tm-v1",
+        ),
+    ],
+)
+def test_multicoin_proxy_constructs_fused_shared_account_runner(
+    monkeypatch, strategy_kind, runner_name, override_cols, proxy_mode
+):
     torch = pytest.importorskip("torch")
 
     import optimization.gpu.mps_kernel as mps_kernel
@@ -719,7 +771,7 @@ def test_multicoin_ema_proxy_constructs_fused_shared_account_runner(monkeypatch)
     config = get_template_config()
     config["live"].update(
         {
-            "strategy_kind": "ema_anchor",
+            "strategy_kind": strategy_kind,
             "approved_coins": {
                 "long": ["BTC", "ETH"],
                 "short": ["BTC", "ETH"],
@@ -781,7 +833,7 @@ def test_multicoin_ema_proxy_constructs_fused_shared_account_runner(monkeypatch)
         ],
         strategy_params_list=[
             {
-                side: dict(config["bot"][side]["strategy"]["ema_anchor"])
+                side: dict(config["bot"][side]["strategy"][strategy_kind])
                 for side in ("long", "short")
             }
             for _ in range(2)
@@ -833,9 +885,7 @@ def test_multicoin_ema_proxy_constructs_fused_shared_account_runner(monkeypatch)
         def __init__(self, run, data, **kwargs):
             constructed.update({"run": run, "data": data, "kwargs": kwargs})
 
-    monkeypatch.setattr(
-        mps_kernel, "MpsEmaAnchorMulticoinFusedRunner", FakeFusedRunner
-    )
+    monkeypatch.setattr(mps_kernel, runner_name, FakeFusedRunner)
     values = np.ones((4, 2, 4), dtype=np.float64)
     timestamps = np.arange(4, dtype=np.int64) * 60_000
 
@@ -852,14 +902,16 @@ def test_multicoin_ema_proxy_constructs_fused_shared_account_runner(monkeypatch)
 
     assert isinstance(proxy.fused_runner, FakeFusedRunner)
     assert proxy.runners == {}
-    assert proxy.coin_override_contract["proxy_mode"] == (
-        "shared-account-fused-ema-v1"
+    assert proxy.coin_override_contract["proxy_mode"] == proxy_mode
+    assert proxy.coin_override_contract["hsl_proxy_mode"] == proxy_mode
+    assert constructed["kwargs"]["long_coin_overrides"].shape == (
+        2,
+        override_cols,
     )
-    assert proxy.coin_override_contract["hsl_proxy_mode"] == (
-        "shared-account-fused-ema-v1"
+    assert constructed["kwargs"]["short_coin_overrides"].shape == (
+        2,
+        override_cols,
     )
-    assert constructed["kwargs"]["long_coin_overrides"].shape == (2, 29)
-    assert constructed["kwargs"]["short_coin_overrides"].shape == (2, 29)
 
 
 def test_gpu_proxy_requires_complete_valid_tail():
