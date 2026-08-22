@@ -569,6 +569,49 @@ inline void record_tm_multicoin_close_fill(
     }
 }
 
+inline void record_tm_multicoin_entry_fill(
+    thread TrailingMartingaleMulticoinSideState& side,
+    thread JointPortfolioAccount& account,
+    thread TrailingMartingaleMulticoinFillState& fills,
+    device float* coin_fill_counts,
+    int candidate_index,
+    int coin_count,
+    int coin,
+    int k,
+    float fee,
+    float qty,
+    float fill_price,
+    float mark_price,
+    float c_mult,
+    bool short_side,
+    bool collect_coin_fill_counts,
+    thread float& hsl_equity_before_fills
+) {
+    const bool coin_hsl_mode =
+        side.hsl.signal_mode == HSL_SIGNAL_COIN;
+    record_realized_net(
+        -fee, account,
+        fills.day_fill_count, fills.fill_count,
+        fills.fill_count_entry, fills.fill_count_long,
+        fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
+        fills.pnl_recovery_max_min, float(k), true, !short_side
+    );
+    side.coin_realized_pnl[coin] -= fee;
+    if (coin_hsl_mode) {
+        record_coin_hsl_realized_fill(
+            side.coin_hsl[coin], side.coin_realized_pnl[coin]
+        );
+        advance_coin_hsl_equity_after_entry_fill(
+            hsl_equity_before_fills,
+            fee, qty, fill_price, mark_price,
+            c_mult, short_side
+        );
+    }
+    if (collect_coin_fill_counts) {
+        coin_fill_counts[candidate_index * coin_count + coin] += 1.0f;
+    }
+}
+
 inline TrailingMartingaleMulticoinSideConfig
 load_trailing_martingale_multicoin_side_config(
     constant float* params,
@@ -1562,27 +1605,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 float fill_price = float(entry_tick[c]) * price_step;
                 float adjusted = round_step(entry_qty[c], qty_step);
                 float fee = adjusted * fill_price * c_mult * maker_fee;
-                record_realized_net(
-                    -fee, account,
-                    day_fill_count, fill_count, fill_count_entry,
-                    fill_count_long, pnl_recovery_peak,
-                    pnl_recovery_peak_k, pnl_recovery_max_min,
-                    float(k), true, !short_side
+                record_tm_multicoin_entry_fill(
+                    side, account, fills, coin_fill_counts,
+                    int(b), C, c, k, fee, adjusted, fill_price,
+                    close, c_mult, short_side, collect_coin_fill_counts,
+                    hsl_equity_before_fills
                 );
-                coin_realized_pnl[c] -= fee;
-                if (coin_hsl_mode) {
-                    record_coin_hsl_realized_fill(
-                        coin_hsl[c], coin_realized_pnl[c]
-                    );
-                    advance_coin_hsl_equity_after_entry_fill(
-                        hsl_equity_before_fills,
-                        fee, adjusted, fill_price, close,
-                        c_mult, short_side
-                    );
-                }
-                if (collect_coin_fill_counts) {
-                    coin_fill_counts[int(b) * C + c] += 1.0f;
-                }
                 float new_size = round_step(psize[c] + adjusted, qty_step);
                 float new_price = was_flat ? fill_price
                     : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))

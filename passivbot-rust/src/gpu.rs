@@ -623,6 +623,7 @@ mod tests {
         assert!(source.contains("init_trailing_martingale_multicoin_fill_state("));
         assert!(source.contains("record_tm_multicoin_gross_pnl("));
         assert!(source.contains("record_tm_multicoin_close_fill("));
+        assert!(source.contains("record_tm_multicoin_entry_fill("));
         assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
@@ -654,6 +655,12 @@ mod tests {
                 .matches("record_tm_multicoin_close_fill(")
                 .count(),
             4
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("record_tm_multicoin_entry_fill(")
+                .count(),
+            2
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
@@ -700,11 +707,16 @@ mod tests {
             source
                 .matches("coin_fill_counts[int(b) * C + c] += 1.0f")
                 .count(),
-            1
+            0
         );
-        assert!(source.contains(
-            "coin_fill_counts[candidate_index * coin_count + coin] += 1.0f"
-        ));
+        assert_eq!(
+            source
+                .matches(
+                    "coin_fill_counts[candidate_index * coin_count + coin] += 1.0f"
+                )
+                .count(),
+            2
+        );
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("twel_enforcer_enabled"));
