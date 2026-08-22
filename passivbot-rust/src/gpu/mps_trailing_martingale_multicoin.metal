@@ -327,6 +327,68 @@ inline int recursive_grid_close_groups_after_reducer(
     return group_count;
 }
 
+// One complete directional Trailing Martingale portfolio. Keeping the mutable
+// per-coin state behind one thread-local value lets a future fused kernel own
+// long and short portfolios concurrently without changing the proven one-side
+// candle loop.
+struct TrailingMartingaleMulticoinSideState {
+    HslState hsl;
+    HslState coin_hsl[MAX_COINS];
+    ulong coin_hsl_entry_blocked_mask;
+    float ema0[MAX_COINS];
+    float ema1[MAX_COINS];
+    float ema2[MAX_COINS];
+    float volatility_1m[MAX_COINS];
+    float volatility_1h[MAX_COINS];
+    float forager_volume[MAX_COINS];
+    float forager_volatility[MAX_COINS];
+    float hour_high[MAX_COINS];
+    float hour_low[MAX_COINS];
+    float psize[MAX_COINS];
+    float pprice[MAX_COINS];
+    float last_increase_k[MAX_COINS];
+    float entry_qty[MAX_COINS];
+    float close_qty[MAX_COINS];
+    float secondary_close_qty[MAX_COINS];
+    float twel_close_qty[MAX_COINS];
+    float unstuck_close_qty[MAX_COINS];
+    float close_gen_balance[MAX_COINS];
+    float close_gen_allowed_wel[MAX_COINS];
+    float close_grid_gen_psize[MAX_COINS];
+    float position_open_k[MAX_COINS];
+    float position_last_fill_k[MAX_COINS];
+    float score[MAX_COINS];
+    float contribution[MAX_COINS];
+    float minimum_entry[MAX_COINS];
+    float min_since_open[MAX_COINS];
+    float max_since_min[MAX_COINS];
+    float max_since_open[MAX_COINS];
+    float min_since_max[MAX_COINS];
+    int entry_tick[MAX_COINS];
+    int close_tick[MAX_COINS];
+    int secondary_close_tick[MAX_COINS];
+    int twel_close_tick[MAX_COINS];
+    int unstuck_close_tick[MAX_COINS];
+    int close_grid_max_rungs[MAX_COINS];
+    bool selected[MAX_COINS];
+    bool incumbent[MAX_COINS];
+    bool survivor[MAX_COINS];
+    bool entry_candidate[MAX_COINS];
+    bool close_reconstruct_after_reducer[MAX_COINS];
+    bool filled_coin[MAX_COINS];
+    bool close_is_unstuck_reducer[MAX_COINS];
+    bool close_is_hsl_panic[MAX_COINS];
+    bool selection_initialized;
+    int max_tradable_seen;
+    int previous_effective_n_positions;
+    float alpha0_coin[MAX_COINS];
+    float alpha1_coin[MAX_COINS];
+    float alpha2_coin[MAX_COINS];
+    float alpha_1h_coin[MAX_COINS];
+    float alpha_1m_coin[MAX_COINS];
+    float coin_realized_pnl[MAX_COINS];
+};
+
 inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -413,10 +475,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const float unstuck_ema_dist = params[po + 45];
     const float unstuck_loss_allowance_pct = params[po + 46];
     const float unstuck_threshold = params[po + 47];
-    HslState hsl = load_hsl(params, po, 48);
+    TrailingMartingaleMulticoinSideState side;
+    thread HslState& hsl = side.hsl;
+    hsl = load_hsl(params, po, 48);
     const bool coin_hsl_mode = hsl.signal_mode == HSL_SIGNAL_COIN;
-    HslState coin_hsl[MAX_COINS];
-    ulong coin_hsl_entry_blocked_mask = 0ul;
+    thread HslState* coin_hsl = side.coin_hsl;
+    thread ulong& coin_hsl_entry_blocked_mask =
+        side.coin_hsl_entry_blocked_mask;
+    coin_hsl_entry_blocked_mask = 0ul;
     const float weight_sum = w_volume + w_ready + w_volatility;
     if (weight_sum > 0.0f) {
         w_volume /= weight_sum;
@@ -442,55 +508,57 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
-    float ema0[MAX_COINS];
-    float ema1[MAX_COINS];
-    float ema2[MAX_COINS];
-    float volatility_1m[MAX_COINS];
-    float volatility_1h[MAX_COINS];
-    float forager_volume[MAX_COINS];
-    float forager_volatility[MAX_COINS];
-    float hour_high[MAX_COINS];
-    float hour_low[MAX_COINS];
-    float psize[MAX_COINS];
-    float pprice[MAX_COINS];
-    float last_increase_k[MAX_COINS];
-    float entry_qty[MAX_COINS];
-    float close_qty[MAX_COINS];
-    float secondary_close_qty[MAX_COINS];
-    float twel_close_qty[MAX_COINS];
-    float unstuck_close_qty[MAX_COINS];
-    float close_gen_balance[MAX_COINS];
-    float close_gen_allowed_wel[MAX_COINS];
-    float close_grid_gen_psize[MAX_COINS];
-    float position_open_k[MAX_COINS];
-    float position_last_fill_k[MAX_COINS];
-    float score[MAX_COINS];
-    float contribution[MAX_COINS];
-    float minimum_entry[MAX_COINS];
-    float min_since_open[MAX_COINS];
-    float max_since_min[MAX_COINS];
-    float max_since_open[MAX_COINS];
-    float min_since_max[MAX_COINS];
-    int entry_tick[MAX_COINS];
-    int close_tick[MAX_COINS];
-    int secondary_close_tick[MAX_COINS];
-    int twel_close_tick[MAX_COINS];
-    int unstuck_close_tick[MAX_COINS];
-    int close_grid_max_rungs[MAX_COINS];
-    bool selected[MAX_COINS];
-    bool incumbent[MAX_COINS];
-    bool survivor[MAX_COINS];
-    bool entry_candidate[MAX_COINS];
-    bool close_reconstruct_after_reducer[MAX_COINS];
-    bool filled_coin[MAX_COINS];
-    bool close_is_unstuck_reducer[MAX_COINS];
-    bool close_is_hsl_panic[MAX_COINS];
-    float alpha0_coin[MAX_COINS];
-    float alpha1_coin[MAX_COINS];
-    float alpha2_coin[MAX_COINS];
-    float alpha_1h_coin[MAX_COINS];
-    float alpha_1m_coin[MAX_COINS];
-    float coin_realized_pnl[MAX_COINS];
+    thread float* ema0 = side.ema0;
+    thread float* ema1 = side.ema1;
+    thread float* ema2 = side.ema2;
+    thread float* volatility_1m = side.volatility_1m;
+    thread float* volatility_1h = side.volatility_1h;
+    thread float* forager_volume = side.forager_volume;
+    thread float* forager_volatility = side.forager_volatility;
+    thread float* hour_high = side.hour_high;
+    thread float* hour_low = side.hour_low;
+    thread float* psize = side.psize;
+    thread float* pprice = side.pprice;
+    thread float* last_increase_k = side.last_increase_k;
+    thread float* entry_qty = side.entry_qty;
+    thread float* close_qty = side.close_qty;
+    thread float* secondary_close_qty = side.secondary_close_qty;
+    thread float* twel_close_qty = side.twel_close_qty;
+    thread float* unstuck_close_qty = side.unstuck_close_qty;
+    thread float* close_gen_balance = side.close_gen_balance;
+    thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
+    thread float* close_grid_gen_psize = side.close_grid_gen_psize;
+    thread float* position_open_k = side.position_open_k;
+    thread float* position_last_fill_k = side.position_last_fill_k;
+    thread float* score = side.score;
+    thread float* contribution = side.contribution;
+    thread float* minimum_entry = side.minimum_entry;
+    thread float* min_since_open = side.min_since_open;
+    thread float* max_since_min = side.max_since_min;
+    thread float* max_since_open = side.max_since_open;
+    thread float* min_since_max = side.min_since_max;
+    thread int* entry_tick = side.entry_tick;
+    thread int* close_tick = side.close_tick;
+    thread int* secondary_close_tick = side.secondary_close_tick;
+    thread int* twel_close_tick = side.twel_close_tick;
+    thread int* unstuck_close_tick = side.unstuck_close_tick;
+    thread int* close_grid_max_rungs = side.close_grid_max_rungs;
+    thread bool* selected = side.selected;
+    thread bool* incumbent = side.incumbent;
+    thread bool* survivor = side.survivor;
+    thread bool* entry_candidate = side.entry_candidate;
+    thread bool* close_reconstruct_after_reducer =
+        side.close_reconstruct_after_reducer;
+    thread bool* filled_coin = side.filled_coin;
+    thread bool* close_is_unstuck_reducer =
+        side.close_is_unstuck_reducer;
+    thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
+    thread float* alpha0_coin = side.alpha0_coin;
+    thread float* alpha1_coin = side.alpha1_coin;
+    thread float* alpha2_coin = side.alpha2_coin;
+    thread float* alpha_1h_coin = side.alpha_1h_coin;
+    thread float* alpha_1m_coin = side.alpha_1m_coin;
+    thread float* coin_realized_pnl = side.coin_realized_pnl;
 
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < C ? coin_settings[c * COIN_COLS + 9] : 0.0f;
@@ -603,9 +671,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
-    bool selection_initialized = false;
-    int max_tradable_seen = 0;
-    int previous_effective_n_positions = 0;
+    thread bool& selection_initialized = side.selection_initialized;
+    thread int& max_tradable_seen = side.max_tradable_seen;
+    thread int& previous_effective_n_positions =
+        side.previous_effective_n_positions;
+    selection_initialized = false;
+    max_tradable_seen = 0;
+    previous_effective_n_positions = 0;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
