@@ -868,6 +868,187 @@ kernel void passivbot_tm_multicoin_fill_position_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_side_fill_pass_shares_account_chronology():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_side_fill_pass_probe(
+    constant float* bars,
+    constant int* fill_ticks,
+    constant int* touch_ticks,
+    constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* hsl_params,
+    device float* coin_fill_counts,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TrailingMartingaleMulticoinSideState long_side;
+    TrailingMartingaleMulticoinSideState short_side;
+    TrailingMartingaleMulticoinSideConfig long_config;
+    TrailingMartingaleMulticoinSideConfig short_config;
+    long_config.coin_hsl_mode = false;
+    short_config.coin_hsl_mode = false;
+    long_side.hsl = load_hsl(hsl_params, 0, 0);
+    short_side.hsl = load_hsl(hsl_params, 0, 0);
+    for (int c = 0; c < 1; ++c) {
+        long_side.psize[c] = 0.0f;
+        short_side.psize[c] = 0.0f;
+        long_side.pprice[c] = 0.0f;
+        short_side.pprice[c] = 0.0f;
+        long_side.position_open_k[c] = -1.0f;
+        short_side.position_open_k[c] = -1.0f;
+        long_side.position_last_fill_k[c] = -1.0f;
+        short_side.position_last_fill_k[c] = -1.0f;
+        long_side.entry_qty[c] = 1.0f;
+        short_side.entry_qty[c] = 1.0f;
+        long_side.entry_tick[c] = 100;
+        short_side.entry_tick[c] = 100;
+        long_side.close_qty[c] = 0.0f;
+        short_side.close_qty[c] = 0.0f;
+        long_side.secondary_close_qty[c] = 0.0f;
+        short_side.secondary_close_qty[c] = 0.0f;
+        long_side.close_reconstruct_after_reducer[c] = false;
+        short_side.close_reconstruct_after_reducer[c] = false;
+        long_side.close_is_unstuck_reducer[c] = false;
+        short_side.close_is_unstuck_reducer[c] = false;
+        long_side.close_is_hsl_panic[c] = false;
+        short_side.close_is_hsl_panic[c] = false;
+        long_side.coin_realized_pnl[c] = 0.0f;
+        short_side.coin_realized_pnl[c] = 0.0f;
+    }
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    TrailingMartingaleMulticoinFillState fills =
+        init_trailing_martingale_multicoin_fill_state();
+    coin_fill_counts[0] = 0.0f;
+    float long_equity = 1000.0f;
+    float short_equity = 1000.0f;
+    bool long_entry = process_tm_multicoin_side_fills(
+        long_side, long_config, account, fills,
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides, coin_fill_counts,
+        0, 1, 1, false, true, true, false,
+        1.0f, 0.0f, false, long_equity
+    );
+    bool short_entry = process_tm_multicoin_side_fills(
+        short_side, short_config, account, fills,
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides, coin_fill_counts,
+        0, 1, 1, true, true, true, false,
+        1.0f, 0.0f, false, short_equity
+    );
+    long_side.close_qty[0] = 1.0f;
+    short_side.close_qty[0] = 1.0f;
+    long_side.close_tick[0] = 100;
+    short_side.close_tick[0] = 100;
+    long_equity = 1000.0f;
+    short_equity = 1000.0f;
+    bool long_close = process_tm_multicoin_side_fills(
+        long_side, long_config, account, fills,
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides, coin_fill_counts,
+        0, 2, 1, false, true, true, false,
+        1.0f, 0.0f, false, long_equity
+    );
+    bool short_close = process_tm_multicoin_side_fills(
+        short_side, short_config, account, fills,
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides, coin_fill_counts,
+        0, 2, 1, true, true, true, false,
+        1.0f, 0.0f, false, short_equity
+    );
+    output[0] = long_entry && short_entry && long_close && short_close
+        ? 1.0f : 0.0f;
+    output[1] = account.balance;
+    output[2] = account.realized_pnl_total;
+    output[3] = fills.fill_count;
+    output[4] = fills.fill_count_entry;
+    output[5] = fills.fill_count_long;
+    output[6] = long_side.psize[0];
+    output[7] = short_side.psize[0];
+    output[8] = long_side.pprice[0];
+    output[9] = short_side.pprice[0];
+    output[10] = fills.held_max_min;
+    output[11] = fills.held_sum_min;
+    output[12] = fills.held_count;
+    output[13] = fills.position_unchanged_max_min;
+    output[14] = fills.day_volume;
+    output[15] = coin_fill_counts[0];
+}
+"""
+
+    bars = torch.tensor(
+        [
+            [[100.0, 100.0, 100.0, 1.0]],
+            [[100.0, 100.0, 100.0, 1.0]],
+            [[100.0, 100.0, 100.0, 1.0]],
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    fill_ticks = torch.tensor(
+        [[0, 0], [100, 99], [100, 99]], dtype=torch.int32, device="mps"
+    )
+    touch_ticks = torch.zeros((3, 2), dtype=torch.int32, device="mps")
+    touch_nearest_ticks = torch.zeros(3, dtype=torch.int32, device="mps")
+    touch_min_qty_bits = torch.zeros(3, dtype=torch.int32, device="mps")
+    touch_min_qty_relation = torch.zeros(3, dtype=torch.int32, device="mps")
+    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings[0, 0] = 1.0
+    coin_settings[0, 1] = 1.0
+    coin_settings[0, 2] = 1.0
+    coin_settings[0, 4] = 1.0
+    coin_settings[0, 7] = 10.0
+    coin_overrides = torch.full(
+        (1, 44), float("nan"), dtype=torch.float32, device="mps"
+    )
+    hsl_params = torch.tensor(
+        [1.0, 0.2, 60.0, 0.0, 1.0, 1.0, 0.5, 0.75, 0.0, 1.0, 1.0],
+        dtype=torch.float32,
+        device="mps",
+    )
+    coin_fill_counts = torch.zeros(1, dtype=torch.float32, device="mps")
+    output = torch.zeros(16, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_side_fill_pass_probe(
+        bars,
+        fill_ticks,
+        touch_ticks,
+        touch_nearest_ticks,
+        touch_min_qty_bits,
+        touch_min_qty_relation,
+        coin_settings,
+        coin_overrides,
+        hsl_params,
+        coin_fill_counts,
+        output,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    np.testing.assert_allclose(
+        output.cpu().numpy(),
+        [1.0, 1000.0, 0.0, 4.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0,
+         1.0, 2.0, 2.0, 1.0, 0.4, 4.0],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_dual_hsl_phase_covers_all_signal_topologies():
     import passivbot_rust
 
