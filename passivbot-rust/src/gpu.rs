@@ -301,6 +301,7 @@ mod tests {
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin"));
+        assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_fused"));
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
@@ -313,6 +314,7 @@ mod tests {
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 62"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -333,6 +335,11 @@ mod tests {
         assert!(source.contains("update_joint_pside_hsl("));
         assert!(source.contains("update_ema_multicoin_side_selection("));
         assert!(source.contains("generate_ema_multicoin_side_orders("));
+        assert!(source.contains("passivbot_ema_anchor_multicoin_fused_impl("));
+        assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
+        assert!(source.contains("write_dual_side_hsl_outputs("));
+        assert!(source.contains("write_dual_side_coin_hsl_outputs("));
+        assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));

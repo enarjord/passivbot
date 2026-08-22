@@ -2761,6 +2761,171 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
+    import passivbot_rust
+
+    source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
+    assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
+    assert "constant int FUSED_SCALAR_COLS = 62" in source
+
+    count = 512
+    coin_count = 3
+    phase = np.linspace(0.0, 12.0 * np.pi, count)
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin in range(coin_count):
+        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * (4.0 + coin)
+        hlcvs[:, coin, 0] = close * 1.01
+        hlcvs[:, coin, 1] = close * 0.99
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            10,
+            10,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+
+    base = [
+        0.1,
+        10.0,
+        30.0,
+        1.5,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        2.0,
+    ]
+    base += _single_coin_exposure_fields() + [0.0, 0.0]
+    base += list(_UNSTUCK_DISABLED_VALUES.values())
+
+    def side_row(signal_mode):
+        hsl = dict(_HSL_DISABLED_VALUES)
+        hsl["hsl_enabled"] = 1.0
+        hsl["hsl_red_threshold"] = 0.9
+        hsl["hsl_signal_mode"] = float(signal_mode)
+        row = base + list(hsl.values())
+        assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        return row
+
+    rows = [
+        side_row(0) + side_row(0),
+        side_row(1) + side_row(1),
+        side_row(2) + side_row(2),
+        side_row(0) + side_row(1),
+        side_row(3) + side_row(3),
+    ]
+    batch_size = len(rows)
+    params = torch.as_tensor(
+        np.asarray(rows, dtype=np.float32), device="mps"
+    ).contiguous()
+    overrides = torch.full(
+        (coin_count, 29), float("nan"), dtype=torch.float32, device="mps"
+    )
+    run_settings = torch.tensor(
+        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 0.1, 1.0, 0.0, 0.0, 0.0],
+        dtype=torch.float32,
+        device="mps",
+    )
+    sizes = torch.tensor(
+        [
+            batch_size,
+            data["n"],
+            coin_count,
+            data["n_days"],
+            0,
+            10,
+            data["start_minute_of_day"],
+            data["start_minute_of_hour"],
+        ],
+        dtype=torch.int32,
+        device="mps",
+    )
+    end_steps = torch.full(
+        (batch_size,), data["n"] - 1, dtype=torch.int32, device="mps"
+    )
+    daily = torch.zeros(
+        (batch_size, data["n_days"], 9), dtype=torch.float32, device="mps"
+    )
+    daily[:, :, 1].fill_(float("inf"))
+    daily[:, :, 5].fill_(float("inf"))
+    scalars = torch.zeros((batch_size, 62), dtype=torch.float32, device="mps")
+    gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
+    coin_fill_counts = torch.zeros(
+        (batch_size, coin_count), dtype=torch.float32, device="mps"
+    )
+
+    library = torch.mps.compile_shader(source)
+    library.passivbot_ema_anchor_multicoin_fused(
+        data["bars"],
+        data["fill_ticks"],
+        data["touch_ticks"],
+        data["coin_settings"],
+        overrides,
+        overrides,
+        params,
+        run_settings,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        threads=(batch_size, 1, 1),
+    )
+    torch.mps.synchronize()
+    values = scalars.cpu().numpy()
+
+    assert values[:3, 13].tolist() == [1.0, 1.0, 1.0]
+    assert (values[:3, 24] > 0.0).all()
+    assert (values[:3, 26] > 0.0).all()
+    assert (values[:3, 24] - values[:3, 26] > 0.0).all()
+    assert values[:3, 32:34].tolist() == [[1.0, 1.0]] * 3
+    assert (values[:3, 38] > 0.0).all()
+    np.testing.assert_allclose(
+        values[:3, 18], values[:3, 58] + values[:3, 60]
+    )
+    np.testing.assert_allclose(
+        values[:3, 19], values[:3, 59] + values[:3, 61]
+    )
+    np.testing.assert_allclose(
+        values[:3, 24], daily[:3, :, 8].sum(dim=1).cpu().numpy()
+    )
+    assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
+    # Mixed or unknown signal modes are rejected before any state or fills.
+    assert values[3:, 9].tolist() == [0.0, 0.0]
+    assert values[3:, 13].tolist() == [0.0, 0.0]
+    assert values[3:, 24].tolist() == [0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     import passivbot_rust
