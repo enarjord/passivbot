@@ -614,11 +614,18 @@ mod tests {
         );
         assert!(source.contains("load_trailing_martingale_multicoin_side_config("));
         assert!(source.contains("init_trailing_martingale_multicoin_side_state("));
+        assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));
+        assert!(source.contains("update_tm_multicoin_side_indicators("));
+        assert!(source.contains("count_tm_multicoin_tradable_coins("));
+        assert!(source.contains("tm_multicoin_side_has_position("));
         assert!(source.contains(
             "const TrailingMartingaleMulticoinSideConfig config ="
         ));
         assert!(source.contains(
             "init_trailing_martingale_multicoin_side_state(\n        side, config, bars, coin_settings, coin_overrides, C"
+        ));
+        assert!(source.contains(
+            "update_tm_multicoin_side_indicators(\n            side, config, bars, coin_settings, k, C, start_hour_minute"
         ));
         assert!(source.contains("TrailingMartingaleMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));

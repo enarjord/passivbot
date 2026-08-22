@@ -721,6 +721,167 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_candle_helpers_advance_independent_sides():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_candle_helpers_probe(
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TrailingMartingaleMulticoinSideState long_side;
+    TrailingMartingaleMulticoinSideState short_side;
+    TrailingMartingaleMulticoinSideConfig long_config;
+    TrailingMartingaleMulticoinSideConfig short_config;
+    long_config.alpha_forager_volume = 1.0f;
+    long_config.alpha_forager_volatility = 1.0f;
+    short_config.alpha_forager_volume = 0.5f;
+    short_config.alpha_forager_volatility = 0.5f;
+    for (int c = 0; c < 2; ++c) {
+        float seed = c == 0 ? 90.0f : 190.0f;
+        long_side.ema0[c] = seed;
+        long_side.ema1[c] = seed;
+        long_side.ema2[c] = seed;
+        short_side.ema0[c] = seed + 20.0f;
+        short_side.ema1[c] = seed + 20.0f;
+        short_side.ema2[c] = seed + 20.0f;
+        long_side.alpha0_coin[c] = 1.0f;
+        long_side.alpha1_coin[c] = 0.5f;
+        long_side.alpha2_coin[c] = 0.25f;
+        short_side.alpha0_coin[c] = 0.5f;
+        short_side.alpha1_coin[c] = 0.25f;
+        short_side.alpha2_coin[c] = 0.125f;
+        long_side.alpha_1m_coin[c] = 0.5f;
+        short_side.alpha_1m_coin[c] = 0.25f;
+        long_side.alpha_1h_coin[c] = 1.0f;
+        short_side.alpha_1h_coin[c] = 0.5f;
+        long_side.volatility_1m[c] = 0.0f;
+        short_side.volatility_1m[c] = 0.0f;
+        long_side.volatility_1h[c] = 0.0f;
+        short_side.volatility_1h[c] = 0.0f;
+        long_side.forager_volume[c] = 0.0f;
+        short_side.forager_volume[c] = 0.0f;
+        long_side.forager_volatility[c] = 0.0f;
+        short_side.forager_volatility[c] = 0.0f;
+        long_side.hour_high[c] = c == 0 ? 105.0f : 205.0f;
+        long_side.hour_low[c] = c == 0 ? 95.0f : 195.0f;
+        short_side.hour_high[c] = long_side.hour_high[c];
+        short_side.hour_low[c] = long_side.hour_low[c];
+        long_side.psize[c] = c == 0 ? 2.0f : 0.0f;
+        long_side.pprice[c] = 90.0f;
+        short_side.psize[c] = c == 0 ? 3.0f : 0.0f;
+        short_side.pprice[c] = 110.0f;
+        long_side.filled_coin[c] = false;
+        short_side.filled_coin[c] = c == 0;
+        long_side.min_since_open[c] = c == 0 ? 95.0f : INFINITY;
+        long_side.max_since_min[c] = c == 0 ? 96.0f : 0.0f;
+        long_side.max_since_open[c] = c == 0 ? 105.0f : 0.0f;
+        long_side.min_since_max[c] = c == 0 ? 104.0f : INFINITY;
+        short_side.min_since_open[c] = c == 0 ? 95.0f : INFINITY;
+        short_side.max_since_min[c] = c == 0 ? 96.0f : 0.0f;
+        short_side.max_since_open[c] = c == 0 ? 105.0f : 0.0f;
+        short_side.min_since_max[c] = c == 0 ? 104.0f : INFINITY;
+    }
+    output[0] = accumulate_tm_multicoin_side_unrealized_pnl(
+        long_side, bars, coin_settings, 1, 2, false, 1000.0f
+    );
+    output[1] = accumulate_tm_multicoin_side_unrealized_pnl(
+        short_side, bars, coin_settings, 1, 2, true, 1000.0f
+    );
+    update_tm_multicoin_side_indicators(
+        long_side, long_config, bars, coin_settings, 1, 2, 59
+    );
+    update_tm_multicoin_side_indicators(
+        short_side, short_config, bars, coin_settings, 1, 2, 59
+    );
+    output[2] = float(count_tm_multicoin_tradable_coins(
+        bars, coin_settings, coin_overrides, 1, 2
+    ));
+    output[3] = tm_multicoin_side_has_position(long_side, 2) ? 1.0f : 0.0f;
+    output[4] = tm_multicoin_side_has_position(short_side, 2) ? 1.0f : 0.0f;
+    output[5] = long_side.ema0[0];
+    output[6] = short_side.ema0[0];
+    output[7] = long_side.forager_volatility[0];
+    output[8] = short_side.forager_volatility[0];
+    output[9] = long_side.forager_volume[0];
+    output[10] = short_side.forager_volume[0];
+    output[11] = long_side.volatility_1h[0];
+    output[12] = long_side.min_since_open[0];
+    output[13] = long_side.max_since_min[0];
+    output[14] = long_side.max_since_open[0];
+    output[15] = long_side.min_since_max[0];
+    output[16] = short_side.max_since_min[0];
+    output[17] = short_side.max_since_open[0];
+    output[18] = short_side.min_since_open[0];
+    output[19] = short_side.min_since_max[0];
+}
+"""
+
+    bars = torch.tensor(
+        [
+            [[101.0, 99.0, 100.0, 10.0], [202.0, 198.0, 200.0, 20.0]],
+            [[110.0, 90.0, 100.0, 10.0], [220.0, 180.0, 200.0, 20.0]],
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    coin_settings = torch.zeros((2, 12), dtype=torch.float32, device="mps")
+    coin_settings[:, 4] = 1.0
+    coin_settings[:, 7] = 10.0
+    coin_overrides = torch.full(
+        (2, 44), float("nan"), dtype=torch.float32, device="mps"
+    )
+    coin_overrides[1, 24] = 0.0
+    output = torch.zeros(20, dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_candle_helpers_probe(
+        bars, coin_settings, coin_overrides, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    values = output.cpu().numpy()
+    expected_range = np.log(110.0 / 90.0)
+    expected_hour = np.log(105.0 / 95.0)
+    np.testing.assert_allclose(
+        values[:18],
+        [
+            1020.0,
+            1030.0,
+            1.0,
+            1.0,
+            1.0,
+            100.0,
+            105.0,
+            expected_range,
+            expected_range * 0.5,
+            1000.0,
+            500.0,
+            expected_hour,
+            90.0,
+            100.0,
+            110.0,
+            100.0,
+            0.0,
+            0.0,
+        ],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    assert np.isinf(values[18])
+    assert np.isinf(values[19])
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_fill_phase_shares_account_across_sides():
     import passivbot_rust
 
