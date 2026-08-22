@@ -148,12 +148,14 @@ The supported slice is intentionally narrow:
   suppression, RED latching, panic flattening, two-sample flat confirmation,
   positive-cooldown restart, zero-cooldown indefinite halt, cumulative no-restart peak tracking,
   effective coin-slot scaling, and terminal no-restart policy. For a finite
-  `live.pnls_max_lookback_days`, Metal deliberately retains its candidate-local all-history
-  realized-PnL and strategy-equity peaks. This is a conservative envelope over Rust's rolling
-  peak: it may trigger HSL early after an old peak ages out, but cannot suppress a drawdown for
-  that reason. The selected history must have no internal invalid candles between its first and
-  last valid samples. Thresholds in the float32-unrepresentable interval immediately below `1.0`
-  fail closed. Exact validation and drift gates remain authoritative. The non-loss HSL lifecycle
+  `live.pnls_max_lookback_days`, the single-coin `coin`-mode directional kernels expire
+  candidate-local realized-PnL fill events with the same rolling-window rule as exact Rust.
+  Other HSL topologies deliberately retain all-history realized-PnL and strategy-equity peaks as
+  a conservative envelope over Rust's rolling peak: they may trigger HSL early after an old peak
+  ages out, but cannot suppress a drawdown for that reason. The selected history must have no
+  internal invalid candles between its first and last valid samples. Thresholds in the
+  float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
+  drift gates remain authoritative. The non-loss HSL lifecycle
   metrics (trigger/restart counts and
   yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
   post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
