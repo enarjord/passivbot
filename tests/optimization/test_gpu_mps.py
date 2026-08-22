@@ -1305,6 +1305,171 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_dual_hsl_phase_covers_all_signal_topologies():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_dual_hsl_phase_probe(
+    constant float* params,
+    constant float* bars,
+    constant float* invalid_bars,
+    constant float* coin_settings,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b >= 8) return;
+    int po = int(b) * 22;
+    TrailingMartingaleMulticoinSideState long_side;
+    TrailingMartingaleMulticoinSideState short_side;
+    TrailingMartingaleMulticoinSideConfig long_config;
+    TrailingMartingaleMulticoinSideConfig short_config;
+    long_side.hsl = load_hsl(params, po, 0);
+    short_side.hsl = load_hsl(params, po + 11, 0);
+    long_config.coin_hsl_mode =
+        long_side.hsl.signal_mode == HSL_SIGNAL_COIN;
+    short_config.coin_hsl_mode =
+        short_side.hsl.signal_mode == HSL_SIGNAL_COIN;
+    long_side.coin_hsl[0] = long_side.hsl;
+    short_side.coin_hsl[0] = short_side.hsl;
+    long_side.coin_realized_pnl[0] = 0.0f;
+    short_side.coin_realized_pnl[0] = 0.0f;
+    long_side.psize[0] = (b == 4 || b == 5) ? 1.0f : 0.0f;
+    short_side.psize[0] = 0.0f;
+    long_side.pprice[0] = 100.0f;
+    short_side.pprice[0] = 100.0f;
+    long_side.entry_qty[0] = 0.0f;
+    short_side.entry_qty[0] = 0.0f;
+    long_side.close_qty[0] = 0.0f;
+    short_side.close_qty[0] = 0.0f;
+    long_side.secondary_close_qty[0] = 0.0f;
+    short_side.secondary_close_qty[0] = 0.0f;
+
+    JointPortfolioAccount account = init_joint_portfolio_account(100.0f);
+    account.realized_pnl_total = 0.0f;
+    account.realized_pnl_long = 0.0f;
+    account.realized_pnl_short = 0.0f;
+    account.balance = 100.0f;
+    bool all_valid = true;
+    bool sample_enabled = false;
+    int sampled_tier = 0;
+    float triggers_while_long_open = -1.0f;
+    for (int k = 1; k <= 5; ++k) {
+        if (k == 2) {
+            account.realized_pnl_total = -10.0f;
+            account.realized_pnl_long = b == 7 ? 0.0f : -10.0f;
+            account.realized_pnl_short = b == 7 ? -10.0f : 0.0f;
+            account.balance = 90.0f;
+            long_side.coin_realized_pnl[0] = b == 7 ? 0.0f : -10.0f;
+            short_side.coin_realized_pnl[0] = b == 7 ? -10.0f : 0.0f;
+        }
+        if (b == 4 && k == 4) long_side.psize[0] = 0.0f;
+        constant float* selected_bars = b == 5 ? invalid_bars : bars;
+        int long_slots = b == 7 ? 0 : 1;
+        int short_slots = b == 6 ? 0 : 1;
+        bool valid = update_tm_multicoin_dual_side_hsl(
+            long_side, long_config, long_slots,
+            short_side, short_config, short_slots,
+            account, selected_bars, coin_settings, k, 1,
+            100.0f, 60000.0f, sample_enabled, sampled_tier
+        );
+        all_valid = all_valid && valid;
+        if (b == 4 && k == 3) {
+            triggers_while_long_open = long_side.hsl.triggers;
+        }
+    }
+    int oo = int(b) * 12;
+    output[oo + 0] = all_valid ? 1.0f : 0.0f;
+    output[oo + 1] = sample_enabled ? 1.0f : 0.0f;
+    output[oo + 2] = float(sampled_tier);
+    output[oo + 3] = float(long_side.hsl.tier);
+    output[oo + 4] = float(short_side.hsl.tier);
+    output[oo + 5] = long_side.hsl.triggers;
+    output[oo + 6] = short_side.hsl.triggers;
+    output[oo + 7] = float(long_side.coin_hsl[0].tier);
+    output[oo + 8] = float(short_side.coin_hsl[0].tier);
+    output[oo + 9] = long_side.coin_hsl[0].triggers;
+    output[oo + 10] = short_side.coin_hsl[0].triggers;
+    output[oo + 11] = triggers_while_long_open;
+}
+"""
+
+    def controller(mode):
+        return [
+            1.0,
+            0.05,
+            1.0,
+            0.0,
+            1.0,
+            2.0,
+            0.5,
+            0.75,
+            0.0,
+            float(mode),
+            1.0,
+        ]
+
+    params = torch.tensor(
+        [
+            controller(0) + controller(0),
+            controller(1) + controller(1),
+            controller(2) + controller(2),
+            controller(0) + controller(1),
+            controller(0) + controller(0),
+            controller(0) + controller(0),
+            controller(2) + controller(2),
+            controller(2) + controller(2),
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    bars = torch.tensor(
+        [[[100.0, 100.0, 100.0, 0.0]]] * 6,
+        dtype=torch.float32,
+        device="mps",
+    )
+    invalid_bars = bars.clone()
+    invalid_bars[:, 0, 2] = float("nan")
+    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings[0, 4] = 1.0
+    output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_tm_multicoin_dual_hsl_phase_probe(
+        params, bars, invalid_bars, coin_settings, output, threads=(8, 1, 1)
+    )
+    torch.mps.synchronize()
+    values = output.cpu().numpy()
+
+    # Unified mode consumes the shared account signal and requires portfolio
+    # flatness before either controller may halt.
+    assert values[0, :7].tolist() == [1.0, 1.0, 3.0, 3.0, 3.0, 1.0, 1.0]
+    # Pside mode isolates directional strategy PnL.
+    assert values[1, :7].tolist() == [1.0, 1.0, 3.0, 3.0, 0.0, 1.0, 0.0]
+    # Coin mode advances the per-coin controllers, not the pside templates.
+    assert values[2, :7].tolist() == [1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0]
+    assert values[2, 7:11].tolist() == [3.0, 0.0, 1.0, 0.0]
+    # Mixed topologies fail closed without advancing state.
+    assert values[3, :7].tolist() == [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    # One open long position blocks both unified controllers until the whole
+    # account is flat for two consecutive samples.
+    assert values[4, 5:7].tolist() == [1.0, 1.0]
+    assert values[4, 11] == 0.0
+    # A held coin without a valid mark rejects the sample before mutating any
+    # controller instead of fabricating neutral unrealized PnL.
+    assert values[5, :11].tolist() == [0.0] * 11
+    # Coin HSL skips a side without an effective slot budget while retaining
+    # the active side's controller, matching exact Rust asymmetric tradability.
+    assert values[6, :11].tolist() == [
+        1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.0, 0.0
+    ]
+    assert values[7, :11].tolist() == [
+        1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.0
+    ]
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_dual_hsl_phase_covers_all_signal_topologies():
     import passivbot_rust
 

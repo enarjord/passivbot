@@ -632,6 +632,9 @@ mod tests {
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
         assert!(source.contains("tm_multicoin_side_has_position("));
+        assert!(source.contains("tm_multicoin_side_held_marks_are_valid("));
+        assert!(source.contains("tm_multicoin_side_has_blocking_orders("));
+        assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));
         assert!(source.contains(
