@@ -2916,6 +2916,8 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     np.testing.assert_allclose(
         values[:3, 24], daily[:3, :, 8].sum(dim=1).cpu().numpy()
     )
+    # Rust analyzes abs(long TWE + signed short TWE), not gross exposure.
+    assert (values[:3, 22] <= 1.01).all()
     assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
     # Mixed or unknown signal modes are rejected before any state or fills.
     assert values[3:, 9].tolist() == [0.0, 0.0]

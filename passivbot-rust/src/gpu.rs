@@ -340,6 +340,12 @@ mod tests {
         assert!(source.contains("write_dual_side_hsl_outputs("));
         assert!(source.contains("write_dual_side_coin_hsl_outputs("));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
+        assert!(source.contains("net_position_cost -= short_side.psize[c]"));
+        assert!(source.contains(
+            "float twe_abs = fabs(net_position_cost / account.balance)"
+        ));
+        assert!(source.contains("account.balance = 0.0f"));
+        assert!(source.contains("alive || hsl_validation_failed"));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));

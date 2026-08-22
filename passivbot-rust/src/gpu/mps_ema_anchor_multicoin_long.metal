@@ -2664,7 +2664,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 
         float long_unrealized = 0.0f;
         float short_unrealized = 0.0f;
-        float position_cost = 0.0f;
+        float net_position_cost = 0.0f;
         bool any_valid = false;
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
@@ -2677,7 +2677,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             }
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
-                position_cost += long_side.psize[c]
+                net_position_cost += long_side.psize[c]
                     * long_side.pprice[c] * c_mult;
                 if (finite_positive(close)) {
                     long_unrealized += long_side.psize[c] * c_mult
@@ -2685,7 +2685,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 }
             }
             if (short_side.psize[c] > 0.0f) {
-                position_cost += short_side.psize[c]
+                net_position_cost -= short_side.psize[c]
                     * short_side.pprice[c] * c_mult;
                 if (finite_positive(close)) {
                     short_unrealized += short_side.psize[c] * c_mult
@@ -2701,6 +2701,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             && joint_portfolio_can_generate(
                 account, equity, liquidation_floor
             );
+        bool hsl_validation_failed = false;
         if (can_sample_hsl) {
             bool sample_enabled = false;
             int sampled_tier = 0;
@@ -2712,8 +2713,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 sample_enabled, sampled_tier
             );
             if (!hsl_valid) {
+                account.balance = 0.0f;
                 alive = false;
                 liquidation_day = day_index;
+                hsl_validation_failed = true;
             } else if (sample_enabled) {
                 hsl_tier_samples_total += 1.0f;
                 hsl_tier_samples_yellow +=
@@ -2725,7 +2728,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             }
         }
 
-        bool active = equity_started && alive && any_valid;
+        bool active = equity_started && any_valid
+            && (alive || hsl_validation_failed);
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
@@ -2771,7 +2775,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             day_dd = fmax(day_dd, drawdown);
             day_touched = true;
             if (!liquidated) {
-                float twe_abs = position_cost / account.balance;
+                float twe_abs = fabs(net_position_cost / account.balance);
                 total_wallet_exposure_samples += 1.0f;
                 total_wallet_exposure_mean += (
                     twe_abs - total_wallet_exposure_mean
