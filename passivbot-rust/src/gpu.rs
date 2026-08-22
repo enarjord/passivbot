@@ -624,6 +624,9 @@ mod tests {
         assert!(source.contains("record_tm_multicoin_gross_pnl("));
         assert!(source.contains("record_tm_multicoin_close_fill("));
         assert!(source.contains("record_tm_multicoin_entry_fill("));
+        assert!(source.contains("finalize_tm_multicoin_close_position("));
+        assert!(source.contains("apply_tm_multicoin_entry_position("));
+        assert!(source.contains("update_tm_multicoin_position_fill_timestamp("));
         assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
@@ -659,6 +662,24 @@ mod tests {
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("record_tm_multicoin_entry_fill(")
+                .count(),
+            2
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("finalize_tm_multicoin_close_position(")
+                .count(),
+            2
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("apply_tm_multicoin_entry_position(")
+                .count(),
+            2
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("update_tm_multicoin_position_fill_timestamp(")
                 .count(),
             2
         );

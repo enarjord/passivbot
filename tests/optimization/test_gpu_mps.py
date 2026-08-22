@@ -751,6 +751,123 @@ kernel void passivbot_tm_multicoin_entry_fill_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_fill_position_helpers_preserve_chronology():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_fill_position_probe(
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TrailingMartingaleMulticoinSideState close_side;
+    TrailingMartingaleMulticoinSideState entry_side;
+    TrailingMartingaleMulticoinFillState fills =
+        init_trailing_martingale_multicoin_fill_state();
+    for (int c = 0; c < 2; ++c) {
+        close_side.psize[c] = c == 0 ? 0.0f : 1.0f;
+        close_side.pprice[c] = 100.0f;
+        close_side.position_open_k[c] = 5.0f;
+        close_side.close_qty[c] = 1.0f;
+        close_side.secondary_close_qty[c] = 2.0f;
+        close_side.close_reconstruct_after_reducer[c] = true;
+        close_side.close_is_unstuck_reducer[c] = true;
+        close_side.close_is_hsl_panic[c] = true;
+        close_side.filled_coin[c] = false;
+    }
+    close_side.position_last_fill_k[0] = 10.0f;
+    finalize_tm_multicoin_close_position(close_side, fills, 0, 20);
+    finalize_tm_multicoin_close_position(close_side, fills, 1, 20);
+    update_tm_multicoin_position_fill_timestamp(close_side, fills, 0, 20);
+
+    entry_side.psize[0] = 0.0f;
+    entry_side.pprice[0] = 0.0f;
+    entry_side.position_open_k[0] = -1.0f;
+    entry_side.position_last_fill_k[0] = 12.0f;
+    entry_side.entry_qty[0] = 1.0f;
+    entry_side.filled_coin[0] = false;
+    apply_tm_multicoin_entry_position(
+        entry_side, fills, 0, 20, 1.0f, 120.0f, 1.0f, 1.0f, 1000.0f
+    );
+    entry_side.entry_qty[0] = 1.0f;
+    apply_tm_multicoin_entry_position(
+        entry_side, fills, 0, 21, 1.0f, 100.0f, 1.0f, 1.0f, 1000.0f
+    );
+    update_tm_multicoin_position_fill_timestamp(entry_side, fills, 0, 21);
+
+    output[0] = close_side.pprice[0];
+    output[1] = close_side.position_open_k[0];
+    output[2] = close_side.close_qty[0];
+    output[3] = close_side.secondary_close_qty[0];
+    output[4] = close_side.close_reconstruct_after_reducer[0] ? 1.0f : 0.0f;
+    output[5] = close_side.close_is_unstuck_reducer[0] ? 1.0f : 0.0f;
+    output[6] = close_side.close_is_hsl_panic[0] ? 1.0f : 0.0f;
+    output[7] = close_side.filled_coin[0] ? 1.0f : 0.0f;
+    output[8] = close_side.position_last_fill_k[0];
+    output[9] = close_side.pprice[1];
+    output[10] = close_side.position_open_k[1];
+    output[11] = close_side.filled_coin[1] ? 1.0f : 0.0f;
+    output[12] = fills.held_max_min;
+    output[13] = fills.held_sum_min;
+    output[14] = fills.held_count;
+    output[15] = fills.position_unchanged_max_min;
+    output[16] = entry_side.psize[0];
+    output[17] = entry_side.pprice[0];
+    output[18] = entry_side.position_open_k[0];
+    output[19] = entry_side.last_increase_k[0];
+    output[20] = entry_side.entry_qty[0];
+    output[21] = entry_side.filled_coin[0] ? 1.0f : 0.0f;
+    output[22] = entry_side.position_last_fill_k[0];
+    output[23] = fills.day_volume;
+}
+"""
+
+    output = torch.zeros(24, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_fill_position_probe(
+        output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    np.testing.assert_allclose(
+        output.cpu().numpy(),
+        [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            100.0,
+            5.0,
+            1.0,
+            15.0,
+            15.0,
+            1.0,
+            10.0,
+            2.0,
+            110.0,
+            20.0,
+            21.0,
+            0.0,
+            1.0,
+            21.0,
+            0.22,
+        ],
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_dual_hsl_phase_covers_all_signal_topologies():
     import passivbot_rust
 

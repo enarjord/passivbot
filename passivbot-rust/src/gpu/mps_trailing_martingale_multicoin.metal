@@ -612,6 +612,72 @@ inline void record_tm_multicoin_entry_fill(
     }
 }
 
+inline void finalize_tm_multicoin_close_position(
+    thread TrailingMartingaleMulticoinSideState& side,
+    thread TrailingMartingaleMulticoinFillState& fills,
+    int coin,
+    int k
+) {
+    if (side.psize[coin] <= 0.0f) {
+        side.pprice[coin] = 0.0f;
+        if (side.position_open_k[coin] >= 0.0f) {
+            float held_min = float(k) - side.position_open_k[coin];
+            fills.held_max_min = fmax(fills.held_max_min, held_min);
+            fills.held_sum_min += held_min;
+            fills.held_count += 1.0f;
+        }
+        side.position_open_k[coin] = -1.0f;
+    }
+    side.close_qty[coin] = 0.0f;
+    side.secondary_close_qty[coin] = 0.0f;
+    side.close_reconstruct_after_reducer[coin] = false;
+    side.close_is_unstuck_reducer[coin] = false;
+    side.close_is_hsl_panic[coin] = false;
+    side.filled_coin[coin] = true;
+}
+
+inline void apply_tm_multicoin_entry_position(
+    thread TrailingMartingaleMulticoinSideState& side,
+    thread TrailingMartingaleMulticoinFillState& fills,
+    int coin,
+    int k,
+    float qty,
+    float fill_price,
+    float qty_step,
+    float c_mult,
+    float balance
+) {
+    bool was_flat = side.psize[coin] <= 0.0f;
+    float new_size = round_step(side.psize[coin] + qty, qty_step);
+    float new_price = was_flat ? fill_price
+        : side.pprice[coin]
+            * (side.psize[coin] / fmax(new_size, 1.0e-12f))
+            + fill_price * (qty / fmax(new_size, 1.0e-12f));
+    if (was_flat) side.position_open_k[coin] = float(k);
+    side.psize[coin] = new_size;
+    side.pprice[coin] = new_price;
+    side.last_increase_k[coin] = float(k);
+    fills.day_volume += fabs(qty) * fill_price * c_mult / balance;
+    side.entry_qty[coin] = 0.0f;
+    side.filled_coin[coin] = true;
+}
+
+inline void update_tm_multicoin_position_fill_timestamp(
+    thread TrailingMartingaleMulticoinSideState& side,
+    thread TrailingMartingaleMulticoinFillState& fills,
+    int coin,
+    int k
+) {
+    if (side.position_last_fill_k[coin] >= 0.0f) {
+        fills.position_unchanged_max_min = fmax(
+            fills.position_unchanged_max_min,
+            float(k) - side.position_last_fill_k[coin]
+        );
+    }
+    side.position_last_fill_k[coin] =
+        side.psize[coin] > 0.0f ? float(k) : -1.0f;
+}
+
 inline TrailingMartingaleMulticoinSideConfig
 load_trailing_martingale_multicoin_side_config(
     constant float* params,
@@ -1575,28 +1641,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 }
 
                 if (executed_close) {
-                    bool went_flat = psize[c] <= 0.0f;
-                    if (went_flat) {
-                        pprice[c] = 0.0f;
-                        if (position_open_k[c] >= 0.0f) {
-                            float held_min = float(k) - position_open_k[c];
-                            held_max_min = fmax(held_max_min, held_min);
-                            held_sum_min += held_min;
-                            held_count += 1.0f;
-                        }
-                        position_open_k[c] = -1.0f;
-                    }
-                    close_qty[c] = 0.0f;
-                    secondary_close_qty[c] = 0.0f;
-                    close_reconstruct_after_reducer[c] = false;
-                    close_is_unstuck_reducer[c] = false;
-                    close_is_hsl_panic[c] = false;
-                    filled_coin[c] = true;
+                    finalize_tm_multicoin_close_position(
+                        side, fills, c, k
+                    );
                     any_fill = true;
                 }
             }
 
-            bool was_flat = psize[c] <= 0.0f;
             bool filled_entry = entry_qty[c] > 0.0f
                 && (short_side
                     ? entry_tick[c] <= fill_ticks[tick_offset + 0]
@@ -1611,27 +1662,16 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     close, c_mult, short_side, collect_coin_fill_counts,
                     hsl_equity_before_fills
                 );
-                float new_size = round_step(psize[c] + adjusted, qty_step);
-                float new_price = was_flat ? fill_price
-                    : pprice[c] * (psize[c] / fmax(new_size, 1.0e-12f))
-                        + fill_price * (adjusted / fmax(new_size, 1.0e-12f));
-                if (was_flat) position_open_k[c] = float(k);
-                psize[c] = new_size;
-                pprice[c] = new_price;
-                last_increase_k[c] = float(k);
-                day_volume += fabs(adjusted) * fill_price * c_mult / balance;
-                entry_qty[c] = 0.0f;
-                filled_coin[c] = true;
+                apply_tm_multicoin_entry_position(
+                    side, fills, c, k, adjusted, fill_price,
+                    qty_step, c_mult, balance
+                );
                 any_fill = true;
             }
             if (filled_coin[c]) {
-                if (position_last_fill_k[c] >= 0.0f) {
-                    position_unchanged_max_min = fmax(
-                        position_unchanged_max_min,
-                        float(k) - position_last_fill_k[c]
-                    );
-                }
-                position_last_fill_k[c] = psize[c] > 0.0f ? float(k) : -1.0f;
+                update_tm_multicoin_position_fill_timestamp(
+                    side, fills, c, k
+                );
             }
         }
         if (any_fill) {
