@@ -2833,12 +2833,16 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         return row
 
+    unstuck_long = side_row(0)
+    unstuck_long[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")] = 1.0
+
     rows = [
         side_row(0) + side_row(0),
         side_row(1) + side_row(1),
         side_row(2) + side_row(2),
         side_row(0) + side_row(1),
         side_row(3) + side_row(3),
+        unstuck_long + side_row(0),
     ]
     batch_size = len(rows)
     params = torch.as_tensor(
@@ -2919,10 +2923,49 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     # Rust analyzes abs(long TWE + signed short TWE), not gross exposure.
     assert (values[:3, 22] <= 1.01).all()
     assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
-    # Mixed or unknown signal modes are rejected before any state or fills.
-    assert values[3:, 9].tolist() == [0.0, 0.0]
-    assert values[3:, 13].tolist() == [0.0, 0.0]
-    assert values[3:, 24].tolist() == [0.0, 0.0]
+    # Mixed/unknown signal modes and dual-side auto-unstuck are rejected before
+    # any state or fills; exact Rust requires one global unstuck arbitration.
+    assert values[3:, 9].tolist() == [0.0, 0.0, 0.0]
+    assert values[3:, 13].tolist() == [0.0, 0.0, 0.0]
+    assert values[3:, 24].tolist() == [0.0, 0.0, 0.0]
+
+    # Coin overrides can enable auto-unstuck even when the side template does
+    # not, so the kernel must inspect the effective per-coin setting too.
+    override_unstuck = overrides.clone()
+    override_unstuck[0, 13] = 1.0
+    override_sizes = sizes.clone()
+    override_sizes[0] = 1
+    override_daily = torch.zeros(
+        (1, data["n_days"], 9), dtype=torch.float32, device="mps"
+    )
+    override_daily[:, :, 1].fill_(float("inf"))
+    override_daily[:, :, 5].fill_(float("inf"))
+    override_scalars = torch.zeros((1, 62), dtype=torch.float32, device="mps")
+    override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
+    override_coin_fills = torch.zeros(
+        (1, coin_count), dtype=torch.float32, device="mps"
+    )
+    library.passivbot_ema_anchor_multicoin_fused(
+        data["bars"],
+        data["fill_ticks"],
+        data["touch_ticks"],
+        data["coin_settings"],
+        override_unstuck,
+        overrides,
+        params[:1],
+        run_settings,
+        override_sizes,
+        end_steps[:1],
+        override_daily,
+        override_scalars,
+        override_gaps,
+        override_coin_fills,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+    assert override_scalars[0, 9].item() == 0.0
+    assert override_scalars[0, 13].item() == 0.0
+    assert override_scalars[0, 24].item() == 0.0
 
 
 @pytest.mark.skipif(

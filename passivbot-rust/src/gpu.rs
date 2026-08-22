@@ -346,6 +346,8 @@ mod tests {
         ));
         assert!(source.contains("account.balance = 0.0f"));
         assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(source.contains("bool any_unstuck_enabled = false"));
+        assert!(source.contains("&& !any_unstuck_enabled"));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));

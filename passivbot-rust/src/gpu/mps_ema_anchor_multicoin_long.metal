@@ -2431,12 +2431,25 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         load_ema_multicoin_side_config(params, po);
     const EmaMulticoinSideConfig short_config =
         load_ema_multicoin_side_config(params, po + PARAM_COLS);
+    bool any_unstuck_enabled = false;
+    for (int c = 0; c < C; ++c) {
+        any_unstuck_enabled = any_unstuck_enabled
+            || coin_override_or(
+                long_coin_overrides, c, 13,
+                long_config.unstuck_enabled ? 1.0f : 0.0f
+            ) > 0.5f
+            || coin_override_or(
+                short_coin_overrides, c, 13,
+                short_config.unstuck_enabled ? 1.0f : 0.0f
+            ) > 0.5f;
+    }
     const int hsl_signal_mode = long_config.hsl_template.signal_mode;
     const bool topology_valid = hsl_signal_mode >= HSL_SIGNAL_UNIFIED
         && hsl_signal_mode <= HSL_SIGNAL_COIN
         && long_config.hsl_template.signal_mode
             == short_config.hsl_template.signal_mode
-        && long_config.coin_hsl_mode == short_config.coin_hsl_mode;
+        && long_config.coin_hsl_mode == short_config.coin_hsl_mode
+        && !any_unstuck_enabled;
     if (!topology_valid) {
         scalars[scalar_offset + 9] = 0.0f;
         scalars[scalar_offset + 13] = 0.0f;
