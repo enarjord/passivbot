@@ -324,7 +324,7 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     device float* output,
     uint b [[thread_position_in_grid]]
 ) {
-    if (b >= 6) return;
+    if (b >= 8) return;
     int po = int(b) * 22;
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
@@ -363,15 +363,19 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     for (int k = 1; k <= 5; ++k) {
         if (k == 2) {
             account.realized_pnl_total = -10.0f;
-            account.realized_pnl_long = -10.0f;
+            account.realized_pnl_long = b == 7 ? 0.0f : -10.0f;
+            account.realized_pnl_short = b == 7 ? -10.0f : 0.0f;
             account.balance = 90.0f;
-            long_side.coin_realized_pnl[0] = -10.0f;
+            long_side.coin_realized_pnl[0] = b == 7 ? 0.0f : -10.0f;
+            short_side.coin_realized_pnl[0] = b == 7 ? -10.0f : 0.0f;
         }
         if (b == 4 && k == 4) long_side.psize[0] = 0.0f;
         constant float* selected_bars = b == 5 ? invalid_bars : bars;
+        int long_slots = b == 7 ? 0 : 1;
+        int short_slots = b == 6 ? 0 : 1;
         bool valid = update_ema_multicoin_dual_side_hsl(
-            long_side, long_config, 1,
-            short_side, short_config, 1,
+            long_side, long_config, long_slots,
+            short_side, short_config, short_slots,
             account, selected_bars, coin_settings, k, 1,
             100.0f, 60000.0f, sample_enabled, sampled_tier
         );
@@ -419,6 +423,8 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
             controller(0) + controller(1),
             controller(0) + controller(0),
             controller(0) + controller(0),
+            controller(2) + controller(2),
+            controller(2) + controller(2),
         ],
         dtype=torch.float32,
         device="mps",
@@ -432,13 +438,13 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     invalid_bars[:, 0, 2] = float("nan")
     coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
     coin_settings[0, 4] = 1.0
-    output = torch.zeros((6, 12), dtype=torch.float32, device="mps")
+    output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
     )
     library.passivbot_ema_multicoin_dual_hsl_phase_probe(
-        params, bars, invalid_bars, coin_settings, output, threads=(6, 1, 1)
+        params, bars, invalid_bars, coin_settings, output, threads=(8, 1, 1)
     )
     torch.mps.synchronize()
     values = output.cpu().numpy()
@@ -460,6 +466,14 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     # A held coin without a valid mark rejects the sample before mutating any
     # controller instead of fabricating neutral unrealized PnL.
     assert values[5, :11].tolist() == [0.0] * 11
+    # Coin HSL skips a side without an effective slot budget while retaining
+    # the active side's controller, matching exact Rust asymmetric tradability.
+    assert values[6, :11].tolist() == [
+        1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.0, 0.0
+    ]
+    assert values[7, :11].tolist() == [
+        1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.0
+    ]
 
 
 @pytest.mark.skipif(

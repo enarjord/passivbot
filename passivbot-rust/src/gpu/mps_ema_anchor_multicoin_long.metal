@@ -634,12 +634,6 @@ inline bool update_ema_multicoin_dual_side_hsl(
     sampled_tier = 0;
     if (long_side.hsl.signal_mode != short_side.hsl.signal_mode) return false;
     if (long_config.coin_hsl_mode != short_config.coin_hsl_mode) return false;
-    if (long_config.coin_hsl_mode && (
-            long_effective_n_positions <= 0
-                || short_effective_n_positions <= 0
-        )) {
-        return false;
-    }
     if (!ema_multicoin_side_held_marks_are_valid(
             long_side, bars, coin_settings, k, coin_count
         ) || !ema_multicoin_side_held_marks_are_valid(
@@ -668,6 +662,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
     );
 
     if (long_config.coin_hsl_mode) {
+        const bool long_active = long_effective_n_positions > 0;
+        const bool short_active = short_effective_n_positions > 0;
         float portfolio_equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
@@ -702,37 +698,44 @@ inline bool update_ema_multicoin_dual_side_hsl(
                     || short_side.close_qty[c] > 0.0f
                     || short_side.secondary_close_qty[c] > 0.0f
             );
-            long_side.coin_hsl[c].slot_count = float(
-                long_effective_n_positions
-            );
-            short_side.coin_hsl[c].slot_count = float(
-                short_effective_n_positions
-            );
-            update_hsl(
-                long_side.coin_hsl[c], account.balance, starting_balance,
-                long_side.coin_realized_pnl[c], long_coin_unrealized,
-                long_side.psize[c] > 0.0f,
-                long_coin_has_blocking_orders, float(k), interval_ms
-            );
-            update_hsl(
-                short_side.coin_hsl[c], account.balance, starting_balance,
-                short_side.coin_realized_pnl[c], short_coin_unrealized,
-                short_side.psize[c] > 0.0f,
-                short_coin_has_blocking_orders, float(k), interval_ms
-            );
-            sample_enabled = sample_enabled
-                || long_side.coin_hsl[c].enabled
-                || short_side.coin_hsl[c].enabled;
-            sampled_tier = max(
-                sampled_tier,
-                max(long_side.coin_hsl[c].tier, short_side.coin_hsl[c].tier)
-            );
-            try_restart_hsl(
-                long_side.coin_hsl[c], float(k), portfolio_equity
-            );
-            try_restart_hsl(
-                short_side.coin_hsl[c], float(k), portfolio_equity
-            );
+            if (long_active) {
+                long_side.coin_hsl[c].slot_count = float(
+                    long_effective_n_positions
+                );
+                update_hsl(
+                    long_side.coin_hsl[c], account.balance, starting_balance,
+                    long_side.coin_realized_pnl[c], long_coin_unrealized,
+                    long_side.psize[c] > 0.0f,
+                    long_coin_has_blocking_orders, float(k), interval_ms
+                );
+                sample_enabled = sample_enabled
+                    || long_side.coin_hsl[c].enabled;
+                sampled_tier = max(
+                    sampled_tier, long_side.coin_hsl[c].tier
+                );
+                try_restart_hsl(
+                    long_side.coin_hsl[c], float(k), portfolio_equity
+                );
+            }
+            if (short_active) {
+                short_side.coin_hsl[c].slot_count = float(
+                    short_effective_n_positions
+                );
+                update_hsl(
+                    short_side.coin_hsl[c], account.balance, starting_balance,
+                    short_side.coin_realized_pnl[c], short_coin_unrealized,
+                    short_side.psize[c] > 0.0f,
+                    short_coin_has_blocking_orders, float(k), interval_ms
+                );
+                sample_enabled = sample_enabled
+                    || short_side.coin_hsl[c].enabled;
+                sampled_tier = max(
+                    sampled_tier, short_side.coin_hsl[c].tier
+                );
+                try_restart_hsl(
+                    short_side.coin_hsl[c], float(k), portfolio_equity
+                );
+            }
         }
         return true;
     }

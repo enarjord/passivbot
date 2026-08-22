@@ -333,6 +333,12 @@ mod tests {
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("if (long_side.hsl.signal_mode != short_side.hsl.signal_mode)"));
         assert!(source.contains("update_joint_pside_hsl("));
+        assert!(source.contains(
+            "const bool long_active = long_effective_n_positions > 0"
+        ));
+        assert!(source.contains(
+            "const bool short_active = short_effective_n_positions > 0"
+        ));
         assert!(source.contains("update_ema_multicoin_side_selection("));
         assert!(source.contains("generate_ema_multicoin_side_orders("));
         assert!(source.contains("passivbot_ema_anchor_multicoin_fused_impl("));
