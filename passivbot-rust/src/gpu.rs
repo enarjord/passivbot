@@ -632,6 +632,7 @@ mod tests {
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
         assert!(source.contains("tm_multicoin_side_has_position("));
+        assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains(
             "const TrailingMartingaleMulticoinSideConfig config ="
         ));
@@ -644,6 +645,9 @@ mod tests {
         assert!(source.contains(
             "bool any_fill = process_tm_multicoin_side_fills(\n            side, config, account, fills"
         ));
+        assert!(source.contains(
+            "update_tm_multicoin_side_selection(\n                side, config, bars, coin_settings, coin_overrides"
+        ));
         assert!(source.contains("TrailingMartingaleMulticoinSideState side"));
         assert!(source.contains("TrailingMartingaleMulticoinFillState fills"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
@@ -651,7 +655,6 @@ mod tests {
         assert!(source.contains("thread float* psize = side.psize"));
         assert!(source.contains("thread int* entry_tick = side.entry_tick"));
         assert!(source.contains("thread bool* selected = side.selected"));
-        assert!(source.contains("thread bool& selection_initialized = side.selection_initialized"));
         assert!(source.contains("thread int& max_tradable_seen = side.max_tradable_seen"));
         assert!(source.contains("side.previous_effective_n_positions"));
         assert!(source.contains("load_hsl(params, po, 48)"));

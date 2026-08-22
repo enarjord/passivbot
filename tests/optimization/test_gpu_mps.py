@@ -1049,6 +1049,133 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_selection_phase_keeps_side_local_hsl_rankings():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_selection_phase_probe(
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TrailingMartingaleMulticoinSideState long_side;
+    TrailingMartingaleMulticoinSideState short_side;
+    TrailingMartingaleMulticoinSideConfig long_config;
+    TrailingMartingaleMulticoinSideConfig short_config;
+    long_config.coin_hsl_mode = true;
+    short_config.coin_hsl_mode = false;
+    long_config.volume_drop = 0.0f;
+    short_config.volume_drop = 0.0f;
+    long_config.w_volume = 1.0f;
+    short_config.w_volume = 1.0f;
+    long_config.w_ready = 0.0f;
+    short_config.w_ready = 0.0f;
+    long_config.w_volatility = 0.0f;
+    short_config.w_volatility = 0.0f;
+    long_config.initial_ema_dist = 0.0f;
+    short_config.initial_ema_dist = 0.0f;
+    long_side.selection_initialized = false;
+    short_side.selection_initialized = false;
+    long_side.previous_effective_n_positions = 0;
+    short_side.previous_effective_n_positions = 0;
+    long_side.coin_hsl_entry_blocked_mask = 0ul;
+    short_side.coin_hsl_entry_blocked_mask = 0ul;
+    for (int c = 0; c < 3; ++c) {
+        long_side.psize[c] = 0.0f;
+        short_side.psize[c] = 0.0f;
+        long_side.selected[c] = false;
+        short_side.selected[c] = false;
+        long_side.incumbent[c] = false;
+        short_side.incumbent[c] = false;
+        long_side.survivor[c] = false;
+        short_side.survivor[c] = false;
+        long_side.ema0[c] = 100.0f;
+        long_side.ema1[c] = 100.0f;
+        long_side.ema2[c] = 100.0f;
+        short_side.ema0[c] = 100.0f;
+        short_side.ema1[c] = 100.0f;
+        short_side.ema2[c] = 100.0f;
+        long_side.forager_volume[c] = float(3 - c) * 100.0f;
+        short_side.forager_volume[c] = float(c + 1) * 100.0f;
+        long_side.forager_volatility[c] = 0.0f;
+        short_side.forager_volatility[c] = 0.0f;
+        long_side.coin_hsl[c].enabled = false;
+        long_side.coin_hsl[c].halted = false;
+        long_side.coin_hsl[c].tier = 0;
+        long_side.coin_hsl[c].red_active_now = false;
+        long_side.coin_hsl[c].orange_graceful_stop = false;
+    }
+    // Block the long side's highest-volume coin without affecting short.
+    long_side.coin_hsl[0].enabled = true;
+    long_side.coin_hsl[0].tier = 2;
+    long_side.coin_hsl[0].orange_graceful_stop = true;
+    update_tm_multicoin_side_selection(
+        long_side, long_config, bars, coin_settings, coin_overrides,
+        1, 3, false, true, 1, 0.0f
+    );
+    update_tm_multicoin_side_selection(
+        short_side, short_config, bars, coin_settings, coin_overrides,
+        1, 3, true, true, 1, 0.0f
+    );
+    for (int c = 0; c < 3; ++c) {
+        output[c] = long_side.selected[c] ? 1.0f : 0.0f;
+        output[3 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+    }
+    output[6] = long_side.selection_initialized ? 1.0f : 0.0f;
+    output[7] = short_side.selection_initialized ? 1.0f : 0.0f;
+    output[8] = float(long_side.previous_effective_n_positions);
+    output[9] = float(short_side.previous_effective_n_positions);
+    output[10] = float(long_side.coin_hsl_entry_blocked_mask);
+    output[11] = float(short_side.coin_hsl_entry_blocked_mask);
+}
+"""
+
+    bars = torch.tensor(
+        [
+            [[100.0, 100.0, 100.0, 1.0]] * 3,
+            [[100.0, 100.0, 100.0, 1.0]] * 3,
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    coin_settings = torch.zeros((3, 12), dtype=torch.float32, device="mps")
+    coin_settings[:, 7] = 10.0
+    coin_overrides = torch.full(
+        (3, 44), float("nan"), dtype=torch.float32, device="mps"
+    )
+    output = torch.zeros(12, dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_selection_phase_probe(
+        bars, coin_settings, coin_overrides, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+    ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_dual_hsl_phase_covers_all_signal_topologies():
     import passivbot_rust
 
