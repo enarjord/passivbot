@@ -509,6 +509,131 @@ kernel void passivbot_tm_multicoin_fill_state_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_close_fill_centralizes_hsl_accounting():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_close_fill_probe(
+    constant float* hsl_params,
+    device float* coin_fill_counts,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TrailingMartingaleMulticoinSideState long_side;
+    TrailingMartingaleMulticoinSideState short_side;
+    long_side.hsl = load_hsl(hsl_params, 0, 0);
+    long_side.coin_hsl[0] = load_hsl(hsl_params, 0, 0);
+    short_side.hsl = load_hsl(hsl_params, 11, 0);
+    short_side.coin_hsl[0] = load_hsl(hsl_params, 11, 0);
+    long_side.coin_realized_pnl[0] = 0.0f;
+    short_side.coin_realized_pnl[0] = 0.0f;
+    long_side.coin_hsl[0].coin_realized_baseline = -20.0f;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    TrailingMartingaleMulticoinFillState fills =
+        init_trailing_martingale_multicoin_fill_state();
+    float long_equity = 1000.0f;
+    float short_equity = 989.0f;
+    coin_fill_counts[0] = 0.0f;
+    record_tm_multicoin_close_fill(
+        long_side, account, fills, coin_fill_counts,
+        0, 1, 0, 10, -10.0f, -11.0f, 1.0f,
+        110.0f, 100.0f, 1.0f, false, true, true, long_equity
+    );
+    record_tm_multicoin_close_fill(
+        short_side, account, fills, coin_fill_counts,
+        0, 1, 0, 11, -10.0f, -11.0f, 1.0f,
+        90.0f, 100.0f, 1.0f, true, true, true, short_equity
+    );
+    output[0] = account.balance;
+    output[1] = account.realized_pnl_total;
+    output[2] = account.realized_pnl_long;
+    output[3] = account.realized_pnl_short;
+    output[4] = fills.profit_sum;
+    output[5] = fills.loss_sum;
+    output[6] = fills.fill_count;
+    output[7] = fills.fill_count_entry;
+    output[8] = fills.fill_count_long;
+    output[9] = fills.day_fill_count;
+    output[10] = long_equity;
+    output[11] = short_equity;
+    output[12] = long_side.coin_realized_pnl[0];
+    output[13] = short_side.coin_realized_pnl[0];
+    output[14] = long_side.coin_hsl[0].coin_realized_peak;
+    output[15] = long_side.coin_hsl[0].panic_event_start_equity;
+    output[16] = long_side.coin_hsl[0].panic_event_loss;
+    output[17] = short_side.hsl.panic_event_start_equity;
+    output[18] = short_side.hsl.panic_event_loss;
+    output[19] = coin_fill_counts[0];
+}
+"""
+
+    hsl_params = torch.tensor(
+        [
+            1.0,
+            0.2,
+            60.0,
+            0.0,
+            1.0,
+            1.0,
+            0.5,
+            0.75,
+            0.0,
+            2.0,
+            1.0,
+            1.0,
+            0.2,
+            60.0,
+            0.0,
+            1.0,
+            1.0,
+            0.5,
+            0.75,
+            0.0,
+            1.0,
+            1.0,
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    coin_fill_counts = torch.zeros(1, dtype=torch.float32, device="mps")
+    output = torch.zeros(20, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_close_fill_probe(
+        hsl_params, coin_fill_counts, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [
+        978.0,
+        -22.0,
+        -11.0,
+        -11.0,
+        0.0,
+        20.0,
+        2.0,
+        0.0,
+        1.0,
+        2.0,
+        999.0,
+        989.0,
+        -11.0,
+        -11.0,
+        9.0,
+        1000.0,
+        11.0,
+        989.0,
+        11.0,
+        2.0,
+    ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_dual_hsl_phase_covers_all_signal_topologies():
     import passivbot_rust
 

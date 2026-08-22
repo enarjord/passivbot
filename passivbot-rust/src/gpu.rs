@@ -181,9 +181,9 @@ mod tests {
 
     #[test]
     fn multicoin_kernels_route_every_fill_through_joint_account_state() {
-        for (body, expected_fill_paths) in [
+        for (body, expected_account_record_sites) in [
             (MPS_EMA_ANCHOR_MULTICOIN_BODY, 2),
-            (MPS_TRAILING_MARTINGALE_MULTICOIN_BODY, 4),
+            (MPS_TRAILING_MARTINGALE_MULTICOIN_BODY, 2),
         ] {
             assert!(body.contains(
                 "JointPortfolioAccount account = init_joint_portfolio_account(starting_balance)"
@@ -196,7 +196,7 @@ mod tests {
             );
             assert_eq!(
                 body.matches("record_realized_net(").count(),
-                expected_fill_paths
+                expected_account_record_sites
             );
             assert!(!body.contains("float balance = starting_balance"));
             assert!(!body.contains("balance += net_pnl"));
@@ -622,6 +622,7 @@ mod tests {
         assert!(source.contains("init_trailing_martingale_multicoin_side_state("));
         assert!(source.contains("init_trailing_martingale_multicoin_fill_state("));
         assert!(source.contains("record_tm_multicoin_gross_pnl("));
+        assert!(source.contains("record_tm_multicoin_close_fill("));
         assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
@@ -650,15 +651,21 @@ mod tests {
         assert!(source.contains("record_hsl_panic_fill("));
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
-                .matches("record_coin_hsl_realized_fill(")
+                .matches("record_tm_multicoin_close_fill(")
                 .count(),
             4
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
+                .matches("record_coin_hsl_realized_fill(")
+                .count(),
+            2
+        );
+        assert_eq!(
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("advance_coin_hsl_equity_after_close_fill(")
                 .count(),
-            3
+            1
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
@@ -693,8 +700,11 @@ mod tests {
             source
                 .matches("coin_fill_counts[int(b) * C + c] += 1.0f")
                 .count(),
-            4
+            1
         );
+        assert!(source.contains(
+            "coin_fill_counts[candidate_index * coin_count + coin] += 1.0f"
+        ));
         assert!(source.contains("coin_wel_enforcer_enabled"));
         assert!(source.contains("coin_wel_enforcer_threshold"));
         assert!(source.contains("twel_enforcer_enabled"));
