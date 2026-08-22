@@ -301,6 +301,7 @@ mod tests {
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin"));
+        assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_fused"));
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
@@ -313,6 +314,7 @@ mod tests {
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 62"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -331,8 +333,27 @@ mod tests {
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("if (long_side.hsl.signal_mode != short_side.hsl.signal_mode)"));
         assert!(source.contains("update_joint_pside_hsl("));
+        assert!(source.contains(
+            "const bool long_active = long_effective_n_positions > 0"
+        ));
+        assert!(source.contains(
+            "const bool short_active = short_effective_n_positions > 0"
+        ));
         assert!(source.contains("update_ema_multicoin_side_selection("));
         assert!(source.contains("generate_ema_multicoin_side_orders("));
+        assert!(source.contains("passivbot_ema_anchor_multicoin_fused_impl("));
+        assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
+        assert!(source.contains("write_dual_side_hsl_outputs("));
+        assert!(source.contains("write_dual_side_coin_hsl_outputs("));
+        assert!(source.contains("long_coin_overrides, short_coin_overrides"));
+        assert!(source.contains("net_position_cost -= short_side.psize[c]"));
+        assert!(source.contains(
+            "float twe_abs = fabs(net_position_cost / account.balance)"
+        ));
+        assert!(source.contains("account.balance = 0.0f"));
+        assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(source.contains("bool any_unstuck_enabled = false"));
+        assert!(source.contains("&& !any_unstuck_enabled"));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));

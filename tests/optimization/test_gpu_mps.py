@@ -324,7 +324,7 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     device float* output,
     uint b [[thread_position_in_grid]]
 ) {
-    if (b >= 6) return;
+    if (b >= 8) return;
     int po = int(b) * 22;
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
@@ -363,15 +363,19 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     for (int k = 1; k <= 5; ++k) {
         if (k == 2) {
             account.realized_pnl_total = -10.0f;
-            account.realized_pnl_long = -10.0f;
+            account.realized_pnl_long = b == 7 ? 0.0f : -10.0f;
+            account.realized_pnl_short = b == 7 ? -10.0f : 0.0f;
             account.balance = 90.0f;
-            long_side.coin_realized_pnl[0] = -10.0f;
+            long_side.coin_realized_pnl[0] = b == 7 ? 0.0f : -10.0f;
+            short_side.coin_realized_pnl[0] = b == 7 ? -10.0f : 0.0f;
         }
         if (b == 4 && k == 4) long_side.psize[0] = 0.0f;
         constant float* selected_bars = b == 5 ? invalid_bars : bars;
+        int long_slots = b == 7 ? 0 : 1;
+        int short_slots = b == 6 ? 0 : 1;
         bool valid = update_ema_multicoin_dual_side_hsl(
-            long_side, long_config, 1,
-            short_side, short_config, 1,
+            long_side, long_config, long_slots,
+            short_side, short_config, short_slots,
             account, selected_bars, coin_settings, k, 1,
             100.0f, 60000.0f, sample_enabled, sampled_tier
         );
@@ -419,6 +423,8 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
             controller(0) + controller(1),
             controller(0) + controller(0),
             controller(0) + controller(0),
+            controller(2) + controller(2),
+            controller(2) + controller(2),
         ],
         dtype=torch.float32,
         device="mps",
@@ -432,13 +438,13 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     invalid_bars[:, 0, 2] = float("nan")
     coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
     coin_settings[0, 4] = 1.0
-    output = torch.zeros((6, 12), dtype=torch.float32, device="mps")
+    output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
     )
     library.passivbot_ema_multicoin_dual_hsl_phase_probe(
-        params, bars, invalid_bars, coin_settings, output, threads=(6, 1, 1)
+        params, bars, invalid_bars, coin_settings, output, threads=(8, 1, 1)
     )
     torch.mps.synchronize()
     values = output.cpu().numpy()
@@ -460,6 +466,14 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     # A held coin without a valid mark rejects the sample before mutating any
     # controller instead of fabricating neutral unrealized PnL.
     assert values[5, :11].tolist() == [0.0] * 11
+    # Coin HSL skips a side without an effective slot budget while retaining
+    # the active side's controller, matching exact Rust asymmetric tradability.
+    assert values[6, :11].tolist() == [
+        1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.0, 0.0
+    ]
+    assert values[7, :11].tolist() == [
+        1.0, 1.0, 3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 1.0
+    ]
 
 
 @pytest.mark.skipif(
@@ -2756,6 +2770,216 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert torch.equal(
         exact_last_output["day_end_eq"][0], exact_last_output["day_end_eq"][1]
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
+    import passivbot_rust
+
+    source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
+    assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
+    assert "constant int FUSED_SCALAR_COLS = 62" in source
+
+    count = 512
+    coin_count = 3
+    phase = np.linspace(0.0, 12.0 * np.pi, count)
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin in range(coin_count):
+        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * (4.0 + coin)
+        hlcvs[:, coin, 0] = close * 1.01
+        hlcvs[:, coin, 1] = close * 0.99
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            10,
+            10,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+
+    base = [
+        0.1,
+        10.0,
+        30.0,
+        1.5,
+        0.01,
+        0.0,
+        0.0,
+        0.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        60.0,
+        60.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        2.0,
+    ]
+    base += _single_coin_exposure_fields() + [0.0, 0.0]
+    base += list(_UNSTUCK_DISABLED_VALUES.values())
+
+    def side_row(signal_mode):
+        hsl = dict(_HSL_DISABLED_VALUES)
+        hsl["hsl_enabled"] = 1.0
+        hsl["hsl_red_threshold"] = 0.9
+        hsl["hsl_signal_mode"] = float(signal_mode)
+        row = base + list(hsl.values())
+        assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        return row
+
+    unstuck_long = side_row(0)
+    unstuck_long[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")] = 1.0
+
+    rows = [
+        side_row(0) + side_row(0),
+        side_row(1) + side_row(1),
+        side_row(2) + side_row(2),
+        side_row(0) + side_row(1),
+        side_row(3) + side_row(3),
+        unstuck_long + side_row(0),
+    ]
+    batch_size = len(rows)
+    params = torch.as_tensor(
+        np.asarray(rows, dtype=np.float32), device="mps"
+    ).contiguous()
+    overrides = torch.full(
+        (coin_count, 29), float("nan"), dtype=torch.float32, device="mps"
+    )
+    run_settings = torch.tensor(
+        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 0.1, 1.0, 0.0, 0.0, 0.0],
+        dtype=torch.float32,
+        device="mps",
+    )
+    sizes = torch.tensor(
+        [
+            batch_size,
+            data["n"],
+            coin_count,
+            data["n_days"],
+            0,
+            10,
+            data["start_minute_of_day"],
+            data["start_minute_of_hour"],
+        ],
+        dtype=torch.int32,
+        device="mps",
+    )
+    end_steps = torch.full(
+        (batch_size,), data["n"] - 1, dtype=torch.int32, device="mps"
+    )
+    daily = torch.zeros(
+        (batch_size, data["n_days"], 9), dtype=torch.float32, device="mps"
+    )
+    daily[:, :, 1].fill_(float("inf"))
+    daily[:, :, 5].fill_(float("inf"))
+    scalars = torch.zeros((batch_size, 62), dtype=torch.float32, device="mps")
+    gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
+    coin_fill_counts = torch.zeros(
+        (batch_size, coin_count), dtype=torch.float32, device="mps"
+    )
+
+    library = torch.mps.compile_shader(source)
+    library.passivbot_ema_anchor_multicoin_fused(
+        data["bars"],
+        data["fill_ticks"],
+        data["touch_ticks"],
+        data["coin_settings"],
+        overrides,
+        overrides,
+        params,
+        run_settings,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        threads=(batch_size, 1, 1),
+    )
+    torch.mps.synchronize()
+    values = scalars.cpu().numpy()
+
+    assert values[:3, 13].tolist() == [1.0, 1.0, 1.0]
+    assert (values[:3, 24] > 0.0).all()
+    assert (values[:3, 26] > 0.0).all()
+    assert (values[:3, 24] - values[:3, 26] > 0.0).all()
+    assert values[:3, 32:34].tolist() == [[1.0, 1.0]] * 3
+    assert (values[:3, 38] > 0.0).all()
+    np.testing.assert_allclose(
+        values[:3, 18], values[:3, 58] + values[:3, 60]
+    )
+    np.testing.assert_allclose(
+        values[:3, 19], values[:3, 59] + values[:3, 61]
+    )
+    np.testing.assert_allclose(
+        values[:3, 24], daily[:3, :, 8].sum(dim=1).cpu().numpy()
+    )
+    # Rust analyzes abs(long TWE + signed short TWE), not gross exposure.
+    assert (values[:3, 22] <= 1.01).all()
+    assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
+    # Mixed/unknown signal modes and dual-side auto-unstuck are rejected before
+    # any state or fills; exact Rust requires one global unstuck arbitration.
+    assert values[3:, 9].tolist() == [0.0, 0.0, 0.0]
+    assert values[3:, 13].tolist() == [0.0, 0.0, 0.0]
+    assert values[3:, 24].tolist() == [0.0, 0.0, 0.0]
+
+    # Coin overrides can enable auto-unstuck even when the side template does
+    # not, so the kernel must inspect the effective per-coin setting too.
+    override_unstuck = overrides.clone()
+    override_unstuck[0, 13] = 1.0
+    override_sizes = sizes.clone()
+    override_sizes[0] = 1
+    override_daily = torch.zeros(
+        (1, data["n_days"], 9), dtype=torch.float32, device="mps"
+    )
+    override_daily[:, :, 1].fill_(float("inf"))
+    override_daily[:, :, 5].fill_(float("inf"))
+    override_scalars = torch.zeros((1, 62), dtype=torch.float32, device="mps")
+    override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
+    override_coin_fills = torch.zeros(
+        (1, coin_count), dtype=torch.float32, device="mps"
+    )
+    library.passivbot_ema_anchor_multicoin_fused(
+        data["bars"],
+        data["fill_ticks"],
+        data["touch_ticks"],
+        data["coin_settings"],
+        override_unstuck,
+        overrides,
+        params[:1],
+        run_settings,
+        override_sizes,
+        end_steps[:1],
+        override_daily,
+        override_scalars,
+        override_gaps,
+        override_coin_fills,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+    assert override_scalars[0, 9].item() == 0.0
+    assert override_scalars[0, 13].item() == 0.0
+    assert override_scalars[0, 24].item() == 0.0
 
 
 @pytest.mark.skipif(
