@@ -633,6 +633,7 @@ mod tests {
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
         assert!(source.contains("tm_multicoin_side_has_position("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
+        assert!(source.contains("generate_tm_multicoin_side_orders("));
         assert!(source.contains(
             "const TrailingMartingaleMulticoinSideConfig config ="
         ));
@@ -647,6 +648,9 @@ mod tests {
         ));
         assert!(source.contains(
             "update_tm_multicoin_side_selection(\n                side, config, bars, coin_settings, coin_overrides"
+        ));
+        assert!(source.contains(
+            "generate_tm_multicoin_side_orders(\n                side, config, account"
         ));
         assert!(source.contains("TrailingMartingaleMulticoinSideState side"));
         assert!(source.contains("TrailingMartingaleMulticoinFillState fills"));
