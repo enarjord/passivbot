@@ -315,8 +315,11 @@ mod tests {
         assert!(source.contains("constant int SCALAR_COLS = 57"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
+        assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
         assert!(source.contains("load_ema_multicoin_side_config("));
         assert!(source.contains("init_ema_multicoin_side_state("));
+        assert!(source.contains("init_ema_multicoin_fill_state("));
+        assert!(source.contains("process_ema_multicoin_side_fills("));
         assert!(source.contains(
             "accumulate_ema_multicoin_side_unrealized_pnl("
         ));
@@ -331,6 +334,9 @@ mod tests {
         ));
         assert!(source.contains(
             "update_ema_multicoin_side_indicators(\n            side, config, bars, coin_settings, k, C, start_hour_minute"
+        ));
+        assert!(source.contains(
+            "bool any_fill = process_ema_multicoin_side_fills("
         ));
         assert!(source.contains("EmaMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
@@ -384,7 +390,7 @@ mod tests {
         assert!(source.contains("device float* coin_fill_counts"));
         assert_eq!(
             source
-                .matches("coin_fill_counts[int(b) * C + c] += 1.0f")
+                .matches("coin_fill_counts[candidate_index * coin_count + c] += 1.0f")
                 .count(),
             2
         );

@@ -442,6 +442,142 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
     )
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_multicoin_fill_phase_shares_account_across_sides():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_ema_multicoin_shared_fill_phase_probe(
+    constant float* bars,
+    constant int* fill_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    device float* coin_fill_counts,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    EmaMulticoinSideState long_side;
+    EmaMulticoinSideState short_side;
+    long_side.hsl.signal_mode = HSL_SIGNAL_UNIFIED;
+    short_side.hsl.signal_mode = HSL_SIGNAL_UNIFIED;
+    long_side.psize[0] = 0.0f;
+    short_side.psize[0] = 0.0f;
+    long_side.pprice[0] = 0.0f;
+    short_side.pprice[0] = 0.0f;
+    long_side.entry_qty[0] = 1.0f;
+    short_side.entry_qty[0] = 2.0f;
+    long_side.entry_tick[0] = 95;
+    short_side.entry_tick[0] = 105;
+    long_side.close_qty[0] = 0.0f;
+    short_side.close_qty[0] = 0.0f;
+    long_side.secondary_close_qty[0] = 0.0f;
+    short_side.secondary_close_qty[0] = 0.0f;
+    long_side.close_is_unstuck_reducer[0] = false;
+    short_side.close_is_unstuck_reducer[0] = false;
+    long_side.close_is_hsl_panic[0] = false;
+    short_side.close_is_hsl_panic[0] = false;
+    long_side.position_open_k[0] = -1.0f;
+    short_side.position_open_k[0] = -1.0f;
+    long_side.position_last_fill_k[0] = -1.0f;
+    short_side.position_last_fill_k[0] = -1.0f;
+    long_side.coin_realized_pnl[0] = 0.0f;
+    short_side.coin_realized_pnl[0] = 0.0f;
+
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
+    bool long_filled = process_ema_multicoin_side_fills(
+        long_side, account, fills,
+        bars, fill_ticks, coin_settings, coin_overrides,
+        coin_fill_counts, 0, 1, 1, false, true,
+        false, false, 1.0f, 0.0f, false, 1000.0f
+    );
+    float balance_after_long = account.balance;
+    bool short_filled = process_ema_multicoin_side_fills(
+        short_side, account, fills,
+        bars, fill_ticks, coin_settings, coin_overrides,
+        coin_fill_counts, 0, 1, 1, true, true,
+        false, false, 1.0f, 0.0f, false, balance_after_long
+    );
+
+    output[0] = long_filled ? 1.0f : 0.0f;
+    output[1] = short_filled ? 1.0f : 0.0f;
+    output[2] = balance_after_long;
+    output[3] = account.balance;
+    output[4] = account.realized_pnl_total;
+    output[5] = account.realized_pnl_long;
+    output[6] = account.realized_pnl_short;
+    output[7] = fills.fill_count;
+    output[8] = fills.fill_count_entry;
+    output[9] = fills.fill_count_long;
+    output[10] = fills.day_fill_count;
+    output[11] = long_side.psize[0];
+    output[12] = short_side.psize[0];
+    output[13] = long_side.pprice[0];
+    output[14] = short_side.pprice[0];
+}
+"""
+
+    bars = torch.tensor(
+        [[[100.0, 100.0, 100.0, 1.0]], [[110.0, 90.0, 100.0, 1.0]]],
+        dtype=torch.float32,
+        device="mps",
+    )
+    fill_ticks = torch.tensor(
+        [[[100, 100]], [[110, 90]]], dtype=torch.int32, device="mps"
+    )
+    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings[0, 0] = 1.0
+    coin_settings[0, 1] = 1.0
+    coin_settings[0, 4] = 1.0
+    coin_settings[0, 5] = 0.01
+    coin_settings[0, 7] = 10.0
+    coin_overrides = torch.full(
+        (1, 29), float("nan"), dtype=torch.float32, device="mps"
+    )
+    coin_fill_counts = torch.zeros(1, dtype=torch.float32, device="mps")
+    output = torch.zeros(15, dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_ema_multicoin_shared_fill_phase_probe(
+        bars,
+        fill_ticks,
+        coin_settings,
+        coin_overrides,
+        coin_fill_counts,
+        output,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    np.testing.assert_allclose(
+        output.cpu().numpy(),
+        [
+            1.0,
+            1.0,
+            999.05,
+            996.95,
+            -3.05,
+            -0.95,
+            -2.10,
+            2.0,
+            2.0,
+            1.0,
+            2.0,
+            1.0,
+            2.0,
+            95.0,
+            105.0,
+        ],
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+
 def _single_coin_exposure_fields(
     *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
 ):
