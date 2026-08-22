@@ -24,7 +24,8 @@ from optimization.gpu.mps_kernel import (
     _decode_ema_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
 )
-from optimization.gpu.metrics import _fill_gap_metrics
+from optimization.gpu.metrics import _fill_gap_metrics, compute_objectives
+from optimization.gpu.service import MpsMulticoinEmaProxy
 
 
 def _assert_fill_scalar_contract(output):
@@ -2888,7 +2889,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         (coin_count, 29), float("nan"), dtype=torch.float32, device="mps"
     )
     run_settings = torch.tensor(
-        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 0.1, 1.0, 0.0, 0.0, 0.0],
+        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0],
         dtype=torch.float32,
         device="mps",
     )
@@ -2972,9 +2973,10 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         long_coin_overrides=override_matrix,
         short_coin_overrides=override_matrix,
         forager_score_hysteresis_pct=0.02,
-        max_realized_loss_pct=0.1,
+        max_realized_loss_pct=1.0,
         collect_coin_fill_counts=True,
     )
+    torch.testing.assert_close(runner.settings, run_settings)
     runner_output = runner.run(
         np.asarray(rows, dtype=np.float64), profile=True
     )
@@ -3002,6 +3004,90 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     ]
     assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
     assert runner.last_profile["kernel_seconds"] >= 0.0
+
+    metric_rows = []
+    red_threshold_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index(
+        "hsl_red_threshold"
+    )
+    restart_policy_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index(
+        "hsl_restart_policy"
+    )
+    for signal_mode in range(3):
+        row = side_row(signal_mode) + side_row(signal_mode)
+        for side_offset in (0, len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)):
+            row[side_offset + red_threshold_index] = 0.001
+            row[side_offset + restart_policy_index] = 2.0
+        metric_rows.append(row)
+
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.batch_size = 3
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": data["ts0"], "n": data["n"]}
+    proxy.run = runs[0]
+    proxy.sides = ["long", "short"]
+    proxy.needed_metrics = {
+        "hard_stop_panic_close_loss_drawdown_pct_mean",
+        "hard_stop_time_in_red_pct",
+        "hard_stop_triggers",
+        "hard_stop_triggers_long",
+        "hard_stop_triggers_short",
+    }
+    proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+    proxy.base_params = {
+        "long": dict(
+            zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, metric_rows[0][:width])
+        ),
+        "short": dict(
+            zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, metric_rows[0][width:])
+        ),
+    }
+    proxy.fused_runner = runner
+    proxy.runners = {}
+    candidates = [
+        {
+            **{
+                f"long_{key}": row[index]
+                for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+            },
+            **{
+                f"short_{key}": row[width + index]
+                for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+            },
+        }
+        for row in metric_rows
+    ]
+    np.testing.assert_allclose(
+        proxy._parameter_matrix(candidates, "long"),
+        np.asarray(metric_rows, dtype=np.float64)[:, :width],
+    )
+    np.testing.assert_allclose(
+        proxy._parameter_matrix(candidates, "short"),
+        np.asarray(metric_rows, dtype=np.float64)[:, width:],
+    )
+    seen_hsl_triggers = {}
+
+    def reduce_service_output(output, *args, **kwargs):
+        seen_hsl_triggers["long"] = output["hsl_triggers_long"].clone()
+        seen_hsl_triggers["short"] = output["hsl_triggers_short"].clone()
+        return compute_objectives(output, *args, **kwargs)
+
+    proxy._compute_objectives = reduce_service_output
+    service_results = proxy.evaluate(candidates)
+    assert (seen_hsl_triggers["long"] + seen_hsl_triggers["short"] > 0.0).all()
+    assert all(item["hard_stop_triggers"] > 0.0 for item in service_results)
+    assert all(
+        item["hard_stop_triggers"]
+        == item["hard_stop_triggers_long"] + item["hard_stop_triggers_short"]
+        for item in service_results
+    )
+    assert all(item["hard_stop_time_in_red_pct"] > 0.0 for item in service_results)
+    assert all(
+        item["hard_stop_panic_close_loss_drawdown_pct_mean"] > 0.0
+        for item in service_results
+    )
+
     with pytest.raises(ValueError, match="84 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     truncated = runner.run(

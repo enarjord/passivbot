@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added fused shared-account dual-side multi-coin EMA Anchor screening to Apple MPS optimization.
+  Unified, pside, and coin HSL now run inside one portfolio kernel, including per-coin HSL
+  overrides and shared event/tier scoring metrics. Exact Rust remains authoritative, dual-side
+  auto-unstuck and exposure repair remain fail closed, and dual-side multi-coin Trailing
+  Martingale remains on its existing pside-only directional proxy.
+
 - Added dual-side single-coin `unified` HSL to Apple MPS optimization for EMA Anchor and
   Trailing Martingale. Both Metal controllers now consume account-wide realized and unrealized
   PnL and require positions and blocking orders on both sides to be flat before ending a RED

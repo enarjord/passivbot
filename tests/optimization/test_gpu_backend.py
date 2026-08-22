@@ -1547,8 +1547,24 @@ def test_gpu_hsl_accepts_dual_side_multicoin_pside_mode():
 
 
 @pytest.mark.parametrize("signal_mode", ["coin", "unified"])
-def test_gpu_hsl_rejects_dual_side_multicoin_joint_account_modes(signal_mode):
+def test_gpu_hsl_accepts_dual_side_multicoin_fused_ema_modes(signal_mode):
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    coins = ["BTC", "ETH", "XRP"]
+    config["live"]["approved_coins"] = {"long": coins, "short": coins}
+    config["live"]["hsl_signal_mode"] = signal_mode
+    config["live"]["hedge_mode"] = True
+    for side in ("long", "short"):
+        config["bot"][side]["risk"]["n_positions"] = 3
+        config["bot"][side]["hsl"]["enabled"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("signal_mode", ["coin", "unified"])
+def test_gpu_hsl_keeps_dual_side_multicoin_tm_joint_modes_fail_closed(
+    signal_mode,
+):
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
     coins = ["BTC", "ETH", "XRP"]
     config["live"]["approved_coins"] = {"long": coins, "short": coins}
     config["live"]["hsl_signal_mode"] = signal_mode
@@ -1596,6 +1612,20 @@ def test_gpu_hsl_metrics_reject_only_dual_multicoin_tier_overlap():
                 "hard_stop_panic_close_loss_drawdown_pct_mean"
             },
         )
+
+    _validate_hsl_metric_topology(
+        {
+            "hard_stop_time_in_red_pct",
+            "hard_stop_panic_close_loss_drawdown_pct_mean",
+        },
+        coin_count=3,
+        enabled_sides=["long", "short"],
+        hard_stop_metrics={
+            "hard_stop_time_in_red_pct",
+            "hard_stop_panic_close_loss_drawdown_pct_mean",
+        },
+        shared_account_controller=True,
+    )
 
     _validate_hsl_metric_topology(
         {"hard_stop_panic_close_loss_sum"},
@@ -2145,7 +2175,7 @@ def test_gpu_multicoin_rejects_invalid_coin_hsl_values(hsl_patch, match):
 
 @pytest.mark.parametrize(
     ("signal_mode", "enabled_sides"),
-    [("pside", ["long"]), ("unified", ["long"]), ("coin", ["long", "short"])],
+    [("pside", ["long"]), ("unified", ["long"])],
 )
 def test_gpu_multicoin_coin_hsl_overrides_fail_closed_outside_one_side_coin_mode(
     signal_mode, enabled_sides
@@ -2163,6 +2193,42 @@ def test_gpu_multicoin_coin_hsl_overrides_fail_closed_outside_one_side_coin_mode
             config,
             strategy_kind="ema_anchor",
             enabled_sides=enabled_sides,
+            coin_count=3,
+        )
+
+
+def test_gpu_multicoin_coin_hsl_overrides_accept_fused_dual_side_ema():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {"hsl": {"enabled": True}},
+                "short": {"hsl": {"enabled": True}},
+            }
+        }
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind="ema_anchor",
+        enabled_sides=["long", "short"],
+        coin_count=3,
+    )
+
+
+def test_gpu_multicoin_coin_hsl_overrides_keep_dual_side_tm_fail_closed():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["coin_overrides"] = {
+        "ETH": {"bot": {"long": {"hsl": {"enabled": True}}}}
+    }
+
+    with pytest.raises(ValueError, match="fused dual-side EMA Anchor"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="trailing_martingale",
+            enabled_sides=["long", "short"],
             coin_count=3,
         )
 
@@ -4616,7 +4682,7 @@ def test_gpu_accepts_unstuck_bounds_for_single_side_but_pins_dual_multicoin():
         )
 
 
-def test_gpu_accepts_hsl_bounds_for_single_side_but_pins_dual_multicoin():
+def test_gpu_accepts_hsl_bounds_for_single_and_dual_multicoin():
     bounds = {
         "long_hsl_enabled": Bound(1.0, 1.0, None),
         "long_hsl_red_threshold": Bound(0.05, 0.2, None),
@@ -4626,10 +4692,9 @@ def test_gpu_accepts_hsl_bounds_for_single_side_but_pins_dual_multicoin():
     base = {"long_hsl_enabled": 1.0}
 
     _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=2)
-    with pytest.raises(ValueError, match="hsl_enabled"):
-        _validate_pinned_scope_bounds(
-            bounds, base, {"long", "short"}, coin_count=2
-        )
+    _validate_pinned_scope_bounds(
+        bounds, base, {"long", "short"}, coin_count=2
+    )
 
 
 def test_gpu_anchor_constant_twel_threshold_is_supported_for_multicoin():

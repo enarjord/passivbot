@@ -980,9 +980,9 @@ def _validate_scope_config(
                         )
             if repair_paths:
                 raise ValueError(
-                    "GPU dual-side multicoin exposure/unstuck repair requires a shared-"
-                    "balance portfolio kernel; independent directional runners "
-                    f"cannot model {sorted(repair_paths)}"
+                    "GPU dual-side multicoin exposure/unstuck repair requires a strategy-"
+                    "complete shared-balance portfolio kernel; the current GPU topology "
+                    f"does not model {sorted(repair_paths)}"
                 )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
@@ -1014,6 +1014,11 @@ def _validate_scope_config(
             signal_mode,
             coin_count=coin_count,
             enabled_side_count=len(enabled_sides),
+            shared_account_controller=(
+                coin_count > 1
+                and len(enabled_sides) == 2
+                and strategy_kind == "ema_anchor"
+            ),
         )
         for side in hsl_enabled_sides:
             hsl = config["bot"][side].get("hsl", {})
@@ -1089,7 +1094,12 @@ def _validate_dual_multicoin_metrics(
 
 
 def _validate_hsl_metric_topology(
-    needed_metrics, *, coin_count: int, enabled_sides, hard_stop_metrics
+    needed_metrics,
+    *,
+    coin_count: int,
+    enabled_sides,
+    hard_stop_metrics,
+    shared_account_controller: bool = False,
 ) -> None:
     shared_account_metrics = {
         "hard_stop_halt_to_restart_equity_loss_pct",
@@ -1107,7 +1117,12 @@ def _validate_hsl_metric_topology(
         & set(hard_stop_metrics)
         & (shared_account_metrics | tier_overlap_metrics)
     )
-    if int(coin_count) > 1 and len(set(enabled_sides)) > 1 and unsupported:
+    if (
+        int(coin_count) > 1
+        and len(set(enabled_sides)) > 1
+        and unsupported
+        and not shared_account_controller
+    ):
         raise ValueError(
             "GPU dual-side multi-coin HSL metrics require shared event-level "
             "account equity or minute-level cross-side tier overlap which "
@@ -1228,10 +1243,16 @@ def _validate_gpu_coin_overrides(
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
-        if signal_mode != "coin" or len(enabled_sides) != 1:
+        dual_fused_ema = (
+            strategy_kind == "ema_anchor" and len(enabled_sides) == 2
+        )
+        if signal_mode != "coin" or not (
+            len(enabled_sides) == 1 or dual_fused_ema
+        ):
             raise ValueError(
                 "GPU per-coin HSL overrides require live.hsl_signal_mode=coin "
-                "and exactly one enabled side; unsupported paths: "
+                "and either one enabled side or fused dual-side EMA Anchor; "
+                "unsupported paths: "
                 f"{sorted(hsl_override_paths)}"
             )
         for coin, patch in overrides.items():
@@ -2536,10 +2557,6 @@ def _validate_pinned_scope_bounds(
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
     pinned = {}
-    if len(enabled_sides) != 1:
-        pinned.update(
-            {f"{side}_hsl_enabled": 0.0 for side in ("long", "short")}
-        )
     if coin_count > 1 and len(enabled_sides) == 2:
         pinned.update(
             {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
@@ -3203,6 +3220,11 @@ def run_backend(
         coin_count=max_coin_count,
         enabled_sides=enabled_sides,
         hard_stop_metrics=HARD_STOP_PROXY_METRICS,
+        shared_account_controller=(
+            max_coin_count > 1
+            and len(enabled_sides) == 2
+            and strategy_kind == "ema_anchor"
+        ),
     )
     _validate_dual_multicoin_metrics(
         needed_metrics,

@@ -1,9 +1,11 @@
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
 
 from config.shared_bot import flatten_shared_bot_side
+from config.schema import get_template_config
 from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
@@ -453,6 +455,230 @@ def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
 
 
+def test_multicoin_ema_proxy_routes_dual_side_batch_through_fused_runner():
+    torch = pytest.importorskip("torch")
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.batch_size = 2
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": 1_000.0}
+    proxy.run = SimpleNamespace()
+    proxy.sides = ["long", "short"]
+    proxy.needed_metrics = {"hard_stop_triggers"}
+    proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    proxy.base_params = {
+        side: {
+            key: float(index + (100 if side == "short" else 0))
+            for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        }
+        for side in ("long", "short")
+    }
+    seen = {}
+
+    def run(params, **kwargs):
+        seen["params"] = params.copy()
+        seen["kwargs"] = kwargs
+        batch = len(params)
+        raw = {
+            key: torch.zeros(batch)
+            for key in (
+                "first_fill_ts",
+                "last_fill_ts",
+                "last_high_ts",
+                "first_eq_ts",
+                "last_eq_ts",
+            )
+        }
+        raw["hsl_triggers_long"] = torch.tensor([1.0, 2.0])
+        raw["hsl_triggers_short"] = torch.tensor([3.0, 4.0])
+        return raw
+
+    proxy.fused_runner = SimpleNamespace(run=run)
+    proxy.runners = {}
+
+    def reduce(output, *args, **kwargs):
+        return {
+            "hard_stop_triggers": output["hsl_triggers_long"]
+            + output["hsl_triggers_short"]
+        }
+
+    proxy._compute_objectives = reduce
+    candidates = [
+        {"long_offset": 0.25, "short_offset": 0.5},
+        {"long_offset": 0.75, "short_offset": 1.0},
+    ]
+
+    assert proxy.evaluate(candidates) == [
+        {"hard_stop_triggers": 4.0},
+        {"hard_stop_triggers": 6.0},
+    ]
+    assert seen["params"].shape == (
+        2,
+        len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS) * 2,
+    )
+    offset_index = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")
+    side_width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+    assert seen["params"][:, offset_index].tolist() == [0.25, 0.75]
+    assert seen["params"][:, side_width + offset_index].tolist() == [0.5, 1.0]
+    assert seen["kwargs"] == {"profile": False}
+
+
+def test_multicoin_ema_proxy_constructs_fused_shared_account_runner(monkeypatch):
+    torch = pytest.importorskip("torch")
+
+    import optimization.gpu.mps_kernel as mps_kernel
+    import optimization.gpu.service as gpu_service
+
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    backtest = ModuleType("backtest")
+    backtest._get_backtest_coin_override = lambda *args, **kwargs: {}
+    monkeypatch.setitem(sys.modules, "backtest", backtest)
+    config = get_template_config()
+    config["live"].update(
+        {
+            "strategy_kind": "ema_anchor",
+            "approved_coins": {
+                "long": ["BTC", "ETH"],
+                "short": ["BTC", "ETH"],
+            },
+            "ignored_coins": {"long": [], "short": []},
+            "hedge_mode": True,
+            "hsl_signal_mode": "coin",
+        }
+    )
+    config["backtest"]["dynamic_wel_by_tradability"] = True
+    for side in ("long", "short"):
+        config["bot"][side]["risk"].update(
+            {
+                "n_positions": 2,
+                "total_wallet_exposure_limit": 1.0,
+                "position_exposure_enforcer_enabled": False,
+                "total_exposure_enforcer_enabled": False,
+            }
+        )
+        config["bot"][side]["unstuck"]["enabled"] = False
+        config["bot"][side]["hsl"]["enabled"] = True
+        flat = flatten_shared_bot_side(config["bot"][side])
+        config["bot"][side].update(
+            {key: value for key, value in flat.items() if key.startswith("unstuck_")}
+        )
+
+    def bot_payload(side):
+        flat = flatten_shared_bot_side(config["bot"][side])
+        return {
+            "entry_cooldown_minutes": flat["risk_entry_cooldown_minutes"],
+            "filter_volume_ema_span_1m": flat[
+                "forager_volume_ema_span_1m"
+            ],
+            "filter_volatility_ema_span_1m": flat[
+                "forager_volatility_ema_span_1m"
+            ],
+            "filter_volume_drop_pct": flat["forager_volume_drop_pct"],
+            "forager_score_weights": flat["forager_score_weights"],
+            "n_positions": flat["n_positions"],
+            "total_wallet_exposure_limit": flat[
+                "total_wallet_exposure_limit"
+            ],
+            "risk_twel_entry_gate_enabled": flat[
+                "risk_twel_entry_gate_enabled"
+            ],
+            "risk_twel_enforcer_enabled": flat["risk_twel_enforcer_enabled"],
+            "risk_twel_enforcer_policy": flat["risk_twel_enforcer_policy"],
+            "risk_twel_enforcer_threshold": flat[
+                "risk_twel_enforcer_threshold"
+            ],
+            "unstuck_enabled": flat["unstuck_enabled"],
+            "hsl_enabled": flat["hsl_enabled"],
+        }
+
+    payload = SimpleNamespace(
+        bot_params_list=[
+            {side: bot_payload(side) for side in ("long", "short")}
+            for _ in range(2)
+        ],
+        strategy_params_list=[
+            {
+                side: dict(config["bot"][side]["strategy"]["ema_anchor"])
+                for side in ("long", "short")
+            }
+            for _ in range(2)
+        ],
+        exchange_params=[
+            {
+                "qty_step": 0.001,
+                "price_step": 0.01,
+                "min_qty": 0.001,
+                "min_cost": 5.0,
+                "c_mult": 1.0,
+                "maker_fee": 0.0002,
+                "taker_fee": 0.0006,
+            }
+            for _ in range(2)
+        ],
+        backtest_params={
+            "candle_interval_minutes": 1,
+            "dynamic_wel_by_tradability": True,
+            "forager_score_hysteresis_pct": 0.0,
+            "last_valid_indices": [3, 3],
+            "first_valid_indices": [0, 0],
+            "equity_hard_stop_loss": {"signal_mode": "coin"},
+            "coins": ["BTC", "ETH"],
+            "starting_balance": 1_000.0,
+            "global_warmup_bars": 1,
+            "trade_start_indices": [1, 1],
+            "requested_start_timestamp_ms": 0,
+            "first_timestamp_ms": 0,
+            "liquidation_threshold": 0.05,
+            "max_realized_loss_pct": 1.0,
+            "market_order_slippage_pct": 0.0,
+        },
+    )
+    backtest.build_backtest_payload = lambda *args, **kwargs: payload
+    monkeypatch.setattr(
+        gpu_service,
+        "build_mps_multicoin_data",
+        lambda *args, **kwargs: {
+            "n": 4,
+            "n_coins": 2,
+            "n_days": 1,
+            "ts0": 0,
+        },
+    )
+    constructed = {}
+
+    class FakeFusedRunner:
+        def __init__(self, run, data, **kwargs):
+            constructed.update({"run": run, "data": data, "kwargs": kwargs})
+
+    monkeypatch.setattr(
+        mps_kernel, "MpsEmaAnchorMulticoinFusedRunner", FakeFusedRunner
+    )
+    values = np.ones((4, 2, 4), dtype=np.float64)
+    timestamps = np.arange(4, dtype=np.int64) * 60_000
+
+    proxy = MpsMulticoinEmaProxy(
+        config=config,
+        hlcvs=values,
+        mss={"BTC": {}, "ETH": {}},
+        btc=np.ones(4, dtype=np.float64),
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=8,
+        needed_metrics={"hard_stop_time_in_red_pct"},
+    )
+
+    assert isinstance(proxy.fused_runner, FakeFusedRunner)
+    assert proxy.runners == {}
+    assert proxy.coin_override_contract["proxy_mode"] == (
+        "shared-account-fused-ema-v1"
+    )
+    assert proxy.coin_override_contract["hsl_proxy_mode"] == (
+        "shared-account-fused-ema-v1"
+    )
+    assert constructed["kwargs"]["long_coin_overrides"].shape == (2, 29)
+    assert constructed["kwargs"]["short_coin_overrides"].shape == (2, 29)
+
+
 def test_gpu_proxy_requires_complete_valid_tail():
     _require_complete_valid_tail(99, 100)
 
@@ -727,6 +953,16 @@ def test_one_sided_multicoin_hsl_accepts_all_signal_modes(signal_mode):
 def test_dual_side_multicoin_hsl_accepts_decomposable_pside_mode():
     validate_hsl_signal_topology(
         "pside", coin_count=3, enabled_side_count=2
+    )
+
+
+@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+def test_dual_side_multicoin_hsl_accepts_shared_account_controller(signal_mode):
+    validate_hsl_signal_topology(
+        signal_mode,
+        coin_count=3,
+        enabled_side_count=2,
+        shared_account_controller=True,
     )
 
 
