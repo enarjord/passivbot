@@ -483,6 +483,55 @@ def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
     assert side_outputs["short"]["hsl_triggers_short"].tolist() == [10.0, 4.0]
 
 
+def test_hedged_multicoin_hsl_cutoff_replay_honors_interrupt_between_sides():
+    torch = pytest.importorskip("torch")
+    calls = []
+    checks = 0
+
+    class FakeRunner:
+        def run(self, params, *, end_steps):
+            calls.append(params.tolist())
+            return {
+                key: torch.zeros(
+                    len(params),
+                    dtype=torch.bool if key.endswith("_enabled") else torch.float32,
+                )
+                for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+            }
+
+    def interrupt_check():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise KeyboardInterrupt
+
+    side_outputs = {
+        side: {
+            key: torch.zeros(
+                1,
+                dtype=torch.bool if key.endswith("_enabled") else torch.float32,
+            )
+            for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+        }
+        for side in ("long", "short")
+    }
+
+    with pytest.raises(KeyboardInterrupt):
+        _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
+            side_outputs=side_outputs,
+            runners={"long": FakeRunner(), "short": FakeRunner()},
+            parameter_matrices={
+                "long": np.asarray([[1.0]]),
+                "short": np.asarray([[2.0]]),
+            },
+            combined_output={"liq_step": torch.tensor([1.0])},
+            start_minute_of_day=0,
+            interrupt_check=interrupt_check,
+        )
+
+    assert calls == [[[1.0]]]
+
+
 def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():
     torch = pytest.importorskip("torch")
     proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)

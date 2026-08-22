@@ -705,6 +705,7 @@ def _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
     parameter_matrices: dict,
     combined_output: dict,
     start_minute_of_day: int,
+    interrupt_check=None,
 ) -> bool:
     """Replace full-run directional HSL summaries at a portfolio cutoff.
 
@@ -724,10 +725,13 @@ def _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
         - int(start_minute_of_day)
     )
     end_steps = np.maximum(end_steps, 1).astype(np.int32)
+    interrupt_check = interrupt_check or (lambda: None)
     for side in ("long", "short"):
+        interrupt_check()
         truncated = runners[side].run(
             parameter_matrices[side][indices], end_steps=end_steps
         )
+        interrupt_check()
         for key in DIRECTIONAL_HSL_OUTPUT_KEYS:
             side_outputs[side][key][cutoff_mask] = truncated[key].cpu()
     return True
@@ -2034,6 +2038,7 @@ class MpsMulticoinProxy:
                     start_minute_of_day=self.runners[
                         "long"
                     ].start_minute_of_day,
+                    interrupt_check=interrupt_check,
                 ):
                     output = _combine_hedged_multicoin_outputs(
                         side_outputs["long"],
