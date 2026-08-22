@@ -21,7 +21,8 @@ from optimization.gpu.model import (
 )
 from optimization.gpu.mps_kernel import (
     MpsEmaAnchorMulticoinFusedRunner,
-    _decode_ema_multicoin_fused_outputs,
+    MpsTrailingMartingaleMulticoinFusedRunner,
+    _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
 )
 from optimization.gpu.metrics import _fill_gap_metrics, compute_objectives
@@ -94,14 +95,14 @@ def test_mps_disabled_realized_loss_limit_has_finite_float32_encoding(value):
     assert _encode_max_realized_loss_pct(value) == 1.0
 
 
-def test_decode_ema_multicoin_fused_outputs_maps_directional_reductions():
+def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
     scalars = torch.arange(62, dtype=torch.float32).reshape(1, 62)
     gaps = torch.zeros((1, 128), dtype=torch.int32)
 
-    output = _decode_ema_multicoin_fused_outputs(daily, scalars, gaps)
+    output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
     assert "entry_initial_balance_pct" not in output
     assert torch.equal(output["entry_initial_balance_pct_long"], scalars[:, 21])
@@ -4623,6 +4624,59 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert output[3:, 9].tolist() == [0.0, 0.0, 0.0]
     assert output[3:, 13].tolist() == [0.0, 0.0, 0.0]
     assert output[3:, 24].tolist() == [0.0, 0.0, 0.0]
+
+    override_matrix = np.full((coin_count, 44), np.nan, dtype=np.float32)
+    runner = MpsTrailingMartingaleMulticoinFusedRunner(
+        runs[0],
+        data,
+        long_coin_overrides=override_matrix,
+        short_coin_overrides=override_matrix,
+        forager_score_hysteresis_pct=0.02,
+        max_realized_loss_pct=1.0,
+        collect_coin_fill_counts=True,
+    )
+    torch.testing.assert_close(runner.settings, run_settings)
+    runner_output = runner.run(np.asarray(rows, dtype=np.float64), profile=True)
+    torch.mps.synchronize()
+    torch.testing.assert_close(runner_output["day_end_eq"], daily[:, :, 0])
+    torch.testing.assert_close(runner_output["day_min_eq"], daily[:, :, 1])
+    torch.testing.assert_close(runner_output["fill_count"], scalars[:, 24])
+    torch.testing.assert_close(
+        runner_output["entry_initial_balance_pct_long"], scalars[:, 21]
+    )
+    torch.testing.assert_close(
+        runner_output["entry_initial_balance_pct_short"], scalars[:, 57]
+    )
+    torch.testing.assert_close(runner_output["profit_sum_long"], scalars[:, 58])
+    torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 59])
+    torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 60])
+    torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 61])
+    assert runner_output["alive"].cpu().tolist() == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+    assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
+    assert runner.last_profile["kernel_seconds"] >= 0.0
+
+    with pytest.raises(ValueError, match="118 columns"):
+        runner.run(np.asarray([side_row(0)], dtype=np.float64))
+    with pytest.raises(ValueError, match="short override matrix shaped"):
+        MpsTrailingMartingaleMulticoinFusedRunner(
+            runs[0],
+            data,
+            short_coin_overrides=np.empty((coin_count, 43), dtype=np.float32),
+        )
+    truncated = runner.run(
+        np.asarray([rows[0]], dtype=np.float64),
+        end_steps=np.asarray([60], dtype=np.int32),
+    )
+    torch.mps.synchronize()
+    assert truncated["last_eq_ts"].item() <= 59 * 60_000.0
+    assert truncated["fill_count"].item() <= output[0, 24]
 
     override_unstuck = overrides.clone()
     override_unstuck[0, 28] = 1.0

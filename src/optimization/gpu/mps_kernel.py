@@ -22,7 +22,7 @@ MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
 MPS_MULTICOIN_SCALAR_COLS = 57
 MPS_DIRECTIONAL_SCALAR_COLS = 62
-MPS_EMA_MULTICOIN_FUSED_SCALAR_COLS = 62
+MPS_MULTICOIN_FUSED_SCALAR_COLS = 62
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -165,7 +165,7 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
     }
 
 
-def _decode_ema_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
+def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
     output = _decode_outputs(daily, scalars, gaps)
     long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
     output.update(
@@ -664,6 +664,9 @@ class MpsEmaAnchorMulticoinRunner:
             threads=(batch_size, 1, 1),
         )
 
+    def _library(self):
+        return _ema_anchor_multicoin_shader_library()
+
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps)
 
@@ -698,7 +701,7 @@ class MpsEmaAnchorMulticoinRunner:
                 device="mps",
             )
         prepared = time.perf_counter()
-        library = _ema_anchor_multicoin_shader_library()
+        library = self._library()
         compiled = time.perf_counter()
         if profile:
             torch.mps.synchronize()
@@ -735,7 +738,7 @@ class MpsEmaAnchorMulticoinRunner:
 class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent dual-side shared-account EMA Anchor runner on Apple MPS."""
 
-    scalar_cols = MPS_EMA_MULTICOIN_FUSED_SCALAR_COLS
+    scalar_cols = MPS_MULTICOIN_FUSED_SCALAR_COLS
 
     def __init__(
         self,
@@ -845,7 +848,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
-        return _decode_ema_multicoin_fused_outputs(daily, scalars, gaps)
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
@@ -903,44 +906,22 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             )
         return np.ascontiguousarray(params, dtype=np.float32)
 
-    def run(
+    def _library(self):
+        return _trailing_martingale_multicoin_shader_library()
+
+    def _dispatch(
         self,
-        params: np.ndarray,
+        library,
+        params_mps,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
         *,
-        profile: bool = False,
-        end_steps: np.ndarray | None = None,
-    ) -> dict:
-        started = time.perf_counter()
-        matrix = self._pack_params(params)
-        packed = time.perf_counter()
-        params_mps = torch.as_tensor(matrix, device="mps")
-        batch_size = int(matrix.shape[0])
-        end_steps_mps = self._end_steps(end_steps, batch_size)
-        daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
-        sizes_key = (batch_size, int(matrix.shape[1]))
-        if sizes_key not in self._sizes:
-            self._sizes[sizes_key] = torch.tensor(
-                [
-                    batch_size,
-                    self.n,
-                    self.n_coins,
-                    self.n_days,
-                    self.requested_start_idx,
-                    self.run_config.warmup_bars,
-                    self.start_minute_of_day,
-                    self.start_minute_of_hour,
-                ],
-                dtype=torch.int32,
-                device="mps",
-            )
-        prepared = time.perf_counter()
-        library = _trailing_martingale_multicoin_shader_library()
-        compiled = time.perf_counter()
-        if profile:
-            torch.mps.synchronize()
-            dispatched = time.perf_counter()
-        else:
-            dispatched = compiled
+        batch_size: int,
+    ) -> None:
         library.passivbot_trailing_martingale_multicoin(
             self.bars,
             self.fill_ticks,
@@ -952,28 +933,136 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.coin_overrides,
             params_mps,
             self.settings,
-            self._sizes[sizes_key],
-            end_steps_mps,
+            sizes,
+            end_steps,
             daily,
             scalars,
             gaps,
             coin_fill_counts,
             threads=(batch_size, 1, 1),
         )
-        if profile:
-            torch.mps.synchronize()
-        finished = time.perf_counter()
-        self.last_profile = {
-            "cpu_pack_seconds": packed - started,
-            "upload_and_zero_seconds": prepared - packed,
-            "compile_seconds": compiled - prepared,
-            "pre_dispatch_sync_seconds": dispatched - compiled,
-            "kernel_seconds": finished - dispatched,
-        }
-        output = _decode_outputs(daily, scalars, gaps)
-        if self.collect_coin_fill_counts:
-            output["coin_fill_counts"] = coin_fill_counts
-        return output
+
+    def _decode(self, daily, scalars, gaps) -> dict:
+        return _decode_outputs(daily, scalars, gaps)
+
+
+class MpsTrailingMartingaleMulticoinFusedRunner(
+    MpsTrailingMartingaleMulticoinRunner
+):
+    """Persistent dual-side shared-account Trailing Martingale runner on MPS."""
+
+    scalar_cols = MPS_MULTICOIN_FUSED_SCALAR_COLS
+
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        long_coin_overrides: np.ndarray | None = None,
+        short_coin_overrides: np.ndarray | None = None,
+        forager_score_hysteresis_pct: float = 0.0,
+        max_realized_loss_pct: float = 1.0,
+        collect_coin_fill_counts: bool = False,
+        market_order_slippage_pct: float = 0.0,
+        hsl_panic_market_long: bool = False,
+        hsl_panic_market_short: bool = False,
+    ):
+        super().__init__(
+            run,
+            data,
+            side="long",
+            coin_overrides=long_coin_overrides,
+            forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+            max_realized_loss_pct=max_realized_loss_pct,
+            collect_coin_fill_counts=collect_coin_fill_counts,
+            market_order_slippage_pct=market_order_slippage_pct,
+            hsl_panic_market=hsl_panic_market_long,
+        )
+        if short_coin_overrides is None:
+            short_coin_overrides = np.full(
+                (self.n_coins, self.coin_override_cols),
+                np.nan,
+                dtype=np.float32,
+            )
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        expected_shape = (self.n_coins, self.coin_override_cols)
+        if short_coin_overrides.shape != expected_shape:
+            raise ValueError(
+                "expected fused multicoin Trailing Martingale short override "
+                f"matrix shaped {expected_shape}, got {short_coin_overrides.shape}"
+            )
+        self.short_coin_overrides = torch.as_tensor(
+            np.ascontiguousarray(short_coin_overrides), device="mps"
+        )
+        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
+            float(max_realized_loss_pct)
+        )
+        liq_floor = max(0.0, run.starting_balance) * max(
+            0.0, run.liquidation_threshold
+        )
+        self.settings = torch.tensor(
+            [
+                run.starting_balance,
+                liq_floor,
+                run.interval_ms,
+                0.0,
+                float(forager_score_hysteresis_pct),
+                encoded_max_realized_loss_pct,
+                float(self.collect_coin_fill_counts),
+                float(market_order_slippage_pct),
+                float(bool(hsl_panic_market_long)),
+                float(bool(hsl_panic_market_short)),
+            ],
+            dtype=torch.float32,
+            device="mps",
+        )
+
+    def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        expected = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS) * 2
+        if params.ndim != 2 or params.shape[1] != expected:
+            got = params.shape[1] if params.ndim == 2 else params.shape
+            raise ValueError(
+                "expected fused multicoin Trailing Martingale parameter matrix "
+                f"with {expected} columns, got {got}"
+            )
+        return np.ascontiguousarray(params, dtype=np.float32)
+
+    def _dispatch(
+        self,
+        library,
+        params_mps,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        *,
+        batch_size: int,
+    ) -> None:
+        library.passivbot_trailing_martingale_multicoin_fused(
+            self.bars,
+            self.fill_ticks,
+            self.touch_ticks,
+            self.touch_nearest_ticks,
+            self.touch_min_qty_bits,
+            self.touch_min_qty_relation,
+            self.coin_settings,
+            self.coin_overrides,
+            self.short_coin_overrides,
+            params_mps,
+            self.settings,
+            sizes,
+            end_steps,
+            daily,
+            scalars,
+            gaps,
+            coin_fill_counts,
+            threads=(batch_size, 1, 1),
+        )
+
+    def _decode(self, daily, scalars, gaps) -> dict:
+        return _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
 
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
