@@ -447,6 +447,71 @@ struct TrailingMartingaleMulticoinSideConfig {
     bool coin_hsl_mode;
 };
 
+// Shared fill accounting is separate from strategy-side state so a fused
+// long+short kernel can apply both directional fill passes to one account and
+// one chronology without reconstructing totals from directional summaries.
+struct TrailingMartingaleMulticoinFillState {
+    float pnl_recovery_peak;
+    float pnl_recovery_peak_k;
+    float pnl_recovery_max_min;
+    float profit_sum;
+    float loss_sum;
+    float profit_sum_long;
+    float loss_sum_long;
+    float profit_sum_short;
+    float loss_sum_short;
+    float fill_count;
+    float fill_count_entry;
+    float fill_count_long;
+    float held_max_min;
+    float held_sum_min;
+    float held_count;
+    float position_unchanged_max_min;
+    float day_volume;
+    float day_fill_count;
+};
+
+inline TrailingMartingaleMulticoinFillState
+init_trailing_martingale_multicoin_fill_state() {
+    TrailingMartingaleMulticoinFillState fills;
+    fills.pnl_recovery_peak = -INFINITY;
+    fills.pnl_recovery_peak_k = -1.0f;
+    fills.pnl_recovery_max_min = 0.0f;
+    fills.profit_sum = 0.0f;
+    fills.loss_sum = 0.0f;
+    fills.profit_sum_long = 0.0f;
+    fills.loss_sum_long = 0.0f;
+    fills.profit_sum_short = 0.0f;
+    fills.loss_sum_short = 0.0f;
+    fills.fill_count = 0.0f;
+    fills.fill_count_entry = 0.0f;
+    fills.fill_count_long = 0.0f;
+    fills.held_max_min = 0.0f;
+    fills.held_sum_min = 0.0f;
+    fills.held_count = 0.0f;
+    fills.position_unchanged_max_min = 0.0f;
+    fills.day_volume = 0.0f;
+    fills.day_fill_count = 0.0f;
+    return fills;
+}
+
+inline void record_tm_multicoin_gross_pnl(
+    float pnl,
+    thread TrailingMartingaleMulticoinFillState& fills,
+    bool short_side
+) {
+    record_gross_pnl(pnl, fills.profit_sum, fills.loss_sum);
+    if (short_side) {
+        record_gross_pnl(
+            pnl, fills.profit_sum_short, fills.loss_sum_short
+        );
+    } else {
+        record_gross_pnl(
+            pnl, fills.profit_sum_long, fills.loss_sum_long
+        );
+    }
+}
+
 inline TrailingMartingaleMulticoinSideConfig
 load_trailing_martingale_multicoin_side_config(
     constant float* params,
@@ -946,14 +1011,16 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     thread float& balance = account.balance;
     thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
     thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
-    float pnl_recovery_peak = -INFINITY;
-    float pnl_recovery_peak_k = -1.0f;
-    float pnl_recovery_max_min = 0.0f;
-    float profit_sum = 0.0f;
-    float loss_sum = 0.0f;
-    float fill_count = 0.0f;
-    float fill_count_entry = 0.0f;
-    float fill_count_long = 0.0f;
+    TrailingMartingaleMulticoinFillState fills =
+        init_trailing_martingale_multicoin_fill_state();
+    thread float& pnl_recovery_peak = fills.pnl_recovery_peak;
+    thread float& pnl_recovery_peak_k = fills.pnl_recovery_peak_k;
+    thread float& pnl_recovery_max_min = fills.pnl_recovery_max_min;
+    thread float& profit_sum = fills.profit_sum;
+    thread float& loss_sum = fills.loss_sum;
+    thread float& fill_count = fills.fill_count;
+    thread float& fill_count_entry = fills.fill_count_entry;
+    thread float& fill_count_long = fills.fill_count_long;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     bool alive = true;
@@ -967,10 +1034,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float total_wallet_exposure_max = 0.0f;
     float total_wallet_exposure_mean = 0.0f;
     float total_wallet_exposure_samples = 0.0f;
-    float held_max_min = 0.0f;
-    float held_sum_min = 0.0f;
-    float held_count = 0.0f;
-    float position_unchanged_max_min = 0.0f;
+    thread float& held_max_min = fills.held_max_min;
+    thread float& held_sum_min = fills.held_sum_min;
+    thread float& held_count = fills.held_count;
+    thread float& position_unchanged_max_min =
+        fills.position_unchanged_max_min;
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
@@ -992,11 +1060,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float day_end = 0.0f;
     float day_min = INFINITY;
     float day_dd = 0.0f;
-    float day_volume = 0.0f;
+    thread float& day_volume = fills.day_volume;
     float day_has_fill = 0.0f;
     float day_min_balance = INFINITY;
     float day_start_balance = balance;
-    float day_fill_count = 0.0f;
+    thread float& day_fill_count = fills.day_fill_count;
 
     for (int k = 1; k < stop_k; ++k) {
         const int day_index = (start_day_minute + k) / 1440;
@@ -1302,7 +1370,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             )) {
                             float net_pnl = pnl
                                 - qty * fill_price * c_mult * maker_fee;
-                            record_gross_pnl(pnl, profit_sum, loss_sum);
+                            record_tm_multicoin_gross_pnl(
+                                pnl, fills, short_side
+                            );
                             record_realized_net(
                                 net_pnl, account,
                                 day_fill_count, fill_count, fill_count_entry,
@@ -1352,7 +1422,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     }
                     float grid_net_pnl = grid_pnl
                         - grid_qty * group.price * c_mult * maker_fee;
-                    record_gross_pnl(grid_pnl, profit_sum, loss_sum);
+                    record_tm_multicoin_gross_pnl(
+                        grid_pnl, fills, short_side
+                    );
                     record_realized_net(
                         grid_net_pnl, account,
                         day_fill_count, fill_count, fill_count_entry,
@@ -1433,7 +1505,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                             );
                         }
                     }
-                    record_gross_pnl(pnl, profit_sum, loss_sum);
+                    record_tm_multicoin_gross_pnl(
+                        pnl, fills, short_side
+                    );
                     record_realized_net(
                         net_pnl, account,
                         day_fill_count, fill_count, fill_count_entry,

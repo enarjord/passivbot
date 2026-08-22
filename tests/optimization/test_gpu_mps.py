@@ -421,6 +421,94 @@ kernel void passivbot_tm_multicoin_side_state_isolation_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_fill_state_shares_directional_accounting():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_fill_state_probe(
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    TrailingMartingaleMulticoinFillState fills =
+        init_trailing_martingale_multicoin_fill_state();
+    record_tm_multicoin_gross_pnl(4.0f, fills, false);
+    record_tm_multicoin_gross_pnl(-2.0f, fills, false);
+    record_tm_multicoin_gross_pnl(3.0f, fills, true);
+    record_tm_multicoin_gross_pnl(-5.0f, fills, true);
+    record_realized_net(
+        -1.0f, account,
+        fills.day_fill_count, fills.fill_count,
+        fills.fill_count_entry, fills.fill_count_long,
+        fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
+        fills.pnl_recovery_max_min, 10.0f, true, true
+    );
+    record_realized_net(
+        2.0f, account,
+        fills.day_fill_count, fills.fill_count,
+        fills.fill_count_entry, fills.fill_count_long,
+        fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
+        fills.pnl_recovery_max_min, 20.0f, false, false
+    );
+    output[0] = account.balance;
+    output[1] = account.realized_pnl_total;
+    output[2] = account.realized_pnl_long;
+    output[3] = account.realized_pnl_short;
+    output[4] = fills.profit_sum;
+    output[5] = fills.loss_sum;
+    output[6] = fills.profit_sum_long;
+    output[7] = fills.loss_sum_long;
+    output[8] = fills.profit_sum_short;
+    output[9] = fills.loss_sum_short;
+    output[10] = fills.fill_count;
+    output[11] = fills.fill_count_entry;
+    output[12] = fills.fill_count_long;
+    output[13] = fills.day_fill_count;
+    output[14] = fills.pnl_recovery_peak;
+    output[15] = fills.pnl_recovery_peak_k;
+    output[16] = fills.pnl_recovery_max_min;
+    output[17] = fills.held_max_min + fills.held_sum_min
+        + fills.held_count + fills.position_unchanged_max_min
+        + fills.day_volume;
+}
+"""
+
+    output = torch.zeros(18, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_fill_state_probe(
+        output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [
+        1001.0,
+        1.0,
+        -1.0,
+        2.0,
+        7.0,
+        7.0,
+        4.0,
+        2.0,
+        3.0,
+        5.0,
+        2.0,
+        1.0,
+        1.0,
+        2.0,
+        1.0,
+        20.0,
+        10.0,
+        0.0,
+    ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_dual_hsl_phase_covers_all_signal_topologies():
     import passivbot_rust
 

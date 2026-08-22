@@ -612,8 +612,16 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            source
+                .matches("struct TrailingMartingaleMulticoinFillState")
+                .count(),
+            1
+        );
         assert!(source.contains("load_trailing_martingale_multicoin_side_config("));
         assert!(source.contains("init_trailing_martingale_multicoin_side_state("));
+        assert!(source.contains("init_trailing_martingale_multicoin_fill_state("));
+        assert!(source.contains("record_tm_multicoin_gross_pnl("));
         assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
@@ -628,6 +636,7 @@ mod tests {
             "update_tm_multicoin_side_indicators(\n            side, config, bars, coin_settings, k, C, start_hour_minute"
         ));
         assert!(source.contains("TrailingMartingaleMulticoinSideState side"));
+        assert!(source.contains("TrailingMartingaleMulticoinFillState fills"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
         assert!(source.contains("thread HslState* coin_hsl = side.coin_hsl"));
         assert!(source.contains("thread float* psize = side.psize"));
