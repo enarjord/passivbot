@@ -458,7 +458,15 @@ The CPU-side NSGA-II proposal stage uses the same `optimize.pymoo.shared` crosso
 duplicate-elimination controls as the ordinary pymoo optimizer.
 
 - `population_size` is the NSGA-II proxy population.
-- `batch_size` caps candidates per MPS dispatch.
+- `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
+  shares the GPU with WindowServer, the backend transparently splits a batch when its
+  candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too
+  long. The effective dispatch size is logged as `GPU MPS dispatch safety cap active`; population
+  size, candidate order, NSGA-II ask/tell semantics, and the number of proxy evaluations are
+  unchanged. Ctrl+C is polled between those bounded dispatches. If it arrives during a generation,
+  that incomplete ask/tell transaction is discarded and the last complete checkpoint is retained.
+  A topology whose single candidate already exceeds the safety envelope fails closed with guidance
+  to shorten the date range or reduce its coin count.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
 - `drift_probes` reserves at least part of that validation budget for candidates away from the
   proxy front.

@@ -24,6 +24,7 @@ from optimization.backends.gpu_backend import (
     _build_gpu_nsga2,
     _build_proxy_parameter_dicts,
     _checkpoint_signature,
+    _checkpoint_gpu_interrupt,
     _constraint_classification_mismatch,
     _constraint_diagnostics,
     _ema_multicoin_bound_map,
@@ -111,6 +112,34 @@ def test_gpu_exact_submission_checks_interrupt_before_apply_async():
 
     interrupt_check.assert_called_once_with()
     pool.apply_async.assert_not_called()
+
+
+def test_gpu_interrupt_discards_incomplete_ask_tell_without_checkpointing():
+    save_checkpoint = MagicMock()
+
+    saved = _checkpoint_gpu_interrupt(
+        generation_in_progress=True,
+        generation=7,
+        exact_done=23,
+        save_checkpoint=save_checkpoint,
+    )
+
+    assert not saved
+    save_checkpoint.assert_not_called()
+
+
+def test_gpu_interrupt_checkpoints_complete_generation_state():
+    save_checkpoint = MagicMock()
+
+    saved = _checkpoint_gpu_interrupt(
+        generation_in_progress=False,
+        generation=7,
+        exact_done=23,
+        save_checkpoint=save_checkpoint,
+    )
+
+    assert saved
+    save_checkpoint.assert_called_once_with(force=True)
 
 
 def _long_only_ema_config():

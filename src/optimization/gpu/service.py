@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
+import logging
 import os
 
 import numpy as np
@@ -99,6 +100,62 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_panic_loss_drawdown_max",
     "hsl_panic_loss_drawdown_count",
 }
+
+
+# One MPS thread simulates one candidate across every candle stream. Long-running
+# command buffers can starve WindowServer because Apple silicon shares the GPU
+# with the desktop. Keep one dispatch below the bounded work envelope measured
+# on the supported M3 target; callers may still use larger evolutionary
+# populations and configured batches, which are split transparently.
+MPS_MAX_DISPATCH_CANDIDATE_BARS = 500_000_000
+
+
+def _mps_dispatch_batch_size(
+    requested_batch_size: int,
+    *,
+    n_bars: int,
+    n_coins: int = 1,
+    n_sides: int = 1,
+) -> int:
+    requested_batch_size = max(1, int(requested_batch_size))
+    n_bars = max(1, int(n_bars))
+    n_coins = max(1, int(n_coins))
+    n_sides = max(1, int(n_sides))
+    per_candidate_work = n_bars * n_coins * n_sides
+    if per_candidate_work > MPS_MAX_DISPATCH_CANDIDATE_BARS:
+        raise ValueError(
+            "one GPU candidate exceeds the Apple MPS dispatch safety envelope "
+            f"(bars={n_bars}, coins={n_coins}, sides={n_sides}, "
+            f"candidate_bars={per_candidate_work}, "
+            f"max_candidate_bars={MPS_MAX_DISPATCH_CANDIDATE_BARS}); "
+            "use a shorter date range or fewer coins"
+        )
+    safe_batch_size = max(
+        1, MPS_MAX_DISPATCH_CANDIDATE_BARS // per_candidate_work
+    )
+    return min(requested_batch_size, safe_batch_size)
+
+
+def _log_mps_dispatch_cap(
+    *,
+    requested_batch_size: int,
+    dispatch_batch_size: int,
+    n_bars: int,
+    n_coins: int,
+    n_sides: int,
+) -> None:
+    if dispatch_batch_size >= requested_batch_size:
+        return
+    logging.warning(
+        "GPU MPS dispatch safety cap active | requested_batch=%d dispatch_batch=%d "
+        "bars=%d coins=%d sides=%d max_candidate_bars=%d",
+        requested_batch_size,
+        dispatch_batch_size,
+        n_bars,
+        n_coins,
+        n_sides,
+        MPS_MAX_DISPATCH_CANDIDATE_BARS,
+    )
 
 _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "adg_pnl",
@@ -845,6 +902,7 @@ class MpsSingleCoinProxy:
         exchange: str,
         batch_size: int,
         needed_metrics,
+        interrupt_check=None,
     ):
         try:
             import torch
@@ -871,6 +929,7 @@ class MpsSingleCoinProxy:
         self._compute_objectives = compute_objectives
         self.needed_metrics = set(needed_metrics)
         self.batch_size = max(1, int(batch_size))
+        self.interrupt_check = interrupt_check or (lambda: None)
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
         ).strip().lower() in {
@@ -921,6 +980,19 @@ class MpsSingleCoinProxy:
         }
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")
+        enabled_side_count = sum(self.enabled.values())
+        self.dispatch_batch_size = _mps_dispatch_batch_size(
+            self.batch_size,
+            n_bars=len(hlcvs),
+            n_sides=enabled_side_count,
+        )
+        _log_mps_dispatch_cap(
+            requested_batch_size=self.batch_size,
+            dispatch_batch_size=self.dispatch_batch_size,
+            n_bars=len(hlcvs),
+            n_coins=1,
+            n_sides=enabled_side_count,
+        )
         hsl_enabled_sides = [
             side
             for side, bot in (("long", long_bot), ("short", short_bot))
@@ -1095,13 +1167,19 @@ class MpsSingleCoinProxy:
     def evaluate(self, candidates: list[dict]) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
-        for start in range(0, len(candidates), self.batch_size):
-            chunk = candidates[start : start + self.batch_size]
+        dispatch_batch_size = getattr(
+            self, "dispatch_batch_size", self.batch_size
+        )
+        interrupt_check = getattr(self, "interrupt_check", lambda: None)
+        for start in range(0, len(candidates), dispatch_batch_size):
+            interrupt_check()
+            chunk = candidates[start : start + dispatch_batch_size]
             parameter_matrix = self._parameter_matrix(chunk)
             output = self.runner.run(
                 parameter_matrix,
                 profile=self.profile_enabled,
             )
+            interrupt_check()
             output = {
                 key: value.cpu()
                 for key, value in output.items()
@@ -1385,6 +1463,7 @@ class MpsMulticoinProxy:
         exchange: str,
         batch_size: int,
         needed_metrics,
+        interrupt_check=None,
     ):
         try:
             import torch
@@ -1410,6 +1489,7 @@ class MpsMulticoinProxy:
         self._compute_objectives = compute_objectives
         self.needed_metrics = set(needed_metrics)
         self.batch_size = max(1, int(batch_size))
+        self.interrupt_check = interrupt_check or (lambda: None)
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
         ).strip().lower() in {"1", "true", "yes", "y"}
@@ -1447,6 +1527,19 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
+        self.dispatch_batch_size = _mps_dispatch_batch_size(
+            self.batch_size,
+            n_bars=len(values),
+            n_coins=coin_count,
+            n_sides=len(enabled_sides),
+        )
+        _log_mps_dispatch_cap(
+            requested_batch_size=self.batch_size,
+            dispatch_batch_size=self.dispatch_batch_size,
+            n_bars=len(values),
+            n_coins=coin_count,
+            n_sides=len(enabled_sides),
+        )
         self.shared_account_fused = (
             self.strategy_kind == "ema_anchor" and len(self.sides) == 2
         )
@@ -1868,8 +1961,13 @@ class MpsMulticoinProxy:
         results: list[dict] = []
         torch = self._torch
         fused_runner = getattr(self, "fused_runner", None)
-        for start in range(0, len(candidates), self.batch_size):
-            chunk = candidates[start : start + self.batch_size]
+        dispatch_batch_size = getattr(
+            self, "dispatch_batch_size", self.batch_size
+        )
+        interrupt_check = getattr(self, "interrupt_check", lambda: None)
+        for start in range(0, len(candidates), dispatch_batch_size):
+            interrupt_check()
+            chunk = candidates[start : start + dispatch_batch_size]
             parameter_matrices = {
                 side: self._parameter_matrix(chunk, side) for side in self.sides
             }
@@ -1882,19 +1980,20 @@ class MpsMulticoinProxy:
                     fused_parameters,
                     profile=self.profile_enabled,
                 )
+                interrupt_check()
                 output = {
                     key: value.cpu()
                     for key, value in raw_output.items()
                     if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
                 }
             else:
-                raw_side_outputs = {
-                    side: self.runners[side].run(
+                raw_side_outputs = {}
+                for side in self.sides:
+                    raw_side_outputs[side] = self.runners[side].run(
                         parameter_matrices[side],
                         profile=self.profile_enabled,
                     )
-                    for side in self.sides
-                }
+                    interrupt_check()
                 side_outputs = {
                     side: {
                         key: value.cpu()

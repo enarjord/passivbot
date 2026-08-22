@@ -97,6 +97,33 @@ def _submit_gpu_exact_validation(
     return pool.apply_async(_evaluate_pymoo_worker_from_globals, (vector,))
 
 
+def _checkpoint_gpu_interrupt(
+    *,
+    generation_in_progress: bool,
+    generation: int,
+    exact_done: int,
+    save_checkpoint,
+) -> bool:
+    """Checkpoint only complete ask/tell state during graceful GPU shutdown."""
+
+    if generation_in_progress:
+        logging.info(
+            "GPU interrupt received between bounded MPS dispatches; "
+            "discarding the incomplete proxy generation and retaining the "
+            "last safe checkpoint | generation=%d exact=%d",
+            generation,
+            exact_done,
+        )
+        return False
+    save_checkpoint(force=True)
+    logging.info(
+        "Saved GPU interrupt checkpoint | generation=%d exact=%d",
+        generation,
+        exact_done,
+    )
+    return True
+
+
 _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES = {
     "risk_we_excess_allowance_pct": "we_excess_allowance_pct",
     "risk_twel_enforcer_threshold": "twel_enforcer_threshold",
@@ -3247,6 +3274,7 @@ def run_backend(
                 exchange=item["exchange"],
                 batch_size=int(options["batch_size"]),
                 needed_metrics=needed_metrics,
+                interrupt_check=interrupt_check,
             )
             item["coin_override_contract"] = getattr(
                 scenario_proxy, "coin_override_contract", {}
@@ -3273,6 +3301,7 @@ def run_backend(
             exchange=exchange,
             batch_size=int(options["batch_size"]),
             needed_metrics=needed_metrics,
+            interrupt_check=interrupt_check,
         )
 
         def evaluate_proxy(candidates):
@@ -3517,6 +3546,7 @@ def run_backend(
     last_probe_shortfall = None
     last_checkpoint_at = 0.0
     last_checkpoint_exact = exact_done
+    generation_in_progress = False
 
     def checkpoint_state() -> dict:
         return {
@@ -3682,9 +3712,11 @@ def run_backend(
                 consume_ready(wait_for_one=True)
                 continue
 
-            # Do not poll the latch again until the matching tell() completes;
-            # checkpointing an interrupted ask/tell transaction is not safe.
+            # An MPS proxy may poll the latch between bounded Metal dispatches.
+            # If interrupted there, the outer handler discards this incomplete
+            # ask/tell transaction and retains the preceding safe checkpoint.
             population = _ask_gpu_population(algorithm, interrupt_check)
+            generation_in_progress = True
             rows = np.asarray(population.get("X"), dtype=np.float64)
             metric_rows = evaluate_proxy(parameter_dicts(rows))
             proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
@@ -3702,6 +3734,7 @@ def run_backend(
                 ).reshape(-1, 1),
             )
             algorithm.tell(infills=population)
+            generation_in_progress = False
             generation += 1
             # PyTorch MPS may consume KeyboardInterrupt while waiting for a
             # Metal dispatch. Finish the in-progress ask/tell transaction, then
@@ -3786,14 +3819,16 @@ def run_backend(
     except KeyboardInterrupt:
         cancel_pending_async_results(pending)
         try:
-            maybe_save_checkpoint(force=True)
-            logging.info(
-                "Saved GPU interrupt checkpoint | generation=%d exact=%d",
-                generation,
-                exact_done,
+            _checkpoint_gpu_interrupt(
+                generation_in_progress=generation_in_progress,
+                generation=generation,
+                exact_done=exact_done,
+                save_checkpoint=maybe_save_checkpoint,
             )
         except Exception:
-            logging.exception("Failed to save GPU checkpoint during interrupt shutdown")
+            logging.exception(
+                "Failed to save GPU checkpoint during interrupt shutdown"
+            )
         pool.terminate()
         raise OptimizerBackendInterrupted(pool=pool, pool_terminated=True)
     except BaseException:

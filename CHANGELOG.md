@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Bounded Apple MPS proxy command buffers by candidate-candle workload so large populations and
+  long histories cannot monopolize the shared display GPU in one Metal dispatch. The configured
+  population and batch retain their optimization semantics while the backend transparently splits
+  oversized dispatches, polls Ctrl+C between them, and retains the last complete ask/tell
+  checkpoint if an in-progress generation is interrupted.
+
 - Fixed finite `live.pnls_max_lookback_days` handling for single-coin `coin`-mode HSL on Apple
   MPS. EMA Anchor and Trailing Martingale screening now expire realized-PnL fill events with the
   same rolling-window rule as exact Rust instead of retaining an all-history peak; bounded GPU
