@@ -538,6 +538,172 @@ inline bool ema_multicoin_side_has_position(
     return false;
 }
 
+inline bool ema_multicoin_side_has_blocking_orders(
+    thread EmaMulticoinSideState& side,
+    thread const EmaMulticoinSideConfig& config,
+    int coin_count
+) {
+    bool side_has_position = config.coin_hsl_mode
+        ? false : ema_multicoin_side_has_position(side, coin_count);
+    int side_mode = config.coin_hsl_mode
+        ? 0 : hsl_mode(side.hsl, side_has_position);
+    for (int c = 0; c < coin_count; ++c) {
+        int mode = config.coin_hsl_mode
+            ? hsl_mode(side.coin_hsl[c], side.psize[c] > 0.0f)
+            : side_mode;
+        if (mode != 3 && (
+                side.entry_qty[c] > 0.0f
+                    || side.close_qty[c] > 0.0f
+                    || side.secondary_close_qty[c] > 0.0f
+            )) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Advance the complete dual-side HSL topology after both directional order
+// phases have run against the same account. Unified and pside modes use the
+// shared account controller. Coin mode keeps one controller per coin/pside,
+// while its sampled tier is the maximum across the full portfolio, matching
+// exact Rust reporting. Mixed signal modes fail closed.
+inline bool update_ema_multicoin_dual_side_hsl(
+    thread EmaMulticoinSideState& long_side,
+    thread const EmaMulticoinSideConfig& long_config,
+    int long_effective_n_positions,
+    thread EmaMulticoinSideState& short_side,
+    thread const EmaMulticoinSideConfig& short_config,
+    int short_effective_n_positions,
+    thread const JointPortfolioAccount& account,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
+    int coin_count,
+    float starting_balance,
+    float interval_ms,
+    thread bool& sample_enabled,
+    thread int& sampled_tier
+) {
+    sample_enabled = false;
+    sampled_tier = 0;
+    if (long_side.hsl.signal_mode != short_side.hsl.signal_mode) return false;
+    if (long_config.coin_hsl_mode != short_config.coin_hsl_mode) return false;
+    if (long_config.coin_hsl_mode && (
+            long_effective_n_positions <= 0
+                || short_effective_n_positions <= 0
+        )) {
+        return false;
+    }
+
+    float long_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
+        long_side, bars, coin_settings, k, coin_count, false, 0.0f
+    );
+    float short_unrealized = accumulate_ema_multicoin_side_unrealized_pnl(
+        short_side, bars, coin_settings, k, coin_count, true, 0.0f
+    );
+    bool long_has_position = ema_multicoin_side_has_position(
+        long_side, coin_count
+    );
+    bool short_has_position = ema_multicoin_side_has_position(
+        short_side, coin_count
+    );
+    bool long_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
+        long_side, long_config, coin_count
+    );
+    bool short_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
+        short_side, short_config, coin_count
+    );
+
+    if (long_config.coin_hsl_mode) {
+        float portfolio_equity = joint_portfolio_equity(
+            account, long_unrealized, short_unrealized
+        );
+        for (int c = 0; c < coin_count; ++c) {
+            int coin_offset = c * COIN_COLS;
+            int bar_offset = (k * coin_count + c) * 4;
+            float close = bars[bar_offset + 2];
+            float c_mult = coin_settings[coin_offset + 4];
+            float long_coin_unrealized = long_side.psize[c] > 0.0f
+                    && finite_positive(close)
+                ? long_side.psize[c] * c_mult
+                    * (close - long_side.pprice[c])
+                : 0.0f;
+            float short_coin_unrealized = short_side.psize[c] > 0.0f
+                    && finite_positive(close)
+                ? short_side.psize[c] * c_mult
+                    * (short_side.pprice[c] - close)
+                : 0.0f;
+            int long_mode = hsl_mode(
+                long_side.coin_hsl[c], long_side.psize[c] > 0.0f
+            );
+            int short_mode = hsl_mode(
+                short_side.coin_hsl[c], short_side.psize[c] > 0.0f
+            );
+            bool long_coin_has_blocking_orders = long_mode != 3 && (
+                long_side.entry_qty[c] > 0.0f
+                    || long_side.close_qty[c] > 0.0f
+                    || long_side.secondary_close_qty[c] > 0.0f
+            );
+            bool short_coin_has_blocking_orders = short_mode != 3 && (
+                short_side.entry_qty[c] > 0.0f
+                    || short_side.close_qty[c] > 0.0f
+                    || short_side.secondary_close_qty[c] > 0.0f
+            );
+            long_side.coin_hsl[c].slot_count = float(
+                long_effective_n_positions
+            );
+            short_side.coin_hsl[c].slot_count = float(
+                short_effective_n_positions
+            );
+            update_hsl(
+                long_side.coin_hsl[c], account.balance, starting_balance,
+                long_side.coin_realized_pnl[c], long_coin_unrealized,
+                long_side.psize[c] > 0.0f,
+                long_coin_has_blocking_orders, float(k), interval_ms
+            );
+            update_hsl(
+                short_side.coin_hsl[c], account.balance, starting_balance,
+                short_side.coin_realized_pnl[c], short_coin_unrealized,
+                short_side.psize[c] > 0.0f,
+                short_coin_has_blocking_orders, float(k), interval_ms
+            );
+            sample_enabled = sample_enabled
+                || long_side.coin_hsl[c].enabled
+                || short_side.coin_hsl[c].enabled;
+            sampled_tier = max(
+                sampled_tier,
+                max(long_side.coin_hsl[c].tier, short_side.coin_hsl[c].tier)
+            );
+            try_restart_hsl(
+                long_side.coin_hsl[c], float(k), portfolio_equity
+            );
+            try_restart_hsl(
+                short_side.coin_hsl[c], float(k), portfolio_equity
+            );
+        }
+        return true;
+    }
+
+    if (!update_joint_pside_hsl(
+            long_side.hsl, short_side.hsl, account, starting_balance,
+            long_unrealized, short_unrealized,
+            long_has_position, short_has_position,
+            long_has_blocking_orders, short_has_blocking_orders,
+            float(k), interval_ms
+        )) {
+        return false;
+    }
+    sample_enabled = long_side.hsl.enabled || short_side.hsl.enabled;
+    sampled_tier = joint_pside_hsl_global_tier(
+        long_side.hsl, short_side.hsl
+    );
+    try_restart_joint_pside_hsl(
+        long_side.hsl, short_side.hsl, account, starting_balance,
+        long_unrealized, short_unrealized, float(k)
+    );
+    return true;
+}
+
 inline void update_ema_multicoin_side_selection(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
