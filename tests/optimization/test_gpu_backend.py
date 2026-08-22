@@ -1561,9 +1561,7 @@ def test_gpu_hsl_accepts_dual_side_multicoin_fused_ema_modes(signal_mode):
 
 
 @pytest.mark.parametrize("signal_mode", ["coin", "unified"])
-def test_gpu_hsl_keeps_dual_side_multicoin_tm_joint_modes_fail_closed(
-    signal_mode,
-):
+def test_gpu_hsl_accepts_dual_side_multicoin_tm_joint_modes(signal_mode):
     config = _directional_tm_config(long_enabled=True, short_enabled=True)
     coins = ["BTC", "ETH", "XRP"]
     config["live"]["approved_coins"] = {"long": coins, "short": coins}
@@ -1573,8 +1571,7 @@ def test_gpu_hsl_keeps_dual_side_multicoin_tm_joint_modes_fail_closed(
         config["bot"][side]["risk"]["n_positions"] = 3
         config["bot"][side]["hsl"]["enabled"] = True
 
-    with pytest.raises(ValueError, match="supports only pside"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_hsl_metrics_reject_only_dual_multicoin_tier_overlap():
@@ -2493,6 +2490,12 @@ def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
             coin_count=3,
             enabled_sides={"long", "short"},
         )
+    _validate_dual_multicoin_metrics(
+        {metric, "adg_strategy_eq"},
+        coin_count=3,
+        enabled_sides={"long", "short"},
+        shared_account_controller=True,
+    )
 
 
 def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
