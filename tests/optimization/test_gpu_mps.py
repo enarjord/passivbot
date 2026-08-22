@@ -689,6 +689,112 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     ]
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_multicoin_order_phase_builds_both_sides_on_shared_account():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_ema_multicoin_order_phase_probe(
+    constant float* bars,
+    constant int* touch_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    EmaMulticoinSideConfig long_config =
+        load_ema_multicoin_side_config(params, 0);
+    EmaMulticoinSideConfig short_config =
+        load_ema_multicoin_side_config(params, PARAM_COLS);
+    EmaMulticoinSideState long_side;
+    EmaMulticoinSideState short_side;
+    init_ema_multicoin_side_state(
+        long_side, long_config, bars, coin_settings, coin_overrides, 1
+    );
+    init_ema_multicoin_side_state(
+        short_side, short_config, bars, coin_settings, coin_overrides, 1
+    );
+    long_side.selected[0] = true;
+    short_side.selected[0] = true;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    generate_ema_multicoin_side_orders(
+        long_side, long_config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 1, false, 1, 1, 0, false, 1.0f
+    );
+    generate_ema_multicoin_side_orders(
+        short_side, short_config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 1, true, 1, 1, 0, false, 1.0f
+    );
+    output[0] = long_side.entry_qty[0];
+    output[1] = short_side.entry_qty[0];
+    output[2] = float(long_side.entry_tick[0]);
+    output[3] = float(short_side.entry_tick[0]);
+    output[4] = long_side.close_qty[0];
+    output[5] = short_side.close_qty[0];
+    output[6] = account.balance;
+    output[7] = account.realized_pnl_total;
+}
+"""
+
+    _, row = _multicoin_exposure_fixture(
+        "ema_anchor", "long", count=3, closes=(100.0, 100.0)
+    )
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.01
+    short_row = list(row)
+    short_row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_pct")] = 0.5
+    params = torch.tensor([row, short_row], dtype=torch.float32, device="mps")
+    bars = torch.tensor(
+        [[[100.0, 100.0, 100.0, 1.0]], [[101.0, 99.0, 100.0, 1.0]]],
+        dtype=torch.float32,
+        device="mps",
+    )
+    touch_ticks = torch.tensor(
+        [[[10_000, 10_000]], [[10_000, 10_000]]],
+        dtype=torch.int32,
+        device="mps",
+    )
+    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings[0, 0] = 0.001
+    coin_settings[0, 1] = 0.01
+    coin_settings[0, 2] = 0.001
+    coin_settings[0, 4] = 1.0
+    coin_settings[0, 7] = 10.0
+    coin_settings[0, 9] = 100.0
+    coin_settings[0, 10] = 1.0
+    coin_overrides = torch.full(
+        (1, 29), float("nan"), dtype=torch.float32, device="mps"
+    )
+    output = torch.zeros(8, dtype=torch.float32, device="mps")
+
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_ema_multicoin_order_phase_probe(
+        bars,
+        touch_ticks,
+        coin_settings,
+        coin_overrides,
+        params,
+        output,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    values = output.cpu().numpy()
+    assert values[0] > values[1] > 0.0
+    assert values[2] < values[3]
+    assert values[4] == 0.0
+    assert values[5] == 0.0
+    assert values[6] == 1_000.0
+    assert values[7] == 0.0
+
+
 def _single_coin_exposure_fields(
     *, allowance_pct=0.0, legacy_raw=False, entry_gate=True, threshold=1.0
 ):
