@@ -606,6 +606,20 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            source
+                .matches("struct TrailingMartingaleMulticoinSideConfig")
+                .count(),
+            1
+        );
+        assert!(source.contains("load_trailing_martingale_multicoin_side_config("));
+        assert!(source.contains("init_trailing_martingale_multicoin_side_state("));
+        assert!(source.contains(
+            "const TrailingMartingaleMulticoinSideConfig config ="
+        ));
+        assert!(source.contains(
+            "init_trailing_martingale_multicoin_side_state(\n        side, config, bars, coin_settings, coin_overrides, C"
+        ));
         assert!(source.contains("TrailingMartingaleMulticoinSideState side"));
         assert!(source.contains("thread HslState& hsl = side.hsl"));
         assert!(source.contains("thread HslState* coin_hsl = side.coin_hsl"));
