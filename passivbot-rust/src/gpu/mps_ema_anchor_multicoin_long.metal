@@ -538,6 +538,26 @@ inline bool ema_multicoin_side_has_position(
     return false;
 }
 
+inline bool ema_multicoin_side_held_marks_are_valid(
+    thread const EmaMulticoinSideState& side,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
+    int coin_count
+) {
+    for (int c = 0; c < coin_count; ++c) {
+        if (!(side.psize[c] > 0.0f)) continue;
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        if (!finite_positive(side.pprice[c])
+            || !finite_positive(bars[bar_offset + 2])
+            || !finite_positive(coin_settings[coin_offset + 4])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 inline bool ema_multicoin_side_has_blocking_orders(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
@@ -591,6 +611,13 @@ inline bool update_ema_multicoin_dual_side_hsl(
     if (long_config.coin_hsl_mode && (
             long_effective_n_positions <= 0
                 || short_effective_n_positions <= 0
+        )) {
+        return false;
+    }
+    if (!ema_multicoin_side_held_marks_are_valid(
+            long_side, bars, coin_settings, k, coin_count
+        ) || !ema_multicoin_side_held_marks_are_valid(
+            short_side, bars, coin_settings, k, coin_count
         )) {
         return false;
     }

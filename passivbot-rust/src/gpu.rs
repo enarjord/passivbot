@@ -326,6 +326,7 @@ mod tests {
         assert!(source.contains("update_ema_multicoin_side_indicators("));
         assert!(source.contains("count_ema_multicoin_tradable_coins("));
         assert!(source.contains("ema_multicoin_side_has_position("));
+        assert!(source.contains("ema_multicoin_side_held_marks_are_valid("));
         assert!(source.contains("ema_multicoin_side_has_blocking_orders("));
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("if (long_side.hsl.signal_mode != short_side.hsl.signal_mode)"));
