@@ -678,6 +678,476 @@ inline void update_tm_multicoin_position_fill_timestamp(
         side.psize[coin] > 0.0f ? float(k) : -1.0f;
 }
 
+inline bool process_tm_multicoin_side_fills(
+    thread TrailingMartingaleMulticoinSideState& side,
+    thread const TrailingMartingaleMulticoinSideConfig& config,
+    thread JointPortfolioAccount& account,
+    thread TrailingMartingaleMulticoinFillState& fills,
+    constant float* bars,
+    constant int* fill_ticks,
+    constant int* touch_ticks,
+    constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    device float* coin_fill_counts,
+    int b,
+    int k,
+    int C,
+    bool short_side,
+    bool alive,
+    bool collect_coin_fill_counts,
+    bool loss_gate_enabled,
+    float max_realized_loss_pct,
+    float market_order_slippage_pct,
+    bool hsl_panic_market,
+    thread float& hsl_equity_before_fills
+) {
+    const bool coin_hsl_mode = config.coin_hsl_mode;
+    const float close_qty_pct = config.close_qty_pct;
+    const float close_threshold_base = config.close_threshold_base;
+    const float close_threshold_we = config.close_threshold_we;
+    const float close_threshold_v1h = config.close_threshold_v1h;
+    const float close_threshold_v1m = config.close_threshold_v1m;
+    thread float* volatility_1m = side.volatility_1m;
+    thread float* volatility_1h = side.volatility_1h;
+    thread float* psize = side.psize;
+    thread float* pprice = side.pprice;
+    thread float* entry_qty = side.entry_qty;
+    thread float* close_qty = side.close_qty;
+    thread float* secondary_close_qty = side.secondary_close_qty;
+    thread float* close_gen_balance = side.close_gen_balance;
+    thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
+    thread float* close_grid_gen_psize = side.close_grid_gen_psize;
+    thread int* entry_tick = side.entry_tick;
+    thread int* close_tick = side.close_tick;
+    thread int* secondary_close_tick = side.secondary_close_tick;
+    thread int* close_grid_max_rungs = side.close_grid_max_rungs;
+    thread bool* close_reconstruct_after_reducer =
+        side.close_reconstruct_after_reducer;
+    thread bool* filled_coin = side.filled_coin;
+    thread bool* close_is_unstuck_reducer =
+        side.close_is_unstuck_reducer;
+    thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
+    thread float& balance = account.balance;
+    thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
+    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
+    thread float& day_volume = fills.day_volume;
+    bool any_fill = false;
+    for (int c = 0; c < C; ++c) filled_coin[c] = false;
+    for (int c = 0; c < C; ++c) {
+        const int coin_offset = c * COIN_COLS;
+        const int bar_offset = (k * C + c) * 4;
+        const int tick_offset = (k * C + c) * 2;
+        const float high = bars[bar_offset + 0];
+        const float low = bars[bar_offset + 1];
+        const float close = bars[bar_offset + 2];
+        const int first_valid = int(coin_settings[coin_offset + 6]);
+        const int last_valid = int(coin_settings[coin_offset + 7]);
+        const bool valid = k >= first_valid && k <= last_valid
+            && finite_positive(high) && finite_positive(low) && finite_positive(close);
+        if (!valid || !alive) continue;
+        const float qty_step = coin_settings[coin_offset + 0];
+        const float price_step = coin_settings[coin_offset + 1];
+        const float min_qty = coin_settings[coin_offset + 2];
+        const float min_cost = coin_settings[coin_offset + 3];
+        const float c_mult = coin_settings[coin_offset + 4];
+        const float maker_fee = coin_settings[coin_offset + 5];
+        const float taker_fee = coin_settings[coin_offset + 11];
+
+        bool close_ready = close_qty[c] > 0.0f && psize[c] > 0.0f;
+        bool coin_hsl_panic_market = coin_hsl_mode
+            ? coin_override_or(
+                coin_overrides, c, HSL_OVERRIDE_START + 9,
+                hsl_panic_market ? 1.0f : 0.0f
+            ) > 0.5f
+            : hsl_panic_market;
+        bool primary_market_panic = close_is_hsl_panic[c]
+            && coin_hsl_panic_market;
+        bool filled_close = close_ready
+            && (primary_market_panic || (short_side
+                ? close_tick[c] > fill_ticks[tick_offset + 1]
+                : close_tick[c] <= fill_ticks[tick_offset + 0]));
+        bool filled_secondary_close = secondary_close_qty[c] > 0.0f
+            && psize[c] > 0.0f
+            && (short_side
+                ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
+                : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
+        bool rebuild_grid = psize[c] > 0.0f
+            && close_reconstruct_after_reducer[c]
+            && !close_is_hsl_panic[c];
+        if (filled_close || filled_secondary_close || rebuild_grid) {
+            float fill_price = primary_market_panic
+                ? fmax(
+                    short_side
+                        ? ceil_step(
+                            close * (1.0f + market_order_slippage_pct),
+                            price_step
+                        )
+                        : floor_step(
+                            close * (1.0f - market_order_slippage_pct),
+                            price_step
+                        ),
+                    price_step
+                )
+                : float(close_tick[c]) * price_step;
+            float reducer_qty = fmin(
+                round_step(close_qty[c], qty_step), psize[c]
+            );
+            float grid_gen_psize = close_grid_gen_psize[c];
+            int gen_tick_offset = 0;
+            float coin_close_qty_pct = 0.0f;
+            float coin_close_threshold_base = 0.0f;
+            float coin_close_threshold_we = 0.0f;
+            float coin_close_threshold_v1h = 0.0f;
+            float coin_close_threshold_v1m = 0.0f;
+            CloseGroup group;
+            int group_count = 0;
+            bool reverse = false;
+            bool reducer_executed = false;
+            bool executed_close = false;
+
+            if (rebuild_grid && grid_gen_psize > 0.0f) {
+                gen_tick_offset = ((k - 1) * C + c) * 2;
+                coin_close_qty_pct = coin_override_or(
+                    coin_overrides, c, 15, close_qty_pct
+                );
+                coin_close_threshold_base = coin_override_or(
+                    coin_overrides, c, 16, close_threshold_base
+                );
+                coin_close_threshold_we = coin_override_or(
+                    coin_overrides, c, 17, close_threshold_we
+                );
+                coin_close_threshold_v1h = coin_override_or(
+                    coin_overrides, c, 18, close_threshold_v1h
+                );
+                coin_close_threshold_v1m = coin_override_or(
+                    coin_overrides, c, 19, close_threshold_v1m
+                );
+                group_count = recursive_grid_close_groups_after_reducer(
+                    short_side,
+                    grid_gen_psize,
+                    pprice[c],
+                    close_gen_balance[c],
+                    close_gen_allowed_wel[c],
+                    touch_ticks[gen_tick_offset + 0],
+                    touch_ticks[gen_tick_offset + 1],
+                    touch_nearest_ticks[(k - 1) * C + c],
+                    as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                    touch_min_qty_relation[(k - 1) * C + c],
+                    coin_close_qty_pct,
+                    coin_close_threshold_base,
+                    coin_close_threshold_we,
+                    coin_close_threshold_v1h,
+                    coin_close_threshold_v1m,
+                    volatility_1h[c],
+                    volatility_1m[c],
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    close_grid_max_rungs[c],
+                    -1,
+                    group
+                );
+                reverse = coin_close_threshold_we > 0.0f;
+            }
+
+            float ordinary_budget = fmax(
+                round_step(psize[c] - reducer_qty, qty_step), 0.0f
+            );
+            float remaining_budget = ordinary_budget;
+            float kept_ordinary = 0.0f;
+            float minimum_any = min_entry_qty(
+                fill_price, qty_step, min_qty, min_cost, c_mult
+            );
+            int last_kept_rank = -1;
+            for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
+                int wanted = reverse
+                    ? group_count - trim_rank - 1 : trim_rank;
+                recursive_grid_close_groups_after_reducer(
+                    short_side,
+                    grid_gen_psize,
+                    pprice[c],
+                    close_gen_balance[c],
+                    close_gen_allowed_wel[c],
+                    touch_ticks[gen_tick_offset + 0],
+                    touch_ticks[gen_tick_offset + 1],
+                    touch_nearest_ticks[(k - 1) * C + c],
+                    as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                    touch_min_qty_relation[(k - 1) * C + c],
+                    coin_close_qty_pct,
+                    coin_close_threshold_base,
+                    coin_close_threshold_we,
+                    coin_close_threshold_v1h,
+                    coin_close_threshold_v1m,
+                    volatility_1h[c],
+                    volatility_1m[c],
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    close_grid_max_rungs[c],
+                    wanted,
+                    group
+                );
+                float trimmed_qty = fmin(group.qty, remaining_budget);
+                float group_min = min_entry_qty(
+                    group.price, qty_step, min_qty, min_cost, c_mult
+                );
+                bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
+                if (trimmed_qty + 1.0e-6f < group_min) {
+                    trimmed_qty = 0.0f;
+                    if (partial_trim) remaining_budget = 0.0f;
+                }
+                if (trimmed_qty > 0.0f) {
+                    kept_ordinary += trimmed_qty;
+                    remaining_budget = fmax(
+                        round_step(
+                            remaining_budget - trimmed_qty, qty_step
+                        ),
+                        0.0f
+                    );
+                    minimum_any = fmin(minimum_any, group_min);
+                    last_kept_rank = trim_rank;
+                }
+            }
+            float dust_remainder = fmax(
+                round_step(
+                    psize[c] - reducer_qty - kept_ordinary, qty_step
+                ),
+                0.0f
+            );
+            if (dust_remainder > 0.0f && dust_remainder < minimum_any
+                && last_kept_rank < 0) {
+                reducer_qty = fmin(
+                    psize[c],
+                    round_step(reducer_qty + dust_remainder, qty_step)
+                );
+                dust_remainder = 0.0f;
+            }
+
+            remaining_budget = ordinary_budget;
+            for (int rank = 0; rank < group_count; ++rank) {
+                int wanted = reverse ? group_count - rank - 1 : rank;
+                recursive_grid_close_groups_after_reducer(
+                    short_side,
+                    grid_gen_psize,
+                    pprice[c],
+                    close_gen_balance[c],
+                    close_gen_allowed_wel[c],
+                    touch_ticks[gen_tick_offset + 0],
+                    touch_ticks[gen_tick_offset + 1],
+                    touch_nearest_ticks[(k - 1) * C + c],
+                    as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                    touch_min_qty_relation[(k - 1) * C + c],
+                    coin_close_qty_pct,
+                    coin_close_threshold_base,
+                    coin_close_threshold_we,
+                    coin_close_threshold_v1h,
+                    coin_close_threshold_v1m,
+                    volatility_1h[c],
+                    volatility_1m[c],
+                    qty_step,
+                    price_step,
+                    min_qty,
+                    min_cost,
+                    c_mult,
+                    close_grid_max_rungs[c],
+                    wanted,
+                    group
+                );
+                if (group.qty <= 0.0f) break;
+                float group_min = min_entry_qty(
+                    group.price, qty_step, min_qty, min_cost, c_mult
+                );
+                float trimmed_group_qty = fmin(
+                    group.qty, remaining_budget
+                );
+                bool partial_trim = trimmed_group_qty + 1.0e-6f
+                    < group.qty;
+                if (trimmed_group_qty + 1.0e-6f < group_min) {
+                    trimmed_group_qty = 0.0f;
+                    if (partial_trim) remaining_budget = 0.0f;
+                }
+                if (trimmed_group_qty > 0.0f) {
+                    remaining_budget = fmax(
+                        round_step(
+                            remaining_budget - trimmed_group_qty,
+                            qty_step
+                        ),
+                        0.0f
+                    );
+                    if (rank == last_kept_rank && dust_remainder > 0.0f
+                        && dust_remainder < minimum_any) {
+                        trimmed_group_qty = round_step(
+                            trimmed_group_qty + dust_remainder, qty_step
+                        );
+                    }
+                }
+                bool reducer_before_group = filled_close
+                    && !reducer_executed
+                    && (short_side
+                        ? close_tick[c] > group.ticks
+                        : close_tick[c] < group.ticks);
+                if (reducer_before_group) {
+                    float qty = fmin(reducer_qty, psize[c]);
+                    float pnl = qty * c_mult * (short_side
+                        ? pprice[c] - fill_price
+                        : fill_price - pprice[c]);
+                    if (realized_loss_proxy_allows_reducer(
+                            qty, fill_price, pprice[c], short_side,
+                            c_mult, maker_fee,
+                            close_is_unstuck_reducer[c], loss_gate_enabled,
+                            balance, realized_pnl_cumsum_last,
+                            realized_pnl_cumsum_max, max_realized_loss_pct
+                        )) {
+                        float net_pnl = pnl
+                            - qty * fill_price * c_mult * maker_fee;
+                        record_tm_multicoin_close_fill(
+                            side, account, fills, coin_fill_counts,
+                            int(b), C, c, k, pnl, net_pnl, qty,
+                            pprice[c], close, c_mult, short_side,
+                            false, collect_coin_fill_counts,
+                            hsl_equity_before_fills
+                        );
+                        psize[c] = fmax(
+                            round_step(psize[c] - qty, qty_step), 0.0f
+                        );
+                        day_volume += qty * fill_price * c_mult / balance;
+                        reducer_executed = true;
+                        executed_close = true;
+                    }
+                }
+                bool reachable = short_side
+                    ? group.ticks > fill_ticks[tick_offset + 1]
+                    : group.ticks <= fill_ticks[tick_offset + 0];
+                if (!reachable) break;
+                float group_qty = trimmed_group_qty;
+                if (group_qty <= 0.0f) continue;
+                float grid_qty = fmin(
+                    round_step(group_qty, qty_step), psize[c]
+                );
+                float grid_pnl = grid_qty * c_mult * (short_side
+                    ? pprice[c] - group.price
+                    : group.price - pprice[c]);
+                if (!realized_loss_proxy_allows_close(
+                        grid_qty, group.price, pprice[c], short_side,
+                        c_mult, maker_fee, loss_gate_enabled
+                    )) {
+                    continue;
+                }
+                float grid_net_pnl = grid_pnl
+                    - grid_qty * group.price * c_mult * maker_fee;
+                record_tm_multicoin_close_fill(
+                    side, account, fills, coin_fill_counts,
+                    int(b), C, c, k, grid_pnl, grid_net_pnl,
+                    grid_qty, pprice[c], close, c_mult, short_side,
+                    false, collect_coin_fill_counts,
+                    hsl_equity_before_fills
+                );
+                psize[c] = fmax(
+                    round_step(psize[c] - grid_qty, qty_step), 0.0f
+                );
+                day_volume += grid_qty * group.price * c_mult / balance;
+                executed_close = true;
+                if (psize[c] <= 0.0f) break;
+            }
+
+            float secondary_price = float(secondary_close_tick[c])
+                * price_step;
+            bool secondary_first = filled_secondary_close
+                && (!(filled_close && !reducer_executed)
+                    || (short_side
+                        ? secondary_price >= fill_price
+                        : secondary_price <= fill_price));
+            for (int close_rank = 0; close_rank < 2; ++close_rank) {
+                bool use_secondary = secondary_first
+                    ? close_rank == 0 : close_rank == 1;
+                bool reachable = use_secondary
+                    ? filled_secondary_close
+                    : filled_close && !reducer_executed;
+                if (!reachable || psize[c] <= 0.0f) continue;
+                float price = use_secondary
+                    ? secondary_price : fill_price;
+                float requested_qty = use_secondary
+                    ? secondary_close_qty[c] : reducer_qty;
+                float qty = fmin(
+                    round_step(requested_qty, qty_step), psize[c]
+                );
+                float pnl = qty * c_mult * (short_side
+                    ? pprice[c] - price : price - pprice[c]);
+                bool is_unstuck = !use_secondary
+                    && close_is_unstuck_reducer[c];
+                bool is_hsl_panic = !use_secondary
+                    && close_is_hsl_panic[c];
+                bool market_panic = !use_secondary
+                    && primary_market_panic;
+                if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
+                        qty, price, pprice[c], short_side,
+                        c_mult, maker_fee, is_unstuck, loss_gate_enabled,
+                        balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_max, max_realized_loss_pct
+                    )) {
+                    continue;
+                }
+                float net_pnl = pnl - qty * price * c_mult
+                    * (market_panic ? taker_fee : maker_fee);
+                record_tm_multicoin_close_fill(
+                    side, account, fills, coin_fill_counts,
+                    int(b), C, c, k, pnl, net_pnl, qty,
+                    pprice[c], close, c_mult, short_side,
+                    is_hsl_panic, collect_coin_fill_counts,
+                    hsl_equity_before_fills
+                );
+                psize[c] = fmax(
+                    round_step(psize[c] - qty, qty_step), 0.0f
+                );
+                day_volume += qty * price * c_mult / balance;
+                if (!use_secondary) reducer_executed = true;
+                executed_close = true;
+            }
+
+            if (executed_close) {
+                finalize_tm_multicoin_close_position(
+                    side, fills, c, k
+                );
+                any_fill = true;
+            }
+        }
+
+        bool filled_entry = entry_qty[c] > 0.0f
+            && (short_side
+                ? entry_tick[c] <= fill_ticks[tick_offset + 0]
+                : entry_tick[c] > fill_ticks[tick_offset + 1]);
+        if (filled_entry) {
+            float fill_price = float(entry_tick[c]) * price_step;
+            float adjusted = round_step(entry_qty[c], qty_step);
+            float fee = adjusted * fill_price * c_mult * maker_fee;
+            record_tm_multicoin_entry_fill(
+                side, account, fills, coin_fill_counts,
+                int(b), C, c, k, fee, adjusted, fill_price,
+                close, c_mult, short_side, collect_coin_fill_counts,
+                hsl_equity_before_fills
+            );
+            apply_tm_multicoin_entry_position(
+                side, fills, c, k, adjusted, fill_price,
+                qty_step, c_mult, balance
+            );
+            any_fill = true;
+        }
+        if (filled_coin[c]) {
+            update_tm_multicoin_position_fill_timestamp(
+                side, fills, c, k
+            );
+        }
+    }
+    return any_fill;
+}
+
 inline TrailingMartingaleMulticoinSideConfig
 load_trailing_martingale_multicoin_side_config(
     constant float* params,
@@ -1164,7 +1634,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     thread bool* entry_candidate = side.entry_candidate;
     thread bool* close_reconstruct_after_reducer =
         side.close_reconstruct_after_reducer;
-    thread bool* filled_coin = side.filled_coin;
     thread bool* close_is_unstuck_reducer =
         side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
@@ -1259,421 +1728,20 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             day_fill_count = 0.0f;
         }
 
-        bool any_fill = false;
         float hsl_equity_before_fills =
             accumulate_tm_multicoin_side_unrealized_pnl(
                 side, bars, coin_settings, k, C, short_side, balance
             );
-        for (int c = 0; c < C; ++c) filled_coin[c] = false;
-        for (int c = 0; c < C; ++c) {
-            const int coin_offset = c * COIN_COLS;
-            const int bar_offset = (k * C + c) * 4;
-            const int tick_offset = (k * C + c) * 2;
-            const float high = bars[bar_offset + 0];
-            const float low = bars[bar_offset + 1];
-            const float close = bars[bar_offset + 2];
-            const int first_valid = int(coin_settings[coin_offset + 6]);
-            const int last_valid = int(coin_settings[coin_offset + 7]);
-            const bool valid = k >= first_valid && k <= last_valid
-                && finite_positive(high) && finite_positive(low) && finite_positive(close);
-            if (!valid || !alive) continue;
-            const float qty_step = coin_settings[coin_offset + 0];
-            const float price_step = coin_settings[coin_offset + 1];
-            const float min_qty = coin_settings[coin_offset + 2];
-            const float min_cost = coin_settings[coin_offset + 3];
-            const float c_mult = coin_settings[coin_offset + 4];
-            const float maker_fee = coin_settings[coin_offset + 5];
-            const float taker_fee = coin_settings[coin_offset + 11];
-
-            bool close_ready = close_qty[c] > 0.0f && psize[c] > 0.0f;
-            bool coin_hsl_panic_market = coin_hsl_mode
-                ? coin_override_or(
-                    coin_overrides, c, HSL_OVERRIDE_START + 9,
-                    hsl_panic_market ? 1.0f : 0.0f
-                ) > 0.5f
-                : hsl_panic_market;
-            bool primary_market_panic = close_is_hsl_panic[c]
-                && coin_hsl_panic_market;
-            bool filled_close = close_ready
-                && (primary_market_panic || (short_side
-                    ? close_tick[c] > fill_ticks[tick_offset + 1]
-                    : close_tick[c] <= fill_ticks[tick_offset + 0]));
-            bool filled_secondary_close = secondary_close_qty[c] > 0.0f
-                && psize[c] > 0.0f
-                && (short_side
-                    ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
-                    : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
-            bool rebuild_grid = psize[c] > 0.0f
-                && close_reconstruct_after_reducer[c]
-                && !close_is_hsl_panic[c];
-            if (filled_close || filled_secondary_close || rebuild_grid) {
-                float fill_price = primary_market_panic
-                    ? fmax(
-                        short_side
-                            ? ceil_step(
-                                close * (1.0f + market_order_slippage_pct),
-                                price_step
-                            )
-                            : floor_step(
-                                close * (1.0f - market_order_slippage_pct),
-                                price_step
-                            ),
-                        price_step
-                    )
-                    : float(close_tick[c]) * price_step;
-                float reducer_qty = fmin(
-                    round_step(close_qty[c], qty_step), psize[c]
-                );
-                float grid_gen_psize = close_grid_gen_psize[c];
-                int gen_tick_offset = 0;
-                float coin_close_qty_pct = 0.0f;
-                float coin_close_threshold_base = 0.0f;
-                float coin_close_threshold_we = 0.0f;
-                float coin_close_threshold_v1h = 0.0f;
-                float coin_close_threshold_v1m = 0.0f;
-                CloseGroup group;
-                int group_count = 0;
-                bool reverse = false;
-                bool reducer_executed = false;
-                bool executed_close = false;
-
-                if (rebuild_grid && grid_gen_psize > 0.0f) {
-                    gen_tick_offset = ((k - 1) * C + c) * 2;
-                    coin_close_qty_pct = coin_override_or(
-                        coin_overrides, c, 15, close_qty_pct
-                    );
-                    coin_close_threshold_base = coin_override_or(
-                        coin_overrides, c, 16, close_threshold_base
-                    );
-                    coin_close_threshold_we = coin_override_or(
-                        coin_overrides, c, 17, close_threshold_we
-                    );
-                    coin_close_threshold_v1h = coin_override_or(
-                        coin_overrides, c, 18, close_threshold_v1h
-                    );
-                    coin_close_threshold_v1m = coin_override_or(
-                        coin_overrides, c, 19, close_threshold_v1m
-                    );
-                    group_count = recursive_grid_close_groups_after_reducer(
-                        short_side,
-                        grid_gen_psize,
-                        pprice[c],
-                        close_gen_balance[c],
-                        close_gen_allowed_wel[c],
-                        touch_ticks[gen_tick_offset + 0],
-                        touch_ticks[gen_tick_offset + 1],
-                        touch_nearest_ticks[(k - 1) * C + c],
-                        as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
-                        touch_min_qty_relation[(k - 1) * C + c],
-                        coin_close_qty_pct,
-                        coin_close_threshold_base,
-                        coin_close_threshold_we,
-                        coin_close_threshold_v1h,
-                        coin_close_threshold_v1m,
-                        volatility_1h[c],
-                        volatility_1m[c],
-                        qty_step,
-                        price_step,
-                        min_qty,
-                        min_cost,
-                        c_mult,
-                        close_grid_max_rungs[c],
-                        -1,
-                        group
-                    );
-                    reverse = coin_close_threshold_we > 0.0f;
-                }
-
-                float ordinary_budget = fmax(
-                    round_step(psize[c] - reducer_qty, qty_step), 0.0f
-                );
-                float remaining_budget = ordinary_budget;
-                float kept_ordinary = 0.0f;
-                float minimum_any = min_entry_qty(
-                    fill_price, qty_step, min_qty, min_cost, c_mult
-                );
-                int last_kept_rank = -1;
-                for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
-                    int wanted = reverse
-                        ? group_count - trim_rank - 1 : trim_rank;
-                    recursive_grid_close_groups_after_reducer(
-                        short_side,
-                        grid_gen_psize,
-                        pprice[c],
-                        close_gen_balance[c],
-                        close_gen_allowed_wel[c],
-                        touch_ticks[gen_tick_offset + 0],
-                        touch_ticks[gen_tick_offset + 1],
-                        touch_nearest_ticks[(k - 1) * C + c],
-                        as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
-                        touch_min_qty_relation[(k - 1) * C + c],
-                        coin_close_qty_pct,
-                        coin_close_threshold_base,
-                        coin_close_threshold_we,
-                        coin_close_threshold_v1h,
-                        coin_close_threshold_v1m,
-                        volatility_1h[c],
-                        volatility_1m[c],
-                        qty_step,
-                        price_step,
-                        min_qty,
-                        min_cost,
-                        c_mult,
-                        close_grid_max_rungs[c],
-                        wanted,
-                        group
-                    );
-                    float trimmed_qty = fmin(group.qty, remaining_budget);
-                    float group_min = min_entry_qty(
-                        group.price, qty_step, min_qty, min_cost, c_mult
-                    );
-                    bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
-                    if (trimmed_qty + 1.0e-6f < group_min) {
-                        trimmed_qty = 0.0f;
-                        if (partial_trim) remaining_budget = 0.0f;
-                    }
-                    if (trimmed_qty > 0.0f) {
-                        kept_ordinary += trimmed_qty;
-                        remaining_budget = fmax(
-                            round_step(
-                                remaining_budget - trimmed_qty, qty_step
-                            ),
-                            0.0f
-                        );
-                        minimum_any = fmin(minimum_any, group_min);
-                        last_kept_rank = trim_rank;
-                    }
-                }
-                float dust_remainder = fmax(
-                    round_step(
-                        psize[c] - reducer_qty - kept_ordinary, qty_step
-                    ),
-                    0.0f
-                );
-                if (dust_remainder > 0.0f && dust_remainder < minimum_any
-                    && last_kept_rank < 0) {
-                    reducer_qty = fmin(
-                        psize[c],
-                        round_step(reducer_qty + dust_remainder, qty_step)
-                    );
-                    dust_remainder = 0.0f;
-                }
-
-                remaining_budget = ordinary_budget;
-                for (int rank = 0; rank < group_count; ++rank) {
-                    int wanted = reverse ? group_count - rank - 1 : rank;
-                    recursive_grid_close_groups_after_reducer(
-                        short_side,
-                        grid_gen_psize,
-                        pprice[c],
-                        close_gen_balance[c],
-                        close_gen_allowed_wel[c],
-                        touch_ticks[gen_tick_offset + 0],
-                        touch_ticks[gen_tick_offset + 1],
-                        touch_nearest_ticks[(k - 1) * C + c],
-                        as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
-                        touch_min_qty_relation[(k - 1) * C + c],
-                        coin_close_qty_pct,
-                        coin_close_threshold_base,
-                        coin_close_threshold_we,
-                        coin_close_threshold_v1h,
-                        coin_close_threshold_v1m,
-                        volatility_1h[c],
-                        volatility_1m[c],
-                        qty_step,
-                        price_step,
-                        min_qty,
-                        min_cost,
-                        c_mult,
-                        close_grid_max_rungs[c],
-                        wanted,
-                        group
-                    );
-                    if (group.qty <= 0.0f) break;
-                    float group_min = min_entry_qty(
-                        group.price, qty_step, min_qty, min_cost, c_mult
-                    );
-                    float trimmed_group_qty = fmin(
-                        group.qty, remaining_budget
-                    );
-                    bool partial_trim = trimmed_group_qty + 1.0e-6f
-                        < group.qty;
-                    if (trimmed_group_qty + 1.0e-6f < group_min) {
-                        trimmed_group_qty = 0.0f;
-                        if (partial_trim) remaining_budget = 0.0f;
-                    }
-                    if (trimmed_group_qty > 0.0f) {
-                        remaining_budget = fmax(
-                            round_step(
-                                remaining_budget - trimmed_group_qty,
-                                qty_step
-                            ),
-                            0.0f
-                        );
-                        if (rank == last_kept_rank && dust_remainder > 0.0f
-                            && dust_remainder < minimum_any) {
-                            trimmed_group_qty = round_step(
-                                trimmed_group_qty + dust_remainder, qty_step
-                            );
-                        }
-                    }
-                    bool reducer_before_group = filled_close
-                        && !reducer_executed
-                        && (short_side
-                            ? close_tick[c] > group.ticks
-                            : close_tick[c] < group.ticks);
-                    if (reducer_before_group) {
-                        float qty = fmin(reducer_qty, psize[c]);
-                        float pnl = qty * c_mult * (short_side
-                            ? pprice[c] - fill_price
-                            : fill_price - pprice[c]);
-                        if (realized_loss_proxy_allows_reducer(
-                                qty, fill_price, pprice[c], short_side,
-                                c_mult, maker_fee,
-                                close_is_unstuck_reducer[c], loss_gate_enabled,
-                                balance, realized_pnl_cumsum_last,
-                                realized_pnl_cumsum_max, max_realized_loss_pct
-                            )) {
-                            float net_pnl = pnl
-                                - qty * fill_price * c_mult * maker_fee;
-                            record_tm_multicoin_close_fill(
-                                side, account, fills, coin_fill_counts,
-                                int(b), C, c, k, pnl, net_pnl, qty,
-                                pprice[c], close, c_mult, short_side,
-                                false, collect_coin_fill_counts,
-                                hsl_equity_before_fills
-                            );
-                            psize[c] = fmax(
-                                round_step(psize[c] - qty, qty_step), 0.0f
-                            );
-                            day_volume += qty * fill_price * c_mult / balance;
-                            reducer_executed = true;
-                            executed_close = true;
-                        }
-                    }
-                    bool reachable = short_side
-                        ? group.ticks > fill_ticks[tick_offset + 1]
-                        : group.ticks <= fill_ticks[tick_offset + 0];
-                    if (!reachable) break;
-                    float group_qty = trimmed_group_qty;
-                    if (group_qty <= 0.0f) continue;
-                    float grid_qty = fmin(
-                        round_step(group_qty, qty_step), psize[c]
-                    );
-                    float grid_pnl = grid_qty * c_mult * (short_side
-                        ? pprice[c] - group.price
-                        : group.price - pprice[c]);
-                    if (!realized_loss_proxy_allows_close(
-                            grid_qty, group.price, pprice[c], short_side,
-                            c_mult, maker_fee, loss_gate_enabled
-                        )) {
-                        continue;
-                    }
-                    float grid_net_pnl = grid_pnl
-                        - grid_qty * group.price * c_mult * maker_fee;
-                    record_tm_multicoin_close_fill(
-                        side, account, fills, coin_fill_counts,
-                        int(b), C, c, k, grid_pnl, grid_net_pnl,
-                        grid_qty, pprice[c], close, c_mult, short_side,
-                        false, collect_coin_fill_counts,
-                        hsl_equity_before_fills
-                    );
-                    psize[c] = fmax(
-                        round_step(psize[c] - grid_qty, qty_step), 0.0f
-                    );
-                    day_volume += grid_qty * group.price * c_mult / balance;
-                    executed_close = true;
-                    if (psize[c] <= 0.0f) break;
-                }
-
-                float secondary_price = float(secondary_close_tick[c])
-                    * price_step;
-                bool secondary_first = filled_secondary_close
-                    && (!(filled_close && !reducer_executed)
-                        || (short_side
-                            ? secondary_price >= fill_price
-                            : secondary_price <= fill_price));
-                for (int close_rank = 0; close_rank < 2; ++close_rank) {
-                    bool use_secondary = secondary_first
-                        ? close_rank == 0 : close_rank == 1;
-                    bool reachable = use_secondary
-                        ? filled_secondary_close
-                        : filled_close && !reducer_executed;
-                    if (!reachable || psize[c] <= 0.0f) continue;
-                    float price = use_secondary
-                        ? secondary_price : fill_price;
-                    float requested_qty = use_secondary
-                        ? secondary_close_qty[c] : reducer_qty;
-                    float qty = fmin(
-                        round_step(requested_qty, qty_step), psize[c]
-                    );
-                    float pnl = qty * c_mult * (short_side
-                        ? pprice[c] - price : price - pprice[c]);
-                    bool is_unstuck = !use_secondary
-                        && close_is_unstuck_reducer[c];
-                    bool is_hsl_panic = !use_secondary
-                        && close_is_hsl_panic[c];
-                    bool market_panic = !use_secondary
-                        && primary_market_panic;
-                    if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
-                            qty, price, pprice[c], short_side,
-                            c_mult, maker_fee, is_unstuck, loss_gate_enabled,
-                            balance, realized_pnl_cumsum_last,
-                            realized_pnl_cumsum_max, max_realized_loss_pct
-                        )) {
-                        continue;
-                    }
-                    float net_pnl = pnl - qty * price * c_mult
-                        * (market_panic ? taker_fee : maker_fee);
-                    record_tm_multicoin_close_fill(
-                        side, account, fills, coin_fill_counts,
-                        int(b), C, c, k, pnl, net_pnl, qty,
-                        pprice[c], close, c_mult, short_side,
-                        is_hsl_panic, collect_coin_fill_counts,
-                        hsl_equity_before_fills
-                    );
-                    psize[c] = fmax(
-                        round_step(psize[c] - qty, qty_step), 0.0f
-                    );
-                    day_volume += qty * price * c_mult / balance;
-                    if (!use_secondary) reducer_executed = true;
-                    executed_close = true;
-                }
-
-                if (executed_close) {
-                    finalize_tm_multicoin_close_position(
-                        side, fills, c, k
-                    );
-                    any_fill = true;
-                }
-            }
-
-            bool filled_entry = entry_qty[c] > 0.0f
-                && (short_side
-                    ? entry_tick[c] <= fill_ticks[tick_offset + 0]
-                    : entry_tick[c] > fill_ticks[tick_offset + 1]);
-            if (filled_entry) {
-                float fill_price = float(entry_tick[c]) * price_step;
-                float adjusted = round_step(entry_qty[c], qty_step);
-                float fee = adjusted * fill_price * c_mult * maker_fee;
-                record_tm_multicoin_entry_fill(
-                    side, account, fills, coin_fill_counts,
-                    int(b), C, c, k, fee, adjusted, fill_price,
-                    close, c_mult, short_side, collect_coin_fill_counts,
-                    hsl_equity_before_fills
-                );
-                apply_tm_multicoin_entry_position(
-                    side, fills, c, k, adjusted, fill_price,
-                    qty_step, c_mult, balance
-                );
-                any_fill = true;
-            }
-            if (filled_coin[c]) {
-                update_tm_multicoin_position_fill_timestamp(
-                    side, fills, c, k
-                );
-            }
-        }
+        bool any_fill = process_tm_multicoin_side_fills(
+            side, config, account, fills,
+            bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+            touch_min_qty_bits, touch_min_qty_relation,
+            coin_settings, coin_overrides, coin_fill_counts,
+            int(b), k, C, short_side, alive,
+            collect_coin_fill_counts, loss_gate_enabled,
+            max_realized_loss_pct, market_order_slippage_pct,
+            hsl_panic_market, hsl_equity_before_fills
+        );
         if (any_fill) {
             day_has_fill = 1.0f;
             if (last_fill_k >= 0.0f) {

@@ -627,6 +627,7 @@ mod tests {
         assert!(source.contains("finalize_tm_multicoin_close_position("));
         assert!(source.contains("apply_tm_multicoin_entry_position("));
         assert!(source.contains("update_tm_multicoin_position_fill_timestamp("));
+        assert!(source.contains("process_tm_multicoin_side_fills("));
         assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));
         assert!(source.contains("update_tm_multicoin_side_indicators("));
         assert!(source.contains("count_tm_multicoin_tradable_coins("));
@@ -639,6 +640,9 @@ mod tests {
         ));
         assert!(source.contains(
             "update_tm_multicoin_side_indicators(\n            side, config, bars, coin_settings, k, C, start_hour_minute"
+        ));
+        assert!(source.contains(
+            "bool any_fill = process_tm_multicoin_side_fills(\n            side, config, account, fills"
         ));
         assert!(source.contains("TrailingMartingaleMulticoinSideState side"));
         assert!(source.contains("TrailingMartingaleMulticoinFillState fills"));
