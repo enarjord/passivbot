@@ -22,6 +22,7 @@ MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
 MPS_MULTICOIN_SCALAR_COLS = 57
 MPS_DIRECTIONAL_SCALAR_COLS = 62
+MPS_EMA_MULTICOIN_FUSED_SCALAR_COLS = 62
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -162,6 +163,22 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "hsl_panic_loss_drawdown_max": scalars[:, 55],
         "hsl_panic_loss_drawdown_count": scalars[:, 56],
     }
+
+
+def _decode_ema_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
+    output = _decode_outputs(daily, scalars, gaps)
+    long_entry_initial_balance_pct = output.pop("entry_initial_balance_pct")
+    output.update(
+        {
+            "entry_initial_balance_pct_long": long_entry_initial_balance_pct,
+            "entry_initial_balance_pct_short": scalars[:, 57],
+            "profit_sum_long": scalars[:, 58],
+            "loss_sum_long": scalars[:, 59],
+            "profit_sum_short": scalars[:, 60],
+            "loss_sum_short": scalars[:, 61],
+        }
+    )
+    return output
 
 
 def _decode_directional_outputs(daily, scalars, gaps) -> dict:
@@ -457,6 +474,7 @@ class MpsEmaAnchorMulticoinRunner:
 
     coin_override_cols = 29
     coin_override_label = "EMA"
+    scalar_cols = MPS_MULTICOIN_SCALAR_COLS
 
     def __init__(
         self,
@@ -576,7 +594,7 @@ class MpsEmaAnchorMulticoinRunner:
                         device="mps",
                     ),
                     torch.zeros(
-                        (batch_size, MPS_MULTICOIN_SCALAR_COLS),
+                        (batch_size, self.scalar_cols),
                         dtype=torch.float32,
                         device="mps",
                     ),
@@ -616,6 +634,39 @@ class MpsEmaAnchorMulticoinRunner:
             np.ascontiguousarray(values), dtype=torch.int32, device="mps"
         )
 
+    def _dispatch(
+        self,
+        library,
+        params_mps,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        *,
+        batch_size: int,
+    ) -> None:
+        library.passivbot_ema_anchor_multicoin(
+            self.bars,
+            self.fill_ticks,
+            self.touch_ticks,
+            self.coin_settings,
+            self.coin_overrides,
+            params_mps,
+            self.settings,
+            sizes,
+            end_steps,
+            daily,
+            scalars,
+            gaps,
+            coin_fill_counts,
+            threads=(batch_size, 1, 1),
+        )
+
+    def _decode(self, daily, scalars, gaps) -> dict:
+        return _decode_outputs(daily, scalars, gaps)
+
     def run(
         self,
         params: np.ndarray,
@@ -654,21 +705,16 @@ class MpsEmaAnchorMulticoinRunner:
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
-        library.passivbot_ema_anchor_multicoin(
-            self.bars,
-            self.fill_ticks,
-            self.touch_ticks,
-            self.coin_settings,
-            self.coin_overrides,
+        self._dispatch(
+            library,
             params_mps,
-            self.settings,
             self._sizes[sizes_key],
             end_steps_mps,
             daily,
             scalars,
             gaps,
             coin_fill_counts,
-            threads=(batch_size, 1, 1),
+            batch_size=batch_size,
         )
         if profile:
             torch.mps.synchronize()
@@ -680,10 +726,126 @@ class MpsEmaAnchorMulticoinRunner:
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        output = _decode_outputs(daily, scalars, gaps)
+        output = self._decode(daily, scalars, gaps)
         if self.collect_coin_fill_counts:
             output["coin_fill_counts"] = coin_fill_counts
         return output
+
+
+class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
+    """Persistent dual-side shared-account EMA Anchor runner on Apple MPS."""
+
+    scalar_cols = MPS_EMA_MULTICOIN_FUSED_SCALAR_COLS
+
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        long_coin_overrides: np.ndarray | None = None,
+        short_coin_overrides: np.ndarray | None = None,
+        forager_score_hysteresis_pct: float = 0.0,
+        max_realized_loss_pct: float = 1.0,
+        collect_coin_fill_counts: bool = False,
+        market_order_slippage_pct: float = 0.0,
+        hsl_panic_market_long: bool = False,
+        hsl_panic_market_short: bool = False,
+    ):
+        super().__init__(
+            run,
+            data,
+            side="long",
+            coin_overrides=long_coin_overrides,
+            forager_score_hysteresis_pct=forager_score_hysteresis_pct,
+            max_realized_loss_pct=max_realized_loss_pct,
+            collect_coin_fill_counts=collect_coin_fill_counts,
+            market_order_slippage_pct=market_order_slippage_pct,
+            hsl_panic_market=hsl_panic_market_long,
+        )
+        if short_coin_overrides is None:
+            short_coin_overrides = np.full(
+                (self.n_coins, self.coin_override_cols),
+                np.nan,
+                dtype=np.float32,
+            )
+        short_coin_overrides = np.asarray(short_coin_overrides, dtype=np.float32)
+        expected_shape = (self.n_coins, self.coin_override_cols)
+        if short_coin_overrides.shape != expected_shape:
+            raise ValueError(
+                "expected fused multicoin EMA short override matrix shaped "
+                f"{expected_shape}, got {short_coin_overrides.shape}"
+            )
+        self.short_coin_overrides = torch.as_tensor(
+            np.ascontiguousarray(short_coin_overrides), device="mps"
+        )
+        max_realized_loss_pct = float(max_realized_loss_pct)
+        encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
+            max_realized_loss_pct
+        )
+        market_order_slippage_pct = float(market_order_slippage_pct)
+        liq_floor = max(0.0, run.starting_balance) * max(
+            0.0, run.liquidation_threshold
+        )
+        self.settings = torch.tensor(
+            [
+                run.starting_balance,
+                liq_floor,
+                run.interval_ms,
+                0.0,
+                float(forager_score_hysteresis_pct),
+                encoded_max_realized_loss_pct,
+                float(self.collect_coin_fill_counts),
+                market_order_slippage_pct,
+                float(bool(hsl_panic_market_long)),
+                float(bool(hsl_panic_market_short)),
+            ],
+            dtype=torch.float32,
+            device="mps",
+        )
+
+    def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        expected = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS) * 2
+        if params.ndim != 2 or params.shape[1] != expected:
+            got = params.shape[1] if params.ndim == 2 else params.shape
+            raise ValueError(
+                "expected fused multicoin EMA parameter matrix with "
+                f"{expected} columns, got {got}"
+            )
+        return np.ascontiguousarray(params, dtype=np.float32)
+
+    def _dispatch(
+        self,
+        library,
+        params_mps,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        *,
+        batch_size: int,
+    ) -> None:
+        library.passivbot_ema_anchor_multicoin_fused(
+            self.bars,
+            self.fill_ticks,
+            self.touch_ticks,
+            self.coin_settings,
+            self.coin_overrides,
+            self.short_coin_overrides,
+            params_mps,
+            self.settings,
+            sizes,
+            end_steps,
+            daily,
+            scalars,
+            gaps,
+            coin_fill_counts,
+            threads=(batch_size, 1, 1),
+        )
+
+    def _decode(self, daily, scalars, gaps) -> dict:
+        return _decode_ema_multicoin_fused_outputs(daily, scalars, gaps)
 
 
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
