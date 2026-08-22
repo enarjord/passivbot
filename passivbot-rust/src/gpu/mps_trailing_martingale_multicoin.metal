@@ -8,6 +8,7 @@ constant int HSL_OVERRIDE_START = 34;
 constant int COIN_COLS = 12;
 constant int DAILY_COLS = 9;
 constant int SCALAR_COLS = 57;
+constant int FUSED_SCALAR_COLS = 62;
 constant int GAP_BINS = 128;
 
 // PASSIVBOT_HSL_COMMON
@@ -2850,6 +2851,636 @@ inline void generate_tm_multicoin_side_orders(
             close_is_hsl_panic[c] = true;
         }
     }
+}
+
+inline float tm_multicoin_entry_initial_balance_pct(
+    thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* coin_overrides,
+    int effective_n_positions
+) {
+    float base_limit = effective_n_positions > 0
+        ? config.twel / float(effective_n_positions) : 0.0f;
+    float initial_qty_pct = coin_override_or(
+        coin_overrides, 0, 6, config.initial_qty_pct
+    );
+    float allowance_pct = coin_override_or(
+        coin_overrides, 0, 25, config.allowance_pct
+    );
+    return allowed_wallet_exposure_limit(
+        base_limit, config.twel, allowance_pct, config.legacy_raw_allowance
+    ) * initial_qty_pct;
+}
+
+inline void passivbot_trailing_martingale_multicoin_fused_impl(
+    constant float* bars,
+    constant int* fill_ticks,
+    constant int* touch_ticks,
+    constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
+    constant float* coin_settings,
+    constant float* long_coin_overrides,
+    constant float* short_coin_overrides,
+    constant float* params,
+    constant float* run_settings,
+    constant int* sizes,
+    constant int* end_steps,
+    device float* daily,
+    device float* scalars,
+    device int* gap_hist,
+    device float* coin_fill_counts,
+    uint b
+) {
+    const int B = sizes[0];
+    const int T = sizes[1];
+    const int C = sizes[2];
+    const int D = sizes[3];
+    const int requested_start_k = sizes[4];
+    const int global_warmup = sizes[5];
+    const int start_day_minute = sizes[6];
+    const int start_hour_minute = sizes[7];
+    if (b >= uint(B)) return;
+    const int stop_k = clamp(end_steps[b], 1, T - 1);
+    const int scalar_offset = int(b) * FUSED_SCALAR_COLS;
+    for (int j = 0; j < FUSED_SCALAR_COLS; ++j) {
+        scalars[scalar_offset + j] = 0.0f;
+    }
+    for (int j = 0; j < GAP_BINS; ++j) {
+        gap_hist[int(b) * GAP_BINS + j] = 0;
+    }
+    if (C < 1 || C > MAX_COINS) {
+        scalars[scalar_offset + 9] = 0.0f;
+        scalars[scalar_offset + 13] = 0.0f;
+        return;
+    }
+    const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
+    if (collect_coin_fill_counts) {
+        for (int c = 0; c < C; ++c) {
+            coin_fill_counts[int(b) * C + c] = 0.0f;
+        }
+    }
+
+    const int po = int(b) * PARAM_COLS * 2;
+    const TrailingMartingaleMulticoinSideConfig long_config =
+        load_trailing_martingale_multicoin_side_config(params, po);
+    const TrailingMartingaleMulticoinSideConfig short_config =
+        load_trailing_martingale_multicoin_side_config(
+            params, po + PARAM_COLS
+        );
+    bool any_unstuck_enabled = false;
+    for (int c = 0; c < C; ++c) {
+        any_unstuck_enabled = any_unstuck_enabled
+            || coin_override_or(
+                long_coin_overrides, c, 28,
+                long_config.unstuck_enabled ? 1.0f : 0.0f
+            ) > 0.5f
+            || coin_override_or(
+                short_coin_overrides, c, 28,
+                short_config.unstuck_enabled ? 1.0f : 0.0f
+            ) > 0.5f;
+    }
+    const int hsl_signal_mode = long_config.hsl_template.signal_mode;
+    const bool topology_valid = hsl_signal_mode >= HSL_SIGNAL_UNIFIED
+        && hsl_signal_mode <= HSL_SIGNAL_COIN
+        && long_config.hsl_template.signal_mode
+            == short_config.hsl_template.signal_mode
+        && long_config.coin_hsl_mode == short_config.coin_hsl_mode
+        && !any_unstuck_enabled;
+    if (!topology_valid) {
+        scalars[scalar_offset + 9] = 0.0f;
+        scalars[scalar_offset + 13] = 0.0f;
+        return;
+    }
+
+    TrailingMartingaleMulticoinSideState long_side;
+    TrailingMartingaleMulticoinSideState short_side;
+    init_trailing_martingale_multicoin_side_state(
+        long_side, long_config, bars, coin_settings,
+        long_coin_overrides, C
+    );
+    init_trailing_martingale_multicoin_side_state(
+        short_side, short_config, bars, coin_settings,
+        short_coin_overrides, C
+    );
+
+    const float starting_balance = run_settings[0];
+    const float liquidation_floor = run_settings[1];
+    const float interval_ms = run_settings[2];
+    const float score_hysteresis = fmax(run_settings[4], 0.0f);
+    const bool loss_gate_enabled = run_settings[5] < 1.0f;
+    const float max_realized_loss_pct = run_settings[5];
+    const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
+    const bool long_hsl_panic_market = run_settings[8] > 0.5f;
+    const bool short_hsl_panic_market = run_settings[9] > 0.5f;
+    const float log_bin_scale = 127.0f / log(4000001.0f);
+
+    JointPortfolioAccount account = init_joint_portfolio_account(
+        starting_balance
+    );
+    TrailingMartingaleMulticoinFillState fills =
+        init_trailing_martingale_multicoin_fill_state();
+    bool alive = true;
+    bool equity_started = false;
+    float fills_active_days_count = 0.0f;
+    int last_active_fill_day = -1;
+    float run_peak = -INFINITY;
+    float max_dd = 0.0f;
+    float total_wallet_exposure_max = 0.0f;
+    float total_wallet_exposure_mean = 0.0f;
+    float total_wallet_exposure_samples = 0.0f;
+    float first_fill_k = -1.0f;
+    float last_fill_k = -1.0f;
+    float gap_max_min = 0.0f;
+    float last_high_k = -1.0f;
+    float recovery_max_min = 0.0f;
+    float account_peak = -INFINITY;
+    float account_peak_k = -1.0f;
+    float account_recovery_max_min = 0.0f;
+    float first_eq_k = -1.0f;
+    float last_eq_k = -1.0f;
+    int liquidation_day = -1;
+    float hsl_tier_samples_total = 0.0f;
+    float hsl_tier_samples_yellow = 0.0f;
+    float hsl_tier_samples_orange = 0.0f;
+    float hsl_tier_samples_red = 0.0f;
+
+    int current_day = 0;
+    bool day_touched = false;
+    float day_end = 0.0f;
+    float day_min = INFINITY;
+    float day_dd = 0.0f;
+    float day_has_fill = 0.0f;
+    float day_min_balance = INFINITY;
+    float day_start_balance = account.balance;
+
+    for (int k = 1; k < stop_k; ++k) {
+        const int day_index = (start_day_minute + k) / 1440;
+        if (day_index != current_day) {
+            if (day_touched && current_day >= 0 && current_day < D) {
+                int output = (int(b) * D + current_day) * DAILY_COLS;
+                daily[output + 0] = day_end;
+                daily[output + 1] = day_min;
+                daily[output + 2] = day_dd;
+                daily[output + 3] = fills.day_volume;
+                daily[output + 4] = day_has_fill;
+                daily[output + 5] = day_min_balance;
+                daily[output + 6] = account.balance - day_start_balance;
+                daily[output + 7] = account.balance;
+                daily[output + 8] = fills.day_fill_count;
+            }
+            current_day = day_index;
+            day_touched = false;
+            day_end = 0.0f;
+            day_min = INFINITY;
+            day_dd = 0.0f;
+            fills.day_volume = 0.0f;
+            day_has_fill = 0.0f;
+            day_min_balance = INFINITY;
+            day_start_balance = account.balance;
+            fills.day_fill_count = 0.0f;
+        }
+
+        float long_hsl_equity_before_fills = account.balance;
+        long_hsl_equity_before_fills =
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                long_side, bars, coin_settings, k, C, false,
+                long_hsl_equity_before_fills
+            );
+        long_hsl_equity_before_fills =
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                short_side, bars, coin_settings, k, C, true,
+                long_hsl_equity_before_fills
+            );
+        bool long_fill = process_tm_multicoin_side_fills(
+            long_side, long_config, account, fills,
+            bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+            touch_min_qty_bits, touch_min_qty_relation,
+            coin_settings, long_coin_overrides,
+            coin_fill_counts, int(b), k, C, false, alive,
+            collect_coin_fill_counts, loss_gate_enabled,
+            max_realized_loss_pct, market_order_slippage_pct,
+            long_hsl_panic_market, long_hsl_equity_before_fills
+        );
+        float short_hsl_equity_before_fills = account.balance;
+        short_hsl_equity_before_fills =
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                long_side, bars, coin_settings, k, C, false,
+                short_hsl_equity_before_fills
+            );
+        short_hsl_equity_before_fills =
+            accumulate_tm_multicoin_side_unrealized_pnl(
+                short_side, bars, coin_settings, k, C, true,
+                short_hsl_equity_before_fills
+            );
+        bool short_fill = process_tm_multicoin_side_fills(
+            short_side, short_config, account, fills,
+            bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+            touch_min_qty_bits, touch_min_qty_relation,
+            coin_settings, short_coin_overrides,
+            coin_fill_counts, int(b), k, C, true, alive,
+            collect_coin_fill_counts, loss_gate_enabled,
+            max_realized_loss_pct, market_order_slippage_pct,
+            short_hsl_panic_market, short_hsl_equity_before_fills
+        );
+        bool any_fill = long_fill || short_fill;
+        if (any_fill) {
+            day_has_fill = 1.0f;
+            if (last_fill_k >= 0.0f) {
+                float gap = float(k) - last_fill_k;
+                int bin = clamp(
+                    int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale),
+                    0, 127
+                );
+                gap_hist[int(b) * GAP_BINS + bin] += 1;
+                gap_max_min = fmax(gap_max_min, gap);
+            }
+            if (first_fill_k < 0.0f) first_fill_k = float(k);
+            last_fill_k = float(k);
+        }
+
+        update_tm_multicoin_side_indicators(
+            long_side, long_config, bars, coin_settings,
+            k, C, start_hour_minute
+        );
+        update_tm_multicoin_side_indicators(
+            short_side, short_config, bars, coin_settings,
+            k, C, start_hour_minute
+        );
+        int long_tradable_count = count_tm_multicoin_tradable_coins(
+            bars, coin_settings, long_coin_overrides, k, C
+        );
+        int short_tradable_count = count_tm_multicoin_tradable_coins(
+            bars, coin_settings, short_coin_overrides, k, C
+        );
+        const bool post_fill_balance_depleted =
+            isfinite(account.balance) && account.balance <= 0.0f;
+        if (alive && !post_fill_balance_depleted) {
+            long_side.max_tradable_seen = max(
+                long_side.max_tradable_seen, long_tradable_count
+            );
+            short_side.max_tradable_seen = max(
+                short_side.max_tradable_seen, short_tradable_count
+            );
+        }
+        const int long_effective_n_positions = min(
+            long_config.n_positions, long_side.max_tradable_seen
+        );
+        const int short_effective_n_positions = min(
+            short_config.n_positions, short_side.max_tradable_seen
+        );
+        const bool past_warmup =
+            k > max(global_warmup, 1) && k >= requested_start_k;
+        const bool long_can_generate = alive
+            && long_effective_n_positions > 0 && past_warmup;
+        const bool short_can_generate = alive
+            && short_effective_n_positions > 0 && past_warmup;
+        equity_started = equity_started
+            || long_can_generate || short_can_generate;
+
+        int long_hsl_mode = long_config.coin_hsl_mode ? 0
+            : hsl_mode(
+                long_side.hsl,
+                tm_multicoin_side_has_position(long_side, C)
+            );
+        int short_hsl_mode = short_config.coin_hsl_mode ? 0
+            : hsl_mode(
+                short_side.hsl,
+                tm_multicoin_side_has_position(short_side, C)
+            );
+        if (long_can_generate) {
+            update_tm_multicoin_side_selection(
+                long_side, long_config, bars, coin_settings,
+                long_coin_overrides, k, C, false, any_fill,
+                long_effective_n_positions, score_hysteresis
+            );
+            generate_tm_multicoin_side_orders(
+                long_side, long_config, account,
+                bars, touch_ticks, touch_nearest_ticks,
+                touch_min_qty_bits, touch_min_qty_relation,
+                coin_settings, long_coin_overrides,
+                k, C, false, long_tradable_count,
+                long_effective_n_positions, long_hsl_mode,
+                loss_gate_enabled, max_realized_loss_pct
+            );
+        }
+        if (short_can_generate) {
+            update_tm_multicoin_side_selection(
+                short_side, short_config, bars, coin_settings,
+                short_coin_overrides, k, C, true, any_fill,
+                short_effective_n_positions, score_hysteresis
+            );
+            generate_tm_multicoin_side_orders(
+                short_side, short_config, account,
+                bars, touch_ticks, touch_nearest_ticks,
+                touch_min_qty_bits, touch_min_qty_relation,
+                coin_settings, short_coin_overrides,
+                k, C, true, short_tradable_count,
+                short_effective_n_positions, short_hsl_mode,
+                loss_gate_enabled, max_realized_loss_pct
+            );
+        }
+
+        float long_unrealized = 0.0f;
+        float short_unrealized = 0.0f;
+        float net_position_cost = 0.0f;
+        bool any_valid = false;
+        for (int c = 0; c < C; ++c) {
+            int coin_offset = c * COIN_COLS;
+            int bar_offset = (k * C + c) * 4;
+            float close = bars[bar_offset + 2];
+            if (k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && finite_positive(close)) {
+                any_valid = true;
+            }
+            float c_mult = coin_settings[coin_offset + 4];
+            if (long_side.psize[c] > 0.0f) {
+                net_position_cost += long_side.psize[c]
+                    * long_side.pprice[c] * c_mult;
+                if (finite_positive(close)) {
+                    long_unrealized += long_side.psize[c] * c_mult
+                        * (close - long_side.pprice[c]);
+                }
+            }
+            if (short_side.psize[c] > 0.0f) {
+                net_position_cost -= short_side.psize[c]
+                    * short_side.pprice[c] * c_mult;
+                if (finite_positive(close)) {
+                    short_unrealized += short_side.psize[c] * c_mult
+                        * (short_side.pprice[c] - close);
+                }
+            }
+        }
+        float equity = joint_portfolio_equity(
+            account, long_unrealized, short_unrealized
+        );
+        bool can_sample_hsl = (long_can_generate || short_can_generate)
+            && any_valid && alive
+            && joint_portfolio_can_generate(
+                account, equity, liquidation_floor
+            );
+        bool hsl_validation_failed = false;
+        if (can_sample_hsl) {
+            bool sample_enabled = false;
+            int sampled_tier = 0;
+            bool hsl_valid = update_tm_multicoin_dual_side_hsl(
+                long_side, long_config, long_effective_n_positions,
+                short_side, short_config, short_effective_n_positions,
+                account, bars, coin_settings, k, C,
+                starting_balance, interval_ms,
+                sample_enabled, sampled_tier
+            );
+            if (!hsl_valid) {
+                account.balance = 0.0f;
+                alive = false;
+                liquidation_day = day_index;
+                hsl_validation_failed = true;
+            } else if (sample_enabled) {
+                hsl_tier_samples_total += 1.0f;
+                hsl_tier_samples_yellow +=
+                    sampled_tier == 1 ? 1.0f : 0.0f;
+                hsl_tier_samples_orange +=
+                    sampled_tier == 2 ? 1.0f : 0.0f;
+                hsl_tier_samples_red +=
+                    sampled_tier == 3 ? 1.0f : 0.0f;
+            }
+        }
+
+        bool active = equity_started && any_valid
+            && (alive || hsl_validation_failed);
+        if (active) {
+            if (first_eq_k < 0.0f) first_eq_k = float(k);
+            last_eq_k = float(k);
+            if (any_fill) {
+                int active_fill_day = int(float(k) - first_eq_k) / 1440;
+                if (active_fill_day != last_active_fill_day) {
+                    fills_active_days_count += 1.0f;
+                    last_active_fill_day = active_fill_day;
+                }
+            }
+            bool liquidated = account.balance <= 0.0f
+                || equity <= liquidation_floor;
+            float effective_equity = liquidated
+                ? liquidation_floor : equity;
+            if (effective_equity >= account_peak) {
+                if (account_peak_k >= 0.0f) {
+                    account_recovery_max_min = fmax(
+                        account_recovery_max_min,
+                        float(k) - account_peak_k
+                    );
+                }
+                account_peak = effective_equity;
+                account_peak_k = float(k);
+            }
+            if (effective_equity > run_peak) {
+                if (last_high_k >= 0.0f) {
+                    recovery_max_min = fmax(
+                        recovery_max_min, float(k) - last_high_k
+                    );
+                }
+                last_high_k = float(k);
+                run_peak = effective_equity;
+            }
+            float drawdown = fmax(
+                (run_peak - effective_equity)
+                    / fmax(fabs(run_peak), 1.0e-12f),
+                0.0f
+            );
+            max_dd = fmax(max_dd, drawdown);
+            day_end = effective_equity;
+            day_min = fmin(day_min, effective_equity);
+            day_min_balance = fmin(day_min_balance, account.balance);
+            day_dd = fmax(day_dd, drawdown);
+            day_touched = true;
+            if (!liquidated) {
+                float twe_abs = fabs(net_position_cost / account.balance);
+                total_wallet_exposure_samples += 1.0f;
+                total_wallet_exposure_mean += (
+                    twe_abs - total_wallet_exposure_mean
+                ) / total_wallet_exposure_samples;
+                total_wallet_exposure_max = fmax(
+                    total_wallet_exposure_max, twe_abs
+                );
+            }
+            if (liquidated) {
+                alive = false;
+                liquidation_day = day_index;
+            }
+        }
+    }
+
+    if (day_touched && current_day >= 0 && current_day < D) {
+        int output = (int(b) * D + current_day) * DAILY_COLS;
+        daily[output + 0] = day_end;
+        daily[output + 1] = day_min;
+        daily[output + 2] = day_dd;
+        daily[output + 3] = fills.day_volume;
+        daily[output + 4] = day_has_fill;
+        daily[output + 5] = day_min_balance;
+        daily[output + 6] = account.balance - day_start_balance;
+        daily[output + 7] = account.balance;
+        daily[output + 8] = fills.day_fill_count;
+    }
+
+    float long_total_size = 0.0f;
+    float long_total_cost = 0.0f;
+    float short_total_size = 0.0f;
+    float short_total_cost = 0.0f;
+    int open_positions = 0;
+    for (int c = 0; c < C; ++c) {
+        float c_mult = coin_settings[c * COIN_COLS + 4];
+        if (long_side.psize[c] > 0.0f) {
+            long_total_size += long_side.psize[c];
+            long_total_cost += long_side.psize[c]
+                * long_side.pprice[c] * c_mult;
+            open_positions += 1;
+            if (long_side.position_open_k[c] >= 0.0f
+                && last_eq_k >= 0.0f) {
+                float held_min = last_eq_k
+                    - long_side.position_open_k[c];
+                fills.held_max_min = fmax(fills.held_max_min, held_min);
+                fills.held_sum_min += held_min;
+                fills.held_count += 1.0f;
+            }
+            if (long_side.position_last_fill_k[c] >= 0.0f
+                && last_eq_k >= 0.0f) {
+                fills.position_unchanged_max_min = fmax(
+                    fills.position_unchanged_max_min,
+                    last_eq_k - long_side.position_last_fill_k[c]
+                );
+            }
+        }
+        if (short_side.psize[c] > 0.0f) {
+            short_total_size += short_side.psize[c];
+            short_total_cost += short_side.psize[c]
+                * short_side.pprice[c] * c_mult;
+            open_positions += 1;
+            if (short_side.position_open_k[c] >= 0.0f
+                && last_eq_k >= 0.0f) {
+                float held_min = last_eq_k
+                    - short_side.position_open_k[c];
+                fills.held_max_min = fmax(fills.held_max_min, held_min);
+                fills.held_sum_min += held_min;
+                fills.held_count += 1.0f;
+            }
+            if (short_side.position_last_fill_k[c] >= 0.0f
+                && last_eq_k >= 0.0f) {
+                fills.position_unchanged_max_min = fmax(
+                    fills.position_unchanged_max_min,
+                    last_eq_k - short_side.position_last_fill_k[c]
+                );
+            }
+        }
+    }
+    if (fills.pnl_recovery_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        fills.pnl_recovery_max_min = fmax(
+            fills.pnl_recovery_max_min,
+            last_eq_k - fills.pnl_recovery_peak_k
+        );
+    }
+
+    scalars[scalar_offset + 0] = max_dd;
+    scalars[scalar_offset + 1] = fills.held_max_min * interval_ms;
+    scalars[scalar_offset + 2] = gap_max_min * interval_ms;
+    scalars[scalar_offset + 3] = first_fill_k >= 0.0f
+        ? first_fill_k * interval_ms : -1.0f;
+    scalars[scalar_offset + 4] = last_fill_k >= 0.0f
+        ? last_fill_k * interval_ms : -1.0f;
+    scalars[scalar_offset + 5] = recovery_max_min * interval_ms;
+    scalars[scalar_offset + 6] = last_high_k >= 0.0f
+        ? last_high_k * interval_ms : -1.0f;
+    scalars[scalar_offset + 7] = first_eq_k >= 0.0f
+        ? first_eq_k * interval_ms : -1.0f;
+    scalars[scalar_offset + 8] = last_eq_k >= 0.0f
+        ? last_eq_k * interval_ms : -1.0f;
+    scalars[scalar_offset + 9] = float(liquidation_day);
+    scalars[scalar_offset + 10] = account.balance;
+    scalars[scalar_offset + 11] = long_total_size;
+    scalars[scalar_offset + 12] = long_total_cost;
+    scalars[scalar_offset + 13] = alive ? 1.0f : 0.0f;
+    scalars[scalar_offset + 14] = float(open_positions);
+    scalars[scalar_offset + 15] = short_total_size;
+    scalars[scalar_offset + 16] = short_total_cost;
+    // Derive portfolio gross-PnL outputs from their directional reductions so
+    // the public total/directional metric contract stays algebraically exact
+    // despite different float32 accumulation orders.
+    scalars[scalar_offset + 18] =
+        fills.profit_sum_long + fills.profit_sum_short;
+    scalars[scalar_offset + 19] =
+        fills.loss_sum_long + fills.loss_sum_short;
+    scalars[scalar_offset + 20] =
+        fills.position_unchanged_max_min * interval_ms;
+    scalars[scalar_offset + 21] = tm_multicoin_entry_initial_balance_pct(
+        long_config, long_coin_overrides,
+        min(long_config.n_positions, long_side.max_tradable_seen)
+    );
+    scalars[scalar_offset + 22] = total_wallet_exposure_max;
+    scalars[scalar_offset + 23] = total_wallet_exposure_mean;
+    scalars[scalar_offset + 24] = fills.fill_count;
+    scalars[scalar_offset + 25] = fills.fill_count_entry;
+    scalars[scalar_offset + 26] = fills.fill_count_long;
+    scalars[scalar_offset + 27] = fills_active_days_count;
+    scalars[scalar_offset + 28] =
+        fills.pnl_recovery_max_min * interval_ms;
+    scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
+    scalars[scalar_offset + 30] = fills.held_count;
+    scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
+    if (long_config.coin_hsl_mode) {
+        write_dual_side_coin_hsl_outputs(
+            long_side.coin_hsl, short_side.coin_hsl, C,
+            hsl_tier_samples_total,
+            hsl_tier_samples_yellow,
+            hsl_tier_samples_orange,
+            hsl_tier_samples_red,
+            last_eq_k, scalars, scalar_offset + 32
+        );
+    } else {
+        write_dual_side_hsl_outputs(
+            long_side.hsl, short_side.hsl,
+            hsl_tier_samples_total,
+            hsl_tier_samples_yellow,
+            hsl_tier_samples_orange,
+            hsl_tier_samples_red,
+            last_eq_k, scalars, scalar_offset + 32
+        );
+    }
+    scalars[scalar_offset + 57] = tm_multicoin_entry_initial_balance_pct(
+        short_config, short_coin_overrides,
+        min(short_config.n_positions, short_side.max_tradable_seen)
+    );
+    scalars[scalar_offset + 58] = fills.profit_sum_long;
+    scalars[scalar_offset + 59] = fills.loss_sum_long;
+    scalars[scalar_offset + 60] = fills.profit_sum_short;
+    scalars[scalar_offset + 61] = fills.loss_sum_short;
+}
+
+kernel void passivbot_trailing_martingale_multicoin_fused(
+    constant float* bars,
+    constant int* fill_ticks,
+    constant int* touch_ticks,
+    constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
+    constant float* coin_settings,
+    constant float* long_coin_overrides,
+    constant float* short_coin_overrides,
+    constant float* params,
+    constant float* run_settings,
+    constant int* sizes,
+    constant int* end_steps,
+    device float* daily,
+    device float* scalars,
+    device int* gap_hist,
+    device float* coin_fill_counts,
+    uint b [[thread_position_in_grid]]
+) {
+    passivbot_trailing_martingale_multicoin_fused_impl(
+        bars, fill_ticks, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation, coin_settings,
+        long_coin_overrides, short_coin_overrides,
+        params, run_settings, sizes, end_steps,
+        daily, scalars, gap_hist, coin_fill_counts, b
+    );
 }
 
 inline void passivbot_trailing_martingale_multicoin_impl(
