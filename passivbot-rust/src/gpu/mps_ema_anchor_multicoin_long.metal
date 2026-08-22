@@ -742,6 +742,689 @@ inline void update_ema_multicoin_side_selection(
     side.previous_effective_n_positions = effective_n_positions;
 }
 
+inline void generate_ema_multicoin_side_orders(
+    thread EmaMulticoinSideState& side,
+    thread const EmaMulticoinSideConfig& config,
+    thread JointPortfolioAccount& account,
+    constant float* bars,
+    constant int* touch_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    int k,
+    int coin_count,
+    bool short_side,
+    int tradable_count,
+    int effective_n_positions,
+    int current_hsl_mode,
+    bool loss_gate_enabled,
+    float max_realized_loss_pct
+) {
+    const int C = coin_count;
+    const float base_qty_pct = config.base_qty_pct;
+    const float ddf = config.ddf;
+    const float offset = config.offset;
+    const float psize_weight = config.psize_weight;
+    const float weight_1h = config.weight_1h;
+    const float weight_1m = config.weight_1m;
+    const float cooldown_min = config.cooldown_min;
+    const float twel = config.twel;
+    const int n_positions = config.n_positions;
+    const float allowance_pct = config.allowance_pct;
+    const bool legacy_raw_allowance = config.legacy_raw_allowance;
+    const bool twel_entry_gate_enabled = config.twel_entry_gate_enabled;
+    const float twel_threshold = config.twel_threshold;
+    const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
+    const bool twel_enforcer_reduce_portfolio =
+        config.twel_enforcer_reduce_portfolio;
+    const bool unstuck_enabled = config.unstuck_enabled;
+    const bool unstuck_ema_gating_enabled =
+        config.unstuck_ema_gating_enabled;
+    const float unstuck_close_pct = config.unstuck_close_pct;
+    const float unstuck_ema_dist = config.unstuck_ema_dist;
+    const float unstuck_loss_allowance_pct =
+        config.unstuck_loss_allowance_pct;
+    const float unstuck_threshold = config.unstuck_threshold;
+    const bool coin_hsl_mode = config.coin_hsl_mode;
+    thread HslState* coin_hsl = side.coin_hsl;
+    thread float* ema0 = side.ema0;
+    thread float* ema1 = side.ema1;
+    thread float* ema2 = side.ema2;
+    thread float* volatility_1m = side.volatility_1m;
+    thread float* volatility_1h = side.volatility_1h;
+    thread float* psize = side.psize;
+    thread float* pprice = side.pprice;
+    thread float* last_increase_k = side.last_increase_k;
+    thread float* entry_qty = side.entry_qty;
+    thread float* close_qty = side.close_qty;
+    thread float* secondary_close_qty = side.secondary_close_qty;
+    thread float* twel_close_qty = side.twel_close_qty;
+    thread float* unstuck_close_qty = side.unstuck_close_qty;
+    thread float* contribution = side.contribution;
+    thread float* minimum_entry = side.minimum_entry;
+    thread int* entry_tick = side.entry_tick;
+    thread int* close_tick = side.close_tick;
+    thread int* secondary_close_tick = side.secondary_close_tick;
+    thread int* twel_close_tick = side.twel_close_tick;
+    thread int* unstuck_close_tick = side.unstuck_close_tick;
+    thread bool* close_is_unstuck_reducer =
+        side.close_is_unstuck_reducer;
+    thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
+    thread bool* selected = side.selected;
+    thread bool* entry_candidate = side.entry_candidate;
+    thread float& balance = account.balance;
+    thread float& realized_pnl_cumsum_last =
+        account.realized_pnl_total;
+    thread float& realized_pnl_cumsum_max =
+        account.realized_pnl_peak;
+
+    const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
+    float current_twe = 0.0f;
+    int open_position_count = 0;
+    for (int c = 0; c < C; ++c) {
+        int coin_offset = c * COIN_COLS;
+        if (psize[c] > 0.0f && balance > 0.0f) {
+            current_twe += psize[c] * pprice[c]
+                * coin_settings[coin_offset + 4] / balance;
+            open_position_count += 1;
+        }
+        twel_close_qty[c] = 0.0f;
+        twel_close_tick[c] = 0;
+    }
+
+    // Match calc_twel_enforcer_actions: every open position contributes
+    // to total exposure. Reducible positions are ranked by least
+    // adverse projected loss per exposure, then symbol index.
+    float twel_repair_target = twel * twel_threshold;
+    if (twel_enforcer_enabled && twel_threshold > 0.0f
+        && twel_repair_target > 0.0f && balance > 0.0f
+        && current_twe > twel_repair_target + 1.0e-9f
+        && open_position_count > 0) {
+        // Reduce-overweight uses the current eligible count. The
+        // grow-only maximum remains exclusive to dynamic WEL sizing.
+        int current_effective_n_positions = min(
+            n_positions, tradable_count
+        );
+        int repair_n_positions = current_effective_n_positions > 0
+            ? current_effective_n_positions : open_position_count;
+        float overweight_target = twel_repair_target
+            / fmax(float(repair_n_positions), 1.0f);
+        bool processed[MAX_COINS];
+        for (int c = 0; c < MAX_COINS; ++c) processed[c] = false;
+        float running_twe = current_twe;
+        for (int rank = 0; rank < C; ++rank) {
+            if (running_twe <= twel_repair_target + 1.0e-9f) break;
+            int best = -1;
+            float best_adverse = INFINITY;
+            for (int c = 0; c < C; ++c) {
+                if (processed[c] || psize[c] <= 0.0f
+                    || pprice[c] <= 0.0f) continue;
+                int coin_offset = c * COIN_COLS;
+                float c_mult = coin_settings[coin_offset + 4];
+                float exposure = psize[c] * pprice[c] * c_mult
+                    / balance;
+                if (!(exposure > 1.0e-9f)) continue;
+                if (!twel_enforcer_reduce_portfolio
+                    && !(exposure > overweight_target + 1.0e-9f)) {
+                    continue;
+                }
+                float market_price = clamped_market_price(
+                    bars, coin_settings, k, c, C
+                );
+                float projected_loss = psize[c] * c_mult * fmax(
+                    short_side
+                        ? market_price - pprice[c]
+                        : pprice[c] - market_price,
+                    0.0f
+                );
+                float adverse = projected_loss / exposure;
+                if (best < 0 || adverse < best_adverse
+                    || (adverse == best_adverse && c < best)) {
+                    best = c;
+                    best_adverse = adverse;
+                }
+            }
+            if (best < 0) break;
+            processed[best] = true;
+            int coin_offset = best * COIN_COLS;
+            float qty_step = coin_settings[coin_offset + 0];
+            float price_step = coin_settings[coin_offset + 1];
+            float min_qty = coin_settings[coin_offset + 2];
+            float min_cost = coin_settings[coin_offset + 3];
+            float c_mult = coin_settings[coin_offset + 4];
+            float exposure = psize[best] * pprice[best] * c_mult
+                / balance;
+            float exposure_to_cut = fmin(
+                fmax(running_twe - twel_repair_target, 0.0f),
+                exposure
+            );
+            float market_price = clamped_market_price(
+                bars, coin_settings, k, best, C
+            );
+            int reducer_tick = short_side
+                ? int(ceil(
+                    market_price * 1.0005f / price_step - 1.0e-6f
+                ))
+                : int(floor(
+                    market_price * 0.9995f / price_step + 1.0e-6f
+                ));
+            reducer_tick = max(reducer_tick, 1);
+            float reducer_price = float(reducer_tick) * price_step;
+            float requested_qty = ceil_step(
+                exposure_to_cut * balance
+                    / fmax(pprice[best] * c_mult, 1.0e-12f),
+                qty_step
+            );
+            float reducer_min = min_entry_qty(
+                reducer_price, qty_step, min_qty, min_cost, c_mult
+            );
+            float reducer_qty = fmin(
+                psize[best], fmax(reducer_min, requested_qty)
+            );
+            reducer_qty = fmin(
+                psize[best], ceil_step(reducer_qty, qty_step)
+            );
+            if (reducer_qty <= 1.0e-9f) continue;
+            twel_close_qty[best] = reducer_qty;
+            twel_close_tick[best] = reducer_tick;
+            running_twe -= fmax(
+                exposure - fmax(
+                    round_step(psize[best] - reducer_qty, qty_step),
+                    0.0f
+                ) * pprice[best] * c_mult / balance,
+                0.0f
+            );
+        }
+    }
+
+    // Exact Rust emits one global auto-unstuck intent across all
+    // positions. A directional multicoin thread owns that complete
+    // one-side portfolio, so it can apply the same least-stuck rank.
+    for (int c = 0; c < C; ++c) {
+        unstuck_close_qty[c] = 0.0f;
+        unstuck_close_tick[c] = 0;
+        close_is_unstuck_reducer[c] = false;
+    }
+    float balance_peak = balance
+        + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
+    int unstuck_coin = -1;
+    float best_unstuck_diff = INFINITY;
+    float selected_unstuck_qty = 0.0f;
+    int selected_unstuck_tick = 0;
+    for (int c = 0; c < C; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * C + c) * 4;
+        int tick_offset = (k * C + c) * 2;
+        float price_now = bars[bar_offset + 2];
+        float c_mult = coin_settings[coin_offset + 4];
+        float qty_step = coin_settings[coin_offset + 0];
+        float price_step = coin_settings[coin_offset + 1];
+        float min_qty = coin_settings[coin_offset + 2];
+        float min_cost = coin_settings[coin_offset + 3];
+        bool coin_unstuck_enabled = coin_override_or(
+            coin_overrides, c, 13, unstuck_enabled ? 1.0f : 0.0f
+        ) > 0.5f;
+        bool coin_ema_gate = coin_override_or(
+            coin_overrides, c, 14,
+            unstuck_ema_gating_enabled ? 1.0f : 0.0f
+        ) > 0.5f;
+        float coin_close_pct = coin_override_or(
+            coin_overrides, c, 15, unstuck_close_pct
+        );
+        float coin_ema_dist = coin_override_or(
+            coin_overrides, c, 16, unstuck_ema_dist
+        );
+        float coin_loss_allowance_pct = coin_override_or(
+            coin_overrides, c, 17, unstuck_loss_allowance_pct
+        );
+        float coin_threshold = coin_override_or(
+            coin_overrides, c, 18, unstuck_threshold
+        );
+        float fixed_coin_wel = coin_override_or(
+            coin_overrides, c, 11, -1.0f
+        );
+        float coin_wel = fixed_coin_wel >= 0.0f
+            ? fixed_coin_wel : effective_wel;
+        float coin_allowance_pct = coin_override_or(
+            coin_overrides, c, 12, allowance_pct
+        );
+        float allowed_coin_wel = allowed_wallet_exposure_limit(
+            coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
+        );
+        if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
+            && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
+            && balance > 0.0f && balance_peak > 0.0f
+            && psize[c] > 0.0f && pprice[c] > 0.0f
+            && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
+            continue;
+        }
+        float allowance = float32_floor_nonnegative(fmax(
+            balance - balance_peak * (
+                1.0f - coin_loss_allowance_pct * twel
+            ),
+            0.0f
+        ));
+        float wallet_exposure = psize[c] * pprice[c] * c_mult / balance;
+        if (!(allowance > 0.0f
+            && wallet_exposure / allowed_coin_wel > coin_threshold)) {
+            continue;
+        }
+        if (coin_ema_gate) {
+            float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
+            float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+            int trigger_tick = short_side
+                ? int(floor(
+                    lower * (1.0f - coin_ema_dist) / price_step
+                        + 1.0e-6f
+                ))
+                : int(ceil(
+                    upper * (1.0f + coin_ema_dist) / price_step
+                        - 1.0e-6f
+                ));
+            bool triggered = short_side
+                ? touch_ticks[tick_offset + 1] <= trigger_tick
+                : touch_ticks[tick_offset + 0] >= trigger_tick;
+            if (!triggered) continue;
+        }
+        int reducer_tick = max(
+            short_side
+                ? touch_ticks[tick_offset + 0]
+                : touch_ticks[tick_offset + 1],
+            1
+        );
+        float reducer_price = float(reducer_tick) * price_step;
+        float reducer_min = min_entry_qty(
+            reducer_price, qty_step, min_qty, min_cost, c_mult
+        );
+        float target_qty = floor_step(
+            balance * allowed_coin_wel * coin_close_pct
+                / fmax(reducer_price * c_mult, 1.0e-12f),
+            qty_step
+        );
+        float reducer_qty = fmin(
+            psize[c], fmax(reducer_min, target_qty)
+        );
+        float gross_pnl = reducer_qty * c_mult * (short_side
+            ? pprice[c] - reducer_price
+            : reducer_price - pprice[c]);
+        if (gross_pnl < 0.0f && -gross_pnl > allowance) {
+            float scaled_qty = fmin(
+                psize[c], reducer_qty * allowance / -gross_pnl
+            );
+            reducer_qty = fmin(
+                psize[c], fmax(
+                    reducer_min, floor_step(scaled_qty, qty_step)
+                )
+            );
+        }
+        float pprice_diff = short_side
+            ? price_now / pprice[c] - 1.0f
+            : 1.0f - price_now / pprice[c];
+        if (unstuck_coin < 0 || pprice_diff < best_unstuck_diff
+            || (pprice_diff == best_unstuck_diff && c < unstuck_coin)) {
+            unstuck_coin = c;
+            best_unstuck_diff = pprice_diff;
+            selected_unstuck_qty = reducer_qty;
+            selected_unstuck_tick = reducer_tick;
+        }
+    }
+    if (unstuck_coin >= 0) {
+        unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
+        unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
+    }
+    for (int c = 0; c < C; ++c) {
+        entry_qty[c] = 0.0f;
+        close_qty[c] = 0.0f;
+        secondary_close_qty[c] = 0.0f;
+        secondary_close_tick[c] = 0;
+        close_is_hsl_panic[c] = false;
+        contribution[c] = 0.0f;
+        entry_candidate[c] = false;
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * C + c) * 4;
+        int tick_offset = (k * C + c) * 2;
+        float price_now = bars[bar_offset + 2];
+        float fixed_coin_wel = coin_override_or(
+            coin_overrides, c, 11, -1.0f
+        );
+        float coin_wel = fixed_coin_wel >= 0.0f
+            ? fixed_coin_wel : effective_wel;
+        float coin_allowance_pct = coin_override_or(
+            coin_overrides, c, 12, allowance_pct
+        );
+        float allowed_coin_wel = allowed_wallet_exposure_limit(
+            coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
+        );
+        bool tradable = k >= int(coin_settings[coin_offset + 8])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(price_now) && allowed_coin_wel > 0.0f;
+        if (!tradable) continue;
+        float qty_step = coin_settings[coin_offset + 0];
+        float price_step = coin_settings[coin_offset + 1];
+        float min_qty = coin_settings[coin_offset + 2];
+        float min_cost = coin_settings[coin_offset + 3];
+        float c_mult = coin_settings[coin_offset + 4];
+        float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
+        float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+        float coin_weight_1h = coin_override_or(
+            coin_overrides, c, 6, weight_1h
+        );
+        float coin_weight_1m = coin_override_or(
+            coin_overrides, c, 7, weight_1m
+        );
+        float multiplier = fmax(
+            1.0f + volatility_1h[c] * coin_weight_1h
+                + volatility_1m[c] * coin_weight_1m,
+            1.0f
+        );
+        float wallet_ratio = psize[c] > 0.0f && balance > 0.0f
+            ? (psize[c] * price_now * c_mult / balance)
+                / fmax(coin_wel, 1.0e-12f) : 0.0f;
+        float signed_wallet_ratio = short_side ? -wallet_ratio : wallet_ratio;
+        float coin_psize_weight = coin_override_or(
+            coin_overrides, c, 5, psize_weight
+        );
+        float coin_offset_pct = coin_override_or(
+            coin_overrides, c, 4, offset
+        );
+        float inventory_shift = signed_wallet_ratio * coin_psize_weight;
+        int bid_tick = min(
+            int(floor(
+                lower * (1.0f - coin_offset_pct * multiplier - inventory_shift)
+                    / price_step + 1.0e-6f
+            )),
+            touch_ticks[tick_offset + 0]
+        );
+        int ask_tick = max(
+            int(ceil(
+                upper * (1.0f + coin_offset_pct * multiplier - inventory_shift)
+                    / price_step - 1.0e-6f
+            )),
+            touch_ticks[tick_offset + 1]
+        );
+        float bid_price = float(bid_tick) * price_step;
+        float ask_price = float(ask_tick) * price_step;
+        int candidate_entry_tick = short_side ? ask_tick : bid_tick;
+        int candidate_close_tick = short_side ? bid_tick : ask_tick;
+        float entry_price = short_side ? ask_price : bid_price;
+        float close_price = short_side ? bid_price : ask_price;
+        float minimum = min_entry_qty(
+            entry_price, qty_step, min_qty, min_cost, c_mult
+        );
+        minimum_entry[c] = minimum;
+        float coin_cooldown_min = ceil(coin_override_or(
+            coin_overrides, c, 10, cooldown_min
+        ));
+        bool cooldown = coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
+            && float(k) < last_increase_k[c] + coin_cooldown_min;
+        float cost_we = psize[c] > 0.0f && balance > 0.0f
+            ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
+        float position_cap = allowed_coin_wel - 1.0e-7f;
+        float coin_base_qty_pct = coin_override_or(
+            coin_overrides, c, 0, base_qty_pct
+        );
+        float coin_ddf = coin_override_or(coin_overrides, c, 3, ddf);
+        if (selected[c] && !cooldown && entry_price > 0.0f && balance > 0.0f
+            && cost_we < position_cap && coin_base_qty_pct > 0.0f) {
+            float base_qty = fmax(minimum, round_step(
+                balance * allowed_coin_wel * coin_base_qty_pct
+                    / fmax(entry_price * c_mult, 1.0e-12f),
+                qty_step
+            ));
+            float quantity = round_step(
+                base_qty * fmax(1.0f + fmax(wallet_ratio, 0.0f) * coin_ddf, 1.0f),
+                qty_step
+            );
+            float headroom = (
+                position_cap * balance - psize[c] * pprice[c] * c_mult
+            ) / fmax(entry_price * c_mult, 1.0e-12f);
+            bool over = (psize[c] * pprice[c] + quantity * entry_price) * c_mult
+                / fmax(balance, 1.0e-9f) >= position_cap;
+            if (over) {
+                float capped = floor_step(headroom, qty_step);
+                quantity = capped > 0.0f && capped + 1.0e-6f >= minimum
+                    ? capped : 0.0f;
+            }
+            entry_qty[c] = quantity;
+            entry_tick[c] = candidate_entry_tick;
+            entry_candidate[c] = quantity > 0.0f;
+            contribution[c] = quantity * entry_price * c_mult / balance;
+        }
+        if (psize[c] > 0.0f && close_price > 0.0f) {
+            float minimum_close = min_entry_qty(
+                close_price, qty_step, min_qty, min_cost, c_mult
+            );
+            float clip = fmin(psize[c], fmax(minimum_close, round_step(
+                balance * allowed_coin_wel * coin_base_qty_pct
+                    / fmax(close_price * c_mult, 1.0e-12f),
+                qty_step
+            )));
+            close_qty[c] = psize[c] <= minimum_close
+                    || psize[c] - clip < minimum_close
+                ? psize[c] : clip;
+            close_tick[c] = candidate_close_tick;
+        }
+
+        // Reserve the side-wide protective reducer and trim the
+        // ordinary EMA close first, matching finalized_closes_with_reducer.
+        float raw_twel_qty = twel_close_qty[c];
+        int raw_twel_tick = twel_close_tick[c];
+        float raw_unstuck_qty = unstuck_close_qty[c];
+        int raw_unstuck_tick = unstuck_close_tick[c];
+        float finalized_twel_qty = finalized_reducer_qty_with_ordinary(
+            psize[c], close_qty[c], close_price,
+            raw_twel_qty, float(raw_twel_tick) * price_step,
+            qty_step, min_qty, min_cost, c_mult
+        );
+        float finalized_unstuck_qty = finalized_reducer_qty_with_ordinary(
+            psize[c], close_qty[c], close_price,
+            raw_unstuck_qty, float(raw_unstuck_tick) * price_step,
+            qty_step, min_qty, min_cost, c_mult
+        );
+        bool prefer_unstuck = finalized_unstuck_qty > 0.0f && (
+            finalized_twel_qty <= 0.0f
+            || finalized_unstuck_qty > finalized_twel_qty
+            || (finalized_unstuck_qty == finalized_twel_qty && (
+                raw_unstuck_tick != raw_twel_tick
+                    ? (short_side
+                        ? raw_unstuck_tick > raw_twel_tick
+                        : raw_unstuck_tick < raw_twel_tick)
+                    : true
+            ))
+        );
+        float reducer_qty = prefer_unstuck
+            ? raw_unstuck_qty : raw_twel_qty;
+        int reducer_tick = prefer_unstuck
+            ? raw_unstuck_tick : raw_twel_tick;
+        bool reducer_is_unstuck = prefer_unstuck;
+        for (int reducer_attempt = 0; reducer_attempt < 2;
+                ++reducer_attempt) {
+            if (!(reducer_qty > 0.0f && reducer_tick > 0)) break;
+            float finalized_qty = reducer_is_unstuck
+                ? finalized_unstuck_qty : finalized_twel_qty;
+            if (realized_loss_proxy_allows_reducer(
+                    finalized_qty, float(reducer_tick) * price_step,
+                    pprice[c], short_side, c_mult,
+                    coin_settings[coin_offset + 5],
+                    reducer_is_unstuck, loss_gate_enabled, balance,
+                    realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_max, max_realized_loss_pct
+                )) {
+                break;
+            }
+            if (reducer_attempt > 0) {
+                reducer_qty = 0.0f;
+                reducer_tick = 0;
+                reducer_is_unstuck = false;
+                break;
+            }
+            reducer_is_unstuck = !reducer_is_unstuck;
+            reducer_qty = reducer_is_unstuck
+                ? raw_unstuck_qty : raw_twel_qty;
+            reducer_tick = reducer_is_unstuck
+                ? raw_unstuck_tick : raw_twel_tick;
+        }
+        if (reducer_qty > 0.0f && reducer_tick > 0) {
+            float reducer_price = float(reducer_tick) * price_step;
+            float reducer_min = min_entry_qty(
+                reducer_price, qty_step, min_qty, min_cost, c_mult
+            );
+            float ordinary_qty = close_qty[c];
+            if (ordinary_qty > 0.0f) {
+                float ordinary_min = min_entry_qty(
+                    close_price, qty_step, min_qty, min_cost, c_mult
+                );
+                if (ordinary_qty + reducer_qty > psize[c]) {
+                    ordinary_qty = fmax(
+                        round_step(
+                            psize[c] - reducer_qty, qty_step
+                        ),
+                        0.0f
+                    );
+                }
+                if (ordinary_qty >= ordinary_min) {
+                    float remainder = fmax(
+                        round_step(
+                            psize[c] - reducer_qty - ordinary_qty,
+                            qty_step
+                        ),
+                        0.0f
+                    );
+                    float minimum_any = fmin(
+                        ordinary_min, reducer_min
+                    );
+                    if (remainder > 0.0f
+                        && remainder < minimum_any) {
+                        ordinary_qty = fmin(
+                            psize[c] - reducer_qty,
+                            round_step(
+                                ordinary_qty + remainder, qty_step
+                            )
+                        );
+                    }
+                    secondary_close_qty[c] = ordinary_qty;
+                    secondary_close_tick[c] = close_tick[c];
+                }
+            }
+            if (secondary_close_qty[c] <= 0.0f) {
+                float remainder = fmax(
+                    round_step(psize[c] - reducer_qty, qty_step),
+                    0.0f
+                );
+                if (remainder > 0.0f && remainder < reducer_min) {
+                    reducer_qty = psize[c];
+                }
+            }
+            close_qty[c] = reducer_qty;
+            close_tick[c] = reducer_tick;
+            close_is_unstuck_reducer[c] = reducer_is_unstuck;
+        }
+        if (close_qty[c] > 0.0f && !realized_loss_proxy_allows_reducer(
+                close_qty[c], float(close_tick[c]) * price_step,
+                pprice[c], short_side, c_mult,
+                coin_settings[coin_offset + 5],
+                close_is_unstuck_reducer[c], loss_gate_enabled,
+                balance, realized_pnl_cumsum_last,
+                realized_pnl_cumsum_max, max_realized_loss_pct
+            )) {
+            close_qty[c] = 0.0f;
+            close_is_unstuck_reducer[c] = false;
+        }
+        if (secondary_close_qty[c] > 0.0f
+            && !realized_loss_proxy_allows_close(
+                secondary_close_qty[c],
+                float(secondary_close_tick[c]) * price_step,
+                pprice[c], short_side, c_mult,
+                coin_settings[coin_offset + 5], loss_gate_enabled
+            )) {
+            secondary_close_qty[c] = 0.0f;
+        }
+    }
+
+    float gated_twel = twel;
+    if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
+        gated_twel = fmin(twel, twel * twel_threshold);
+    }
+    float total_cap = twel_entry_gate_enabled
+        ? gated_twel - 1.0e-7f : INFINITY;
+    float proposed_twe = current_twe;
+    for (int c = 0; c < C; ++c) {
+        if (entry_candidate[c]) proposed_twe += contribution[c];
+    }
+    if (current_twe >= total_cap) {
+        for (int c = 0; c < C; ++c) entry_qty[c] = 0.0f;
+    } else if (proposed_twe >= total_cap) {
+        bool processed[MAX_COINS];
+        for (int c = 0; c < MAX_COINS; ++c) processed[c] = false;
+        float running_twe = current_twe;
+        for (int rank = 0; rank < C; ++rank) {
+            int best = -1;
+            float best_distance = INFINITY;
+            for (int c = 0; c < C; ++c) {
+                if (!entry_candidate[c] || processed[c]) continue;
+                int bar_offset = (k * C + c) * 4;
+                int coin_offset = c * COIN_COLS;
+                float price_now = bars[bar_offset + 2];
+                float price_step = coin_settings[coin_offset + 1];
+                float entry_price = float(entry_tick[c]) * price_step;
+                float distance = (short_side
+                    ? entry_price - price_now
+                    : price_now - entry_price) / fmax(price_now, 1.0e-12f);
+                // Exact Rust removes equal-distance entries in ascending
+                // symbol order, so the retained order is descending.
+                if (best < 0 || distance < best_distance
+                    || (distance == best_distance && c > best)) {
+                    best = c;
+                    best_distance = distance;
+                }
+            }
+            if (best < 0) break;
+            processed[best] = true;
+            if (running_twe + contribution[best] < total_cap) {
+                running_twe += contribution[best];
+                continue;
+            }
+            int coin_offset = best * COIN_COLS;
+            float qty_step = coin_settings[coin_offset + 0];
+            float price_step = coin_settings[coin_offset + 1];
+            float c_mult = coin_settings[coin_offset + 4];
+            float price = float(entry_tick[best]) * price_step;
+            float room_cost = fmax((total_cap - running_twe) * balance, 0.0f);
+            float partial = floor_step(
+                room_cost / fmax(price * c_mult, 1.0e-12f), qty_step
+            );
+            entry_qty[best] = partial + 1.0e-6f >= minimum_entry[best]
+                ? partial : 0.0f;
+            for (int c = 0; c < C; ++c) {
+                if (entry_candidate[c] && !processed[c]) entry_qty[c] = 0.0f;
+            }
+            break;
+        }
+    }
+    for (int c = 0; c < C; ++c) {
+        int coin_mode = coin_hsl_mode
+            ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
+            : current_hsl_mode;
+        if (coin_mode >= 2
+            || (coin_mode != 0 && psize[c] <= 0.0f)) {
+            entry_qty[c] = 0.0f;
+        }
+        if (coin_mode == 3 && psize[c] > 0.0f) {
+            int tick_offset = (k * C + c) * 2;
+            close_qty[c] = psize[c];
+            close_tick[c] = max(
+                short_side
+                    ? touch_ticks[tick_offset + 1] + 1
+                    : touch_ticks[tick_offset + 0] - 1,
+                1
+            );
+            secondary_close_qty[c] = 0.0f;
+            secondary_close_tick[c] = 0;
+            close_is_unstuck_reducer[c] = false;
+            close_is_hsl_panic[c] = true;
+        }
+    }
+}
+
 inline bool process_ema_multicoin_side_fills(
     thread EmaMulticoinSideState& side,
     thread JointPortfolioAccount& account,
@@ -1029,26 +1712,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const int po = int(b) * PARAM_COLS;
     const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po);
     const float base_qty_pct = config.base_qty_pct;
-    const float ddf = config.ddf;
-    const float offset = config.offset;
-    const float psize_weight = config.psize_weight;
-    const float weight_1h = config.weight_1h;
-    const float weight_1m = config.weight_1m;
-    const float cooldown_min = config.cooldown_min;
     const float twel = config.twel;
     const int n_positions = config.n_positions;
     const float allowance_pct = config.allowance_pct;
     const bool legacy_raw_allowance = config.legacy_raw_allowance;
-    const bool twel_entry_gate_enabled = config.twel_entry_gate_enabled;
-    const float twel_threshold = config.twel_threshold;
-    const bool twel_enforcer_enabled = config.twel_enforcer_enabled;
-    const bool twel_enforcer_reduce_portfolio = config.twel_enforcer_reduce_portfolio;
-    const bool unstuck_enabled = config.unstuck_enabled;
-    const bool unstuck_ema_gating_enabled = config.unstuck_ema_gating_enabled;
-    const float unstuck_close_pct = config.unstuck_close_pct;
-    const float unstuck_ema_dist = config.unstuck_ema_dist;
-    const float unstuck_loss_allowance_pct = config.unstuck_loss_allowance_pct;
-    const float unstuck_threshold = config.unstuck_threshold;
     EmaMulticoinSideState side;
     init_ema_multicoin_side_state(
         side, config, bars, coin_settings, coin_overrides, C
@@ -1056,7 +1723,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
     thread HslState* coin_hsl = side.coin_hsl;
-    thread ulong& coin_hsl_entry_blocked_mask = side.coin_hsl_entry_blocked_mask;
 
     const float starting_balance = run_settings[0];
     const float liquidation_floor = run_settings[1];
@@ -1068,32 +1734,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const bool hsl_panic_market = run_settings[8] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
-    thread float* ema0 = side.ema0;
-    thread float* ema1 = side.ema1;
-    thread float* ema2 = side.ema2;
-    thread float* volatility_1m = side.volatility_1m;
-    thread float* volatility_1h = side.volatility_1h;
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
-    thread float* last_increase_k = side.last_increase_k;
     thread float* entry_qty = side.entry_qty;
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
-    thread float* twel_close_qty = side.twel_close_qty;
-    thread float* unstuck_close_qty = side.unstuck_close_qty;
     thread float* position_open_k = side.position_open_k;
     thread float* position_last_fill_k = side.position_last_fill_k;
-    thread float* contribution = side.contribution;
-    thread float* minimum_entry = side.minimum_entry;
-    thread int* entry_tick = side.entry_tick;
-    thread int* close_tick = side.close_tick;
-    thread int* secondary_close_tick = side.secondary_close_tick;
-    thread int* twel_close_tick = side.twel_close_tick;
-    thread int* unstuck_close_tick = side.unstuck_close_tick;
-    thread bool* close_is_unstuck_reducer = side.close_is_unstuck_reducer;
-    thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
-    thread bool* selected = side.selected;
-    thread bool* entry_candidate = side.entry_candidate;
     thread float* coin_realized_pnl = side.coin_realized_pnl;
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
@@ -1102,9 +1749,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     JointPortfolioAccount account = init_joint_portfolio_account(starting_balance);
     thread float& balance = account.balance;
     thread float& realized_pnl_cumsum_last = account.realized_pnl_total;
-    thread float& realized_pnl_cumsum_max = account.realized_pnl_peak;
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
-    thread float& pnl_recovery_peak = fills.pnl_recovery_peak;
     thread float& pnl_recovery_peak_k = fills.pnl_recovery_peak_k;
     thread float& pnl_recovery_max_min = fills.pnl_recovery_max_min;
     thread float& profit_sum = fills.profit_sum;
@@ -1234,612 +1879,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 k, C, short_side, any_fill, effective_n_positions,
                 score_hysteresis
             );
-            const float effective_wel = twel / fmax(float(effective_n_positions), 1.0f);
-            float current_twe = 0.0f;
-            int open_position_count = 0;
-            for (int c = 0; c < C; ++c) {
-                int coin_offset = c * COIN_COLS;
-                if (psize[c] > 0.0f && balance > 0.0f) {
-                    current_twe += psize[c] * pprice[c]
-                        * coin_settings[coin_offset + 4] / balance;
-                    open_position_count += 1;
-                }
-                twel_close_qty[c] = 0.0f;
-                twel_close_tick[c] = 0;
-            }
-
-            // Match calc_twel_enforcer_actions: every open position contributes
-            // to total exposure. Reducible positions are ranked by least
-            // adverse projected loss per exposure, then symbol index.
-            float twel_repair_target = twel * twel_threshold;
-            if (twel_enforcer_enabled && twel_threshold > 0.0f
-                && twel_repair_target > 0.0f && balance > 0.0f
-                && current_twe > twel_repair_target + 1.0e-9f
-                && open_position_count > 0) {
-                // Reduce-overweight uses the current eligible count. The
-                // grow-only maximum remains exclusive to dynamic WEL sizing.
-                int current_effective_n_positions = min(
-                    n_positions, tradable_count
-                );
-                int repair_n_positions = current_effective_n_positions > 0
-                    ? current_effective_n_positions : open_position_count;
-                float overweight_target = twel_repair_target
-                    / fmax(float(repair_n_positions), 1.0f);
-                bool processed[MAX_COINS];
-                for (int c = 0; c < MAX_COINS; ++c) processed[c] = false;
-                float running_twe = current_twe;
-                for (int rank = 0; rank < C; ++rank) {
-                    if (running_twe <= twel_repair_target + 1.0e-9f) break;
-                    int best = -1;
-                    float best_adverse = INFINITY;
-                    for (int c = 0; c < C; ++c) {
-                        if (processed[c] || psize[c] <= 0.0f
-                            || pprice[c] <= 0.0f) continue;
-                        int coin_offset = c * COIN_COLS;
-                        float c_mult = coin_settings[coin_offset + 4];
-                        float exposure = psize[c] * pprice[c] * c_mult
-                            / balance;
-                        if (!(exposure > 1.0e-9f)) continue;
-                        if (!twel_enforcer_reduce_portfolio
-                            && !(exposure > overweight_target + 1.0e-9f)) {
-                            continue;
-                        }
-                        float market_price = clamped_market_price(
-                            bars, coin_settings, k, c, C
-                        );
-                        float projected_loss = psize[c] * c_mult * fmax(
-                            short_side
-                                ? market_price - pprice[c]
-                                : pprice[c] - market_price,
-                            0.0f
-                        );
-                        float adverse = projected_loss / exposure;
-                        if (best < 0 || adverse < best_adverse
-                            || (adverse == best_adverse && c < best)) {
-                            best = c;
-                            best_adverse = adverse;
-                        }
-                    }
-                    if (best < 0) break;
-                    processed[best] = true;
-                    int coin_offset = best * COIN_COLS;
-                    float qty_step = coin_settings[coin_offset + 0];
-                    float price_step = coin_settings[coin_offset + 1];
-                    float min_qty = coin_settings[coin_offset + 2];
-                    float min_cost = coin_settings[coin_offset + 3];
-                    float c_mult = coin_settings[coin_offset + 4];
-                    float exposure = psize[best] * pprice[best] * c_mult
-                        / balance;
-                    float exposure_to_cut = fmin(
-                        fmax(running_twe - twel_repair_target, 0.0f),
-                        exposure
-                    );
-                    float market_price = clamped_market_price(
-                        bars, coin_settings, k, best, C
-                    );
-                    int reducer_tick = short_side
-                        ? int(ceil(
-                            market_price * 1.0005f / price_step - 1.0e-6f
-                        ))
-                        : int(floor(
-                            market_price * 0.9995f / price_step + 1.0e-6f
-                        ));
-                    reducer_tick = max(reducer_tick, 1);
-                    float reducer_price = float(reducer_tick) * price_step;
-                    float requested_qty = ceil_step(
-                        exposure_to_cut * balance
-                            / fmax(pprice[best] * c_mult, 1.0e-12f),
-                        qty_step
-                    );
-                    float reducer_min = min_entry_qty(
-                        reducer_price, qty_step, min_qty, min_cost, c_mult
-                    );
-                    float reducer_qty = fmin(
-                        psize[best], fmax(reducer_min, requested_qty)
-                    );
-                    reducer_qty = fmin(
-                        psize[best], ceil_step(reducer_qty, qty_step)
-                    );
-                    if (reducer_qty <= 1.0e-9f) continue;
-                    twel_close_qty[best] = reducer_qty;
-                    twel_close_tick[best] = reducer_tick;
-                    running_twe -= fmax(
-                        exposure - fmax(
-                            round_step(psize[best] - reducer_qty, qty_step),
-                            0.0f
-                        ) * pprice[best] * c_mult / balance,
-                        0.0f
-                    );
-                }
-            }
-
-            // Exact Rust emits one global auto-unstuck intent across all
-            // positions. A directional multicoin thread owns that complete
-            // one-side portfolio, so it can apply the same least-stuck rank.
-            for (int c = 0; c < C; ++c) {
-                unstuck_close_qty[c] = 0.0f;
-                unstuck_close_tick[c] = 0;
-                close_is_unstuck_reducer[c] = false;
-            }
-            float balance_peak = balance
-                + (realized_pnl_cumsum_max - realized_pnl_cumsum_last);
-            int unstuck_coin = -1;
-            float best_unstuck_diff = INFINITY;
-            float selected_unstuck_qty = 0.0f;
-            int selected_unstuck_tick = 0;
-            for (int c = 0; c < C; ++c) {
-                int coin_offset = c * COIN_COLS;
-                int bar_offset = (k * C + c) * 4;
-                int tick_offset = (k * C + c) * 2;
-                float price_now = bars[bar_offset + 2];
-                float c_mult = coin_settings[coin_offset + 4];
-                float qty_step = coin_settings[coin_offset + 0];
-                float price_step = coin_settings[coin_offset + 1];
-                float min_qty = coin_settings[coin_offset + 2];
-                float min_cost = coin_settings[coin_offset + 3];
-                bool coin_unstuck_enabled = coin_override_or(
-                    coin_overrides, c, 13, unstuck_enabled ? 1.0f : 0.0f
-                ) > 0.5f;
-                bool coin_ema_gate = coin_override_or(
-                    coin_overrides, c, 14,
-                    unstuck_ema_gating_enabled ? 1.0f : 0.0f
-                ) > 0.5f;
-                float coin_close_pct = coin_override_or(
-                    coin_overrides, c, 15, unstuck_close_pct
-                );
-                float coin_ema_dist = coin_override_or(
-                    coin_overrides, c, 16, unstuck_ema_dist
-                );
-                float coin_loss_allowance_pct = coin_override_or(
-                    coin_overrides, c, 17, unstuck_loss_allowance_pct
-                );
-                float coin_threshold = coin_override_or(
-                    coin_overrides, c, 18, unstuck_threshold
-                );
-                float fixed_coin_wel = coin_override_or(
-                    coin_overrides, c, 11, -1.0f
-                );
-                float coin_wel = fixed_coin_wel >= 0.0f
-                    ? fixed_coin_wel : effective_wel;
-                float coin_allowance_pct = coin_override_or(
-                    coin_overrides, c, 12, allowance_pct
-                );
-                float allowed_coin_wel = allowed_wallet_exposure_limit(
-                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
-                );
-                if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
-                    && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
-                    && balance > 0.0f && balance_peak > 0.0f
-                    && psize[c] > 0.0f && pprice[c] > 0.0f
-                    && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
-                    continue;
-                }
-                float allowance = float32_floor_nonnegative(fmax(
-                    balance - balance_peak * (
-                        1.0f - coin_loss_allowance_pct * twel
-                    ),
-                    0.0f
-                ));
-                float wallet_exposure = psize[c] * pprice[c] * c_mult / balance;
-                if (!(allowance > 0.0f
-                    && wallet_exposure / allowed_coin_wel > coin_threshold)) {
-                    continue;
-                }
-                if (coin_ema_gate) {
-                    float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-                    float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
-                    int trigger_tick = short_side
-                        ? int(floor(
-                            lower * (1.0f - coin_ema_dist) / price_step
-                                + 1.0e-6f
-                        ))
-                        : int(ceil(
-                            upper * (1.0f + coin_ema_dist) / price_step
-                                - 1.0e-6f
-                        ));
-                    bool triggered = short_side
-                        ? touch_ticks[tick_offset + 1] <= trigger_tick
-                        : touch_ticks[tick_offset + 0] >= trigger_tick;
-                    if (!triggered) continue;
-                }
-                int reducer_tick = max(
-                    short_side
-                        ? touch_ticks[tick_offset + 0]
-                        : touch_ticks[tick_offset + 1],
-                    1
-                );
-                float reducer_price = float(reducer_tick) * price_step;
-                float reducer_min = min_entry_qty(
-                    reducer_price, qty_step, min_qty, min_cost, c_mult
-                );
-                float target_qty = floor_step(
-                    balance * allowed_coin_wel * coin_close_pct
-                        / fmax(reducer_price * c_mult, 1.0e-12f),
-                    qty_step
-                );
-                float reducer_qty = fmin(
-                    psize[c], fmax(reducer_min, target_qty)
-                );
-                float gross_pnl = reducer_qty * c_mult * (short_side
-                    ? pprice[c] - reducer_price
-                    : reducer_price - pprice[c]);
-                if (gross_pnl < 0.0f && -gross_pnl > allowance) {
-                    float scaled_qty = fmin(
-                        psize[c], reducer_qty * allowance / -gross_pnl
-                    );
-                    reducer_qty = fmin(
-                        psize[c], fmax(
-                            reducer_min, floor_step(scaled_qty, qty_step)
-                        )
-                    );
-                }
-                float pprice_diff = short_side
-                    ? price_now / pprice[c] - 1.0f
-                    : 1.0f - price_now / pprice[c];
-                if (unstuck_coin < 0 || pprice_diff < best_unstuck_diff
-                    || (pprice_diff == best_unstuck_diff && c < unstuck_coin)) {
-                    unstuck_coin = c;
-                    best_unstuck_diff = pprice_diff;
-                    selected_unstuck_qty = reducer_qty;
-                    selected_unstuck_tick = reducer_tick;
-                }
-            }
-            if (unstuck_coin >= 0) {
-                unstuck_close_qty[unstuck_coin] = selected_unstuck_qty;
-                unstuck_close_tick[unstuck_coin] = selected_unstuck_tick;
-            }
-            for (int c = 0; c < C; ++c) {
-                entry_qty[c] = 0.0f;
-                close_qty[c] = 0.0f;
-                secondary_close_qty[c] = 0.0f;
-                secondary_close_tick[c] = 0;
-                close_is_hsl_panic[c] = false;
-                contribution[c] = 0.0f;
-                entry_candidate[c] = false;
-                int coin_offset = c * COIN_COLS;
-                int bar_offset = (k * C + c) * 4;
-                int tick_offset = (k * C + c) * 2;
-                float price_now = bars[bar_offset + 2];
-                float fixed_coin_wel = coin_override_or(
-                    coin_overrides, c, 11, -1.0f
-                );
-                float coin_wel = fixed_coin_wel >= 0.0f
-                    ? fixed_coin_wel : effective_wel;
-                float coin_allowance_pct = coin_override_or(
-                    coin_overrides, c, 12, allowance_pct
-                );
-                float allowed_coin_wel = allowed_wallet_exposure_limit(
-                    coin_wel, twel, coin_allowance_pct, legacy_raw_allowance
-                );
-                bool tradable = k >= int(coin_settings[coin_offset + 8])
-                    && k <= int(coin_settings[coin_offset + 7])
-                    && finite_positive(price_now) && allowed_coin_wel > 0.0f;
-                if (!tradable) continue;
-                float qty_step = coin_settings[coin_offset + 0];
-                float price_step = coin_settings[coin_offset + 1];
-                float min_qty = coin_settings[coin_offset + 2];
-                float min_cost = coin_settings[coin_offset + 3];
-                float c_mult = coin_settings[coin_offset + 4];
-                float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-                float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
-                float coin_weight_1h = coin_override_or(
-                    coin_overrides, c, 6, weight_1h
-                );
-                float coin_weight_1m = coin_override_or(
-                    coin_overrides, c, 7, weight_1m
-                );
-                float multiplier = fmax(
-                    1.0f + volatility_1h[c] * coin_weight_1h
-                        + volatility_1m[c] * coin_weight_1m,
-                    1.0f
-                );
-                float wallet_ratio = psize[c] > 0.0f && balance > 0.0f
-                    ? (psize[c] * price_now * c_mult / balance)
-                        / fmax(coin_wel, 1.0e-12f) : 0.0f;
-                float signed_wallet_ratio = short_side ? -wallet_ratio : wallet_ratio;
-                float coin_psize_weight = coin_override_or(
-                    coin_overrides, c, 5, psize_weight
-                );
-                float coin_offset_pct = coin_override_or(
-                    coin_overrides, c, 4, offset
-                );
-                float inventory_shift = signed_wallet_ratio * coin_psize_weight;
-                int bid_tick = min(
-                    int(floor(
-                        lower * (1.0f - coin_offset_pct * multiplier - inventory_shift)
-                            / price_step + 1.0e-6f
-                    )),
-                    touch_ticks[tick_offset + 0]
-                );
-                int ask_tick = max(
-                    int(ceil(
-                        upper * (1.0f + coin_offset_pct * multiplier - inventory_shift)
-                            / price_step - 1.0e-6f
-                    )),
-                    touch_ticks[tick_offset + 1]
-                );
-                float bid_price = float(bid_tick) * price_step;
-                float ask_price = float(ask_tick) * price_step;
-                int candidate_entry_tick = short_side ? ask_tick : bid_tick;
-                int candidate_close_tick = short_side ? bid_tick : ask_tick;
-                float entry_price = short_side ? ask_price : bid_price;
-                float close_price = short_side ? bid_price : ask_price;
-                float minimum = min_entry_qty(
-                    entry_price, qty_step, min_qty, min_cost, c_mult
-                );
-                minimum_entry[c] = minimum;
-                float coin_cooldown_min = ceil(coin_override_or(
-                    coin_overrides, c, 10, cooldown_min
-                ));
-                bool cooldown = coin_cooldown_min > 0.0f && last_increase_k[c] > -1.0e19f
-                    && float(k) < last_increase_k[c] + coin_cooldown_min;
-                float cost_we = psize[c] > 0.0f && balance > 0.0f
-                    ? psize[c] * pprice[c] * c_mult / balance : 0.0f;
-                float position_cap = allowed_coin_wel - 1.0e-7f;
-                float coin_base_qty_pct = coin_override_or(
-                    coin_overrides, c, 0, base_qty_pct
-                );
-                float coin_ddf = coin_override_or(coin_overrides, c, 3, ddf);
-                if (selected[c] && !cooldown && entry_price > 0.0f && balance > 0.0f
-                    && cost_we < position_cap && coin_base_qty_pct > 0.0f) {
-                    float base_qty = fmax(minimum, round_step(
-                        balance * allowed_coin_wel * coin_base_qty_pct
-                            / fmax(entry_price * c_mult, 1.0e-12f),
-                        qty_step
-                    ));
-                    float quantity = round_step(
-                        base_qty * fmax(1.0f + fmax(wallet_ratio, 0.0f) * coin_ddf, 1.0f),
-                        qty_step
-                    );
-                    float headroom = (
-                        position_cap * balance - psize[c] * pprice[c] * c_mult
-                    ) / fmax(entry_price * c_mult, 1.0e-12f);
-                    bool over = (psize[c] * pprice[c] + quantity * entry_price) * c_mult
-                        / fmax(balance, 1.0e-9f) >= position_cap;
-                    if (over) {
-                        float capped = floor_step(headroom, qty_step);
-                        quantity = capped > 0.0f && capped + 1.0e-6f >= minimum
-                            ? capped : 0.0f;
-                    }
-                    entry_qty[c] = quantity;
-                    entry_tick[c] = candidate_entry_tick;
-                    entry_candidate[c] = quantity > 0.0f;
-                    contribution[c] = quantity * entry_price * c_mult / balance;
-                }
-                if (psize[c] > 0.0f && close_price > 0.0f) {
-                    float minimum_close = min_entry_qty(
-                        close_price, qty_step, min_qty, min_cost, c_mult
-                    );
-                    float clip = fmin(psize[c], fmax(minimum_close, round_step(
-                        balance * allowed_coin_wel * coin_base_qty_pct
-                            / fmax(close_price * c_mult, 1.0e-12f),
-                        qty_step
-                    )));
-                    close_qty[c] = psize[c] <= minimum_close
-                            || psize[c] - clip < minimum_close
-                        ? psize[c] : clip;
-                    close_tick[c] = candidate_close_tick;
-                }
-
-                // Reserve the side-wide protective reducer and trim the
-                // ordinary EMA close first, matching finalized_closes_with_reducer.
-                float raw_twel_qty = twel_close_qty[c];
-                int raw_twel_tick = twel_close_tick[c];
-                float raw_unstuck_qty = unstuck_close_qty[c];
-                int raw_unstuck_tick = unstuck_close_tick[c];
-                float finalized_twel_qty = finalized_reducer_qty_with_ordinary(
-                    psize[c], close_qty[c], close_price,
-                    raw_twel_qty, float(raw_twel_tick) * price_step,
-                    qty_step, min_qty, min_cost, c_mult
-                );
-                float finalized_unstuck_qty = finalized_reducer_qty_with_ordinary(
-                    psize[c], close_qty[c], close_price,
-                    raw_unstuck_qty, float(raw_unstuck_tick) * price_step,
-                    qty_step, min_qty, min_cost, c_mult
-                );
-                bool prefer_unstuck = finalized_unstuck_qty > 0.0f && (
-                    finalized_twel_qty <= 0.0f
-                    || finalized_unstuck_qty > finalized_twel_qty
-                    || (finalized_unstuck_qty == finalized_twel_qty && (
-                        raw_unstuck_tick != raw_twel_tick
-                            ? (short_side
-                                ? raw_unstuck_tick > raw_twel_tick
-                                : raw_unstuck_tick < raw_twel_tick)
-                            : true
-                    ))
-                );
-                float reducer_qty = prefer_unstuck
-                    ? raw_unstuck_qty : raw_twel_qty;
-                int reducer_tick = prefer_unstuck
-                    ? raw_unstuck_tick : raw_twel_tick;
-                bool reducer_is_unstuck = prefer_unstuck;
-                for (int reducer_attempt = 0; reducer_attempt < 2;
-                        ++reducer_attempt) {
-                    if (!(reducer_qty > 0.0f && reducer_tick > 0)) break;
-                    float finalized_qty = reducer_is_unstuck
-                        ? finalized_unstuck_qty : finalized_twel_qty;
-                    if (realized_loss_proxy_allows_reducer(
-                            finalized_qty, float(reducer_tick) * price_step,
-                            pprice[c], short_side, c_mult,
-                            coin_settings[coin_offset + 5],
-                            reducer_is_unstuck, loss_gate_enabled, balance,
-                            realized_pnl_cumsum_last,
-                            realized_pnl_cumsum_max, max_realized_loss_pct
-                        )) {
-                        break;
-                    }
-                    if (reducer_attempt > 0) {
-                        reducer_qty = 0.0f;
-                        reducer_tick = 0;
-                        reducer_is_unstuck = false;
-                        break;
-                    }
-                    reducer_is_unstuck = !reducer_is_unstuck;
-                    reducer_qty = reducer_is_unstuck
-                        ? raw_unstuck_qty : raw_twel_qty;
-                    reducer_tick = reducer_is_unstuck
-                        ? raw_unstuck_tick : raw_twel_tick;
-                }
-                if (reducer_qty > 0.0f && reducer_tick > 0) {
-                    float reducer_price = float(reducer_tick) * price_step;
-                    float reducer_min = min_entry_qty(
-                        reducer_price, qty_step, min_qty, min_cost, c_mult
-                    );
-                    float ordinary_qty = close_qty[c];
-                    if (ordinary_qty > 0.0f) {
-                        float ordinary_min = min_entry_qty(
-                            close_price, qty_step, min_qty, min_cost, c_mult
-                        );
-                        if (ordinary_qty + reducer_qty > psize[c]) {
-                            ordinary_qty = fmax(
-                                round_step(
-                                    psize[c] - reducer_qty, qty_step
-                                ),
-                                0.0f
-                            );
-                        }
-                        if (ordinary_qty >= ordinary_min) {
-                            float remainder = fmax(
-                                round_step(
-                                    psize[c] - reducer_qty - ordinary_qty,
-                                    qty_step
-                                ),
-                                0.0f
-                            );
-                            float minimum_any = fmin(
-                                ordinary_min, reducer_min
-                            );
-                            if (remainder > 0.0f
-                                && remainder < minimum_any) {
-                                ordinary_qty = fmin(
-                                    psize[c] - reducer_qty,
-                                    round_step(
-                                        ordinary_qty + remainder, qty_step
-                                    )
-                                );
-                            }
-                            secondary_close_qty[c] = ordinary_qty;
-                            secondary_close_tick[c] = close_tick[c];
-                        }
-                    }
-                    if (secondary_close_qty[c] <= 0.0f) {
-                        float remainder = fmax(
-                            round_step(psize[c] - reducer_qty, qty_step),
-                            0.0f
-                        );
-                        if (remainder > 0.0f && remainder < reducer_min) {
-                            reducer_qty = psize[c];
-                        }
-                    }
-                    close_qty[c] = reducer_qty;
-                    close_tick[c] = reducer_tick;
-                    close_is_unstuck_reducer[c] = reducer_is_unstuck;
-                }
-                if (close_qty[c] > 0.0f && !realized_loss_proxy_allows_reducer(
-                        close_qty[c], float(close_tick[c]) * price_step,
-                        pprice[c], short_side, c_mult,
-                        coin_settings[coin_offset + 5],
-                        close_is_unstuck_reducer[c], loss_gate_enabled,
-                        balance, realized_pnl_cumsum_last,
-                        realized_pnl_cumsum_max, max_realized_loss_pct
-                    )) {
-                    close_qty[c] = 0.0f;
-                    close_is_unstuck_reducer[c] = false;
-                }
-                if (secondary_close_qty[c] > 0.0f
-                    && !realized_loss_proxy_allows_close(
-                        secondary_close_qty[c],
-                        float(secondary_close_tick[c]) * price_step,
-                        pprice[c], short_side, c_mult,
-                        coin_settings[coin_offset + 5], loss_gate_enabled
-                    )) {
-                    secondary_close_qty[c] = 0.0f;
-                }
-            }
-
-            float gated_twel = twel;
-            if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
-                gated_twel = fmin(twel, twel * twel_threshold);
-            }
-            float total_cap = twel_entry_gate_enabled
-                ? gated_twel - 1.0e-7f : INFINITY;
-            float proposed_twe = current_twe;
-            for (int c = 0; c < C; ++c) {
-                if (entry_candidate[c]) proposed_twe += contribution[c];
-            }
-            if (current_twe >= total_cap) {
-                for (int c = 0; c < C; ++c) entry_qty[c] = 0.0f;
-            } else if (proposed_twe >= total_cap) {
-                bool processed[MAX_COINS];
-                for (int c = 0; c < MAX_COINS; ++c) processed[c] = false;
-                float running_twe = current_twe;
-                for (int rank = 0; rank < C; ++rank) {
-                    int best = -1;
-                    float best_distance = INFINITY;
-                    for (int c = 0; c < C; ++c) {
-                        if (!entry_candidate[c] || processed[c]) continue;
-                        int bar_offset = (k * C + c) * 4;
-                        int coin_offset = c * COIN_COLS;
-                        float price_now = bars[bar_offset + 2];
-                        float price_step = coin_settings[coin_offset + 1];
-                        float entry_price = float(entry_tick[c]) * price_step;
-                        float distance = (short_side
-                            ? entry_price - price_now
-                            : price_now - entry_price) / fmax(price_now, 1.0e-12f);
-                        // Exact Rust removes equal-distance entries in ascending
-                        // symbol order, so the retained order is descending.
-                        if (best < 0 || distance < best_distance
-                            || (distance == best_distance && c > best)) {
-                            best = c;
-                            best_distance = distance;
-                        }
-                    }
-                    if (best < 0) break;
-                    processed[best] = true;
-                    if (running_twe + contribution[best] < total_cap) {
-                        running_twe += contribution[best];
-                        continue;
-                    }
-                    int coin_offset = best * COIN_COLS;
-                    float qty_step = coin_settings[coin_offset + 0];
-                    float price_step = coin_settings[coin_offset + 1];
-                    float c_mult = coin_settings[coin_offset + 4];
-                    float price = float(entry_tick[best]) * price_step;
-                    float room_cost = fmax((total_cap - running_twe) * balance, 0.0f);
-                    float partial = floor_step(
-                        room_cost / fmax(price * c_mult, 1.0e-12f), qty_step
-                    );
-                    entry_qty[best] = partial + 1.0e-6f >= minimum_entry[best]
-                        ? partial : 0.0f;
-                    for (int c = 0; c < C; ++c) {
-                        if (entry_candidate[c] && !processed[c]) entry_qty[c] = 0.0f;
-                    }
-                    break;
-                }
-            }
-            for (int c = 0; c < C; ++c) {
-                int coin_mode = coin_hsl_mode
-                    ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
-                    : current_hsl_mode;
-                if (coin_mode >= 2
-                    || (coin_mode != 0 && psize[c] <= 0.0f)) {
-                    entry_qty[c] = 0.0f;
-                }
-                if (coin_mode == 3 && psize[c] > 0.0f) {
-                    int tick_offset = (k * C + c) * 2;
-                    close_qty[c] = psize[c];
-                    close_tick[c] = max(
-                        short_side
-                            ? touch_ticks[tick_offset + 1] + 1
-                            : touch_ticks[tick_offset + 0] - 1,
-                        1
-                    );
-                    secondary_close_qty[c] = 0.0f;
-                    secondary_close_tick[c] = 0;
-                    close_is_unstuck_reducer[c] = false;
-                    close_is_hsl_panic[c] = true;
-                }
-            }
+            generate_ema_multicoin_side_orders(
+                side, config, account,
+                bars, touch_ticks, coin_settings, coin_overrides,
+                k, C, short_side, tradable_count, effective_n_positions,
+                current_hsl_mode, loss_gate_enabled,
+                max_realized_loss_pct
+            );
         }
 
         float unrealized = 0.0f;
