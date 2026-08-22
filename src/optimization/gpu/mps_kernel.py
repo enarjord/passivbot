@@ -23,6 +23,7 @@ MPS_SCALAR_COLS = 32
 MPS_MULTICOIN_SCALAR_COLS = 57
 MPS_DIRECTIONAL_SCALAR_COLS = 62
 MPS_MULTICOIN_FUSED_SCALAR_COLS = 62
+MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -285,6 +286,7 @@ class MpsEmaAnchorRunner:
         market_order_slippage_pct: float = 0.0,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
+        pnl_lookback_bars: int = 0,
     ):
         self.market = market
         self.run_config = run
@@ -303,6 +305,7 @@ class MpsEmaAnchorRunner:
         )
         taker_fee = market.maker_fee if taker_fee is None else float(taker_fee)
         market_order_slippage_pct = float(market_order_slippage_pct)
+        pnl_lookback_bars = int(pnl_lookback_bars)
         if not np.isfinite(taker_fee):
             raise ValueError("taker_fee must be finite")
         if (
@@ -312,6 +315,14 @@ class MpsEmaAnchorRunner:
             raise ValueError(
                 "market_order_slippage_pct must be finite and non-negative"
             )
+        if pnl_lookback_bars < 0:
+            raise ValueError("pnl_lookback_bars must be non-negative")
+        self.pnl_lookback_bars = pnl_lookback_bars
+        self.rolling_capacity = (
+            MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
+            if pnl_lookback_bars > 0
+            else 1
+        )
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
         self.bars = (
@@ -375,6 +386,7 @@ class MpsEmaAnchorRunner:
             device="mps",
         )
         self._buffers: dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
+        self._rolling_buffers: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
 
@@ -417,6 +429,19 @@ class MpsEmaAnchorRunner:
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
         return self._buffers[batch_size]
 
+    def _hsl_rolling_buffers(self, batch_size: int):
+        if batch_size not in self._rolling_buffers:
+            # The kernel overwrites every active ring/deque slot.  Avoid
+            # zeroing this large scratch allocation between generations.
+            shape = (batch_size, 2, self.rolling_capacity, 2)
+            self._rolling_buffers = {
+                batch_size: (
+                    torch.empty(shape, dtype=torch.float32, device="mps"),
+                    torch.empty(shape, dtype=torch.int32, device="mps"),
+                )
+            }
+        return self._rolling_buffers[batch_size]
+
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
         started = time.perf_counter()
         matrix = self._pack_params(params)
@@ -424,6 +449,9 @@ class MpsEmaAnchorRunner:
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
         daily, scalars, gaps = self._output_buffers(batch_size)
+        rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
+            batch_size
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             self._sizes[sizes_key] = torch.tensor(
@@ -433,6 +461,8 @@ class MpsEmaAnchorRunner:
                     self.n_days,
                     matrix.shape[1],
                     self.run_config.first_valid_idx,
+                    self.rolling_capacity,
+                    self.pnl_lookback_bars,
                 ],
                 dtype=torch.int32,
                 device="mps",
@@ -454,6 +484,8 @@ class MpsEmaAnchorRunner:
             daily,
             scalars,
             gaps,
+            rolling_pnl_values,
+            rolling_pnl_indices,
             threads=(batch_size, 1, 1),
         )
         if profile:
@@ -1085,6 +1117,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
         daily, scalars, gaps = self._output_buffers(batch_size)
+        rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
+            batch_size
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             self._sizes[sizes_key] = torch.tensor(
@@ -1094,6 +1129,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     self.n_days,
                     matrix.shape[1],
                     self.run_config.first_valid_idx,
+                    self.rolling_capacity,
+                    self.pnl_lookback_bars,
                 ],
                 dtype=torch.int32,
                 device="mps",
@@ -1115,6 +1152,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             daily,
             scalars,
             gaps,
+            rolling_pnl_values,
+            rolling_pnl_indices,
             threads=(batch_size, 1, 1),
         )
         if profile:

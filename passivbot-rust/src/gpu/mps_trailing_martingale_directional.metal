@@ -119,6 +119,8 @@ inline bool realized_loss_proxy_allows_reducer(
     return -net_pnl + margin <= remaining_loss_budget;
 }
 
+// PASSIVBOT_HSL_COMMON
+
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
@@ -222,8 +224,6 @@ struct CloseGroup {
     float price;
     float qty;
 };
-
-// PASSIVBOT_HSL_COMMON
 
 inline float directional_equity_at_close(
     float balance,
@@ -1073,6 +1073,8 @@ inline void passivbot_single_coin_impl(
     device float* daily,
     device float* scalars,
     device int* gap_hist,
+    device float2* rolling_pnl_values,
+    device int2* rolling_pnl_indices,
     uint b
 ) {
     const int B = sizes[0];
@@ -1101,6 +1103,8 @@ inline void passivbot_single_coin_impl(
     const float market_order_slippage_pct = fmax(settings[16], 0.0f);
     const bool long_hsl_panic_market = settings[17] > 0.5f;
     const bool short_hsl_panic_market = settings[18] > 0.5f;
+    const int pnl_lookback_bars = max(sizes[6], 0);
+    const int rolling_capacity = sizes[5];
     const bool loss_gate_enabled = max_realized_loss_pct < 1.0f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
@@ -1111,6 +1115,10 @@ inline void passivbot_single_coin_impl(
     TmSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
     HslState long_hsl = load_hsl(params, po, 40);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 40);
+    HslRollingPnlWindow long_rolling_pnl = init_hsl_rolling_pnl_window();
+    HslRollingPnlWindow short_rolling_pnl = init_hsl_rolling_pnl_window();
+    const int long_rolling_base = int(b) * 2 * rolling_capacity;
+    const int short_rolling_base = long_rolling_base + rolling_capacity;
     const bool hsl_modes_valid = long_hsl.signal_mode == short_hsl.signal_mode;
 
     float balance = hsl_modes_valid ? starting_balance : 0.0f;
@@ -1448,6 +1456,12 @@ inline void passivbot_single_coin_impl(
                             false,
                             true
                         );
+                        record_hsl_rolling_pnl(
+                            long_rolling_pnl,
+                            rolling_pnl_values, rolling_pnl_indices,
+                            long_rolling_base, rolling_capacity, int(kf),
+                            pnl_lookback_bars, pnl - fee
+                        );
                         long_side.psize = fmax(
                             round_step(
                                 long_side.psize - reducer_qty, qty_step
@@ -1496,6 +1510,11 @@ inline void passivbot_single_coin_impl(
                     kf,
                     false,
                     true
+                );
+                record_hsl_rolling_pnl(
+                    long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    long_rolling_base, rolling_capacity, int(kf),
+                    pnl_lookback_bars, pnl - fee
                 );
                 float new_psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1557,6 +1576,12 @@ inline void passivbot_single_coin_impl(
                         kf,
                         false,
                         true
+                    );
+                    record_hsl_rolling_pnl(
+                        long_rolling_pnl,
+                        rolling_pnl_values, rolling_pnl_indices,
+                        long_rolling_base, rolling_capacity, int(kf),
+                        pnl_lookback_bars, pnl - fee
                     );
                     long_side.psize = fmax(
                         round_step(long_side.psize - adj, qty_step), 0.0f
@@ -1642,6 +1667,11 @@ inline void passivbot_single_coin_impl(
                     false,
                     true
                 );
+                record_hsl_rolling_pnl(
+                    long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    long_rolling_base, rolling_capacity, int(kf),
+                    pnl_lookback_bars, pnl - fee
+                );
                 long_side.psize = fmax(
                     round_step(long_side.psize - adj, qty_step), 0.0f
                 );
@@ -1704,6 +1734,11 @@ inline void passivbot_single_coin_impl(
                     kf,
                     true,
                     true
+                );
+                record_hsl_rolling_pnl(
+                    long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    long_rolling_base, rolling_capacity, int(kf),
+                    pnl_lookback_bars, -fee
                 );
                 bool was_flat = long_side.psize <= 0.0f;
                 float new_psize = round_step(long_side.psize + eq, qty_step);
@@ -1964,6 +1999,12 @@ inline void passivbot_single_coin_impl(
                             false,
                             false
                         );
+                        record_hsl_rolling_pnl(
+                            short_rolling_pnl,
+                            rolling_pnl_values, rolling_pnl_indices,
+                            short_rolling_base, rolling_capacity, int(kf),
+                            pnl_lookback_bars, pnl - fee
+                        );
                         short_side.psize = fmax(
                             round_step(
                                 short_side.psize - reducer_qty, qty_step
@@ -2012,6 +2053,12 @@ inline void passivbot_single_coin_impl(
                     kf,
                     false,
                     false
+                );
+                record_hsl_rolling_pnl(
+                    short_rolling_pnl,
+                    rolling_pnl_values, rolling_pnl_indices,
+                    short_rolling_base, rolling_capacity, int(kf),
+                    pnl_lookback_bars, pnl - fee
                 );
                 float new_psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
@@ -2073,6 +2120,12 @@ inline void passivbot_single_coin_impl(
                         kf,
                         false,
                         false
+                    );
+                    record_hsl_rolling_pnl(
+                        short_rolling_pnl,
+                        rolling_pnl_values, rolling_pnl_indices,
+                        short_rolling_base, rolling_capacity, int(kf),
+                        pnl_lookback_bars, pnl - fee
                     );
                     short_side.psize = fmax(
                         round_step(short_side.psize - adj, qty_step), 0.0f
@@ -2158,6 +2211,12 @@ inline void passivbot_single_coin_impl(
                     false,
                     false
                 );
+                record_hsl_rolling_pnl(
+                    short_rolling_pnl,
+                    rolling_pnl_values, rolling_pnl_indices,
+                    short_rolling_base, rolling_capacity, int(kf),
+                    pnl_lookback_bars, pnl - fee
+                );
                 short_side.psize = fmax(
                     round_step(short_side.psize - adj, qty_step), 0.0f
                 );
@@ -2220,6 +2279,12 @@ inline void passivbot_single_coin_impl(
                     kf,
                     true,
                     false
+                );
+                record_hsl_rolling_pnl(
+                    short_rolling_pnl,
+                    rolling_pnl_values, rolling_pnl_indices,
+                    short_rolling_base, rolling_capacity, int(kf),
+                    pnl_lookback_bars, -fee
                 );
                 bool was_flat = short_side.psize <= 0.0f;
                 float new_psize = round_step(short_side.psize + eq, qty_step);
@@ -2507,6 +2572,11 @@ inline void passivbot_single_coin_impl(
         float short_unreal = short_side.psize > 0.0f
             ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f;
         float equity = balance + long_unreal + short_unreal;
+        if (long_rolling_pnl.overflowed || short_rolling_pnl.overflowed) {
+            balance = 0.0f;
+            alive = false;
+            liq_day = di;
+        }
         if (gen && valid && alive && balance > 0.0f && equity > liq_floor) {
             bool long_blocking_orders = long_hsl_mode != 3 && (
                 long_side.entry_qty > 0.0f || long_side.close_qty > 0.0f
@@ -2516,6 +2586,20 @@ inline void passivbot_single_coin_impl(
                 short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
                     || short_side.secondary_close_qty > 0.0f
             );
+            prepare_coin_hsl_rolling_signal(
+                long_hsl, long_rolling_pnl,
+                rolling_pnl_values, rolling_pnl_indices,
+                long_rolling_base, rolling_capacity, int(kf),
+                pnl_lookback_bars, realized_pnl_cumsum_long
+            );
+            prepare_coin_hsl_rolling_signal(
+                short_hsl, short_rolling_pnl,
+                rolling_pnl_values, rolling_pnl_indices,
+                short_rolling_base, rolling_capacity, int(kf),
+                pnl_lookback_bars, realized_pnl_cumsum_short
+            );
+            float long_triggers_before = long_hsl.triggers;
+            float short_triggers_before = short_hsl.triggers;
             bool hsl_update_valid = update_dual_side_hsl(
                 long_hsl, short_hsl, balance, starting_balance,
                 realized_pnl_cumsum_last,
@@ -2525,6 +2609,12 @@ inline void passivbot_single_coin_impl(
                 long_blocking_orders, short_blocking_orders,
                 kf, interval_ms
             );
+            if (long_hsl.triggers > long_triggers_before) {
+                reset_hsl_rolling_pnl_window(long_rolling_pnl);
+            }
+            if (short_hsl.triggers > short_triggers_before) {
+                reset_hsl_rolling_pnl_window(short_rolling_pnl);
+            }
             if (!hsl_update_valid) {
                 balance = 0.0f;
                 alive = false;
@@ -2755,9 +2845,12 @@ kernel void passivbot_trailing_martingale(
     device float* daily,
     device float* scalars,
     device int* gap_hist,
+    device float2* rolling_pnl_values,
+    device int2* rolling_pnl_indices,
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_single_coin_impl(
-        bars, flags, params, settings, sizes, daily, scalars, gap_hist, b
+        bars, flags, params, settings, sizes, daily, scalars, gap_hist,
+        rolling_pnl_values, rolling_pnl_indices, b
     );
 }

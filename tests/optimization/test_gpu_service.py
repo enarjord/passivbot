@@ -29,6 +29,7 @@ from optimization.gpu.service import (
     _candidate_position_slot_outputs,
     _combine_hedged_multicoin_hsl_outputs,
     _combine_hedged_multicoin_outputs,
+    _directional_coin_hsl_lookback_bars,
     _directional_entry_initial_metrics,
     _directional_gross_pnl_outputs,
     _hsl_params,
@@ -44,6 +45,32 @@ from optimization.gpu.service import (
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+@pytest.mark.parametrize(
+    ("lookback_days", "signal_mode", "enabled", "expected"),
+    [
+        (30.0, "coin", True, 43_200),
+        (0.0, "coin", True, 1),
+        (-1.0, "coin", True, 0),
+        (30.0, "pside", True, 0),
+        (30.0, "coin", False, 0),
+    ],
+)
+def test_directional_coin_hsl_lookback_bar_contract(
+    lookback_days, signal_mode, enabled, expected
+):
+    assert (
+        _directional_coin_hsl_lookback_bars(
+            {
+                "pnls_max_lookback_days": lookback_days,
+                "candle_interval_minutes": 1,
+            },
+            signal_mode=signal_mode,
+            hsl_enabled=enabled,
+        )
+        == expected
+    )
 
 
 def test_hsl_params_preserve_grouped_tier_ratios_after_flattening():

@@ -116,6 +116,100 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_coin_hsl_rolling_pnl_window_expires_and_resets_fill_events():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_hsl_rolling_pnl_probe(
+    device float2* values,
+    device int2* indices,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    HslRollingPnlWindow window = init_hsl_rolling_pnl_window();
+    const int capacity = 4;
+    const int lookback_bars = 2;
+    record_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 0, lookback_bars, 50.0f
+    );
+    HslRollingPnlSignal first = effective_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 0, lookback_bars
+    );
+    record_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 1, lookback_bars, -80.0f
+    );
+    HslRollingPnlSignal second = effective_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 1, lookback_bars
+    );
+    HslRollingPnlSignal expired = effective_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 3, lookback_bars
+    );
+    record_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 4, lookback_bars, 55.0f
+    );
+    HslRollingPnlSignal final_signal = effective_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 4, lookback_bars
+    );
+    reset_hsl_rolling_pnl_window(window);
+    HslRollingPnlSignal reset_signal = effective_hsl_rolling_pnl(
+        window, values, indices, 0, capacity, 4, lookback_bars
+    );
+
+    output[0] = first.peak;
+    output[1] = first.current;
+    output[2] = second.peak;
+    output[3] = second.current;
+    output[4] = expired.peak;
+    output[5] = expired.current;
+    output[6] = final_signal.peak;
+    output[7] = final_signal.current;
+    output[8] = reset_signal.peak;
+    output[9] = reset_signal.current;
+
+    HslRollingPnlWindow overflow = init_hsl_rolling_pnl_window();
+    record_hsl_rolling_pnl(
+        overflow, values, indices, 4, 2, 0, 10, 1.0f
+    );
+    record_hsl_rolling_pnl(
+        overflow, values, indices, 4, 2, 1, 10, 1.0f
+    );
+    record_hsl_rolling_pnl(
+        overflow, values, indices, 4, 2, 2, 10, 1.0f
+    );
+    output[10] = overflow.overflowed ? 1.0f : 0.0f;
+}
+"""
+    values = torch.empty((6, 2), dtype=torch.float32, device="mps")
+    indices = torch.empty((6, 2), dtype=torch.int32, device="mps")
+    output = torch.zeros(11, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_source_py() + probe_kernel
+    )
+
+    library.passivbot_hsl_rolling_pnl_probe(
+        values, indices, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [
+        50.0,
+        50.0,
+        50.0,
+        -30.0,
+        0.0,
+        -80.0,
+        55.0,
+        55.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_joint_pside_hsl_contract_routes_unified_and_directional_signals():
     import passivbot_rust
 
@@ -5511,6 +5605,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         data,
         long_enabled=side == "long",
         short_enabled=side == "short",
+        pnl_lookback_bars=5,
     ).run(np.asarray(rows, dtype=np.float64))
     market_runner = runner_cls(
         market,
