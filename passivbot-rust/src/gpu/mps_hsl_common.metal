@@ -7,6 +7,133 @@ constant int HSL_SIGNAL_UNIFIED = 0;
 constant int HSL_SIGNAL_PSIDE = 1;
 constant int HSL_SIGNAL_COIN = 2;
 
+// Finite coin-HSL PnL windows are candidate-local.  Their fill events live in
+// device buffers owned by the directional runner; this small thread-local
+// structure keeps only ring/deque cursors and the absolute realized cumsum.
+// The two packed buffers use float2(base_before, cumulative_after) and
+// int2(event_k, monotonic_peak_slot) respectively.
+struct HslRollingPnlWindow {
+    int event_head;
+    int event_count;
+    int peak_head;
+    int peak_count;
+    float absolute_cumulative;
+    bool overflowed;
+};
+
+struct HslRollingPnlSignal {
+    float peak;
+    float current;
+};
+
+inline HslRollingPnlWindow init_hsl_rolling_pnl_window() {
+    HslRollingPnlWindow window;
+    window.event_head = 0;
+    window.event_count = 0;
+    window.peak_head = 0;
+    window.peak_count = 0;
+    window.absolute_cumulative = 0.0f;
+    window.overflowed = false;
+    return window;
+}
+
+inline void reset_hsl_rolling_pnl_window(
+    thread HslRollingPnlWindow& window
+) {
+    window.event_head = 0;
+    window.event_count = 0;
+    window.peak_head = 0;
+    window.peak_count = 0;
+}
+
+inline void prune_hsl_rolling_pnl_window(
+    thread HslRollingPnlWindow& window,
+    device float2* values,
+    device int2* indices,
+    int base,
+    int capacity,
+    int k,
+    int lookback_bars
+) {
+    if (lookback_bars <= 0 || window.overflowed) return;
+    while (window.event_count > 0) {
+        int slot = window.event_head;
+        if (k - indices[base + slot].x <= lookback_bars) break;
+        if (window.peak_count > 0
+            && indices[base + window.peak_head].y == slot) {
+            window.peak_head = (window.peak_head + 1) % capacity;
+            window.peak_count -= 1;
+        }
+        window.event_head = (window.event_head + 1) % capacity;
+        window.event_count -= 1;
+    }
+}
+
+inline void record_hsl_rolling_pnl(
+    thread HslRollingPnlWindow& window,
+    device float2* values,
+    device int2* indices,
+    int base,
+    int capacity,
+    int k,
+    int lookback_bars,
+    bool active,
+    float pnl
+) {
+    if (!active || lookback_bars <= 0 || window.overflowed) return;
+    window.absolute_cumulative += pnl;
+    prune_hsl_rolling_pnl_window(
+        window, values, indices, base, capacity, k, lookback_bars
+    );
+    if (window.event_count >= capacity || window.peak_count >= capacity) {
+        window.overflowed = true;
+        return;
+    }
+    int slot = (window.event_head + window.event_count) % capacity;
+    values[base + slot] = float2(
+        window.absolute_cumulative - pnl, window.absolute_cumulative
+    );
+    indices[base + slot].x = k;
+    window.event_count += 1;
+
+    while (window.peak_count > 0) {
+        int back = (window.peak_head + window.peak_count - 1) % capacity;
+        int peak_slot = indices[base + back].y;
+        if (values[base + peak_slot].y > window.absolute_cumulative) break;
+        window.peak_count -= 1;
+    }
+    int peak_tail = (window.peak_head + window.peak_count) % capacity;
+    indices[base + peak_tail].y = slot;
+    window.peak_count += 1;
+}
+
+inline HslRollingPnlSignal effective_hsl_rolling_pnl(
+    thread HslRollingPnlWindow& window,
+    device float2* values,
+    device int2* indices,
+    int base,
+    int capacity,
+    int k,
+    int lookback_bars
+) {
+    HslRollingPnlSignal signal;
+    signal.peak = 0.0f;
+    signal.current = 0.0f;
+    if (lookback_bars <= 0 || window.overflowed) return signal;
+    prune_hsl_rolling_pnl_window(
+        window, values, indices, base, capacity, k, lookback_bars
+    );
+    if (window.event_count == 0) return signal;
+    float base_cumulative = values[base + window.event_head].x;
+    int peak_slot = indices[base + window.peak_head].y;
+    signal.current = window.absolute_cumulative - base_cumulative;
+    signal.peak = fmax(
+        values[base + peak_slot].y - base_cumulative,
+        fmax(signal.current, 0.0f)
+    );
+    return signal;
+}
+
 struct HslState {
     bool enabled;
     float red_threshold;
@@ -61,6 +188,26 @@ struct HslState {
     float panic_loss_drawdown_max;
     float panic_loss_drawdown_count;
 };
+
+inline void prepare_coin_hsl_rolling_signal(
+    thread HslState& h,
+    thread HslRollingPnlWindow& window,
+    device float2* values,
+    device int2* indices,
+    int base,
+    int capacity,
+    int k,
+    int lookback_bars,
+    float realized_pnl
+) {
+    if (!h.enabled || h.signal_mode != HSL_SIGNAL_COIN
+        || lookback_bars <= 0 || window.overflowed) return;
+    HslRollingPnlSignal signal = effective_hsl_rolling_pnl(
+        window, values, indices, base, capacity, k, lookback_bars
+    );
+    h.coin_realized_baseline = realized_pnl - signal.current;
+    h.coin_realized_peak = signal.peak;
+}
 
 struct HslSignal {
     float drawdown_raw;

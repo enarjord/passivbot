@@ -147,6 +147,26 @@ _ACCOUNT_EQUITY_RECOVERY_METRICS = {
 }
 
 
+def _directional_coin_hsl_lookback_bars(
+    backtest_params: dict,
+    *,
+    signal_mode: str,
+    hsl_enabled: bool,
+) -> int:
+    """Translate Rust's finite coin-HSL PnL window into candle bars."""
+
+    if not hsl_enabled or str(signal_mode).strip().lower() != "coin":
+        return 0
+    lookback_days = float(backtest_params.get("pnls_max_lookback_days", -1.0))
+    if lookback_days < 0.0:
+        return 0
+    interval_minutes = int(backtest_params["candle_interval_minutes"])
+    return max(
+        1,
+        int(np.ceil(lookback_days * 24.0 * 60.0 / interval_minutes)),
+    )
+
+
 def _require_multicoin_metric_topology(sides, needed_metrics) -> None:
     unsupported = (
         set(needed_metrics) & _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS
@@ -980,6 +1000,11 @@ class MpsSingleCoinProxy:
             taker_fee=float(market_params["taker_fee"]),
         )
         interval_ms = int(backtest_params["candle_interval_minutes"]) * 60_000
+        pnl_lookback_bars = _directional_coin_hsl_lookback_bars(
+            backtest_params,
+            signal_mode=signal_mode,
+            hsl_enabled=bool(hsl_enabled_sides),
+        )
         self.run = ProxyRun(
             starting_balance=float(backtest_params["starting_balance"]),
             warmup_bars=max(1, int(backtest_params.get("global_warmup_bars", 0) or 1)),
@@ -1047,6 +1072,7 @@ class MpsSingleCoinProxy:
             ),
             hsl_panic_market_long=hsl_panic_market["long"],
             hsl_panic_market_short=hsl_panic_market["short"],
+            pnl_lookback_bars=pnl_lookback_bars,
         )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:

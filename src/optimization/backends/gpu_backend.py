@@ -999,10 +999,9 @@ def _validate_scope_config(
         side for side in enabled_sides if _gpu_hsl_side_enabled(config, side)
     ]
     if hsl_enabled_sides:
-        # The proxy deliberately keeps an all-history candidate-local peak for
-        # finite windows. That peak is never below Rust's rolling-window peak,
-        # so HSL may trigger early but cannot miss a drawdown solely because an
-        # older peak aged out. Exact validation remains authoritative.
+        # Directional single-coin coin mode mirrors Rust's finite fill-event
+        # PnL window. Other HSL topologies retain the conservative all-history
+        # screening envelope; exact Rust validation remains authoritative.
         parse_pnls_max_lookback_days(
             config.get("live", {}).get("pnls_max_lookback_days", 30.0),
             field_name="live.pnls_max_lookback_days",
