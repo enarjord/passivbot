@@ -147,10 +147,12 @@ _ACCOUNT_EQUITY_RECOVERY_METRICS = {
 }
 
 
-def _require_multicoin_metric_topology(sides, needed_metrics) -> None:
+def _require_multicoin_metric_topology(
+    sides, needed_metrics, *, shared_account_controller: bool = False
+) -> None:
     unsupported = (
         set(needed_metrics) & _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS
-        if len(sides) == 2
+        if len(sides) == 2 and not shared_account_controller
         else set()
     )
     if unsupported:
@@ -159,6 +161,21 @@ def _require_multicoin_metric_topology(sides, needed_metrics) -> None:
             "shared-liquidation cutoff required by these metrics: "
             + ", ".join(sorted(unsupported))
         )
+
+
+def _multicoin_exposure_eligible_coins(
+    per_side_coin_overrides: dict[str, np.ndarray],
+    sides,
+    wallet_exposure_column: int,
+) -> np.ndarray:
+    coin_count = next(iter(per_side_coin_overrides.values())).shape[0]
+    eligible = np.zeros(coin_count, dtype=bool)
+    for side in sides:
+        fixed_coin_wels = per_side_coin_overrides[side][
+            :, wallet_exposure_column
+        ]
+        eligible |= ~np.isfinite(fixed_coin_wels) | (fixed_coin_wels != 0.0)
+    return eligible
 
 
 def _candidate_wallet_exposure_limit_outputs(
@@ -1377,6 +1394,7 @@ class MpsMulticoinProxy:
         from optimization.gpu.mps_kernel import (
             MpsEmaAnchorMulticoinFusedRunner,
             MpsEmaAnchorMulticoinRunner,
+            MpsTrailingMartingaleMulticoinFusedRunner,
             MpsTrailingMartingaleMulticoinRunner,
         )
 
@@ -1421,10 +1439,17 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
-        self.shared_account_fused = (
-            self.strategy_kind == "ema_anchor" and len(self.sides) == 2
+        self.shared_account_fused = len(self.sides) == 2
+        self.shared_account_proxy_mode = (
+            "shared-account-fused-tm-v1"
+            if self.strategy_kind == "trailing_martingale"
+            else "shared-account-fused-ema-v1"
         )
-        _require_multicoin_metric_topology(self.sides, self.needed_metrics)
+        _require_multicoin_metric_topology(
+            self.sides,
+            self.needed_metrics,
+            shared_account_controller=self.shared_account_fused,
+        )
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
         ):
@@ -1551,8 +1576,8 @@ class MpsMulticoinProxy:
                 for item in payload.bot_params_list
             ):
                 raise ValueError(
-                    "MPS dual-side multicoin auto-unstuck requires a shared-balance "
-                    "portfolio kernel"
+                    "MPS dual-side multicoin auto-unstuck is not yet supported; "
+                    "the fused proxy requires one global cross-side selector"
                 )
             if self.strategy_kind == "trailing_martingale":
                 first_strategy = flatten_trailing_martingale_params(
@@ -1670,14 +1695,14 @@ class MpsMulticoinProxy:
                     for side in self.sides
                 },
                 "proxy_mode": (
-                    "shared-account-fused-ema-v1"
+                    self.shared_account_proxy_mode
                     if self.shared_account_fused
                     else "independent-side-hedge-v1"
                 ),
             }
             if hsl_enabled_sides:
                 self.coin_override_contract["hsl_proxy_mode"] = (
-                    "shared-account-fused-ema-v1"
+                    self.shared_account_proxy_mode
                     if self.shared_account_fused
                     else "independent-pside-v1"
                 )
@@ -1734,20 +1759,19 @@ class MpsMulticoinProxy:
             trade_start_idx=min(run.trade_start_idx for run in runs),
         )
         if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
-            side = self.sides[0]
             wallet_exposure_column = (
                 11
                 if self.strategy_kind == "ema_anchor"
                 else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
             )
-            fixed_coin_wels = per_side_coin_overrides[side][
-                :, wallet_exposure_column
-            ]
+            exposure_eligible_coins = _multicoin_exposure_eligible_coins(
+                per_side_coin_overrides,
+                self.sides,
+                wallet_exposure_column,
+            )
             _require_no_internal_invalid_account_recovery_candles(
                 values,
-                exposure_eligible_coins=(
-                    ~np.isfinite(fixed_coin_wels) | (fixed_coin_wels != 0.0)
-                ),
+                exposure_eligible_coins=exposure_eligible_coins,
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
                 tracking_start_indices=[run.trade_start_idx for run in runs],
@@ -1772,7 +1796,12 @@ class MpsMulticoinProxy:
             ),
         }
         if self.shared_account_fused:
-            self.fused_runner = MpsEmaAnchorMulticoinFusedRunner(
+            fused_runner_cls = (
+                MpsTrailingMartingaleMulticoinFusedRunner
+                if self.strategy_kind == "trailing_martingale"
+                else MpsEmaAnchorMulticoinFusedRunner
+            )
+            self.fused_runner = fused_runner_cls(
                 self.run,
                 self.data,
                 long_coin_overrides=per_side_coin_overrides["long"],

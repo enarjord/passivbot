@@ -4662,6 +4662,100 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
+    metric_rows = []
+    red_threshold_index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+        "hsl_red_threshold"
+    )
+    restart_policy_index = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+        "hsl_restart_policy"
+    )
+    for signal_mode in range(3):
+        row = side_row(signal_mode) + side_row(signal_mode)
+        for side_offset in (
+            0,
+            len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS),
+        ):
+            row[side_offset + red_threshold_index] = 0.001
+            row[side_offset + restart_policy_index] = 2.0
+        metric_rows.append(row)
+
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.batch_size = 3
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": data["ts0"], "n": data["n"]}
+    proxy.run = runs[0]
+    proxy.sides = ["long", "short"]
+    proxy.needed_metrics = {
+        "hard_stop_panic_close_loss_drawdown_pct_mean",
+        "hard_stop_time_in_red_pct",
+        "hard_stop_triggers",
+        "hard_stop_triggers_long",
+        "hard_stop_triggers_short",
+        "fills_count",
+    }
+    proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    width = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
+    proxy.base_params = {
+        "long": dict(
+            zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, metric_rows[0][:width])
+        ),
+        "short": dict(
+            zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, metric_rows[0][width:])
+        ),
+    }
+    proxy.fused_runner = runner
+    proxy.runners = {}
+    candidates = [
+        {
+            **{
+                f"long_{key}": row[index]
+                for index, key in enumerate(
+                    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+                )
+            },
+            **{
+                f"short_{key}": row[width + index]
+                for index, key in enumerate(
+                    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+                )
+            },
+        }
+        for row in metric_rows
+    ]
+    np.testing.assert_allclose(
+        proxy._parameter_matrix(candidates, "long"),
+        np.asarray(metric_rows, dtype=np.float64)[:, :width],
+    )
+    np.testing.assert_allclose(
+        proxy._parameter_matrix(candidates, "short"),
+        np.asarray(metric_rows, dtype=np.float64)[:, width:],
+    )
+    seen_hsl_triggers = {}
+
+    def reduce_service_output(output, *args, **kwargs):
+        seen_hsl_triggers["long"] = output["hsl_triggers_long"].clone()
+        seen_hsl_triggers["short"] = output["hsl_triggers_short"].clone()
+        seen_hsl_triggers["samples"] = output["hsl_tier_samples_total"].clone()
+        return compute_objectives(output, *args, **kwargs)
+
+    proxy._compute_objectives = reduce_service_output
+    service_results = proxy.evaluate(candidates)
+    assert (seen_hsl_triggers["samples"] > 0.0).all()
+    assert (seen_hsl_triggers["long"] >= 0.0).all()
+    assert (seen_hsl_triggers["short"] >= 0.0).all()
+    assert all(item["fills_count"] > 0.0 for item in service_results)
+    assert all(
+        item["hard_stop_triggers"]
+        == item["hard_stop_triggers_long"] + item["hard_stop_triggers_short"]
+        for item in service_results
+    )
+    assert all(item["hard_stop_time_in_red_pct"] >= 0.0 for item in service_results)
+    assert all(
+        item["hard_stop_panic_close_loss_drawdown_pct_mean"] >= 0.0
+        for item in service_results
+    )
+
     with pytest.raises(ValueError, match="118 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     with pytest.raises(ValueError, match="short override matrix shaped"):
