@@ -13,15 +13,25 @@ HSL_SIGNAL_MODES = {"unified", "pside", "coin"}
 
 
 def validate_hsl_signal_topology(
-    signal_mode: str, *, coin_count: int, enabled_side_count: int
+    signal_mode: str,
+    *,
+    coin_count: int,
+    enabled_side_count: int,
+    shared_account_controller: bool = False,
 ) -> None:
+    """Fail closed unless the selected HSL scope has the state it requires."""
+
     if signal_mode not in HSL_SIGNAL_MODES:
         raise ValueError(
             "GPU HSL requires live.hsl_signal_mode to be coin, pside, or "
             f"unified; got {signal_mode!r}"
         )
     if coin_count > 1:
-        if enabled_side_count > 1 and signal_mode != "pside":
+        if (
+            enabled_side_count > 1
+            and signal_mode != "pside"
+            and not shared_account_controller
+        ):
             raise ValueError(
                 "GPU dual-side multi-coin HSL currently supports only pside "
                 "signal mode; coin requires a shared-balance denominator and "

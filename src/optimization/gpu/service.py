@@ -1375,6 +1375,7 @@ class MpsMulticoinProxy:
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import compute_objectives
         from optimization.gpu.mps_kernel import (
+            MpsEmaAnchorMulticoinFusedRunner,
             MpsEmaAnchorMulticoinRunner,
             MpsTrailingMartingaleMulticoinRunner,
         )
@@ -1420,6 +1421,9 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
+        self.shared_account_fused = (
+            self.strategy_kind == "ema_anchor" and len(self.sides) == 2
+        )
         _require_multicoin_metric_topology(self.sides, self.needed_metrics)
         if len(enabled_sides) == 2 and not bool(
             config.get("live", {}).get("hedge_mode")
@@ -1514,6 +1518,7 @@ class MpsMulticoinProxy:
                 signal_mode,
                 coin_count=coin_count,
                 enabled_side_count=len(self.sides),
+                shared_account_controller=self.shared_account_fused,
             )
             _require_no_internal_invalid_multicoin_hsl_candles(
                 values,
@@ -1664,11 +1669,17 @@ class MpsMulticoinProxy:
                     side: per_side_override_contracts[side]["values"]
                     for side in self.sides
                 },
-                "proxy_mode": "independent-side-hedge-v1",
+                "proxy_mode": (
+                    "shared-account-fused-ema-v1"
+                    if self.shared_account_fused
+                    else "independent-side-hedge-v1"
+                ),
             }
             if hsl_enabled_sides:
                 self.coin_override_contract["hsl_proxy_mode"] = (
-                    "independent-pside-v1"
+                    "shared-account-fused-ema-v1"
+                    if self.shared_account_fused
+                    else "independent-pside-v1"
                 )
                 self.coin_override_contract["hsl_signal_mode"] = str(
                     signal_mode
@@ -1745,39 +1756,64 @@ class MpsMulticoinProxy:
             values, timestamps, runs=runs, markets=markets
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
-        runner_cls = (
-            MpsTrailingMartingaleMulticoinRunner
-            if self.strategy_kind == "trailing_martingale"
-            else MpsEmaAnchorMulticoinRunner
-        )
         self.runners = {}
-        for side in self.sides:
-            runner_kwargs = {
-                "side": side,
-                "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
-                "max_realized_loss_pct": float(
-                    backtest_params.get("max_realized_loss_pct", 1.0)
-                ),
-                "collect_coin_fill_counts": bool(
-                    self.needed_metrics
-                    & {"fills_active_symbols_count", "fills_top_symbol_share"}
-                ),
-                "market_order_slippage_pct": float(
-                    backtest_params.get("market_order_slippage_pct", 0.0)
-                ),
-                "hsl_panic_market": str(
-                    flatten_shared_bot_side(config["bot"][side]).get(
+        self.fused_runner = None
+        common_runner_kwargs = {
+            "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
+            "max_realized_loss_pct": float(
+                backtest_params.get("max_realized_loss_pct", 1.0)
+            ),
+            "collect_coin_fill_counts": bool(
+                self.needed_metrics
+                & {"fills_active_symbols_count", "fills_top_symbol_share"}
+            ),
+            "market_order_slippage_pct": float(
+                backtest_params.get("market_order_slippage_pct", 0.0)
+            ),
+        }
+        if self.shared_account_fused:
+            self.fused_runner = MpsEmaAnchorMulticoinFusedRunner(
+                self.run,
+                self.data,
+                long_coin_overrides=per_side_coin_overrides["long"],
+                short_coin_overrides=per_side_coin_overrides["short"],
+                hsl_panic_market_long=str(
+                    flatten_shared_bot_side(config["bot"]["long"]).get(
                         "hsl_panic_close_order_type", "limit"
                     )
                 ).strip().lower()
                 == "market",
-            }
-            runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
-            self.runners[side] = runner_cls(
-                self.run,
-                self.data,
-                **runner_kwargs,
+                hsl_panic_market_short=str(
+                    flatten_shared_bot_side(config["bot"]["short"]).get(
+                        "hsl_panic_close_order_type", "limit"
+                    )
+                ).strip().lower()
+                == "market",
+                **common_runner_kwargs,
             )
+        else:
+            runner_cls = (
+                MpsTrailingMartingaleMulticoinRunner
+                if self.strategy_kind == "trailing_martingale"
+                else MpsEmaAnchorMulticoinRunner
+            )
+            for side in self.sides:
+                runner_kwargs = {
+                    "side": side,
+                    "hsl_panic_market": str(
+                        flatten_shared_bot_side(config["bot"][side]).get(
+                            "hsl_panic_close_order_type", "limit"
+                        )
+                    ).strip().lower()
+                    == "market",
+                    **common_runner_kwargs,
+                }
+                runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
+                self.runners[side] = runner_cls(
+                    self.run,
+                    self.data,
+                    **runner_kwargs,
+                )
 
     def _parameter_matrix(
         self, candidates: list[dict], side: str | None = None
@@ -1805,27 +1841,43 @@ class MpsMulticoinProxy:
     def evaluate(self, candidates: list[dict]) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
+        fused_runner = getattr(self, "fused_runner", None)
         for start in range(0, len(candidates), self.batch_size):
             chunk = candidates[start : start + self.batch_size]
             parameter_matrices = {
                 side: self._parameter_matrix(chunk, side) for side in self.sides
             }
-            raw_side_outputs = {
-                side: self.runners[side].run(
-                    parameter_matrices[side],
+            if fused_runner is not None:
+                fused_parameters = np.concatenate(
+                    (parameter_matrices["long"], parameter_matrices["short"]),
+                    axis=1,
+                )
+                raw_output = fused_runner.run(
+                    fused_parameters,
                     profile=self.profile_enabled,
                 )
-                for side in self.sides
-            }
-            side_outputs = {
-                side: {
+                output = {
                     key: value.cpu()
-                    for key, value in raw_side_outputs[side].items()
+                    for key, value in raw_output.items()
                     if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
                 }
-                for side in self.sides
-            }
-            if len(self.sides) == 1:
+            else:
+                raw_side_outputs = {
+                    side: self.runners[side].run(
+                        parameter_matrices[side],
+                        profile=self.profile_enabled,
+                    )
+                    for side in self.sides
+                }
+                side_outputs = {
+                    side: {
+                        key: value.cpu()
+                        for key, value in raw_side_outputs[side].items()
+                        if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+                    }
+                    for side in self.sides
+                }
+            if fused_runner is None and len(self.sides) == 1:
                 side = self.sides[0]
                 output = side_outputs[side]
                 output.update(
@@ -1838,7 +1890,7 @@ class MpsMulticoinProxy:
                         side, output["entry_initial_balance_pct"]
                     )
                 )
-            else:
+            elif fused_runner is None:
                 output = _combine_hedged_multicoin_outputs(
                     side_outputs["long"],
                     side_outputs["short"],

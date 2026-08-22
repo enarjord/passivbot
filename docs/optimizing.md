@@ -134,7 +134,9 @@ The supported slice is intentionally narrow:
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed. In one-sided `live.hsl_signal_mode: coin` runs, all ten HSL
-  leaves documented in `coin_overrides.md` are also supported; other HSL topologies fail closed
+  leaves documented in `coin_overrides.md` are also supported. Fused dual-side EMA Anchor coin
+  mode resolves the same HSL leaves independently for long and short; dual-side Trailing
+  Martingale coin-mode HSL overrides remain fail closed
 - one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with
   `coin`, `pside`, or `unified` signals and both resting-limit and market panic closes. Unified and
   pside multi-coin runs use one portfolio controller; coin mode uses an independent controller per
@@ -157,7 +159,11 @@ The supported slice is intentionally narrow:
   post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
   drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
   One-sided coin-mode multi-coin runs may resolve all canonical HSL settings independently per
-  coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin HSL and HSL
+  coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin EMA Anchor
+  uses one fused shared-account kernel for unified, pside, and coin signals, so shared event-loss,
+  warning-tier overlap, and the other HSL lifecycle/panic-loss metrics are available. Dual-side
+  multi-coin Trailing Martingale remains limited to pside signals; shared event-loss and
+  warning-tier overlap metrics remain fail closed on its independent directional proxy. HSL
   strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
