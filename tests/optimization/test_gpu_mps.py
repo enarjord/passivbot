@@ -4436,6 +4436,237 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
+    import passivbot_rust
+
+    source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+    assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
+    assert "constant int FUSED_SCALAR_COLS = 62" in source
+
+    count = 512
+    coin_count = 3
+    phase = np.linspace(0.0, 12.0 * np.pi, count)
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    for coin in range(coin_count):
+        close = 100.0 + coin * 20.0 + np.sin(phase + coin) * (6.0 + coin)
+        hlcvs[:, coin, 0] = close * 1.015
+        hlcvs[:, coin, 1] = close * 0.985
+        hlcvs[:, coin, 2] = close
+        hlcvs[:, coin, 3] = 100.0 * (coin + 1)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            10,
+            10,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+
+    values = {
+        "ema_span_0": 10.0,
+        "ema_span_1": 30.0,
+        "volatility_ema_span_1h": 60.0,
+        "volatility_ema_span_1m": 60.0,
+        "entry_double_down_factor": 1.5,
+        "entry_initial_ema_dist": 0.01,
+        "entry_initial_qty_pct": 0.1,
+        "entry_threshold_base_pct": 0.02,
+        "entry_threshold_we_weight": 0.0,
+        "entry_threshold_volatility_1h_weight": 0.0,
+        "entry_threshold_volatility_1m_weight": 0.0,
+        "entry_retracement_base_pct": 0.0,
+        "entry_retracement_we_weight": 0.0,
+        "entry_retracement_volatility_1h_weight": 0.0,
+        "entry_retracement_volatility_1m_weight": 0.0,
+        "close_qty_pct": 0.2,
+        "close_threshold_base_pct": 0.01,
+        "close_threshold_we_weight": 0.0,
+        "close_threshold_volatility_1h_weight": 0.0,
+        "close_threshold_volatility_1m_weight": 0.0,
+        "close_retracement_base_pct": 0.0,
+        "close_retracement_volatility_1h_weight": 0.0,
+        "close_retracement_volatility_1m_weight": 0.0,
+        "entry_cooldown_minutes": 0.0,
+        "total_wallet_exposure_limit": 1.0,
+        "gate_initial": 1.0,
+        "gate_reentry": 1.0,
+        "forager_volume_ema_span_1m": 60.0,
+        "forager_volatility_ema_span_1m": 60.0,
+        "forager_volume_drop_pct": 0.0,
+        "forager_score_weights_volume": 1.0,
+        "forager_score_weights_ema_readiness": 0.0,
+        "forager_score_weights_volatility": 0.0,
+        "n_positions": 2.0,
+        "we_excess_allowance_pct": 0.0,
+        "we_excess_allowance_legacy_raw": 0.0,
+        "twel_entry_gate_enabled": 1.0,
+        "twel_enforcer_threshold": 1.0,
+        "wel_enforcer_enabled": 0.0,
+        "wel_enforcer_threshold": 1.0,
+        "twel_enforcer_enabled": 0.0,
+        "twel_enforcer_reduce_portfolio": 0.0,
+        **_UNSTUCK_DISABLED_VALUES,
+        **_HSL_DISABLED_VALUES,
+    }
+
+    def side_row(signal_mode):
+        side_values = dict(values)
+        side_values["hsl_enabled"] = 1.0
+        side_values["hsl_red_threshold"] = 0.9
+        side_values["hsl_signal_mode"] = float(signal_mode)
+        return [
+            side_values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        ]
+
+    unstuck_long = side_row(0)
+    unstuck_long[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")
+    ] = 1.0
+    rows = [
+        side_row(0) + side_row(0),
+        side_row(1) + side_row(1),
+        side_row(2) + side_row(2),
+        side_row(0) + side_row(1),
+        side_row(3) + side_row(3),
+        unstuck_long + side_row(0),
+    ]
+    batch_size = len(rows)
+    params = torch.as_tensor(
+        np.asarray(rows, dtype=np.float32), device="mps"
+    ).contiguous()
+    overrides = torch.full(
+        (coin_count, 44), float("nan"), dtype=torch.float32, device="mps"
+    )
+    run_settings = torch.tensor(
+        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0],
+        dtype=torch.float32,
+        device="mps",
+    )
+    sizes = torch.tensor(
+        [
+            batch_size,
+            data["n"],
+            coin_count,
+            data["n_days"],
+            0,
+            10,
+            data["start_minute_of_day"],
+            data["start_minute_of_hour"],
+        ],
+        dtype=torch.int32,
+        device="mps",
+    )
+    end_steps = torch.full(
+        (batch_size,), data["n"] - 1, dtype=torch.int32, device="mps"
+    )
+    daily = torch.zeros(
+        (batch_size, data["n_days"], 9), dtype=torch.float32, device="mps"
+    )
+    daily[:, :, 1].fill_(float("inf"))
+    daily[:, :, 5].fill_(float("inf"))
+    scalars = torch.zeros((batch_size, 62), dtype=torch.float32, device="mps")
+    gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
+    coin_fill_counts = torch.zeros(
+        (batch_size, coin_count), dtype=torch.float32, device="mps"
+    )
+
+    library = torch.mps.compile_shader(source)
+    library.passivbot_trailing_martingale_multicoin_fused(
+        data["bars"],
+        data["fill_ticks"],
+        data["touch_ticks"],
+        data["touch_nearest_ticks"],
+        data["touch_min_qty_bits"],
+        data["touch_min_qty_relation"],
+        data["coin_settings"],
+        overrides,
+        overrides,
+        params,
+        run_settings,
+        sizes,
+        end_steps,
+        daily,
+        scalars,
+        gaps,
+        coin_fill_counts,
+        threads=(batch_size, 1, 1),
+    )
+    torch.mps.synchronize()
+    output = scalars.cpu().numpy()
+
+    assert output[:3, 13].tolist() == [1.0, 1.0, 1.0]
+    assert (output[:3, 24] > 0.0).all()
+    assert (output[:3, 26] > 0.0).all()
+    assert (output[:3, 24] - output[:3, 26] > 0.0).all()
+    assert output[:3, 32:34].tolist() == [[1.0, 1.0]] * 3
+    assert (output[:3, 38] > 0.0).all()
+    np.testing.assert_allclose(output[:3, 18], output[:3, 58] + output[:3, 60])
+    np.testing.assert_allclose(output[:3, 19], output[:3, 59] + output[:3, 61])
+    np.testing.assert_allclose(
+        output[:3, 24], daily[:3, :, 8].sum(dim=1).cpu().numpy()
+    )
+    assert (output[:3, 22] <= 1.01).all()
+    assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
+    assert output[3:, 9].tolist() == [0.0, 0.0, 0.0]
+    assert output[3:, 13].tolist() == [0.0, 0.0, 0.0]
+    assert output[3:, 24].tolist() == [0.0, 0.0, 0.0]
+
+    override_unstuck = overrides.clone()
+    override_unstuck[0, 28] = 1.0
+    override_sizes = sizes.clone()
+    override_sizes[0] = 1
+    override_daily = torch.zeros(
+        (1, data["n_days"], 9), dtype=torch.float32, device="mps"
+    )
+    override_daily[:, :, 1].fill_(float("inf"))
+    override_daily[:, :, 5].fill_(float("inf"))
+    override_scalars = torch.zeros((1, 62), dtype=torch.float32, device="mps")
+    override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
+    override_coin_fills = torch.zeros(
+        (1, coin_count), dtype=torch.float32, device="mps"
+    )
+    library.passivbot_trailing_martingale_multicoin_fused(
+        data["bars"],
+        data["fill_ticks"],
+        data["touch_ticks"],
+        data["touch_nearest_ticks"],
+        data["touch_min_qty_bits"],
+        data["touch_min_qty_relation"],
+        data["coin_settings"],
+        override_unstuck,
+        overrides,
+        params[:1],
+        run_settings,
+        override_sizes,
+        end_steps[:1],
+        override_daily,
+        override_scalars,
+        override_gaps,
+        override_coin_fills,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+    assert override_scalars[0, 9].item() == 0.0
+    assert override_scalars[0, 13].item() == 0.0
+    assert override_scalars[0, 24].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     import passivbot_rust

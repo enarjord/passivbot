@@ -600,6 +600,7 @@ mod tests {
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int SCALAR_COLS = 57"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 62"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")
@@ -637,6 +638,21 @@ mod tests {
         assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));
+        assert!(source.contains("tm_multicoin_entry_initial_balance_pct("));
+        assert!(source.contains(
+            "passivbot_trailing_martingale_multicoin_fused_impl("
+        ));
+        assert!(source.contains(
+            "kernel void passivbot_trailing_martingale_multicoin_fused("
+        ));
+        assert!(source.contains(
+            "const TrailingMartingaleMulticoinSideConfig long_config ="
+        ));
+        assert!(source.contains("long_coin_overrides, short_coin_overrides"));
+        assert!(source.contains("net_position_cost -= short_side.psize[c]"));
+        assert!(source.contains("alive || hsl_validation_failed"));
+        assert!(source.contains("bool any_unstuck_enabled = false"));
+        assert!(source.contains("&& !any_unstuck_enabled"));
         assert!(source.contains(
             "const TrailingMartingaleMulticoinSideConfig config ="
         ));
