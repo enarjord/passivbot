@@ -692,8 +692,9 @@ mod tests {
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
         assert!(source.contains("min_since_max"));
-        assert!(source.contains("if (we_if <= s.entry_cap * 1.01f) return qty"));
-        assert!(source.contains("s.entry_cap * balance - cost"));
+        assert!(source.contains("if (we_if <= s.allowed_wel * 1.01f) return qty"));
+        assert!(source.contains("s.allowed_wel * balance - cost"));
+        assert!(source.contains("s.entry_cap * balance - current_cost"));
         assert!(source.contains("s.allowed_wel"));
         assert!(source.contains("s.wel_enforcer_enabled"));
         assert!(source.contains("wel_target"));

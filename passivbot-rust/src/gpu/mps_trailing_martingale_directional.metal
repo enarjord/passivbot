@@ -471,16 +471,18 @@ inline float crop_entry(
     if (qty <= 0.0f) return 0.0f;
     float cost = s.psize * s.pprice * c_mult;
     float we_if = (cost + qty * price * c_mult) / fmax(balance, 1.0e-9f);
-    if (we_if <= s.entry_cap * 1.01f) return qty;
+    if (we_if <= s.allowed_wel * 1.01f) return qty;
     float q = round_step(
-        (s.entry_cap * balance - cost) / fmax(price * c_mult, 1.0e-12f), qty_step
+        (s.allowed_wel * balance - cost)
+            / fmax(price * c_mult, 1.0e-12f),
+        qty_step
     );
     float mq = min_entry_qty(price, qty_step, min_qty, min_cost, c_mult);
     q = fmax(q, mq);
     return q < qty ? q : qty;
 }
 
-inline float gate_market_entry_by_twel_strict(
+inline float gate_entry_by_twel_strict(
     thread TmSide& s, float balance, float price, float qty,
     float qty_step, float min_qty, float min_cost, float c_mult
 ) {
@@ -902,11 +904,12 @@ inline void generate_orders(
     )));
     float we_if = (s.psize * s.pprice + rq * reentry_price)
         * c_mult / fmax(balance, 1.0e-9f);
-    float crop_fraction = (s.entry_cap - we) / fmax(we_if - we, 1.0e-12f);
+    float crop_fraction = (s.allowed_wel - we)
+        / fmax(we_if - we, 1.0e-12f);
     float rq_crop = fmax(round_step(rq * crop_fraction, qty_step), min_rq);
-    if (we_if > s.entry_cap * 1.01f && rq_crop < rq) rq = rq_crop;
+    if (we_if > s.allowed_wel * 1.01f && rq_crop < rq) rq = rq_crop;
     bool cap_hit = trailing_entry
-        ? we > s.entry_cap * 0.999f : we >= s.entry_cap * 0.999f;
+        ? we > s.allowed_wel * 0.999f : we >= s.allowed_wel * 0.999f;
     bool reentry_ok = !flat && !partial && !cap_hit && reentry_ticks > 1
         && (!trailing_entry || entry_triggered);
     float eqty = flat ? iq : (partial ? iq_partial : (reentry_ok ? rq : 0.0f));
@@ -922,7 +925,7 @@ inline void generate_orders(
     bool cooldown = s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
         && kf < s.last_inc_k + s.cooldown_min;
     if (cooldown || balance <= 0.0f || s.initial_qty_pct <= 0.0f
-        || s.allowed_wel <= 0.0f || s.entry_cap <= 0.0f || eticks <= 1
+        || s.allowed_wel <= 0.0f || eticks <= 1
         || (block_initial && flat)) eqty = 0.0f;
     s.entry_ticks = eticks;
     s.entry_price = eprice;
@@ -937,9 +940,10 @@ inline void generate_orders(
         && s.entry_qty < market_min_q) {
         s.entry_qty = market_min_q;
     }
-    if (entry_market && s.twel_entry_gate_enabled) {
-        s.entry_qty = gate_market_entry_by_twel_strict(
-            s, balance, price_now, s.entry_qty,
+    if (s.twel_entry_gate_enabled) {
+        float entry_gate_price = entry_market ? price_now : eprice;
+        s.entry_qty = gate_entry_by_twel_strict(
+            s, balance, entry_gate_price, s.entry_qty,
             qty_step, min_qty, min_cost, c_mult
         );
     }
@@ -1972,10 +1976,12 @@ inline void passivbot_single_coin_impl(
             long_side.secondary_close_qty = 0.0f;
         }
 
+        bool long_entry_passive_reachable = long_side.entry_qty > 0.0f
+            && long_side.entry_ticks > low_nonfill_max_tick;
         bool long_entry_fill = valid && alive && long_enabled
             && long_side.entry_qty > 0.0f
             && (long_side.entry_market
-                || long_side.entry_ticks > low_nonfill_max_tick);
+                || long_entry_passive_reachable);
         if (long_entry_fill) {
             long_entry_fill = false;
             TmSide ladder_side = long_side;
@@ -2008,10 +2014,11 @@ inline void passivbot_single_coin_impl(
                     long_side.market_orders_allowed,
                     long_side.market_order_near_touch_threshold
                 );
-                if (entry_market && rung > 0
-                    && gate_side.twel_entry_gate_enabled) {
-                    eq = gate_market_entry_by_twel_strict(
-                        gate_side, ladder_balance, ladder_market_price, eq,
+                if (rung > 0 && gate_side.twel_entry_gate_enabled) {
+                    float entry_gate_price = entry_market
+                        ? ladder_market_price : ep;
+                    eq = gate_entry_by_twel_strict(
+                        gate_side, ladder_balance, entry_gate_price, eq,
                         qty_step, min_qty, min_cost, c_mult
                     );
                     // Exact Rust removes farthest entries first.  A rejected
@@ -2068,15 +2075,17 @@ inline void passivbot_single_coin_impl(
                     day_volume += fabs(eq) * entry_fill_price / balance;
                     long_entry_fill = true;
 
-                    if (entry_market && gate_side.twel_entry_gate_enabled) {
+                    if (gate_side.twel_entry_gate_enabled) {
+                        float entry_gate_price = entry_market
+                            ? ladder_market_price : ep;
                         bool gate_flat = gate_side.psize <= 0.0f;
                         float gate_psize = round_step(
                             gate_side.psize + eq, qty_step
                         );
-                        gate_side.pprice = gate_flat ? ladder_market_price
+                        gate_side.pprice = gate_flat ? entry_gate_price
                             : gate_side.pprice * (
                                 gate_side.psize / fmax(gate_psize, 1.0e-12f)
-                            ) + ladder_market_price * (
+                            ) + entry_gate_price * (
                                 eq / fmax(gate_psize, 1.0e-12f)
                             );
                         gate_side.psize = gate_psize;
@@ -2094,6 +2103,11 @@ inline void passivbot_single_coin_impl(
                 ladder_side.psize = sim_psize;
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = min(ladder_touch_ticks, entry_ticks);
+                // Exact Rust expands the immutable recursive ladder only when
+                // the original passive next entry strictly crosses the next
+                // candle. Market promotion guarantees rung zero's execution,
+                // but does not itself authorize expansion.
+                if (rung == 0 && !long_entry_passive_reachable) break;
                 if (long_side.entry_retracement_base > 0.0f
                     || long_side.cooldown_min != 0.0f) break;
                 generate_long_orders(
@@ -2581,10 +2595,12 @@ inline void passivbot_single_coin_impl(
             short_side.secondary_close_qty = 0.0f;
         }
 
+        bool short_entry_passive_reachable = short_side.entry_qty > 0.0f
+            && short_side.entry_ticks <= high_fill_max_tick;
         bool short_entry_fill = valid && alive && short_enabled
             && short_side.entry_qty > 0.0f
             && (short_side.entry_market
-                || short_side.entry_ticks <= high_fill_max_tick);
+                || short_entry_passive_reachable);
         if (short_entry_fill) {
             short_entry_fill = false;
             TmSide ladder_side = short_side;
@@ -2621,10 +2637,11 @@ inline void passivbot_single_coin_impl(
                     );
                     if (eq < market_min_q) eq = market_min_q;
                 }
-                if (entry_market && rung > 0
-                    && gate_side.twel_entry_gate_enabled) {
-                    eq = gate_market_entry_by_twel_strict(
-                        gate_side, ladder_balance, ladder_market_price, eq,
+                if (rung > 0 && gate_side.twel_entry_gate_enabled) {
+                    float entry_gate_price = entry_market
+                        ? ladder_market_price : ep;
+                    eq = gate_entry_by_twel_strict(
+                        gate_side, ladder_balance, entry_gate_price, eq,
                         qty_step, min_qty, min_cost, c_mult
                     );
                     if (!(eq > 0.0f)) break;
@@ -2678,15 +2695,17 @@ inline void passivbot_single_coin_impl(
                     day_volume += fabs(eq) * entry_fill_price / balance;
                     short_entry_fill = true;
 
-                    if (entry_market && gate_side.twel_entry_gate_enabled) {
+                    if (gate_side.twel_entry_gate_enabled) {
+                        float entry_gate_price = entry_market
+                            ? ladder_market_price : ep;
                         bool gate_flat = gate_side.psize <= 0.0f;
                         float gate_psize = round_step(
                             gate_side.psize + eq, qty_step
                         );
-                        gate_side.pprice = gate_flat ? ladder_market_price
+                        gate_side.pprice = gate_flat ? entry_gate_price
                             : gate_side.pprice * (
                                 gate_side.psize / fmax(gate_psize, 1.0e-12f)
-                            ) + ladder_market_price * (
+                            ) + entry_gate_price * (
                                 eq / fmax(gate_psize, 1.0e-12f)
                             );
                         gate_side.psize = gate_psize;
@@ -2704,6 +2723,7 @@ inline void passivbot_single_coin_impl(
                 ladder_side.psize = sim_psize;
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = max(ladder_touch_ticks, entry_ticks);
+                if (rung == 0 && !short_entry_passive_reachable) break;
                 if (short_side.entry_retracement_base > 0.0f
                     || short_side.cooldown_min != 0.0f) break;
                 generate_short_orders(

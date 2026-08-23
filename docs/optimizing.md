@@ -294,9 +294,12 @@ The supported slice is intentionally narrow:
   touch before they are retained. Protective reducers are independently classified and resized
   before reducer selection and aggregate allocation; adverse slippage and taker fees participate
   in realized-loss gating. For recursive Trailing Martingale entries, every ladder rung is
-  classified against the immutable generation market snapshot and streamed through the strict
-  total-exposure entry gate before execution. Trailing Martingale recursive close market ladders
-  and multi-coin market execution remain fail closed until their execution ordering is modeled
+  classified against the immutable generation market snapshot only when the original passive rung
+  is strictly next-candle reachable, then streamed through the strict total-exposure entry gate at
+  each limit price or executable market touch. Immutable strategy sizing uses its wallet-exposure
+  allowance separately from that portfolio gate. Trailing Martingale recursive close market
+  ladders and multi-coin market execution remain fail closed until their execution ordering is
+  modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

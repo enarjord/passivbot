@@ -6,10 +6,13 @@ All notable user-facing changes will be documented in this file.
 
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market
-  snapshot, short entries are resized to the executable minimum, and promoted quantities stream
-  through the strict total-exposure entry gate. Entry optimizer bounds must remain wholly recursive
-  or wholly trailing; mode-crossing ranges, recursive close market ladders, and multi-coin market
-  execution remain fail closed.
+  snapshot after the original passive rung is next-candle reachable, short entries are resized to
+  the executable minimum, and executable ladder quantities stream through the strict
+  total-exposure entry gate at their limit price or market touch. Strategy-ladder sizing retains
+  its separate wallet-exposure allowance before that portfolio gate is applied. Entry optimizer
+  bounds must remain wholly recursive or wholly trailing;
+  mode-crossing ranges, recursive close market ladders, and multi-coin market execution remain fail
+  closed.
 
 - Extended single-coin Trailing Martingale ordinary market-order optimization on Apple MPS to
   compatible HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, position- and

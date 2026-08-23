@@ -6630,7 +6630,9 @@ def test_mps_tm_near_touch_market_entry_uses_taker_fill(
         101.0 if side == "long" else 99.0, abs=1.0e-4
     )
     assert market_output["balance"].item() < 1_000.0
-    assert market_output["fill_count_entry"].item() >= 1.0
+    # Market promotion guarantees rung zero, but exact Rust does not expand a
+    # recursive ladder unless the original passive order strictly crosses.
+    assert market_output["fill_count_entry"].item() == 1.0
 
 
 @pytest.mark.skipif(
@@ -6642,6 +6644,11 @@ def test_mps_tm_recursive_entry_promotes_each_near_touch_rung(side):
     close = np.full(count, 100.0)
     high = np.full(count, 100.0)
     low = np.full(count, 100.0)
+    # Strictly cross the near passive prefix on the next candle. Exact Rust
+    # then expands the immutable ladder; near-touch promotion makes one later
+    # rung executable without requiring its passive price to cross.
+    low[3] = 99.89
+    high[3] = 100.11
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0002)
     run = ProxyRun(
@@ -6693,14 +6700,65 @@ def test_mps_tm_recursive_entry_promotes_each_near_touch_rung(side):
     torch.mps.synchronize()
 
     size_key = "psize" if side == "long" else "short_psize"
-    assert resting["fill_count_entry"].item() == 0.0
-    assert resting[size_key].item() == 0.0
+    assert resting["fill_count_entry"].item() >= 1.0
     assert promoted["fill_count_entry"].item() >= 2.0
-    assert promoted[size_key].item() > 0.0
+    assert promoted["fill_count_entry"].item() > resting[
+        "fill_count_entry"
+    ].item()
+    assert promoted[size_key].item() > resting[size_key].item()
     # Rust's entry gate measures wallet exposure at the executable market
     # snapshot, before backtest-only adverse slippage is applied to the fill.
     assert promoted[size_key].item() * 100.0 / 1_000.0 < 0.12
     assert promoted["balance"].item() < 1_000.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_market_entry_applies_twel_at_executable_touch(side):
+    count = 5
+    close = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(close, close, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.001,
+        entry_gate=True,
+        threshold=0.12,
+    )
+    row[6] = 1.0
+    row[11] = 0.0
+    row[16] = 10.0
+    params = np.asarray([row + row], dtype=np.float64)
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.003,
+    ).run(params)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output["fill_count_entry"].item() == 1.0
+    assert output[size_key].item() == pytest.approx(1.199, abs=1.0e-4)
 
 
 @pytest.mark.skipif(
@@ -11754,6 +11812,9 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "entry_ticks, false, ladder_market_price" in source
     assert source.count("entry_strategy_qty") == 5
     assert source.count("if (!(eq > 0.0f)) break;") == 2
+    assert source.count("entry_passive_reachable") >= 6
+    assert "gate_market_entry_by_twel_strict" not in source
+    assert source.count("gate_entry_by_twel_strict(") == 4
     assert "s.entry_retracement_base > 0.0f" in source
     assert "s.close_retracement_base > 0.0f" in source
     assert "the proxy uses a zero-loss envelope" in source
