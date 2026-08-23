@@ -14,10 +14,10 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    trailing_martingale_shader_topology,
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
-from optimization.gpu.mps_kernel import _trailing_martingale_shader_topology
 from optimization.gpu.service import (
     CORE_OUTPUT_KEYS,
     DIRECTIONAL_HSL_OUTPUT_KEYS,
@@ -90,7 +90,7 @@ def test_trailing_martingale_shader_topology_is_fail_closed(
     long_enabled, short_enabled, hsl_enabled, expected
 ):
     assert (
-        _trailing_martingale_shader_topology(
+        trailing_martingale_shader_topology(
             long_enabled=long_enabled,
             short_enabled=short_enabled,
             hsl_enabled=hsl_enabled,

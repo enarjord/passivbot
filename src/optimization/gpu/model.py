@@ -47,6 +47,21 @@ def validate_single_coin_hsl_signal_topology(
         signal_mode, coin_count=1, enabled_side_count=enabled_side_count
     )
 
+
+def trailing_martingale_shader_topology(
+    *, long_enabled: bool, short_enabled: bool, hsl_enabled: bool
+) -> str:
+    """Select a topology variant only when compile-time assumptions are exact."""
+
+    if hsl_enabled:
+        return "generic"
+    if long_enabled and not short_enabled:
+        return "long_no_hsl"
+    if short_enabled and not long_enabled:
+        return "short_no_hsl"
+    return "generic"
+
+
 EMA_ANCHOR_PARAM_KEYS = (
     "base_qty_pct",
     "ema_span_0",

@@ -14,6 +14,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+    trailing_martingale_shader_topology,
 )
 
 
@@ -77,18 +78,6 @@ def _trailing_martingale_short_no_hsl_shader_library():
     return torch.mps.compile_shader(
         passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py()
     )
-
-
-def _trailing_martingale_shader_topology(
-    *, long_enabled: bool, short_enabled: bool, hsl_enabled: bool
-) -> str:
-    if hsl_enabled:
-        return "generic"
-    if long_enabled and not short_enabled:
-        return "long_no_hsl"
-    if short_enabled and not long_enabled:
-        return "short_no_hsl"
-    return "generic"
 
 
 @lru_cache(maxsize=1)
@@ -1136,7 +1125,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
 
     def __init__(self, *args, hsl_enabled: bool = True, **kwargs):
         super().__init__(*args, **kwargs)
-        self.shader_topology = _trailing_martingale_shader_topology(
+        self.shader_topology = trailing_martingale_shader_topology(
             long_enabled=self.long_enabled,
             short_enabled=self.short_enabled,
             hsl_enabled=bool(hsl_enabled),
