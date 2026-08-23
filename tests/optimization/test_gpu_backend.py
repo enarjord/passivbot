@@ -41,6 +41,7 @@ from optimization.backends.gpu_backend import (
     _gpu_suite_enabled,
     _gpu_suite_checkpoint_contract,
     _gpu_runtime_checkpoint_contract,
+    _gpu_search_checkpoint_contract,
     _gpu_unstuck_parameter_active,
     _gpu_suite_scenario_override_context,
     _gpu_suite_scenario_inputs,
@@ -4597,6 +4598,9 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "unstuck": original["unstuck"],
             "hsl": original["hsl"],
             "pinned_hsl_bounds": {},
+            "scenario_fixed_bound_values": {},
+            "scenario_parameter_overrides": {},
+            "proxy_execution": {},
             "candle_count": 3,
             "first_timestamp": 1000,
             "last_timestamp": 3000,
@@ -4663,6 +4667,15 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
         _gpu_suite_checkpoint_contract(config, [changed_pinned_hsl])
         != original
     )
+
+    changed_proxy_execution = copy.deepcopy(item)
+    changed_proxy_execution["proxy_checkpoint_contract"] = {
+        "backtest": {"starting_balance": 20_000.0}
+    }
+    assert (
+        _gpu_suite_checkpoint_contract(config, [changed_proxy_execution])
+        != original
+    )
     assert (
         _gpu_suite_checkpoint_contract(
             config,
@@ -4682,6 +4695,68 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
     assert _gpu_suite_checkpoint_contract(config, [changed_coins]) != original
     assert _gpu_suite_checkpoint_contract(config, [changed_window]) != original
     assert _gpu_suite_checkpoint_contract(config, [changed_source]) != original
+
+
+def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
+    key_paths = [
+        ("long_offset", ("bot", "long", "strategy", "ema_anchor", "offset")),
+        (
+            "long_base_qty_pct",
+            ("bot", "long", "strategy", "ema_anchor", "base_qty_pct"),
+        ),
+    ]
+    bounds = [Bound(0.01, 0.1, 0.01), Bound(0.02, 0.02, 0.01)]
+    base = [0.04, 0.02]
+    contract = _gpu_search_checkpoint_contract(
+        key_paths=key_paths,
+        bounds=bounds,
+        base_vector=base,
+        fixed_bound_values={"long_base_qty_pct": 0.02},
+        fixed_parameter_overrides={"long_base_qty_pct": 0.02},
+        optimizer_overrides=set(),
+        sig_digits=3,
+    )
+    active = [("long_offset", 0, bounds[0])]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    original = _checkpoint_signature(
+        active, scoring, search_contract=contract
+    )
+
+    mutations = []
+    changed_base = copy.deepcopy(contract)
+    changed_base["dimensions"][1]["base"] = 0.03
+    mutations.append(changed_base)
+    changed_fixed = copy.deepcopy(contract)
+    changed_fixed["fixed_parameter_overrides"]["long_base_qty_pct"] = 0.03
+    mutations.append(changed_fixed)
+    changed_digits = copy.deepcopy(contract)
+    changed_digits["sig_digits"] = 4
+    mutations.append(changed_digits)
+    changed_override = copy.deepcopy(contract)
+    changed_override["optimizer_overrides"] = ["mirror_short_from_long"]
+    mutations.append(changed_override)
+
+    assert all(
+        _checkpoint_signature(active, scoring, search_contract=changed)
+        != original
+        for changed in mutations
+    )
+
+
+def test_gpu_runtime_checkpoint_contract_tracks_prepared_proxy_execution():
+    config = _long_only_ema_config()
+    proxy = SimpleNamespace(
+        coin_override_contract=None,
+        checkpoint_contract={
+            "backtest": {"starting_balance": 10_000.0},
+            "markets": [{"maker_fee": 0.0004}],
+        },
+    )
+    original = _gpu_runtime_checkpoint_contract(config, proxy)
+    changed_proxy = copy.deepcopy(proxy)
+    changed_proxy.checkpoint_contract["markets"][0]["maker_fee"] = 0.0005
+
+    assert _gpu_runtime_checkpoint_contract(config, changed_proxy) != original
 
 
 def test_gpu_suite_checkpoint_contract_rejects_timestamp_shape_mismatch():

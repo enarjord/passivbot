@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import replace
+import hashlib
 import logging
 import os
 
@@ -116,6 +117,78 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
 # on the supported M3 target; callers may still use larger evolutionary
 # populations and configured batches, which are split transparently.
 MPS_MAX_DISPATCH_CANDIDATE_BARS = 500_000_000
+
+
+def _gpu_proxy_execution_checkpoint_contract(
+    *,
+    strategy_kind: str,
+    exchange: str,
+    enabled_sides,
+    hlcvs_shape,
+    timestamps,
+    backtest_params: dict,
+    exchange_params,
+) -> dict:
+    """Return the prepared execution inputs which make proxy state reusable."""
+
+    timestamp_values = np.ascontiguousarray(
+        np.asarray(timestamps, dtype=np.int64).reshape(-1)
+    )
+    if len(timestamp_values) != int(hlcvs_shape[0]):
+        raise ValueError(
+            "GPU proxy checkpoint timestamp identity disagrees with prepared "
+            f"candles: timestamps={len(timestamp_values)}, candles={hlcvs_shape[0]}"
+        )
+    runtime_keys = (
+        "starting_balance",
+        "candle_interval_minutes",
+        "requested_start_timestamp_ms",
+        "first_timestamp_ms",
+        "first_valid_indices",
+        "last_valid_indices",
+        "trade_start_indices",
+        "global_warmup_bars",
+        "liquidation_threshold",
+        "filter_by_min_effective_cost",
+        "dynamic_wel_by_tradability",
+        "hedge_mode",
+        "max_realized_loss_pct",
+        "pnls_max_lookback_days",
+        "market_order_slippage_pct",
+        "market_orders_allowed",
+        "market_order_near_touch_threshold",
+        "forager_score_hysteresis_pct",
+    )
+    market_keys = (
+        "qty_step",
+        "price_step",
+        "min_qty",
+        "min_cost",
+        "c_mult",
+        "maker_fee",
+        "taker_fee",
+    )
+    return {
+        "version": 1,
+        "strategy_kind": str(strategy_kind),
+        "exchange": str(exchange),
+        "coins": [str(coin) for coin in backtest_params.get("coins", [])],
+        "enabled_sides": sorted(str(side) for side in enabled_sides),
+        "hlcvs_shape": [int(value) for value in hlcvs_shape],
+        "timestamps": {
+            "count": int(len(timestamp_values)),
+            "first": int(timestamp_values[0]) if len(timestamp_values) else None,
+            "last": int(timestamp_values[-1]) if len(timestamp_values) else None,
+            "sha256": hashlib.sha256(timestamp_values.tobytes()).hexdigest(),
+        },
+        "backtest": {
+            key: copy.deepcopy(backtest_params.get(key)) for key in runtime_keys
+        },
+        "markets": [
+            {key: copy.deepcopy(item.get(key)) for key in market_keys}
+            for item in exchange_params
+        ],
+    }
 
 
 def _mps_dispatch_batch_size(
@@ -1082,6 +1155,15 @@ class MpsSingleCoinProxy:
         }
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")
+        self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
+            strategy_kind=self.strategy_kind,
+            exchange=exchange,
+            enabled_sides=[side for side, enabled in self.enabled.items() if enabled],
+            hlcvs_shape=hlcvs.shape,
+            timestamps=timestamps,
+            backtest_params=backtest_params,
+            exchange_params=payload.exchange_params,
+        )
         enabled_side_count = sum(self.enabled.values())
         self.dispatch_batch_size = _mps_dispatch_batch_size(
             self.batch_size,
@@ -1726,6 +1808,15 @@ class MpsMulticoinProxy:
             raise ValueError(
                 "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
             )
+        self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
+            strategy_kind=self.strategy_kind,
+            exchange=exchange,
+            enabled_sides=self.sides,
+            hlcvs_shape=values.shape,
+            timestamps=timestamps,
+            backtest_params=backtest_params,
+            exchange_params=payload.exchange_params,
+        )
         self.forager_score_hysteresis_pct = float(
             backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0
         )

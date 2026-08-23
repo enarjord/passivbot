@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened Apple MPS optimizer checkpoint/resume identity. GPU checkpoints now bind the complete
+  fixed and tunable search shape and each prepared single-run or suite-scenario proxy execution
+  contract, including timestamp identity, starting balance, valid/trade windows, liquidation and
+  exposure policy, resolved market settings and fees, and modeled execution settings. Resume now
+  fails closed after any incompatible input change; older GPU checkpoints are intentionally
+  invalidated.
+
 - Added Apple MPS GPU optimizer support for dual-side multi-coin one-way mode in EMA Anchor and
   Trailing Martingale, with per-symbol initial-entry arbitration matching exact Rust.
 

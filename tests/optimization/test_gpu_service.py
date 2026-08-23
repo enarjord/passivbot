@@ -35,6 +35,7 @@ from optimization.gpu.service import (
     _directional_entry_initial_metrics,
     _directional_gross_pnl_outputs,
     _hsl_params,
+    _gpu_proxy_execution_checkpoint_contract,
     _mps_dispatch_batch_size,
     _mps_strategy_eq_recovery_distribution,
     _multicoin_exposure_eligible_coins,
@@ -51,6 +52,84 @@ from optimization.gpu.service import (
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
+    backtest_params = {
+        "coins": ["BTC"],
+        "starting_balance": 10_000.0,
+        "candle_interval_minutes": 1,
+        "requested_start_timestamp_ms": 1_000,
+        "first_timestamp_ms": 1_000,
+        "first_valid_indices": [0],
+        "last_valid_indices": [2],
+        "trade_start_indices": [1],
+        "global_warmup_bars": 1,
+        "liquidation_threshold": 0.05,
+        "filter_by_min_effective_cost": False,
+        "dynamic_wel_by_tradability": True,
+        "hedge_mode": False,
+        "max_realized_loss_pct": 1.0,
+        "pnls_max_lookback_days": 30.0,
+        "market_order_slippage_pct": 0.0005,
+        "market_orders_allowed": False,
+        "market_order_near_touch_threshold": 0.001,
+        "forager_score_hysteresis_pct": 0.02,
+    }
+    market = {
+        "qty_step": 0.001,
+        "price_step": 0.1,
+        "min_qty": 0.001,
+        "min_cost": 5.0,
+        "c_mult": 1.0,
+        "maker_fee": 0.0004,
+        "taker_fee": 0.00055,
+    }
+    original = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs_shape=(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+    )
+    changed_fee = dict(market, maker_fee=0.0005)
+    changed = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs_shape=(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[changed_fee],
+    )
+    changed_timestamps = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs_shape=(3, 1, 4),
+        timestamps=np.array([1_000, 2_100, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+    )
+
+    assert changed != original
+    assert changed_timestamps != original
+    assert original["timestamps"]["count"] == 3
+
+
+def test_gpu_proxy_execution_checkpoint_contract_rejects_timestamp_shape_mismatch():
+    with pytest.raises(ValueError, match="timestamp identity disagrees"):
+        _gpu_proxy_execution_checkpoint_contract(
+            strategy_kind="ema_anchor",
+            exchange="bybit",
+            enabled_sides=["long"],
+            hlcvs_shape=(3, 1, 4),
+            timestamps=np.array([1_000, 2_000], dtype=np.int64),
+            backtest_params={"coins": ["BTC"]},
+            exchange_params=[],
+        )
 
 
 @pytest.mark.parametrize(
