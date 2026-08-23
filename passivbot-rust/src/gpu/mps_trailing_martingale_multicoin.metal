@@ -7,7 +7,10 @@ constant int OVERRIDE_COLS = 44;
 constant int HSL_OVERRIDE_START = 34;
 constant int COIN_COLS = 12;
 constant int DAILY_COLS = 9;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+constant int SCALAR_COLS = 65;
+constant int FUSED_SCALAR_COLS = 70;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
 constant int SCALAR_COLS = 63;
 constant int FUSED_SCALAR_COLS = 68;
 #else
@@ -3560,6 +3563,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         short_side.hsl_ema_tail
     );
 #endif
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    scalars[scalar_offset + 68] = hsl_strategy_equity_drawdown_max(
+        long_side.hsl_strategy_eq
+    );
+    scalars[scalar_offset + 69] = hsl_strategy_equity_drawdown_max(
+        short_side.hsl_strategy_eq
+    );
+#endif
 }
 
 kernel void passivbot_trailing_martingale_multicoin_fused(
@@ -4102,6 +4113,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         : hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail);
     scalars[scalar_offset + 62] = short_side
         ? hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail) : 0.0f;
+#endif
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    scalars[scalar_offset + 63] = short_side ? 0.0f
+        : hsl_strategy_equity_drawdown_max(side.hsl_strategy_eq);
+    scalars[scalar_offset + 64] = short_side
+        ? hsl_strategy_equity_drawdown_max(side.hsl_strategy_eq) : 0.0f;
 #endif
 }
 

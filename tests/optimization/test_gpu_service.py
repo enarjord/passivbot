@@ -490,7 +490,7 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert panic["hard_stop_panic_close_loss_drawdown_pct_mean"].item() == (
         pytest.approx(0.8 / 3.0)
     )
-    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 31
+    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 33
 
 
 def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
@@ -780,10 +780,11 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     ],
 )
 @pytest.mark.parametrize(
-    ("needed_metrics", "tail_enabled"),
+    ("needed_metrics", "tail_enabled", "raw_drawdown_enabled"),
     [
-        ({"hard_stop_time_in_red_pct"}, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True),
+        ({"hard_stop_time_in_red_pct"}, False, False),
+        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False),
+        ({"drawdown_worst_strategy_eq_long"}, False, True),
     ],
 )
 def test_multicoin_proxy_constructs_fused_shared_account_runner(
@@ -794,6 +795,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     proxy_mode,
     needed_metrics,
     tail_enabled,
+    raw_drawdown_enabled,
 ):
     torch = pytest.importorskip("torch")
 
@@ -949,6 +951,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         override_cols,
     )
     assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
+    assert (
+        constructed["kwargs"]["hsl_raw_drawdown_enabled"]
+        is raw_drawdown_enabled
+    )
 
 
 def test_gpu_proxy_requires_complete_valid_tail():

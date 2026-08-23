@@ -170,8 +170,10 @@ The supported slice is intentionally narrow:
   `peak_recovery_hours_strategy_eq_{long,short}` and
   `peak_recovery_days_strategy_eq_{long,short}` retain the longest interval until strategy equity
   strictly exceeds its prior controller peak, including an unrecovered tail through the backtest
-  end. Raw per-side worst-drawdown and recovery-distribution metrics remain fail closed for now.
-  Compatible suites may use the supported topologies.
+  end. Raw per-side `drawdown_worst_strategy_eq_{long,short}` is also available through an opt-in
+  bounded peak-and-maximum accumulator, with exact Rust validation retaining authority over the
+  approximate fill path. Recovery-distribution metrics remain fail closed for now. Compatible
+  suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
   and compatible suites also support auto-unstuck, including static per-coin overrides. Metal

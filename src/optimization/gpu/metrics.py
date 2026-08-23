@@ -57,6 +57,8 @@ SUPPORTED_METRICS = (
     "calmar_ratio_strategy_eq",
     "calmar_ratio_strategy_eq_w",
     "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_strategy_eq_long",
+    "drawdown_worst_strategy_eq_short",
     "drawdown_worst_mean_1pct_ema_strategy_eq",
     "drawdown_worst_mean_1pct_ema_strategy_eq_long",
     "drawdown_worst_mean_1pct_ema_strategy_eq_short",
@@ -249,6 +251,10 @@ _HARD_STOP_EMA_DRAWDOWN_METRICS = {
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_ema_strategy_eq_long",
     "drawdown_worst_ema_strategy_eq_short",
+}
+_HARD_STOP_RAW_DRAWDOWN_METRICS = {
+    "drawdown_worst_strategy_eq_long",
+    "drawdown_worst_strategy_eq_short",
 }
 _HARD_STOP_EMA_TAIL_METRICS = {
     "drawdown_worst_mean_1pct_ema_strategy_eq",
@@ -1186,6 +1192,25 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
     }
 
 
+def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
+    """Expose per-side worst raw HSL strategy-equity drawdown."""
+
+    required = {"hsl_drawdown_raw_max_long", "hsl_drawdown_raw_max_short"}
+    if missing := required.difference(out):
+        raise RuntimeError(
+            "MPS directional HSL raw-drawdown outputs are missing from proxy "
+            "results: " + ", ".join(sorted(missing))
+        )
+    return {
+        "drawdown_worst_strategy_eq_long": out[
+            "hsl_drawdown_raw_max_long"
+        ].to(torch.float64),
+        "drawdown_worst_strategy_eq_short": out[
+            "hsl_drawdown_raw_max_short"
+        ].to(torch.float64),
+    }
+
+
 def _hard_stop_ema_tail_metrics(out: dict) -> dict:
     """Reduce bounded per-side HSL EMA tails using Rust's public contract."""
 
@@ -1428,6 +1453,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _HARD_STOP_EMA_DRAWDOWN_METRICS
         else {}
     )
+    hard_stop_raw_drawdown_metrics = (
+        _hard_stop_raw_drawdown_metrics(out)
+        if requested & _HARD_STOP_RAW_DRAWDOWN_METRICS
+        else {}
+    )
     hard_stop_ema_tail_metrics = (
         _hard_stop_ema_tail_metrics(out)
         if requested & _HARD_STOP_EMA_TAIL_METRICS
@@ -1489,6 +1519,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "volume_pct_per_day_avg": volume_pct,
     }
     objectives.update(hard_stop_ema_drawdown_metrics)
+    objectives.update(hard_stop_raw_drawdown_metrics)
     objectives.update(hard_stop_ema_tail_metrics)
     objectives.update(hard_stop_strategy_eq_recovery_metrics)
     if "loss_profit_ratio" in requested:
