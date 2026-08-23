@@ -58,6 +58,40 @@ def _trailing_martingale_shader_library():
 
 
 @lru_cache(maxsize=1)
+def _trailing_martingale_long_no_hsl_shader_library():
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py()
+    )
+
+
+@lru_cache(maxsize=1)
+def _trailing_martingale_short_no_hsl_shader_library():
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py()
+    )
+
+
+def _trailing_martingale_shader_topology(
+    *, long_enabled: bool, short_enabled: bool, hsl_enabled: bool
+) -> str:
+    if hsl_enabled:
+        return "generic"
+    if long_enabled and not short_enabled:
+        return "long_no_hsl"
+    if short_enabled and not long_enabled:
+        return "short_no_hsl"
+    return "generic"
+
+
+@lru_cache(maxsize=1)
 def _ema_anchor_multicoin_shader_library():
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -1100,6 +1134,21 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     """Persistent single-coin trailing-martingale runner on Apple MPS."""
 
+    def __init__(self, *args, hsl_enabled: bool = True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.shader_topology = _trailing_martingale_shader_topology(
+            long_enabled=self.long_enabled,
+            short_enabled=self.short_enabled,
+            hsl_enabled=bool(hsl_enabled),
+        )
+
+    def _shader_library(self):
+        if self.shader_topology == "long_no_hsl":
+            return _trailing_martingale_long_no_hsl_shader_library()
+        if self.shader_topology == "short_no_hsl":
+            return _trailing_martingale_short_no_hsl_shader_library()
+        return _trailing_martingale_shader_library()
+
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         expected = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS) * 2
         if params.ndim != 2 or params.shape[1] != expected:
@@ -1136,7 +1185,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 device="mps",
             )
         prepared = time.perf_counter()
-        library = _trailing_martingale_shader_library()
+        library = self._shader_library()
         compiled = time.perf_counter()
         if profile:
             torch.mps.synchronize()

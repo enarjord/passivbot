@@ -1093,8 +1093,16 @@ inline void passivbot_single_coin_impl(
     const float starting_balance = settings[6];
     const float liq_floor = settings[7];
     const float interval_ms = settings[8];
+#if defined(PASSIVBOT_TRAILING_LONG_ONLY)
+    const bool long_enabled = true;
+    const bool short_enabled = false;
+#elif defined(PASSIVBOT_TRAILING_SHORT_ONLY)
+    const bool long_enabled = false;
+    const bool short_enabled = true;
+#else
     const bool long_enabled = settings[9] > 0.5f;
     const bool short_enabled = settings[10] > 0.5f;
+#endif
     const bool hedge_mode = settings[11] > 0.5f;
     const bool filter_by_min_effective_cost = settings[12] > 0.5f;
     const float max_effective_min_cost = settings[13];
@@ -1115,6 +1123,10 @@ inline void passivbot_single_coin_impl(
     TmSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
     HslState long_hsl = load_hsl(params, po, 40);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 40);
+#if defined(PASSIVBOT_TRAILING_HSL_DISABLED)
+    long_hsl.enabled = false;
+    short_hsl.enabled = false;
+#endif
     const bool long_coin_hsl_rolling = long_hsl.enabled
         && long_hsl.signal_mode == HSL_SIGNAL_COIN && pnl_lookback_bars > 0;
     const bool short_coin_hsl_rolling = short_hsl.enabled

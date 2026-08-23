@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Accelerated HSL-disabled, one-sided single-coin Trailing Martingale optimization on Apple MPS
+  with Rust-owned long-only and short-only Metal variants. The backend selects these variants
+  automatically, logs the selected topology, and retains the generic kernel for dual-side or
+  HSL-enabled runs. Exact Rust validation and the existing drift gates remain authoritative.
+
 - Bounded Apple MPS proxy command buffers by candidate-candle workload so large populations and
   long histories cannot monopolize the shared display GPU in one Metal dispatch. The configured
   population and batch retain their optimization semantics while the backend transparently splits
