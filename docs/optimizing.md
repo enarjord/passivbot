@@ -177,9 +177,10 @@ The supported slice is intentionally narrow:
   directional kernels emit opt-in hourly strategy-equity samples, and a bounded Metal
   postprocessor applies the same strict time-to-exceed and percentile/tail definitions as exact
   Rust. The hourly proxy is approximate; exact Rust validation and rolling drift gates remain
-  authoritative. Multi-coin recovery-distribution metrics remain fail closed until the shared
-  portfolio kernels can emit equivalent bounded samples. Compatible suites may use the supported
-  topologies.
+  authoritative. Tracked histories with internal invalid candles fail closed because exact Rust
+  records balance-only strategy equity at those steps. Multi-coin recovery-distribution metrics
+  remain fail closed until the shared portfolio kernels can emit equivalent bounded samples.
+  Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
   and compatible suites also support auto-unstuck, including static per-coin overrides. Metal

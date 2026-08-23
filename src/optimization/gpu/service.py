@@ -619,10 +619,33 @@ def _require_no_internal_invalid_account_recovery_candles(
         if not bool(np.all(valid)):
             first_invalid = first + int(np.flatnonzero(~valid)[0])
             raise ValueError(
-                "MPS account-equity peak-recovery metrics require contiguous "
+                "MPS account/strategy-equity recovery metrics require contiguous "
                 "valid candles after equity tracking starts; "
                 f"coin index {coin}, invalid candle at {first_invalid}"
             )
+
+
+def _require_no_internal_invalid_single_coin_recovery_candles(
+    hlcvs,
+    *,
+    needed_metrics,
+    first_valid_idx: int,
+    last_valid_idx: int,
+    tracking_start_idx: int,
+) -> None:
+    recovery_metrics = (
+        _ACCOUNT_EQUITY_RECOVERY_METRICS
+        | _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
+    )
+    if not set(needed_metrics) & recovery_metrics:
+        return
+    _require_no_internal_invalid_account_recovery_candles(
+        hlcvs,
+        exposure_eligible_coins=[True],
+        first_valid_indices=[first_valid_idx],
+        last_valid_indices=[last_valid_idx],
+        tracking_start_indices=[tracking_start_idx],
+    )
 
 
 def _nan_min(left, right):
@@ -1184,14 +1207,13 @@ class MpsSingleCoinProxy:
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
-        if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
-            _require_no_internal_invalid_account_recovery_candles(
-                hlcvs,
-                exposure_eligible_coins=[True],
-                first_valid_indices=backtest_params["first_valid_indices"],
-                last_valid_indices=backtest_params["last_valid_indices"],
-                tracking_start_indices=[self.run.trade_start_idx],
-            )
+        _require_no_internal_invalid_single_coin_recovery_candles(
+            hlcvs,
+            needed_metrics=self.needed_metrics,
+            first_valid_idx=self.run.first_valid_idx,
+            last_valid_idx=self.run.last_valid_idx,
+            tracking_start_idx=self.run.trade_start_idx,
+        )
         if hsl_enabled_sides:
             _require_no_internal_invalid_hsl_candles(
                 high,
