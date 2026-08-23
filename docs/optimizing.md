@@ -185,16 +185,17 @@ The supported slice is intentionally narrow:
   fail closed for these metrics because they cannot reconstruct one shared portfolio-equity curve.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
-  short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
-  and compatible suites also support auto-unstuck, including static per-coin overrides. Metal
+  short-only, hedge-mode dual-side, one-way, and compatible suite runs. One- and dual-side
+  multi-coin runs and compatible suites also support auto-unstuck, including static per-coin
+  overrides. Metal
   models the enable and EMA-gating toggles, tunable close percentage, EMA distance, loss allowance,
   and exposure threshold. It derives the allowance from a conservative all-history realized
-  net-PnL peak, admits at most one least-stuck eligible position per one-sided portfolio, scales a
+  net-PnL peak, admits at most one least-stuck eligible position per portfolio, scales a
   losing close to its own allowance subject to exchange minimums, and lets that close compete with
   the position's WEL/TWEL reducer before ordinary closes consume the remaining realized-loss
-  budget. Exact Rust remains authoritative for the configured rolling PnL lookback. Dual-side
-  multi-coin auto-unstuck remains fail closed until one shared portfolio kernel can select across
-  both directional surfaces
+  budget. The fused dual-side multi-coin kernel chooses globally across both directional surfaces
+  using exact Rust's price-difference, symbol-index, and long-before-short tie ordering. Exact Rust
+  remains authoritative for the configured rolling PnL lookback
 - single- and multi-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
   `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
   `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible
@@ -254,8 +255,9 @@ The supported slice is intentionally narrow:
   Martingale permit the one selected auto-unstuck reducer to consume that same conservative budget,
   while ordinary and exposure-repair closes retain the stricter zero-loss envelope. One-sided
   multi-coin EMA Anchor applies the conservative budget only to its selected auto-unstuck reducer;
-  its other closes remain zero-loss. Dual-side multi-coin runs retain the strict zero-loss
-  envelope. These restrictions avoid unsafe cross-side loss-budget reservation and per-candle
+  its other closes remain zero-loss. Fused dual-side multi-coin runs apply that same shared budget
+  to the one globally selected auto-unstuck reducer; their other closes remain zero-loss. These
+  restrictions avoid unsafe cross-side loss-budget reservation and per-candle
   enumeration of TM's recursive 500-rung close ladder. Exact
   validation applies the configured rolling allowance and remains authoritative
 - BTC collateral remains disabled; dual-side multicoin total-exposure repair remains disabled
@@ -279,7 +281,7 @@ Unsupported combinations fail before optimization begins. Dual-side multi-coin E
 Trailing Martingale use fused shared-account Metal kernels in hedge mode. Every accepted metric
 still comes from the unchanged exact Rust portfolio backtest, and classification, rank, and drift
 gates halt material disagreement. Dual-side one-way arbitration, unmodeled non-bot suite scenario
-overrides, dual-side multi-coin auto-unstuck, and dual-side multi-coin exposure repair are not
+overrides and dual-side multi-coin exposure repair are not
 silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
@@ -295,7 +297,7 @@ overrides: the canonical exact
 suite evaluator still applies them last, after candidate materialization, while each scenario's
 Metal proxy shadows the corresponding candidate parameters with the same effective values. Every
 overridden scenario is rechecked against the directional GPU scope, so an override cannot silently
-enable HSL, dual-side multi-coin auto-unstuck, an unsupported exposure-repair path, an invalid
+enable an unsupported exposure-repair path, an invalid
 position count, or another unsupported behavior. In a multicoin suite, a scenario with fewer coins must
 keep the effective `n_positions` range within that subset, either through common bounds or an
 explicit scenario override. Metal uses the strategy-specific single-coin or multicoin kernel

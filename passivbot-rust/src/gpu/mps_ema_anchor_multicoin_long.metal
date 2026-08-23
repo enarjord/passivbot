@@ -1064,6 +1064,123 @@ inline void update_ema_multicoin_side_selection(
     side.previous_effective_n_positions = effective_n_positions;
 }
 
+// Preselect one side's best eligible candidate without creating an order.
+// The fused caller compares both sides before allowing either generator to
+// consume the shared realized-loss allowance.
+inline int select_ema_multicoin_unstuck_coin(
+    thread EmaMulticoinSideState& side,
+    thread const EmaMulticoinSideConfig& config,
+    thread const JointPortfolioAccount& account,
+    constant float* bars,
+    constant int* touch_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    int k,
+    int coin_count,
+    bool short_side,
+    int effective_n_positions,
+    thread float& selected_diff
+) {
+    selected_diff = INFINITY;
+    if (effective_n_positions <= 0 || account.balance <= 0.0f) return -1;
+    const float effective_wel = config.twel
+        / fmax(float(effective_n_positions), 1.0f);
+    const float balance_peak = account.balance
+        + (account.realized_pnl_peak - account.realized_pnl_total);
+    if (!(balance_peak > 0.0f)) return -1;
+
+    int selected_coin = -1;
+    for (int c = 0; c < coin_count; ++c) {
+        const int coin_offset = c * COIN_COLS;
+        const int bar_offset = (k * coin_count + c) * 4;
+        const int tick_offset = (k * coin_count + c) * 2;
+        const float price_now = bars[bar_offset + 2];
+        const float c_mult = coin_settings[coin_offset + 4];
+        const float price_step = coin_settings[coin_offset + 1];
+        const bool coin_unstuck_enabled = coin_override_or(
+            coin_overrides, c, 13,
+            config.unstuck_enabled ? 1.0f : 0.0f
+        ) > 0.5f;
+        const bool coin_ema_gate = coin_override_or(
+            coin_overrides, c, 14,
+            config.unstuck_ema_gating_enabled ? 1.0f : 0.0f
+        ) > 0.5f;
+        const float coin_close_pct = coin_override_or(
+            coin_overrides, c, 15, config.unstuck_close_pct
+        );
+        const float coin_ema_dist = coin_override_or(
+            coin_overrides, c, 16, config.unstuck_ema_dist
+        );
+        const float coin_loss_allowance_pct = coin_override_or(
+            coin_overrides, c, 17, config.unstuck_loss_allowance_pct
+        );
+        const float coin_threshold = coin_override_or(
+            coin_overrides, c, 18, config.unstuck_threshold
+        );
+        const float fixed_coin_wel = coin_override_or(
+            coin_overrides, c, 11, -1.0f
+        );
+        const float coin_wel = fixed_coin_wel >= 0.0f
+            ? fixed_coin_wel : effective_wel;
+        const float coin_allowance_pct = coin_override_or(
+            coin_overrides, c, 12, config.allowance_pct
+        );
+        const float allowed_coin_wel = allowed_wallet_exposure_limit(
+            coin_wel, config.twel, coin_allowance_pct,
+            config.legacy_raw_allowance
+        );
+        if (!(coin_unstuck_enabled && coin_close_pct > 0.0f
+            && coin_loss_allowance_pct > 0.0f && coin_threshold > 0.0f
+            && side.psize[c] > 0.0f && side.pprice[c] > 0.0f
+            && allowed_coin_wel > 0.0f && price_now > 0.0f)) {
+            continue;
+        }
+        const float allowance = float32_floor_nonnegative(fmax(
+            account.balance - balance_peak * (
+                1.0f - coin_loss_allowance_pct * config.twel
+            ),
+            0.0f
+        ));
+        const float wallet_exposure = side.psize[c] * side.pprice[c]
+            * c_mult / account.balance;
+        if (!(allowance > 0.0f
+            && wallet_exposure / allowed_coin_wel > coin_threshold)) {
+            continue;
+        }
+        if (coin_ema_gate) {
+            const float lower = fmin(
+                side.ema0[c], fmin(side.ema1[c], side.ema2[c])
+            );
+            const float upper = fmax(
+                side.ema0[c], fmax(side.ema1[c], side.ema2[c])
+            );
+            const int trigger_tick = short_side
+                ? int(floor(
+                    lower * (1.0f - coin_ema_dist) / price_step
+                        + 1.0e-6f
+                ))
+                : int(ceil(
+                    upper * (1.0f + coin_ema_dist) / price_step
+                        - 1.0e-6f
+                ));
+            const bool triggered = short_side
+                ? touch_ticks[tick_offset + 1] <= trigger_tick
+                : touch_ticks[tick_offset + 0] >= trigger_tick;
+            if (!triggered) continue;
+        }
+        const float pprice_diff = short_side
+            ? price_now / side.pprice[c] - 1.0f
+            : 1.0f - price_now / side.pprice[c];
+        if (!isfinite(pprice_diff)) continue;
+        if (selected_coin < 0 || pprice_diff < selected_diff
+            || (pprice_diff == selected_diff && c < selected_coin)) {
+            selected_coin = c;
+            selected_diff = pprice_diff;
+        }
+    }
+    return selected_coin;
+}
+
 inline void generate_ema_multicoin_side_orders(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
@@ -1079,7 +1196,8 @@ inline void generate_ema_multicoin_side_orders(
     int effective_n_positions,
     int current_hsl_mode,
     bool loss_gate_enabled,
-    float max_realized_loss_pct
+    float max_realized_loss_pct,
+    int forced_unstuck_coin
 ) {
     const int C = coin_count;
     const float base_qty_pct = config.base_qty_pct;
@@ -1273,6 +1391,10 @@ inline void generate_ema_multicoin_side_orders(
     float selected_unstuck_qty = 0.0f;
     int selected_unstuck_tick = 0;
     for (int c = 0; c < C; ++c) {
+        if (forced_unstuck_coin == -1
+            || (forced_unstuck_coin >= 0 && c != forced_unstuck_coin)) {
+            continue;
+        }
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * C + c) * 4;
         int tick_offset = (k * C + c) * 2;
@@ -2216,7 +2338,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 bars, touch_ticks, coin_settings, coin_overrides,
                 k, C, short_side, tradable_count, effective_n_positions,
                 current_hsl_mode, loss_gate_enabled,
-                max_realized_loss_pct
+                max_realized_loss_pct, -2
             );
         }
 
@@ -2623,25 +2745,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         load_ema_multicoin_side_config(params, po);
     const EmaMulticoinSideConfig short_config =
         load_ema_multicoin_side_config(params, po + PARAM_COLS);
-    bool any_unstuck_enabled = false;
-    for (int c = 0; c < C; ++c) {
-        any_unstuck_enabled = any_unstuck_enabled
-            || coin_override_or(
-                long_coin_overrides, c, 13,
-                long_config.unstuck_enabled ? 1.0f : 0.0f
-            ) > 0.5f
-            || coin_override_or(
-                short_coin_overrides, c, 13,
-                short_config.unstuck_enabled ? 1.0f : 0.0f
-            ) > 0.5f;
-    }
     const int hsl_signal_mode = long_config.hsl_template.signal_mode;
     const bool topology_valid = hsl_signal_mode >= HSL_SIGNAL_UNIFIED
         && hsl_signal_mode <= HSL_SIGNAL_COIN
         && long_config.hsl_template.signal_mode
             == short_config.hsl_template.signal_mode
-        && long_config.coin_hsl_mode == short_config.coin_hsl_mode
-        && !any_unstuck_enabled;
+        && long_config.coin_hsl_mode == short_config.coin_hsl_mode;
     if (!topology_valid) {
         scalars[scalar_offset + 9] = 0.0f;
         scalars[scalar_offset + 13] = 0.0f;
@@ -2845,6 +2954,37 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side.hsl,
                 ema_multicoin_side_has_position(short_side, C)
             );
+        float long_unstuck_diff = INFINITY;
+        float short_unstuck_diff = INFINITY;
+        const int long_unstuck_candidate = long_can_generate
+            ? select_ema_multicoin_unstuck_coin(
+                long_side, long_config, account,
+                bars, touch_ticks, coin_settings, long_coin_overrides,
+                k, C, false, long_effective_n_positions,
+                long_unstuck_diff
+            )
+            : -1;
+        const int short_unstuck_candidate = short_can_generate
+            ? select_ema_multicoin_unstuck_coin(
+                short_side, short_config, account,
+                bars, touch_ticks, coin_settings, short_coin_overrides,
+                k, C, true, short_effective_n_positions,
+                short_unstuck_diff
+            )
+            : -1;
+        // Exact Rust ranks by price difference, then symbol index. Its stable
+        // long-first input order makes long win an equal-symbol tie.
+        const bool long_unstuck_wins = long_unstuck_candidate >= 0
+            && (
+                short_unstuck_candidate < 0
+                || long_unstuck_diff < short_unstuck_diff
+                || (long_unstuck_diff == short_unstuck_diff
+                    && long_unstuck_candidate <= short_unstuck_candidate)
+            );
+        const int long_unstuck_coin = long_unstuck_wins
+            ? long_unstuck_candidate : -1;
+        const int short_unstuck_coin = !long_unstuck_wins
+            ? short_unstuck_candidate : -1;
         if (long_can_generate) {
             update_ema_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings,
@@ -2856,7 +2996,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 bars, touch_ticks, coin_settings, long_coin_overrides,
                 k, C, false, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct
+                loss_gate_enabled, max_realized_loss_pct,
+                long_unstuck_coin
             );
         }
         if (short_can_generate) {
@@ -2870,7 +3011,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 bars, touch_ticks, coin_settings, short_coin_overrides,
                 k, C, true, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct
+                loss_gate_enabled, max_realized_loss_pct,
+                short_unstuck_coin
             );
         }
 

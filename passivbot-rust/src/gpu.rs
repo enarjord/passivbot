@@ -510,8 +510,12 @@ mod tests {
         ));
         assert!(source.contains("account.balance = 0.0f"));
         assert!(source.contains("alive || hsl_validation_failed"));
-        assert!(source.contains("bool any_unstuck_enabled = false"));
-        assert!(source.contains("&& !any_unstuck_enabled"));
+        assert!(source.contains("select_ema_multicoin_unstuck_coin("));
+        assert!(source.contains("int forced_unstuck_coin"));
+        assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
+        assert!(source.contains(
+            "long_unstuck_candidate <= short_unstuck_candidate"
+        ));
         assert!(source.contains(
             "const EmaMulticoinSideConfig config = load_ema_multicoin_side_config(params, po)"
         ));
@@ -822,8 +826,12 @@ mod tests {
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
         assert!(source.contains("alive || hsl_validation_failed"));
-        assert!(source.contains("bool any_unstuck_enabled = false"));
-        assert!(source.contains("&& !any_unstuck_enabled"));
+        assert!(source.contains("select_tm_multicoin_unstuck_coin("));
+        assert!(source.contains("int forced_unstuck_coin"));
+        assert!(source.contains("long_unstuck_diff < short_unstuck_diff"));
+        assert!(source.contains(
+            "long_unstuck_candidate <= short_unstuck_candidate"
+        ));
         assert!(source.contains(
             "const TrailingMartingaleMulticoinSideConfig config ="
         ));

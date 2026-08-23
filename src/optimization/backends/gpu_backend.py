@@ -967,8 +967,6 @@ def _validate_scope_config(
         }:
             repair_paths = []
             for side in enabled_sides:
-                if bool(config["bot"][side].get("unstuck", {}).get("enabled")):
-                    repair_paths.append(f"bot.{side}.unstuck.enabled")
                 risk = config["bot"][side].get("risk", {})
                 for key in (
                     "position_exposure_enforcer_enabled",
@@ -984,15 +982,6 @@ def _validate_scope_config(
                     continue
                 for side in enabled_sides:
                     side_patch = bot_patch.get(side, {})
-                    unstuck = (
-                        side_patch.get("unstuck", {})
-                        if isinstance(side_patch, dict)
-                        else {}
-                    )
-                    if isinstance(unstuck, dict) and bool(unstuck.get("enabled")):
-                        repair_paths.append(
-                            f"coin_overrides.{coin}.bot.{side}.unstuck.enabled"
-                        )
                     risk = (
                         side_patch.get("risk", {})
                         if isinstance(side_patch, dict)
@@ -1008,8 +997,8 @@ def _validate_scope_config(
                         )
             if repair_paths:
                 raise ValueError(
-                    "GPU dual-side multicoin exposure/unstuck repair requires shared "
-                    "global cross-side selection and loss-budget reservation semantics; the "
+                    "GPU dual-side multicoin exposure repair requires shared "
+                    "global cross-side selection semantics; the "
                     f"current fused proxy does not model {sorted(repair_paths)}"
                 )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
@@ -2621,10 +2610,6 @@ def _validate_pinned_scope_bounds(
 ) -> None:
     enabled_sides = set(enabled_sides or ("long", "short"))
     pinned = {}
-    if coin_count > 1 and len(enabled_sides) == 2:
-        pinned.update(
-            {f"{side}_unstuck_enabled": 0.0 for side in ("long", "short")}
-        )
     if strategy_kind != "trailing_martingale":
         pinned.update(
             {
@@ -2633,9 +2618,8 @@ def _validate_pinned_scope_bounds(
             }
         )
     if coin_count > 1 and len(enabled_sides) == 2:
-        # Directional multicoin runners do not share realized PnL or balance.
-        # Until a portfolio kernel owns both sides, any exposure reducer whose
-        # sizing depends on account balance must remain disabled.
+        # The fused runner owns shared account state, but exposure repair still
+        # lacks one global cross-side reducer-selection implementation.
         pinned.update(
             {
                 f"{side}_risk_{key}": 0.0
@@ -3248,12 +3232,6 @@ def run_backend(
             if bound_side not in hsl_search_sides:
                 # Dormant HSL bounds affect neither proxy nor exact Rust.
                 continue
-        if max_coin_count > 1 and len(enabled_sides) == 2 and any(
-            bound_key.startswith(f"{side}_unstuck_") for side in enabled_sides
-        ):
-            # Dual-side multicoin unstuck remains disabled until one shared
-            # portfolio kernel owns the global selector across both sides.
-            continue
         if (
             max_coin_count == 1
             and bound_key

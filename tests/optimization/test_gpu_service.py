@@ -877,7 +877,9 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
                 "total_exposure_enforcer_enabled": False,
             }
         )
-        config["bot"][side]["unstuck"]["enabled"] = False
+        # Construction must retain the fused shared-account path when both
+        # directional surfaces participate in global auto-unstuck selection.
+        config["bot"][side]["unstuck"]["enabled"] = True
         config["bot"][side]["hsl"]["enabled"] = True
         flat = flatten_shared_bot_side(config["bot"][side])
         config["bot"][side].update(

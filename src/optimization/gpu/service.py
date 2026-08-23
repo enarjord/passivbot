@@ -1803,14 +1803,6 @@ class MpsMulticoinProxy:
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
             first_strategy = dict(payload.strategy_params_list[0][side])
-            if len(self.sides) == 2 and any(
-                bool(item[side].get("unstuck_enabled"))
-                for item in payload.bot_params_list
-            ):
-                raise ValueError(
-                    "MPS dual-side multicoin auto-unstuck is not yet supported; "
-                    "the fused proxy requires one global cross-side selector"
-                )
             if self.strategy_kind == "trailing_martingale":
                 first_strategy = flatten_trailing_martingale_params(
                     first_strategy, first_bot
