@@ -1007,9 +1007,9 @@ def _validate_scope_config(
                         )
             if repair_paths:
                 raise ValueError(
-                    "GPU dual-side multicoin exposure/unstuck repair requires a strategy-"
-                    "complete shared-balance portfolio kernel; the current GPU topology "
-                    f"does not model {sorted(repair_paths)}"
+                    "GPU dual-side multicoin exposure/unstuck repair requires shared "
+                    "global cross-side selection and loss-budget reservation semantics; the "
+                    f"current fused proxy does not model {sorted(repair_paths)}"
                 )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
@@ -1041,9 +1041,7 @@ def _validate_scope_config(
             coin_count=coin_count,
             enabled_side_count=len(enabled_sides),
             shared_account_controller=(
-                coin_count > 1
-                and len(enabled_sides) == 2
-                and strategy_kind == "ema_anchor"
+                coin_count > 1 and len(enabled_sides) == 2
             ),
         )
         for side in hsl_enabled_sides:
@@ -1073,11 +1071,19 @@ def _validate_scope_config(
 
 
 def _validate_dual_multicoin_metrics(
-    needed_metrics, *, coin_count: int, enabled_sides
+    needed_metrics,
+    *,
+    coin_count: int,
+    enabled_sides,
+    shared_account_controller: bool = False,
 ) -> None:
     """Reject metrics which cannot be reconstructed from directional summaries."""
 
-    if int(coin_count) <= 1 or len(set(enabled_sides)) != 2:
+    if (
+        int(coin_count) <= 1
+        or len(set(enabled_sides)) != 2
+        or shared_account_controller
+    ):
         return
     unsupported = sorted(
         set(needed_metrics)
@@ -1269,15 +1275,13 @@ def _validate_gpu_coin_overrides(
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
-        dual_fused_ema = (
-            strategy_kind == "ema_anchor" and len(enabled_sides) == 2
-        )
+        fused_dual_side = len(enabled_sides) == 2
         if signal_mode != "coin" or not (
-            len(enabled_sides) == 1 or dual_fused_ema
+            len(enabled_sides) == 1 or fused_dual_side
         ):
             raise ValueError(
                 "GPU per-coin HSL overrides require live.hsl_signal_mode=coin "
-                "and either one enabled side or fused dual-side EMA Anchor; "
+                "and either one enabled side or a fused dual-side proxy; "
                 "unsupported paths: "
                 f"{sorted(hsl_override_paths)}"
             )
@@ -3247,15 +3251,16 @@ def run_backend(
         enabled_sides=enabled_sides,
         hard_stop_metrics=HARD_STOP_PROXY_METRICS,
         shared_account_controller=(
-            max_coin_count > 1
-            and len(enabled_sides) == 2
-            and strategy_kind == "ema_anchor"
+            max_coin_count > 1 and len(enabled_sides) == 2
         ),
     )
     _validate_dual_multicoin_metrics(
         needed_metrics,
         coin_count=max_coin_count,
         enabled_sides=enabled_sides,
+        shared_account_controller=(
+            max_coin_count > 1 and len(enabled_sides) == 2
+        ),
     )
 
     if suite_enabled:
