@@ -468,12 +468,14 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   At least eight samples of a validation class are required before its independent low agreement
   can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
   eight true proxy-front validations even when the complete feasible proxy front contributes only
-  one novel candidate per generation. Off-front validations stay truthfully classified as broad
+  one candidate per generation. Off-front validations stay truthfully classified as broad
   probes rather than being relabeled as front evidence, and scarce or duplicate probes give their
   unused exact slots back to true-front candidates. Front membership is carried independently
-  through exact-result persistence and resume recovery. A generation still fails closed if
-  duplicate filtering leaves no novel proxy-front candidate, so broad probes cannot silently
-  consume the exact budget needed to activate the front gate. `drift_probes` must remain below
+  through exact-result persistence and resume recovery. If duplicate filtering leaves no novel
+  proxy-front candidate, the optimizer revalidates a previously exact current-front member; if its
+  exact job is still in flight, selection waits for that job first. This preserves truthful front
+  evidence without relabeling broad probes, and repeated front disagreements still activate the
+  rolling front gate. `drift_probes` must remain below
   `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
   final validation batch scales its reserved probe count down proportionally.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
