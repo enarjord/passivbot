@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Expanded Apple MPS suite scenario overrides to the already-modeled taker-fee, market-order
+  slippage, minimum-effective-cost filtering, and PnL-lookback execution settings. Every effective
+  scenario is still scope-validated independently, so unsupported side/coin combinations fail
+  before optimization.
+
 - Hardened Apple MPS optimizer checkpoint/resume identity. GPU checkpoints now bind the complete
   fixed and tunable search shape and each prepared single-run or suite-scenario proxy execution
   contract, including prepared candle-value and timestamp hashes, starting balance, valid/trade

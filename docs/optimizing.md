@@ -123,7 +123,8 @@ The supported slice is intentionally narrow:
   scenario date, coin, ignored-coin, exchange selection, and fail-closed `bot.long`/`bot.short`
   config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
   EMA-anchor and trailing-martingale runs, starting balance, maker fee, liquidation threshold,
-  Forager hysteresis, and hedge mode are also supported, while other
+  taker fee, market-order slippage, minimum-effective-cost filtering, finite or all-history PnL
+  lookback, Forager hysteresis, and hedge mode are also supported, while other
   non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
   assignments, while an individual-exchange scenario fails closed if an effective assignment
   for one of its prepared coins selects another exchange
@@ -304,7 +305,9 @@ explicit scenario override. Metal uses the strategy-specific single-coin or mult
 independently for each scenario, then feeds all results to the same suite reducer. Scenario-local
 `coin_overrides` for supported
 multi-coin EMA Anchor and Trailing Martingale runs, `backtest.starting_balance`,
-`backtest.maker_fee_override`, `backtest.liquidation_threshold`,
+`backtest.maker_fee_override`, `backtest.taker_fee_override`,
+`backtest.market_order_slippage_pct`, `backtest.filter_by_min_effective_cost`,
+`backtest.liquidation_threshold`, `live.pnls_max_lookback_days`,
 `live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario
 proxy consumes them through the canonical backtest payload and then passes the same fail-closed
 scope checks. Combined scenario `coin_sources` use the same prepared per-coin candles and market

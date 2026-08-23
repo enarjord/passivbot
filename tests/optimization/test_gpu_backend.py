@@ -668,6 +668,17 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
     [
         ("backtest.starting_balance", 12_345.0, ("backtest", "starting_balance")),
         ("backtest.maker_fee_override", 0.0002, ("backtest", "maker_fee_override")),
+        ("backtest.taker_fee_override", 0.0007, ("backtest", "taker_fee_override")),
+        (
+            "backtest.market_order_slippage_pct",
+            0.0015,
+            ("backtest", "market_order_slippage_pct"),
+        ),
+        (
+            "backtest.filter_by_min_effective_cost",
+            True,
+            ("backtest", "filter_by_min_effective_cost"),
+        ),
         (
             "backtest.liquidation_threshold",
             0.1,
@@ -683,6 +694,11 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
             "live.max_realized_loss_pct",
             0.05,
             ("live", "max_realized_loss_pct"),
+        ),
+        (
+            "live.pnls_max_lookback_days",
+            7.0,
+            ("live", "pnls_max_lookback_days"),
         ),
     ],
 )
