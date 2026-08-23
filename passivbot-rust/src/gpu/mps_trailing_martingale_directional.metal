@@ -61,24 +61,6 @@ inline bool should_use_ordinary_market_execution(
         <= fmax(market_order_near_touch_threshold, 0.0f);
 }
 
-inline bool recursive_close_bound_requires_scan(
-    int nearest_ticks,
-    bool buy_order,
-    int passive_fill_bound,
-    float generation_market_price,
-    float price_step,
-    bool market_orders_allowed,
-    float market_order_near_touch_threshold
-) {
-    bool passively_reachable = buy_order
-        ? nearest_ticks > passive_fill_bound
-        : nearest_ticks <= passive_fill_bound;
-    return passively_reachable || should_use_ordinary_market_execution(
-        nearest_ticks, buy_order, generation_market_price, price_step,
-        market_orders_allowed, market_order_near_touch_threshold
-    );
-}
-
 inline float ordinary_market_fill_price(
     float market_price,
     bool buy_order,
@@ -273,7 +255,7 @@ struct TmSide {
     float close_threshold_v1h, close_threshold_v1m;
     float close_retracement_base, close_retracement_v1h, close_retracement_v1m;
     float cooldown_min, twel, allowed_wel, entry_cap;
-    bool gate_initial, gate_reentry;
+    bool gate_initial, gate_reentry, twel_entry_gate_enabled;
     bool wel_enforcer_enabled;
     float wel_enforcer_threshold;
     bool twel_enforcer_enabled;
@@ -368,13 +350,13 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.allowed_wel = s.twel * (
         1.0f + (legacy_raw_allowance ? allowance_pct : 0.0f)
     );
-    bool twel_entry_gate_enabled = p[o + 29] > 0.5f;
+    s.twel_entry_gate_enabled = p[o + 29] > 0.5f;
     float twel_threshold = p[o + 30];
     float gate_cap = s.twel;
     if (isfinite(twel_threshold) && twel_threshold > 0.0f) {
         gate_cap = fmin(s.twel, s.twel * twel_threshold);
     }
-    s.entry_cap = twel_entry_gate_enabled
+    s.entry_cap = s.twel_entry_gate_enabled
         ? fmin(s.allowed_wel, gate_cap) : s.allowed_wel;
     s.wel_enforcer_enabled = p[o + 31] > 0.5f;
     s.wel_enforcer_threshold = p[o + 32];
@@ -867,15 +849,14 @@ inline void generate_orders(
     float eqty = flat ? iq : (partial ? iq_partial : (reentry_ok ? rq : 0.0f));
     int eticks = flat || partial ? initial_ticks : reentry_ticks;
     float eprice = flat || partial ? initial_price : reentry_price;
-    bool entry_market = should_use_ordinary_market_execution(
-        eticks, is_long, price_now, price_step, s.market_orders_allowed,
-        s.market_order_near_touch_threshold
-    );
-    float entry_exposure_price = entry_market ? price_now : eprice;
+    bool entry_market = s.entry_retracement_base > 0.0f
+        && should_use_ordinary_market_execution(
+            eticks, is_long, price_now, price_step, s.market_orders_allowed,
+            s.market_order_near_touch_threshold
+        );
     float market_min_q = entry_market
         ? min_entry_qty(price_now, qty_step, min_qty, min_cost, c_mult)
         : min_entry_qty(eprice, qty_step, min_qty, min_cost, c_mult);
-    if (!is_long && entry_market && eqty < market_min_q) eqty = market_min_q;
     bool cooldown = s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
         && kf < s.last_inc_k + s.cooldown_min;
     if (cooldown || balance <= 0.0f || s.initial_qty_pct <= 0.0f
@@ -884,9 +865,19 @@ inline void generate_orders(
     s.entry_ticks = eticks;
     s.entry_price = eprice;
     s.entry_qty = crop_entry(
-        s, balance, entry_exposure_price, eqty,
+        s, balance, eprice, eqty,
         qty_step, min_qty, min_cost, c_mult
     );
+    if (!is_long && entry_market && s.entry_qty > 0.0f
+        && s.entry_qty < market_min_q) {
+        s.entry_qty = market_min_q;
+    }
+    if (entry_market && s.twel_entry_gate_enabled) {
+        s.entry_qty = crop_entry(
+            s, balance, price_now, s.entry_qty,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    }
     if (!is_long && entry_market && s.entry_qty + 1.0e-12f < market_min_q) {
         s.entry_qty = 0.0f;
     }
@@ -980,6 +971,7 @@ inline void generate_orders(
             s, balance, close_mq, close_mq_relation, pct, qty_step, c_mult
         ) : 0.0f;
     s.close_market = s.close_qty > 0.0f
+        && s.close_retracement_base > 0.0f
         && should_use_ordinary_market_execution(
             cticks, !is_long, price_now, price_step,
             s.market_orders_allowed, s.market_order_near_touch_threshold
@@ -1431,11 +1423,7 @@ inline void passivbot_single_coin_impl(
             int nearest_ticks = touch_controls
                 ? long_side.close_gen_touch_nearest_ticks : target_ticks;
             long_scan_close_grid = long_scan_close_grid
-                || recursive_close_bound_requires_scan(
-                    nearest_ticks, false, high_fill_max_tick,
-                    long_side.close_gen_market_price, price_step,
-                    market_orders_allowed, market_order_near_touch_threshold
-                );
+                || nearest_ticks <= high_fill_max_tick;
         }
         if (long_scan_close_grid && long_recursive_close
             && !long_side.close_is_panic) {
@@ -1646,30 +1634,14 @@ inline void passivbot_single_coin_impl(
                         reducer_executed = true;
                     }
                 }
-                bool group_market = should_use_ordinary_market_execution(
-                    group.ticks, false, long_side.close_gen_market_price,
-                    price_step, market_orders_allowed,
-                    market_order_near_touch_threshold
-                );
-                if (!group_market && group.ticks > high_fill_max_tick) break;
+                if (group.ticks > high_fill_max_tick) break;
                 float group_qty = trimmed_group_qty;
-                if (group_market) {
-                    group_qty = resize_market_close_qty(
-                        group_qty, long_side.psize,
-                        long_side.close_gen_market_price,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
                 if (group_qty <= 0.0f) continue;
                 float adj = fmin(round_step(group_qty, qty_step), long_side.psize);
-                float group_fill_price = group_market
-                    ? ordinary_market_fill_price(
-                        close, false, market_order_slippage_pct, price_step
-                    ) : group.price;
+                float group_fill_price = group.price;
                 float pnl = adj * c_mult
                     * (group_fill_price - long_side.pprice);
-                float fee = adj * group_fill_price * c_mult
-                    * (group_market ? taker_fee : maker_fee);
+                float fee = adj * group_fill_price * c_mult * maker_fee;
                 if (!realized_loss_proxy_allows_close(
                         adj, group.price, long_side.pprice, true,
                         c_mult, maker_fee, loss_gate_enabled)) continue;
@@ -1902,7 +1874,6 @@ inline void passivbot_single_coin_impl(
             const float ladder_balance = long_side.entry_gen_balance;
             const float ladder_kf = long_side.entry_gen_kf;
             int ladder_touch_ticks = long_side.entry_gen_touch_ticks;
-            float ladder_market_price = long_side.entry_gen_market_price;
             int previous_ticks = 0;
             for (int rung = 0; rung < 500; ++rung) {
                 int entry_ticks = rung == 0
@@ -1915,17 +1886,7 @@ inline void passivbot_single_coin_impl(
                 );
                 if (strategy_eq <= 0.0f) break;
                 float eq = strategy_eq;
-                bool entry_market = rung == 0 ? long_side.entry_market
-                    : should_use_ordinary_market_execution(
-                        entry_ticks, true, ladder_market_price, price_step,
-                        market_orders_allowed, market_order_near_touch_threshold
-                    );
-                if (rung > 0 && entry_market) {
-                    eq = crop_entry(
-                        ladder_side, ladder_balance, ladder_market_price, eq,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
+                bool entry_market = rung == 0 && long_side.entry_market;
                 if (eq <= 0.0f
                     || (!entry_market && entry_ticks <= low_nonfill_max_tick)
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
@@ -2027,11 +1988,7 @@ inline void passivbot_single_coin_impl(
             int nearest_ticks = touch_controls
                 ? short_side.close_gen_touch_nearest_ticks : target_ticks;
             short_scan_close_grid = short_scan_close_grid
-                || recursive_close_bound_requires_scan(
-                    nearest_ticks, true, low_nonfill_max_tick,
-                    short_side.close_gen_market_price, price_step,
-                    market_orders_allowed, market_order_near_touch_threshold
-                );
+                || nearest_ticks > low_nonfill_max_tick;
         }
         if (short_scan_close_grid && short_recursive_close
             && !short_side.close_is_panic) {
@@ -2242,30 +2199,14 @@ inline void passivbot_single_coin_impl(
                         reducer_executed = true;
                     }
                 }
-                bool group_market = should_use_ordinary_market_execution(
-                    group.ticks, true, short_side.close_gen_market_price,
-                    price_step, market_orders_allowed,
-                    market_order_near_touch_threshold
-                );
-                if (!group_market && group.ticks <= low_nonfill_max_tick) break;
+                if (group.ticks <= low_nonfill_max_tick) break;
                 float group_qty = trimmed_group_qty;
-                if (group_market) {
-                    group_qty = resize_market_close_qty(
-                        group_qty, short_side.psize,
-                        short_side.close_gen_market_price,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
                 if (group_qty <= 0.0f) continue;
                 float adj = fmin(round_step(group_qty, qty_step), short_side.psize);
-                float group_fill_price = group_market
-                    ? ordinary_market_fill_price(
-                        close, true, market_order_slippage_pct, price_step
-                    ) : group.price;
+                float group_fill_price = group.price;
                 float pnl = adj * c_mult
                     * (short_side.pprice - group_fill_price);
-                float fee = adj * group_fill_price * c_mult
-                    * (group_market ? taker_fee : maker_fee);
+                float fee = adj * group_fill_price * c_mult * maker_fee;
                 if (!realized_loss_proxy_allows_close(
                         adj, group.price, short_side.pprice, false,
                         c_mult, maker_fee, loss_gate_enabled)) continue;
@@ -2511,23 +2452,12 @@ inline void passivbot_single_coin_impl(
                 );
                 if (strategy_eq <= 0.0f) break;
                 float eq = strategy_eq;
-                bool entry_market = rung == 0 ? short_side.entry_market
-                    : should_use_ordinary_market_execution(
-                        entry_ticks, false, ladder_market_price, price_step,
-                        market_orders_allowed, market_order_near_touch_threshold
-                    );
+                bool entry_market = rung == 0 && short_side.entry_market;
                 if (entry_market) {
                     float market_min_q = min_entry_qty(
                         ladder_market_price, qty_step, min_qty, min_cost, c_mult
                     );
                     if (eq < market_min_q) eq = market_min_q;
-                    if (rung > 0) {
-                        eq = crop_entry(
-                            ladder_side, ladder_balance, ladder_market_price, eq,
-                            qty_step, min_qty, min_cost, c_mult
-                        );
-                        if (eq + 1.0e-12f < market_min_q) eq = 0.0f;
-                    }
                 }
                 if (eq <= 0.0f
                     || (!entry_market && entry_ticks > high_fill_max_tick)

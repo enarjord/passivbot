@@ -74,6 +74,7 @@ from optimization.backends.gpu_backend import (
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
     _validate_scope,
+    _validate_tm_market_nonrecursive_bounds,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
     _GPU_SUITE_VIOLATION_KEY,
@@ -1575,6 +1576,40 @@ def test_gpu_foundation_accepts_baseline_tm_single_coin_market_execution():
     config["live"]["market_order_near_touch_threshold"] = 0.002
 
     assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "long_entry_retracement_base_pct",
+        "long_close_retracement_base_pct",
+    ],
+)
+def test_gpu_tm_market_execution_rejects_recursive_mode_bounds(key):
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    bounds = {
+        "long_entry_retracement_base_pct": Bound(0.001, 0.1),
+        "long_close_retracement_base_pct": Bound(0.001, 0.1),
+    }
+    bounds[key] = Bound(0.0, 0.1)
+
+    with pytest.raises(ValueError, match="Recursive market ladders"):
+        _validate_tm_market_nonrecursive_bounds(bounds, {}, {"long"}, config)
+
+
+def test_gpu_tm_market_execution_accepts_trailing_only_mode_bounds():
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    bounds = {
+        f"{side}_{phase}_retracement_base_pct": Bound(0.001, 0.1)
+        for side in ("long", "short")
+        for phase in ("entry", "close")
+    }
+
+    _validate_tm_market_nonrecursive_bounds(bounds, {}, {"long"}, config)
 
 
 @pytest.mark.parametrize(
