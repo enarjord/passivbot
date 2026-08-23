@@ -961,46 +961,6 @@ def _validate_scope_config(
                         "GPU dual-side multicoin optimization currently requires "
                         f"matching long/short {label}_coins"
                     )
-        if len(enabled_sides) == 2 and strategy_kind in {
-            "ema_anchor",
-            "trailing_martingale",
-        }:
-            repair_paths = []
-            for side in enabled_sides:
-                risk = config["bot"][side].get("risk", {})
-                for key in (
-                    "position_exposure_enforcer_enabled",
-                    "total_exposure_enforcer_enabled",
-                ):
-                    if bool(risk.get(key)):
-                        repair_paths.append(f"bot.{side}.risk.{key}")
-            for coin, patch in (config.get("coin_overrides") or {}).items():
-                if not isinstance(patch, dict):
-                    continue
-                bot_patch = patch.get("bot", {})
-                if not isinstance(bot_patch, dict):
-                    continue
-                for side in enabled_sides:
-                    side_patch = bot_patch.get(side, {})
-                    risk = (
-                        side_patch.get("risk", {})
-                        if isinstance(side_patch, dict)
-                        else {}
-                    )
-                    if isinstance(risk, dict) and bool(
-                        risk.get("position_exposure_enforcer_enabled")
-                    ):
-                        repair_paths.append(
-                            "coin_overrides."
-                            f"{coin}.bot.{side}.risk."
-                            "position_exposure_enforcer_enabled"
-                        )
-            if repair_paths:
-                raise ValueError(
-                    "GPU dual-side multicoin exposure repair requires shared "
-                    "global cross-side selection semantics; the "
-                    f"current fused proxy does not model {sorted(repair_paths)}"
-                )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
                 "GPU multicoin foundation requires "
@@ -2615,19 +2575,6 @@ def _validate_pinned_scope_bounds(
             {
                 f"{side}_risk_position_exposure_enforcer_enabled": 0.0
                 for side in ("long", "short")
-            }
-        )
-    if coin_count > 1 and len(enabled_sides) == 2:
-        # The fused runner owns shared account state, but exposure repair still
-        # lacks one global cross-side reducer-selection implementation.
-        pinned.update(
-            {
-                f"{side}_risk_{key}": 0.0
-                for side in enabled_sides
-                for key in (
-                    "position_exposure_enforcer_enabled",
-                    "total_exposure_enforcer_enabled",
-                )
             }
         )
     for key, expected in pinned.items():

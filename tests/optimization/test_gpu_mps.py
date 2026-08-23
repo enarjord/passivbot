@@ -2715,6 +2715,7 @@ def _multicoin_exposure_fixture(
     collect_coin_fill_counts=False,
     market_order_slippage_pct=0.0,
     hsl_panic_market=False,
+    return_context=False,
 ):
     coin_count = 2
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -2854,6 +2855,8 @@ def _multicoin_exposure_fixture(
             market_order_slippage_pct=market_order_slippage_pct,
             hsl_panic_market=hsl_panic_market,
         )
+    if return_context:
+        return runner, row, runs[0], data
     return runner, row
 
 
@@ -9061,6 +9064,77 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
         output["day_volume"][1].sum().item()
         > output["day_volume"][0].sum().item()
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize(
+    ("strategy_kind", "repair_kind"),
+    [
+        ("ema_anchor", "total"),
+        ("trailing_martingale", "total"),
+        ("trailing_martingale", "position"),
+    ],
+)
+def test_mps_fused_dual_multicoin_exposure_repair(
+    strategy_kind, repair_kind
+):
+    fixture_kwargs = {"count": 10}
+    if strategy_kind == "ema_anchor":
+        count = 70
+        highs = np.full((count, 2), 100.5)
+        lows = np.full((count, 2), 99.5)
+        highs[62, :] = 102.0
+        lows[62, :] = 98.0
+        fixture_kwargs = {
+            "count": count,
+            "closes": (100.0, 100.0),
+            "highs": highs,
+            "lows": lows,
+        }
+    _, baseline, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        return_context=True,
+        **fixture_kwargs,
+    )
+    if strategy_kind == "ema_anchor":
+        runner = MpsEmaAnchorMulticoinFusedRunner(run, data)
+        param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    else:
+        runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data)
+        param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+
+    baseline = list(baseline)
+    baseline[param_keys.index("entry_cooldown_minutes")] = 100.0
+    if strategy_kind == "ema_anchor":
+        baseline[param_keys.index("offset")] = 0.01
+    else:
+        baseline[param_keys.index("entry_initial_ema_dist")] = 0.01
+    repaired = list(baseline)
+    if repair_kind == "total":
+        repaired[param_keys.index("twel_entry_gate_enabled")] = 0.0
+        repaired[param_keys.index("twel_enforcer_threshold")] = 0.5
+        repaired[param_keys.index("twel_enforcer_enabled")] = 1.0
+        repaired[param_keys.index("twel_enforcer_reduce_portfolio")] = 1.0
+    else:
+        repaired[param_keys.index("wel_enforcer_enabled")] = 1.0
+        repaired[param_keys.index("wel_enforcer_threshold")] = 0.5
+
+    output = runner.run(
+        np.asarray(
+            [baseline + baseline, repaired + repaired], dtype=np.float64
+        )
+    )
+    torch.mps.synchronize()
+
+    assert output["alive"].cpu().tolist() == [True, True]
+    assert output["psize"][0].item() > 0.0
+    assert output["short_psize"][0].item() > 0.0
+    assert output["psize"][1].item() < output["psize"][0].item()
+    assert output["short_psize"][1].item() < output["short_psize"][0].item()
+    assert output["fill_count"][1].item() > output["fill_count"][0].item()
 
 
 @pytest.mark.skipif(
