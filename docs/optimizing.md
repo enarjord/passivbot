@@ -279,9 +279,10 @@ The supported slice is intentionally narrow:
   another flat side or coin
 - `live.market_orders_allowed: false` for the complete strategy/risk surface. Single-coin EMA
   Anchor also supports `true` for long-only, short-only, hedge-mode dual-side, one-way, and
-  compatible suite scenarios when HSL, auto-unstuck, and total-exposure repair are disabled,
-  `live.max_realized_loss_pct >= 1`, and minimum-effective-cost filtering is disabled. The Metal
-  proxy classifies each generated order against the current candle close using
+  compatible suite scenarios when auto-unstuck and total-exposure repair are disabled and
+  `live.max_realized_loss_pct >= 1`. Single-coin HSL and the existing one-sided
+  minimum-effective-cost filter are supported in combination with ordinary market execution. The
+  Metal proxy classifies each generated order against the current candle close using
   `live.market_order_near_touch_threshold`, retains that execution intent for the pending order,
   and fills promoted orders on the next valid candle at its adversely slipped, directionally
   rounded close with the taker fee. Market closes and short entries are resized at the executable

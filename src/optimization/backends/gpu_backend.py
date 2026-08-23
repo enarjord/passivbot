@@ -971,11 +971,6 @@ def _validate_scope_config(
                 "GPU ordinary market execution currently requires single-coin "
                 "strategy_kind=ema_anchor"
             )
-        if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
-            raise ValueError(
-                "GPU ordinary market execution currently requires "
-                "backtest.filter_by_min_effective_cost=false"
-            )
         if max_realized_loss_pct < 1.0:
             raise ValueError(
                 "GPU ordinary market execution currently requires "
@@ -984,11 +979,6 @@ def _validate_scope_config(
             )
         for side in enabled_sides:
             side_config = config["bot"][side]
-            if bool(side_config.get("hsl", {}).get("enabled")):
-                raise ValueError(
-                    "GPU ordinary market execution currently requires "
-                    f"bot.{side}.hsl.enabled=false"
-                )
             if bool(side_config.get("unstuck", {}).get("enabled")):
                 raise ValueError(
                     "GPU ordinary market execution currently requires "
