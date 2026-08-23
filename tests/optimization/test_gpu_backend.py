@@ -1579,13 +1579,15 @@ def test_gpu_foundation_accepts_baseline_tm_single_coin_market_execution():
 
 
 @pytest.mark.parametrize(
-    "key",
+    ("key", "low"),
     [
-        "long_entry_retracement_base_pct",
-        "long_close_retracement_base_pct",
+        ("long_entry_retracement_base_pct", 0.0),
+        ("long_close_retracement_base_pct", 0.0),
+        ("long_entry_retracement_base_pct", 1.0e-50),
+        ("long_close_retracement_base_pct", 1.0e-50),
     ],
 )
-def test_gpu_tm_market_execution_rejects_recursive_mode_bounds(key):
+def test_gpu_tm_market_execution_rejects_recursive_mode_bounds(key, low):
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
@@ -1593,7 +1595,7 @@ def test_gpu_tm_market_execution_rejects_recursive_mode_bounds(key):
         "long_entry_retracement_base_pct": Bound(0.001, 0.1),
         "long_close_retracement_base_pct": Bound(0.001, 0.1),
     }
-    bounds[key] = Bound(0.0, 0.1)
+    bounds[key] = Bound(low, 0.1)
 
     with pytest.raises(ValueError, match="Recursive market ladders"):
         _validate_tm_market_nonrecursive_bounds(bounds, {}, {"long"}, config)

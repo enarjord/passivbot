@@ -456,6 +456,36 @@ inline float crop_entry(
     return q < qty ? q : qty;
 }
 
+inline float gate_market_entry_by_twel_strict(
+    thread TmSide& s, float balance, float price, float qty,
+    float qty_step, float min_qty, float min_cost, float c_mult
+) {
+    if (!(qty > 0.0f && balance > 0.0f && price > 0.0f
+        && qty_step > 0.0f && c_mult > 0.0f && s.entry_cap > 0.0f)) {
+        return 0.0f;
+    }
+    float current_cost = s.psize * s.pprice * c_mult;
+    float remaining_cost = s.entry_cap * balance - current_cost;
+    if (!(remaining_cost > 0.0f)) return 0.0f;
+    float gated_qty = fmin(
+        qty,
+        floor_step(remaining_cost / (price * c_mult), qty_step)
+    );
+    if (!(gated_qty > 0.0f)) return 0.0f;
+
+    // Exact Rust requires post-fill exposure to remain strictly below the
+    // total-exposure cap.  A quantity exactly on the cap is not eligible.
+    float gated_exposure = (current_cost + gated_qty * price * c_mult)
+        / balance;
+    if (gated_exposure >= s.entry_cap) {
+        gated_qty = floor_step(gated_qty - qty_step, qty_step);
+    }
+    float executable_min = min_entry_qty(
+        price, qty_step, min_qty, min_cost, c_mult
+    );
+    return gated_qty >= executable_min ? gated_qty : 0.0f;
+}
+
 inline float calc_close_qty(
     thread TmSide& s, float balance, float mq, int mq_relation, float pct,
     float qty_step, float c_mult
@@ -873,7 +903,7 @@ inline void generate_orders(
         s.entry_qty = market_min_q;
     }
     if (entry_market && s.twel_entry_gate_enabled) {
-        s.entry_qty = crop_entry(
+        s.entry_qty = gate_market_entry_by_twel_strict(
             s, balance, price_now, s.entry_qty,
             qty_step, min_qty, min_cost, c_mult
         );

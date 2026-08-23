@@ -2776,7 +2776,14 @@ def _validate_tm_market_nonrecursive_bounds(
                 if bound is not None
                 else float(base_by_key.get(key, 0.0))
             )
-            if not math.isfinite(low) or low <= 0.0:
+            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+                packed_low = np.float32(low)
+            if (
+                not math.isfinite(low)
+                or low <= 0.0
+                or not np.isfinite(packed_low)
+                or packed_low <= np.float32(0.0)
+            ):
                 unsupported.append(f"{key} lower={low}")
     if unsupported:
         raise ValueError(
