@@ -297,6 +297,30 @@ struct CloseGroup {
     float qty;
 };
 
+inline void install_hsl_panic_close(
+    thread TmSide& side,
+    bool is_long,
+    int touch_down_tick,
+    int touch_up_tick,
+    float price_step
+) {
+    side.close_ticks = is_long
+        ? max(touch_down_tick - 1, 1)
+        : max(touch_up_tick + 1, 1);
+    side.close_price = float(side.close_ticks) * price_step;
+    side.close_qty = side.psize;
+    side.secondary_close_qty = 0.0f;
+    side.close_is_exposure_reducer = false;
+    side.close_is_twel_reducer = false;
+    side.close_is_unstuck_reducer = false;
+    // HSL replaces the generated ordinary close. Panic execution policy is
+    // carried separately by close_is_panic and the side-specific runner
+    // setting; ordinary market flags must not leak into a limit panic.
+    side.close_market = false;
+    side.secondary_close_market = false;
+    side.close_is_panic = true;
+}
+
 inline float directional_equity_at_close(
     float balance,
     thread TmSide& long_side,
@@ -2793,24 +2817,14 @@ inline void passivbot_single_coin_impl(
                 short_side.entry_qty = 0.0f;
             }
             if (long_enabled && long_hsl_mode == 3) {
-                long_side.close_ticks = max(touch_down_tick - 1, 1);
-                long_side.close_price = float(long_side.close_ticks) * price_step;
-                long_side.close_qty = long_side.psize;
-                long_side.secondary_close_qty = 0.0f;
-                long_side.close_is_exposure_reducer = false;
-                long_side.close_is_twel_reducer = false;
-                long_side.close_is_unstuck_reducer = false;
-                long_side.close_is_panic = true;
+                install_hsl_panic_close(
+                    long_side, true, touch_down_tick, touch_up_tick, price_step
+                );
             }
             if (short_enabled && short_hsl_mode == 3) {
-                short_side.close_ticks = max(touch_up_tick + 1, 1);
-                short_side.close_price = float(short_side.close_ticks) * price_step;
-                short_side.close_qty = short_side.psize;
-                short_side.secondary_close_qty = 0.0f;
-                short_side.close_is_exposure_reducer = false;
-                short_side.close_is_twel_reducer = false;
-                short_side.close_is_unstuck_reducer = false;
-                short_side.close_is_panic = true;
+                install_hsl_panic_close(
+                    short_side, false, touch_down_tick, touch_up_tick, price_step
+                );
             }
         }
 
