@@ -478,7 +478,16 @@ inline float gate_market_entry_by_twel_strict(
     float gated_exposure = (current_cost + gated_qty * price * c_mult)
         / balance;
     if (gated_exposure >= s.entry_cap) {
-        gated_qty = floor_step(gated_qty - qty_step, qty_step);
+        float previous_qty = gated_qty;
+        float decremented_qty = gated_qty - qty_step;
+        if (!(decremented_qty < gated_qty)) {
+            decremented_qty = gated_qty - fmax(
+                qty_step,
+                fabs(gated_qty) * 1.1920928955078125e-7f
+            );
+        }
+        gated_qty = floor_step(decremented_qty, qty_step);
+        if (!(gated_qty < previous_qty)) return 0.0f;
     }
     float executable_min = min_entry_qty(
         price, qty_step, min_qty, min_cost, c_mult
