@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
-constant int SCALAR_COLS = 62;
+constant int SCALAR_COLS = 64;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -1715,6 +1715,8 @@ inline void passivbot_single_coin_impl(
     scalars[so + 59] = loss_sum_long;
     scalars[so + 60] = profit_sum_short;
     scalars[so + 61] = loss_sum_short;
+    scalars[so + 62] = long_hsl.enabled ? long_hsl.drawdown_ema_max : 0.0f;
+    scalars[so + 63] = short_hsl.enabled ? short_hsl.drawdown_ema_max : 0.0f;
 }
 
 kernel void passivbot_ema_anchor(

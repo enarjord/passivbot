@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added worst EMA-smoothed HSL strategy-equity drawdown scoring and limits to Apple MPS
+  optimization for the account, long side, and short side. Metal retains each controller's
+  maximum across cooldown restarts and coin-mode controllers, then applies the same account-level
+  `max(long, short)` reduction as exact Rust. Exact Rust validation remains authoritative.
+
 - Accelerated HSL-disabled, one-sided single-coin Trailing Martingale optimization on Apple MPS
   with Rust-owned long-only and short-only Metal variants. The backend selects these variants
   automatically, logs the selected topology, and retains the generic kernel for dual-side or

@@ -822,7 +822,44 @@ def test_hard_stop_lifecycle_metric_surface_is_supported():
         "hard_stop_flatten_time_minutes_mean",
         "hard_stop_post_restart_retrigger_pct",
     } <= set(SUPPORTED_METRICS)
-    assert "drawdown_worst_ema_strategy_eq" not in SUPPORTED_METRICS
+    assert {
+        "drawdown_worst_ema_strategy_eq",
+        "drawdown_worst_ema_strategy_eq_long",
+        "drawdown_worst_ema_strategy_eq_short",
+    } <= set(SUPPORTED_METRICS)
+
+
+def test_hard_stop_ema_drawdown_reduction_matches_rust_side_max_contract():
+    from optimization.gpu.metrics import _hard_stop_ema_drawdown_metrics
+
+    metrics = _hard_stop_ema_drawdown_metrics(
+        {
+            "hsl_drawdown_ema_max_long": torch.tensor([0.12, 0.0]),
+            "hsl_drawdown_ema_max_short": torch.tensor([0.08, 0.2]),
+        }
+    )
+
+    assert metrics["drawdown_worst_ema_strategy_eq"].tolist() == pytest.approx(
+        [0.12, 0.2]
+    )
+    assert metrics["drawdown_worst_ema_strategy_eq_long"].tolist() == pytest.approx(
+        [0.12, 0.0]
+    )
+    assert metrics["drawdown_worst_ema_strategy_eq_short"].tolist() == pytest.approx(
+        [0.08, 0.2]
+    )
+
+
+def test_hard_stop_ema_drawdown_metrics_fail_closed_without_directional_outputs():
+    from optimization.gpu.metrics import _hard_stop_ema_drawdown_metrics
+
+    with pytest.raises(RuntimeError, match="drawdown-EMA outputs are missing"):
+        _hard_stop_ema_drawdown_metrics({})
+
+    with pytest.raises(RuntimeError, match="hsl_drawdown_ema_max_short"):
+        _hard_stop_ema_drawdown_metrics(
+            {"hsl_drawdown_ema_max_long": torch.tensor([0.1])}
+        )
 
 
 def test_hard_stop_lifecycle_reduction_matches_rust_formulas():

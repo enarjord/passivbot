@@ -7,8 +7,8 @@ constant int OVERRIDE_COLS = 44;
 constant int HSL_OVERRIDE_START = 34;
 constant int COIN_COLS = 12;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 57;
-constant int FUSED_SCALAR_COLS = 62;
+constant int SCALAR_COLS = 59;
+constant int FUSED_SCALAR_COLS = 64;
 constant int GAP_BINS = 128;
 
 // PASSIVBOT_HSL_COMMON
@@ -3444,14 +3444,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             last_eq_k, scalars, scalar_offset + 32
         );
     }
-    scalars[scalar_offset + 57] = tm_multicoin_entry_initial_balance_pct(
+    scalars[scalar_offset + 59] = tm_multicoin_entry_initial_balance_pct(
         short_config, short_coin_overrides,
         min(short_config.n_positions, short_side.max_tradable_seen)
     );
-    scalars[scalar_offset + 58] = fills.profit_sum_long;
-    scalars[scalar_offset + 59] = fills.loss_sum_long;
-    scalars[scalar_offset + 60] = fills.profit_sum_short;
-    scalars[scalar_offset + 61] = fills.loss_sum_short;
+    scalars[scalar_offset + 60] = fills.profit_sum_long;
+    scalars[scalar_offset + 61] = fills.loss_sum_long;
+    scalars[scalar_offset + 62] = fills.profit_sum_short;
+    scalars[scalar_offset + 63] = fills.loss_sum_short;
 }
 
 kernel void passivbot_trailing_martingale_multicoin_fused(

@@ -46,6 +46,9 @@ def test_default_objective_goal_recognizes_fill_activity_metrics():
 
 
 def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
+    assert default_objective_goal("drawdown_worst_ema_strategy_eq") == "min"
+    assert default_objective_goal("drawdown_worst_ema_strategy_eq_long") == "min"
+    assert default_objective_goal("drawdown_worst_ema_strategy_eq_short") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_mean") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_median") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_p95") == "min"

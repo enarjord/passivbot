@@ -57,6 +57,9 @@ SUPPORTED_METRICS = (
     "calmar_ratio_strategy_eq",
     "calmar_ratio_strategy_eq_w",
     "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_ema_strategy_eq",
+    "drawdown_worst_ema_strategy_eq_long",
+    "drawdown_worst_ema_strategy_eq_short",
     "drawdown_worst_strategy_eq",
     "equity_choppiness_usd",
     "equity_jerkiness_usd",
@@ -234,6 +237,11 @@ _HARD_STOP_PANIC_LOSS_METRICS = {
     "hard_stop_panic_close_loss_drawdown_pct_min",
     "hard_stop_panic_close_loss_max",
     "hard_stop_panic_close_loss_sum",
+}
+_HARD_STOP_EMA_DRAWDOWN_METRICS = {
+    "drawdown_worst_ema_strategy_eq",
+    "drawdown_worst_ema_strategy_eq_long",
+    "drawdown_worst_ema_strategy_eq_short",
 }
 HARD_STOP_PROXY_METRICS = tuple(
     sorted(_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
@@ -1139,6 +1147,27 @@ def _hard_stop_panic_loss_metrics(out: dict, run) -> dict:
     }
 
 
+def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
+    """Reduce per-side HSL EMA maxima using Rust's public metric contract."""
+
+    required = {
+        "hsl_drawdown_ema_max_long",
+        "hsl_drawdown_ema_max_short",
+    }
+    if missing := required.difference(out):
+        raise RuntimeError(
+            "MPS directional HSL drawdown-EMA outputs are missing from proxy results: "
+            + ", ".join(sorted(missing))
+        )
+    long_ema_max = out["hsl_drawdown_ema_max_long"].to(torch.float64)
+    short_ema_max = out["hsl_drawdown_ema_max_short"].to(torch.float64)
+    return {
+        "drawdown_worst_ema_strategy_eq": long_ema_max.maximum(short_ema_max),
+        "drawdown_worst_ema_strategy_eq_long": long_ema_max,
+        "drawdown_worst_ema_strategy_eq_short": short_ema_max,
+    }
+
+
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
@@ -1329,6 +1358,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _HARD_STOP_PANIC_LOSS_METRICS
         else {}
     )
+    hard_stop_ema_drawdown_metrics = (
+        _hard_stop_ema_drawdown_metrics(out)
+        if requested & _HARD_STOP_EMA_DRAWDOWN_METRICS
+        else {}
+    )
 
     requested_start = float(run.requested_start_ts_ms)
     first_timestamp = data["ts0"]
@@ -1379,6 +1413,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
+    objectives.update(hard_stop_ema_drawdown_metrics)
     if "loss_profit_ratio" in requested:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]

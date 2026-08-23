@@ -148,6 +148,7 @@ struct HslState {
     float slot_count;
     bool initialized;
     float drawdown_ema;
+    float drawdown_ema_max;
     float peak_strategy_pnl;
     float no_restart_peak_strategy_equity;
     float coin_realized_baseline;
@@ -235,6 +236,7 @@ inline HslState load_hsl(
     h.slot_count = fmax(round(params[ho + 10]), 1.0f);
     h.initialized = false;
     h.drawdown_ema = 0.0f;
+    h.drawdown_ema_max = 0.0f;
     h.peak_strategy_pnl = -INFINITY;
     h.no_restart_peak_strategy_equity = 0.0f;
     h.coin_realized_baseline = 0.0f;
@@ -415,6 +417,7 @@ inline void update_hsl_from_signal(
         return;
     }
     h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
+    h.drawdown_ema_max = fmax(h.drawdown_ema_max, fabs(h.drawdown_ema));
     float score = fmin(drawdown_raw, fmax(h.drawdown_ema, 0.0f));
     const float cmp_eps = 1.0e-12f;
     h.red_active_now = score + cmp_eps >= h.red_threshold;
@@ -654,6 +657,8 @@ struct HslOutputAggregate {
     float panic_loss_drawdown_sum;
     float panic_loss_drawdown_max;
     float panic_loss_drawdown_count;
+    float drawdown_ema_max_long;
+    float drawdown_ema_max_short;
 };
 
 inline HslOutputAggregate init_hsl_output_aggregate(
@@ -688,6 +693,8 @@ inline HslOutputAggregate init_hsl_output_aggregate(
     output.panic_loss_drawdown_sum = 0.0f;
     output.panic_loss_drawdown_max = 0.0f;
     output.panic_loss_drawdown_count = 0.0f;
+    output.drawdown_ema_max_long = 0.0f;
+    output.drawdown_ema_max_short = 0.0f;
     return output;
 }
 
@@ -707,10 +714,16 @@ inline void accumulate_hsl_output(
         output.enabled_short = 1.0f;
         output.triggers_short += h.triggers;
         output.restarts_short += h.restarts;
+        output.drawdown_ema_max_short = fmax(
+            output.drawdown_ema_max_short, h.drawdown_ema_max
+        );
     } else {
         output.enabled_long = 1.0f;
         output.triggers_long += h.triggers;
         output.restarts_long += h.restarts;
+        output.drawdown_ema_max_long = fmax(
+            output.drawdown_ema_max_long, h.drawdown_ema_max
+        );
     }
     output.duration_sum += h.halt_duration_sum_steps + terminal_duration;
     output.duration_max = fmax(
@@ -770,6 +783,8 @@ inline void write_hsl_output_aggregate(
     scalars[scalar_offset + 22] = output.panic_loss_drawdown_sum;
     scalars[scalar_offset + 23] = output.panic_loss_drawdown_max;
     scalars[scalar_offset + 24] = output.panic_loss_drawdown_count;
+    scalars[scalar_offset + 25] = output.drawdown_ema_max_long;
+    scalars[scalar_offset + 26] = output.drawdown_ema_max_short;
 }
 
 inline void write_one_side_hsl_outputs(

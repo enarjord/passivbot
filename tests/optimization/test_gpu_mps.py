@@ -99,18 +99,20 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.arange(62, dtype=torch.float32).reshape(1, 62)
+    scalars = torch.arange(64, dtype=torch.float32).reshape(1, 64)
     gaps = torch.zeros((1, 128), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
 
     assert "entry_initial_balance_pct" not in output
     assert torch.equal(output["entry_initial_balance_pct_long"], scalars[:, 21])
-    assert torch.equal(output["entry_initial_balance_pct_short"], scalars[:, 57])
-    assert torch.equal(output["profit_sum_long"], scalars[:, 58])
-    assert torch.equal(output["loss_sum_long"], scalars[:, 59])
-    assert torch.equal(output["profit_sum_short"], scalars[:, 60])
-    assert torch.equal(output["loss_sum_short"], scalars[:, 61])
+    assert torch.equal(output["hsl_drawdown_ema_max_long"], scalars[:, 57])
+    assert torch.equal(output["hsl_drawdown_ema_max_short"], scalars[:, 58])
+    assert torch.equal(output["entry_initial_balance_pct_short"], scalars[:, 59])
+    assert torch.equal(output["profit_sum_long"], scalars[:, 60])
+    assert torch.equal(output["loss_sum_long"], scalars[:, 61])
+    assert torch.equal(output["profit_sum_short"], scalars[:, 62])
+    assert torch.equal(output["loss_sum_short"], scalars[:, 63])
 
 
 @pytest.mark.skipif(
@@ -275,7 +277,7 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
             unrealized_long, unrealized_short, float(k)
         );
     }
-    int oo = int(b) * 58;
+    int oo = int(b) * 62;
     output[oo + 0] = float(long_hsl.tier);
     output[oo + 1] = float(short_hsl.tier);
     output[oo + 2] = long_hsl.triggers;
@@ -313,7 +315,7 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     write_dual_side_coin_hsl_outputs(
         long_coin_hsl, short_coin_hsl, 2,
         4.0f, 1.0f, 2.0f, 3.0f, -1.0f,
-        output, oo + 33
+        output, oo + 35
     );
 }
 """
@@ -351,7 +353,7 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     samples[4, :, 4] = 1.0
     settings = torch.tensor([100.0, 60_000.0], device="mps")
     sizes = torch.tensor([5, 4], dtype=torch.int32, device="mps")
-    output = torch.zeros((5, 58), dtype=torch.float32, device="mps")
+    output = torch.zeros((5, 62), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -379,11 +381,13 @@ kernel void passivbot_joint_pside_hsl_contract_probe(
     assert values[:, 14:18].tolist() == [[4.0, 1.0, 2.0, 3.0]] * 5
     assert values[:, 18:21].tolist() == [[5.0, 3.0, 2.0]] * 5
     np.testing.assert_allclose(values[:, 29:33], [[0.1, 0.3, 0.2, 2.0]] * 5)
-    assert values[0, 33:39].tolist() == [1.0, 1.0, 2.0, 2.0, 0.0, 0.0]
-    assert values[1, 33:39].tolist() == [1.0, 1.0, 0.0, 2.0, 0.0, 0.0]
-    assert values[:, 39:43].tolist() == [[4.0, 1.0, 2.0, 3.0]] * 5
-    assert values[:, 43:46].tolist() == [[10.0, 3.0, 4.0]] * 5
-    np.testing.assert_allclose(values[:, 54:58], [[0.1, 0.6, 0.2, 4.0]] * 5)
+    assert (values[:, 33:35] >= 0.0).all()
+    assert values[0, 35:41].tolist() == [1.0, 1.0, 2.0, 2.0, 0.0, 0.0]
+    assert values[1, 35:41].tolist() == [1.0, 1.0, 0.0, 2.0, 0.0, 0.0]
+    assert values[:, 41:45].tolist() == [[4.0, 1.0, 2.0, 3.0]] * 5
+    assert values[:, 45:48].tolist() == [[10.0, 3.0, 4.0]] * 5
+    np.testing.assert_allclose(values[:, 56:60], [[0.1, 0.6, 0.2, 4.0]] * 5)
+    np.testing.assert_allclose(values[:, 60:62], values[:, 33:35])
 
 
 @pytest.mark.skipif(
@@ -3710,7 +3714,7 @@ kernel void passivbot_hsl_trace(
     const int N = sizes[1];
     const int PARAM_COLS = 11;
     const int SAMPLE_COLS = 5;
-    const int OUTPUT_COLS = 10;
+    const int OUTPUT_COLS = 11;
     if (b >= uint(B)) return;
     HslState h = load_hsl(params, int(b) * PARAM_COLS, 0);
     for (int k = 0; k < N; k++) {
@@ -3746,6 +3750,7 @@ kernel void passivbot_hsl_trace(
         output[oi + 7] = h.cooldown_until_k;
         output[oi + 8] = h.triggers;
         output[oi + 9] = h.pending_stop_k;
+        output[oi + 10] = h.drawdown_ema_max;
     }
 }
 """
@@ -3776,7 +3781,7 @@ kernel void passivbot_hsl_trace(
         dtype=np.float32,
     )
     output = torch.zeros(
-        (len(signal_modes), len(realized), 10),
+        (len(signal_modes), len(realized), 11),
         dtype=torch.float32,
         device="mps",
     )
@@ -3799,6 +3804,7 @@ kernel void passivbot_hsl_trace(
         runtime = passivbot_rust.EquityHardStopRuntime()
         peak_strategy_pnl = float("-inf")
         peak_coin_realized = 0.0
+        exact_drawdown_ema_max = 0.0
         for k, (realized_pnl, unrealized_pnl) in enumerate(
             zip(realized, unrealized)
         ):
@@ -3834,6 +3840,12 @@ kernel void passivbot_hsl_trace(
             assert actual[mode_index, k, 1] == pytest.approx(
                 exact["drawdown_ema"], abs=2.0e-6
             )
+            exact_drawdown_ema_max = max(
+                exact_drawdown_ema_max, abs(exact["drawdown_ema"])
+            )
+            assert actual[mode_index, k, 10] == pytest.approx(
+                exact_drawdown_ema_max, abs=2.0e-6
+            )
             assert actual[mode_index, k, 2] == tier_ids[exact["tier"]]
             assert bool(actual[mode_index, k, 3]) == exact["red_active_now"]
             assert bool(actual[mode_index, k, 4]) == exact["red_latched"]
@@ -3862,7 +3874,7 @@ kernel void passivbot_hsl_trace(
         dtype=np.float32,
     )
     lifecycle_output = torch.zeros(
-        (len(restart_policies), len(lifecycle_unrealized), 10),
+        (len(restart_policies), len(lifecycle_unrealized), 11),
         dtype=torch.float32,
         device="mps",
     )
@@ -3908,6 +3920,7 @@ kernel void passivbot_hsl_trace(
         assert final[7] == pytest.approx(expected_cooldown_step)
         assert final[8] == 1.0
         assert final[9] == 2.0
+        assert final[10] == pytest.approx(0.2, abs=2.0e-6)
 
 
 @pytest.mark.skipif(
@@ -3930,7 +3943,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 62" in source
+    assert "constant int SCALAR_COLS = 64" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
@@ -3941,6 +3954,9 @@ def test_mps_ema_anchor_shader_smoke():
     assert "scalars[so + 57] = account_recovery_max_min * interval_ms" in source
     assert "scalars[so + 58] = profit_sum_long" in source
     assert "scalars[so + 61] = loss_sum_short" in source
+    assert "scalars[so + 62] = long_hsl.enabled" in source
+    assert "long_hsl.drawdown_ema_max" in source
+    assert "scalars[so + 63] = short_hsl.enabled" in source
     assert "record_gross_pnl" in source
     assert "hsl_tier_samples_total" in source
     assert "h.restart_retrigger_count" in source
@@ -4207,7 +4223,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 62" in source
+    assert "constant int FUSED_SCALAR_COLS = 64" in source
 
     count = 512
     coin_count = 3
@@ -4319,7 +4335,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 62), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 64), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -4353,10 +4369,10 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert values[:3, 32:34].tolist() == [[1.0, 1.0]] * 3
     assert (values[:3, 38] > 0.0).all()
     np.testing.assert_allclose(
-        values[:3, 18], values[:3, 58] + values[:3, 60]
+        values[:3, 18], values[:3, 60] + values[:3, 62]
     )
     np.testing.assert_allclose(
-        values[:3, 19], values[:3, 59] + values[:3, 61]
+        values[:3, 19], values[:3, 61] + values[:3, 63]
     )
     np.testing.assert_allclose(
         values[:3, 24], daily[:3, :, 8].sum(dim=1).cpu().numpy()
@@ -4392,12 +4408,18 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         runner_output["entry_initial_balance_pct_long"], scalars[:, 21]
     )
     torch.testing.assert_close(
-        runner_output["entry_initial_balance_pct_short"], scalars[:, 57]
+        runner_output["entry_initial_balance_pct_short"], scalars[:, 59]
     )
-    torch.testing.assert_close(runner_output["profit_sum_long"], scalars[:, 58])
-    torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 59])
-    torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 60])
-    torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 61])
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_ema_max_long"], scalars[:, 57]
+    )
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_ema_max_short"], scalars[:, 58]
+    )
+    torch.testing.assert_close(runner_output["profit_sum_long"], scalars[:, 60])
+    torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 61])
+    torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 62])
+    torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 63])
     assert runner_output["alive"].cpu().tolist() == [
         True,
         True,
@@ -4436,6 +4458,9 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         "hard_stop_triggers",
         "hard_stop_triggers_long",
         "hard_stop_triggers_short",
+        "drawdown_worst_ema_strategy_eq",
+        "drawdown_worst_ema_strategy_eq_long",
+        "drawdown_worst_ema_strategy_eq_short",
     }
     proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
@@ -4491,6 +4516,14 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         item["hard_stop_panic_close_loss_drawdown_pct_mean"] > 0.0
         for item in service_results
     )
+    assert all(
+        item["drawdown_worst_ema_strategy_eq"]
+        == max(
+            item["drawdown_worst_ema_strategy_eq_long"],
+            item["drawdown_worst_ema_strategy_eq_short"],
+        )
+        for item in service_results
+    )
 
     with pytest.raises(ValueError, match="84 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
@@ -4513,7 +4546,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 62), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 64), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -4549,7 +4582,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 62" in source
+    assert "constant int FUSED_SCALAR_COLS = 64" in source
 
     count = 512
     coin_count = 3
@@ -4685,7 +4718,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 62), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 64), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -4721,8 +4754,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert (output[:3, 24] - output[:3, 26] > 0.0).all()
     assert output[:3, 32:34].tolist() == [[1.0, 1.0]] * 3
     assert (output[:3, 38] > 0.0).all()
-    np.testing.assert_allclose(output[:3, 18], output[:3, 58] + output[:3, 60])
-    np.testing.assert_allclose(output[:3, 19], output[:3, 59] + output[:3, 61])
+    np.testing.assert_allclose(output[:3, 18], output[:3, 60] + output[:3, 62])
+    np.testing.assert_allclose(output[:3, 19], output[:3, 61] + output[:3, 63])
     np.testing.assert_allclose(
         output[:3, 24], daily[:3, :, 8].sum(dim=1).cpu().numpy()
     )
@@ -4752,12 +4785,18 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         runner_output["entry_initial_balance_pct_long"], scalars[:, 21]
     )
     torch.testing.assert_close(
-        runner_output["entry_initial_balance_pct_short"], scalars[:, 57]
+        runner_output["entry_initial_balance_pct_short"], scalars[:, 59]
     )
-    torch.testing.assert_close(runner_output["profit_sum_long"], scalars[:, 58])
-    torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 59])
-    torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 60])
-    torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 61])
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_ema_max_long"], scalars[:, 57]
+    )
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_ema_max_short"], scalars[:, 58]
+    )
+    torch.testing.assert_close(runner_output["profit_sum_long"], scalars[:, 60])
+    torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 61])
+    torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 62])
+    torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 63])
     assert runner_output["alive"].cpu().tolist() == [
         True,
         True,
@@ -4800,6 +4839,9 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "hard_stop_triggers_long",
         "hard_stop_triggers_short",
         "fills_count",
+        "drawdown_worst_ema_strategy_eq",
+        "drawdown_worst_ema_strategy_eq_long",
+        "drawdown_worst_ema_strategy_eq_short",
     }
     proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     width = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
@@ -4862,6 +4904,14 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         item["hard_stop_panic_close_loss_drawdown_pct_mean"] >= 0.0
         for item in service_results
     )
+    assert all(
+        item["drawdown_worst_ema_strategy_eq"]
+        == max(
+            item["drawdown_worst_ema_strategy_eq_long"],
+            item["drawdown_worst_ema_strategy_eq_short"],
+        )
+        for item in service_results
+    )
 
     with pytest.raises(ValueError, match="118 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
@@ -4888,7 +4938,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 62), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 64), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
