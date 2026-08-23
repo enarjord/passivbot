@@ -1562,7 +1562,7 @@ class MpsMulticoinProxy:
         if len(enabled_sides) not in (1, 2):
             raise ValueError(
                 "MPS multicoin proxy requires one or two enabled sides"
-        )
+            )
         self.sides = enabled_sides
         self.dispatch_batch_size = _mps_dispatch_batch_size(
             self.batch_size,
@@ -2000,9 +2000,7 @@ class MpsMulticoinProxy:
                     if key.startswith(f"{side}_")
                 }
             )
-            rows.append(
-                [float(merged[key]) for key in param_keys]
-            )
+            rows.append([float(merged[key]) for key in param_keys])
         return np.asarray(rows, dtype=np.float64)
 
     def evaluate(self, candidates: list[dict]) -> list[dict]:

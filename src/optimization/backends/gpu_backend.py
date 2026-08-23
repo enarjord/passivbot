@@ -1007,9 +1007,9 @@ def _validate_scope_config(
                         )
             if repair_paths:
                 raise ValueError(
-                    "GPU dual-side multicoin exposure/unstuck repair requires a strategy-"
-                    "complete shared-balance portfolio kernel; the current GPU topology "
-                    f"does not model {sorted(repair_paths)}"
+                    "GPU dual-side multicoin exposure/unstuck repair requires shared "
+                    "global cross-side selection and loss-budget reservation semantics; the "
+                    f"current fused proxy does not model {sorted(repair_paths)}"
                 )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
@@ -1275,15 +1275,13 @@ def _validate_gpu_coin_overrides(
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
-        dual_fused_ema = (
-            strategy_kind == "ema_anchor" and len(enabled_sides) == 2
-        )
+        fused_dual_side = len(enabled_sides) == 2
         if signal_mode != "coin" or not (
-            len(enabled_sides) == 1 or dual_fused_ema
+            len(enabled_sides) == 1 or fused_dual_side
         ):
             raise ValueError(
                 "GPU per-coin HSL overrides require live.hsl_signal_mode=coin "
-                "and either one enabled side or fused dual-side EMA Anchor; "
+                "and either one enabled side or a fused dual-side proxy; "
                 "unsupported paths: "
                 f"{sorted(hsl_override_paths)}"
             )

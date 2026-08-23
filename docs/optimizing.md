@@ -134,9 +134,8 @@ The supported slice is intentionally narrow:
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
   other override leaves fail closed. In one-sided `live.hsl_signal_mode: coin` runs, all ten HSL
-  leaves documented in `coin_overrides.md` are also supported. Fused dual-side EMA Anchor coin
-  mode resolves the same HSL leaves independently for long and short; dual-side Trailing
-  Martingale coin-mode HSL overrides remain fail closed
+  leaves documented in `coin_overrides.md` are also supported. Fused dual-side EMA Anchor and
+  Trailing Martingale coin mode resolve the same HSL leaves independently for long and short
 - one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with
   `coin`, `pside`, or `unified` signals and both resting-limit and market panic closes. Unified and
   pside multi-coin runs use one portfolio controller; coin mode uses an independent controller per
@@ -162,11 +161,9 @@ The supported slice is intentionally narrow:
   drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
   One-sided coin-mode multi-coin runs may resolve all canonical HSL settings independently per
   coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin EMA Anchor
-  uses one fused shared-account kernel for unified, pside, and coin signals, so shared event-loss,
-  warning-tier overlap, and the other HSL lifecycle/panic-loss metrics are available. Dual-side
-  multi-coin Trailing Martingale remains limited to pside signals; shared event-loss and
-  warning-tier overlap metrics remain fail closed on its independent directional proxy. HSL
-  strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
+  and Trailing Martingale use fused shared-account kernels for unified, pside, and coin signals,
+  so shared event-loss, warning-tier overlap, and the other HSL lifecycle/panic-loss metrics are
+  available. HSL strategy-equity EMA/recovery-distribution metrics remain fail closed for now.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
@@ -192,17 +189,15 @@ The supported slice is intentionally narrow:
   permits aggregate entries beyond TWEL while each symbol remains subject to its allowed WEL
 - `position_held_hours_mean`, `position_held_days_mean`, `positions_held_per_day`,
   `position_unchanged_hours_max`, and `position_unchanged_days_max` may be used for scoring and
-  limits in single-coin and one-sided multi-coin runs. Metal counts each completed position and
-  open tail, sums its holding duration, and tracks the latest fill independently for each coin and
-  position side. Dual-side multi-coin runs fail closed for these metrics and held-duration maxima
-  because independent directional summaries cannot truncate pre-reduced duration aggregates at
-  shared portfolio liquidation; exact Rust validation remains authoritative
+  limits in single-coin and multi-coin runs. Metal counts each completed position and open tail,
+  sums its holding duration, and tracks the latest fill independently for each coin and position
+  side. Fused dual-side multi-coin kernels truncate those aggregates at shared portfolio
+  liquidation; exact Rust validation remains authoritative
 - `total_wallet_exposure_max` and `total_wallet_exposure_mean` may be used for scoring and limits
-  in single-coin and one-sided multi-coin runs. Metal samples absolute net long-minus-short wallet
+  in single-coin and multi-coin runs. Metal samples absolute net long-minus-short wallet
   exposure after every non-liquidating equity update, including flat zero-exposure samples, and
-  reduces it with bounded maximum and online-mean accumulators. Dual-side multi-coin runs fail
-  closed because independent directional kernels cannot reconstruct the shared minute-level net
-  exposure series
+  reduces it with bounded maximum and online-mean accumulators. Fused dual-side multi-coin kernels
+  maintain the shared minute-level net exposure series
 - canonical USD account-equity metrics may use the same MPS surface as their strategy-equity
   counterparts while BTC collateral is disabled: `gain_usd`, `adg_usd`, `mdg_usd`,
   `sharpe_ratio_usd`, `sortino_ratio_usd`, `omega_ratio_usd`,
@@ -210,8 +205,7 @@ The supported slice is intentionally narrow:
   `drawdown_worst_usd`, and `drawdown_worst_mean_1pct_usd`, plus the available `_w_usd` weighted
   variants. `exposure_ratio_usd` and `exposure_mean_ratio_usd` combine proxy ADG with the maximum
   and mean total-wallet-exposure accumulators. The exposure ratios support single-coin and
-  one-sided multi-coin runs; dual-side multi-coin runs fail closed because independent directional
-  kernels cannot reconstruct shared net exposure
+  multi-coin runs, including fused dual-side kernels
 - canonical USD gain, ADG, MDG, weighted ADG, and weighted MDG per-configured-exposure metrics are
   supported for both long and short sides. The proxy divides the matching validated equity metric
   by each candidate's effective side `total_wallet_exposure_limit`, after applying any exact-last
@@ -221,18 +215,19 @@ The supported slice is intentionally narrow:
   without fills retain Rust's default value of `1.0` for all three metrics
 - canonical USD `peak_recovery_hours_equity` and `peak_recovery_days_equity` scoring and limits
   use Metal's full-resolution maximum completed peak-to-peak recovery interval. As in exact Rust,
-  an unrecovered final tail is not included and a candidate without fills returns zero. Dual-side
-  multi-coin runs fail closed because independent directional kernels cannot reconstruct the
-  shared portfolio equity path. These metrics also require contiguous valid candles for each
-  exposure-eligible coin after that coin's equity tracking starts because Rust records an equity
-  sample on every tracked step
+  an unrecovered final tail is not included and a candidate without fills returns zero. Fused
+  dual-side multi-coin kernels maintain the shared portfolio equity path. These metrics also
+  require contiguous valid candles for every exposure-eligible coin on either side after that
+  coin's equity tracking starts because Rust records an equity sample on every tracked step
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
-  `risk.position_exposure_enforcer_threshold` for single- and multi-coin long, short, dual-side,
-  and compatible suite runs. When current position exposure exceeds the allowance-adjusted WEL
-  times the positive threshold, Metal gives the passive reducer precedence over the normal
-  strategy close and sizes it strictly below that target. Static per-coin overrides may change
-  both fields. EMA Anchor position-exposure repair remains fail closed because its exact Rust
-  strategy path does not use this reducer
+  `risk.position_exposure_enforcer_threshold` for single-coin long, short, and dual-side runs,
+  one-sided multi-coin runs, and compatible suites. When current position exposure exceeds the
+  allowance-adjusted WEL times the positive threshold, Metal gives the passive reducer precedence
+  over the normal strategy close and sizes it strictly below that target. Static per-coin
+  overrides may change both fields in one-sided multi-coin runs. Dual-side multi-coin repair
+  remains fail closed until global cross-side selection and loss-budget reservation are modeled.
+  EMA Anchor position-exposure repair remains fail closed because its exact Rust strategy path
+  does not use this reducer
 - single-coin EMA Anchor models the cumulative realized-loss gate, including entry and close fees,
   shared long/short loss-budget accounting, and lossy total-exposure repairs. The proxy uses a
   conservative all-history loss envelope, so it may block a close that exact Rust admits after old
@@ -240,9 +235,9 @@ The supported slice is intentionally narrow:
   Martingale permit the one selected auto-unstuck reducer to consume that same conservative budget,
   while ordinary and exposure-repair closes retain the stricter zero-loss envelope. One-sided
   multi-coin EMA Anchor applies the conservative budget only to its selected auto-unstuck reducer;
-  its other closes remain zero-loss. Dual-side multi-coin runs retain the strict zero-loss envelope
-  across independent directional dispatches. These restrictions avoid unsafe cross-dispatch loss-
-  budget reservation and per-candle enumeration of TM's recursive 500-rung close ladder. Exact
+  its other closes remain zero-loss. Dual-side multi-coin runs retain the strict zero-loss
+  envelope. These restrictions avoid unsafe cross-side loss-budget reservation and per-candle
+  enumeration of TM's recursive 500-rung close ladder. Exact
   validation applies the configured rolling allowance and remains authoritative
 - BTC collateral remains disabled; dual-side multicoin total-exposure repair remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
@@ -262,27 +257,11 @@ The supported slice is intentionally narrow:
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
-Trailing Martingale use one long and one short Metal dispatch per candidate in hedge mode. Their
-directional surfaces form a
-conservative portfolio screening proxy; every accepted metric still comes from the unchanged exact
-Rust portfolio backtest, and classification, rank, and drift gates halt material disagreement.
-Dual-side one-way arbitration, unmodeled non-bot suite scenario overrides, HSL, and dual-side
-multi-coin auto-unstuck are not silently approximated by this release. Dual-side multi-coin
-screening also rejects `fills_gap_longest_days`,
-`fills_gap_mean_hours`, `fills_gap_median_hours`, `fills_gap_p95_hours`,
-`fills_gap_p99_hours`,
-`strategy_eq_recovery_days_max`, `peak_recovery_hours_strategy_eq`,
-`peak_recovery_days_strategy_eq`, `peak_recovery_hours_pnl`, `peak_recovery_days_pnl`,
-`entry_initial_balance_pct_long`, `entry_initial_balance_pct_short`,
-`peak_recovery_hours_equity_usd`, `peak_recovery_days_equity_usd`,
-`position_held_days_mean`, `position_held_days_max`, `position_held_hours_mean`,
-`position_held_hours_max`, `positions_held_per_day`, `position_unchanged_days_max`,
-`position_unchanged_hours_max`, `total_wallet_exposure_max`, `total_wallet_exposure_mean`, and
-`exposure_ratio_usd`, `exposure_mean_ratio_usd`, and `volume_pct_per_day_avg`: the independent
-directional
-summaries cannot reconstruct cross-side-only fill gaps, alternating portfolio recovery periods,
-effective coin counts and duration maxima truncated at shared portfolio liquidation, minute-level
-net exposure, or fill volume normalized by the shared balance safely.
+Trailing Martingale use fused shared-account Metal kernels in hedge mode. Every accepted metric
+still comes from the unchanged exact Rust portfolio backtest, and classification, rank, and drift
+gates halt material disagreement. Dual-side one-way arbitration, unmodeled non-bot suite scenario
+overrides, dual-side multi-coin auto-unstuck, and dual-side multi-coin exposure repair are not
+silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer
@@ -353,21 +332,21 @@ the corresponding canonical USD account-equity names share this strategy-equity 
 Daily USD equity choppiness, jerkiness, and exponential fit error are reduced from that same active
 daily closing-equity surface with Rust's no-fill defaults and short-series behavior.
 Collateral-agnostic `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio_pnl` are also
-supported for single-coin and one-sided multi-coin runs. Metal groups realized balance changes by
+supported for single-coin and multi-coin runs. Metal groups realized balance changes by
 UTC fill day and divides by that day's last fill balance, matching exact Rust's unweighted daily
-PnL ratio contract. Dual-side multi-coin runs remain unsupported because independent directional
-summaries cannot identify the intraday shared-liquidation cutoff. The corresponding weighted PnL
-variants are supported in the same safe topologies. Metal counts each actual proxy fill, including
-multiple same-candle ladder fills, and applies Rust's full-run minimum fill count and empty-suffix
-rules across the same ten minute-position suffix boundaries. The compact daily surface includes
-the complete UTC day containing each suffix boundary, so exact Rust validation and drift gates
-remain authoritative for that screening approximation.
+PnL ratio contract. Fused dual-side multi-coin kernels retain the shared intraday-liquidation
+cutoff. The corresponding weighted PnL variants are supported in the same safe topologies. Metal
+counts each actual proxy fill, including multiple same-candle ladder fills, and applies Rust's
+full-run minimum fill count and empty-suffix rules across the same ten minute-position suffix
+boundaries. The compact daily surface includes the complete UTC day containing each suffix
+boundary, so exact Rust validation and drift gates remain authoritative for that screening
+approximation.
 Gross close-fill loss/profit ratios are supported both in aggregate and separately for long and
 short. `pnl_ratio_long_short` and its `long_short_profit_ratio` alias use each side's signed
 realized PnL and Rust's neutral `0.5` result when combined signed PnL is zero. Directional kernels
 retain the four gross side sums, while one-sided and dual-side multi-coin dispatches preserve the
 same side partition before reduction.
-Full-run fill activity is supported for single-coin and one-sided multi-coin topologies: analysis
+Full-run fill activity is supported for single-coin and multi-coin topologies: analysis
 duration; total, entry, close, long, and short counts; their daily rates; entry-to-close ratio; and
 combined or side-specific per-configured-position-slot daily rates. Active fill-day count and ratio
 use distinct 24-hour buckets anchored to the analyzed equity start, matching Rust rather than the
@@ -375,13 +354,12 @@ UTC buckets used by the compact daily equity surface. Active-symbol count and to
 use per-coin counters emitted only when either metric is requested. Metal classifies every actual
 proxy fill by role, position side, and—when needed—coin, then Python applies each candidate's
 configured active slot counts and Rust's mean-of-enabled-sides contract. All rates use the same
-first-to-last analyzed-equity timestamp span as Rust. Dual-side multi-coin runs fail closed because
-independent directional summaries cannot reconstruct the intraday shared-liquidation cutoff.
+first-to-last analyzed-equity timestamp span as Rust. Fused dual-side kernels retain the shared
+intraday-liquidation cutoff.
 Peak strategy-equity recovery is available in both hours and days; peak realized-PnL recovery
 tracks the strict cumulative net-PnL peak at every proxy fill and includes the final analyzed tail.
-These metrics support single-coin and one-sided multi-coin topologies. Dual-side multi-coin runs
-fail closed because independent directional dispatches cannot reconstruct the shared fill sequence
-or liquidation cutoff.
+These metrics support single-coin and multi-coin topologies. Fused dual-side kernels retain the
+shared fill sequence and liquidation cutoff.
 Initial-entry allocation uses the candidate's effective position count and the same
 first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
 p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and

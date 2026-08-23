@@ -1812,7 +1812,7 @@ def test_gpu_dual_multicoin_rejects_tm_exposure_repair(repair_key):
         risk["n_positions"] = 2
         risk[repair_key] = True
 
-    with pytest.raises(ValueError, match="shared-balance portfolio kernel"):
+    with pytest.raises(ValueError, match="global cross-side selection"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
@@ -1834,7 +1834,7 @@ def test_gpu_dual_multicoin_rejects_tm_coin_override_exposure_repair():
         }
     }
 
-    with pytest.raises(ValueError, match="shared-balance portfolio kernel"):
+    with pytest.raises(ValueError, match="global cross-side selection"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
@@ -1923,7 +1923,7 @@ def test_gpu_dual_multicoin_rejects_ema_total_exposure_repair():
         risk["n_positions"] = 2
         risk["total_exposure_enforcer_enabled"] = True
 
-    with pytest.raises(ValueError, match="shared-balance portfolio kernel"):
+    with pytest.raises(ValueError, match="global cross-side selection"):
         _validate_scope(config, _MulticoinEvaluator())
 
 
@@ -2223,8 +2223,17 @@ def test_gpu_multicoin_coin_hsl_overrides_fail_closed_outside_one_side_coin_mode
         )
 
 
-def test_gpu_multicoin_coin_hsl_overrides_accept_fused_dual_side_ema():
-    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+@pytest.mark.parametrize(
+    ("strategy_kind", "config_factory"),
+    [
+        ("ema_anchor", _directional_ema_config),
+        ("trailing_martingale", _directional_tm_config),
+    ],
+)
+def test_gpu_multicoin_coin_hsl_overrides_accept_fused_dual_side(
+    strategy_kind, config_factory
+):
+    config = config_factory(long_enabled=True, short_enabled=True)
     config["live"]["hsl_signal_mode"] = "coin"
     config["coin_overrides"] = {
         "ETH": {
@@ -2237,26 +2246,10 @@ def test_gpu_multicoin_coin_hsl_overrides_accept_fused_dual_side_ema():
 
     _validate_gpu_coin_overrides(
         config,
-        strategy_kind="ema_anchor",
+        strategy_kind=strategy_kind,
         enabled_sides=["long", "short"],
         coin_count=3,
     )
-
-
-def test_gpu_multicoin_coin_hsl_overrides_keep_dual_side_tm_fail_closed():
-    config = _directional_tm_config(long_enabled=True, short_enabled=True)
-    config["live"]["hsl_signal_mode"] = "coin"
-    config["coin_overrides"] = {
-        "ETH": {"bot": {"long": {"hsl": {"enabled": True}}}}
-    }
-
-    with pytest.raises(ValueError, match="fused dual-side EMA Anchor"):
-        _validate_gpu_coin_overrides(
-            config,
-            strategy_kind="trailing_martingale",
-            enabled_sides=["long", "short"],
-            coin_count=3,
-        )
 
 
 def test_gpu_coin_overrides_reject_single_coin_scope():
