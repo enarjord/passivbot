@@ -1586,25 +1586,11 @@ def test_gpu_foundation_accepts_baseline_ema_single_coin_market_execution():
             "finite non-negative",
         ),
         (
-            lambda config: config["backtest"].__setitem__(
-                "filter_by_min_effective_cost", True
-            ),
-            _Evaluator,
-            "filter_by_min_effective_cost=false",
-        ),
-        (
             lambda config: config["live"].__setitem__(
                 "max_realized_loss_pct", 0.5
             ),
             _Evaluator,
             "max_realized_loss_pct>=1",
-        ),
-        (
-            lambda config: config["bot"]["long"]["hsl"].__setitem__(
-                "enabled", True
-            ),
-            _Evaluator,
-            "hsl.enabled=false",
         ),
         (
             lambda config: config["bot"]["long"]["unstuck"].__setitem__(
@@ -1638,6 +1624,37 @@ def test_gpu_market_execution_fails_closed_outside_baseline_scope(
 
     with pytest.raises(ValueError, match=message):
         _validate_scope(config, evaluator())
+
+
+@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+def test_gpu_market_execution_accepts_single_coin_ema_hsl(signal_mode):
+    config = _long_only_ema_config()
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["hsl_signal_mode"] = signal_mode
+    config["live"]["pnls_max_lookback_days"] = "all"
+    config["bot"]["long"]["hsl"]["enabled"] = True
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_market_execution_accepts_hsl_with_min_effective_cost_filter():
+    config = _long_only_ema_config()
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["live"]["pnls_max_lookback_days"] = "all"
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    config["backtest"]["filter_by_min_effective_cost"] = True
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+def test_gpu_market_execution_rejects_dual_side_min_effective_cost_filter():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    config["live"]["market_orders_allowed"] = True
+    config["backtest"]["filter_by_min_effective_cost"] = True
+
+    with pytest.raises(ValueError, match="requires exactly one enabled side"):
+        _validate_scope(config, _Evaluator())
 
 
 def test_gpu_foundation_accepts_one_sided_single_coin_hsl():

@@ -6706,6 +6706,25 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     market_output = market_runner.run(
         np.asarray([rows[1]], dtype=np.float64)
     )
+    ordinary_market_runner = None
+    ordinary_market_output = None
+    if strategy_kind == "ema_anchor":
+        ordinary_market_runner = runner_cls(
+            market,
+            run,
+            data,
+            long_enabled=side == "long",
+            short_enabled=side == "short",
+            taker_fee=0.01,
+            market_order_slippage_pct=0.02,
+            market_orders_allowed=True,
+            market_order_near_touch_threshold=0.001,
+            hsl_panic_market_long=side == "long",
+            hsl_panic_market_short=side == "short",
+        )
+        ordinary_market_output = ordinary_market_runner.run(
+            np.asarray([rows[1]], dtype=np.float64)
+        )
     gated_output = runner_cls(
         market,
         run,
@@ -6775,6 +6794,13 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         market_output["hsl_panic_close_loss_sum"].item()
         > output["hsl_panic_close_loss_sum"][1].item()
     )
+    if strategy_kind == "ema_anchor":
+        assert ordinary_market_runner.settings[19].item() == 1.0
+        assert ordinary_market_output[size_key].item() == 0.0
+        assert ordinary_market_output[trigger_key].item() == 1.0
+        assert ordinary_market_output["hsl_flatten_time_count"].item() == 1.0
+        assert ordinary_market_output["hsl_panic_close_loss_sum"].item() > 0.0
+        assert torch.isfinite(ordinary_market_output["balance"]).all()
 
 
 @pytest.mark.skipif(
@@ -10701,6 +10727,60 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
 
     assert output["day_has_fill"].sum().item() == 0
     assert output["psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter():
+    count = 5
+    close = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 4.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(close, close, close, timestamps, run, market)
+    row = [
+        0.1,
+        2.0,
+        3.0,
+        0.0,
+        0.0005,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        2.0,
+        0.0,
+        1.0,
+    ]
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
+
+    output = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        long_enabled=False,
+        short_enabled=True,
+        filter_by_min_effective_cost=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() == 1.0
+    assert output["short_psize"].item() == pytest.approx(1.0)
+    assert output["short_pprice"].item() == pytest.approx(100.0)
 
 
 @pytest.mark.skipif(
