@@ -670,7 +670,7 @@ mod tests {
         assert!(source.contains("h.restart_retrigger_count"));
         assert!(source.contains("h.halt_duration_sum_steps"));
         assert!(source.contains("record_hsl_panic_fill("));
-        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
+        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("h.panic_loss_drawdown_sum"));
         assert!(source.contains("&& !long_side.close_is_panic"));
         assert!(source.contains("&& !short_side.close_is_panic"));
@@ -736,9 +736,17 @@ mod tests {
         assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
         assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
         assert!(source.contains("const bool short_hsl_panic_market = settings[18] > 0.5f"));
-        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
+        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("close * (1.0f - market_order_slippage_pct)"));
         assert!(source.contains("close * (1.0f + market_order_slippage_pct)"));
+        assert!(source.contains("const bool market_orders_allowed = settings[19] > 0.5f"));
+        assert!(source
+            .contains("const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"));
+        assert!(source.contains("should_use_ordinary_market_execution("));
+        assert!(source.contains("ordinary_market_fill_price("));
+        assert!(source.contains("resize_market_close_qty("));
+        assert!(source.contains("entry_gen_market_price"));
+        assert!(source.contains("close_gen_market_price"));
         assert!(source.contains("the proxy uses a zero-loss envelope"));
         assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
         assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));

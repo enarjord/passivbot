@@ -227,16 +227,23 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
     assert runner.hsl_raw_drawdown_enabled is False
 
 
-def test_trailing_martingale_runner_rejects_unmodeled_ordinary_market_execution():
+def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):
+    from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 
-    with pytest.raises(ValueError, match="ordinary market execution is not modeled"):
-        MpsTrailingMartingaleRunner(
-            None,
-            None,
-            None,
-            market_orders_allowed=True,
-        )
+    def fake_base_init(self, *args, **kwargs):
+        self.long_enabled = True
+        self.short_enabled = False
+        self.hsl_ema_tail_enabled = False
+        self.hsl_raw_drawdown_enabled = False
+        self.recovery_distribution_enabled = False
+
+    monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    runner = MpsTrailingMartingaleRunner(
+        None, None, None, market_orders_allowed=True, hsl_enabled=False
+    )
+
+    assert runner.shader_topology == "long_no_hsl"
 
 
 @pytest.mark.skipif(
@@ -6565,6 +6572,406 @@ def _tm_single_row(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("recursive_entry", [False, True])
+def test_mps_tm_near_touch_market_entry_uses_taker_fill(
+    side, recursive_entry
+):
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.001)
+    row[11] = 0.0 if recursive_entry else 0.001
+    row[16] = 10.0
+    row[20] = 0.001
+    params = np.asarray([row + row], dtype=np.float64)
+    common = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+        "hsl_enabled": False,
+    }
+
+    resting = MpsTrailingMartingaleRunner(
+        market, run, data, **common
+    ).run(params)
+    market_output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        taker_fee=0.01,
+        market_order_slippage_pct=0.01,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.002,
+        **common,
+    ).run(params)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    price_key = "pprice" if side == "long" else "short_pprice"
+    assert resting[size_key].item() == 0.0
+    if recursive_entry:
+        assert market_output[size_key].item() == 0.0
+        assert market_output["balance"].item() == pytest.approx(1_000.0)
+        assert market_output["fill_count_entry"].item() == 0.0
+        return
+    assert market_output[size_key].item() > 0.0
+    assert market_output[price_key].item() == pytest.approx(
+        101.0 if side == "long" else 99.0, abs=1.0e-4
+    )
+    assert market_output["balance"].item() < 1_000.0
+    assert market_output["fill_count_entry"].item() >= 1.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_long_market_entry_crop_requires_total_exposure_gate():
+    count = 5
+    close = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(close, close, close, timestamps, run, market)
+    disabled = _tm_single_row(initial_ema_dist=0.02, entry_gate=False)
+    enabled = _tm_single_row(initial_ema_dist=0.02, entry_gate=True)
+    disabled[6] = enabled[6] = 1.0
+    disabled[16] = enabled[16] = 10.0
+    disabled[20] = enabled[20] = 0.001
+    common = {
+        "long_enabled": True,
+        "short_enabled": False,
+        "hsl_enabled": False,
+        "market_orders_allowed": True,
+        "market_order_near_touch_threshold": 0.03,
+    }
+
+    without_gate = MpsTrailingMartingaleRunner(
+        market, run, data, **common
+    ).run(np.asarray([disabled + disabled], dtype=np.float64))
+    with_gate = MpsTrailingMartingaleRunner(
+        market, run, data, **common
+    ).run(np.asarray([enabled + enabled], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert without_gate["psize"].item() > with_gate["psize"].item()
+    assert without_gate["psize"].item() == pytest.approx(10.204, abs=1.0e-3)
+    assert 9.997 <= with_gate["psize"].item() < 10.0
+    assert with_gate["psize"].item() * 100.0 / run.starting_balance < 1.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_market_entry_gate_drops_unexecutable_cap_remainder(side):
+    count = 5
+    close = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(close, close, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.02, entry_gate=True)
+    row[6] = 1.0
+    row[20] = 0.001
+    row[24] = 0.05
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.03,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count_entry"].item() == 0.0
+    assert output["psize" if side == "long" else "short_psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_market_entry_gate_handles_qty_step_below_float32_ulp(side):
+    count = 5
+    close = np.full(count, 1.0e-7)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(1.0, 1.0e-9, 1.0, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        10.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(close, close, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.02, entry_gate=True)
+    row[6] = 1.0
+    row[20] = 0.001
+    row[24] = 0.5
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.03,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert np.spacing(np.float32(50_000_000.0)) > market.qty_step
+    assert output["fill_count_entry"].item() == 0.0
+    assert output["psize" if side == "long" else "short_psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_close_remains_passive_with_market_policy(side):
+    count = 7
+    close = np.full(count, 99.0 if side == "long" else 101.0)
+    close[:3] = 100.0
+    high = close.copy()
+    low = close.copy()
+    if side == "long":
+        high[3] = 100.0
+        low[3] = 98.0
+    else:
+        high[3] = 102.0
+        low[3] = 100.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.01)
+    row[11] = 0.001
+    row[16] = 0.005
+    row[20] = 0.0
+    params = np.asarray([row + row], dtype=np.float64)
+    common = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+        "hsl_enabled": False,
+    }
+
+    resting = MpsTrailingMartingaleRunner(
+        market, run, data, **common
+    ).run(params)
+    zero_cost_market = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.006,
+        **common,
+    ).run(params)
+    costly_market = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        taker_fee=0.01,
+        market_order_slippage_pct=0.01,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.006,
+        **common,
+    ).run(params)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert resting[size_key].item() > 0.0
+    assert zero_cost_market[size_key].item() == pytest.approx(
+        resting[size_key].item(), abs=1.0e-6
+    )
+    assert costly_market[size_key].item() == pytest.approx(
+        resting[size_key].item(), abs=1.0e-6
+    )
+    assert costly_market["balance"].item() == pytest.approx(
+        resting["balance"].item(), abs=1.0e-6
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_close_sizing_uses_generation_market(side):
+    import passivbot_rust
+
+    row = _tm_single_row(initial_ema_dist=0.0)
+    row[15] = 0.5
+    row[16] = 0.1 if side == "long" else -0.1
+    row[17] = 0.01 if side == "long" else -0.01
+    row[20] = 0.0
+    row[24] = 0.01
+    params = torch.tensor(row, dtype=torch.float32, device="mps")
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_close_generation_market_probe(
+    constant float* params,
+    device float* output,
+    constant int& is_long_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool is_long = is_long_raw != 0;
+    TmSide source = load_side(params, 0, 100.0f);
+    source.close_gen_balance = 1000.0f;
+    source.close_gen_psize = 0.1f;
+    source.close_gen_pprice = 100.0f;
+    source.close_gen_market_price = is_long ? 80.0f : 140.0f;
+    source.close_gen_touch_down_ticks = is_long ? 7999 : 13999;
+    source.close_gen_touch_up_ticks = is_long ? 8001 : 14001;
+    source.close_gen_touch_nearest_ticks = is_long ? 8000 : 14000;
+    source.close_gen_touch_min_qty = is_long ? 0.063f : 0.036f;
+    source.close_gen_touch_min_qty_relation = 0;
+    source.market_order_near_touch_threshold = 0.12f;
+
+    CloseGroup group;
+    source.market_orders_allowed = true;
+    output[0] = float(recursive_close_groups(
+        source, is_long, 0, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    ));
+    output[1] = group.qty;
+    recursive_close_groups(
+        source, is_long, 1, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    );
+    output[2] = group.qty;
+
+    source.market_orders_allowed = false;
+    output[3] = float(recursive_close_groups(
+        source, is_long, 0, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    ));
+    output[4] = group.qty;
+    recursive_close_groups(
+        source, is_long, 1, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    );
+    output[5] = group.qty;
+}
+"""
+    output = torch.zeros(6, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_close_generation_market_probe(
+        params,
+        output,
+        1 if side == "long" else 0,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    values = output.cpu().numpy()
+    assert values[0] >= 2.0
+    np.testing.assert_allclose(values[:3], values[3:], atol=1.0e-6)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_mps_tm_dual_side_market_entries_respect_position_mode(hedge_mode):
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.001)
+    row[16] = 10.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=hedge_mode,
+        hsl_enabled=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.002,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() > 0.0
+    assert (output["short_psize"].item() > 0.0) is hedge_mode
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
@@ -11161,7 +11568,23 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "const float market_order_slippage_pct = fmax(settings[16], 0.0f)" in source
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
-    assert "market_panic ? taker_fee : maker_fee" in source
+    assert "market_execution ? taker_fee : maker_fee" in source
+    assert "const bool market_orders_allowed = settings[19] > 0.5f" in source
+    assert (
+        "const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"
+        in source
+    )
+    assert "should_use_ordinary_market_execution(" in source
+    assert "ordinary_market_fill_price(" in source
+    assert "resize_market_close_qty(" in source
+    assert "entry_gen_market_price" in source
+    assert "close_gen_market_price" in source
+    assert "sim.market_orders_allowed = false" in source
+    assert source.count("ladder_side.market_orders_allowed = false") == 2
+    assert source.count("ladder_side.psize + strategy_eq") == 2
+    assert source.count("bool entry_market = rung == 0 &&") == 2
+    assert "s.entry_retracement_base > 0.0f" in source
+    assert "s.close_retracement_base > 0.0f" in source
     assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source

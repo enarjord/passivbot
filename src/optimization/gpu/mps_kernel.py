@@ -1542,10 +1542,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     """Persistent single-coin trailing-martingale runner on Apple MPS."""
 
     def __init__(self, *args, hsl_enabled: bool = True, **kwargs):
-        if bool(kwargs.get("market_orders_allowed", False)):
-            raise ValueError(
-                "MPS trailing-martingale ordinary market execution is not modeled yet"
-            )
         super().__init__(*args, **kwargs)
         self.shader_topology = trailing_martingale_shader_topology(
             long_enabled=self.long_enabled,
