@@ -164,8 +164,11 @@ The supported slice is intentionally narrow:
   and Trailing Martingale use fused shared-account kernels for unified, pside, and coin signals,
   so shared event-loss, warning-tier overlap, and the other HSL lifecycle/panic-loss metrics are
   available. The worst EMA-smoothed strategy-equity drawdown metrics are also available for the
-  account and each side; HSL mean-worst-1% EMA and recovery-distribution metrics remain fail
-  closed for now.
+  account and each side. Per-side `peak_recovery_hours_strategy_eq_{long,short}` and
+  `peak_recovery_days_strategy_eq_{long,short}` retain the longest interval until strategy equity
+  strictly exceeds its prior controller peak, including an unrecovered tail through the backtest
+  end. Raw per-side worst-drawdown, HSL mean-worst-1% EMA, and recovery-distribution metrics remain
+  fail closed for now.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
@@ -1180,6 +1183,7 @@ over all exchanges before scoring.
 | `peak_recovery_hours_pnl`, `peak_recovery_days_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
 | `strategy_eq_recovery_days_mean`, `strategy_eq_recovery_days_median`, `strategy_eq_recovery_days_p95`, `strategy_eq_recovery_days_p99`, `strategy_eq_recovery_days_mean_worst_5pct`, `strategy_eq_recovery_days_mean_worst_1pct`, `strategy_eq_recovery_days_max` | Per-sample strategy-equity time-to-exceed distribution in days. Each sample measures how long until a later strategy-equity sample strictly exceeds it; unrecovered samples use the open tail to the backtest end. |
 | `peak_recovery_hours_strategy_eq`, `peak_recovery_days_strategy_eq` | Legacy max-recovery metrics. `peak_recovery_days_strategy_eq` is an alias for `strategy_eq_recovery_days_max`; the hours variant remains available for older configs. |
+| `peak_recovery_hours_strategy_eq_{long,short}`, `peak_recovery_days_strategy_eq_{long,short}` | Longest strict time-to-exceed interval for the long or short HSL strategy-equity controller, including an unrecovered tail through the backtest end. |
 | `high_exposure_hours_{mean,max}_long`, `high_exposure_days_{mean,max}_long` | Mean / maximum duration of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE, in hours and equivalent days |
 | `high_exposure_hours_{mean,max}_short`, `high_exposure_days_{mean,max}_short` | Mean / maximum duration of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE, in hours and equivalent days |
 

@@ -128,6 +128,25 @@ mod tests {
         assert!(source.contains("h.drawdown_ema_max = fmax("));
         assert!(source.contains("output.drawdown_ema_max_long"));
         assert!(source.contains("output.drawdown_ema_max_short"));
+        assert_eq!(source.matches("struct HslStrategyEquityStats").count(), 1);
+        assert_eq!(
+            source
+                .matches("inline HslStrategyEquityStats init_hsl_strategy_equity_stats(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            source
+                .matches("inline void update_hsl_strategy_equity_stats(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            source
+                .matches("inline float hsl_strategy_equity_recovery_max_steps(")
+                .count(),
+            1
+        );
         assert!(source
             .contains("const bool shared_has_position = has_position_long || has_position_short"));
         assert!(source.contains("const bool shared_has_blocking_orders = has_blocking_orders_long"));
@@ -289,7 +308,7 @@ mod tests {
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
-        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 66"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -307,6 +326,8 @@ mod tests {
         assert!(source.contains("scalars[so + 57] = account_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[so + 58] = profit_sum_long"));
         assert!(source.contains("scalars[so + 61] = loss_sum_short"));
+        assert!(source.contains("scalars[so + 64] = hsl_strategy_equity_recovery_max_steps("));
+        assert!(source.contains("scalars[so + 65] = hsl_strategy_equity_recovery_max_steps("));
         assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("constant int SIDE_PARAMS = 34"));
         assert!(source.contains("struct HslState"));
@@ -377,8 +398,8 @@ mod tests {
         assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
-        assert!(source.contains("constant int SCALAR_COLS = 59"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 61"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -409,6 +430,7 @@ mod tests {
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("write_dual_side_hsl_outputs("));
         assert!(source.contains("write_dual_side_coin_hsl_outputs("));
+        assert!(source.contains("hsl_strategy_equity_recovery_max_steps("));
         assert!(source.contains("long_coin_overrides, short_coin_overrides"));
         assert!(source.contains("net_position_cost -= short_side.psize[c]"));
         assert!(source.contains(
@@ -535,7 +557,7 @@ mod tests {
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 66"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -553,6 +575,8 @@ mod tests {
         assert!(source.contains("scalars[so + 57] = account_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[so + 58] = profit_sum_long"));
         assert!(source.contains("scalars[so + 61] = loss_sum_short"));
+        assert!(source.contains("scalars[so + 64] = hsl_strategy_equity_recovery_max_steps("));
+        assert!(source.contains("scalars[so + 65] = hsl_strategy_equity_recovery_max_steps("));
         assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("hsl_tier_samples_total"));
         assert!(source.contains("h.restart_retrigger_count"));
@@ -663,8 +687,8 @@ mod tests {
         assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 12"));
-        assert!(source.contains("constant int SCALAR_COLS = 59"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 61"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")

@@ -137,10 +137,14 @@ SUPPORTED_METRICS = (
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq",
+    "peak_recovery_hours_strategy_eq_long",
+    "peak_recovery_hours_strategy_eq_short",
     "peak_recovery_days_equity_usd",
     "peak_recovery_hours_equity_usd",
     "peak_recovery_days_pnl",
     "peak_recovery_days_strategy_eq",
+    "peak_recovery_days_strategy_eq_long",
+    "peak_recovery_days_strategy_eq_short",
     "peak_recovery_hours_pnl",
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
@@ -242,6 +246,12 @@ _HARD_STOP_EMA_DRAWDOWN_METRICS = {
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_ema_strategy_eq_long",
     "drawdown_worst_ema_strategy_eq_short",
+}
+_HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS = {
+    "peak_recovery_hours_strategy_eq_long",
+    "peak_recovery_hours_strategy_eq_short",
+    "peak_recovery_days_strategy_eq_long",
+    "peak_recovery_days_strategy_eq_short",
 }
 HARD_STOP_PROXY_METRICS = tuple(
     sorted(_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
@@ -1168,6 +1178,32 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
     }
 
 
+def _hard_stop_strategy_eq_recovery_metrics(out: dict) -> dict:
+    """Expose per-side HSL strategy-equity maximum recovery duration."""
+
+    required = {
+        "hsl_strategy_eq_recovery_max_ms_long",
+        "hsl_strategy_eq_recovery_max_ms_short",
+    }
+    if missing := required.difference(out):
+        raise RuntimeError(
+            "MPS directional HSL strategy-equity recovery outputs are missing from proxy results: "
+            + ", ".join(sorted(missing))
+        )
+    long_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_long"].to(
+        torch.float64
+    )
+    short_recovery_ms = out["hsl_strategy_eq_recovery_max_ms_short"].to(
+        torch.float64
+    )
+    return {
+        "peak_recovery_hours_strategy_eq_long": long_recovery_ms / 3_600_000.0,
+        "peak_recovery_hours_strategy_eq_short": short_recovery_ms / 3_600_000.0,
+        "peak_recovery_days_strategy_eq_long": long_recovery_ms / 86_400_000.0,
+        "peak_recovery_days_strategy_eq_short": short_recovery_ms / 86_400_000.0,
+    }
+
+
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
@@ -1363,6 +1399,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _HARD_STOP_EMA_DRAWDOWN_METRICS
         else {}
     )
+    hard_stop_strategy_eq_recovery_metrics = (
+        _hard_stop_strategy_eq_recovery_metrics(out)
+        if requested & _HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS
+        else {}
+    )
 
     requested_start = float(run.requested_start_ts_ms)
     first_timestamp = data["ts0"]
@@ -1414,6 +1455,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "volume_pct_per_day_avg": volume_pct,
     }
     objectives.update(hard_stop_ema_drawdown_metrics)
+    objectives.update(hard_stop_strategy_eq_recovery_metrics)
     if "loss_profit_ratio" in requested:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]

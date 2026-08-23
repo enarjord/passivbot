@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added per-side HSL strategy-equity peak-recovery scoring and limits to Apple MPS optimization.
+  EMA Anchor and Trailing Martingale kernels now retain the longest strict time-to-exceed interval
+  for each long and short HSL controller, including an unrecovered tail through the backtest end,
+  and expose it in hours and days. Exact Rust validation remains authoritative; raw per-side
+  strategy-equity drawdown and recovery-distribution metrics remain fail closed.
+
 - Fixed Apple MPS optimization halting when a converged or single-objective proxy front repeats an
   already exact-validated candidate. The backend now revalidates that actual current-front member
   (or waits for its in-flight exact job) instead of relabeling an off-front candidate, preserving

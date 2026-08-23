@@ -2,7 +2,7 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
-constant int SCALAR_COLS = 64;
+constant int SCALAR_COLS = 66;
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 51;
 
@@ -1123,6 +1123,8 @@ inline void passivbot_single_coin_impl(
     TmSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
     HslState long_hsl = load_hsl(params, po, 40);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 40);
+    HslStrategyEquityStats long_hsl_strategy_eq = init_hsl_strategy_equity_stats();
+    HslStrategyEquityStats short_hsl_strategy_eq = init_hsl_strategy_equity_stats();
 #if defined(PASSIVBOT_TRAILING_HSL_DISABLED)
     long_hsl.enabled = false;
     short_hsl.enabled = false;
@@ -2617,6 +2619,29 @@ inline void passivbot_single_coin_impl(
             );
             float long_triggers_before = long_hsl.triggers;
             float short_triggers_before = short_hsl.triggers;
+            const bool unified_hsl = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+            if (hsl_modes_valid && long_enabled && long_hsl.enabled
+                && (long_hsl.signal_mode == HSL_SIGNAL_COIN || !long_hsl.halted)) {
+                update_hsl_strategy_equity_stats(
+                    long_hsl_strategy_eq,
+                    starting_balance + (
+                        unified_hsl ? realized_pnl_cumsum_last
+                            : realized_pnl_cumsum_long
+                    ) + (unified_hsl ? long_unreal + short_unreal : long_unreal),
+                    kf
+                );
+            }
+            if (hsl_modes_valid && short_enabled && short_hsl.enabled
+                && (short_hsl.signal_mode == HSL_SIGNAL_COIN || !short_hsl.halted)) {
+                update_hsl_strategy_equity_stats(
+                    short_hsl_strategy_eq,
+                    starting_balance + (
+                        unified_hsl ? realized_pnl_cumsum_last
+                            : realized_pnl_cumsum_short
+                    ) + (unified_hsl ? long_unreal + short_unreal : short_unreal),
+                    kf
+                );
+            }
             bool hsl_update_valid = update_dual_side_hsl(
                 long_hsl, short_hsl, balance, starting_balance,
                 realized_pnl_cumsum_last,
@@ -2853,6 +2878,12 @@ inline void passivbot_single_coin_impl(
     scalars[so + 61] = loss_sum_short;
     scalars[so + 62] = long_hsl.enabled ? long_hsl.drawdown_ema_max : 0.0f;
     scalars[so + 63] = short_hsl.enabled ? short_hsl.drawdown_ema_max : 0.0f;
+    scalars[so + 64] = hsl_strategy_equity_recovery_max_steps(
+        long_hsl_strategy_eq
+    ) * interval_ms;
+    scalars[so + 65] = hsl_strategy_equity_recovery_max_steps(
+        short_hsl_strategy_eq
+    ) * interval_ms;
 }
 
 kernel void passivbot_trailing_martingale(

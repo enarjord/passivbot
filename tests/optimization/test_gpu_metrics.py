@@ -826,6 +826,10 @@ def test_hard_stop_lifecycle_metric_surface_is_supported():
         "drawdown_worst_ema_strategy_eq",
         "drawdown_worst_ema_strategy_eq_long",
         "drawdown_worst_ema_strategy_eq_short",
+        "peak_recovery_hours_strategy_eq_long",
+        "peak_recovery_hours_strategy_eq_short",
+        "peak_recovery_days_strategy_eq_long",
+        "peak_recovery_days_strategy_eq_short",
     } <= set(SUPPORTED_METRICS)
 
 
@@ -859,6 +863,48 @@ def test_hard_stop_ema_drawdown_metrics_fail_closed_without_directional_outputs(
     with pytest.raises(RuntimeError, match="hsl_drawdown_ema_max_short"):
         _hard_stop_ema_drawdown_metrics(
             {"hsl_drawdown_ema_max_long": torch.tensor([0.1])}
+        )
+
+
+def test_hard_stop_strategy_equity_recovery_matches_rust_units():
+    from optimization.gpu.metrics import _hard_stop_strategy_eq_recovery_metrics
+
+    metrics = _hard_stop_strategy_eq_recovery_metrics(
+        {
+            "hsl_strategy_eq_recovery_max_ms_long": torch.tensor(
+                [3_600_000.0, 86_400_000.0]
+            ),
+            "hsl_strategy_eq_recovery_max_ms_short": torch.tensor(
+                [7_200_000.0, 172_800_000.0]
+            ),
+        }
+    )
+
+    assert metrics["peak_recovery_hours_strategy_eq_long"].tolist() == pytest.approx(
+        [1.0, 24.0]
+    )
+    assert metrics["peak_recovery_hours_strategy_eq_short"].tolist() == pytest.approx(
+        [2.0, 48.0]
+    )
+    assert metrics["peak_recovery_days_strategy_eq_long"].tolist() == pytest.approx(
+        [1.0 / 24.0, 1.0]
+    )
+    assert metrics["peak_recovery_days_strategy_eq_short"].tolist() == pytest.approx(
+        [2.0 / 24.0, 2.0]
+    )
+
+
+def test_hard_stop_strategy_equity_recovery_fails_closed_without_raw_outputs():
+    from optimization.gpu.metrics import _hard_stop_strategy_eq_recovery_metrics
+
+    with pytest.raises(RuntimeError, match="strategy-equity recovery outputs are missing"):
+        _hard_stop_strategy_eq_recovery_metrics({})
+
+    with pytest.raises(RuntimeError, match="hsl_strategy_eq_recovery_max_ms_short"):
+        _hard_stop_strategy_eq_recovery_metrics(
+            {
+                "hsl_strategy_eq_recovery_max_ms_long": torch.tensor([60_000.0]),
+            }
         )
 
 

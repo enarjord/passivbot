@@ -216,6 +216,57 @@ struct HslSignal {
     float peak_strategy_equity;
 };
 
+struct HslStrategyEquityStats {
+    bool initialized;
+    float peak;
+    float peak_k;
+    float last_k;
+    float recovery_max_steps;
+};
+
+inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
+    HslStrategyEquityStats stats;
+    stats.initialized = false;
+    stats.peak = 0.0f;
+    stats.peak_k = -1.0f;
+    stats.last_k = -1.0f;
+    stats.recovery_max_steps = 0.0f;
+    return stats;
+}
+
+inline void update_hsl_strategy_equity_stats(
+    thread HslStrategyEquityStats& stats,
+    float strategy_equity,
+    float kf
+) {
+    if (!isfinite(strategy_equity)) return;
+    if (!stats.initialized) {
+        stats.initialized = true;
+        stats.peak = strategy_equity;
+        stats.peak_k = kf;
+        stats.last_k = kf;
+        return;
+    }
+    stats.last_k = kf;
+    if (strategy_equity > stats.peak) {
+        stats.recovery_max_steps = fmax(
+            stats.recovery_max_steps, kf - stats.peak_k
+        );
+        stats.peak = strategy_equity;
+        stats.peak_k = kf;
+    }
+}
+
+inline float hsl_strategy_equity_recovery_max_steps(
+    thread HslStrategyEquityStats& stats
+) {
+    if (!stats.initialized) return 0.0f;
+    return fmax(
+        stats.recovery_max_steps,
+        fmax(stats.last_k - stats.peak_k, 0.0f)
+    );
+}
+
 inline HslState load_hsl(
     constant float* params,
     int po,
