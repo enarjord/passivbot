@@ -1120,6 +1120,11 @@ inline int recursive_close_groups(
     TmSide sim = source;
     sim.psize = source.close_gen_psize;
     sim.pprice = source.close_gen_pprice;
+    // Reconstruct Rust's passive strategy ladder first. Ordinary market
+    // execution is a policy applied to each completed price group against the
+    // market captured at generation time; applying it inside generate_orders
+    // would compare against close_gen_pprice and permanently distort sizing.
+    sim.market_orders_allowed = false;
     bool have_group = false;
     int group_count = 0;
     int group_ticks = 0;

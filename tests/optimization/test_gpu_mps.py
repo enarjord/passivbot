@@ -6709,6 +6709,80 @@ def test_mps_tm_recursive_near_touch_market_close_uses_taker_fill(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_close_sizing_uses_generation_market(side):
+    import passivbot_rust
+
+    row = _tm_single_row(initial_ema_dist=0.0)
+    row[15] = 0.5
+    row[16] = 0.1 if side == "long" else -0.1
+    row[17] = 0.01 if side == "long" else -0.01
+    row[20] = 0.0
+    row[24] = 0.01
+    params = torch.tensor(row, dtype=torch.float32, device="mps")
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_close_generation_market_probe(
+    constant float* params,
+    device float* output,
+    constant int& is_long_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool is_long = is_long_raw != 0;
+    TmSide source = load_side(params, 0, 100.0f);
+    source.close_gen_balance = 1000.0f;
+    source.close_gen_psize = 0.1f;
+    source.close_gen_pprice = 100.0f;
+    source.close_gen_market_price = is_long ? 80.0f : 140.0f;
+    source.close_gen_touch_down_ticks = is_long ? 7999 : 13999;
+    source.close_gen_touch_up_ticks = is_long ? 8001 : 14001;
+    source.close_gen_touch_nearest_ticks = is_long ? 8000 : 14000;
+    source.close_gen_touch_min_qty = is_long ? 0.063f : 0.036f;
+    source.close_gen_touch_min_qty_relation = 0;
+    source.market_order_near_touch_threshold = 0.12f;
+
+    CloseGroup group;
+    source.market_orders_allowed = true;
+    output[0] = float(recursive_close_groups(
+        source, is_long, 0, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    ));
+    output[1] = group.qty;
+    recursive_close_groups(
+        source, is_long, 1, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    );
+    output[2] = group.qty;
+
+    source.market_orders_allowed = false;
+    output[3] = float(recursive_close_groups(
+        source, is_long, 0, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    ));
+    output[4] = group.qty;
+    recursive_close_groups(
+        source, is_long, 1, 0.001f, 0.01f, 0.001f, 5.005f, 1.0f, 500, group
+    );
+    output[5] = group.qty;
+}
+"""
+    output = torch.zeros(6, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_close_generation_market_probe(
+        params,
+        output,
+        1 if side == "long" else 0,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    values = output.cpu().numpy()
+    assert values[0] >= 2.0
+    np.testing.assert_allclose(values[:3], values[3:], atol=1.0e-6)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("hedge_mode", [False, True])
 def test_mps_tm_dual_side_market_entries_respect_position_mode(hedge_mode):
     count = 5
@@ -11360,6 +11434,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "resize_market_close_qty(" in source
     assert "entry_gen_market_price" in source
     assert "close_gen_market_price" in source
+    assert "sim.market_orders_allowed = false" in source
     assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
