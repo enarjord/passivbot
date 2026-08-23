@@ -16,6 +16,8 @@ const MPS_TRAILING_MARTINGALE_BODY: &str =
 const MPS_EMA_ANCHOR_MULTICOIN_BODY: &str = include_str!("gpu/mps_ema_anchor_multicoin_long.metal");
 const MPS_TRAILING_MARTINGALE_MULTICOIN_BODY: &str =
     include_str!("gpu/mps_trailing_martingale_multicoin.metal");
+const MPS_STRATEGY_EQ_RECOVERY_DISTRIBUTION_SOURCE: &str =
+    include_str!("gpu/mps_strategy_eq_recovery_distribution.metal");
 const MPS_TRAILING_LONG_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_TRAILING_LONG_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
 const MPS_TRAILING_SHORT_NO_HSL_PREAMBLE: &str =
@@ -85,6 +87,10 @@ pub fn mps_trailing_martingale_short_no_hsl_source() -> &'static str {
 
 pub fn mps_trailing_martingale_multicoin_source() -> &'static str {
     MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE.as_str()
+}
+
+pub fn mps_strategy_eq_recovery_distribution_source() -> &'static str {
+    MPS_STRATEGY_EQ_RECOVERY_DISTRIBUTION_SOURCE
 }
 
 #[cfg(test)]
@@ -167,6 +173,27 @@ mod tests {
         assert!(source
             .contains("const bool shared_has_position = has_position_long || has_position_short"));
         assert!(source.contains("const bool shared_has_blocking_orders = has_blocking_orders_long"));
+    }
+
+    fn assert_directional_recovery_sampling_contract(source: &str) {
+        assert_eq!(source.matches("device float* recovery_samples").count(), 2);
+        assert!(source.contains("#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"));
+        assert!(source.contains("const int recovery_stride = sizes[7]"));
+        assert!(source.contains("const int recovery_sample_count = sizes[8]"));
+        assert!(source.contains("recovery_stride > 0 && k % recovery_stride == 0"));
+        assert!(source
+            .contains("recovery_samples[int(b) * recovery_sample_count + sample_index] = eqf"));
+    }
+
+    #[test]
+    fn strategy_eq_recovery_distribution_source_preserves_strict_rust_contract() {
+        let source = mps_strategy_eq_recovery_distribution_source();
+
+        assert!(source.contains("kernel void passivbot_strategy_eq_recovery_distribution("));
+        assert!(source.contains("if (!(value > strategy_equity_samples[offset + pending_slot]))"));
+        assert!(source.contains("constant int RECOVERY_METRIC_COLS = 7"));
+        assert!(source.contains("recovery_histogram_percentile("));
+        assert!(source.contains("recovery_histogram_mean_worst_pct("));
     }
 
     fn assert_shared_multicoin_contract(source: &str) {
@@ -322,6 +349,7 @@ mod tests {
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
         assert_shared_hsl_contract(source);
+        assert_directional_recovery_sampling_contract(source);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
@@ -580,6 +608,7 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert_shared_hsl_contract(source);
+        assert_directional_recovery_sampling_contract(source);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
         assert!(source.contains("constant int SIDE_PARAMS = 51"));

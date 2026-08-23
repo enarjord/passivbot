@@ -1081,6 +1081,9 @@ inline void passivbot_single_coin_impl(
     device int* gap_hist,
     device float2* rolling_pnl_values,
     device int2* rolling_pnl_indices,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b
 ) {
     const int B = sizes[0];
@@ -1088,6 +1091,10 @@ inline void passivbot_single_coin_impl(
     const int D = sizes[2];
     const int P = sizes[3];
     const int first_valid = sizes[4];
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    const int recovery_stride = sizes[7];
+    const int recovery_sample_count = sizes[8];
+#endif
     if (b >= uint(B)) return;
 
     const float qty_step = settings[0];
@@ -2711,6 +2718,14 @@ inline void passivbot_single_coin_impl(
             }
             bool liq = balance <= 0.0f || equity <= liq_floor;
             float eqf = liq ? liq_floor : equity;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+            if (recovery_stride > 0 && k % recovery_stride == 0) {
+                const int sample_index = k / recovery_stride;
+                if (sample_index < recovery_sample_count) {
+                    recovery_samples[int(b) * recovery_sample_count + sample_index] = eqf;
+                }
+            }
+#endif
             if (eqf >= account_peak) {
                 if (account_peak_k >= 0.0f) {
                     account_recovery_max_min = fmax(
@@ -2929,10 +2944,17 @@ kernel void passivbot_trailing_martingale(
     device int* gap_hist,
     device float2* rolling_pnl_values,
     device int2* rolling_pnl_indices,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_single_coin_impl(
         bars, flags, params, settings, sizes, daily, scalars, gap_hist,
-        rolling_pnl_values, rolling_pnl_indices, b
+        rolling_pnl_values, rolling_pnl_indices,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples,
+#endif
+        b
     );
 }

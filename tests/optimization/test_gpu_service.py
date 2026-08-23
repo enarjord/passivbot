@@ -36,6 +36,7 @@ from optimization.gpu.service import (
     _directional_gross_pnl_outputs,
     _hsl_params,
     _mps_dispatch_batch_size,
+    _mps_strategy_eq_recovery_distribution,
     _multicoin_exposure_eligible_coins,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
@@ -75,6 +76,45 @@ def test_directional_coin_hsl_lookback_bar_contract(
         )
         == expected
     )
+
+
+def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypatch):
+    needed = {"strategy_eq_recovery_days_p99"}
+
+    assert _mps_strategy_eq_recovery_distribution({}, {"adg_strategy_eq"}) is None
+    with pytest.raises(RuntimeError, match="recovery sampling output is missing"):
+        _mps_strategy_eq_recovery_distribution({}, needed)
+
+    import torch
+    from optimization.gpu import mps_kernel
+
+    samples = torch.tensor([[100.0, 90.0, 101.0]])
+    expected = torch.ones((1, 7))
+    called = {}
+
+    def fake_postprocessor(values, *, sample_interval_days):
+        called["values"] = values
+        called["sample_interval_days"] = sample_interval_days
+        return expected
+
+    monkeypatch.setattr(
+        mps_kernel,
+        "strategy_eq_recovery_distribution_from_samples",
+        fake_postprocessor,
+    )
+    actual = _mps_strategy_eq_recovery_distribution(
+        {
+            "strategy_eq_recovery_samples": samples,
+            "strategy_eq_recovery_sample_interval_days": 1.0 / 24.0,
+        },
+        needed,
+    )
+
+    assert called == {
+        "values": samples,
+        "sample_interval_days": 1.0 / 24.0,
+    }
+    assert actual is expected
 
 
 @pytest.mark.parametrize(

@@ -220,6 +220,38 @@ _HSL_RAW_DRAWDOWN_METRICS = {
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",
 }
+_STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
+    "strategy_eq_recovery_days_mean",
+    "strategy_eq_recovery_days_median",
+    "strategy_eq_recovery_days_p95",
+    "strategy_eq_recovery_days_p99",
+    "strategy_eq_recovery_days_mean_worst_5pct",
+    "strategy_eq_recovery_days_mean_worst_1pct",
+}
+
+
+def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
+    """Run the opt-in recovery postprocessor before proxy outputs leave MPS."""
+
+    if not set(needed_metrics) & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS:
+        return None
+    required = {
+        "strategy_eq_recovery_samples",
+        "strategy_eq_recovery_sample_interval_days",
+    }
+    if missing := required.difference(output):
+        raise RuntimeError(
+            "MPS strategy-equity recovery sampling output is missing: "
+            + ", ".join(sorted(missing))
+        )
+    from optimization.gpu.mps_kernel import (
+        strategy_eq_recovery_distribution_from_samples,
+    )
+
+    return strategy_eq_recovery_distribution_from_samples(
+        output["strategy_eq_recovery_samples"],
+        sample_interval_days=output["strategy_eq_recovery_sample_interval_days"],
+    ).cpu()
 
 
 def _directional_coin_hsl_lookback_bars(
@@ -1198,6 +1230,9 @@ class MpsSingleCoinProxy:
             hsl_raw_drawdown_enabled=bool(
                 self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
             ),
+            recovery_distribution_enabled=bool(
+                self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
+            ),
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -1248,11 +1283,16 @@ class MpsSingleCoinProxy:
                 profile=self.profile_enabled,
             )
             interrupt_check()
+            recovery_distribution = _mps_strategy_eq_recovery_distribution(
+                output, self.needed_metrics
+            )
             output = {
                 key: value.cpu()
                 for key, value in output.items()
                 if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
             }
+            if recovery_distribution is not None:
+                output["strategy_eq_recovery_distribution"] = recovery_distribution
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",
@@ -2065,6 +2105,9 @@ class MpsMulticoinProxy:
                     profile=self.profile_enabled,
                 )
                 interrupt_check()
+                recovery_distribution = _mps_strategy_eq_recovery_distribution(
+                    raw_output, self.needed_metrics
+                )
                 output = {
                     key: value.cpu()
                     for key, value in raw_output.items()
@@ -2078,6 +2121,13 @@ class MpsMulticoinProxy:
                         profile=self.profile_enabled,
                     )
                     interrupt_check()
+                recovery_distribution = (
+                    _mps_strategy_eq_recovery_distribution(
+                        raw_side_outputs[self.sides[0]], self.needed_metrics
+                    )
+                    if len(self.sides) == 1
+                    else None
+                )
                 side_outputs = {
                     side: {
                         key: value.cpu()
@@ -2134,6 +2184,8 @@ class MpsMulticoinProxy:
                 output["entry_initial_balance_pct_short"] = side_outputs[
                     "short"
                 ]["entry_initial_balance_pct"]
+            if recovery_distribution is not None:
+                output["strategy_eq_recovery_distribution"] = recovery_distribution
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",

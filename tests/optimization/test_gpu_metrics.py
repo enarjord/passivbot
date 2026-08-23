@@ -16,6 +16,7 @@ from optimization.gpu.metrics import (
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
     _hard_stop_panic_loss_metrics,
+    _strategy_eq_recovery_distribution_metrics,
     _loss_profit_ratio,
     _masked_median,
     _mean_worst_one_pct_abs,
@@ -976,6 +977,31 @@ def test_hard_stop_strategy_equity_recovery_fails_closed_without_raw_outputs():
                 "hsl_strategy_eq_recovery_max_ms_long": torch.tensor([60_000.0]),
             }
         )
+
+
+def test_strategy_eq_recovery_distribution_maps_mps_columns():
+    expected = torch.tensor(
+        [[1.25, 1.0, 3.5, 4.0, 4.5, 5.0, 5.5]], dtype=torch.float32
+    )
+
+    metrics = _strategy_eq_recovery_distribution_metrics(
+        {"strategy_eq_recovery_distribution": expected}
+    )
+
+    assert {name: value.item() for name, value in metrics.items()} == {
+        "strategy_eq_recovery_days_mean": 1.25,
+        "strategy_eq_recovery_days_median": 1.0,
+        "strategy_eq_recovery_days_p95": 3.5,
+        "strategy_eq_recovery_days_p99": 4.0,
+        "strategy_eq_recovery_days_mean_worst_5pct": 4.5,
+        "strategy_eq_recovery_days_mean_worst_1pct": 5.0,
+    }
+    assert set(metrics) <= set(SUPPORTED_METRICS)
+
+
+def test_strategy_eq_recovery_distribution_fails_closed_without_mps_output():
+    with pytest.raises(RuntimeError, match="recovery-distribution output is missing"):
+        _strategy_eq_recovery_distribution_metrics({})
 
 
 def test_hard_stop_lifecycle_reduction_matches_rust_formulas():

@@ -26,6 +26,8 @@ from optimization.gpu.mps_kernel import (
     _encode_max_realized_loss_pct,
     _with_hsl_ema_tail,
     _with_hsl_features,
+    _with_recovery_distribution,
+    strategy_eq_recovery_distribution_from_samples,
 )
 from optimization.gpu.metrics import _fill_gap_metrics, compute_objectives
 from optimization.gpu.service import MpsMulticoinEmaProxy
@@ -155,6 +157,43 @@ def test_hsl_raw_drawdown_source_variant_is_opt_in_and_guarded():
         _with_hsl_features(
             "body", ema_tail_enabled=False, raw_drawdown_enabled=True
         )
+
+
+def test_recovery_distribution_source_variant_is_opt_in_and_guarded():
+    source = "#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED\nbody"
+
+    assert _with_recovery_distribution(source, False) is source
+    assert _with_recovery_distribution(source, True) == (
+        "#define PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED 1\n"
+        + source
+    )
+    with pytest.raises(RuntimeError, match="recovery-distribution feature guard"):
+        _with_recovery_distribution("body", True)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_strategy_eq_recovery_distribution_matches_strict_rust_contract():
+    matrix = torch.tensor(
+        [
+            [100.0, 90.0, 95.0, 101.0, 100.0, 102.0],
+            [100.0, 100.0, 101.0, float("nan"), float("nan"), float("nan")],
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+
+    actual = strategy_eq_recovery_distribution_from_samples(
+        matrix, sample_interval_days=1.0 / 24.0
+    ).cpu().numpy()
+
+    assert actual[0].tolist() == pytest.approx(
+        [value / 24.0 for value in [8.0 / 6.0, 1.0, 2.75, 2.95, 3.0, 3.0, 3.0]]
+    )
+    assert actual[1].tolist() == pytest.approx(
+        [value / 24.0 for value in [1.0, 1.0, 1.9, 1.98, 2.0, 2.0, 2.0]]
+    )
 
 
 def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(

@@ -31,9 +31,13 @@ MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 66
 MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 68
 MPS_MULTICOIN_FUSED_SCALAR_COLS = 70
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
+MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 
 _HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
 _HSL_RAW_DRAWDOWN_DEFINE = "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
+_RECOVERY_DISTRIBUTION_DEFINE = (
+    "#define PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED 1\n"
+)
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -58,6 +62,16 @@ def _with_hsl_features(
     return _HSL_RAW_DRAWDOWN_DEFINE + source
 
 
+def _with_recovery_distribution(source: str, enabled: bool) -> str:
+    if not enabled:
+        return source
+    if "#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED" not in source:
+        raise RuntimeError(
+            "MPS source is missing the strategy-equity recovery-distribution feature guard"
+        )
+    return _RECOVERY_DISTRIBUTION_DEFINE + source
+
+
 def _encode_max_realized_loss_pct(value: float) -> float:
     """Encode a float64 loss fraction without loosening its Metal budget."""
 
@@ -75,61 +89,79 @@ def _scalar_column_or_zero(scalars, index: int):
     return torch.zeros_like(scalars[:, 0])
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_hsl_features(
-            passivbot_rust.mps_ema_anchor_source_py(),
-            ema_tail_enabled=hsl_ema_tail_enabled,
-            raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+        _with_recovery_distribution(
+            _with_hsl_features(
+                passivbot_rust.mps_ema_anchor_source_py(),
+                ema_tail_enabled=hsl_ema_tail_enabled,
+                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            ),
+            recovery_distribution_enabled,
         )
     )
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _trailing_martingale_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_hsl_features(
-            passivbot_rust.mps_trailing_martingale_source_py(),
-            ema_tail_enabled=hsl_ema_tail_enabled,
-            raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+        _with_recovery_distribution(
+            _with_hsl_features(
+                passivbot_rust.mps_trailing_martingale_source_py(),
+                ema_tail_enabled=hsl_ema_tail_enabled,
+                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            ),
+            recovery_distribution_enabled,
         )
     )
 
 
-@lru_cache(maxsize=1)
-def _trailing_martingale_long_no_hsl_shader_library():
+@lru_cache(maxsize=2)
+def _trailing_martingale_long_no_hsl_shader_library(
+    recovery_distribution_enabled: bool = False,
+):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py()
+        _with_recovery_distribution(
+            passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py(),
+            recovery_distribution_enabled,
+        )
     )
 
 
-@lru_cache(maxsize=1)
-def _trailing_martingale_short_no_hsl_shader_library():
+@lru_cache(maxsize=2)
+def _trailing_martingale_short_no_hsl_shader_library(
+    recovery_distribution_enabled: bool = False,
+):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py()
+        _with_recovery_distribution(
+            passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py(),
+            recovery_distribution_enabled,
+        )
     )
 
 
@@ -167,6 +199,80 @@ def _trailing_martingale_multicoin_shader_library(
             raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         )
     )
+
+
+@lru_cache(maxsize=1)
+def _strategy_eq_recovery_distribution_shader_library():
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        passivbot_rust.mps_strategy_eq_recovery_distribution_source_py()
+    )
+
+
+@lru_cache(maxsize=2)
+def _strategy_eq_recovery_distribution_buffers(
+    batch_size: int, sample_capacity: int
+):
+    shape = (int(batch_size), int(sample_capacity))
+    return (
+        torch.empty(shape, dtype=torch.int32, device="mps"),
+        torch.empty(shape, dtype=torch.int32, device="mps"),
+        torch.empty(
+            (int(batch_size), MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
+            dtype=torch.float32,
+            device="mps",
+        ),
+        torch.tensor(shape, dtype=torch.int32, device="mps"),
+    )
+
+
+def strategy_eq_recovery_distribution_from_samples(
+    strategy_equity_samples, *, sample_interval_days: float = 1.0
+):
+    """Approximate exact recovery summaries from uniformly spaced proxy samples."""
+
+    if strategy_equity_samples.device.type != "mps":
+        raise ValueError("strategy-equity recovery distribution requires an MPS tensor")
+    if strategy_equity_samples.dtype != torch.float32:
+        raise ValueError("strategy-equity recovery distribution requires float32 input")
+    if strategy_equity_samples.ndim != 2:
+        raise ValueError(
+            "strategy-equity recovery distribution expects a batch-by-day matrix"
+        )
+    sample_interval_days = float(sample_interval_days)
+    if not np.isfinite(sample_interval_days) or sample_interval_days <= 0.0:
+        raise ValueError("recovery sample interval must be finite and positive")
+    matrix = strategy_equity_samples.contiguous()
+    batch_size, sample_capacity = (int(value) for value in matrix.shape)
+    if batch_size == 0:
+        return torch.empty(
+            (0, MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
+            dtype=torch.float32,
+            device="mps",
+        )
+    if sample_capacity == 0:
+        return torch.zeros(
+            (batch_size, MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
+            dtype=torch.float32,
+            device="mps",
+        )
+    stack, histogram, output, sizes = _strategy_eq_recovery_distribution_buffers(
+        batch_size, sample_capacity
+    )
+    histogram.zero_()
+    library = _strategy_eq_recovery_distribution_shader_library()
+    library.passivbot_strategy_eq_recovery_distribution(
+        matrix,
+        stack,
+        histogram,
+        output,
+        sizes,
+        threads=(batch_size, 1, 1),
+    )
+    return output * sample_interval_days
 
 
 def _decode_outputs(daily, scalars, gaps) -> dict:
@@ -413,6 +519,7 @@ class MpsEmaAnchorRunner:
         pnl_lookback_bars: int = 0,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        recovery_distribution_enabled: bool = False,
     ):
         self.market = market
         self.run_config = run
@@ -446,6 +553,7 @@ class MpsEmaAnchorRunner:
         self.pnl_lookback_bars = pnl_lookback_bars
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
+        self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.rolling_capacity = (
             MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
             if pnl_lookback_bars > 0
@@ -453,6 +561,16 @@ class MpsEmaAnchorRunner:
         )
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
+        self.recovery_stride = (
+            max(1, int(np.ceil(3_600_000.0 / float(run.interval_ms))))
+            if self.recovery_distribution_enabled
+            else 0
+        )
+        self.n_recovery_samples = (
+            max(1, (self.n + self.recovery_stride - 1) // self.recovery_stride)
+            if self.recovery_distribution_enabled
+            else 1
+        )
         self.bars = (
             torch.stack(
                 [
@@ -515,6 +633,7 @@ class MpsEmaAnchorRunner:
         )
         self._buffers: dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
         self._rolling_buffers: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
+        self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
 
@@ -579,6 +698,20 @@ class MpsEmaAnchorRunner:
             }
         return self._rolling_buffers[batch_size]
 
+    def _recovery_sample_buffer(self, batch_size: int):
+        if batch_size not in self._recovery_buffers:
+            self._recovery_buffers = {
+                batch_size: torch.full(
+                    (batch_size, self.n_recovery_samples),
+                    float("nan"),
+                    dtype=torch.float32,
+                    device="mps",
+                )
+            }
+        else:
+            self._recovery_buffers[batch_size].fill_(float("nan"))
+        return self._recovery_buffers[batch_size]
+
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
         started = time.perf_counter()
         matrix = self._pack_params(params)
@@ -589,18 +722,28 @@ class MpsEmaAnchorRunner:
         rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
             batch_size
         )
+        recovery_samples = (
+            self._recovery_sample_buffer(batch_size)
+            if self.recovery_distribution_enabled
+            else None
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
+            size_values = [
+                batch_size,
+                self.n,
+                self.n_days,
+                matrix.shape[1],
+                self.run_config.first_valid_idx,
+                self.rolling_capacity,
+                self.pnl_lookback_bars,
+            ]
+            if self.recovery_distribution_enabled:
+                size_values.extend(
+                    [self.recovery_stride, self.n_recovery_samples]
+                )
             self._sizes[sizes_key] = torch.tensor(
-                [
-                    batch_size,
-                    self.n,
-                    self.n_days,
-                    matrix.shape[1],
-                    self.run_config.first_valid_idx,
-                    self.rolling_capacity,
-                    self.pnl_lookback_bars,
-                ],
+                size_values,
                 dtype=torch.int32,
                 device="mps",
             )
@@ -608,6 +751,7 @@ class MpsEmaAnchorRunner:
         library = _shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.recovery_distribution_enabled,
         )
         compiled = time.perf_counter()
         if profile:
@@ -615,7 +759,7 @@ class MpsEmaAnchorRunner:
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
-        library.passivbot_ema_anchor(
+        kernel_args = (
             self.bars,
             self.flags,
             params_mps,
@@ -626,6 +770,11 @@ class MpsEmaAnchorRunner:
             gaps,
             rolling_pnl_values,
             rolling_pnl_indices,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        library.passivbot_ema_anchor(
+            *kernel_args,
             threads=(batch_size, 1, 1),
         )
         if profile:
@@ -638,7 +787,13 @@ class MpsEmaAnchorRunner:
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        return _decode_directional_outputs(daily, scalars, gaps)
+        output = _decode_directional_outputs(daily, scalars, gaps)
+        if self.recovery_distribution_enabled:
+            output["strategy_eq_recovery_samples"] = recovery_samples
+            output["strategy_eq_recovery_sample_interval_days"] = (
+                self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            )
+        return output
 
 
 class MpsEmaAnchorMulticoinRunner:
@@ -1297,12 +1452,17 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
 
     def _shader_library(self):
         if self.shader_topology == "long_no_hsl":
-            return _trailing_martingale_long_no_hsl_shader_library()
+            return _trailing_martingale_long_no_hsl_shader_library(
+                self.recovery_distribution_enabled
+            )
         if self.shader_topology == "short_no_hsl":
-            return _trailing_martingale_short_no_hsl_shader_library()
+            return _trailing_martingale_short_no_hsl_shader_library(
+                self.recovery_distribution_enabled
+            )
         return _trailing_martingale_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.recovery_distribution_enabled,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -1325,18 +1485,28 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
             batch_size
         )
+        recovery_samples = (
+            self._recovery_sample_buffer(batch_size)
+            if self.recovery_distribution_enabled
+            else None
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
+            size_values = [
+                batch_size,
+                self.n,
+                self.n_days,
+                matrix.shape[1],
+                self.run_config.first_valid_idx,
+                self.rolling_capacity,
+                self.pnl_lookback_bars,
+            ]
+            if self.recovery_distribution_enabled:
+                size_values.extend(
+                    [self.recovery_stride, self.n_recovery_samples]
+                )
             self._sizes[sizes_key] = torch.tensor(
-                [
-                    batch_size,
-                    self.n,
-                    self.n_days,
-                    matrix.shape[1],
-                    self.run_config.first_valid_idx,
-                    self.rolling_capacity,
-                    self.pnl_lookback_bars,
-                ],
+                size_values,
                 dtype=torch.int32,
                 device="mps",
             )
@@ -1348,7 +1518,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
-        library.passivbot_trailing_martingale(
+        kernel_args = (
             self.bars,
             self.flags,
             params_mps,
@@ -1359,6 +1529,11 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             gaps,
             rolling_pnl_values,
             rolling_pnl_indices,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        library.passivbot_trailing_martingale(
+            *kernel_args,
             threads=(batch_size, 1, 1),
         )
         if profile:
@@ -1371,4 +1546,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             "pre_dispatch_sync_seconds": dispatched - compiled,
             "kernel_seconds": finished - dispatched,
         }
-        return _decode_directional_outputs(daily, scalars, gaps)
+        output = _decode_directional_outputs(daily, scalars, gaps)
+        if self.recovery_distribution_enabled:
+            output["strategy_eq_recovery_samples"] = recovery_samples
+            output["strategy_eq_recovery_sample_interval_days"] = (
+                self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            )
+        return output

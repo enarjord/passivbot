@@ -172,8 +172,14 @@ The supported slice is intentionally narrow:
   strictly exceeds its prior controller peak, including an unrecovered tail through the backtest
   end. Raw per-side `drawdown_worst_strategy_eq_{long,short}` is also available through an opt-in
   bounded peak-and-maximum accumulator, with exact Rust validation retaining authority over the
-  approximate fill path. Recovery-distribution metrics remain fail closed for now. Compatible
-  suites may use the supported topologies.
+  approximate fill path. Single-coin EMA Anchor and Trailing Martingale also support the global
+  `strategy_eq_recovery_days_{mean,median,p95,p99,mean_worst_5pct,mean_worst_1pct}` metrics. The
+  directional kernels emit opt-in hourly strategy-equity samples, and a bounded Metal
+  postprocessor applies the same strict time-to-exceed and percentile/tail definitions as exact
+  Rust. The hourly proxy is approximate; exact Rust validation and rolling drift gates remain
+  authoritative. Multi-coin recovery-distribution metrics remain fail closed until the shared
+  portfolio kernels can emit equivalent bounded samples. Compatible suites may use the supported
+  topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
   and compatible suites also support auto-unstuck, including static per-coin overrides. Metal
