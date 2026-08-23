@@ -5850,6 +5850,109 @@ def test_mps_recovery_captures_early_post_fill_liquidation_endpoint():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_recovery_fails_closed_on_coin_hsl_rolling_overflow(strategy_kind):
+    count = 12
+    close = np.full(count, 100.0)
+    high = np.full(count, 101.0)
+    low = np.full(count, 99.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "trailing_martingale":
+        row = _tm_single_row(initial_ema_dist=0.0)
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsTrailingMartingaleRunner
+    else:
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.5,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 1.0,
+                "offset": 0.0,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsEmaAnchorRunner
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 1.0e-8,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 2.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    runner = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        pnl_lookback_bars=count,
+        hsl_panic_market_long=True,
+        recovery_distribution_enabled=True,
+    )
+    # Exercise the production overflow path without needing 2,049 fills.
+    runner.rolling_capacity = 1
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
+    recovery = strategy_eq_recovery_distribution_from_samples(
+        output["strategy_eq_recovery_samples"],
+        sample_interval_days=output[
+            "strategy_eq_recovery_sample_interval_days"
+        ],
+    )
+    torch.mps.synchronize()
+
+    assert not output["alive"].item()
+    assert output["balance"].item() == 0.0
+    samples = output["strategy_eq_recovery_samples"][0]
+    assert torch.isfinite(samples[0]).item()
+    assert samples[0].item() < 0.0
+    expected_full_horizon_days = (
+        runner.n_recovery_samples - 1
+    ) * runner.recovery_stride * run.interval_ms / 86_400_000.0
+    assert torch.allclose(
+        recovery[0],
+        torch.full_like(recovery[0], expected_full_horizon_days),
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("hedge_mode", [False, True])
 def test_mps_dual_side_respects_one_way_initial_arbitration(hedge_mode):
     count = 5

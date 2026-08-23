@@ -11,6 +11,9 @@ constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
+#endif
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -1474,8 +1477,17 @@ inline void passivbot_single_coin_impl(
         float short_unreal = short_side.psize > 0.0f
             ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f;
         float equity = balance + long_unreal + short_unreal;
-        if ((long_coin_hsl_rolling && long_rolling_pnl.overflowed)
-            || (short_coin_hsl_rolling && short_rolling_pnl.overflowed)) {
+        const bool rolling_pnl_overflowed =
+            (long_coin_hsl_rolling && long_rolling_pnl.overflowed)
+            || (short_coin_hsl_rolling && short_rolling_pnl.overflowed);
+        if (rolling_pnl_overflowed) {
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+            // A bounded rolling-PnL overflow invalidates the proxy candidate.
+            // The postprocessor maps this impossible equity to the maximum
+            // bounded duration for every minimized recovery statistic.
+            recovery_samples[int(b) * recovery_sample_count]
+                = RECOVERY_FAIL_CLOSED_SENTINEL;
+#endif
             balance = 0.0f;
             alive = false;
             liq_day = di;

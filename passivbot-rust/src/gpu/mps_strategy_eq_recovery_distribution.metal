@@ -2,6 +2,7 @@
 using namespace metal;
 
 constant int RECOVERY_METRIC_COLS = 7;
+constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 
 inline uint recovery_histogram_value_at_rank(
     device const uint* histogram,
@@ -80,6 +81,13 @@ kernel void passivbot_strategy_eq_recovery_distribution(
 
     const uint offset = candidate * slot_count;
     const uint output_offset = candidate * RECOVERY_METRIC_COLS;
+    if (strategy_equity_samples[offset] == RECOVERY_FAIL_CLOSED_SENTINEL) {
+        const float full_horizon = float(slot_count - 1);
+        for (uint metric = 0; metric < RECOVERY_METRIC_COLS; ++metric) {
+            output[output_offset + metric] = full_horizon;
+        }
+        return;
+    }
     uint stack_size = 0;
     uint sample_count = 0;
     uint final_slot = 0;

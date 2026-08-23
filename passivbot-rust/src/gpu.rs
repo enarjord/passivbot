@@ -184,6 +184,8 @@ mod tests {
         assert!(source.contains("const bool recovery_terminal = liq || k == T - 2"));
         assert!(source.contains("(recovery_elapsed + recovery_stride - 1) / recovery_stride"));
         assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
+        assert!(source.contains("const bool rolling_pnl_overflowed ="));
+        assert!(source.contains("= RECOVERY_FAIL_CLOSED_SENTINEL;"));
     }
 
     #[test]
@@ -195,6 +197,8 @@ mod tests {
         assert!(source.contains("constant int RECOVERY_METRIC_COLS = 7"));
         assert!(source.contains("recovery_histogram_percentile("));
         assert!(source.contains("recovery_histogram_mean_worst_pct("));
+        assert!(source.contains("== RECOVERY_FAIL_CLOSED_SENTINEL"));
+        assert!(source.contains("output[output_offset + metric] = full_horizon"));
     }
 
     fn assert_shared_multicoin_contract(source: &str) {
