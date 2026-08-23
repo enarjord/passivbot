@@ -2,7 +2,9 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
-#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+constant int SCALAR_COLS = 70;
+#elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
 constant int SCALAR_COLS = 68;
 #else
 constant int SCALAR_COLS = 66;
@@ -2909,6 +2911,10 @@ inline void passivbot_single_coin_impl(
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     scalars[so + 66] = hsl_drawdown_ema_mean_worst_1pct(long_hsl_ema_tail);
     scalars[so + 67] = hsl_drawdown_ema_mean_worst_1pct(short_hsl_ema_tail);
+#endif
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    scalars[so + 68] = hsl_strategy_equity_drawdown_max(long_hsl_strategy_eq);
+    scalars[so + 69] = hsl_strategy_equity_drawdown_max(short_hsl_strategy_eq);
 #endif
 }
 

@@ -869,6 +869,36 @@ def test_hard_stop_ema_drawdown_metrics_fail_closed_without_directional_outputs(
         )
 
 
+def test_hard_stop_raw_drawdown_metrics_map_each_side():
+    from optimization.gpu.metrics import _hard_stop_raw_drawdown_metrics
+
+    metrics = _hard_stop_raw_drawdown_metrics(
+        {
+            "hsl_drawdown_raw_max_long": torch.tensor([0.17, 0.0]),
+            "hsl_drawdown_raw_max_short": torch.tensor([0.08, 0.23]),
+        }
+    )
+
+    assert metrics["drawdown_worst_strategy_eq_long"].tolist() == pytest.approx(
+        [0.17, 0.0]
+    )
+    assert metrics["drawdown_worst_strategy_eq_short"].tolist() == pytest.approx(
+        [0.08, 0.23]
+    )
+
+
+def test_hard_stop_raw_drawdown_metrics_fail_closed_without_outputs():
+    from optimization.gpu.metrics import _hard_stop_raw_drawdown_metrics
+
+    with pytest.raises(RuntimeError, match="raw-drawdown outputs are missing"):
+        _hard_stop_raw_drawdown_metrics({})
+
+    with pytest.raises(RuntimeError, match="hsl_drawdown_raw_max_short"):
+        _hard_stop_raw_drawdown_metrics(
+            {"hsl_drawdown_raw_max_long": torch.tensor([0.1])}
+        )
+
+
 def test_hard_stop_ema_tail_reduction_matches_rust_side_max_contract():
     from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
 

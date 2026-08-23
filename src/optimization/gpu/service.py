@@ -105,6 +105,8 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_strategy_eq_recovery_max_ms_short",
     "hsl_drawdown_ema_mean_worst_1pct_long",
     "hsl_drawdown_ema_mean_worst_1pct_short",
+    "hsl_drawdown_raw_max_long",
+    "hsl_drawdown_raw_max_short",
 }
 
 
@@ -213,6 +215,10 @@ _HSL_EMA_TAIL_METRICS = {
     "drawdown_worst_mean_1pct_ema_strategy_eq",
     "drawdown_worst_mean_1pct_ema_strategy_eq_long",
     "drawdown_worst_mean_1pct_ema_strategy_eq_short",
+}
+_HSL_RAW_DRAWDOWN_METRICS = {
+    "drawdown_worst_strategy_eq_long",
+    "drawdown_worst_strategy_eq_short",
 }
 
 
@@ -687,6 +693,8 @@ def _combine_hedged_multicoin_hsl_outputs(long: dict, short: dict) -> dict:
         "hsl_drawdown_ema_max_short",
         "hsl_drawdown_ema_mean_worst_1pct_long",
         "hsl_drawdown_ema_mean_worst_1pct_short",
+        "hsl_drawdown_raw_max_long",
+        "hsl_drawdown_raw_max_short",
         "hsl_strategy_eq_recovery_max_ms_long",
         "hsl_strategy_eq_recovery_max_ms_short",
     ):
@@ -1186,6 +1194,9 @@ class MpsSingleCoinProxy:
             pnl_lookback_bars=pnl_lookback_bars,
             hsl_ema_tail_enabled=bool(
                 self.needed_metrics & _HSL_EMA_TAIL_METRICS
+            ),
+            hsl_raw_drawdown_enabled=bool(
+                self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
             ),
         )
         if self.strategy_kind == "trailing_martingale":
@@ -1955,6 +1966,9 @@ class MpsMulticoinProxy:
             ),
             "hsl_ema_tail_enabled": bool(
                 self.needed_metrics & _HSL_EMA_TAIL_METRICS
+            ),
+            "hsl_raw_drawdown_enabled": bool(
+                self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
             ),
         }
         if self.shared_account_fused:

@@ -7,6 +7,10 @@
 #define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0
+#endif
+
 #define HSL_EMA_TAIL_BINS 32
 
 constant int HSL_SIGNAL_UNIFIED = 0;
@@ -228,6 +232,9 @@ struct HslStrategyEquityStats {
     float peak_sample_k;
     float last_sample_k;
     float recovery_max_steps;
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    float drawdown_max;
+#endif
 };
 
 inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
@@ -237,6 +244,9 @@ inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
     stats.peak_sample_k = -1.0f;
     stats.last_sample_k = -1.0f;
     stats.recovery_max_steps = 0.0f;
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    stats.drawdown_max = 0.0f;
+#endif
     return stats;
 }
 
@@ -262,6 +272,22 @@ inline void update_hsl_strategy_equity_stats(
         stats.peak = strategy_equity;
         stats.peak_sample_k = sample_k;
     }
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    stats.drawdown_max = fmax(
+        stats.drawdown_max,
+        (stats.peak - strategy_equity) / fmax(fabs(stats.peak), 1.0e-12f)
+    );
+#endif
+}
+
+inline float hsl_strategy_equity_drawdown_max(
+    thread HslStrategyEquityStats& stats
+) {
+#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+    return stats.drawdown_max;
+#else
+    return 0.0f;
+#endif
 }
 
 inline float hsl_strategy_equity_recovery_max_steps(

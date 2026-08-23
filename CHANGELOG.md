@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added raw per-side HSL strategy-equity worst-drawdown scoring and limits to Apple MPS
+  optimization for EMA Anchor and Trailing Martingale, across single-coin and multi-coin
+  topologies. The bounded peak-and-maximum state is compiled into Metal only when either the long
+  or short metric is requested; exact Rust validation and rolling drift gates remain authoritative.
+
 - Added mean-worst-1% EMA-smoothed HSL strategy-equity drawdown scoring and limits to Apple MPS
   optimization for the account, long side, and short side. The Metal proxy uses an opt-in bounded
   logarithmic histogram so normal GPU runs do not pay the per-candidate state cost; exact Rust
@@ -12,8 +17,8 @@ All notable user-facing changes will be documented in this file.
 - Added per-side HSL strategy-equity peak-recovery scoring and limits to Apple MPS optimization.
   EMA Anchor and Trailing Martingale kernels now retain the longest strict time-to-exceed interval
   for each long and short HSL controller, including an unrecovered tail through the backtest end,
-  and expose it in hours and days. Exact Rust validation remains authoritative; raw per-side
-  strategy-equity drawdown and recovery-distribution metrics remain fail closed.
+  and expose it in hours and days. Exact Rust validation remains authoritative;
+  recovery-distribution metrics remain fail closed.
 
 - Fixed Apple MPS optimization halting when a converged or single-objective proxy front repeats an
   already exact-validated candidate. The backend now revalidates that actual current-front member
