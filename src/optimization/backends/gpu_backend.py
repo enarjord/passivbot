@@ -1993,6 +1993,9 @@ def _gpu_suite_checkpoint_contract(
     contract["max_realized_loss_pct"] = float(
         config.get("live", {}).get("max_realized_loss_pct", 1.0)
     )
+    contract["hedge_mode"] = bool(
+        config.get("live", {}).get("hedge_mode", True)
+    )
     contract["pnls_max_lookback_days"] = (
         _gpu_pnls_max_lookback_days_checkpoint_value(config)
     )
@@ -2040,6 +2043,9 @@ def _gpu_suite_checkpoint_contract(
                         for side in ("long", "short")
                         if gpu_side_enabled(item["config"], side)
                     ],
+                    "hedge_mode": bool(
+                        item["config"].get("live", {}).get("hedge_mode", True)
+                    ),
                     "max_realized_loss_pct": float(
                         item["config"]
                         .get("live", {})
@@ -2077,6 +2083,9 @@ def _gpu_runtime_checkpoint_contract(
     config: dict, proxy, *, pinned_hsl_bounds=None
 ) -> dict:
     return {
+        "hedge_mode": bool(
+            config.get("live", {}).get("hedge_mode", True)
+        ),
         "max_realized_loss_pct": float(
             config.get("live", {}).get("max_realized_loss_pct", 1.0)
         ),

@@ -1436,6 +1436,8 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     short_side.previous_effective_n_positions = 0;
     long_side.coin_hsl_entry_blocked_mask = 0ul;
     short_side.coin_hsl_entry_blocked_mask = 0ul;
+    long_side.one_way_initial_blocked_mask = 0ul;
+    short_side.one_way_initial_blocked_mask = 0ul;
     for (int c = 0; c < 3; ++c) {
         long_side.psize[c] = 0.0f;
         short_side.psize[c] = 0.0f;
@@ -1467,11 +1469,11 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     long_side.coin_hsl[0].orange_graceful_stop = true;
     update_tm_multicoin_side_selection(
         long_side, long_config, bars, coin_settings, coin_overrides,
-        1, 3, false, true, 1, 0.0f
+        1, 3, false, true, 1, 0.0f, 0ul
     );
     update_tm_multicoin_side_selection(
         short_side, short_config, bars, coin_settings, coin_overrides,
-        1, 3, true, true, 1, 0.0f
+        1, 3, true, true, 1, 0.0f, 0ul
     );
     for (int c = 0; c < 3; ++c) {
         output[c] = long_side.selected[c] ? 1.0f : 0.0f;
@@ -1483,6 +1485,16 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     output[9] = float(short_side.previous_effective_n_positions);
     output[10] = float(long_side.coin_hsl_entry_blocked_mask);
     output[11] = float(short_side.coin_hsl_entry_blocked_mask);
+    // Mimic a new opposite-held block on short's highest-ranked coin.
+    // The changed mask must force reselection onto the next candidate.
+    update_tm_multicoin_side_selection(
+        short_side, short_config, bars, coin_settings, coin_overrides,
+        1, 3, true, false, 1, 0.0f, 4ul
+    );
+    for (int c = 0; c < 3; ++c) {
+        output[12 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+    }
+    output[15] = float(short_side.one_way_initial_blocked_mask);
 }
 """
 
@@ -1499,7 +1511,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     coin_overrides = torch.full(
         (3, 44), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(12, dtype=torch.float32, device="mps")
+    output = torch.zeros(16, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_trailing_martingale_multicoin_source_py()
@@ -1523,6 +1535,10 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         1.0,
         1.0,
         0.0,
+        0.0,
+        1.0,
+        0.0,
+        4.0,
     ]
 
 
@@ -1566,14 +1582,14 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f, -2
+        1, 1, false, 1, 1, 0, false, 1.0f, -2, 0ul
     );
     generate_tm_multicoin_side_orders(
         short_side, short_config, account,
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, true, 1, 1, 0, false, 1.0f, -2
+        1, 1, true, 1, 1, 0, false, 1.0f, -2, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -1583,6 +1599,16 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     output[5] = short_side.close_qty[0];
     output[6] = account.balance;
     output[7] = account.realized_pnl_total;
+    generate_tm_multicoin_side_orders(
+        long_side, long_config, account,
+        bars, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides,
+        1, 1, false, 1, 1, 0, false, 1.0f, -2, 1ul
+    );
+    output[8] = long_side.entry_qty[0];
+    output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
+    output[10] = long_side.contribution[0];
 }
 """
 
@@ -1626,7 +1652,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     coin_overrides = torch.full(
         (1, 44), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(8, dtype=torch.float32, device="mps")
+    output = torch.zeros(11, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_trailing_martingale_multicoin_source_py()
@@ -1653,6 +1679,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     assert values[5] == 0.0
     assert values[6] == 1_000.0
     assert values[7] == 0.0
+    assert values[8:].tolist() == [0.0, 0.0, 0.0]
 
 
 @pytest.mark.skipif(
@@ -2452,6 +2479,8 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     short_side.selection_initialized = false;
     long_side.previous_effective_n_positions = 0;
     short_side.previous_effective_n_positions = 0;
+    long_side.one_way_initial_blocked_mask = 0ul;
+    short_side.one_way_initial_blocked_mask = 0ul;
     for (int c = 0; c < 3; ++c) {
         long_side.psize[c] = 0.0f;
         short_side.psize[c] = 0.0f;
@@ -2474,11 +2503,11 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     }
     update_ema_multicoin_side_selection(
         long_side, long_config, bars, coin_settings, coin_overrides,
-        1, 3, false, true, 1, 0.0f
+        1, 3, false, true, 1, 0.0f, 0ul
     );
     update_ema_multicoin_side_selection(
         short_side, short_config, bars, coin_settings, coin_overrides,
-        1, 3, true, true, 1, 0.0f
+        1, 3, true, true, 1, 0.0f, 0ul
     );
     for (int c = 0; c < 3; ++c) {
         output[c] = long_side.selected[c] ? 1.0f : 0.0f;
@@ -2488,6 +2517,16 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     output[7] = short_side.selection_initialized ? 1.0f : 0.0f;
     output[8] = float(long_side.previous_effective_n_positions);
     output[9] = float(short_side.previous_effective_n_positions);
+    // Opposite-held eligibility changes outside the side's own fills.
+    // The mask transition must evict the blocked incumbent and promote next.
+    update_ema_multicoin_side_selection(
+        short_side, short_config, bars, coin_settings, coin_overrides,
+        1, 3, true, false, 1, 0.0f, 4ul
+    );
+    for (int c = 0; c < 3; ++c) {
+        output[10 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+    }
+    output[13] = float(short_side.one_way_initial_blocked_mask);
 }
 """
 
@@ -2504,7 +2543,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     coin_overrides = torch.full(
         (3, 29), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(10, dtype=torch.float32, device="mps")
+    output = torch.zeros(14, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2525,6 +2564,10 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         1.0,
         1.0,
         1.0,
+        0.0,
+        1.0,
+        0.0,
+        4.0,
     ]
 
 
@@ -2563,12 +2606,12 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     generate_ema_multicoin_side_orders(
         long_side, long_config, account,
         bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f, -2
+        1, 1, false, 1, 1, 0, false, 1.0f, -2, 0ul
     );
     generate_ema_multicoin_side_orders(
         short_side, short_config, account,
         bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, true, 1, 1, 0, false, 1.0f, -2
+        1, 1, true, 1, 1, 0, false, 1.0f, -2, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -2578,6 +2621,14 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     output[5] = short_side.close_qty[0];
     output[6] = account.balance;
     output[7] = account.realized_pnl_total;
+    generate_ema_multicoin_side_orders(
+        long_side, long_config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 1, false, 1, 1, 0, false, 1.0f, -2, 1ul
+    );
+    output[8] = long_side.entry_qty[0];
+    output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
+    output[10] = long_side.contribution[0];
 }
 """
 
@@ -2609,7 +2660,7 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     coin_overrides = torch.full(
         (1, 29), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(8, dtype=torch.float32, device="mps")
+    output = torch.zeros(11, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2632,6 +2683,7 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     assert values[5] == 0.0
     assert values[6] == 1_000.0
     assert values[7] == 0.0
+    assert values[8:].tolist() == [0.0, 0.0, 0.0]
 
 
 def _single_coin_exposure_fields(
