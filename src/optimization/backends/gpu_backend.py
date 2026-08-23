@@ -2709,7 +2709,7 @@ def _validate_pinned_scope_bounds(
             )
 
 
-def _validate_tm_market_nonrecursive_bounds(
+def _validate_tm_market_mode_bounds(
     bound_by_key, base_by_key, enabled_sides, config
 ) -> None:
     if (
@@ -2720,30 +2720,54 @@ def _validate_tm_market_nonrecursive_bounds(
         return
     unsupported = []
     for side in sorted(set(enabled_sides or ())):
-        for phase in ("entry", "close"):
-            key = f"{side}_{phase}_retracement_base_pct"
-            bound = bound_by_key.get(key)
-            low = (
-                float(bound.low)
-                if bound is not None
-                else float(base_by_key.get(key, 0.0))
+        entry_key = f"{side}_entry_retracement_base_pct"
+        entry_bound = bound_by_key.get(entry_key)
+        entry_low, entry_high = (
+            (float(entry_bound.low), float(entry_bound.high))
+            if entry_bound is not None
+            else (float(base_by_key.get(entry_key, 0.0)),) * 2
+        )
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            packed_entry_low = np.float32(entry_low)
+        recursive_only = entry_high <= 0.0
+        trailing_only = (
+            entry_low > 0.0
+            and np.isfinite(packed_entry_low)
+            and packed_entry_low > np.float32(0.0)
+        )
+        if (
+            not math.isfinite(entry_low)
+            or not math.isfinite(entry_high)
+            or not (recursive_only or trailing_only)
+        ):
+            unsupported.append(
+                f"{entry_key} bounds=({entry_low}, {entry_high})"
             )
-            with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-                packed_low = np.float32(low)
-            if (
-                not math.isfinite(low)
-                or low <= 0.0
-                or not np.isfinite(packed_low)
-                or packed_low <= np.float32(0.0)
-            ):
-                unsupported.append(f"{key} lower={low}")
+
+        close_key = f"{side}_close_retracement_base_pct"
+        close_bound = bound_by_key.get(close_key)
+        close_low = (
+            float(close_bound.low)
+            if close_bound is not None
+            else float(base_by_key.get(close_key, 0.0))
+        )
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            packed_close_low = np.float32(close_low)
+        if (
+            not math.isfinite(close_low)
+            or close_low <= 0.0
+            or not np.isfinite(packed_close_low)
+            or packed_close_low <= np.float32(0.0)
+        ):
+            unsupported.append(f"{close_key} lower={close_low}")
     if unsupported:
         raise ValueError(
             "GPU Trailing Martingale ordinary market execution currently "
-            "requires trailing-only entry and close modes; pin every enabled "
-            "side's entry_retracement_base_pct and close_retracement_base_pct "
-            "lower bounds above zero. Recursive market ladders remain fail "
-            "closed: "
+            "requires each enabled side's entry retracement range to remain "
+            "wholly recursive (high<=0) or wholly trailing with a float32-"
+            "positive lower bound, and close_retracement_base_pct to remain "
+            "strictly trailing. Recursive close market ladders and entry mode-"
+            "crossing bounds remain fail closed: "
             + ", ".join(unsupported)
         )
 
@@ -2755,7 +2779,7 @@ def _validate_tm_market_template_bounds(
 
     if suite_inputs:
         return
-    _validate_tm_market_nonrecursive_bounds(
+    _validate_tm_market_mode_bounds(
         bound_by_key, base_by_key, enabled_sides, config
     )
 
@@ -3320,7 +3344,7 @@ def run_backend(
             coin_count=item["coin_count"],
             strategy_kind=strategy_kind,
         )
-        _validate_tm_market_nonrecursive_bounds(
+        _validate_tm_market_mode_bounds(
             scenario_bound_by_key,
             scenario_base_by_key,
             scenario_enabled_sides,
