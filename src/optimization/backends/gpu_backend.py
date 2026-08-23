@@ -966,11 +966,59 @@ def _validate_scope_config(
                 "GPU market execution requires a finite non-negative "
                 "live.market_order_near_touch_threshold"
             )
-        if strategy_kind != "ema_anchor" or coin_count != 1:
+        if coin_count != 1:
             raise ValueError(
                 "GPU ordinary market execution currently requires single-coin "
-                "strategy_kind=ema_anchor"
+                "EMA Anchor or Trailing Martingale"
             )
+        if strategy_kind == "trailing_martingale":
+            unsupported_market_features = []
+            if max_realized_loss_pct < 1.0:
+                unsupported_market_features.append("live.max_realized_loss_pct")
+            for side in enabled_sides:
+                side_config = config.get("bot", {}).get(side, {}) or {}
+                if _gpu_hsl_side_enabled(config, side):
+                    unsupported_market_features.append(f"bot.{side}.hsl.enabled")
+                if bool((side_config.get("unstuck", {}) or {}).get("enabled", False)):
+                    unsupported_market_features.append(
+                        f"bot.{side}.unstuck.enabled"
+                    )
+                risk = side_config.get("risk", {}) or {}
+                for key in (
+                    "position_exposure_enforcer_enabled",
+                    "total_exposure_enforcer_enabled",
+                ):
+                    if bool(risk.get(key, False)):
+                        unsupported_market_features.append(f"bot.{side}.risk.{key}")
+                for coin, patch in (config.get("coin_overrides") or {}).items():
+                    if not isinstance(patch, dict):
+                        continue
+                    override_side = (
+                        patch.get("bot", {}).get(side, {}) or {}
+                    )
+                    if bool(
+                        (override_side.get("unstuck", {}) or {}).get(
+                            "enabled", False
+                        )
+                    ):
+                        unsupported_market_features.append(
+                            f"coin_overrides.{coin}.bot.{side}.unstuck.enabled"
+                        )
+                    override_risk = override_side.get("risk", {}) or {}
+                    for key in (
+                        "position_exposure_enforcer_enabled",
+                        "total_exposure_enforcer_enabled",
+                    ):
+                        if bool(override_risk.get(key, False)):
+                            unsupported_market_features.append(
+                                f"coin_overrides.{coin}.bot.{side}.risk.{key}"
+                            )
+            if unsupported_market_features:
+                raise ValueError(
+                    "GPU Trailing Martingale ordinary market execution does not "
+                    "yet support risk/HSL ordering for: "
+                    + ", ".join(sorted(unsupported_market_features))
+                )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
         enabled_sides
     ) != 1:

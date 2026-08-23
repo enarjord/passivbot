@@ -41,6 +41,64 @@ inline float min_entry_qty(
     return aligned ? fmax(nearest, raw_min) : ceil(raw_steps) * qty_step;
 }
 
+inline bool should_use_ordinary_market_execution(
+    int order_ticks,
+    bool buy_order,
+    float market_price,
+    float price_step,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold
+) {
+    if (!market_orders_allowed || order_ticks <= 0
+        || !(market_price > 0.0f) || !isfinite(market_price)) {
+        return false;
+    }
+    float order_price = float(order_ticks) * price_step;
+    if (buy_order ? order_price >= market_price : order_price <= market_price) {
+        return true;
+    }
+    return fabs(order_price / market_price - 1.0f)
+        <= fmax(market_order_near_touch_threshold, 0.0f);
+}
+
+inline float ordinary_market_fill_price(
+    float market_price,
+    bool buy_order,
+    float market_order_slippage_pct,
+    float price_step
+) {
+    float slipped = market_price * (
+        buy_order
+            ? 1.0f + market_order_slippage_pct
+            : 1.0f - market_order_slippage_pct
+    );
+    return fmax(
+        buy_order ? ceil_step(slipped, price_step) : floor_step(slipped, price_step),
+        price_step
+    );
+}
+
+inline float resize_market_close_qty(
+    float qty,
+    float psize,
+    float market_price,
+    float qty_step,
+    float min_qty,
+    float min_cost,
+    float c_mult
+) {
+    if (!(qty > 0.0f) || !(psize > 0.0f)) return 0.0f;
+    float minimum = min_entry_qty(
+        market_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float tolerance = 1.0e-12f * fmax(qty, minimum) * 4.0f;
+    if (qty + tolerance >= minimum || psize <= qty) return fmin(qty, psize);
+    float resized = fmin(minimum, psize);
+    float remainder = psize - resized;
+    if (remainder > 0.0f && remainder + tolerance < minimum) resized = psize;
+    return resized;
+}
+
 inline bool passes_min_effective_cost(
     bool enabled, float guaranteed_balance_lower, float wel,
     float initial_qty_pct, float max_effective_min_cost
@@ -213,14 +271,19 @@ struct TmSide {
     bool close_is_unstuck_reducer;
     bool close_loss_gate_disabled_reducers;
     bool close_is_panic;
+    bool entry_market, close_market, secondary_close_market;
+    bool market_orders_allowed;
+    float market_order_near_touch_threshold;
     float ema0, ema1, ema2, vol1m, vol1h;
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks, secondary_close_ticks;
     float entry_price, close_price, entry_qty, close_qty;
     float secondary_close_price, secondary_close_qty;
     float entry_gen_balance, entry_gen_psize, entry_gen_pprice, entry_gen_kf;
+    float entry_gen_market_price;
     int entry_gen_touch_ticks;
     float close_gen_balance, close_gen_psize, close_gen_pprice;
+    float close_gen_market_price;
     int close_gen_touch_down_ticks, close_gen_touch_up_ticks;
     int close_gen_touch_nearest_ticks;
     float close_gen_touch_min_qty;
@@ -311,6 +374,11 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.close_is_unstuck_reducer = false;
     s.close_loss_gate_disabled_reducers = false;
     s.close_is_panic = false;
+    s.entry_market = false;
+    s.close_market = false;
+    s.secondary_close_market = false;
+    s.market_orders_allowed = false;
+    s.market_order_near_touch_threshold = 0.0f;
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
     s.vol1m = 0.0f; s.vol1h = 0.0f;
     s.psize = 0.0f; s.pprice = 0.0f;
@@ -323,8 +391,10 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.entry_gen_balance = 0.0f;
     s.entry_gen_psize = 0.0f; s.entry_gen_pprice = 0.0f;
     s.entry_gen_kf = -1.0f; s.entry_gen_touch_ticks = 0;
+    s.entry_gen_market_price = 0.0f;
     s.close_gen_balance = 0.0f;
     s.close_gen_psize = 0.0f; s.close_gen_pprice = 0.0f;
+    s.close_gen_market_price = 0.0f;
     s.close_gen_touch_down_ticks = 0; s.close_gen_touch_up_ticks = 0;
     s.close_gen_touch_nearest_ticks = 0;
     s.close_gen_touch_min_qty = 0.0f;
@@ -659,9 +729,11 @@ inline void generate_orders(
     s.entry_gen_pprice = s.pprice;
     s.entry_gen_kf = kf;
     s.entry_gen_touch_ticks = entry_touch;
+    s.entry_gen_market_price = price_now;
     s.close_gen_balance = balance;
     s.close_gen_psize = s.psize;
     s.close_gen_pprice = s.pprice;
+    s.close_gen_market_price = price_now;
     s.close_gen_touch_down_ticks = touch_down_ticks;
     s.close_gen_touch_up_ticks = touch_up_ticks;
     s.close_gen_touch_nearest_ticks = touch_nearest_ticks;
@@ -674,6 +746,7 @@ inline void generate_orders(
     s.secondary_close_ticks = 0;
     s.secondary_close_price = 0.0f;
     s.secondary_close_qty = 0.0f;
+    s.secondary_close_market = false;
     int band_ticks = directional_ticks(
         band * (is_long ? 1.0f - s.initial_ema_dist
                         : 1.0f + s.initial_ema_dist),
@@ -776,6 +849,15 @@ inline void generate_orders(
     float eqty = flat ? iq : (partial ? iq_partial : (reentry_ok ? rq : 0.0f));
     int eticks = flat || partial ? initial_ticks : reentry_ticks;
     float eprice = flat || partial ? initial_price : reentry_price;
+    bool entry_market = should_use_ordinary_market_execution(
+        eticks, is_long, price_now, price_step, s.market_orders_allowed,
+        s.market_order_near_touch_threshold
+    );
+    float entry_exposure_price = entry_market ? price_now : eprice;
+    float market_min_q = entry_market
+        ? min_entry_qty(price_now, qty_step, min_qty, min_cost, c_mult)
+        : min_entry_qty(eprice, qty_step, min_qty, min_cost, c_mult);
+    if (!is_long && entry_market && eqty < market_min_q) eqty = market_min_q;
     bool cooldown = s.cooldown_min > 0.0f && s.last_inc_k >= 0.0f
         && kf < s.last_inc_k + s.cooldown_min;
     if (cooldown || balance <= 0.0f || s.initial_qty_pct <= 0.0f
@@ -784,9 +866,13 @@ inline void generate_orders(
     s.entry_ticks = eticks;
     s.entry_price = eprice;
     s.entry_qty = crop_entry(
-        s, balance, eprice, eqty,
+        s, balance, entry_exposure_price, eqty,
         qty_step, min_qty, min_cost, c_mult
     );
+    if (!is_long && entry_market && s.entry_qty + 1.0e-12f < market_min_q) {
+        s.entry_qty = 0.0f;
+    }
+    s.entry_market = entry_market && s.entry_qty > 0.0f;
 
     // Exact Rust selects the largest protective reducer before allocating the
     // ordinary close ladder.  Model both the per-position WEL repair and the
@@ -875,6 +961,17 @@ inline void generate_orders(
         ? calc_close_qty(
             s, balance, close_mq, close_mq_relation, pct, qty_step, c_mult
         ) : 0.0f;
+    s.close_market = s.close_qty > 0.0f
+        && should_use_ordinary_market_execution(
+            cticks, !is_long, price_now, price_step,
+            s.market_orders_allowed, s.market_order_near_touch_threshold
+        );
+    if (s.close_market) {
+        s.close_qty = resize_market_close_qty(
+            s.close_qty, s.psize, price_now,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    }
     bool ordinary_can_accompany_reducer = wel_qty <= 0.0f
         && trailing_close && s.close_qty > 0.0f;
     float finalized_wel_qty = finalized_reducer_qty(
@@ -1127,6 +1224,8 @@ inline void passivbot_single_coin_impl(
     const float market_order_slippage_pct = fmax(settings[16], 0.0f);
     const bool long_hsl_panic_market = settings[17] > 0.5f;
     const bool short_hsl_panic_market = settings[18] > 0.5f;
+    const bool market_orders_allowed = settings[19] > 0.5f;
+    const float market_order_near_touch_threshold = fmax(settings[20], 0.0f);
     const int pnl_lookback_bars = max(sizes[6], 0);
     const int rolling_capacity = sizes[5];
     const bool loss_gate_enabled = max_realized_loss_pct < 1.0f;
@@ -1137,6 +1236,10 @@ inline void passivbot_single_coin_impl(
     const float seed_close = bars[seed_k * 5 + 2];
     TmSide long_side = load_side(params, po, seed_close);
     TmSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
+    long_side.market_orders_allowed = market_orders_allowed;
+    long_side.market_order_near_touch_threshold = market_order_near_touch_threshold;
+    short_side.market_orders_allowed = market_orders_allowed;
+    short_side.market_order_near_touch_threshold = market_order_near_touch_threshold;
     HslState long_hsl = load_hsl(params, po, 40);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 40);
     HslStrategyEquityStats long_hsl_strategy_eq = init_hsl_strategy_equity_stats();
@@ -1273,11 +1376,13 @@ inline void passivbot_single_coin_impl(
             && long_side.close_qty > 0.0f && long_side.psize > 0.0f;
         bool long_secondary_close_fill = valid && alive && long_enabled
             && long_side.secondary_close_qty > 0.0f
-            && long_side.secondary_close_ticks <= high_fill_max_tick
+            && (long_side.secondary_close_market
+                || long_side.secondary_close_ticks <= high_fill_max_tick)
             && long_side.psize > 0.0f;
         bool long_recursive_close = long_side.close_retracement_base <= 0.0f;
         bool long_scan_close_grid = long_close_ready
             && ((long_side.close_is_panic && long_hsl_panic_market)
+                || long_side.close_market
                 || long_side.close_ticks <= high_fill_max_tick);
         if (long_close_ready && long_recursive_close
             && long_side.close_is_exposure_reducer) {
@@ -1514,12 +1619,30 @@ inline void passivbot_single_coin_impl(
                         reducer_executed = true;
                     }
                 }
-                if (group.ticks > high_fill_max_tick) break;
+                bool group_market = should_use_ordinary_market_execution(
+                    group.ticks, false, long_side.close_gen_market_price,
+                    price_step, market_orders_allowed,
+                    market_order_near_touch_threshold
+                );
+                if (!group_market && group.ticks > high_fill_max_tick) break;
                 float group_qty = trimmed_group_qty;
+                if (group_market) {
+                    group_qty = resize_market_close_qty(
+                        group_qty, long_side.psize,
+                        long_side.close_gen_market_price,
+                        qty_step, min_qty, min_cost, c_mult
+                    );
+                }
                 if (group_qty <= 0.0f) continue;
                 float adj = fmin(round_step(group_qty, qty_step), long_side.psize);
-                float pnl = adj * c_mult * (group.price - long_side.pprice);
-                float fee = adj * group.price * c_mult * maker_fee;
+                float group_fill_price = group_market
+                    ? ordinary_market_fill_price(
+                        close, false, market_order_slippage_pct, price_step
+                    ) : group.price;
+                float pnl = adj * c_mult
+                    * (group_fill_price - long_side.pprice);
+                float fee = adj * group_fill_price * c_mult
+                    * (group_market ? taker_fee : maker_fee);
                 if (!realized_loss_proxy_allows_close(
                         adj, group.price, long_side.pprice, true,
                         c_mult, maker_fee, loss_gate_enabled)) continue;
@@ -1562,7 +1685,7 @@ inline void passivbot_single_coin_impl(
                 );
                 bool went_flat = new_psize <= 0.0f;
                 long_side.psize = new_psize;
-                day_volume += fabs(adj) * group.price / balance;
+                day_volume += fabs(adj) * group_fill_price / balance;
                 long_close_fill = true;
                 if (went_flat) {
                     long_side.pprice = 0.0f;
@@ -1655,13 +1778,17 @@ inline void passivbot_single_coin_impl(
                 if (!reachable || long_side.psize <= 0.0f) continue;
                 bool market_panic = !use_secondary && long_side.close_is_panic
                     && long_hsl_panic_market;
-                float cp = use_secondary ? long_side.secondary_close_price
-                    : market_panic
+                bool ordinary_market = use_secondary
+                    ? long_side.secondary_close_market
+                    : long_side.close_market;
+                bool market_execution = market_panic || ordinary_market;
+                float cp = market_execution
                         ? float(max(directional_ticks(
                             close * (1.0f - market_order_slippage_pct),
                             price_step, false
                         ), 1)) * price_step
-                        : long_side.close_price;
+                        : use_secondary ? long_side.secondary_close_price
+                                        : long_side.close_price;
                 float requested_qty = use_secondary
                     ? long_side.secondary_close_qty : long_side.close_qty;
                 float adj = fmin(
@@ -1669,7 +1796,7 @@ inline void passivbot_single_coin_impl(
                 );
                 float pnl = adj * c_mult * (cp - long_side.pprice);
                 float fee = adj * cp * c_mult
-                    * (market_panic ? taker_fee : maker_fee);
+                    * (market_execution ? taker_fee : maker_fee);
                 bool selected_unstuck = !use_secondary
                     && long_side.close_is_unstuck_reducer;
                 if (!long_side.close_is_panic
@@ -1736,7 +1863,8 @@ inline void passivbot_single_coin_impl(
 
         bool long_entry_fill = valid && alive && long_enabled
             && long_side.entry_qty > 0.0f
-            && long_side.entry_ticks > low_nonfill_max_tick;
+            && (long_side.entry_market
+                || long_side.entry_ticks > low_nonfill_max_tick);
         if (long_entry_fill) {
             TmSide ladder_side = long_side;
             ladder_side.psize = long_side.entry_gen_psize;
@@ -1744,6 +1872,7 @@ inline void passivbot_single_coin_impl(
             const float ladder_balance = long_side.entry_gen_balance;
             const float ladder_kf = long_side.entry_gen_kf;
             int ladder_touch_ticks = long_side.entry_gen_touch_ticks;
+            float ladder_market_price = long_side.entry_gen_market_price;
             int previous_ticks = 0;
             for (int rung = 0; rung < 500; ++rung) {
                 int entry_ticks = rung == 0
@@ -1754,10 +1883,20 @@ inline void passivbot_single_coin_impl(
                     rung == 0 ? long_side.entry_qty : ladder_side.entry_qty,
                     qty_step
                 );
-                if (eq <= 0.0f || entry_ticks <= low_nonfill_max_tick
+                bool entry_market = rung == 0 ? long_side.entry_market
+                    : should_use_ordinary_market_execution(
+                        entry_ticks, true, ladder_market_price, price_step,
+                        market_orders_allowed, market_order_near_touch_threshold
+                    );
+                if (eq <= 0.0f
+                    || (!entry_market && entry_ticks <= low_nonfill_max_tick)
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
-
-                float fee = eq * ep * c_mult * maker_fee;
+                float entry_fill_price = entry_market
+                    ? ordinary_market_fill_price(
+                        close, true, market_order_slippage_pct, price_step
+                    ) : ep;
+                float fee = eq * entry_fill_price * c_mult
+                    * (entry_market ? taker_fee : maker_fee);
                 balance -= fee;
                 record_realized_net(
                     -fee,
@@ -1783,14 +1922,14 @@ inline void passivbot_single_coin_impl(
                 );
                 bool was_flat = long_side.psize <= 0.0f;
                 float new_psize = round_step(long_side.psize + eq, qty_step);
-                float new_pprice = was_flat ? ep
+                float new_pprice = was_flat ? entry_fill_price
                     : long_side.pprice * (long_side.psize / fmax(new_psize, 1.0e-12f))
-                        + ep * (eq / fmax(new_psize, 1.0e-12f));
+                        + entry_fill_price * (eq / fmax(new_psize, 1.0e-12f));
                 if (was_flat) long_side.pos_open_k = kf;
                 long_side.psize = new_psize;
                 long_side.pprice = new_pprice;
                 long_side.last_inc_k = kf;
-                day_volume += fabs(eq) * ep / balance;
+                day_volume += fabs(eq) * entry_fill_price / balance;
 
                 bool sim_flat = ladder_side.psize <= 0.0f;
                 float sim_psize = round_step(ladder_side.psize + eq, qty_step);
@@ -1818,11 +1957,13 @@ inline void passivbot_single_coin_impl(
             && short_side.close_qty > 0.0f && short_side.psize > 0.0f;
         bool short_secondary_close_fill = valid && alive && short_enabled
             && short_side.secondary_close_qty > 0.0f
-            && short_side.secondary_close_ticks > low_nonfill_max_tick
+            && (short_side.secondary_close_market
+                || short_side.secondary_close_ticks > low_nonfill_max_tick)
             && short_side.psize > 0.0f;
         bool short_recursive_close = short_side.close_retracement_base <= 0.0f;
         bool short_scan_close_grid = short_close_ready
             && ((short_side.close_is_panic && short_hsl_panic_market)
+                || short_side.close_market
                 || short_side.close_ticks > low_nonfill_max_tick);
         if (short_close_ready && short_recursive_close
             && short_side.close_is_exposure_reducer) {
@@ -2057,12 +2198,30 @@ inline void passivbot_single_coin_impl(
                         reducer_executed = true;
                     }
                 }
-                if (group.ticks <= low_nonfill_max_tick) break;
+                bool group_market = should_use_ordinary_market_execution(
+                    group.ticks, true, short_side.close_gen_market_price,
+                    price_step, market_orders_allowed,
+                    market_order_near_touch_threshold
+                );
+                if (!group_market && group.ticks <= low_nonfill_max_tick) break;
                 float group_qty = trimmed_group_qty;
+                if (group_market) {
+                    group_qty = resize_market_close_qty(
+                        group_qty, short_side.psize,
+                        short_side.close_gen_market_price,
+                        qty_step, min_qty, min_cost, c_mult
+                    );
+                }
                 if (group_qty <= 0.0f) continue;
                 float adj = fmin(round_step(group_qty, qty_step), short_side.psize);
-                float pnl = adj * c_mult * (short_side.pprice - group.price);
-                float fee = adj * group.price * c_mult * maker_fee;
+                float group_fill_price = group_market
+                    ? ordinary_market_fill_price(
+                        close, true, market_order_slippage_pct, price_step
+                    ) : group.price;
+                float pnl = adj * c_mult
+                    * (short_side.pprice - group_fill_price);
+                float fee = adj * group_fill_price * c_mult
+                    * (group_market ? taker_fee : maker_fee);
                 if (!realized_loss_proxy_allows_close(
                         adj, group.price, short_side.pprice, false,
                         c_mult, maker_fee, loss_gate_enabled)) continue;
@@ -2106,7 +2265,7 @@ inline void passivbot_single_coin_impl(
                 );
                 bool went_flat = new_psize <= 0.0f;
                 short_side.psize = new_psize;
-                day_volume += fabs(adj) * group.price / balance;
+                day_volume += fabs(adj) * group_fill_price / balance;
                 short_close_fill = true;
                 if (went_flat) {
                     short_side.pprice = 0.0f;
@@ -2199,13 +2358,17 @@ inline void passivbot_single_coin_impl(
                 if (!reachable || short_side.psize <= 0.0f) continue;
                 bool market_panic = !use_secondary && short_side.close_is_panic
                     && short_hsl_panic_market;
-                float cp = use_secondary ? short_side.secondary_close_price
-                    : market_panic
+                bool ordinary_market = use_secondary
+                    ? short_side.secondary_close_market
+                    : short_side.close_market;
+                bool market_execution = market_panic || ordinary_market;
+                float cp = market_execution
                         ? float(max(directional_ticks(
                             close * (1.0f + market_order_slippage_pct),
                             price_step, true
                         ), 1)) * price_step
-                        : short_side.close_price;
+                        : use_secondary ? short_side.secondary_close_price
+                                        : short_side.close_price;
                 float requested_qty = use_secondary
                     ? short_side.secondary_close_qty : short_side.close_qty;
                 float adj = fmin(
@@ -2213,7 +2376,7 @@ inline void passivbot_single_coin_impl(
                 );
                 float pnl = adj * c_mult * (short_side.pprice - cp);
                 float fee = adj * cp * c_mult
-                    * (market_panic ? taker_fee : maker_fee);
+                    * (market_execution ? taker_fee : maker_fee);
                 bool selected_unstuck = !use_secondary
                     && short_side.close_is_unstuck_reducer;
                 if (!short_side.close_is_panic
@@ -2281,7 +2444,8 @@ inline void passivbot_single_coin_impl(
 
         bool short_entry_fill = valid && alive && short_enabled
             && short_side.entry_qty > 0.0f
-            && short_side.entry_ticks <= high_fill_max_tick;
+            && (short_side.entry_market
+                || short_side.entry_ticks <= high_fill_max_tick);
         if (short_entry_fill) {
             TmSide ladder_side = short_side;
             ladder_side.psize = short_side.entry_gen_psize;
@@ -2289,6 +2453,7 @@ inline void passivbot_single_coin_impl(
             const float ladder_balance = short_side.entry_gen_balance;
             const float ladder_kf = short_side.entry_gen_kf;
             int ladder_touch_ticks = short_side.entry_gen_touch_ticks;
+            float ladder_market_price = short_side.entry_gen_market_price;
             int previous_ticks = 0;
             for (int rung = 0; rung < 500; ++rung) {
                 int entry_ticks = rung == 0
@@ -2299,10 +2464,26 @@ inline void passivbot_single_coin_impl(
                     rung == 0 ? short_side.entry_qty : ladder_side.entry_qty,
                     qty_step
                 );
-                if (eq <= 0.0f || entry_ticks > high_fill_max_tick
+                bool entry_market = rung == 0 ? short_side.entry_market
+                    : should_use_ordinary_market_execution(
+                        entry_ticks, false, ladder_market_price, price_step,
+                        market_orders_allowed, market_order_near_touch_threshold
+                    );
+                if (entry_market) {
+                    float market_min_q = min_entry_qty(
+                        ladder_market_price, qty_step, min_qty, min_cost, c_mult
+                    );
+                    if (eq < market_min_q) eq = market_min_q;
+                }
+                if (eq <= 0.0f
+                    || (!entry_market && entry_ticks > high_fill_max_tick)
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
-
-                float fee = eq * ep * c_mult * maker_fee;
+                float entry_fill_price = entry_market
+                    ? ordinary_market_fill_price(
+                        close, false, market_order_slippage_pct, price_step
+                    ) : ep;
+                float fee = eq * entry_fill_price * c_mult
+                    * (entry_market ? taker_fee : maker_fee);
                 balance -= fee;
                 record_realized_net(
                     -fee,
@@ -2329,14 +2510,14 @@ inline void passivbot_single_coin_impl(
                 );
                 bool was_flat = short_side.psize <= 0.0f;
                 float new_psize = round_step(short_side.psize + eq, qty_step);
-                float new_pprice = was_flat ? ep
+                float new_pprice = was_flat ? entry_fill_price
                     : short_side.pprice * (short_side.psize / fmax(new_psize, 1.0e-12f))
-                        + ep * (eq / fmax(new_psize, 1.0e-12f));
+                        + entry_fill_price * (eq / fmax(new_psize, 1.0e-12f));
                 if (was_flat) short_side.pos_open_k = kf;
                 short_side.psize = new_psize;
                 short_side.pprice = new_pprice;
                 short_side.last_inc_k = kf;
-                day_volume += fabs(eq) * ep / balance;
+                day_volume += fabs(eq) * entry_fill_price / balance;
 
                 bool sim_flat = ladder_side.psize <= 0.0f;
                 float sim_psize = round_step(ladder_side.psize + eq, qty_step);

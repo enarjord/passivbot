@@ -1568,16 +1568,18 @@ def test_gpu_foundation_accepts_baseline_ema_single_coin_market_execution():
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
+def test_gpu_foundation_accepts_baseline_tm_single_coin_market_execution():
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["market_order_near_touch_threshold"] = 0.002
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
 @pytest.mark.parametrize(
     ("mutate", "evaluator", "message"),
     [
-        (
-            lambda config: config["live"].__setitem__(
-                "strategy_kind", "trailing_martingale"
-            ),
-            _Evaluator,
-            "single-coin strategy_kind=ema_anchor",
-        ),
         (
             lambda config: config["live"].__setitem__(
                 "market_order_near_touch_threshold", -0.1
@@ -1590,7 +1592,7 @@ def test_gpu_foundation_accepts_baseline_ema_single_coin_market_execution():
                 "long", ["BTC", "ETH"]
             ),
             _MulticoinEvaluator,
-            "single-coin strategy_kind=ema_anchor",
+            "single-coin EMA Anchor or Trailing Martingale",
         ),
     ],
 )
@@ -1603,6 +1605,77 @@ def test_gpu_market_execution_fails_closed_outside_baseline_scope(
 
     with pytest.raises(ValueError, match=message):
         _validate_scope(config, evaluator())
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda config: config["live"].__setitem__(
+                "max_realized_loss_pct", 0.5
+            ),
+            "live.max_realized_loss_pct",
+        ),
+        (
+            lambda config: config["bot"]["long"]["hsl"].__setitem__(
+                "enabled", True
+            ),
+            "bot.long.hsl.enabled",
+        ),
+        (
+            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
+                "enabled", True
+            ),
+            "bot.long.unstuck.enabled",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "position_exposure_enforcer_enabled", True
+            ),
+            "position_exposure_enforcer_enabled",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "total_exposure_enforcer_enabled", True
+            ),
+            "total_exposure_enforcer_enabled",
+        ),
+        (
+            lambda config: config.__setitem__(
+                "coin_overrides",
+                {"BTC": {"bot": {"long": {"unstuck": {"enabled": True}}}}},
+            ),
+            "coin_overrides.BTC.bot.long.unstuck.enabled",
+        ),
+        (
+            lambda config: config.__setitem__(
+                "coin_overrides",
+                {
+                    "BTC": {
+                        "bot": {
+                            "long": {
+                                "risk": {
+                                    "total_exposure_enforcer_enabled": True
+                                }
+                            }
+                        }
+                    }
+                },
+            ),
+            "coin_overrides.BTC.bot.long.risk.total_exposure_enforcer_enabled",
+        ),
+    ],
+)
+def test_gpu_tm_market_execution_fails_closed_for_unmodeled_ordering(
+    mutate, message
+):
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    mutate(config)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_scope(config, _Evaluator())
 
 
 @pytest.mark.parametrize("risk_feature", ["loss_gate", "unstuck", "twel_enforcer"])
