@@ -232,6 +232,16 @@ mod tests {
         assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
         assert!(source.contains("else account.realized_pnl_short += net_pnl"));
         assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
+        assert!(source.contains(
+            "#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"
+        ));
+        assert!(source.contains("const int recovery_stride = sizes[8]"));
+        assert!(source.contains("const int recovery_sample_count = sizes[9]"));
+        assert!(source.contains(
+            "const bool recovery_terminal = liquidated || k == stop_k - 1"
+        ));
+        assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
+        assert!(source.contains("= RECOVERY_FAIL_CLOSED_SENTINEL;"));
         assert!(source.contains("return update_dual_side_hsl("));
         assert!(source.contains("account.realized_pnl_total"));
         assert!(source.contains("account.realized_pnl_long, account.realized_pnl_short"));

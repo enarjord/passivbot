@@ -4453,6 +4453,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         forager_score_hysteresis_pct=0.02,
         max_realized_loss_pct=0.1,
         hsl_raw_drawdown_enabled=True,
+        recovery_distribution_enabled=True,
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
     assert runner.settings.cpu()[5].item() <= 0.1
@@ -4478,6 +4479,14 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         assert torch.equal(output["fill_count_long"], output["fill_count"])
     else:
         assert (output["fill_count_long"] == 0.0).all()
+    recovery = strategy_eq_recovery_distribution_from_samples(
+        output["strategy_eq_recovery_samples"],
+        sample_interval_days=output[
+            "strategy_eq_recovery_sample_interval_days"
+        ],
+    )
+    assert torch.isfinite(recovery).all().item()
+    assert (recovery[:, 3] > 0.0).all().item()
 
     with pytest.raises(ValueError, match="finite and non-negative"):
         MpsEmaAnchorMulticoinRunner(
@@ -4721,6 +4730,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        recovery_distribution_enabled=True,
     )
     torch.testing.assert_close(runner.settings, run_settings)
     runner_output = runner.run(
@@ -4773,6 +4783,17 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         False,
     ]
     assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
+    recovery = strategy_eq_recovery_distribution_from_samples(
+        runner_output["strategy_eq_recovery_samples"],
+        sample_interval_days=runner_output[
+            "strategy_eq_recovery_sample_interval_days"
+        ],
+    )
+    assert torch.isfinite(recovery).all().item()
+    assert (recovery[:3, 3] > 0.0).all().item()
+    assert (
+        runner_output["strategy_eq_recovery_samples"][3:, 0] < 0.0
+    ).all().item()
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
     metric_rows = []
@@ -5160,6 +5181,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        recovery_distribution_enabled=True,
     )
     torch.testing.assert_close(runner.settings, run_settings)
     runner_output = runner.run(np.asarray(rows, dtype=np.float64), profile=True)
@@ -5210,6 +5232,17 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         False,
     ]
     assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
+    recovery = strategy_eq_recovery_distribution_from_samples(
+        runner_output["strategy_eq_recovery_samples"],
+        sample_interval_days=runner_output[
+            "strategy_eq_recovery_sample_interval_days"
+        ],
+    )
+    assert torch.isfinite(recovery).all().item()
+    assert (recovery[:3, 3] > 0.0).all().item()
+    assert (
+        runner_output["strategy_eq_recovery_samples"][3:, 0] < 0.0
+    ).all().item()
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
     metric_rows = []
@@ -5519,6 +5552,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         forager_score_hysteresis_pct=0.02,
         max_realized_loss_pct=0.1,
         hsl_raw_drawdown_enabled=True,
+        recovery_distribution_enabled=True,
     )
     assert runner.settings.cpu()[5].item() <= 0.1
     output = runner.run(np.array([row, row], dtype=np.float64))
@@ -5532,6 +5566,14 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
     assert torch.isfinite(output["balance"]).all()
     assert output["day_has_fill"].sum().item() > 0
     assert (output["open_positions"] <= 2.0).all()
+    recovery = strategy_eq_recovery_distribution_from_samples(
+        output["strategy_eq_recovery_samples"],
+        sample_interval_days=output[
+            "strategy_eq_recovery_sample_interval_days"
+        ],
+    )
+    assert torch.isfinite(recovery).all().item()
+    assert (recovery[:, 3] > 0.0).all().item()
 
     disabled = np.full((coin_count, 44), np.nan, dtype=np.float32)
     disabled[:, 24] = 0.0

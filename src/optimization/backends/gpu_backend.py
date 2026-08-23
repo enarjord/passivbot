@@ -1132,24 +1132,6 @@ def _validate_dual_multicoin_metrics(
         )
 
 
-def _validate_recovery_distribution_scope(
-    needed_metrics, *, coin_count: int
-) -> None:
-    recovery_distribution_metrics = {
-        "strategy_eq_recovery_days_mean",
-        "strategy_eq_recovery_days_median",
-        "strategy_eq_recovery_days_p95",
-        "strategy_eq_recovery_days_p99",
-        "strategy_eq_recovery_days_mean_worst_5pct",
-        "strategy_eq_recovery_days_mean_worst_1pct",
-    }
-    if int(coin_count) > 1 and set(needed_metrics) & recovery_distribution_metrics:
-        raise ValueError(
-            "GPU strategy-equity recovery-distribution metrics currently require "
-            "a single-coin optimization; use other multicoin metrics or the CPU optimizer"
-        )
-
-
 def _validate_hsl_metric_topology(
     needed_metrics,
     *,
@@ -3297,9 +3279,6 @@ def run_backend(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
         )
-    _validate_recovery_distribution_scope(
-        needed_metrics, coin_count=max_coin_count
-    )
     _validate_hsl_metric_topology(
         needed_metrics,
         coin_count=max_coin_count,

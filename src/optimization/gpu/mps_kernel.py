@@ -165,38 +165,46 @@ def _trailing_martingale_short_no_hsl_shader_library(
     )
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_hsl_features(
-            passivbot_rust.mps_ema_anchor_multicoin_source_py(),
-            ema_tail_enabled=hsl_ema_tail_enabled,
-            raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+        _with_recovery_distribution(
+            _with_hsl_features(
+                passivbot_rust.mps_ema_anchor_multicoin_source_py(),
+                ema_tail_enabled=hsl_ema_tail_enabled,
+                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            ),
+            recovery_distribution_enabled,
         )
     )
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _trailing_martingale_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_hsl_features(
-            passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
-            ema_tail_enabled=hsl_ema_tail_enabled,
-            raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+        _with_recovery_distribution(
+            _with_hsl_features(
+                passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
+                ema_tail_enabled=hsl_ema_tail_enabled,
+                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            ),
+            recovery_distribution_enabled,
         )
     )
 
@@ -820,6 +828,7 @@ class MpsEmaAnchorMulticoinRunner:
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        recovery_distribution_enabled: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -829,6 +838,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.collect_coin_fill_counts = bool(collect_coin_fill_counts)
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
+        self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
         if self.hsl_raw_drawdown_enabled:
             self.scalar_cols = (
@@ -852,6 +862,19 @@ class MpsEmaAnchorMulticoinRunner:
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
+        self.recovery_stride = (
+            max(1, int(np.ceil(3_600_000.0 / float(run.interval_ms))))
+            if self.recovery_distribution_enabled
+            else 0
+        )
+        self.n_recovery_samples = (
+            max(
+                1,
+                (self.n + self.recovery_stride - 1) // self.recovery_stride + 1,
+            )
+            if self.recovery_distribution_enabled
+            else 1
+        )
         self.bars = data["bars"]
         self.fill_ticks = data["fill_ticks"]
         self.touch_ticks = data["touch_ticks"]
@@ -915,6 +938,7 @@ class MpsEmaAnchorMulticoinRunner:
             device="mps",
         )
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
+        self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self._full_end_steps: dict[int, torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
@@ -997,10 +1021,11 @@ class MpsEmaAnchorMulticoinRunner:
         scalars,
         gaps,
         coin_fill_counts,
+        recovery_samples,
         *,
         batch_size: int,
     ) -> None:
-        library.passivbot_ema_anchor_multicoin(
+        kernel_args = (
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
@@ -1014,6 +1039,11 @@ class MpsEmaAnchorMulticoinRunner:
             scalars,
             gaps,
             coin_fill_counts,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        library.passivbot_ema_anchor_multicoin(
+            *kernel_args,
             threads=(batch_size, 1, 1),
         )
 
@@ -1021,10 +1051,23 @@ class MpsEmaAnchorMulticoinRunner:
         return _ema_anchor_multicoin_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.recovery_distribution_enabled,
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps)
+
+    def _recovery_sample_buffer(self, batch_size: int):
+        if batch_size not in self._recovery_buffers:
+            self._recovery_buffers[batch_size] = torch.full(
+                (batch_size, self.n_recovery_samples),
+                float("nan"),
+                dtype=torch.float32,
+                device="mps",
+            )
+        else:
+            self._recovery_buffers[batch_size].fill_(float("nan"))
+        return self._recovery_buffers[batch_size]
 
     def run(
         self,
@@ -1040,19 +1083,29 @@ class MpsEmaAnchorMulticoinRunner:
         batch_size = int(matrix.shape[0])
         end_steps_mps = self._end_steps(end_steps, batch_size)
         daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
+        recovery_samples = (
+            self._recovery_sample_buffer(batch_size)
+            if self.recovery_distribution_enabled
+            else None
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
+            size_values = [
+                batch_size,
+                self.n,
+                self.n_coins,
+                self.n_days,
+                self.requested_start_idx,
+                self.run_config.warmup_bars,
+                self.start_minute_of_day,
+                self.start_minute_of_hour,
+            ]
+            if self.recovery_distribution_enabled:
+                size_values.extend(
+                    [self.recovery_stride, self.n_recovery_samples]
+                )
             self._sizes[sizes_key] = torch.tensor(
-                [
-                    batch_size,
-                    self.n,
-                    self.n_coins,
-                    self.n_days,
-                    self.requested_start_idx,
-                    self.run_config.warmup_bars,
-                    self.start_minute_of_day,
-                    self.start_minute_of_hour,
-                ],
+                size_values,
                 dtype=torch.int32,
                 device="mps",
             )
@@ -1073,6 +1126,7 @@ class MpsEmaAnchorMulticoinRunner:
             scalars,
             gaps,
             coin_fill_counts,
+            recovery_samples,
             batch_size=batch_size,
         )
         if profile:
@@ -1086,6 +1140,11 @@ class MpsEmaAnchorMulticoinRunner:
             "kernel_seconds": finished - dispatched,
         }
         output = self._decode(daily, scalars, gaps)
+        if self.recovery_distribution_enabled:
+            output["strategy_eq_recovery_samples"] = recovery_samples
+            output["strategy_eq_recovery_sample_interval_days"] = (
+                self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            )
         if self.collect_coin_fill_counts:
             output["coin_fill_counts"] = coin_fill_counts
         return output
@@ -1111,6 +1170,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        recovery_distribution_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -1124,6 +1184,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            recovery_distribution_enabled=recovery_distribution_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1186,10 +1247,11 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         scalars,
         gaps,
         coin_fill_counts,
+        recovery_samples,
         *,
         batch_size: int,
     ) -> None:
-        library.passivbot_ema_anchor_multicoin_fused(
+        kernel_args = (
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
@@ -1204,6 +1266,11 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             scalars,
             gaps,
             coin_fill_counts,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        library.passivbot_ema_anchor_multicoin_fused(
+            *kernel_args,
             threads=(batch_size, 1, 1),
         )
 
@@ -1245,6 +1312,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        recovery_distribution_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -1258,6 +1326,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_panic_market=hsl_panic_market,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            recovery_distribution_enabled=recovery_distribution_enabled,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -1274,6 +1343,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         return _trailing_martingale_multicoin_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.recovery_distribution_enabled,
         )
 
     def _dispatch(
@@ -1286,10 +1356,11 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         scalars,
         gaps,
         coin_fill_counts,
+        recovery_samples,
         *,
         batch_size: int,
     ) -> None:
-        library.passivbot_trailing_martingale_multicoin(
+        kernel_args = (
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
@@ -1306,6 +1377,11 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             scalars,
             gaps,
             coin_fill_counts,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        library.passivbot_trailing_martingale_multicoin(
+            *kernel_args,
             threads=(batch_size, 1, 1),
         )
 
@@ -1335,6 +1411,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        recovery_distribution_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -1348,6 +1425,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            recovery_distribution_enabled=recovery_distribution_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1408,10 +1486,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         scalars,
         gaps,
         coin_fill_counts,
+        recovery_samples,
         *,
         batch_size: int,
     ) -> None:
-        library.passivbot_trailing_martingale_multicoin_fused(
+        kernel_args = (
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
@@ -1429,6 +1508,11 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             scalars,
             gaps,
             coin_fill_counts,
+        )
+        if self.recovery_distribution_enabled:
+            kernel_args += (recovery_samples,)
+        library.passivbot_trailing_martingale_multicoin_fused(
+            *kernel_args,
             threads=(batch_size, 1, 1),
         )
 
