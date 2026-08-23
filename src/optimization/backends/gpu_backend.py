@@ -726,17 +726,18 @@ def _resolve_options(config: dict) -> dict:
             "at least optimize.gpu.validate_per_generation so each full validation "
             "batch retains its configured proxy-front/broad-probe allocation"
         )
-    # A complete feasible proxy Pareto front may contain only one novel
-    # candidate. All remaining validation slots are truthfully broad/off-front
-    # evidence, so budget for the worst-case one true-front sample per full
-    # generation rather than assuming a fixed front/probe split.
+    # A complete feasible proxy Pareto front may contain only one candidate.
+    # All remaining validation slots are truthfully broad/off-front evidence,
+    # so budget for the worst-case one true-front sample per full generation
+    # rather than assuming a fixed front/probe split. A repeated member is
+    # exactly revalidated to preserve that sample.
     required_front_window = MIN_DRIFT_PROBES * validations
     if int(options["drift_window"]) < required_front_window:
         raise ValueError(
             "optimize.gpu.drift_window must be at least "
             f"{required_front_window} to retain {MIN_DRIFT_PROBES} true "
-            "proxy-front validations when a complete proxy front contributes "
-            "only one novel candidate per generation"
+            "proxy-front validations when a complete proxy front contains "
+            "only one candidate per generation"
         )
     required_evidence_window = required_front_window
     if int(options["drift_probes"]) > 0:
@@ -1880,9 +1881,9 @@ def _select_validation_indices(
             selected.append((index, not is_front, is_front))
             selected_ids.add(index)
 
-    # Return a complete preference order. The caller may skip candidates whose
-    # quantized exact vectors were already evaluated and continue down this
-    # list until it fills the generation's exact-validation quota.
+    # Return a complete preference order. The caller may skip duplicate probes,
+    # seek novel front members, or deliberately revalidate an already-exact
+    # current-front member without changing its truthful class.
     fallback_order = sorted(
         range(len(objectives)),
         key=lambda index: (
@@ -1899,7 +1900,11 @@ def _select_validation_indices(
     return selected
 
 
-def _select_novel_validations(
+class _ProxyFrontValidationPending(RuntimeError):
+    """The current proxy front has exact work in flight but no ready evidence."""
+
+
+def _select_exact_validations(
     selections,
     *,
     total: int,
@@ -1908,10 +1913,20 @@ def _select_novel_validations(
     completed_hashes,
     submitted_hashes,
 ):
+    """Choose truthful exact evidence, revalidating a covered front if needed.
+
+    Off-front candidates are never relabeled as front evidence. When duplicate
+    filtering leaves no novel front member, a previously completed current-front
+    candidate is deliberately re-run so the rolling front gate remains active.
+    A current-front candidate that is still in flight must complete first.
+    """
+
     novel = []
+    completed_front = []
     seen = set()
     novel_probe_count = 0
     novel_front_count = 0
+    pending_front = False
     # The first ``total`` preferences are the selector's truthful allocation.
     # Later items replace duplicate hashes but must not change that class mix.
     target_probe_count = min(
@@ -1925,10 +1940,17 @@ def _select_novel_validations(
     for index, is_probe, is_front in selections:
         candidate = candidate_for_index(index)
         digest = digest_for_candidate(candidate)
-        if digest in completed_hashes or digest in submitted_hashes or digest in seen:
+        if digest in seen:
             continue
         seen.add(digest)
         item = (index, bool(is_probe), bool(is_front), candidate, digest)
+        if digest in submitted_hashes:
+            pending_front = pending_front or bool(is_front)
+            continue
+        if digest in completed_hashes:
+            if is_front:
+                completed_front.append(item)
+            continue
         novel.append(item)
         novel_probe_count += int(bool(is_probe))
         novel_front_count += int(bool(is_front))
@@ -1940,10 +1962,16 @@ def _select_novel_validations(
 
     probe_items = [item for item in novel if item[1]]
     front_items = [item for item in novel if item[2]]
+    if len(front_items) < target_front_count:
+        front_items.extend(completed_front[: target_front_count - len(front_items)])
     if not front_items:
+        if pending_front:
+            raise _ProxyFrontValidationPending(
+                "GPU proxy-front exact validation is still in flight"
+            )
         raise RuntimeError(
-            "GPU validation cannot provide novel proxy-front safety evidence; "
-            "the current proxy front was already evaluated or submitted"
+            "GPU validation cannot provide truthful proxy-front safety evidence; "
+            "the selector returned no novel or previously exact front candidate"
         )
     chosen = probe_items[:target_probe_count]
     chosen_digests = {item[4] for item in chosen}
@@ -1977,8 +2005,8 @@ def _update_probe_shortfall_log(
         logging.warning(
             "GPU validation has fewer novel candidates outside the complete feasible "
             "proxy Pareto front than requested | requested=%d available=%d | "
-            "filling the exact quota with diverse true-front candidates; broad-probe "
-            "gates use only truthful accumulated off-front evidence",
+            "using truthful true-front candidates (including exact revalidation "
+            "when necessary); broad-probe gates use only accumulated off-front evidence",
             requested,
             actual,
         )
@@ -3674,6 +3702,7 @@ def run_backend(
             )
             exact_done += 1
             completed_hashes.add(digest)
+            submitted_hashes.discard(digest)
             if classification_mismatch:
                 logging.warning(
                     "GPU %s proxy/exact constraint classification disagreed; exact Rust "
@@ -3759,22 +3788,35 @@ def run_backend(
                 total=validation_count,
                 probes=probe_count,
             )
-            novel_selections = _select_novel_validations(
-                selections,
-                total=validation_count,
-                candidate_for_index=lambda index: full_vector(rows[index]),
-                digest_for_candidate=vector_hash,
-                completed_hashes=completed_hashes,
-                submitted_hashes=submitted_hashes,
-            )
-            actual_probe_count = sum(bool(item[1]) for item in novel_selections)
+            while True:
+                try:
+                    exact_selections = _select_exact_validations(
+                        selections,
+                        total=validation_count,
+                        candidate_for_index=lambda index: full_vector(rows[index]),
+                        digest_for_candidate=vector_hash,
+                        completed_hashes=completed_hashes,
+                        submitted_hashes=submitted_hashes,
+                    )
+                    break
+                except _ProxyFrontValidationPending:
+                    if not pending:
+                        raise RuntimeError(
+                            "GPU validation marked proxy-front evidence pending "
+                            "without an exact job in flight"
+                        )
+                    consume_ready(wait_for_one=True)
+                    if exact_done + len(pending) >= budget:
+                        exact_selections = []
+                        break
+            actual_probe_count = sum(bool(item[1]) for item in exact_selections)
             last_probe_shortfall = _update_probe_shortfall_log(
                 last_probe_shortfall,
                 requested=probe_count,
                 actual=actual_probe_count,
             )
             submitted_this_generation = 0
-            for index, is_probe, is_proxy_front, vector, digest in novel_selections:
+            for index, is_probe, is_proxy_front, vector, digest in exact_selections:
                 result = _submit_gpu_exact_validation(
                     pool,
                     vector,

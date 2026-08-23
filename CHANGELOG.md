@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Apple MPS optimization halting when a converged or single-objective proxy front repeats an
+  already exact-validated candidate. The backend now revalidates that actual current-front member
+  (or waits for its in-flight exact job) instead of relabeling an off-front candidate, preserving
+  the proxy-front drift gate and exact Rust authority while allowing the search to continue.
+
 - Added worst EMA-smoothed HSL strategy-equity drawdown scoring and limits to Apple MPS
   optimization for the account, long side, and short side. Metal retains each controller's
   maximum across cooldown restarts and coin-mode controllers, then applies the same account-level
