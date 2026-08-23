@@ -21,10 +21,23 @@ from optimization.gpu.model import (
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
-MPS_MULTICOIN_SCALAR_COLS = 61
-MPS_DIRECTIONAL_SCALAR_COLS = 66
-MPS_MULTICOIN_FUSED_SCALAR_COLS = 66
+MPS_MULTICOIN_BASE_SCALAR_COLS = 61
+MPS_MULTICOIN_SCALAR_COLS = 63
+MPS_DIRECTIONAL_BASE_SCALAR_COLS = 66
+MPS_DIRECTIONAL_SCALAR_COLS = 68
+MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 66
+MPS_MULTICOIN_FUSED_SCALAR_COLS = 68
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
+
+_HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
+
+
+def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
+    if not enabled:
+        return source
+    if "#ifndef PASSIVBOT_HSL_EMA_TAIL_ENABLED" not in source:
+        raise RuntimeError("MPS source is missing the HSL EMA-tail feature guard")
+    return _HSL_EMA_TAIL_DEFINE + source
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -38,23 +51,36 @@ def _encode_max_realized_loss_pct(value: float) -> float:
     return float(encoded)
 
 
-@lru_cache(maxsize=1)
-def _shader_library():
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
-    import passivbot_rust
-
-    return torch.mps.compile_shader(passivbot_rust.mps_ema_anchor_source_py())
+def _scalar_column_or_zero(scalars, index: int):
+    if scalars.shape[1] > index:
+        return scalars[:, index]
+    return torch.zeros_like(scalars[:, 0])
 
 
-@lru_cache(maxsize=1)
-def _trailing_martingale_shader_library():
+@lru_cache(maxsize=2)
+def _shader_library(hsl_ema_tail_enabled: bool = False):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        passivbot_rust.mps_trailing_martingale_source_py()
+        _with_hsl_ema_tail(
+            passivbot_rust.mps_ema_anchor_source_py(), hsl_ema_tail_enabled
+        )
+    )
+
+
+@lru_cache(maxsize=2)
+def _trailing_martingale_shader_library(hsl_ema_tail_enabled: bool = False):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        _with_hsl_ema_tail(
+            passivbot_rust.mps_trailing_martingale_source_py(),
+            hsl_ema_tail_enabled,
+        )
     )
 
 
@@ -80,25 +106,33 @@ def _trailing_martingale_short_no_hsl_shader_library():
     )
 
 
-@lru_cache(maxsize=1)
-def _ema_anchor_multicoin_shader_library():
+@lru_cache(maxsize=2)
+def _ema_anchor_multicoin_shader_library(hsl_ema_tail_enabled: bool = False):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        passivbot_rust.mps_ema_anchor_multicoin_source_py()
+        _with_hsl_ema_tail(
+            passivbot_rust.mps_ema_anchor_multicoin_source_py(),
+            hsl_ema_tail_enabled,
+        )
     )
 
 
-@lru_cache(maxsize=1)
-def _trailing_martingale_multicoin_shader_library():
+@lru_cache(maxsize=2)
+def _trailing_martingale_multicoin_shader_library(
+    hsl_ema_tail_enabled: bool = False,
+):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        _with_hsl_ema_tail(
+            passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
+            hsl_ema_tail_enabled,
+        )
     )
 
 
@@ -190,6 +224,12 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "hsl_drawdown_ema_max_short": scalars[:, 58],
         "hsl_strategy_eq_recovery_max_ms_long": scalars[:, 59],
         "hsl_strategy_eq_recovery_max_ms_short": scalars[:, 60],
+        "hsl_drawdown_ema_mean_worst_1pct_long": _scalar_column_or_zero(
+            scalars, 61
+        ),
+        "hsl_drawdown_ema_mean_worst_1pct_short": _scalar_column_or_zero(
+            scalars, 62
+        ),
     }
 
 
@@ -206,6 +246,12 @@ def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
             "loss_sum_short": scalars[:, 63],
             "hsl_strategy_eq_recovery_max_ms_long": scalars[:, 64],
             "hsl_strategy_eq_recovery_max_ms_short": scalars[:, 65],
+            "hsl_drawdown_ema_mean_worst_1pct_long": _scalar_column_or_zero(
+                scalars, 66
+            ),
+            "hsl_drawdown_ema_mean_worst_1pct_short": _scalar_column_or_zero(
+                scalars, 67
+            ),
         }
     )
     return output
@@ -298,6 +344,12 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "hsl_drawdown_ema_max_short": scalars[:, 63],
         "hsl_strategy_eq_recovery_max_ms_long": scalars[:, 64],
         "hsl_strategy_eq_recovery_max_ms_short": scalars[:, 65],
+        "hsl_drawdown_ema_mean_worst_1pct_long": _scalar_column_or_zero(
+            scalars, 66
+        ),
+        "hsl_drawdown_ema_mean_worst_1pct_short": _scalar_column_or_zero(
+            scalars, 67
+        ),
     }
 
 
@@ -320,6 +372,7 @@ class MpsEmaAnchorRunner:
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         pnl_lookback_bars: int = 0,
+        hsl_ema_tail_enabled: bool = False,
     ):
         self.market = market
         self.run_config = run
@@ -351,6 +404,7 @@ class MpsEmaAnchorRunner:
         if pnl_lookback_bars < 0:
             raise ValueError("pnl_lookback_bars must be non-negative")
         self.pnl_lookback_bars = pnl_lookback_bars
+        self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.rolling_capacity = (
             MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
             if pnl_lookback_bars > 0
@@ -445,7 +499,12 @@ class MpsEmaAnchorRunner:
                         device="mps",
                     ),
                     torch.zeros(
-                        (batch_size, MPS_DIRECTIONAL_SCALAR_COLS),
+                        (
+                            batch_size,
+                            MPS_DIRECTIONAL_SCALAR_COLS
+                            if self.hsl_ema_tail_enabled
+                            else MPS_DIRECTIONAL_BASE_SCALAR_COLS,
+                        ),
                         dtype=torch.float32,
                         device="mps",
                     ),
@@ -501,7 +560,7 @@ class MpsEmaAnchorRunner:
                 device="mps",
             )
         prepared = time.perf_counter()
-        library = _shader_library()
+        library = _shader_library(self.hsl_ema_tail_enabled)
         compiled = time.perf_counter()
         if profile:
             torch.mps.synchronize()
@@ -553,6 +612,7 @@ class MpsEmaAnchorMulticoinRunner:
         collect_coin_fill_counts: bool = False,
         market_order_slippage_pct: float = 0.0,
         hsl_panic_market: bool = False,
+        hsl_ema_tail_enabled: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -560,6 +620,13 @@ class MpsEmaAnchorMulticoinRunner:
             )
         self.side = side
         self.collect_coin_fill_counts = bool(collect_coin_fill_counts)
+        self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
+        if not self.hsl_ema_tail_enabled:
+            self.scalar_cols = (
+                MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS
+                if self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
+                else MPS_MULTICOIN_BASE_SCALAR_COLS
+            )
         self.run_config = run
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
@@ -730,7 +797,7 @@ class MpsEmaAnchorMulticoinRunner:
         )
 
     def _library(self):
-        return _ema_anchor_multicoin_shader_library()
+        return _ema_anchor_multicoin_shader_library(self.hsl_ema_tail_enabled)
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps)
@@ -818,6 +885,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         market_order_slippage_pct: float = 0.0,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
+        hsl_ema_tail_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -829,6 +897,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
             hsl_panic_market=hsl_panic_market_long,
+            hsl_ema_tail_enabled=hsl_ema_tail_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -948,6 +1017,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         collect_coin_fill_counts: bool = False,
         market_order_slippage_pct: float = 0.0,
         hsl_panic_market: bool = False,
+        hsl_ema_tail_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -959,6 +1029,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
             hsl_panic_market=hsl_panic_market,
+            hsl_ema_tail_enabled=hsl_ema_tail_enabled,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -972,7 +1043,9 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         return np.ascontiguousarray(params, dtype=np.float32)
 
     def _library(self):
-        return _trailing_martingale_multicoin_shader_library()
+        return _trailing_martingale_multicoin_shader_library(
+            self.hsl_ema_tail_enabled
+        )
 
     def _dispatch(
         self,
@@ -1031,6 +1104,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         market_order_slippage_pct: float = 0.0,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
+        hsl_ema_tail_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -1042,6 +1116,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
             hsl_panic_market=hsl_panic_market_long,
+            hsl_ema_tail_enabled=hsl_ema_tail_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1140,13 +1215,18 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             short_enabled=self.short_enabled,
             hsl_enabled=bool(hsl_enabled),
         )
+        # The specialized no-HSL kernels retain the original 66-column ABI.
+        # Every EMA-tail metric is identically zero when HSL is disabled, so
+        # keep that faster topology and let the decoder synthesize zeroes.
+        if self.shader_topology != "generic":
+            self.hsl_ema_tail_enabled = False
 
     def _shader_library(self):
         if self.shader_topology == "long_no_hsl":
             return _trailing_martingale_long_no_hsl_shader_library()
         if self.shader_topology == "short_no_hsl":
             return _trailing_martingale_short_no_hsl_shader_library()
-        return _trailing_martingale_shader_library()
+        return _trailing_martingale_shader_library(self.hsl_ema_tail_enabled)
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         expected = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS) * 2

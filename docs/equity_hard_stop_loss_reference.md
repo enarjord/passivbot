@@ -149,7 +149,6 @@ These are the main parity surfaces that should be reviewed together:
    - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
 3. Remaining GPU HSL metric gaps
-   - Mean-worst-1% drawdown-EMA metrics need a bounded distribution reducer rather than a running maximum
    - Strategy-equity recovery-distribution metrics need additional bounded per-side time-series state
    - Raw per-side worst strategy-equity drawdown remains too sensitive to approximate proxy fill paths and stays fail closed pending a safer representation
 
@@ -158,7 +157,7 @@ These are the main parity surfaces that should be reviewed together:
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for HSL mean-worst-1% drawdown-EMA, raw per-side worst drawdown, and recovery-distribution metrics
+4. Apple MPS parity for raw per-side worst drawdown and recovery-distribution metrics
 
 ## Optimizer Work
 

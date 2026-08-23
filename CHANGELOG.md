@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added mean-worst-1% EMA-smoothed HSL strategy-equity drawdown scoring and limits to Apple MPS
+  optimization for the account, long side, and short side. The Metal proxy uses an opt-in bounded
+  logarithmic histogram so normal GPU runs do not pay the per-candidate state cost; exact Rust
+  validation and rolling drift gates remain authoritative.
+
 - Added per-side HSL strategy-equity peak-recovery scoring and limits to Apple MPS optimization.
   EMA Anchor and Trailing Martingale kernels now retain the longest strict time-to-exceed interval
   for each long and short HSL controller, including an unrecovered tail through the backtest end,

@@ -2,7 +2,11 @@
 using namespace metal;
 
 constant int DAILY_COLS = 8;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+constant int SCALAR_COLS = 68;
+#else
 constant int SCALAR_COLS = 66;
+#endif
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
 
@@ -830,6 +834,10 @@ inline void passivbot_single_coin_impl(
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 23);
     HslStrategyEquityStats long_hsl_strategy_eq = init_hsl_strategy_equity_stats();
     HslStrategyEquityStats short_hsl_strategy_eq = init_hsl_strategy_equity_stats();
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    HslDrawdownEmaTailStats long_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+    HslDrawdownEmaTailStats short_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+#endif
     const bool long_coin_hsl_rolling = long_hsl.enabled
         && long_hsl.signal_mode == HSL_SIGNAL_COIN && pnl_lookback_bars > 0;
     const bool short_coin_hsl_rolling = short_hsl.enabled
@@ -1484,8 +1492,13 @@ inline void passivbot_single_coin_impl(
             float long_triggers_before = long_hsl.triggers;
             float short_triggers_before = short_hsl.triggers;
             const bool unified_hsl = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
-            if (hsl_modes_valid && long_enabled && long_hsl.enabled
-                && (long_hsl.signal_mode == HSL_SIGNAL_COIN || !long_hsl.halted)) {
+            const bool long_hsl_sample_enabled = hsl_modes_valid && long_enabled
+                && long_hsl.enabled
+                && (long_hsl.signal_mode == HSL_SIGNAL_COIN || !long_hsl.halted);
+            const bool short_hsl_sample_enabled = hsl_modes_valid && short_enabled
+                && short_hsl.enabled
+                && (short_hsl.signal_mode == HSL_SIGNAL_COIN || !short_hsl.halted);
+            if (long_hsl_sample_enabled) {
                 update_hsl_strategy_equity_stats(
                     long_hsl_strategy_eq,
                     starting_balance + (
@@ -1494,8 +1507,7 @@ inline void passivbot_single_coin_impl(
                     ) + (unified_hsl ? long_unreal + short_unreal : long_unreal)
                 );
             }
-            if (hsl_modes_valid && short_enabled && short_hsl.enabled
-                && (short_hsl.signal_mode == HSL_SIGNAL_COIN || !short_hsl.halted)) {
+            if (short_hsl_sample_enabled) {
                 update_hsl_strategy_equity_stats(
                     short_hsl_strategy_eq,
                     starting_balance + (
@@ -1513,6 +1525,18 @@ inline void passivbot_single_coin_impl(
                 long_blocking_orders, short_blocking_orders,
                 kf, interval_ms
             );
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            if (hsl_update_valid && long_hsl_sample_enabled) {
+                update_hsl_drawdown_ema_tail_stats(
+                    long_hsl_ema_tail, long_hsl.drawdown_ema
+                );
+            }
+            if (hsl_update_valid && short_hsl_sample_enabled) {
+                update_hsl_drawdown_ema_tail_stats(
+                    short_hsl_ema_tail, short_hsl.drawdown_ema
+                );
+            }
+#endif
             if (long_hsl.triggers > long_triggers_before) {
                 reset_hsl_rolling_pnl_window(long_rolling_pnl);
             }
@@ -1746,6 +1770,10 @@ inline void passivbot_single_coin_impl(
     scalars[so + 65] = hsl_strategy_equity_recovery_max_steps(
         short_hsl_strategy_eq
     ) * interval_ms;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[so + 66] = hsl_drawdown_ema_mean_worst_1pct(long_hsl_ema_tail);
+    scalars[so + 67] = hsl_drawdown_ema_mean_worst_1pct(short_hsl_ema_tail);
+#endif
 }
 
 kernel void passivbot_ema_anchor(

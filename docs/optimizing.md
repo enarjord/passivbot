@@ -163,12 +163,14 @@ The supported slice is intentionally narrow:
   coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin EMA Anchor
   and Trailing Martingale use fused shared-account kernels for unified, pside, and coin signals,
   so shared event-loss, warning-tier overlap, and the other HSL lifecycle/panic-loss metrics are
-  available. The worst EMA-smoothed strategy-equity drawdown metrics are also available for the
-  account and each side. Per-side `peak_recovery_hours_strategy_eq_{long,short}` and
+  available. The worst and mean-worst-1% EMA-smoothed strategy-equity drawdown metrics are also
+  available for the account and each side. The mean-worst-1% proxy uses an opt-in bounded
+  logarithmic histogram whose only approximation is the partially selected cutoff bin; exact Rust
+  validation and the rolling drift gates remain authoritative. Per-side
+  `peak_recovery_hours_strategy_eq_{long,short}` and
   `peak_recovery_days_strategy_eq_{long,short}` retain the longest interval until strategy equity
   strictly exceeds its prior controller peak, including an unrecovered tail through the backtest
-  end. Raw per-side worst-drawdown, HSL mean-worst-1% EMA, and recovery-distribution metrics remain
-  fail closed for now.
+  end. Raw per-side worst-drawdown and recovery-distribution metrics remain fail closed for now.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
   short-only, hedge-mode dual-side, one-way, and compatible suite runs. One-sided multi-coin runs
