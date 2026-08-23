@@ -296,13 +296,17 @@ GPU_SUPPORTED_OPTIMIZER_OVERRIDES = {
 # selection and unsupported execution/risk behavior must continue to fail
 # closed instead of being accepted merely because the config path exists.
 GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
+    ("backtest", "filter_by_min_effective_cost"),
     ("backtest", "liquidation_threshold"),
     ("backtest", "maker_fee_override"),
+    ("backtest", "market_order_slippage_pct"),
     ("backtest", "starting_balance"),
+    ("backtest", "taker_fee_override"),
     ("coin_overrides",),
     ("live", "forager_score_hysteresis_pct"),
     ("live", "hedge_mode"),
     ("live", "max_realized_loss_pct"),
+    ("live", "pnls_max_lookback_days"),
 }
 
 
