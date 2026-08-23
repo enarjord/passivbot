@@ -498,12 +498,42 @@ def _minimum_rank_evidence_samples(halt: float) -> int:
     return math.floor((MIN_DRIFT_PROBES - 1) / float(halt)) + 1
 
 
-def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
+def _build_gpu_nsga2(
+    config,
+    *,
+    sampling,
+    population_size: int,
+    n_params: int,
+    policy: dict | None = None,
+):
     """Build GPU proposal evolution with the same variation controls as pymoo CPU."""
 
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
+
+    policy = policy or _gpu_nsga2_checkpoint_contract(
+        config, population_size=population_size, n_params=n_params
+    )
+    return NSGA2(
+        pop_size=int(policy["population_size"]),
+        sampling=sampling,
+        crossover=SBX(
+            prob_var=float(policy["crossover"]["prob_var"]),
+            eta=float(policy["crossover"]["eta"]),
+        ),
+        mutation=PM(
+            prob=float(policy["mutation"]["prob"]),
+            eta=float(policy["mutation"]["eta"]),
+        ),
+        eliminate_duplicates=bool(policy["eliminate_duplicates"]),
+    )
+
+
+def _gpu_nsga2_checkpoint_contract(
+    config: dict, *, population_size: int, n_params: int
+) -> dict:
+    """Return the effective proposal policy serialized inside checkpoints."""
 
     from optimization.backends.pymoo_backend import (
         _resolve_mutation_prob,
@@ -511,19 +541,27 @@ def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
     )
 
     shared = _resolve_pymoo_shared(config)
-    return NSGA2(
-        pop_size=population_size,
-        sampling=sampling,
-        crossover=SBX(
-            prob_var=float(shared["crossover_prob_var"]),
-            eta=float(shared["crossover_eta"]),
+    configured_seed = config.get("optimize", {}).get("seed")
+    return {
+        "version": 1,
+        "algorithm": "nsga2",
+        "population_size": int(population_size),
+        "configured_seed": (
+            None if configured_seed is None else int(configured_seed)
         ),
-        mutation=PM(
-            prob=_resolve_mutation_prob(shared, n_params),
-            eta=float(shared["mutation_eta"]),
-        ),
-        eliminate_duplicates=bool(shared["eliminate_duplicates"]),
-    )
+        "crossover": {
+            "operator": "sbx",
+            "prob_var": float(shared["crossover_prob_var"]),
+            "eta": float(shared["crossover_eta"]),
+        },
+        "mutation": {
+            "operator": "pm",
+            "prob": float(_resolve_mutation_prob(shared, n_params)),
+            "eta": float(shared["mutation_eta"]),
+        },
+        "eliminate_duplicates": bool(shared["eliminate_duplicates"]),
+    }
+
 
 GPU_RESULT_BACKTEST_CONTRACT_KEYS = {
     "balance_sample_divider",
@@ -2061,6 +2099,15 @@ def _gpu_suite_checkpoint_contract(
                     "pinned_hsl_bounds": deepcopy(
                         item.get("pinned_hsl_bounds", {})
                     ),
+                    "scenario_fixed_bound_values": deepcopy(
+                        item.get("fixed_bound_values", {})
+                    ),
+                    "scenario_parameter_overrides": deepcopy(
+                        item.get("parameter_overrides", {})
+                    ),
+                    "proxy_execution": deepcopy(
+                        item.get("proxy_checkpoint_contract", {})
+                    ),
                     "candle_count": int(len(item["hlcvs"])),
                     "first_timestamp": (
                         int(timestamps[0]) if len(timestamps) else None
@@ -2098,6 +2145,9 @@ def _gpu_runtime_checkpoint_contract(
         "unstuck": _gpu_unstuck_checkpoint_contract(config),
         "hsl": _gpu_hsl_checkpoint_contract(config),
         "pinned_hsl_bounds": deepcopy(pinned_hsl_bounds or {}),
+        "proxy_execution": deepcopy(
+            getattr(proxy, "checkpoint_contract", {})
+        ),
     }
 
 
@@ -2329,6 +2379,7 @@ def _checkpoint_signature(
     anchor_plan=None,
     suite_contract=None,
     runtime_contract=None,
+    search_contract=None,
 ) -> str:
     payload = {
         "active": [
@@ -2336,7 +2387,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 2,
+        "version": 3,
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -2354,7 +2405,53 @@ def _checkpoint_signature(
         payload["suite_contract"] = suite_contract
     if runtime_contract is not None:
         payload["runtime_contract"] = runtime_contract
+    if search_contract is not None:
+        payload["search_contract"] = search_contract
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _gpu_search_checkpoint_contract(
+    *,
+    key_paths,
+    bounds,
+    base_vector,
+    fixed_bound_values,
+    fixed_parameter_overrides,
+    optimizer_overrides,
+    sig_digits,
+    algorithm_contract,
+) -> dict:
+    """Fingerprint fixed and dormant search inputs omitted from active genes."""
+
+    if not (len(key_paths) == len(bounds) == len(base_vector)):
+        raise ValueError("GPU checkpoint search contract shape mismatch")
+    return {
+        "version": 1,
+        "sig_digits": int(sig_digits),
+        "dimensions": [
+            {
+                "key": str(bound_key),
+                "path": [str(part) for part in path],
+                "low": float(bound.low),
+                "high": float(bound.high),
+                "step": None if bound.step is None else float(bound.step),
+                "base": float(base_vector[index]),
+            }
+            for index, ((bound_key, path), bound) in enumerate(
+                zip(key_paths, bounds)
+            )
+        ],
+        "fixed_bound_values": {
+            str(key): float(value)
+            for key, value in sorted((fixed_bound_values or {}).items())
+        },
+        "fixed_parameter_overrides": {
+            str(key): float(value)
+            for key, value in sorted((fixed_parameter_overrides or {}).items())
+        },
+        "optimizer_overrides": sorted(str(value) for value in optimizer_overrides),
+        "algorithm": deepcopy(algorithm_contract),
+    }
 
 
 def _save_checkpoint(path: str | None, state: dict) -> None:
@@ -3157,6 +3254,7 @@ def run_backend(
         )
         _validate_hsl_bound_contracts(scenario_bound_by_key, item["config"])
         item["parameter_overrides"] = parameter_overrides
+        item["fixed_bound_values"] = fixed_scenario_bounds
         item["pinned_hsl_bounds"] = _gpu_pinned_hsl_bound_contract(
             scenario_bound_by_key
         )
@@ -3244,6 +3342,9 @@ def run_backend(
             )
             item["coin_override_contract"] = getattr(
                 scenario_proxy, "coin_override_contract", {}
+            )
+            item["proxy_checkpoint_contract"] = getattr(
+                scenario_proxy, "checkpoint_contract", {}
             )
             scenario_proxies.append(
                 (item["ctx"], scenario_proxy, item["parameter_overrides"])
@@ -3357,11 +3458,17 @@ def run_backend(
         xl=np.zeros(len(active)),
         xu=np.ones(len(active)),
     )
+    algorithm_contract = _gpu_nsga2_checkpoint_contract(
+        config,
+        population_size=population_size,
+        n_params=len(active),
+    )
     algorithm = _build_gpu_nsga2(
         config,
         sampling=sampling,
         population_size=population_size,
         n_params=len(active),
+        policy=algorithm_contract,
     )
     algorithm.setup(problem, termination=NoTermination(), seed=seed, verbose=False)
     generation = 0
@@ -3392,6 +3499,16 @@ def run_backend(
                 pinned_hsl_bounds=_gpu_pinned_hsl_bound_contract(bound_by_key),
             )
         ),
+        search_contract=_gpu_search_checkpoint_contract(
+            key_paths=key_paths,
+            bounds=bounds,
+            base_vector=base_vector,
+            fixed_bound_values=fixed_bound_values,
+            fixed_parameter_overrides=fixed_parameter_overrides,
+            optimizer_overrides=gpu_optimizer_overrides,
+            sig_digits=sig_digits,
+            algorithm_contract=algorithm_contract,
+        ),
     )
     budget = int(config["optimize"]["iters"])
     if budget <= 0:
@@ -3404,8 +3521,8 @@ def run_backend(
             checkpoint = pickle.load(file)
         if checkpoint.get("signature") != signature:
             raise ValueError(
-                "GPU checkpoint does not match current bounds, scoring, suite, "
-                "or runtime contract"
+                "GPU checkpoint does not match current search, scoring, suite, "
+                "or prepared execution contract"
             )
         algorithm = checkpoint["algorithm"]
         seed = int(checkpoint.get("seed", seed))

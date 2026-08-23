@@ -512,7 +512,15 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
    no longer reach its minimum sample count. Broad probes remain opportunistic across restart, just
    as in an uninterrupted run: recovered truthful probes are retained, and their independent gates
    activate only after enough off-front evidence exists. A final checkpoint is always written on
-   successful completion.
+   successful completion. Checkpoint identity includes the complete optimizer shape (including
+   fixed and dormant dimensions, quantization, runtime optimizer overrides, and effective NSGA-II
+   population/variation policy) plus every prepared proxy's effective execution contract:
+   strategy and side topology, ordered coins, hashes of prepared candle values and timestamps,
+   starting balance, valid/trade windows, fully resolved fixed proxy parameters, liquidation and
+   exposure policy, resolved maker/taker fees and market settings, and other modeled execution settings.
+   Suite checkpoints record that contract independently for every scenario. Changing any of these
+   inputs makes resume fail closed instead of mixing evolutionary state from incompatible runs.
+   Checkpoints written before this expanded identity contract are intentionally incompatible.
 
 The proxy is a float32 ranking model, not an authoritative simulator. Exact Rust metrics and configs
 remain the only stored optimization results. The screening source is owned and exported by the
