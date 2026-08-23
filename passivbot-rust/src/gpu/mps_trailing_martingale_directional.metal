@@ -61,6 +61,24 @@ inline bool should_use_ordinary_market_execution(
         <= fmax(market_order_near_touch_threshold, 0.0f);
 }
 
+inline bool recursive_close_bound_requires_scan(
+    int nearest_ticks,
+    bool buy_order,
+    int passive_fill_bound,
+    float generation_market_price,
+    float price_step,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold
+) {
+    bool passively_reachable = buy_order
+        ? nearest_ticks > passive_fill_bound
+        : nearest_ticks <= passive_fill_bound;
+    return passively_reachable || should_use_ordinary_market_execution(
+        nearest_ticks, buy_order, generation_market_price, price_step,
+        market_orders_allowed, market_order_near_touch_threshold
+    );
+}
+
 inline float ordinary_market_fill_price(
     float market_price,
     bool buy_order,
@@ -1413,7 +1431,11 @@ inline void passivbot_single_coin_impl(
             int nearest_ticks = touch_controls
                 ? long_side.close_gen_touch_nearest_ticks : target_ticks;
             long_scan_close_grid = long_scan_close_grid
-                || nearest_ticks <= high_fill_max_tick;
+                || recursive_close_bound_requires_scan(
+                    nearest_ticks, false, high_fill_max_tick,
+                    long_side.close_gen_market_price, price_step,
+                    market_orders_allowed, market_order_near_touch_threshold
+                );
         }
         if (long_scan_close_grid && long_recursive_close
             && !long_side.close_is_panic) {
@@ -1874,6 +1896,9 @@ inline void passivbot_single_coin_impl(
             TmSide ladder_side = long_side;
             ladder_side.psize = long_side.entry_gen_psize;
             ladder_side.pprice = long_side.entry_gen_pprice;
+            // Rust constructs the immutable recursive strategy ladder before
+            // orchestration promotes individual rungs to market execution.
+            ladder_side.market_orders_allowed = false;
             const float ladder_balance = long_side.entry_gen_balance;
             const float ladder_kf = long_side.entry_gen_kf;
             int ladder_touch_ticks = long_side.entry_gen_touch_ticks;
@@ -1884,15 +1909,23 @@ inline void passivbot_single_coin_impl(
                     ? long_side.entry_ticks : ladder_side.entry_ticks;
                 float ep = rung == 0
                     ? long_side.entry_price : ladder_side.entry_price;
-                float eq = round_step(
+                float strategy_eq = round_step(
                     rung == 0 ? long_side.entry_qty : ladder_side.entry_qty,
                     qty_step
                 );
+                if (strategy_eq <= 0.0f) break;
+                float eq = strategy_eq;
                 bool entry_market = rung == 0 ? long_side.entry_market
                     : should_use_ordinary_market_execution(
                         entry_ticks, true, ladder_market_price, price_step,
                         market_orders_allowed, market_order_near_touch_threshold
                     );
+                if (rung > 0 && entry_market) {
+                    eq = crop_entry(
+                        ladder_side, ladder_balance, ladder_market_price, eq,
+                        qty_step, min_qty, min_cost, c_mult
+                    );
+                }
                 if (eq <= 0.0f
                     || (!entry_market && entry_ticks <= low_nonfill_max_tick)
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
@@ -1937,11 +1970,13 @@ inline void passivbot_single_coin_impl(
                 day_volume += fabs(eq) * entry_fill_price / balance;
 
                 bool sim_flat = ladder_side.psize <= 0.0f;
-                float sim_psize = round_step(ladder_side.psize + eq, qty_step);
+                float sim_psize = round_step(
+                    ladder_side.psize + strategy_eq, qty_step
+                );
                 ladder_side.pprice = sim_flat ? ep
                     : ladder_side.pprice
                         * (ladder_side.psize / fmax(sim_psize, 1.0e-12f))
-                        + ep * (eq / fmax(sim_psize, 1.0e-12f));
+                        + ep * (strategy_eq / fmax(sim_psize, 1.0e-12f));
                 ladder_side.psize = sim_psize;
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = min(ladder_touch_ticks, entry_ticks);
@@ -1992,7 +2027,11 @@ inline void passivbot_single_coin_impl(
             int nearest_ticks = touch_controls
                 ? short_side.close_gen_touch_nearest_ticks : target_ticks;
             short_scan_close_grid = short_scan_close_grid
-                || nearest_ticks > low_nonfill_max_tick;
+                || recursive_close_bound_requires_scan(
+                    nearest_ticks, true, low_nonfill_max_tick,
+                    short_side.close_gen_market_price, price_step,
+                    market_orders_allowed, market_order_near_touch_threshold
+                );
         }
         if (short_scan_close_grid && short_recursive_close
             && !short_side.close_is_panic) {
@@ -2455,6 +2494,7 @@ inline void passivbot_single_coin_impl(
             TmSide ladder_side = short_side;
             ladder_side.psize = short_side.entry_gen_psize;
             ladder_side.pprice = short_side.entry_gen_pprice;
+            ladder_side.market_orders_allowed = false;
             const float ladder_balance = short_side.entry_gen_balance;
             const float ladder_kf = short_side.entry_gen_kf;
             int ladder_touch_ticks = short_side.entry_gen_touch_ticks;
@@ -2465,10 +2505,12 @@ inline void passivbot_single_coin_impl(
                     ? short_side.entry_ticks : ladder_side.entry_ticks;
                 float ep = rung == 0
                     ? short_side.entry_price : ladder_side.entry_price;
-                float eq = round_step(
+                float strategy_eq = round_step(
                     rung == 0 ? short_side.entry_qty : ladder_side.entry_qty,
                     qty_step
                 );
+                if (strategy_eq <= 0.0f) break;
+                float eq = strategy_eq;
                 bool entry_market = rung == 0 ? short_side.entry_market
                     : should_use_ordinary_market_execution(
                         entry_ticks, false, ladder_market_price, price_step,
@@ -2479,6 +2521,13 @@ inline void passivbot_single_coin_impl(
                         ladder_market_price, qty_step, min_qty, min_cost, c_mult
                     );
                     if (eq < market_min_q) eq = market_min_q;
+                    if (rung > 0) {
+                        eq = crop_entry(
+                            ladder_side, ladder_balance, ladder_market_price, eq,
+                            qty_step, min_qty, min_cost, c_mult
+                        );
+                        if (eq + 1.0e-12f < market_min_q) eq = 0.0f;
+                    }
                 }
                 if (eq <= 0.0f
                     || (!entry_market && entry_ticks > high_fill_max_tick)
@@ -2525,11 +2574,13 @@ inline void passivbot_single_coin_impl(
                 day_volume += fabs(eq) * entry_fill_price / balance;
 
                 bool sim_flat = ladder_side.psize <= 0.0f;
-                float sim_psize = round_step(ladder_side.psize + eq, qty_step);
+                float sim_psize = round_step(
+                    ladder_side.psize + strategy_eq, qty_step
+                );
                 ladder_side.pprice = sim_flat ? ep
                     : ladder_side.pprice
                         * (ladder_side.psize / fmax(sim_psize, 1.0e-12f))
-                        + ep * (eq / fmax(sim_psize, 1.0e-12f));
+                        + ep * (strategy_eq / fmax(sim_psize, 1.0e-12f));
                 ladder_side.psize = sim_psize;
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = max(ladder_touch_ticks, entry_ticks);

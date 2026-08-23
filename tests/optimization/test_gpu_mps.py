@@ -6709,6 +6709,44 @@ def test_mps_tm_recursive_near_touch_market_close_uses_taker_fill(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_recursive_close_scan_includes_near_touch_bound():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_close_scan_probe(
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    output[0] = recursive_close_bound_requires_scan(
+        10050, false, 10000, 100.0f, 0.01f, true, 0.006f
+    ) ? 1.0f : 0.0f;
+    output[1] = recursive_close_bound_requires_scan(
+        9950, true, 10000, 100.0f, 0.01f, true, 0.006f
+    ) ? 1.0f : 0.0f;
+    output[2] = recursive_close_bound_requires_scan(
+        10100, false, 10000, 100.0f, 0.01f, true, 0.006f
+    ) ? 1.0f : 0.0f;
+    output[3] = recursive_close_bound_requires_scan(
+        9900, true, 10000, 100.0f, 0.01f, true, 0.006f
+    ) ? 1.0f : 0.0f;
+}
+"""
+    output = torch.zeros(4, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_close_scan_probe(
+        output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [1.0, 1.0, 0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_recursive_close_sizing_uses_generation_market(side):
     import passivbot_rust
@@ -11435,6 +11473,9 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "entry_gen_market_price" in source
     assert "close_gen_market_price" in source
     assert "sim.market_orders_allowed = false" in source
+    assert source.count("ladder_side.market_orders_allowed = false") == 2
+    assert source.count("ladder_side.psize + strategy_eq") == 2
+    assert source.count("recursive_close_bound_requires_scan(") == 3
     assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source
     assert "passes_min_effective_cost" in source
