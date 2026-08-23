@@ -135,7 +135,8 @@ These are the main parity surfaces that should be reviewed together:
    - Multi-coin limit and market panic closes flatten every open coin on the enabled side and export the same lifecycle and panic-loss metric surface as single-coin HSL; market execution uses each coin's taker fee and directionally quantized configured slippage
    - One-sided multi-coin coin mode resolves all ten canonical per-coin HSL settings independently, including enablement, thresholds, restart/tier behavior, and limit/market panic execution; compatible suites may supply scenario-local overrides
    - Dual-side multi-coin EMA Anchor uses a fused shared-account strategy kernel for unified, pside, and coin signals, including shared lifecycle/panic-loss metrics and per-coin HSL overrides in coin mode
-   - Dual-side multi-coin Trailing Martingale remains limited to pside signals through independent directional kernels; shared event-loss and warning-tier overlap metrics remain fail closed
+   - Dual-side multi-coin Trailing Martingale uses a fused shared-account strategy kernel for unified, pside, and coin signals, including shared lifecycle/panic-loss metrics and per-coin HSL overrides in coin mode
+   - Apple MPS exports the worst EMA-smoothed strategy-equity drawdown for long and short HSL controllers; the account metric is the same `max(long, short)` reduction as exact Rust
 
 ### Confirmed Gaps / Risks
 
@@ -146,15 +147,16 @@ These are the main parity surfaces that should be reviewed together:
    - Runtime decisions are made per `pside`
    - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
-3. Remaining GPU HSL topology gap
-   - Dual-side multi-coin Trailing Martingale coin and unified HSL still need one shared-balance strategy kernel that owns both directional state machines without duplicating account balance or liquidation decisions
+3. Remaining GPU HSL metric gaps
+   - Mean-worst-1% drawdown-EMA metrics need a bounded distribution reducer rather than a running maximum
+   - Strategy-equity recovery distributions and side-specific recovery metrics need additional per-side time-series state
 
 ### Missing or Weak Test Coverage
 
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for dual-side multi-coin Trailing Martingale coin and unified HSL scopes
+4. Apple MPS parity for HSL mean-worst-1% drawdown-EMA and recovery-distribution metrics
 
 ## Optimizer Work
 

@@ -421,6 +421,9 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
         output["hsl_panic_loss_drawdown_count"] = torch.tensor(
             [drawdown_count]
         )
+        output[f"hsl_drawdown_ema_max_{side}"] = torch.tensor(
+            [0.2 if side == "long" else 0.1]
+        )
         return output
 
     combined = _combine_hedged_multicoin_hsl_outputs(
@@ -445,6 +448,8 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert combined["hsl_panic_close_loss_max"].item() == 6.0
     assert combined["hsl_panic_loss_drawdown_min"].item() == pytest.approx(0.1)
     assert combined["hsl_panic_loss_drawdown_count"].item() == 3.0
+    assert combined["hsl_drawdown_ema_max_long"].item() == pytest.approx(0.2)
+    assert combined["hsl_drawdown_ema_max_short"].item() == pytest.approx(0.1)
     assert combined["hsl_tier_samples_total"].item() == 10.0
     assert combined["hsl_tier_samples_red"].item() == 8.0
     assert combined["hsl_tier_samples_orange"].item() == 2.0
@@ -467,7 +472,7 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert panic["hard_stop_panic_close_loss_drawdown_pct_mean"].item() == (
         pytest.approx(0.8 / 3.0)
     )
-    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 25
+    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 27
 
 
 def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():

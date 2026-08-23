@@ -21,9 +21,9 @@ from optimization.gpu.model import (
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
-MPS_MULTICOIN_SCALAR_COLS = 57
-MPS_DIRECTIONAL_SCALAR_COLS = 62
-MPS_MULTICOIN_FUSED_SCALAR_COLS = 62
+MPS_MULTICOIN_SCALAR_COLS = 59
+MPS_DIRECTIONAL_SCALAR_COLS = 64
+MPS_MULTICOIN_FUSED_SCALAR_COLS = 64
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
 
 
@@ -186,6 +186,8 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "hsl_panic_loss_drawdown_sum": scalars[:, 54],
         "hsl_panic_loss_drawdown_max": scalars[:, 55],
         "hsl_panic_loss_drawdown_count": scalars[:, 56],
+        "hsl_drawdown_ema_max_long": scalars[:, 57],
+        "hsl_drawdown_ema_max_short": scalars[:, 58],
     }
 
 
@@ -195,11 +197,11 @@ def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
     output.update(
         {
             "entry_initial_balance_pct_long": long_entry_initial_balance_pct,
-            "entry_initial_balance_pct_short": scalars[:, 57],
-            "profit_sum_long": scalars[:, 58],
-            "loss_sum_long": scalars[:, 59],
-            "profit_sum_short": scalars[:, 60],
-            "loss_sum_short": scalars[:, 61],
+            "entry_initial_balance_pct_short": scalars[:, 59],
+            "profit_sum_long": scalars[:, 60],
+            "loss_sum_long": scalars[:, 61],
+            "profit_sum_short": scalars[:, 62],
+            "loss_sum_short": scalars[:, 63],
         }
     )
     return output
@@ -288,6 +290,8 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "loss_sum_long": scalars[:, 59],
         "profit_sum_short": scalars[:, 60],
         "loss_sum_short": scalars[:, 61],
+        "hsl_drawdown_ema_max_long": scalars[:, 62],
+        "hsl_drawdown_ema_max_short": scalars[:, 63],
     }
 
 
