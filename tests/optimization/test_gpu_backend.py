@@ -2812,7 +2812,7 @@ def test_gpu_foundation_accepts_single_side_multicoin_unstuck():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_foundation_keeps_dual_side_multicoin_unstuck_fail_closed():
+def test_gpu_foundation_accepts_dual_side_multicoin_unstuck():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["hedge_mode"] = True
     for side in ("long", "short"):
@@ -2820,11 +2820,10 @@ def test_gpu_foundation_keeps_dual_side_multicoin_unstuck_fail_closed():
         config["bot"][side]["risk"]["n_positions"] = 2
     config["bot"]["long"]["unstuck"]["enabled"] = True
 
-    with pytest.raises(ValueError, match=r"dual-side.*unstuck.*shared"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_foundation_keeps_dual_side_multicoin_override_unstuck_fail_closed():
+def test_gpu_foundation_accepts_dual_side_multicoin_override_unstuck():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["hedge_mode"] = True
     for side in ("long", "short"):
@@ -2834,8 +2833,7 @@ def test_gpu_foundation_keeps_dual_side_multicoin_override_unstuck_fail_closed()
         "ETH": {"bot": {"short": {"unstuck": {"enabled": True}}}}
     }
 
-    with pytest.raises(ValueError, match=r"dual-side.*unstuck.*shared"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_foundation_rejects_both_sides_disabled():
@@ -4761,7 +4759,7 @@ def test_gpu_accepts_single_coin_exposure_policy_bounds():
     )
 
 
-def test_gpu_accepts_unstuck_bounds_for_single_side_but_pins_dual_multicoin():
+def test_gpu_accepts_unstuck_bounds_for_single_and_dual_multicoin():
     from optimization.bounds import Bound
 
     bounds = {
@@ -4775,10 +4773,9 @@ def test_gpu_accepts_unstuck_bounds_for_single_side_but_pins_dual_multicoin():
 
     _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=1)
     _validate_pinned_scope_bounds(bounds, base, {"long"}, coin_count=2)
-    with pytest.raises(ValueError, match="unstuck_enabled"):
-        _validate_pinned_scope_bounds(
-            bounds, base, {"long", "short"}, coin_count=2
-        )
+    _validate_pinned_scope_bounds(
+        bounds, base, {"long", "short"}, coin_count=2
+    )
 
 
 def test_gpu_accepts_hsl_bounds_for_single_and_dual_multicoin():

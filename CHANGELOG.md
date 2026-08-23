@@ -52,6 +52,13 @@ All notable user-facing changes will be documented in this file.
   oversized dispatches, polls Ctrl+C between them, and retains the last complete ask/tell
   checkpoint if an in-progress generation is interrupted.
 
+- Added fused dual-side multi-coin auto-unstuck screening to Apple MPS optimization for EMA Anchor
+  and Trailing Martingale, including static per-coin overrides and compatible suites. The shared
+  account kernel admits one global least-stuck candidate across both directional surfaces using
+  exact Rust's price-difference, symbol-index, and long-before-short tie ordering, then applies the
+  existing conservative realized-loss allowance. Exact Rust validation and drift gates remain
+  authoritative; dual-side multi-coin exposure repair remains fail closed.
+
 - Fixed finite `live.pnls_max_lookback_days` handling for single-coin `coin`-mode HSL on Apple
   MPS. EMA Anchor and Trailing Martingale screening now expire realized-PnL fill events with the
   same rolling-window rule as exact Rust instead of retaining an all-history peak; bounded GPU
@@ -61,13 +68,12 @@ All notable user-facing changes will be documented in this file.
   optimization. Long and short candidates now run in one portfolio kernel for unified, pside,
   and coin HSL, including shared event/tier metrics, directional PnL, coin overrides, forager
   selection, and the existing TM entry/close behavior. Exact Rust remains authoritative;
-  dual-side auto-unstuck and exposure repair remain fail closed pending their global cross-side
-  parity slices.
+  dual-side exposure repair remains fail closed pending its global cross-side parity slice.
 
 - Added fused shared-account dual-side multi-coin EMA Anchor screening to Apple MPS optimization.
   Unified, pside, and coin HSL now run inside one portfolio kernel, including per-coin HSL
-  overrides and shared event/tier scoring metrics. Exact Rust remains authoritative, dual-side
-  auto-unstuck and exposure repair remain fail closed.
+  overrides and shared event/tier scoring metrics. Exact Rust remains authoritative; dual-side
+  exposure repair remains fail closed.
 
 - Added dual-side single-coin `unified` HSL to Apple MPS optimization for EMA Anchor and
   Trailing Martingale. Both Metal controllers now consume account-wide realized and unrealized
@@ -289,8 +295,7 @@ All notable user-facing changes will be documented in this file.
   exchange minimums, competition with WEL/TWEL and ordinary closes, and the realized-loss gate.
   Its all-history realized-PnL envelope is conservative relative to exact Rust's configured rolling
   lookback; exact validations and the existing classification, rank, and drift gates remain
-  authoritative. Dual-side multi-coin auto-unstuck remains fail closed pending a shared-balance
-  portfolio kernel spanning both directional surfaces.
+  authoritative.
 
 - Expanded Apple MPS optimizer scoring and limits with fill-gap mean, median, p95, and p99 hours.
   The proxy conservatively decodes its existing logarithmic inter-fill histogram at a float32-safe

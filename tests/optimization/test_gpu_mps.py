@@ -1566,14 +1566,14 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f
+        1, 1, false, 1, 1, 0, false, 1.0f, -2
     );
     generate_tm_multicoin_side_orders(
         short_side, short_config, account,
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, true, 1, 1, 0, false, 1.0f
+        1, 1, true, 1, 1, 0, false, 1.0f, -2
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -2563,12 +2563,12 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     generate_ema_multicoin_side_orders(
         long_side, long_config, account,
         bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f
+        1, 1, false, 1, 1, 0, false, 1.0f, -2
     );
     generate_ema_multicoin_side_orders(
         short_side, short_config, account,
         bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, true, 1, 1, 0, false, 1.0f
+        1, 1, true, 1, 1, 0, false, 1.0f, -2
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -4621,6 +4621,8 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     unstuck_long = side_row(0)
     unstuck_long[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")] = 1.0
+    unstuck_short = side_row(0)
+    unstuck_short[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")] = 1.0
 
     rows = [
         side_row(0) + side_row(0),
@@ -4629,6 +4631,8 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         side_row(0) + side_row(1),
         side_row(3) + side_row(3),
         unstuck_long + side_row(0),
+        side_row(0) + unstuck_short,
+        unstuck_long + unstuck_short,
     ]
     batch_size = len(rows)
     params = torch.as_tensor(
@@ -4713,11 +4717,16 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     # Rust analyzes abs(long TWE + signed short TWE), not gross exposure.
     assert (values[:3, 22] <= 1.01).all()
     assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
-    # Mixed/unknown signal modes and dual-side auto-unstuck are rejected before
-    # any state or fills; exact Rust requires one global unstuck arbitration.
-    assert values[3:, 9].tolist() == [0.0, 0.0, 0.0]
-    assert values[3:, 13].tolist() == [0.0, 0.0, 0.0]
-    assert values[3:, 24].tolist() == [0.0, 0.0, 0.0]
+    # Mixed/unknown signal modes remain fail closed. Auto-unstuck is valid on
+    # either or both directional surfaces; the fused kernel chooses only one
+    # global least-stuck candidate before generating side orders.
+    assert values[3:5, 9].tolist() == [0.0, 0.0]
+    assert values[3:5, 13].tolist() == [0.0, 0.0]
+    assert values[3:5, 24].tolist() == [0.0, 0.0]
+    assert values[5:, 9].tolist() == [-1.0, -1.0, -1.0]
+    assert values[5:, 13].tolist() == [1.0, 1.0, 1.0]
+    assert (values[5:, 24] > 0.0).all()
+    assert values[5, 24] > values[0, 24]
 
     override_matrix = np.full((coin_count, 29), np.nan, dtype=np.float32)
     runner = MpsEmaAnchorMulticoinFusedRunner(
@@ -4780,7 +4789,9 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         True,
         False,
         False,
-        False,
+        True,
+        True,
+        True,
     ]
     assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
     recovery = strategy_eq_recovery_distribution_from_samples(
@@ -4790,9 +4801,9 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         ],
     )
     assert torch.isfinite(recovery).all().item()
-    assert (recovery[:3, 3] > 0.0).all().item()
+    assert (recovery[[0, 1, 2, 5, 6, 7], 3] > 0.0).all().item()
     assert (
-        runner_output["strategy_eq_recovery_samples"][3:, 0] < 0.0
+        runner_output["strategy_eq_recovery_samples"][3:5, 0] < 0.0
     ).all().item()
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
@@ -4966,9 +4977,9 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         threads=(1, 1, 1),
     )
     torch.mps.synchronize()
-    assert override_scalars[0, 9].item() == 0.0
-    assert override_scalars[0, 13].item() == 0.0
-    assert override_scalars[0, 24].item() == 0.0
+    assert override_scalars[0, 9].item() == -1.0
+    assert override_scalars[0, 13].item() == 1.0
+    assert override_scalars[0, 24].item() > 0.0
 
 
 @pytest.mark.skipif(
@@ -5077,6 +5088,10 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     unstuck_long[
         TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")
     ] = 1.0
+    unstuck_short = side_row(0)
+    unstuck_short[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("unstuck_enabled")
+    ] = 1.0
     rows = [
         side_row(0) + side_row(0),
         side_row(1) + side_row(1),
@@ -5084,6 +5099,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         side_row(0) + side_row(1),
         side_row(3) + side_row(3),
         unstuck_long + side_row(0),
+        side_row(0) + unstuck_short,
+        unstuck_long + unstuck_short,
     ]
     batch_size = len(rows)
     params = torch.as_tensor(
@@ -5166,9 +5183,12 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     assert (output[:3, 22] <= 1.01).all()
     assert (coin_fill_counts[:3].sum(dim=1).cpu().numpy() > 0.0).all()
-    assert output[3:, 9].tolist() == [0.0, 0.0, 0.0]
-    assert output[3:, 13].tolist() == [0.0, 0.0, 0.0]
-    assert output[3:, 24].tolist() == [0.0, 0.0, 0.0]
+    assert output[3:5, 9].tolist() == [0.0, 0.0]
+    assert output[3:5, 13].tolist() == [0.0, 0.0]
+    assert output[3:5, 24].tolist() == [0.0, 0.0]
+    assert output[5:, 9].tolist() == [-1.0, -1.0, -1.0]
+    assert output[5:, 13].tolist() == [1.0, 1.0, 1.0]
+    assert (output[5:, 24] > 0.0).all()
 
     override_matrix = np.full((coin_count, 44), np.nan, dtype=np.float32)
     runner = MpsTrailingMartingaleMulticoinFusedRunner(
@@ -5229,7 +5249,9 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         True,
         False,
         False,
-        False,
+        True,
+        True,
+        True,
     ]
     assert torch.equal(runner_output["coin_fill_counts"], coin_fill_counts)
     recovery = strategy_eq_recovery_distribution_from_samples(
@@ -5239,9 +5261,9 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         ],
     )
     assert torch.isfinite(recovery).all().item()
-    assert (recovery[:3, 3] > 0.0).all().item()
+    assert (recovery[[0, 1, 2, 5, 6, 7], 3] > 0.0).all().item()
     assert (
-        runner_output["strategy_eq_recovery_samples"][3:, 0] < 0.0
+        runner_output["strategy_eq_recovery_samples"][3:5, 0] < 0.0
     ).all().item()
     assert runner.last_profile["kernel_seconds"] >= 0.0
 
@@ -5433,9 +5455,9 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         threads=(1, 1, 1),
     )
     torch.mps.synchronize()
-    assert override_scalars[0, 9].item() == 0.0
-    assert override_scalars[0, 13].item() == 0.0
-    assert override_scalars[0, 24].item() == 0.0
+    assert override_scalars[0, 9].item() == -1.0
+    assert override_scalars[0, 13].item() == 1.0
+    assert override_scalars[0, 24].item() > 0.0
 
 
 @pytest.mark.skipif(
