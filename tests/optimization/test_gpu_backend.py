@@ -690,6 +690,7 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
             ("live", "forager_score_hysteresis_pct"),
         ),
         ("live.hedge_mode", True, ("live", "hedge_mode")),
+        ("live.hsl_signal_mode", "coin", ("live", "hsl_signal_mode")),
         (
             "live.max_realized_loss_pct",
             0.05,
@@ -736,6 +737,35 @@ def test_gpu_suite_inputs_accept_modeled_non_bot_overrides(
     for part in resolved_path:
         target = target[part]
     assert target == value
+
+
+def test_gpu_suite_hsl_signal_override_revalidates_effective_topology():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    ctx = SimpleNamespace(
+        label="invalid_signal",
+        overrides={"live.hsl_signal_mode": "not-a-mode"},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            scenario["live"]["hsl_signal_mode"] = "not-a-mode"
+            return scenario
+
+    with pytest.raises(ValueError, match="coin, pside, or unified"):
+        _gpu_suite_scenario_inputs(config, Suite())
 
 
 def test_gpu_suite_inputs_accept_scenario_local_modeled_coin_overrides():

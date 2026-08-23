@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS suite scenario overrides for `live.hsl_signal_mode`. Coin, position-side, and
+  unified HSL signal topology may now vary by scenario when each effective scenario passes the
+  existing Metal topology and per-coin override checks.
+
 - Expanded Apple MPS suite scenario overrides to the already-modeled taker-fee, market-order
   slippage, minimum-effective-cost filtering, and PnL-lookback execution settings. Every effective
   scenario is still scope-validated independently, so unsupported side/coin combinations fail

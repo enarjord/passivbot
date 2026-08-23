@@ -124,7 +124,7 @@ The supported slice is intentionally narrow:
   config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
   EMA-anchor and trailing-martingale runs, starting balance, maker fee, liquidation threshold,
   taker fee, market-order slippage, minimum-effective-cost filtering, finite or all-history PnL
-  lookback, Forager hysteresis, and hedge mode are also supported, while other
+  lookback, Forager hysteresis, hedge mode, and HSL signal mode are also supported, while other
   non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
   assignments, while an individual-exchange scenario fails closed if an effective assignment
   for one of its prepared coins selects another exchange
@@ -308,10 +308,11 @@ multi-coin EMA Anchor and Trailing Martingale runs, `backtest.starting_balance`,
 `backtest.maker_fee_override`, `backtest.taker_fee_override`,
 `backtest.market_order_slippage_pct`, `backtest.filter_by_min_effective_cost`,
 `backtest.liquidation_threshold`, `live.pnls_max_lookback_days`,
-`live.forager_score_hysteresis_pct`, and `live.hedge_mode` are accepted because every scenario
-proxy consumes them through the canonical backtest payload and then passes the same fail-closed
-scope checks. Combined scenario `coin_sources` use the same prepared per-coin candles and market
-settings as exact Rust; their resolved OHLCV and market-settings exchanges are part of checkpoint
+`live.forager_score_hysteresis_pct`, `live.hedge_mode`, and `live.hsl_signal_mode` are accepted
+because every scenario proxy consumes them through the canonical backtest payload and then passes
+the same fail-closed scope checks. Combined scenario `coin_sources` use the same prepared per-coin
+candles and market settings as exact Rust; their resolved OHLCV and market-settings exchanges are
+part of checkpoint
 identity. Other non-bot paths remain rejected until their proxy semantics are modeled. The
 effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
