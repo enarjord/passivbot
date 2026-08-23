@@ -85,11 +85,9 @@ def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypat
     with pytest.raises(RuntimeError, match="recovery sampling output is missing"):
         _mps_strategy_eq_recovery_distribution({}, needed)
 
-    import torch
-    from optimization.gpu import mps_kernel
-
-    samples = torch.tensor([[100.0, 90.0, 101.0]])
-    expected = torch.ones((1, 7))
+    samples = object()
+    expected = SimpleNamespace()
+    expected.cpu = lambda: expected
     called = {}
 
     def fake_postprocessor(values, *, sample_interval_days):
@@ -97,10 +95,12 @@ def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypat
         called["sample_interval_days"] = sample_interval_days
         return expected
 
-    monkeypatch.setattr(
-        mps_kernel,
-        "strategy_eq_recovery_distribution_from_samples",
-        fake_postprocessor,
+    fake_mps_kernel = ModuleType("optimization.gpu.mps_kernel")
+    fake_mps_kernel.strategy_eq_recovery_distribution_from_samples = (
+        fake_postprocessor
+    )
+    monkeypatch.setitem(
+        sys.modules, "optimization.gpu.mps_kernel", fake_mps_kernel
     )
     actual = _mps_strategy_eq_recovery_distribution(
         {
