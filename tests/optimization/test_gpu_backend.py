@@ -66,6 +66,7 @@ from optimization.backends.gpu_backend import (
     _update_probe_shortfall_log,
     _validate_directional_search_space,
     _validate_dual_multicoin_metrics,
+    _validate_recovery_distribution_scope,
     _validate_gpu_optimizer_overrides,
     _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
@@ -2501,6 +2502,12 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_ki
         "position_unchanged_hours_max",
         "positions_held_per_day",
         "strategy_eq_recovery_days_max",
+        "strategy_eq_recovery_days_mean",
+        "strategy_eq_recovery_days_median",
+        "strategy_eq_recovery_days_p95",
+        "strategy_eq_recovery_days_p99",
+        "strategy_eq_recovery_days_mean_worst_5pct",
+        "strategy_eq_recovery_days_mean_worst_1pct",
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "volume_pct_per_day_avg",
@@ -2548,6 +2555,12 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
             "position_unchanged_hours_max",
             "positions_held_per_day",
             "strategy_eq_recovery_days_max",
+            "strategy_eq_recovery_days_mean",
+            "strategy_eq_recovery_days_median",
+            "strategy_eq_recovery_days_p95",
+            "strategy_eq_recovery_days_p99",
+            "strategy_eq_recovery_days_mean_worst_5pct",
+            "strategy_eq_recovery_days_mean_worst_1pct",
             "total_wallet_exposure_max",
             "total_wallet_exposure_mean",
             "volume_pct_per_day_avg",
@@ -2555,6 +2568,23 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
         coin_count=3,
         enabled_sides={"long"},
     )
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        "strategy_eq_recovery_days_mean",
+        "strategy_eq_recovery_days_median",
+        "strategy_eq_recovery_days_p95",
+        "strategy_eq_recovery_days_p99",
+        "strategy_eq_recovery_days_mean_worst_5pct",
+        "strategy_eq_recovery_days_mean_worst_1pct",
+    ],
+)
+def test_gpu_recovery_distribution_metrics_fail_closed_for_multicoin(metric):
+    _validate_recovery_distribution_scope({metric}, coin_count=1)
+    with pytest.raises(ValueError, match="require a single-coin optimization"):
+        _validate_recovery_distribution_scope({metric}, coin_count=2)
 
 
 @pytest.mark.parametrize(

@@ -1113,6 +1113,12 @@ def _validate_dual_multicoin_metrics(
             "position_unchanged_hours_max",
             "positions_held_per_day",
             "strategy_eq_recovery_days_max",
+            "strategy_eq_recovery_days_mean",
+            "strategy_eq_recovery_days_median",
+            "strategy_eq_recovery_days_p95",
+            "strategy_eq_recovery_days_p99",
+            "strategy_eq_recovery_days_mean_worst_5pct",
+            "strategy_eq_recovery_days_mean_worst_1pct",
             "total_wallet_exposure_max",
             "total_wallet_exposure_mean",
             "volume_pct_per_day_avg",
@@ -1123,6 +1129,24 @@ def _validate_dual_multicoin_metrics(
             "GPU dual-side multicoin optimization cannot safely reconstruct proxy "
             f"metrics {unsupported} from independent directional summaries; "
             "use other metrics or the CPU optimizer"
+        )
+
+
+def _validate_recovery_distribution_scope(
+    needed_metrics, *, coin_count: int
+) -> None:
+    recovery_distribution_metrics = {
+        "strategy_eq_recovery_days_mean",
+        "strategy_eq_recovery_days_median",
+        "strategy_eq_recovery_days_p95",
+        "strategy_eq_recovery_days_p99",
+        "strategy_eq_recovery_days_mean_worst_5pct",
+        "strategy_eq_recovery_days_mean_worst_1pct",
+    }
+    if int(coin_count) > 1 and set(needed_metrics) & recovery_distribution_metrics:
+        raise ValueError(
+            "GPU strategy-equity recovery-distribution metrics currently require "
+            "a single-coin optimization; use other multicoin metrics or the CPU optimizer"
         )
 
 
@@ -3273,6 +3297,9 @@ def run_backend(
             f"GPU foundation does not implement optimizer metrics {unsupported}; "
             "use supported metrics or the CPU optimizer"
         )
+    _validate_recovery_distribution_scope(
+        needed_metrics, coin_count=max_coin_count
+    )
     _validate_hsl_metric_topology(
         needed_metrics,
         coin_count=max_coin_count,

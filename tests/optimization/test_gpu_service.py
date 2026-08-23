@@ -36,6 +36,7 @@ from optimization.gpu.service import (
     _directional_gross_pnl_outputs,
     _hsl_params,
     _mps_dispatch_batch_size,
+    _mps_strategy_eq_recovery_distribution,
     _multicoin_exposure_eligible_coins,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
@@ -44,6 +45,7 @@ from optimization.gpu.service import (
     _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
     _require_no_internal_invalid_multicoin_hsl_candles,
+    _require_no_internal_invalid_single_coin_recovery_candles,
     _refresh_hedged_multicoin_hsl_at_portfolio_cutoff,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
@@ -75,6 +77,45 @@ def test_directional_coin_hsl_lookback_bar_contract(
         )
         == expected
     )
+
+
+def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypatch):
+    needed = {"strategy_eq_recovery_days_p99"}
+
+    assert _mps_strategy_eq_recovery_distribution({}, {"adg_strategy_eq"}) is None
+    with pytest.raises(RuntimeError, match="recovery sampling output is missing"):
+        _mps_strategy_eq_recovery_distribution({}, needed)
+
+    samples = object()
+    expected = SimpleNamespace()
+    expected.cpu = lambda: expected
+    called = {}
+
+    def fake_postprocessor(values, *, sample_interval_days):
+        called["values"] = values
+        called["sample_interval_days"] = sample_interval_days
+        return expected
+
+    fake_mps_kernel = ModuleType("optimization.gpu.mps_kernel")
+    fake_mps_kernel.strategy_eq_recovery_distribution_from_samples = (
+        fake_postprocessor
+    )
+    monkeypatch.setitem(
+        sys.modules, "optimization.gpu.mps_kernel", fake_mps_kernel
+    )
+    actual = _mps_strategy_eq_recovery_distribution(
+        {
+            "strategy_eq_recovery_samples": samples,
+            "strategy_eq_recovery_sample_interval_days": 1.0 / 24.0,
+        },
+        needed,
+    )
+
+    assert called == {
+        "values": samples,
+        "sample_interval_days": 1.0 / 24.0,
+    }
+    assert actual is expected
 
 
 @pytest.mark.parametrize(
@@ -1025,6 +1066,27 @@ def test_gpu_account_equity_recovery_requires_tracked_candles_to_be_contiguous()
         last_valid_indices=[3, 3],
         tracking_start_indices=[1, 1],
     )
+
+
+def test_gpu_strategy_equity_recovery_distribution_rejects_internal_invalid_candle():
+    hlcvs = np.ones((4, 1, 4), dtype=np.float64)
+    hlcvs[2, 0, :3] = np.nan
+
+    _require_no_internal_invalid_single_coin_recovery_candles(
+        hlcvs,
+        needed_metrics={"adg_strategy_eq"},
+        first_valid_idx=0,
+        last_valid_idx=3,
+        tracking_start_idx=1,
+    )
+    with pytest.raises(ValueError, match="invalid candle at 2"):
+        _require_no_internal_invalid_single_coin_recovery_candles(
+            hlcvs,
+            needed_metrics={"strategy_eq_recovery_days_p99"},
+            first_valid_idx=0,
+            last_valid_idx=3,
+            tracking_start_idx=1,
+        )
 
 
 @pytest.mark.parametrize(

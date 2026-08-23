@@ -150,14 +150,19 @@ These are the main parity surfaces that should be reviewed together:
    - Global `*_strategy_eq` metrics are canonical for risk inspection and optimizer use
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
 3. Remaining GPU HSL metric gaps
-   - Strategy-equity recovery-distribution metrics need additional bounded per-side time-series state
+   - The per-side HSL controllers expose their longest strict strategy-equity recovery interval,
+     but not a full per-side recovery distribution
+   - Global strategy-equity recovery distributions are available for single-coin EMA Anchor and
+     Trailing Martingale through opt-in hourly proxy samples; multi-coin portfolio kernels do not
+     yet emit equivalent samples and fail closed for those metrics
 
 ### Missing or Weak Test Coverage
 
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for strategy-equity recovery-distribution metrics
+4. Apple MPS parity for per-side HSL-controller recovery distributions and global multi-coin
+   strategy-equity recovery distributions
 
 ## Optimizer Work
 

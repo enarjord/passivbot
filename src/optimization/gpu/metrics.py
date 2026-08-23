@@ -161,6 +161,12 @@ SUPPORTED_METRICS = (
     "sortino_ratio_pnl_w",
     "sterling_ratio_strategy_eq",
     "sterling_ratio_strategy_eq_w",
+    "strategy_eq_recovery_days_mean",
+    "strategy_eq_recovery_days_median",
+    "strategy_eq_recovery_days_p95",
+    "strategy_eq_recovery_days_p99",
+    "strategy_eq_recovery_days_mean_worst_5pct",
+    "strategy_eq_recovery_days_mean_worst_1pct",
     "strategy_eq_recovery_days_max",
     "strategy_eq_underwater_pct_mean",
     "strategy_eq_underwater_pct_median",
@@ -266,6 +272,14 @@ _HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS = {
     "peak_recovery_hours_strategy_eq_short",
     "peak_recovery_days_strategy_eq_long",
     "peak_recovery_days_strategy_eq_short",
+}
+_STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
+    "strategy_eq_recovery_days_mean",
+    "strategy_eq_recovery_days_median",
+    "strategy_eq_recovery_days_p95",
+    "strategy_eq_recovery_days_p99",
+    "strategy_eq_recovery_days_mean_worst_5pct",
+    "strategy_eq_recovery_days_mean_worst_1pct",
 }
 HARD_STOP_PROXY_METRICS = tuple(
     sorted(_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
@@ -1258,6 +1272,25 @@ def _hard_stop_strategy_eq_recovery_metrics(out: dict) -> dict:
     }
 
 
+def _strategy_eq_recovery_distribution_metrics(out: dict) -> dict:
+    """Map strict uniformly sampled time-to-exceed summaries from Apple MPS."""
+
+    if "strategy_eq_recovery_distribution" not in out:
+        raise RuntimeError(
+            "MPS strategy-equity recovery-distribution output is missing from proxy results"
+        )
+    values = out["strategy_eq_recovery_distribution"].to(torch.float64)
+    names = (
+        "strategy_eq_recovery_days_mean",
+        "strategy_eq_recovery_days_median",
+        "strategy_eq_recovery_days_p95",
+        "strategy_eq_recovery_days_p99",
+        "strategy_eq_recovery_days_mean_worst_5pct",
+        "strategy_eq_recovery_days_mean_worst_1pct",
+    )
+    return {name: values[:, index] for index, name in enumerate(names)}
+
+
 def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     """Reduce compact Metal output into validated proxy objective metrics."""
 
@@ -1468,6 +1501,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS
         else {}
     )
+    strategy_eq_recovery_distribution_metrics = (
+        _strategy_eq_recovery_distribution_metrics(out)
+        if requested & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
+        else {}
+    )
 
     requested_start = float(run.requested_start_ts_ms)
     first_timestamp = data["ts0"]
@@ -1522,6 +1560,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_raw_drawdown_metrics)
     objectives.update(hard_stop_ema_tail_metrics)
     objectives.update(hard_stop_strategy_eq_recovery_metrics)
+    objectives.update(strategy_eq_recovery_distribution_metrics)
     if "loss_profit_ratio" in requested:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(
             out["loss_sum"], out["profit_sum"]

@@ -220,6 +220,38 @@ _HSL_RAW_DRAWDOWN_METRICS = {
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",
 }
+_STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
+    "strategy_eq_recovery_days_mean",
+    "strategy_eq_recovery_days_median",
+    "strategy_eq_recovery_days_p95",
+    "strategy_eq_recovery_days_p99",
+    "strategy_eq_recovery_days_mean_worst_5pct",
+    "strategy_eq_recovery_days_mean_worst_1pct",
+}
+
+
+def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
+    """Run the opt-in recovery postprocessor before proxy outputs leave MPS."""
+
+    if not set(needed_metrics) & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS:
+        return None
+    required = {
+        "strategy_eq_recovery_samples",
+        "strategy_eq_recovery_sample_interval_days",
+    }
+    if missing := required.difference(output):
+        raise RuntimeError(
+            "MPS strategy-equity recovery sampling output is missing: "
+            + ", ".join(sorted(missing))
+        )
+    from optimization.gpu.mps_kernel import (
+        strategy_eq_recovery_distribution_from_samples,
+    )
+
+    return strategy_eq_recovery_distribution_from_samples(
+        output["strategy_eq_recovery_samples"],
+        sample_interval_days=output["strategy_eq_recovery_sample_interval_days"],
+    ).cpu()
 
 
 def _directional_coin_hsl_lookback_bars(
@@ -587,10 +619,33 @@ def _require_no_internal_invalid_account_recovery_candles(
         if not bool(np.all(valid)):
             first_invalid = first + int(np.flatnonzero(~valid)[0])
             raise ValueError(
-                "MPS account-equity peak-recovery metrics require contiguous "
+                "MPS account/strategy-equity recovery metrics require contiguous "
                 "valid candles after equity tracking starts; "
                 f"coin index {coin}, invalid candle at {first_invalid}"
             )
+
+
+def _require_no_internal_invalid_single_coin_recovery_candles(
+    hlcvs,
+    *,
+    needed_metrics,
+    first_valid_idx: int,
+    last_valid_idx: int,
+    tracking_start_idx: int,
+) -> None:
+    recovery_metrics = (
+        _ACCOUNT_EQUITY_RECOVERY_METRICS
+        | _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
+    )
+    if not set(needed_metrics) & recovery_metrics:
+        return
+    _require_no_internal_invalid_account_recovery_candles(
+        hlcvs,
+        exposure_eligible_coins=[True],
+        first_valid_indices=[first_valid_idx],
+        last_valid_indices=[last_valid_idx],
+        tracking_start_indices=[tracking_start_idx],
+    )
 
 
 def _nan_min(left, right):
@@ -1152,14 +1207,13 @@ class MpsSingleCoinProxy:
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
-        if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
-            _require_no_internal_invalid_account_recovery_candles(
-                hlcvs,
-                exposure_eligible_coins=[True],
-                first_valid_indices=backtest_params["first_valid_indices"],
-                last_valid_indices=backtest_params["last_valid_indices"],
-                tracking_start_indices=[self.run.trade_start_idx],
-            )
+        _require_no_internal_invalid_single_coin_recovery_candles(
+            hlcvs,
+            needed_metrics=self.needed_metrics,
+            first_valid_idx=self.run.first_valid_idx,
+            last_valid_idx=self.run.last_valid_idx,
+            tracking_start_idx=self.run.trade_start_idx,
+        )
         if hsl_enabled_sides:
             _require_no_internal_invalid_hsl_candles(
                 high,
@@ -1197,6 +1251,9 @@ class MpsSingleCoinProxy:
             ),
             hsl_raw_drawdown_enabled=bool(
                 self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
+            ),
+            recovery_distribution_enabled=bool(
+                self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
         )
         if self.strategy_kind == "trailing_martingale":
@@ -1248,11 +1305,16 @@ class MpsSingleCoinProxy:
                 profile=self.profile_enabled,
             )
             interrupt_check()
+            recovery_distribution = _mps_strategy_eq_recovery_distribution(
+                output, self.needed_metrics
+            )
             output = {
                 key: value.cpu()
                 for key, value in output.items()
                 if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
             }
+            if recovery_distribution is not None:
+                output["strategy_eq_recovery_distribution"] = recovery_distribution
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",
@@ -2065,6 +2127,9 @@ class MpsMulticoinProxy:
                     profile=self.profile_enabled,
                 )
                 interrupt_check()
+                recovery_distribution = _mps_strategy_eq_recovery_distribution(
+                    raw_output, self.needed_metrics
+                )
                 output = {
                     key: value.cpu()
                     for key, value in raw_output.items()
@@ -2078,6 +2143,13 @@ class MpsMulticoinProxy:
                         profile=self.profile_enabled,
                     )
                     interrupt_check()
+                recovery_distribution = (
+                    _mps_strategy_eq_recovery_distribution(
+                        raw_side_outputs[self.sides[0]], self.needed_metrics
+                    )
+                    if len(self.sides) == 1
+                    else None
+                )
                 side_outputs = {
                     side: {
                         key: value.cpu()
@@ -2134,6 +2206,8 @@ class MpsMulticoinProxy:
                 output["entry_initial_balance_pct_short"] = side_outputs[
                     "short"
                 ]["entry_initial_balance_pct"]
+            if recovery_distribution is not None:
+                output["strategy_eq_recovery_distribution"] = recovery_distribution
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",

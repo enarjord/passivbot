@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added global strategy-equity recovery-distribution scoring and limits to single-coin Apple MPS
+  optimization for EMA Anchor and Trailing Martingale. Directional kernels emit opt-in
+  candidate-relative hourly strategy-equity samples with mandatory initial and
+  terminal/liquidation endpoints, and a bounded Metal postprocessor applies Rust's strict
+  time-to-exceed, percentile, and worst-tail definitions for
+  `strategy_eq_recovery_days_{mean,median,p95,p99,mean_worst_5pct,mean_worst_1pct}`. Exact Rust
+  validation and rolling drift gates remain authoritative. Histories with internal invalid candles
+  remain fail closed, a bounded coin-HSL rolling-PnL overflow emits a conservative full-horizon
+  recovery penalty, and multi-coin recovery distributions remain fail closed.
+
 - Added raw per-side HSL strategy-equity worst-drawdown scoring and limits to Apple MPS
   optimization for EMA Anchor and Trailing Martingale, across single-coin and multi-coin
   topologies. The bounded peak-and-maximum state is compiled into Metal only when either the long
@@ -17,8 +27,7 @@ All notable user-facing changes will be documented in this file.
 - Added per-side HSL strategy-equity peak-recovery scoring and limits to Apple MPS optimization.
   EMA Anchor and Trailing Martingale kernels now retain the longest strict time-to-exceed interval
   for each long and short HSL controller, including an unrecovered tail through the backtest end,
-  and expose it in hours and days. Exact Rust validation remains authoritative;
-  recovery-distribution metrics remain fail closed.
+  and expose it in hours and days. Exact Rust validation remains authoritative.
 
 - Fixed Apple MPS optimization halting when a converged or single-objective proxy front repeats an
   already exact-validated candidate. The backend now revalidates that actual current-front member

@@ -11,6 +11,9 @@ constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 34;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
+#endif
 
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
@@ -795,6 +798,9 @@ inline void passivbot_single_coin_impl(
     device int* gap_hist,
     device float2* rolling_pnl_values,
     device int2* rolling_pnl_indices,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b
 ) {
     const int B = sizes[0];
@@ -802,6 +808,10 @@ inline void passivbot_single_coin_impl(
     const int D = sizes[2];
     const int P = sizes[3];
     const int first_valid = sizes[4];
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    const int recovery_stride = sizes[7];
+    const int recovery_sample_count = sizes[8];
+#endif
     if (b >= uint(B)) return;
 
     const float qty_step = settings[0];
@@ -893,6 +903,9 @@ inline void passivbot_single_coin_impl(
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    int recovery_start_k = -1;
+#endif
     float hsl_tier_samples_total = 0.0f;
     float hsl_tier_samples_yellow = 0.0f;
     float hsl_tier_samples_orange = 0.0f;
@@ -1464,8 +1477,17 @@ inline void passivbot_single_coin_impl(
         float short_unreal = short_side.psize > 0.0f
             ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f;
         float equity = balance + long_unreal + short_unreal;
-        if ((long_coin_hsl_rolling && long_rolling_pnl.overflowed)
-            || (short_coin_hsl_rolling && short_rolling_pnl.overflowed)) {
+        const bool rolling_pnl_overflowed =
+            (long_coin_hsl_rolling && long_rolling_pnl.overflowed)
+            || (short_coin_hsl_rolling && short_rolling_pnl.overflowed);
+        if (rolling_pnl_overflowed) {
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+            // A bounded rolling-PnL overflow invalidates the proxy candidate.
+            // The postprocessor maps this impossible equity to the maximum
+            // bounded duration for every minimized recovery statistic.
+            recovery_samples[int(b) * recovery_sample_count]
+                = RECOVERY_FAIL_CLOSED_SENTINEL;
+#endif
             balance = 0.0f;
             alive = false;
             liq_day = di;
@@ -1575,6 +1597,26 @@ inline void passivbot_single_coin_impl(
             }
             bool liq = balance <= 0.0f || equity <= liq_floor;
             float eqf = liq ? liq_floor : equity;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+            if (recovery_stride > 0 && recovery_start_k < 0) {
+                recovery_start_k = k;
+                recovery_samples[int(b) * recovery_sample_count] = eqf;
+            } else if (recovery_stride > 0) {
+                const int recovery_elapsed = k - recovery_start_k;
+                const bool recovery_terminal = liq || k == T - 2;
+                const bool recovery_regular = recovery_elapsed % recovery_stride == 0;
+                if (recovery_regular || recovery_terminal) {
+                    const int sample_index = recovery_terminal
+                        ? (recovery_elapsed + recovery_stride - 1) / recovery_stride
+                        : recovery_elapsed / recovery_stride;
+                    if (sample_index < recovery_sample_count) {
+                        recovery_samples[
+                            int(b) * recovery_sample_count + sample_index
+                        ] = eqf;
+                    }
+                }
+            }
+#endif
             if (eqf >= account_peak) {
                 if (account_peak_k >= 0.0f) {
                     account_recovery_max_min = fmax(
@@ -1793,10 +1835,17 @@ kernel void passivbot_ema_anchor(
     device int* gap_hist,
     device float2* rolling_pnl_values,
     device int2* rolling_pnl_indices,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_single_coin_impl(
         bars, flags, params, settings, sizes, daily, scalars, gap_hist,
-        rolling_pnl_values, rolling_pnl_indices, b
+        rolling_pnl_values, rolling_pnl_indices,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples,
+#endif
+        b
     );
 }
