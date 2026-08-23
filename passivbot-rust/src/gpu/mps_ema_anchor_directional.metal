@@ -239,10 +239,13 @@ struct EmaSide {
 struct ReducerVariant {
     bool valid;
     bool is_unstuck;
+    bool is_panic;
     int ticks;
     float qty;
+    bool market;
     int secondary_ticks;
     float secondary_qty;
+    bool secondary_market;
 };
 
 inline EmaSide load_side(constant float* params, int po, float seed_close) {
@@ -318,10 +321,13 @@ inline ReducerVariant empty_reducer_variant() {
     ReducerVariant result;
     result.valid = false;
     result.is_unstuck = false;
+    result.is_panic = false;
     result.ticks = 0;
     result.qty = 0.0f;
+    result.market = false;
     result.secondary_ticks = 0;
     result.secondary_qty = 0.0f;
+    result.secondary_market = false;
     return result;
 }
 
@@ -332,6 +338,10 @@ inline ReducerVariant finalize_reducer_variant(
     int reducer_ticks,
     float reducer_qty,
     bool is_unstuck,
+    bool is_long,
+    float market_price,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold,
     float qty_step,
     float price_step,
     float min_qty,
@@ -343,14 +353,36 @@ inline ReducerVariant finalize_reducer_variant(
         return result;
     }
     float reducer_price = float(reducer_ticks) * price_step;
+    bool reducer_market = should_use_ordinary_market_execution(
+        reducer_ticks, !is_long, market_price, price_step,
+        market_orders_allowed, market_order_near_touch_threshold
+    );
+    if (reducer_market) {
+        reducer_qty = resize_market_close_qty(
+            reducer_qty, psize, market_price, qty_step,
+            min_qty, min_cost, c_mult
+        );
+    }
+    float reducer_min_price = reducer_market ? market_price : reducer_price;
     float reducer_min = min_entry_qty(
-        reducer_price, qty_step, min_qty, min_cost, c_mult
+        reducer_min_price, qty_step, min_qty, min_cost, c_mult
     );
     reducer_qty = fmin(psize, reducer_qty);
     if (ordinary_qty > 0.0f && ordinary_ticks > 0) {
         float ordinary_price = float(ordinary_ticks) * price_step;
+        bool ordinary_market = should_use_ordinary_market_execution(
+            ordinary_ticks, !is_long, market_price, price_step,
+            market_orders_allowed, market_order_near_touch_threshold
+        );
+        if (ordinary_market) {
+            ordinary_qty = resize_market_close_qty(
+                ordinary_qty, psize, market_price, qty_step,
+                min_qty, min_cost, c_mult
+            );
+        }
+        float ordinary_min_price = ordinary_market ? market_price : ordinary_price;
         float ordinary_min = min_entry_qty(
-            ordinary_price, qty_step, min_qty, min_cost, c_mult
+            ordinary_min_price, qty_step, min_qty, min_cost, c_mult
         );
         if (ordinary_qty + reducer_qty > psize) {
             ordinary_qty = fmax(round_step(psize - reducer_qty, qty_step), 0.0f);
@@ -368,6 +400,7 @@ inline ReducerVariant finalize_reducer_variant(
             }
             result.secondary_ticks = ordinary_ticks;
             result.secondary_qty = ordinary_qty;
+            result.secondary_market = ordinary_market;
         }
     }
     if (result.secondary_qty <= 0.0f) {
@@ -378,8 +411,10 @@ inline ReducerVariant finalize_reducer_variant(
     }
     result.valid = reducer_qty > 0.0f;
     result.is_unstuck = is_unstuck;
+    result.is_panic = false;
     result.ticks = reducer_ticks;
     result.qty = reducer_qty;
+    result.market = reducer_market;
     return result;
 }
 
@@ -389,17 +424,48 @@ inline void apply_reducer_variant(
 ) {
     side.close_ticks = variant.ticks;
     side.close_qty = variant.qty;
+    side.close_market = variant.market;
     side.secondary_close_ticks = variant.secondary_ticks;
     side.secondary_close_qty = variant.secondary_qty;
+    side.secondary_close_market = variant.secondary_market;
     side.close_is_protective_reducer = variant.valid;
+    side.close_is_panic = variant.is_panic;
 }
 
 inline void restore_ordinary_close(thread EmaSide& side) {
     side.close_ticks = side.close_without_reducer_ticks;
     side.close_qty = side.close_without_reducer_qty;
+    side.close_market = false;
     side.secondary_close_ticks = 0;
     side.secondary_close_qty = 0.0f;
+    side.secondary_close_market = false;
     side.close_is_protective_reducer = false;
+    side.close_is_panic = false;
+}
+
+inline void prepare_ordinary_market_close(
+    thread EmaSide& side,
+    bool is_long,
+    float market_price,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult
+) {
+    side.close_market = side.close_qty > 0.0f
+        && should_use_ordinary_market_execution(
+            side.close_ticks, !is_long, market_price, price_step,
+            market_orders_allowed, market_order_near_touch_threshold
+        );
+    if (side.close_market) {
+        side.close_qty = resize_market_close_qty(
+            side.close_qty, side.psize, market_price, qty_step,
+            min_qty, min_cost, c_mult
+        );
+    }
 }
 
 inline ReducerVariant generated_reducer_variant(thread EmaSide& side) {
@@ -409,10 +475,30 @@ inline ReducerVariant generated_reducer_variant(thread EmaSide& side) {
     ReducerVariant result;
     result.valid = true;
     result.is_unstuck = false;
+    result.is_panic = false;
     result.ticks = side.close_ticks;
     result.qty = side.close_qty;
+    result.market = side.close_market;
     result.secondary_ticks = side.secondary_close_ticks;
     result.secondary_qty = side.secondary_close_qty;
+    result.secondary_market = side.secondary_close_market;
+    return result;
+}
+
+inline ReducerVariant panic_reducer_variant(
+    thread EmaSide& side,
+    bool is_long,
+    int touch_down_ticks,
+    int touch_up_ticks
+) {
+    ReducerVariant result = empty_reducer_variant();
+    if (!(side.psize > 0.0f)) return result;
+    result.valid = true;
+    result.is_panic = true;
+    result.ticks = max(
+        is_long ? touch_down_ticks - 1 : touch_up_ticks + 1, 1
+    );
+    result.qty = side.psize;
     return result;
 }
 
@@ -450,7 +536,9 @@ inline void apply_twel_reducer(
     float price_step,
     float min_qty,
     float min_cost,
-    float c_mult
+    float c_mult,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold
 ) {
     side.secondary_close_ticks = 0;
     side.secondary_close_qty = 0.0f;
@@ -474,7 +562,9 @@ inline void apply_twel_reducer(
         side,
         finalize_reducer_variant(
             side.psize, side.close_ticks, side.close_qty,
-            reducer_ticks, reducer_qty, false, qty_step, price_step,
+            reducer_ticks, reducer_qty, false, is_long, price_now,
+            market_orders_allowed, market_order_near_touch_threshold,
+            qty_step, price_step,
             min_qty, min_cost, c_mult
         )
     );
@@ -492,7 +582,9 @@ inline ReducerVariant unstuck_reducer_variant(
     float price_step,
     float min_qty,
     float min_cost,
-    float c_mult
+    float c_mult,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold
 ) {
     ReducerVariant none = empty_reducer_variant();
     if (!(side.unstuck_enabled
@@ -568,6 +660,10 @@ inline ReducerVariant unstuck_reducer_variant(
         reducer_ticks,
         reducer_qty,
         true,
+        is_long,
+        price_now,
+        market_orders_allowed,
+        market_order_near_touch_threshold,
         qty_step,
         price_step,
         min_qty,
@@ -584,6 +680,7 @@ inline bool reducer_variant_preferred(
     if (!left.valid) return false;
     if (!right.valid) return true;
     if (left.qty != right.qty) return left.qty > right.qty;
+    if (left.is_panic != right.is_panic) return left.is_panic;
     if (left.ticks != right.ticks) {
         return is_long ? left.ticks < right.ticks : left.ticks > right.ticks;
     }
@@ -615,6 +712,19 @@ inline ReducerVariant reducer_variant_at(
     return index == 0 ? preferred : fallback;
 }
 
+inline bool global_reducer_prefers_long(
+    ReducerVariant long_candidate,
+    ReducerVariant short_candidate
+) {
+    if (long_candidate.qty != short_candidate.qty) {
+        return long_candidate.qty > short_candidate.qty;
+    }
+    if (long_candidate.is_panic != short_candidate.is_panic) {
+        return long_candidate.is_panic;
+    }
+    return true;
+}
+
 inline bool gate_reducer_variant(
     ReducerVariant variant,
     float pprice,
@@ -622,17 +732,26 @@ inline bool gate_reducer_variant(
     float price_step,
     float c_mult,
     float maker_fee,
+    float taker_fee,
+    float market_order_slippage_pct,
+    float market_price,
     bool gate_enabled,
     thread float& remaining_loss_budget
 ) {
     if (!variant.valid || !(variant.qty > 0.0f && pprice > 0.0f)) {
         return false;
     }
-    float price = float(variant.ticks) * price_step;
+    if (variant.is_panic) return true;
+    float price = variant.market
+        ? ordinary_market_fill_price(
+            market_price, !is_long, market_order_slippage_pct, price_step
+        )
+        : float(variant.ticks) * price_step;
+    float fee_rate = variant.market ? taker_fee : maker_fee;
     float gross_pnl = variant.qty * c_mult * (
         is_long ? price - pprice : pprice - price
     );
-    float net_pnl = gross_pnl - variant.qty * price * c_mult * maker_fee;
+    float net_pnl = gross_pnl - variant.qty * price * c_mult * fee_rate;
     if (!realized_loss_gate_allows(
             net_pnl, remaining_loss_budget, gate_enabled)) {
         return false;
@@ -751,7 +870,8 @@ inline void generate_long_orders(
     side.close_without_reducer_qty = c_qty;
     apply_twel_reducer(
         side, true, balance, price_now, qty_step, price_step,
-        min_qty, min_cost, c_mult
+        min_qty, min_cost, c_mult, market_orders_allowed,
+        market_order_near_touch_threshold
     );
 }
 
@@ -844,7 +964,8 @@ inline void generate_short_orders(
     side.close_without_reducer_qty = c_qty;
     apply_twel_reducer(
         side, false, balance, price_now, qty_step, price_step,
-        min_qty, min_cost, c_mult
+        min_qty, min_cost, c_mult, market_orders_allowed,
+        market_order_near_touch_threshold
     );
 }
 
@@ -856,14 +977,23 @@ inline void gate_generated_close(
     float price_step,
     float c_mult,
     float maker_fee,
+    float taker_fee,
+    float market_order_slippage_pct,
+    float market_price,
+    bool market_execution,
     bool gate_enabled,
     thread float& remaining_loss_budget
 ) {
     if (!(qty > 0.0f && ticks > 0 && pprice > 0.0f)) return;
-    float price = float(ticks) * price_step;
+    float price = market_execution
+        ? ordinary_market_fill_price(
+            market_price, !is_long, market_order_slippage_pct, price_step
+        )
+        : float(ticks) * price_step;
+    float fee_rate = market_execution ? taker_fee : maker_fee;
     float gross_pnl = qty * c_mult
         * (is_long ? price - pprice : pprice - price);
-    float net_pnl = gross_pnl - qty * price * c_mult * maker_fee;
+    float net_pnl = gross_pnl - qty * price * c_mult * fee_rate;
     if (!realized_loss_gate_allows(
             net_pnl, remaining_loss_budget, gate_enabled)) {
         qty = 0.0f;
@@ -1430,14 +1560,16 @@ inline void passivbot_single_coin_impl(
                 ? unstuck_reducer_variant(
                     long_side, true, balance, balance_peak, close,
                     touch_down_tick, touch_up_tick, qty_step, price_step,
-                    min_qty, min_cost, c_mult
+                    min_qty, min_cost, c_mult, market_orders_allowed,
+                    market_order_near_touch_threshold
                 )
                 : empty_reducer_variant();
             ReducerVariant short_unstuck = short_enabled
                 ? unstuck_reducer_variant(
                     short_side, false, balance, balance_peak, close,
                     touch_down_tick, touch_up_tick, qty_step, price_step,
-                    min_qty, min_cost, c_mult
+                    min_qty, min_cost, c_mult, market_orders_allowed,
+                    market_order_near_touch_threshold
                 )
                 : empty_reducer_variant();
 
@@ -1452,6 +1584,18 @@ inline void passivbot_single_coin_impl(
                     long_unstuck = empty_reducer_variant();
                 }
             }
+            if (long_enabled && long_hsl_mode == 3) {
+                long_twel = panic_reducer_variant(
+                    long_side, true, touch_down_tick, touch_up_tick
+                );
+                long_unstuck = empty_reducer_variant();
+            }
+            if (short_enabled && short_hsl_mode == 3) {
+                short_twel = panic_reducer_variant(
+                    short_side, false, touch_down_tick, touch_up_tick
+                );
+                short_unstuck = empty_reducer_variant();
+            }
 
             ReducerVariant long_preferred, long_fallback;
             ReducerVariant short_preferred, short_fallback;
@@ -1465,6 +1609,20 @@ inline void passivbot_single_coin_impl(
             );
             restore_ordinary_close(long_side);
             restore_ordinary_close(short_side);
+            if (long_enabled) {
+                prepare_ordinary_market_close(
+                    long_side, true, close, market_orders_allowed,
+                    market_order_near_touch_threshold, qty_step, price_step,
+                    min_qty, min_cost, c_mult
+                );
+            }
+            if (short_enabled) {
+                prepare_ordinary_market_close(
+                    short_side, false, close, market_orders_allowed,
+                    market_order_near_touch_threshold, qty_step, price_step,
+                    min_qty, min_cost, c_mult
+                );
+            }
 
             ReducerVariant selected_long = empty_reducer_variant();
             ReducerVariant selected_short = empty_reducer_variant();
@@ -1485,12 +1643,15 @@ inline void passivbot_single_coin_impl(
                 bool short_available = !short_resolved && short_candidate.valid;
                 if (!long_available && !short_available) break;
                 bool use_long = long_available && (
-                    !short_available || long_candidate.qty >= short_candidate.qty
+                    !short_available || global_reducer_prefers_long(
+                        long_candidate, short_candidate
+                    )
                 );
                 if (use_long) {
                     if (gate_reducer_variant(
                             long_candidate, long_side.pprice, true,
-                            price_step, c_mult, maker_fee, loss_gate_enabled,
+                            price_step, c_mult, maker_fee, taker_fee,
+                            market_order_slippage_pct, close, loss_gate_enabled,
                             remaining_loss_budget)) {
                         selected_long = long_candidate;
                         long_resolved = true;
@@ -1502,7 +1663,8 @@ inline void passivbot_single_coin_impl(
                 } else {
                     if (gate_reducer_variant(
                             short_candidate, short_side.pprice, false,
-                            price_step, c_mult, maker_fee, loss_gate_enabled,
+                            price_step, c_mult, maker_fee, taker_fee,
+                            market_order_slippage_pct, close, loss_gate_enabled,
                             remaining_loss_budget)) {
                         selected_short = short_candidate;
                         short_resolved = true;
@@ -1527,13 +1689,17 @@ inline void passivbot_single_coin_impl(
                     gate_generated_close(
                         long_side.secondary_close_qty,
                         long_side.secondary_close_ticks, long_side.pprice, true,
-                        price_step, c_mult, maker_fee, loss_gate_enabled,
+                        price_step, c_mult, maker_fee, taker_fee,
+                        market_order_slippage_pct, close,
+                        long_side.secondary_close_market, loss_gate_enabled,
                         remaining_loss_budget
                     );
                 } else {
                     gate_generated_close(
                         long_side.close_qty, long_side.close_ticks,
                         long_side.pprice, true, price_step, c_mult, maker_fee,
+                        taker_fee, market_order_slippage_pct, close,
+                        long_side.close_market,
                         loss_gate_enabled, remaining_loss_budget
                     );
                 }
@@ -1543,13 +1709,17 @@ inline void passivbot_single_coin_impl(
                     gate_generated_close(
                         short_side.secondary_close_qty,
                         short_side.secondary_close_ticks, short_side.pprice,
-                        false, price_step, c_mult, maker_fee, loss_gate_enabled,
+                        false, price_step, c_mult, maker_fee, taker_fee,
+                        market_order_slippage_pct, close,
+                        short_side.secondary_close_market, loss_gate_enabled,
                         remaining_loss_budget
                     );
                 } else {
                     gate_generated_close(
                         short_side.close_qty, short_side.close_ticks,
                         short_side.pprice, false, price_step, c_mult, maker_fee,
+                        taker_fee, market_order_slippage_pct, close,
+                        short_side.close_market,
                         loss_gate_enabled, remaining_loss_budget
                     );
                 }
@@ -1560,77 +1730,6 @@ inline void passivbot_single_coin_impl(
             }
             if (short_enabled && short_hsl_mode >= 2) {
                 short_side.entry_qty = 0.0f;
-            }
-            if (long_enabled && long_hsl_mode == 3) {
-                long_side.close_ticks = max(touch_down_tick - 1, 1);
-                long_side.close_qty = long_side.psize;
-                long_side.secondary_close_qty = 0.0f;
-                long_side.close_is_protective_reducer = false;
-                long_side.close_is_panic = true;
-            }
-            if (short_enabled && short_hsl_mode == 3) {
-                short_side.close_ticks = max(touch_up_tick + 1, 1);
-                short_side.close_qty = short_side.psize;
-                short_side.secondary_close_qty = 0.0f;
-                short_side.close_is_protective_reducer = false;
-                short_side.close_is_panic = true;
-            }
-
-            if (long_enabled) {
-                long_side.close_market = !long_side.close_is_panic
-                    && long_side.close_qty > 0.0f
-                    && should_use_ordinary_market_execution(
-                        long_side.close_ticks, false, close, price_step,
-                        market_orders_allowed,
-                        market_order_near_touch_threshold
-                    );
-                long_side.secondary_close_market =
-                    long_side.secondary_close_qty > 0.0f
-                    && should_use_ordinary_market_execution(
-                        long_side.secondary_close_ticks, false, close, price_step,
-                        market_orders_allowed,
-                        market_order_near_touch_threshold
-                    );
-                if (long_side.close_market) {
-                    long_side.close_qty = resize_market_close_qty(
-                        long_side.close_qty, long_side.psize, close,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
-                if (long_side.secondary_close_market) {
-                    long_side.secondary_close_qty = resize_market_close_qty(
-                        long_side.secondary_close_qty, long_side.psize, close,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
-            }
-            if (short_enabled) {
-                short_side.close_market = !short_side.close_is_panic
-                    && short_side.close_qty > 0.0f
-                    && should_use_ordinary_market_execution(
-                        short_side.close_ticks, true, close, price_step,
-                        market_orders_allowed,
-                        market_order_near_touch_threshold
-                    );
-                short_side.secondary_close_market =
-                    short_side.secondary_close_qty > 0.0f
-                    && should_use_ordinary_market_execution(
-                        short_side.secondary_close_ticks, true, close, price_step,
-                        market_orders_allowed,
-                        market_order_near_touch_threshold
-                    );
-                if (short_side.close_market) {
-                    short_side.close_qty = resize_market_close_qty(
-                        short_side.close_qty, short_side.psize, close,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
-                if (short_side.secondary_close_market) {
-                    short_side.secondary_close_qty = resize_market_close_qty(
-                        short_side.secondary_close_qty, short_side.psize, close,
-                        qty_step, min_qty, min_cost, c_mult
-                    );
-                }
             }
         }
 

@@ -5,8 +5,11 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Extended single-coin EMA Anchor ordinary market-order optimization on Apple MPS to compatible
-  HSL modes and one-sided minimum-effective-cost filtering. Unstuck, exposure-repair, and
-  realized-loss-gate combinations remain fail closed pending their execution-ordering slice.
+  HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, total-exposure repair, and
+  realized-loss gating. Market-promoted closes are resized at executable touch before reducer
+  selection and aggregate/loss gating, with adverse slippage and taker fees included in projected
+  loss. Active HSL panic closes participate in reducer ordering without consuming shared loss
+  allowance, matching exact Rust's execution ordering.
 
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin EMA
   Anchor, including near-touch promotion, next-candle adverse slippage, taker fees, executable-touch
