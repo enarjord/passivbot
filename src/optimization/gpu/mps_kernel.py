@@ -522,6 +522,8 @@ class MpsEmaAnchorRunner:
         max_realized_loss_pct: float = 1.0,
         taker_fee: float | None = None,
         market_order_slippage_pct: float = 0.0,
+        market_orders_allowed: bool = False,
+        market_order_near_touch_threshold: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         pnl_lookback_bars: int = 0,
@@ -546,6 +548,9 @@ class MpsEmaAnchorRunner:
         )
         taker_fee = market.maker_fee if taker_fee is None else float(taker_fee)
         market_order_slippage_pct = float(market_order_slippage_pct)
+        market_order_near_touch_threshold = float(
+            market_order_near_touch_threshold
+        )
         pnl_lookback_bars = int(pnl_lookback_bars)
         if not np.isfinite(taker_fee):
             raise ValueError("taker_fee must be finite")
@@ -555,6 +560,13 @@ class MpsEmaAnchorRunner:
         ):
             raise ValueError(
                 "market_order_slippage_pct must be finite and non-negative"
+            )
+        if (
+            not np.isfinite(market_order_near_touch_threshold)
+            or market_order_near_touch_threshold < 0.0
+        ):
+            raise ValueError(
+                "market_order_near_touch_threshold must be finite and non-negative"
             )
         if pnl_lookback_bars < 0:
             raise ValueError("pnl_lookback_bars must be non-negative")
@@ -638,6 +650,8 @@ class MpsEmaAnchorRunner:
                 market_order_slippage_pct,
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
+                float(bool(market_orders_allowed)),
+                market_order_near_touch_threshold,
             ],
             dtype=torch.float32,
             device="mps",
@@ -1528,6 +1542,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     """Persistent single-coin trailing-martingale runner on Apple MPS."""
 
     def __init__(self, *args, hsl_enabled: bool = True, **kwargs):
+        if bool(kwargs.get("market_orders_allowed", False)):
+            raise ValueError(
+                "MPS trailing-martingale ordinary market execution is not modeled yet"
+            )
         super().__init__(*args, **kwargs)
         self.shader_topology = trailing_martingale_shader_topology(
             long_enabled=self.long_enabled,

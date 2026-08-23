@@ -227,6 +227,18 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
     assert runner.hsl_raw_drawdown_enabled is False
 
 
+def test_trailing_martingale_runner_rejects_unmodeled_ordinary_market_execution():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    with pytest.raises(ValueError, match="ordinary market execution is not modeled"):
+        MpsTrailingMartingaleRunner(
+            None,
+            None,
+            None,
+            market_orders_allowed=True,
+        )
+
+
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
@@ -4337,7 +4349,9 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const float market_order_slippage_pct = fmax(settings[16], 0.0f)" in source
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
-    assert "market_panic ? taker_fee : maker_fee" in source
+    assert "const bool market_orders_allowed = settings[19] > 0.5f" in source
+    assert "const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)" in source
+    assert "market_execution ? taker_fee : maker_fee" in source
     assert "constant int SCALAR_COLS = 68" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
@@ -4450,6 +4464,92 @@ def test_mps_ema_anchor_shader_smoke():
         output["total_wallet_exposure_max"]
         >= output["total_wallet_exposure_mean"]
     ).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_anchor_near_touch_market_entry_uses_next_close_and_taker_fee(side):
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(
+        qty_step=0.001,
+        price_step=0.01,
+        min_qty=0.001,
+        min_cost=0.0,
+        c_mult=1.0,
+        maker_fee=0.0,
+        taker_fee=0.01,
+    )
+    run = ProxyRun(
+        starting_balance=1_000.0,
+        warmup_bars=1,
+        trade_start_idx=1,
+        requested_start_ts_ms=int(timestamps[0]),
+        guard_ts_ms=int(timestamps[0]),
+        first_ts_ms=int(timestamps[0]),
+        interval_ms=60_000,
+        liquidation_threshold=0.05,
+        first_valid_idx=0,
+        last_valid_idx=count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = [
+        0.1,
+        2.0,
+        3.0,
+        0.0,
+        0.0005,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        2.0,
+        0.0,
+        1.0,
+    ]
+    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
+    parameters = np.asarray([row + row], dtype=np.float64)
+    common = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+        "hedge_mode": True,
+    }
+
+    resting = MpsEmaAnchorRunner(market, run, data, **common).run(parameters)
+    promoted_runner = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+        taker_fee=market.taker_fee,
+        **common,
+    )
+    promoted = promoted_runner.run(parameters)
+    torch.mps.synchronize()
+
+    assert promoted_runner.settings[19].item() == 1.0
+    assert promoted_runner.settings[20].item() == pytest.approx(0.001)
+    assert resting["fill_count"].item() == 0.0
+    assert promoted["fill_count"].item() == 1.0
+    if side == "long":
+        expected_qty = 1.001
+        expected_price = 101.0
+        assert promoted["psize"].item() == pytest.approx(expected_qty)
+        assert promoted["pprice"].item() == pytest.approx(expected_price)
+    else:
+        expected_qty = 1.0
+        expected_price = 99.0
+        assert promoted["short_psize"].item() == pytest.approx(expected_qty)
+        assert promoted["short_pprice"].item() == pytest.approx(expected_price)
+    expected_balance = 1_000.0 - expected_qty * expected_price * market.taker_fee
+    assert promoted["balance"].item() == pytest.approx(expected_balance, abs=2.0e-4)
 
 
 @pytest.mark.skipif(
@@ -6215,7 +6315,10 @@ def test_mps_recovery_fails_closed_on_coin_hsl_rolling_overflow(strategy_kind):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("hedge_mode", [False, True])
-def test_mps_dual_side_respects_one_way_initial_arbitration(hedge_mode):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_dual_side_respects_one_way_initial_arbitration(
+    hedge_mode, market_orders_allowed
+):
     count = 5
     close = np.full(count, 100.0)
     high = np.array([100.0, 100.0, 100.0, 102.0, 100.0])
@@ -6252,6 +6355,8 @@ def test_mps_dual_side_respects_one_way_initial_arbitration(hedge_mode):
         long_enabled=True,
         short_enabled=True,
         hedge_mode=hedge_mode,
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.02,
     ).run(np.array([row + row], dtype=np.float64))
     torch.mps.synchronize()
 
