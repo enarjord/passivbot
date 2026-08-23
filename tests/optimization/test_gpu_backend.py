@@ -886,7 +886,7 @@ def test_gpu_suite_inputs_reject_invalid_scenario_coin_hsl_values():
         _gpu_suite_scenario_inputs(config, Suite())
 
 
-def test_gpu_suite_inputs_revalidate_scenario_hedge_mode():
+def test_gpu_suite_inputs_accept_scenario_one_way_mode():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["dynamic_wel_by_tradability"] = True
@@ -916,8 +916,9 @@ def test_gpu_suite_inputs_revalidate_scenario_hedge_mode():
             scenario["live"]["hedge_mode"] = False
             return scenario
 
-    with pytest.raises(ValueError, match="requires live.hedge_mode=true"):
-        _gpu_suite_scenario_inputs(config, Suite())
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["config"]["live"]["hedge_mode"] is False
 
 
 def _suite_search_input(label, config, coin_count):
@@ -2405,7 +2406,7 @@ def test_gpu_multicoin_foundation_accepts_forager_score_hysteresis():
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode(strategy_kind):
+def test_gpu_multicoin_foundation_accepts_dual_side_one_way_mode(strategy_kind):
     builder = (
         _directional_tm_config
         if strategy_kind == "trailing_martingale"
@@ -2420,8 +2421,7 @@ def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode(strategy_kind):
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
 
-    with pytest.raises(ValueError, match="one-way arbitration is not modeled"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
@@ -4297,6 +4297,27 @@ def test_gpu_checkpoint_signature_tracks_realized_loss_gate_contract():
     )
 
 
+def test_gpu_checkpoint_signature_tracks_hedge_mode_contract():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    proxy = SimpleNamespace(coin_override_contract={"values": []})
+    original_contract = _gpu_runtime_checkpoint_contract(config, proxy)
+    original = _checkpoint_signature(
+        active, scoring, runtime_contract=original_contract
+    )
+
+    changed = copy.deepcopy(config)
+    changed["live"]["hedge_mode"] = not original_contract["hedge_mode"]
+    changed_contract = _gpu_runtime_checkpoint_contract(changed, proxy)
+
+    assert changed_contract["hedge_mode"] is not original_contract["hedge_mode"]
+    assert (
+        _checkpoint_signature(active, scoring, runtime_contract=changed_contract)
+        != original
+    )
+
+
 def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
@@ -4570,6 +4591,7 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "coin_count": 2,
             "strategy_kind": "ema_anchor",
             "enabled_sides": ["long"],
+            "hedge_mode": False,
             "max_realized_loss_pct": 1.0,
             "pnls_max_lookback_days": 30.0,
             "unstuck": original["unstuck"],
@@ -4600,6 +4622,18 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
 
     assert changed != original
     assert changed["prepared_scenarios"][0]["max_realized_loss_pct"] == 0.05
+
+    changed_hedge_mode = copy.deepcopy(item)
+    changed_hedge_mode["config"]["live"]["hedge_mode"] = True
+    changed = _gpu_suite_checkpoint_contract(config, [changed_hedge_mode])
+    assert changed != original
+    assert changed["prepared_scenarios"][0]["hedge_mode"] is True
+
+    changed_base_hedge_mode = copy.deepcopy(config)
+    changed_base_hedge_mode["live"]["hedge_mode"] = True
+    changed = _gpu_suite_checkpoint_contract(changed_base_hedge_mode, [item])
+    assert changed != original
+    assert changed["hedge_mode"] is True
 
     changed_lookback = copy.deepcopy(item)
     changed_lookback["config"]["live"]["pnls_max_lookback_days"] = 7.0

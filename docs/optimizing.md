@@ -104,7 +104,8 @@ The supported slice is intentionally narrow:
   dataset may be an individual exchange or the canonical combined multi-exchange dataset
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
   long+short enabled for one coin
-- long-only, short-only, or dual-side hedge-mode multi-coin EMA-anchor and trailing-martingale runs
+- long-only, short-only, or dual-side hedge-mode and one-way multi-coin EMA-anchor and
+  trailing-martingale runs
   for up to 64 coins, with dynamic wallet-exposure allocation and independent per-side Forager
   selection; dual-side runs require matching long/short approved and ignored coin sets, and all
   multi-coin runs require `backtest.dynamic_wel_by_tradability: true`;
@@ -278,11 +279,10 @@ The supported slice is intentionally narrow:
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
-Trailing Martingale use fused shared-account Metal kernels in hedge mode. Every accepted metric
-still comes from the unchanged exact Rust portfolio backtest, and classification, rank, and drift
-gates halt material disagreement. Dual-side one-way arbitration, unmodeled non-bot suite scenario
-overrides are not
-silently approximated by this release.
+Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every
+accepted metric still comes from the unchanged exact Rust portfolio backtest, and classification,
+rank, and drift gates halt material disagreement. Unmodeled non-bot suite scenario overrides are
+not silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU
 path then calls the same canonical suite reducer and scenario-selection logic as the CPU optimizer

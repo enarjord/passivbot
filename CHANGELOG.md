@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Apple MPS GPU optimizer support for dual-side multi-coin one-way mode in EMA Anchor and
+  Trailing Martingale, with per-symbol initial-entry arbitration matching exact Rust.
+
 - Added global strategy-equity recovery-distribution scoring and limits to Apple MPS optimization
   for EMA Anchor and Trailing Martingale across single-coin, one-sided multi-coin, and fused
   shared-account dual-side multi-coin runs. Strategy kernels emit opt-in candidate-relative hourly

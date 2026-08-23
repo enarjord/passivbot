@@ -863,7 +863,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
                 "short": ["BTC", "ETH"],
             },
             "ignored_coins": {"long": [], "short": []},
-            "hedge_mode": True,
+            "hedge_mode": False,
             "hsl_signal_mode": "coin",
         }
     )
@@ -965,6 +965,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "liquidation_threshold": 0.05,
             "max_realized_loss_pct": 1.0,
             "market_order_slippage_pct": 0.0,
+            "hedge_mode": config["live"]["hedge_mode"],
         },
     )
     backtest.build_backtest_payload = lambda *args, **kwargs: payload
@@ -1020,6 +1021,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         constructed["kwargs"]["recovery_distribution_enabled"]
         is recovery_distribution_enabled
     )
+    assert constructed["kwargs"]["hedge_mode"] is False
 
 
 def test_gpu_proxy_requires_complete_valid_tail():

@@ -351,6 +351,7 @@ struct TrailingMartingaleMulticoinSideState {
     HslDrawdownEmaTailStats hsl_ema_tail;
 #endif
     ulong coin_hsl_entry_blocked_mask;
+    ulong one_way_initial_blocked_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
@@ -1253,6 +1254,7 @@ inline void init_trailing_martingale_multicoin_side_state(
     side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
 #endif
     side.coin_hsl_entry_blocked_mask = 0ul;
+    side.one_way_initial_blocked_mask = 0ul;
     side.selection_initialized = false;
     side.max_tradable_seen = 0;
     side.previous_effective_n_positions = 0;
@@ -1799,7 +1801,8 @@ inline void update_tm_multicoin_side_selection(
     bool short_side,
     bool any_fill,
     int effective_n_positions,
-    float score_hysteresis
+    float score_hysteresis,
+    ulong one_way_initial_blocked_mask
 ) {
     thread HslState* coin_hsl = side.coin_hsl;
     thread ulong& coin_hsl_entry_blocked_mask =
@@ -1830,8 +1833,12 @@ inline void update_tm_multicoin_side_selection(
             blocked_mask != coin_hsl_entry_blocked_mask;
         coin_hsl_entry_blocked_mask = blocked_mask;
     }
+    bool one_way_eligibility_changed = one_way_initial_blocked_mask
+        != side.one_way_initial_blocked_mask;
+    side.one_way_initial_blocked_mask = one_way_initial_blocked_mask;
     bool reselect = !side.selection_initialized || any_fill
         || coin_hsl_eligibility_changed
+        || one_way_eligibility_changed
         || effective_n_positions != side.previous_effective_n_positions;
     if (!reselect) return;
 
@@ -1853,6 +1860,7 @@ inline void update_tm_multicoin_side_selection(
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_wel != 0.0f
+            && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul
             && (!config.coin_hsl_mode || (
                 coin_hsl_entry_blocked_mask & (1ul << ulong(c))
             ) == 0ul);
@@ -2109,6 +2117,114 @@ inline int select_tm_multicoin_unstuck_coin(
     return selected_coin;
 }
 
+// Match exact Rust's per-symbol one-way eligibility before Forager selection
+// and side-wide entry-cap allocation. Opposite-held coins are excluded from
+// selection; flat/flat arbitration losers retain their selected slot but emit
+// no order. Reentries and closes remain unblocked.
+inline void compute_tm_multicoin_one_way_initial_blocks(
+    thread TrailingMartingaleMulticoinSideState& long_side,
+    thread const TrailingMartingaleMulticoinSideConfig& long_config,
+    constant float* long_coin_overrides,
+    thread TrailingMartingaleMulticoinSideState& short_side,
+    thread const TrailingMartingaleMulticoinSideConfig& short_config,
+    constant float* short_coin_overrides,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
+    int coin_count,
+    int long_hsl_mode,
+    int short_hsl_mode,
+    bool long_can_generate,
+    bool short_can_generate,
+    thread ulong& long_selection_blocked_mask,
+    thread ulong& short_selection_blocked_mask,
+    thread ulong& long_order_blocked_mask,
+    thread ulong& short_order_blocked_mask
+) {
+    long_selection_blocked_mask = 0ul;
+    short_selection_blocked_mask = 0ul;
+    long_order_blocked_mask = 0ul;
+    short_order_blocked_mask = 0ul;
+    for (int c = 0; c < coin_count; ++c) {
+        const ulong bit = 1ul << ulong(c);
+        const bool has_long = long_side.psize[c] > 0.0f;
+        const bool has_short = short_side.psize[c] > 0.0f;
+        if (has_long && !has_short) {
+            short_selection_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
+            continue;
+        }
+        if (has_short && !has_long) {
+            long_selection_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
+            continue;
+        }
+        if (has_long && has_short) {
+            long_selection_blocked_mask |= bit;
+            short_selection_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
+            continue;
+        }
+
+        const int coin_offset = c * COIN_COLS;
+        const float close = bars[(k * coin_count + c) * 4 + 2];
+        const float long_wel = coin_override_or(
+            long_coin_overrides, c, 24, -1.0f
+        );
+        const float short_wel = coin_override_or(
+            short_coin_overrides, c, 24, -1.0f
+        );
+        const int long_coin_mode = long_config.coin_hsl_mode
+            ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
+        const int short_coin_mode = short_config.coin_hsl_mode
+            ? hsl_mode(short_side.coin_hsl[c], false) : short_hsl_mode;
+        const bool coin_tradable = k >= int(coin_settings[coin_offset + 8])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(close);
+        const bool long_eligible = long_can_generate && coin_tradable
+            && long_wel != 0.0f
+            && long_coin_mode == 0;
+        const bool short_eligible = short_can_generate && coin_tradable
+            && short_wel != 0.0f
+            && short_coin_mode == 0;
+        if (long_eligible && !short_eligible) {
+            short_order_blocked_mask |= bit;
+            continue;
+        }
+        if (short_eligible && !long_eligible) {
+            long_order_blocked_mask |= bit;
+            continue;
+        }
+        if (!long_eligible && !short_eligible) {
+            long_order_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
+            continue;
+        }
+        const float long_lower = fmin(
+            long_side.ema0[c], fmin(long_side.ema1[c], long_side.ema2[c])
+        );
+        const float short_upper = fmax(
+            short_side.ema0[c], fmax(short_side.ema1[c], short_side.ema2[c])
+        );
+        const float long_dist = coin_override_or(
+            long_coin_overrides, c, 5, long_config.initial_ema_dist
+        );
+        const float short_dist = coin_override_or(
+            short_coin_overrides, c, 5, short_config.initial_ema_dist
+        );
+        const float dist_long = long_lower * (1.0f - long_dist)
+            / close - 1.0f;
+        const float dist_short = 1.0f
+            - short_upper * (1.0f + short_dist) / close;
+        if (dist_long >= dist_short) {
+            short_order_blocked_mask |= bit;
+        } else {
+            long_order_blocked_mask |= bit;
+        }
+    }
+}
+
 inline void generate_tm_multicoin_side_orders(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
@@ -2128,7 +2244,8 @@ inline void generate_tm_multicoin_side_orders(
     int current_hsl_mode,
     bool loss_gate_enabled,
     float max_realized_loss_pct,
-    int forced_unstuck_coin
+    int forced_unstuck_coin,
+    ulong one_way_initial_blocked_mask
 ) {
     const int C = coin_count;
     const float ddf = config.ddf;
@@ -2708,7 +2825,10 @@ inline void generate_tm_multicoin_side_orders(
         bool cooldown = coin_cooldown_min > 0.0f
             && last_increase_k[c] > -1.0e19f
             && float(k) < last_increase_k[c] + coin_cooldown_min;
-        if (!selected[c] || cooldown || balance <= 0.0f
+        bool initial_entry_allowed = !flat
+            || (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul;
+        if (!selected[c] || !initial_entry_allowed
+            || cooldown || balance <= 0.0f
             || coin_initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
             quantity = 0.0f;
         }
@@ -3196,6 +3316,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
+    const bool hedge_mode = run_settings[10] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
@@ -3374,6 +3495,23 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_side.hsl,
                 tm_multicoin_side_has_position(short_side, C)
             );
+        ulong long_one_way_selection_blocked_mask = 0ul;
+        ulong short_one_way_selection_blocked_mask = 0ul;
+        ulong long_one_way_order_blocked_mask = 0ul;
+        ulong short_one_way_order_blocked_mask = 0ul;
+        if (!hedge_mode) {
+            compute_tm_multicoin_one_way_initial_blocks(
+                long_side, long_config, long_coin_overrides,
+                short_side, short_config, short_coin_overrides,
+                bars, coin_settings, k, C,
+                long_hsl_mode, short_hsl_mode,
+                long_can_generate, short_can_generate,
+                long_one_way_selection_blocked_mask,
+                short_one_way_selection_blocked_mask,
+                long_one_way_order_blocked_mask,
+                short_one_way_order_blocked_mask
+            );
+        }
         float long_unstuck_diff = INFINITY;
         float short_unstuck_diff = INFINITY;
         const int long_unstuck_candidate = long_can_generate
@@ -3409,7 +3547,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             update_tm_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings,
                 long_coin_overrides, k, C, false, any_fill,
-                long_effective_n_positions, score_hysteresis
+                long_effective_n_positions, score_hysteresis,
+                long_one_way_selection_blocked_mask
             );
             generate_tm_multicoin_side_orders(
                 long_side, long_config, account,
@@ -3419,14 +3558,15 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 k, C, false, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
-                long_unstuck_coin
+                long_unstuck_coin, long_one_way_order_blocked_mask
             );
         }
         if (short_can_generate) {
             update_tm_multicoin_side_selection(
                 short_side, short_config, bars, coin_settings,
                 short_coin_overrides, k, C, true, any_fill,
-                short_effective_n_positions, score_hysteresis
+                short_effective_n_positions, score_hysteresis,
+                short_one_way_selection_blocked_mask
             );
             generate_tm_multicoin_side_orders(
                 short_side, short_config, account,
@@ -3436,7 +3576,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 k, C, true, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
-                short_unstuck_coin
+                short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
 
@@ -4013,7 +4153,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             update_tm_multicoin_side_selection(
                 side, config, bars, coin_settings, coin_overrides,
                 k, C, short_side, any_fill, effective_n_positions,
-                score_hysteresis
+                score_hysteresis, 0ul
             );
 
             generate_tm_multicoin_side_orders(
@@ -4023,7 +4163,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 coin_settings, coin_overrides,
                 k, C, short_side, tradable_count,
                 effective_n_positions, current_hsl_mode,
-                loss_gate_enabled, max_realized_loss_pct, -2
+                loss_gate_enabled, max_realized_loss_pct, -2, 0ul
             );
         }
 
