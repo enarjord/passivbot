@@ -1990,7 +1990,10 @@ class MpsMulticoinProxy:
             last_valid_idx=max(run.last_valid_idx for run in runs),
             trade_start_idx=min(run.trade_start_idx for run in runs),
         )
-        if self.needed_metrics & _ACCOUNT_EQUITY_RECOVERY_METRICS:
+        if self.needed_metrics & (
+            _ACCOUNT_EQUITY_RECOVERY_METRICS
+            | _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
+        ):
             wallet_exposure_column = (
                 11
                 if self.strategy_kind == "ema_anchor"
@@ -2031,6 +2034,10 @@ class MpsMulticoinProxy:
             ),
             "hsl_raw_drawdown_enabled": bool(
                 self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
+            ),
+            "recovery_distribution_enabled": bool(
+                self.needed_metrics
+                & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
         }
         if self.shared_account_fused:

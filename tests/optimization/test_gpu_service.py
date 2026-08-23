@@ -821,11 +821,17 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
     ],
 )
 @pytest.mark.parametrize(
-    ("needed_metrics", "tail_enabled", "raw_drawdown_enabled"),
+    (
+        "needed_metrics",
+        "tail_enabled",
+        "raw_drawdown_enabled",
+        "recovery_distribution_enabled",
+    ),
     [
-        ({"hard_stop_time_in_red_pct"}, False, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False),
-        ({"drawdown_worst_strategy_eq_long"}, False, True),
+        ({"hard_stop_time_in_red_pct"}, False, False, False),
+        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False),
+        ({"drawdown_worst_strategy_eq_long"}, False, True, False),
+        ({"strategy_eq_recovery_days_p99"}, False, False, True),
     ],
 )
 def test_multicoin_proxy_constructs_fused_shared_account_runner(
@@ -837,6 +843,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     needed_metrics,
     tail_enabled,
     raw_drawdown_enabled,
+    recovery_distribution_enabled,
 ):
     torch = pytest.importorskip("torch")
 
@@ -995,6 +1002,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert (
         constructed["kwargs"]["hsl_raw_drawdown_enabled"]
         is raw_drawdown_enabled
+    )
+    assert (
+        constructed["kwargs"]["recovery_distribution_enabled"]
+        is recovery_distribution_enabled
     )
 
 

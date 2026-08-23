@@ -18,6 +18,9 @@ constant int SCALAR_COLS = 61;
 constant int FUSED_SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
+#endif
 
 // PASSIVBOT_HSL_COMMON
 
@@ -2008,6 +2011,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     device float* scalars,
     device int* gap_hist,
     device float* coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b,
     bool short_side
 ) {
@@ -2019,6 +2025,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
     const int start_hour_minute = sizes[7];
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    const int recovery_stride = sizes[8];
+    const int recovery_sample_count = sizes[9];
+#endif
     if (b >= uint(B)) return;
     const int stop_k = clamp(end_steps[b], 1, T - 1);
     const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
@@ -2099,6 +2109,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    int recovery_start_k = -1;
+#endif
     int liquidation_day = -1;
     float hsl_tier_samples_total = 0.0f;
     float hsl_tier_samples_yellow = 0.0f;
@@ -2332,6 +2345,29 @@ inline void passivbot_ema_anchor_multicoin_impl(
             }
             bool liquidated = balance <= 0.0f || equity <= liquidation_floor;
             float effective_equity = liquidated ? liquidation_floor : equity;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+            if (recovery_stride > 0 && recovery_start_k < 0) {
+                recovery_start_k = k;
+                recovery_samples[int(b) * recovery_sample_count]
+                    = effective_equity;
+            } else if (recovery_stride > 0) {
+                const int recovery_elapsed = k - recovery_start_k;
+                const bool recovery_terminal = liquidated || k == stop_k - 1;
+                const bool recovery_regular =
+                    recovery_elapsed % recovery_stride == 0;
+                if (recovery_regular || recovery_terminal) {
+                    const int sample_index = recovery_terminal
+                        ? (recovery_elapsed + recovery_stride - 1)
+                            / recovery_stride
+                        : recovery_elapsed / recovery_stride;
+                    if (sample_index < recovery_sample_count) {
+                        recovery_samples[
+                            int(b) * recovery_sample_count + sample_index
+                        ] = effective_equity;
+                    }
+                }
+            }
+#endif
             if (effective_equity >= account_peak) {
                 if (account_peak_k >= 0.0f) {
                     account_recovery_max_min = fmax(
@@ -2540,6 +2576,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     device float* scalars,
     device int* gap_hist,
     device float* coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b
 ) {
     const int B = sizes[0];
@@ -2550,6 +2589,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
     const int start_hour_minute = sizes[7];
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    const int recovery_stride = sizes[8];
+    const int recovery_sample_count = sizes[9];
+#endif
     if (b >= uint(B)) return;
     const int stop_k = clamp(end_steps[b], 1, T - 1);
     const int scalar_offset = int(b) * FUSED_SCALAR_COLS;
@@ -2562,6 +2605,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     if (C < 1 || C > MAX_COINS) {
         scalars[scalar_offset + 9] = 0.0f;
         scalars[scalar_offset + 13] = 0.0f;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples[int(b) * recovery_sample_count]
+            = RECOVERY_FAIL_CLOSED_SENTINEL;
+#endif
         return;
     }
     const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
@@ -2598,6 +2645,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     if (!topology_valid) {
         scalars[scalar_offset + 9] = 0.0f;
         scalars[scalar_offset + 13] = 0.0f;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples[int(b) * recovery_sample_count]
+            = RECOVERY_FAIL_CLOSED_SENTINEL;
+#endif
         return;
     }
 
@@ -2646,6 +2697,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    int recovery_start_k = -1;
+#endif
     int liquidation_day = -1;
     float hsl_tier_samples_total = 0.0f;
     float hsl_tier_samples_yellow = 0.0f;
@@ -2902,6 +2956,29 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 || equity <= liquidation_floor;
             float effective_equity = liquidated
                 ? liquidation_floor : equity;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+            if (recovery_stride > 0 && recovery_start_k < 0) {
+                recovery_start_k = k;
+                recovery_samples[int(b) * recovery_sample_count]
+                    = effective_equity;
+            } else if (recovery_stride > 0) {
+                const int recovery_elapsed = k - recovery_start_k;
+                const bool recovery_terminal = liquidated || k == stop_k - 1;
+                const bool recovery_regular =
+                    recovery_elapsed % recovery_stride == 0;
+                if (recovery_regular || recovery_terminal) {
+                    const int sample_index = recovery_terminal
+                        ? (recovery_elapsed + recovery_stride - 1)
+                            / recovery_stride
+                        : recovery_elapsed / recovery_stride;
+                    if (sample_index < recovery_sample_count) {
+                        recovery_samples[
+                            int(b) * recovery_sample_count + sample_index
+                        ] = effective_equity;
+                    }
+                }
+            }
+#endif
             if (effective_equity >= account_peak) {
                 if (account_peak_k >= 0.0f) {
                     account_recovery_max_min = fmax(
@@ -3131,13 +3208,20 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     device float* scalars,
     device int* gap_hist,
     device float* coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_fused_impl(
         bars, fill_ticks, touch_ticks, coin_settings,
         long_coin_overrides, short_coin_overrides,
         params, run_settings, sizes, end_steps,
-        daily, scalars, gap_hist, coin_fill_counts, b
+        daily, scalars, gap_hist, coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples,
+#endif
+        b
     );
 }
 
@@ -3155,12 +3239,19 @@ kernel void passivbot_ema_anchor_multicoin(
     device float* scalars,
     device int* gap_hist,
     device float* coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     const bool short_side = run_settings[3] > 0.5f;
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, coin_settings, coin_overrides, params, run_settings,
-        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts, b, short_side
+        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples,
+#endif
+        b, short_side
     );
 }
 
@@ -3178,10 +3269,17 @@ kernel void passivbot_ema_anchor_multicoin_long(
     device float* scalars,
     device int* gap_hist,
     device float* coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    device float* recovery_samples,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, coin_settings, coin_overrides, params, run_settings,
-        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts, b, false
+        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts,
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_samples,
+#endif
+        b, false
     );
 }

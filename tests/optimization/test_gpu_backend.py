@@ -66,7 +66,6 @@ from optimization.backends.gpu_backend import (
     _update_probe_shortfall_log,
     _validate_directional_search_space,
     _validate_dual_multicoin_metrics,
-    _validate_recovery_distribution_scope,
     _validate_gpu_optimizer_overrides,
     _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
@@ -2581,10 +2580,24 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
         "strategy_eq_recovery_days_mean_worst_1pct",
     ],
 )
-def test_gpu_recovery_distribution_metrics_fail_closed_for_multicoin(metric):
-    _validate_recovery_distribution_scope({metric}, coin_count=1)
-    with pytest.raises(ValueError, match="require a single-coin optimization"):
-        _validate_recovery_distribution_scope({metric}, coin_count=2)
+def test_gpu_recovery_distribution_metrics_accept_supported_multicoin(metric):
+    for enabled in ({"long"}, {"short"}, {"long", "short"}):
+        config = _directional_ema_config(
+            long_enabled="long" in enabled,
+            short_enabled="short" in enabled,
+        )
+        config["live"]["approved_coins"] = {
+            side: ["BTC", "ETH", "SOL"] if side in enabled else []
+            for side in ("long", "short")
+        }
+        config["live"]["hedge_mode"] = True
+        config["live"]["forager_score_hysteresis_pct"] = 0.0
+        config["backtest"]["dynamic_wel_by_tradability"] = True
+        config["optimize"]["scoring"] = [
+            {"goal": "min", "metric": metric}
+        ]
+
+        assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize(
