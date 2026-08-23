@@ -386,6 +386,8 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
         "hsl_panic_loss_drawdown_count",
         "hsl_strategy_eq_recovery_max_ms_long",
         "hsl_strategy_eq_recovery_max_ms_short",
+        "hsl_drawdown_ema_mean_worst_1pct_long",
+        "hsl_drawdown_ema_mean_worst_1pct_short",
     } <= DIRECTIONAL_HSL_OUTPUT_KEYS
 
 
@@ -429,6 +431,9 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
         output[f"hsl_strategy_eq_recovery_max_ms_{side}"] = torch.tensor(
             [7_200_000.0 if side == "long" else 3_600_000.0]
         )
+        output[f"hsl_drawdown_ema_mean_worst_1pct_{side}"] = torch.tensor(
+            [0.18 if side == "long" else 0.09]
+        )
         return output
 
     combined = _combine_hedged_multicoin_hsl_outputs(
@@ -457,6 +462,12 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert combined["hsl_drawdown_ema_max_short"].item() == pytest.approx(0.1)
     assert combined["hsl_strategy_eq_recovery_max_ms_long"].item() == 7_200_000.0
     assert combined["hsl_strategy_eq_recovery_max_ms_short"].item() == 3_600_000.0
+    assert combined["hsl_drawdown_ema_mean_worst_1pct_long"].item() == pytest.approx(
+        0.18
+    )
+    assert combined["hsl_drawdown_ema_mean_worst_1pct_short"].item() == pytest.approx(
+        0.09
+    )
     assert combined["hsl_tier_samples_total"].item() == 10.0
     assert combined["hsl_tier_samples_red"].item() == 8.0
     assert combined["hsl_tier_samples_orange"].item() == 2.0
@@ -479,7 +490,7 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert panic["hard_stop_panic_close_loss_drawdown_pct_mean"].item() == (
         pytest.approx(0.8 / 3.0)
     )
-    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 29
+    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 31
 
 
 def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
@@ -768,8 +779,21 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         ),
     ],
 )
+@pytest.mark.parametrize(
+    ("needed_metrics", "tail_enabled"),
+    [
+        ({"hard_stop_time_in_red_pct"}, False),
+        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True),
+    ],
+)
 def test_multicoin_proxy_constructs_fused_shared_account_runner(
-    monkeypatch, strategy_kind, runner_name, override_cols, proxy_mode
+    monkeypatch,
+    strategy_kind,
+    runner_name,
+    override_cols,
+    proxy_mode,
+    needed_metrics,
+    tail_enabled,
 ):
     torch = pytest.importorskip("torch")
 
@@ -909,7 +933,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         timestamps=timestamps,
         exchange="bybit",
         batch_size=8,
-        needed_metrics={"hard_stop_time_in_red_pct"},
+        needed_metrics=needed_metrics,
     )
 
     assert isinstance(proxy.fused_runner, FakeFusedRunner)
@@ -924,6 +948,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         2,
         override_cols,
     )
+    assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
 
 
 def test_gpu_proxy_requires_complete_valid_tail():

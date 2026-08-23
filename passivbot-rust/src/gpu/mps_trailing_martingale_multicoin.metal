@@ -7,8 +7,13 @@ constant int OVERRIDE_COLS = 44;
 constant int HSL_OVERRIDE_START = 34;
 constant int COIN_COLS = 12;
 constant int DAILY_COLS = 9;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+constant int SCALAR_COLS = 63;
+constant int FUSED_SCALAR_COLS = 68;
+#else
 constant int SCALAR_COLS = 61;
 constant int FUSED_SCALAR_COLS = 66;
+#endif
 constant int GAP_BINS = 128;
 
 // PASSIVBOT_HSL_COMMON
@@ -336,6 +341,9 @@ struct TrailingMartingaleMulticoinSideState {
     HslState hsl;
     HslState coin_hsl[MAX_COINS];
     HslStrategyEquityStats hsl_strategy_eq;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    HslDrawdownEmaTailStats hsl_ema_tail;
+#endif
     ulong coin_hsl_entry_blocked_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
@@ -1235,6 +1243,9 @@ inline void init_trailing_martingale_multicoin_side_state(
 ) {
     side.hsl = config.hsl_template;
     side.hsl_strategy_eq = init_hsl_strategy_equity_stats();
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
+#endif
     side.coin_hsl_entry_blocked_mask = 0ul;
     side.selection_initialized = false;
     side.max_tradable_seen = 0;
@@ -1596,6 +1607,10 @@ inline bool update_tm_multicoin_dual_side_hsl(
         const bool short_active = short_effective_n_positions > 0;
         bool long_strategy_eq_enabled = false;
         bool short_strategy_eq_enabled = false;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        float long_drawdown_ema_sample = 0.0f;
+        float short_drawdown_ema_sample = 0.0f;
+#endif
         float portfolio_equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
@@ -1644,6 +1659,14 @@ inline bool update_tm_multicoin_dual_side_hsl(
                     || long_side.coin_hsl[c].enabled;
                 long_strategy_eq_enabled = long_strategy_eq_enabled
                     || long_side.coin_hsl[c].enabled;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                if (long_side.coin_hsl[c].enabled) {
+                    long_drawdown_ema_sample = fmax(
+                        long_drawdown_ema_sample,
+                        fabs(long_side.coin_hsl[c].drawdown_ema)
+                    );
+                }
+#endif
                 sampled_tier = max(
                     sampled_tier, long_side.coin_hsl[c].tier
                 );
@@ -1665,6 +1688,14 @@ inline bool update_tm_multicoin_dual_side_hsl(
                     || short_side.coin_hsl[c].enabled;
                 short_strategy_eq_enabled = short_strategy_eq_enabled
                     || short_side.coin_hsl[c].enabled;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                if (short_side.coin_hsl[c].enabled) {
+                    short_drawdown_ema_sample = fmax(
+                        short_drawdown_ema_sample,
+                        fabs(short_side.coin_hsl[c].drawdown_ema)
+                    );
+                }
+#endif
                 sampled_tier = max(
                     sampled_tier, short_side.coin_hsl[c].tier
                 );
@@ -1674,12 +1705,22 @@ inline bool update_tm_multicoin_dual_side_hsl(
             }
         }
         if (long_strategy_eq_enabled) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            update_hsl_drawdown_ema_tail_stats(
+                long_side.hsl_ema_tail, long_drawdown_ema_sample
+            );
+#endif
             update_hsl_strategy_equity_stats(
                 long_side.hsl_strategy_eq,
                 starting_balance + account.realized_pnl_long + long_unrealized
             );
         }
         if (short_strategy_eq_enabled) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            update_hsl_drawdown_ema_tail_stats(
+                short_side.hsl_ema_tail, short_drawdown_ema_sample
+            );
+#endif
             update_hsl_strategy_equity_stats(
                 short_side.hsl_strategy_eq,
                 starting_balance + account.realized_pnl_short + short_unrealized
@@ -1718,6 +1759,18 @@ inline bool update_tm_multicoin_dual_side_hsl(
         )) {
         return false;
     }
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    if (long_strategy_eq_enabled) {
+        update_hsl_drawdown_ema_tail_stats(
+            long_side.hsl_ema_tail, long_side.hsl.drawdown_ema
+        );
+    }
+    if (short_strategy_eq_enabled) {
+        update_hsl_drawdown_ema_tail_stats(
+            short_side.hsl_ema_tail, short_side.hsl.drawdown_ema
+        );
+    }
+#endif
     sample_enabled = long_side.hsl.enabled || short_side.hsl.enabled;
     sampled_tier = joint_pside_hsl_global_tier(
         long_side.hsl, short_side.hsl
@@ -3499,6 +3552,14 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     scalars[scalar_offset + 65] = hsl_strategy_equity_recovery_max_steps(
         short_side.hsl_strategy_eq
     ) * interval_ms;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[scalar_offset + 66] = hsl_drawdown_ema_mean_worst_1pct(
+        long_side.hsl_ema_tail
+    );
+    scalars[scalar_offset + 67] = hsl_drawdown_ema_mean_worst_1pct(
+        short_side.hsl_ema_tail
+    );
+#endif
 }
 
 kernel void passivbot_trailing_martingale_multicoin_fused(
@@ -3787,6 +3848,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         if (can_generate && any_valid && alive
             && balance > 0.0f && equity > liquidation_floor) {
             int sampled_hsl_tier = 0;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            float sampled_hsl_drawdown_ema = 0.0f;
+#endif
             bool hsl_sample_enabled = !coin_hsl_mode && hsl.enabled;
             const bool hsl_strategy_eq_sample_enabled = coin_hsl_mode
                 ? false : hsl.enabled && !hsl.halted;
@@ -3813,6 +3877,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         psize[c] > 0.0f, coin_has_blocking_orders,
                         float(k), interval_ms
                     );
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                    if (coin_hsl[c].enabled) {
+                        sampled_hsl_drawdown_ema = fmax(
+                            sampled_hsl_drawdown_ema,
+                            fabs(coin_hsl[c].drawdown_ema)
+                        );
+                    }
+#endif
                     sampled_hsl_tier = max(sampled_hsl_tier, coin_hsl[c].tier);
                 }
             } else {
@@ -3823,9 +3895,17 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     float(k), interval_ms
                 );
                 sampled_hsl_tier = hsl.tier;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                sampled_hsl_drawdown_ema = fabs(hsl.drawdown_ema);
+#endif
             }
             if ((coin_hsl_mode && effective_n_positions > 0 && hsl_sample_enabled)
                 || hsl_strategy_eq_sample_enabled) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+                update_hsl_drawdown_ema_tail_stats(
+                    side.hsl_ema_tail, sampled_hsl_drawdown_ema
+                );
+#endif
                 update_hsl_strategy_equity_stats(
                     side.hsl_strategy_eq,
                     starting_balance + realized_pnl_cumsum_last + unrealized
@@ -4017,6 +4097,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 60] = short_side
         ? hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms
         : 0.0f;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    scalars[scalar_offset + 61] = short_side ? 0.0f
+        : hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail);
+    scalars[scalar_offset + 62] = short_side
+        ? hsl_drawdown_ema_mean_worst_1pct(side.hsl_ema_tail) : 0.0f;
+#endif
 }
 
 kernel void passivbot_trailing_martingale_multicoin(

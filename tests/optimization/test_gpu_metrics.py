@@ -826,6 +826,9 @@ def test_hard_stop_lifecycle_metric_surface_is_supported():
         "drawdown_worst_ema_strategy_eq",
         "drawdown_worst_ema_strategy_eq_long",
         "drawdown_worst_ema_strategy_eq_short",
+        "drawdown_worst_mean_1pct_ema_strategy_eq",
+        "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+        "drawdown_worst_mean_1pct_ema_strategy_eq_short",
         "peak_recovery_hours_strategy_eq_long",
         "peak_recovery_hours_strategy_eq_short",
         "peak_recovery_days_strategy_eq_long",
@@ -863,6 +866,43 @@ def test_hard_stop_ema_drawdown_metrics_fail_closed_without_directional_outputs(
     with pytest.raises(RuntimeError, match="hsl_drawdown_ema_max_short"):
         _hard_stop_ema_drawdown_metrics(
             {"hsl_drawdown_ema_max_long": torch.tensor([0.1])}
+        )
+
+
+def test_hard_stop_ema_tail_reduction_matches_rust_side_max_contract():
+    from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
+
+    metrics = _hard_stop_ema_tail_metrics(
+        {
+            "hsl_drawdown_ema_mean_worst_1pct_long": torch.tensor([0.14, 0.0]),
+            "hsl_drawdown_ema_mean_worst_1pct_short": torch.tensor([0.09, 0.21]),
+        }
+    )
+
+    assert metrics["drawdown_worst_mean_1pct_ema_strategy_eq"].tolist() == (
+        pytest.approx([0.14, 0.21])
+    )
+    assert metrics[
+        "drawdown_worst_mean_1pct_ema_strategy_eq_long"
+    ].tolist() == pytest.approx([0.14, 0.0])
+    assert metrics[
+        "drawdown_worst_mean_1pct_ema_strategy_eq_short"
+    ].tolist() == pytest.approx([0.09, 0.21])
+
+
+def test_hard_stop_ema_tail_metrics_fail_closed_without_directional_outputs():
+    from optimization.gpu.metrics import _hard_stop_ema_tail_metrics
+
+    with pytest.raises(RuntimeError, match="drawdown-EMA tail outputs are missing"):
+        _hard_stop_ema_tail_metrics({})
+
+    with pytest.raises(
+        RuntimeError, match="hsl_drawdown_ema_mean_worst_1pct_short"
+    ):
+        _hard_stop_ema_tail_metrics(
+            {
+                "hsl_drawdown_ema_mean_worst_1pct_long": torch.tensor([0.1])
+            }
         )
 
 

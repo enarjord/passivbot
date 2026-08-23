@@ -3,6 +3,12 @@
 // Exact Rust backtests remain authoritative. Strategy kernels provide scoped
 // realized and unrealized PnL; this module owns the common proxy lifecycle.
 
+#ifndef PASSIVBOT_HSL_EMA_TAIL_ENABLED
+#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0
+#endif
+
+#define HSL_EMA_TAIL_BINS 32
+
 constant int HSL_SIGNAL_UNIFIED = 0;
 constant int HSL_SIGNAL_PSIDE = 1;
 constant int HSL_SIGNAL_COIN = 2;
@@ -266,6 +272,82 @@ inline float hsl_strategy_equity_recovery_max_steps(
         stats.recovery_max_steps,
         fmax(stats.last_sample_k - stats.peak_sample_k, 0.0f)
     );
+}
+
+// Exact Rust sorts every retained drawdown-EMA sample before averaging the
+// largest floor(1%) (at least one). Keeping that unbounded series per Metal
+// thread would make large optimizer populations impractical. The proxy uses a
+// deterministic log histogram with exact per-bin sums/counts; only the partial
+// cutoff bin is approximated. Exact validations and drift gates remain
+// authoritative. The preprocessor removes this state and work unless one of
+// the tail metrics is requested.
+struct HslDrawdownEmaTailStats {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    float sample_count;
+    float counts[HSL_EMA_TAIL_BINS];
+    float sums[HSL_EMA_TAIL_BINS];
+#else
+    float unused;
+#endif
+};
+
+inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
+    HslDrawdownEmaTailStats stats;
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    stats.sample_count = 0.0f;
+    for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
+        stats.counts[i] = 0.0f;
+        stats.sums[i] = 0.0f;
+    }
+#else
+    stats.unused = 0.0f;
+#endif
+    return stats;
+}
+
+inline int hsl_drawdown_ema_tail_bin(float value) {
+    // Cover fourteen octaves over [2^-14, 1) so low-drawdown Pareto members
+    // remain rankable without increasing thread-local state. Edge bins retain
+    // smaller values and overflow respectively. Actual sums are not clamped,
+    // so values outside the covered range keep their magnitude.
+    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
+        * 2.2857142857142856f;
+    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
+}
+
+inline void update_hsl_drawdown_ema_tail_stats(
+    thread HslDrawdownEmaTailStats& stats,
+    float drawdown_ema
+) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    if (!isfinite(drawdown_ema)) return;
+    float value = fabs(drawdown_ema);
+    int bin = hsl_drawdown_ema_tail_bin(value);
+    stats.sample_count += 1.0f;
+    stats.counts[bin] += 1.0f;
+    stats.sums[bin] += value;
+#endif
+}
+
+inline float hsl_drawdown_ema_mean_worst_1pct(
+    thread HslDrawdownEmaTailStats& stats
+) {
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    if (!(stats.sample_count > 0.0f)) return 0.0f;
+    float worst_n = fmax(floor(stats.sample_count * 0.01f), 1.0f);
+    float remaining = worst_n;
+    float total = 0.0f;
+    for (int i = HSL_EMA_TAIL_BINS - 1; i >= 0 && remaining > 0.0f; --i) {
+        float count = stats.counts[i];
+        if (!(count > 0.0f)) continue;
+        float take = fmin(count, remaining);
+        total += stats.sums[i] * (take / count);
+        remaining -= take;
+    }
+    return total / worst_n;
+#else
+    return 0.0f;
+#endif
 }
 
 inline HslState load_hsl(

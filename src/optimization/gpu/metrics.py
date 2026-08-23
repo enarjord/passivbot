@@ -57,6 +57,9 @@ SUPPORTED_METRICS = (
     "calmar_ratio_strategy_eq",
     "calmar_ratio_strategy_eq_w",
     "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_mean_1pct_ema_strategy_eq",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_ema_strategy_eq_long",
     "drawdown_worst_ema_strategy_eq_short",
@@ -246,6 +249,11 @@ _HARD_STOP_EMA_DRAWDOWN_METRICS = {
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_ema_strategy_eq_long",
     "drawdown_worst_ema_strategy_eq_short",
+}
+_HARD_STOP_EMA_TAIL_METRICS = {
+    "drawdown_worst_mean_1pct_ema_strategy_eq",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
 }
 _HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS = {
     "peak_recovery_hours_strategy_eq_long",
@@ -1178,6 +1186,27 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
     }
 
 
+def _hard_stop_ema_tail_metrics(out: dict) -> dict:
+    """Reduce bounded per-side HSL EMA tails using Rust's public contract."""
+
+    required = {
+        "hsl_drawdown_ema_mean_worst_1pct_long",
+        "hsl_drawdown_ema_mean_worst_1pct_short",
+    }
+    if missing := required.difference(out):
+        raise RuntimeError(
+            "MPS directional HSL drawdown-EMA tail outputs are missing from "
+            "proxy results: " + ", ".join(sorted(missing))
+        )
+    long_tail = out["hsl_drawdown_ema_mean_worst_1pct_long"].to(torch.float64)
+    short_tail = out["hsl_drawdown_ema_mean_worst_1pct_short"].to(torch.float64)
+    return {
+        "drawdown_worst_mean_1pct_ema_strategy_eq": long_tail.maximum(short_tail),
+        "drawdown_worst_mean_1pct_ema_strategy_eq_long": long_tail,
+        "drawdown_worst_mean_1pct_ema_strategy_eq_short": short_tail,
+    }
+
+
 def _hard_stop_strategy_eq_recovery_metrics(out: dict) -> dict:
     """Expose per-side HSL strategy-equity maximum recovery duration."""
 
@@ -1399,6 +1428,11 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _HARD_STOP_EMA_DRAWDOWN_METRICS
         else {}
     )
+    hard_stop_ema_tail_metrics = (
+        _hard_stop_ema_tail_metrics(out)
+        if requested & _HARD_STOP_EMA_TAIL_METRICS
+        else {}
+    )
     hard_stop_strategy_eq_recovery_metrics = (
         _hard_stop_strategy_eq_recovery_metrics(out)
         if requested & _HARD_STOP_STRATEGY_EQ_RECOVERY_METRICS
@@ -1455,6 +1489,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "volume_pct_per_day_avg": volume_pct,
     }
     objectives.update(hard_stop_ema_drawdown_metrics)
+    objectives.update(hard_stop_ema_tail_metrics)
     objectives.update(hard_stop_strategy_eq_recovery_metrics)
     if "loss_profit_ratio" in requested:
         objectives["loss_profit_ratio"] = _loss_profit_ratio(

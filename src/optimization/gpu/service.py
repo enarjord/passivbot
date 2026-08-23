@@ -103,6 +103,8 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_drawdown_ema_max_short",
     "hsl_strategy_eq_recovery_max_ms_long",
     "hsl_strategy_eq_recovery_max_ms_short",
+    "hsl_drawdown_ema_mean_worst_1pct_long",
+    "hsl_drawdown_ema_mean_worst_1pct_short",
 }
 
 
@@ -205,6 +207,12 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
 _ACCOUNT_EQUITY_RECOVERY_METRICS = {
     "peak_recovery_days_equity_usd",
     "peak_recovery_hours_equity_usd",
+}
+
+_HSL_EMA_TAIL_METRICS = {
+    "drawdown_worst_mean_1pct_ema_strategy_eq",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_long",
+    "drawdown_worst_mean_1pct_ema_strategy_eq_short",
 }
 
 
@@ -677,6 +685,8 @@ def _combine_hedged_multicoin_hsl_outputs(long: dict, short: dict) -> dict:
         "hsl_panic_loss_drawdown_max",
         "hsl_drawdown_ema_max_long",
         "hsl_drawdown_ema_max_short",
+        "hsl_drawdown_ema_mean_worst_1pct_long",
+        "hsl_drawdown_ema_mean_worst_1pct_short",
         "hsl_strategy_eq_recovery_max_ms_long",
         "hsl_strategy_eq_recovery_max_ms_short",
     ):
@@ -1174,6 +1184,9 @@ class MpsSingleCoinProxy:
             hsl_panic_market_long=hsl_panic_market["long"],
             hsl_panic_market_short=hsl_panic_market["short"],
             pnl_lookback_bars=pnl_lookback_bars,
+            hsl_ema_tail_enabled=bool(
+                self.needed_metrics & _HSL_EMA_TAIL_METRICS
+            ),
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -1939,6 +1952,9 @@ class MpsMulticoinProxy:
             ),
             "market_order_slippage_pct": float(
                 backtest_params.get("market_order_slippage_pct", 0.0)
+            ),
+            "hsl_ema_tail_enabled": bool(
+                self.needed_metrics & _HSL_EMA_TAIL_METRICS
             ),
         }
         if self.shared_account_fused:
