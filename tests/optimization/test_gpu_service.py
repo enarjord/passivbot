@@ -20,6 +20,7 @@ from optimization.gpu.model import (
 from optimization.gpu.service import (
     CORE_OUTPUT_KEYS,
     DIRECTIONAL_HSL_OUTPUT_KEYS,
+    MPS_MAX_DISPATCH_CANDIDATE_BARS,
     MpsEmaAnchorProxy,
     MpsSingleCoinProxy,
     MpsMulticoinEmaProxy,
@@ -33,6 +34,7 @@ from optimization.gpu.service import (
     _directional_entry_initial_metrics,
     _directional_gross_pnl_outputs,
     _hsl_params,
+    _mps_dispatch_batch_size,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
     _require_multicoin_metric_topology,
@@ -71,6 +73,87 @@ def test_directional_coin_hsl_lookback_bar_contract(
         )
         == expected
     )
+
+
+def test_mps_dispatch_batch_size_bounds_single_and_multicoin_work():
+    n_bars = 1_923_175
+
+    assert _mps_dispatch_batch_size(8192, n_bars=n_bars) == 259
+    assert _mps_dispatch_batch_size(8192, n_bars=n_bars, n_coins=4) == 64
+    assert (
+        _mps_dispatch_batch_size(8192, n_bars=n_bars, n_coins=4, n_sides=2)
+        == 32
+    )
+    assert _mps_dispatch_batch_size(32, n_bars=1000, n_coins=4) == 32
+    with pytest.raises(ValueError, match="one GPU candidate exceeds"):
+        _mps_dispatch_batch_size(8192, n_bars=10**9)
+    assert MPS_MAX_DISPATCH_CANDIDATE_BARS == 500_000_000
+
+
+def _minimal_single_coin_proxy(*, interrupt_check=lambda: None):
+    torch = pytest.importorskip("torch")
+    proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
+    proxy.batch_size = 8
+    proxy.dispatch_batch_size = 2
+    proxy.interrupt_check = interrupt_check
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": 0.0}
+    proxy.run = SimpleNamespace()
+    proxy.needed_metrics = {"score"}
+    proxy._parameter_matrix = lambda candidates: np.asarray(
+        [[candidate["value"]] for candidate in candidates], dtype=np.float64
+    )
+    calls = []
+
+    def run(parameters, **kwargs):
+        calls.append(parameters[:, 0].tolist())
+        batch = len(parameters)
+        output = {
+            key: torch.zeros(batch)
+            for key in (
+                "first_fill_ts",
+                "last_fill_ts",
+                "last_high_ts",
+                "first_eq_ts",
+                "last_eq_ts",
+            )
+        }
+        output["max_dd"] = torch.as_tensor(parameters[:, 0])
+        return output
+
+    proxy.runner = SimpleNamespace(run=run)
+    proxy._compute_objectives = lambda output, *args, **kwargs: {
+        "score": output["max_dd"]
+    }
+    return proxy, calls
+
+
+def test_single_coin_proxy_preserves_order_across_bounded_dispatches():
+    proxy, calls = _minimal_single_coin_proxy()
+    candidates = [{"value": float(index)} for index in range(5)]
+
+    assert proxy.evaluate(candidates) == [
+        {"score": float(index)} for index in range(5)
+    ]
+    assert calls == [[0.0, 1.0], [2.0, 3.0], [4.0]]
+
+
+def test_single_coin_proxy_honors_interrupt_between_mps_dispatches():
+    checks = 0
+
+    def interrupt_check():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise KeyboardInterrupt
+
+    proxy, calls = _minimal_single_coin_proxy(interrupt_check=interrupt_check)
+
+    with pytest.raises(KeyboardInterrupt):
+        proxy.evaluate([{"value": float(index)} for index in range(5)])
+
+    assert calls == [[0.0, 1.0]]
 
 
 def test_hsl_params_preserve_grouped_tier_ratios_after_flattening():
@@ -398,6 +481,55 @@ def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
     assert runners["short"].calls[0][1].tolist() == [2820]
     assert side_outputs["long"]["hsl_triggers_long"].tolist() == [10.0, 3.0]
     assert side_outputs["short"]["hsl_triggers_short"].tolist() == [10.0, 4.0]
+
+
+def test_hedged_multicoin_hsl_cutoff_replay_honors_interrupt_between_sides():
+    torch = pytest.importorskip("torch")
+    calls = []
+    checks = 0
+
+    class FakeRunner:
+        def run(self, params, *, end_steps):
+            calls.append(params.tolist())
+            return {
+                key: torch.zeros(
+                    len(params),
+                    dtype=torch.bool if key.endswith("_enabled") else torch.float32,
+                )
+                for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+            }
+
+    def interrupt_check():
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise KeyboardInterrupt
+
+    side_outputs = {
+        side: {
+            key: torch.zeros(
+                1,
+                dtype=torch.bool if key.endswith("_enabled") else torch.float32,
+            )
+            for key in DIRECTIONAL_HSL_OUTPUT_KEYS
+        }
+        for side in ("long", "short")
+    }
+
+    with pytest.raises(KeyboardInterrupt):
+        _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
+            side_outputs=side_outputs,
+            runners={"long": FakeRunner(), "short": FakeRunner()},
+            parameter_matrices={
+                "long": np.asarray([[1.0]]),
+                "short": np.asarray([[2.0]]),
+            },
+            combined_output={"liq_step": torch.tensor([1.0])},
+            start_minute_of_day=0,
+            interrupt_check=interrupt_check,
+        )
+
+    assert calls == [[[1.0]]]
 
 
 def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():
