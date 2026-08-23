@@ -305,6 +305,7 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
     ("coin_overrides",),
     ("live", "forager_score_hysteresis_pct"),
     ("live", "hedge_mode"),
+    ("live", "hsl_signal_mode"),
     ("live", "max_realized_loss_pct"),
     ("live", "pnls_max_lookback_days"),
 }
