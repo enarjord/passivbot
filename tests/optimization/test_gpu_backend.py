@@ -1586,27 +1586,6 @@ def test_gpu_foundation_accepts_baseline_ema_single_coin_market_execution():
             "finite non-negative",
         ),
         (
-            lambda config: config["live"].__setitem__(
-                "max_realized_loss_pct", 0.5
-            ),
-            _Evaluator,
-            "max_realized_loss_pct>=1",
-        ),
-        (
-            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
-                "enabled", True
-            ),
-            _Evaluator,
-            "unstuck.enabled=false",
-        ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "total_exposure_enforcer_enabled", True
-            ),
-            _Evaluator,
-            "total_exposure_enforcer_enabled=false",
-        ),
-        (
             lambda config: config["live"]["approved_coins"].__setitem__(
                 "long", ["BTC", "ETH"]
             ),
@@ -1624,6 +1603,20 @@ def test_gpu_market_execution_fails_closed_outside_baseline_scope(
 
     with pytest.raises(ValueError, match=message):
         _validate_scope(config, evaluator())
+
+
+@pytest.mark.parametrize("risk_feature", ["loss_gate", "unstuck", "twel_enforcer"])
+def test_gpu_market_execution_accepts_single_coin_ema_risk_ordering(risk_feature):
+    config = _long_only_ema_config()
+    config["live"]["market_orders_allowed"] = True
+    if risk_feature == "loss_gate":
+        config["live"]["max_realized_loss_pct"] = 0.5
+    elif risk_feature == "unstuck":
+        config["bot"]["long"]["unstuck"]["enabled"] = True
+    else:
+        config["bot"]["long"]["risk"]["total_exposure_enforcer_enabled"] = True
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])

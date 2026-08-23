@@ -4352,6 +4352,11 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool market_orders_allowed = settings[19] > 0.5f" in source
     assert "const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)" in source
     assert "market_execution ? taker_fee : maker_fee" in source
+    assert "if (variant.is_panic) return true" in source
+    ordering_start = source.index("restore_ordinary_close(long_side)")
+    assert source.index("prepare_ordinary_market_close(", ordering_start) < source.index(
+        "gate_reducer_variant(", ordering_start
+    )
     assert "constant int SCALAR_COLS = 68" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
@@ -4550,6 +4555,90 @@ def test_mps_ema_anchor_near_touch_market_entry_uses_next_close_and_taker_fee(si
         assert promoted["short_pprice"].item() == pytest.approx(expected_price)
     expected_balance = 1_000.0 - expected_qty * expected_price * market.taker_fee
     assert promoted["balance"].item() == pytest.approx(expected_balance, abs=2.0e-4)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    ("taker_fee", "market_order_slippage_pct"),
+    [(0.01, 0.0), (0.0, 0.01)],
+)
+def test_mps_ema_market_close_loss_gate_projects_execution_cost(
+    side, taker_fee, market_order_slippage_pct
+):
+    count = 6
+    close = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(
+        qty_step=0.001,
+        price_step=0.01,
+        min_qty=0.001,
+        min_cost=0.0,
+        c_mult=1.0,
+        maker_fee=0.0,
+        taker_fee=taker_fee,
+    )
+    run = ProxyRun(
+        starting_balance=1_000.0,
+        warmup_bars=1,
+        trade_start_idx=1,
+        requested_start_ts_ms=int(timestamps[0]),
+        guard_ts_ms=int(timestamps[0]),
+        first_ts_ms=int(timestamps[0]),
+        interval_ms=60_000,
+        liquidation_threshold=0.05,
+        first_valid_idx=0,
+        last_valid_idx=count - 1,
+    )
+    data = build_mps_data(close, close, close, timestamps, run, market)
+    row = _single_coin_param_row(
+        {
+            "base_qty_pct": 0.1,
+            "ema_span_0": 2.0,
+            "ema_span_1": 3.0,
+            "entry_double_down_factor": 0.0,
+            # Both the initial entry and subsequent ordinary close cross touch.
+            "offset": -0.005,
+            "offset_psize_weight": 0.0,
+            "offset_volatility_1h_weight": 0.0,
+            "offset_volatility_1m_weight": 0.0,
+            "offset_volatility_ema_span_1h": 2.0,
+            "offset_volatility_ema_span_1m": 2.0,
+            "entry_cooldown_minutes": 100.0,
+            "total_wallet_exposure_limit": 1.0,
+            "we_excess_allowance_pct": 0.0,
+            "we_excess_allowance_legacy_raw": 0.0,
+            "twel_entry_gate_enabled": 1.0,
+            "twel_enforcer_threshold": 1.0,
+            "twel_enforcer_enabled": 0.0,
+        },
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+    )
+    parameters = np.asarray([row + row], dtype=np.float64)
+    common = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+        "market_orders_allowed": True,
+        "market_order_near_touch_threshold": 0.0,
+        "taker_fee": market.taker_fee,
+        "market_order_slippage_pct": market_order_slippage_pct,
+    }
+
+    ungated = MpsEmaAnchorRunner(
+        market, run, data, max_realized_loss_pct=1.0, **common
+    ).run(parameters)
+    gated = MpsEmaAnchorRunner(
+        market, run, data, max_realized_loss_pct=0.0, **common
+    ).run(parameters)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert ungated["fill_count"].item() == 2.0
+    assert ungated[size_key].item() == pytest.approx(0.0)
+    assert gated["fill_count"].item() == 1.0
+    assert gated[size_key].item() > 0.0
 
 
 @pytest.mark.skipif(
@@ -6952,10 +7041,13 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize(
+    ("strategy_kind", "market_orders_allowed"),
+    [("ema_anchor", False), ("ema_anchor", True), ("trailing_martingale", False)],
+)
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
-    strategy_kind, side
+    strategy_kind, market_orders_allowed, side
 ):
     count = 6
     close = np.full(count, 100.0)
@@ -7041,6 +7133,8 @@ def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
         long_enabled=side == "long",
         short_enabled=side == "short",
         max_realized_loss_pct=0.05,
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.001,
     ).run(
         np.asarray(
             [
@@ -7835,7 +7929,8 @@ def test_mps_tm_single_coin_total_exposure_repair(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_ema_single_coin_total_exposure_repair(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_ema_single_coin_total_exposure_repair(side, market_orders_allowed):
     count = 10
     close = np.full(count, 100.0)
     high = np.full(count, 102.0)
@@ -7870,7 +7965,9 @@ def test_mps_ema_single_coin_total_exposure_repair(side):
         "ema_span_0": 2.0,
         "ema_span_1": 3.0,
         "entry_double_down_factor": 0.0,
-        "offset": 0.0,
+        # Keep the ordinary close passive in the market-enabled case so this
+        # fixture isolates the immediately executable TWEL reducer.
+        "offset": 0.01 if market_orders_allowed else 0.0,
         "offset_psize_weight": 0.0,
         "offset_volatility_1h_weight": 0.0,
         "offset_volatility_1m_weight": 0.0,
@@ -7895,6 +7992,8 @@ def test_mps_ema_single_coin_total_exposure_repair(side):
         data,
         long_enabled=side == "long",
         short_enabled=side == "short",
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.001,
     ).run(
         np.asarray(
             [baseline + baseline, repaired + repaired], dtype=np.float64
@@ -7928,7 +8027,10 @@ def test_mps_ema_single_coin_total_exposure_repair(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_ema_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_ema_realized_loss_gate_blocks_lossy_total_exposure_repair(
+    side, market_orders_allowed
+):
     count = 10
     close = np.full(count, 100.0)
     high = np.full(count, 102.0)
@@ -7981,6 +8083,10 @@ def test_mps_ema_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
     kwargs = {
         "long_enabled": side == "long",
         "short_enabled": side == "short",
+        "market_orders_allowed": market_orders_allowed,
+        "market_order_near_touch_threshold": 0.001,
+        "market_order_slippage_pct": 0.01,
+        "taker_fee": 0.01,
     }
 
     ungated = MpsEmaAnchorRunner(

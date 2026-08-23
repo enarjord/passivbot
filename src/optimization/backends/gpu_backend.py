@@ -971,28 +971,6 @@ def _validate_scope_config(
                 "GPU ordinary market execution currently requires single-coin "
                 "strategy_kind=ema_anchor"
             )
-        if max_realized_loss_pct < 1.0:
-            raise ValueError(
-                "GPU ordinary market execution currently requires "
-                "live.max_realized_loss_pct>=1 until market-close loss gating "
-                "is modeled"
-            )
-        for side in enabled_sides:
-            side_config = config["bot"][side]
-            if bool(side_config.get("unstuck", {}).get("enabled")):
-                raise ValueError(
-                    "GPU ordinary market execution currently requires "
-                    f"bot.{side}.unstuck.enabled=false"
-                )
-            if bool(
-                side_config.get("risk", {}).get(
-                    "total_exposure_enforcer_enabled", False
-                )
-            ):
-                raise ValueError(
-                    "GPU ordinary market execution currently requires "
-                    f"bot.{side}.risk.total_exposure_enforcer_enabled=false"
-                )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
         enabled_sides
     ) != 1:
