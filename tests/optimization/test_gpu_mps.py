@@ -4645,7 +4645,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         (coin_count, 29), float("nan"), dtype=torch.float32, device="mps"
     )
     run_settings = torch.tensor(
-        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0],
+        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         dtype=torch.float32,
         device="mps",
     )
@@ -4988,6 +4988,110 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize(
+    ("runner_cls", "param_keys"),
+    [
+        (MpsEmaAnchorMulticoinFusedRunner, EMA_ANCHOR_MULTICOIN_PARAM_KEYS),
+        (
+            MpsTrailingMartingaleMulticoinFusedRunner,
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
+        ),
+    ],
+)
+def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
+    runner_cls, param_keys
+):
+    count = 16
+    coin_count = 2
+    hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
+    hlcvs[:, :, 0] = 102.0
+    hlcvs[:, :, 1] = 98.0
+    hlcvs[:, :, 2] = 100.0
+    hlcvs[:, :, 3] = 100.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+        for _ in range(coin_count)
+    ]
+    runs = [
+        ProxyRun(
+            1_000.0,
+            1,
+            1,
+            int(timestamps[0]),
+            int(timestamps[0]),
+            int(timestamps[0]),
+            60_000,
+            0.05,
+            0,
+            count - 1,
+        )
+        for _ in range(coin_count)
+    ]
+    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    values = {key: 0.0 for key in param_keys}
+    values.update(
+        {
+            "n_positions": 2.0,
+            "total_wallet_exposure_limit": 1.0,
+            "forager_score_weights_ema_readiness": 1.0,
+        }
+    )
+    if runner_cls is MpsEmaAnchorMulticoinFusedRunner:
+        values.update(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "offset": 0.01,
+            }
+        )
+    else:
+        values.update(
+            {
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_initial_ema_dist": 0.01,
+                "entry_initial_qty_pct": 0.1,
+                "gate_initial": 1.0,
+                "gate_reentry": 1.0,
+            }
+        )
+    side_row = [values[key] for key in param_keys]
+    params = np.asarray([side_row + side_row], dtype=np.float64)
+
+    hedge_output = runner_cls(runs[0], data, hedge_mode=True).run(params)
+    one_way_output = runner_cls(runs[0], data, hedge_mode=False).run(params)
+    override_cols = 29 if runner_cls is MpsEmaAnchorMulticoinFusedRunner else 44
+    wel_col = 11 if runner_cls is MpsEmaAnchorMulticoinFusedRunner else 24
+    long_overrides = np.full((coin_count, override_cols), np.nan, dtype=np.float32)
+    short_overrides = np.full((coin_count, override_cols), np.nan, dtype=np.float32)
+    long_overrides[0, wel_col] = 0.0
+    short_overrides[1, wel_col] = 0.0
+    mixed_output = runner_cls(
+        runs[0],
+        data,
+        long_coin_overrides=long_overrides,
+        short_coin_overrides=short_overrides,
+        hedge_mode=False,
+    ).run(params)
+    torch.mps.synchronize()
+
+    assert hedge_output["fill_count"].item() > hedge_output[
+        "fill_count_long"
+    ].item()
+    assert one_way_output["fill_count"].item() > 0.0
+    assert one_way_output["fill_count"].item() == one_way_output[
+        "fill_count_long"
+    ].item()
+    assert 0.0 < mixed_output["fill_count_long"].item() < mixed_output[
+        "fill_count"
+    ].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     import passivbot_rust
 
@@ -5113,7 +5217,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         (coin_count, 44), float("nan"), dtype=torch.float32, device="mps"
     )
     run_settings = torch.tensor(
-        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0],
+        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         dtype=torch.float32,
         device="mps",
     )

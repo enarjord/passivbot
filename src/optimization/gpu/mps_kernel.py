@@ -1171,6 +1171,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        hedge_mode: bool = True,
     ):
         super().__init__(
             run,
@@ -1222,6 +1223,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 market_order_slippage_pct,
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
+                float(bool(hedge_mode)),
             ],
             dtype=torch.float32,
             device="mps",
@@ -1412,6 +1414,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        hedge_mode: bool = True,
     ):
         super().__init__(
             run,
@@ -1461,6 +1464,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 float(market_order_slippage_pct),
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
+                float(bool(hedge_mode)),
             ],
             dtype=torch.float32,
             device="mps",

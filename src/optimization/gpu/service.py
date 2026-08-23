@@ -1682,13 +1682,6 @@ class MpsMulticoinProxy:
             self.needed_metrics,
             shared_account_controller=self.shared_account_fused,
         )
-        if len(enabled_sides) == 2 and not bool(
-            config.get("live", {}).get("hedge_mode")
-        ):
-            raise ValueError(
-                "MPS dual-side multicoin proxy currently requires live.hedge_mode=true; "
-                "one-way arbitration is not modeled"
-            )
         if len(enabled_sides) == 2:
             approved = config.get("live", {}).get("approved_coins", {}) or {}
             ignored = config.get("live", {}).get("ignored_coins", {}) or {}
@@ -2055,6 +2048,7 @@ class MpsMulticoinProxy:
                     )
                 ).strip().lower()
                 == "market",
+                hedge_mode=bool(backtest_params["hedge_mode"]),
                 **common_runner_kwargs,
             )
         else:

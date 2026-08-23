@@ -587,6 +587,8 @@ mod tests {
         );
         assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
+        assert!(source.contains("const bool hedge_mode = run_settings[10] > 0.5f"));
+        assert!(source.contains("apply_ema_multicoin_one_way_initial_arbitration"));
         assert!(source.contains("device float* coin_fill_counts"));
         assert_eq!(
             source
@@ -932,6 +934,8 @@ mod tests {
         );
         assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
+        assert!(source.contains("const bool hedge_mode = run_settings[10] > 0.5f"));
+        assert!(source.contains("apply_tm_multicoin_one_way_initial_arbitration"));
         assert!(source.contains("device float* coin_fill_counts"));
         assert_eq!(
             source

@@ -2683,6 +2683,90 @@ inline float ema_multicoin_entry_initial_balance_pct(
     ) * initial_qty_pct;
 }
 
+// Match exact Rust's per-symbol one-way initial-entry arbitration after both
+// directional generators have observed the same pre-fill account snapshot.
+// Reentries and closes on an existing position remain untouched.
+inline void apply_ema_multicoin_one_way_initial_arbitration(
+    thread EmaMulticoinSideState& long_side,
+    thread const EmaMulticoinSideConfig& long_config,
+    constant float* long_coin_overrides,
+    thread EmaMulticoinSideState& short_side,
+    thread const EmaMulticoinSideConfig& short_config,
+    constant float* short_coin_overrides,
+    constant float* bars,
+    int k,
+    int coin_count,
+    int long_hsl_mode,
+    int short_hsl_mode
+) {
+    for (int c = 0; c < coin_count; ++c) {
+        const bool has_long = long_side.psize[c] > 0.0f;
+        const bool has_short = short_side.psize[c] > 0.0f;
+        if (has_long && !has_short) {
+            short_side.entry_qty[c] = 0.0f;
+            continue;
+        }
+        if (has_short && !has_long) {
+            long_side.entry_qty[c] = 0.0f;
+            continue;
+        }
+        if (has_long || has_short) continue;
+
+        const float close = bars[(k * coin_count + c) * 4 + 2];
+        const float long_wel = coin_override_or(
+            long_coin_overrides, c, 11, -1.0f
+        );
+        const float short_wel = coin_override_or(
+            short_coin_overrides, c, 11, -1.0f
+        );
+        const int long_coin_mode = long_config.coin_hsl_mode
+            ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
+        const int short_coin_mode = short_config.coin_hsl_mode
+            ? hsl_mode(short_side.coin_hsl[c], false) : short_hsl_mode;
+        const bool coin_tradable = finite_positive(close);
+        const bool long_eligible = coin_tradable && long_wel != 0.0f
+            && long_coin_mode == 0;
+        const bool short_eligible = coin_tradable && short_wel != 0.0f
+            && short_coin_mode == 0;
+        if (long_eligible && !short_eligible) {
+            short_side.entry_qty[c] = 0.0f;
+            continue;
+        }
+        if (short_eligible && !long_eligible) {
+            long_side.entry_qty[c] = 0.0f;
+            continue;
+        }
+        if (!long_eligible && !short_eligible) {
+            long_side.entry_qty[c] = 0.0f;
+            short_side.entry_qty[c] = 0.0f;
+            continue;
+        }
+        const float long_lower = fmin(
+            long_side.ema0[c], fmin(long_side.ema1[c], long_side.ema2[c])
+        );
+        const float short_upper = fmax(
+            short_side.ema0[c], fmax(short_side.ema1[c], short_side.ema2[c])
+        );
+        const float long_offset = coin_override_or(
+            long_coin_overrides, c, 4, long_config.offset
+        );
+        const float short_offset = coin_override_or(
+            short_coin_overrides, c, 4, short_config.offset
+        );
+        const float dist_long = long_lower * (1.0f - long_offset)
+            / close - 1.0f;
+        const float dist_short = 1.0f
+            - short_upper * (1.0f + short_offset) / close;
+        // Exact Rust blocks the side farther from triggering; stable ties
+        // favor long.
+        if (dist_long >= dist_short) {
+            short_side.entry_qty[c] = 0.0f;
+        } else {
+            long_side.entry_qty[c] = 0.0f;
+        }
+    }
+}
+
 inline void passivbot_ema_anchor_multicoin_fused_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -2781,6 +2865,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
+    const bool hedge_mode = run_settings[10] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
@@ -3013,6 +3098,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_effective_n_positions, short_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
                 short_unstuck_coin
+            );
+        }
+        if (!hedge_mode) {
+            apply_ema_multicoin_one_way_initial_arbitration(
+                long_side, long_config, long_coin_overrides,
+                short_side, short_config, short_coin_overrides,
+                bars, k, C, long_hsl_mode, short_hsl_mode
             );
         }
 

@@ -886,7 +886,7 @@ def test_gpu_suite_inputs_reject_invalid_scenario_coin_hsl_values():
         _gpu_suite_scenario_inputs(config, Suite())
 
 
-def test_gpu_suite_inputs_revalidate_scenario_hedge_mode():
+def test_gpu_suite_inputs_accept_scenario_one_way_mode():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["dynamic_wel_by_tradability"] = True
@@ -916,8 +916,9 @@ def test_gpu_suite_inputs_revalidate_scenario_hedge_mode():
             scenario["live"]["hedge_mode"] = False
             return scenario
 
-    with pytest.raises(ValueError, match="requires live.hedge_mode=true"):
-        _gpu_suite_scenario_inputs(config, Suite())
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert prepared[0]["config"]["live"]["hedge_mode"] is False
 
 
 def _suite_search_input(label, config, coin_count):
@@ -2405,7 +2406,7 @@ def test_gpu_multicoin_foundation_accepts_forager_score_hysteresis():
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode(strategy_kind):
+def test_gpu_multicoin_foundation_accepts_dual_side_one_way_mode(strategy_kind):
     builder = (
         _directional_tm_config
         if strategy_kind == "trailing_martingale"
@@ -2420,8 +2421,7 @@ def test_gpu_multicoin_foundation_rejects_dual_side_one_way_mode(strategy_kind):
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
 
-    with pytest.raises(ValueError, match="one-way arbitration is not modeled"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
