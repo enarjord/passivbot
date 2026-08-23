@@ -498,12 +498,42 @@ def _minimum_rank_evidence_samples(halt: float) -> int:
     return math.floor((MIN_DRIFT_PROBES - 1) / float(halt)) + 1
 
 
-def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
+def _build_gpu_nsga2(
+    config,
+    *,
+    sampling,
+    population_size: int,
+    n_params: int,
+    policy: dict | None = None,
+):
     """Build GPU proposal evolution with the same variation controls as pymoo CPU."""
 
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
+
+    policy = policy or _gpu_nsga2_checkpoint_contract(
+        config, population_size=population_size, n_params=n_params
+    )
+    return NSGA2(
+        pop_size=int(policy["population_size"]),
+        sampling=sampling,
+        crossover=SBX(
+            prob_var=float(policy["crossover"]["prob_var"]),
+            eta=float(policy["crossover"]["eta"]),
+        ),
+        mutation=PM(
+            prob=float(policy["mutation"]["prob"]),
+            eta=float(policy["mutation"]["eta"]),
+        ),
+        eliminate_duplicates=bool(policy["eliminate_duplicates"]),
+    )
+
+
+def _gpu_nsga2_checkpoint_contract(
+    config: dict, *, population_size: int, n_params: int
+) -> dict:
+    """Return the effective proposal policy serialized inside checkpoints."""
 
     from optimization.backends.pymoo_backend import (
         _resolve_mutation_prob,
@@ -511,19 +541,27 @@ def _build_gpu_nsga2(config, *, sampling, population_size: int, n_params: int):
     )
 
     shared = _resolve_pymoo_shared(config)
-    return NSGA2(
-        pop_size=population_size,
-        sampling=sampling,
-        crossover=SBX(
-            prob_var=float(shared["crossover_prob_var"]),
-            eta=float(shared["crossover_eta"]),
+    configured_seed = config.get("optimize", {}).get("seed")
+    return {
+        "version": 1,
+        "algorithm": "nsga2",
+        "population_size": int(population_size),
+        "configured_seed": (
+            None if configured_seed is None else int(configured_seed)
         ),
-        mutation=PM(
-            prob=_resolve_mutation_prob(shared, n_params),
-            eta=float(shared["mutation_eta"]),
-        ),
-        eliminate_duplicates=bool(shared["eliminate_duplicates"]),
-    )
+        "crossover": {
+            "operator": "sbx",
+            "prob_var": float(shared["crossover_prob_var"]),
+            "eta": float(shared["crossover_eta"]),
+        },
+        "mutation": {
+            "operator": "pm",
+            "prob": float(_resolve_mutation_prob(shared, n_params)),
+            "eta": float(shared["mutation_eta"]),
+        },
+        "eliminate_duplicates": bool(shared["eliminate_duplicates"]),
+    }
+
 
 GPU_RESULT_BACKTEST_CONTRACT_KEYS = {
     "balance_sample_divider",
@@ -2381,6 +2419,7 @@ def _gpu_search_checkpoint_contract(
     fixed_parameter_overrides,
     optimizer_overrides,
     sig_digits,
+    algorithm_contract,
 ) -> dict:
     """Fingerprint fixed and dormant search inputs omitted from active genes."""
 
@@ -2411,6 +2450,7 @@ def _gpu_search_checkpoint_contract(
             for key, value in sorted((fixed_parameter_overrides or {}).items())
         },
         "optimizer_overrides": sorted(str(value) for value in optimizer_overrides),
+        "algorithm": deepcopy(algorithm_contract),
     }
 
 
@@ -3418,11 +3458,17 @@ def run_backend(
         xl=np.zeros(len(active)),
         xu=np.ones(len(active)),
     )
+    algorithm_contract = _gpu_nsga2_checkpoint_contract(
+        config,
+        population_size=population_size,
+        n_params=len(active),
+    )
     algorithm = _build_gpu_nsga2(
         config,
         sampling=sampling,
         population_size=population_size,
         n_params=len(active),
+        policy=algorithm_contract,
     )
     algorithm.setup(problem, termination=NoTermination(), seed=seed, verbose=False)
     generation = 0
@@ -3461,6 +3507,7 @@ def run_backend(
             fixed_parameter_overrides=fixed_parameter_overrides,
             optimizer_overrides=gpu_optimizer_overrides,
             sig_digits=sig_digits,
+            algorithm_contract=algorithm_contract,
         ),
     )
     budget = int(config["optimize"]["iters"])

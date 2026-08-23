@@ -124,20 +124,22 @@ def _gpu_proxy_execution_checkpoint_contract(
     strategy_kind: str,
     exchange: str,
     enabled_sides,
-    hlcvs_shape,
+    hlcvs,
     timestamps,
     backtest_params: dict,
     exchange_params,
+    base_params,
 ) -> dict:
     """Return the prepared execution inputs which make proxy state reusable."""
 
+    hlcv_values = np.ascontiguousarray(np.asarray(hlcvs))
     timestamp_values = np.ascontiguousarray(
         np.asarray(timestamps, dtype=np.int64).reshape(-1)
     )
-    if len(timestamp_values) != int(hlcvs_shape[0]):
+    if len(timestamp_values) != int(hlcv_values.shape[0]):
         raise ValueError(
             "GPU proxy checkpoint timestamp identity disagrees with prepared "
-            f"candles: timestamps={len(timestamp_values)}, candles={hlcvs_shape[0]}"
+            f"candles: timestamps={len(timestamp_values)}, candles={hlcv_values.shape[0]}"
         )
     runtime_keys = (
         "starting_balance",
@@ -174,7 +176,13 @@ def _gpu_proxy_execution_checkpoint_contract(
         "exchange": str(exchange),
         "coins": [str(coin) for coin in backtest_params.get("coins", [])],
         "enabled_sides": sorted(str(side) for side in enabled_sides),
-        "hlcvs_shape": [int(value) for value in hlcvs_shape],
+        "hlcvs": {
+            "shape": [int(value) for value in hlcv_values.shape],
+            "dtype": str(hlcv_values.dtype.str),
+            "sha256": hashlib.sha256(
+                memoryview(hlcv_values).cast("B")
+            ).hexdigest(),
+        },
         "timestamps": {
             "count": int(len(timestamp_values)),
             "first": int(timestamp_values[0]) if len(timestamp_values) else None,
@@ -188,6 +196,13 @@ def _gpu_proxy_execution_checkpoint_contract(
             {key: copy.deepcopy(item.get(key)) for key in market_keys}
             for item in exchange_params
         ],
+        "base_params": {
+            str(side): {
+                str(key): float(value)
+                for key, value in sorted((params or {}).items())
+            }
+            for side, params in sorted((base_params or {}).items())
+        },
     }
 
 
@@ -1155,15 +1170,6 @@ class MpsSingleCoinProxy:
         }
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")
-        self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
-            strategy_kind=self.strategy_kind,
-            exchange=exchange,
-            enabled_sides=[side for side, enabled in self.enabled.items() if enabled],
-            hlcvs_shape=hlcvs.shape,
-            timestamps=timestamps,
-            backtest_params=backtest_params,
-            exchange_params=payload.exchange_params,
-        )
         enabled_side_count = sum(self.enabled.values())
         self.dispatch_batch_size = _mps_dispatch_batch_size(
             self.batch_size,
@@ -1239,6 +1245,17 @@ class MpsSingleCoinProxy:
                     f"parameters: {missing}"
                 )
             self.base_params[side] = strategy
+
+        self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
+            strategy_kind=self.strategy_kind,
+            exchange=exchange,
+            enabled_sides=[side for side, enabled in self.enabled.items() if enabled],
+            hlcvs=hlcvs,
+            timestamps=timestamps,
+            backtest_params=backtest_params,
+            exchange_params=payload.exchange_params,
+            base_params=self.base_params,
+        )
 
         self.base_total_wallet_exposure_limits = {
             side: float(self.base_params[side]["total_wallet_exposure_limit"])
@@ -1808,15 +1825,6 @@ class MpsMulticoinProxy:
             raise ValueError(
                 "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
             )
-        self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
-            strategy_kind=self.strategy_kind,
-            exchange=exchange,
-            enabled_sides=self.sides,
-            hlcvs_shape=values.shape,
-            timestamps=timestamps,
-            backtest_params=backtest_params,
-            exchange_params=payload.exchange_params,
-        )
         self.forager_score_hysteresis_pct = float(
             backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0
         )
@@ -1961,6 +1969,17 @@ class MpsMulticoinProxy:
                         "MPS multicoin proxy requires identical global "
                         f"{side} forager/risk settings across coins"
                     )
+
+        self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
+            strategy_kind=self.strategy_kind,
+            exchange=exchange,
+            enabled_sides=self.sides,
+            hlcvs=values,
+            timestamps=timestamps,
+            backtest_params=backtest_params,
+            exchange_params=payload.exchange_params,
+            base_params=self.base_params,
+        )
 
         coins = list(backtest_params.get("coins") or [])
         if len(coins) != coin_count:

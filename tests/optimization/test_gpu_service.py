@@ -89,33 +89,60 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         strategy_kind="ema_anchor",
         exchange="bybit",
         enabled_sides=["long"],
-        hlcvs_shape=(3, 1, 4),
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
         timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
         backtest_params=backtest_params,
         exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
     )
     changed_fee = dict(market, maker_fee=0.0005)
     changed = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
         exchange="bybit",
         enabled_sides=["long"],
-        hlcvs_shape=(3, 1, 4),
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
         timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
         backtest_params=backtest_params,
         exchange_params=[changed_fee],
+        base_params={"long": {"offset": 0.01}},
     )
     changed_timestamps = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
         exchange="bybit",
         enabled_sides=["long"],
-        hlcvs_shape=(3, 1, 4),
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
         timestamps=np.array([1_000, 2_100, 3_000], dtype=np.int64),
         backtest_params=backtest_params,
         exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
+    )
+    changed_hlcvs_values = np.arange(12, dtype=np.float64).reshape(3, 1, 4)
+    changed_hlcvs_values[1, 0, 2] += 0.5
+    changed_hlcvs = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs=changed_hlcvs_values,
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
+    )
+    changed_base_params = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+        base_params={"long": {"offset": 0.02}},
     )
 
     assert changed != original
     assert changed_timestamps != original
+    assert changed_hlcvs != original
+    assert changed_base_params != original
     assert original["timestamps"]["count"] == 3
 
 
@@ -125,10 +152,11 @@ def test_gpu_proxy_execution_checkpoint_contract_rejects_timestamp_shape_mismatc
             strategy_kind="ema_anchor",
             exchange="bybit",
             enabled_sides=["long"],
-            hlcvs_shape=(3, 1, 4),
+            hlcvs=np.zeros((3, 1, 4), dtype=np.float64),
             timestamps=np.array([1_000, 2_000], dtype=np.int64),
             backtest_params={"coins": ["BTC"]},
             exchange_params=[],
+            base_params={},
         )
 
 

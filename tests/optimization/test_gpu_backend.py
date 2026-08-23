@@ -35,6 +35,7 @@ from optimization.backends.gpu_backend import (
     _gpu_candidate_source_sides,
     _gpu_hsl_search_sides,
     _gpu_hsl_parameter_active,
+    _gpu_nsga2_checkpoint_contract,
     _gpu_pinned_hsl_bound_contract,
     _validate_hsl_bound_contracts,
     _validate_hsl_metric_topology,
@@ -381,6 +382,19 @@ def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
     assert algorithm.mating.mutation.eta.value == 13.0
     assert algorithm.mating.mutation.prob.value == 0.2
     assert type(algorithm.eliminate_duplicates).__name__ == "NoDuplicateElimination"
+
+    contract = _gpu_nsga2_checkpoint_contract(
+        config, population_size=8, n_params=5
+    )
+    assert contract == {
+        "version": 1,
+        "algorithm": "nsga2",
+        "population_size": 8,
+        "configured_seed": None,
+        "crossover": {"operator": "sbx", "prob_var": 0.7, "eta": 11.0},
+        "mutation": {"operator": "pm", "prob": 0.2, "eta": 13.0},
+        "eliminate_duplicates": False,
+    }
 
 
 def test_trailing_martingale_bound_map_covers_both_directional_shapes():
@@ -4715,6 +4729,11 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
         fixed_parameter_overrides={"long_base_qty_pct": 0.02},
         optimizer_overrides=set(),
         sig_digits=3,
+        algorithm_contract={
+            "algorithm": "nsga2",
+            "population_size": 64,
+            "mutation": {"prob": 0.5},
+        },
     )
     active = [("long_offset", 0, bounds[0])]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
@@ -4735,6 +4754,12 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
     changed_override = copy.deepcopy(contract)
     changed_override["optimizer_overrides"] = ["mirror_short_from_long"]
     mutations.append(changed_override)
+    changed_population = copy.deepcopy(contract)
+    changed_population["algorithm"]["population_size"] = 128
+    mutations.append(changed_population)
+    changed_mutation = copy.deepcopy(contract)
+    changed_mutation["algorithm"]["mutation"]["prob"] = 0.25
+    mutations.append(changed_mutation)
 
     assert all(
         _checkpoint_signature(active, scoring, search_contract=changed)
