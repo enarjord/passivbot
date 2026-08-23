@@ -248,6 +248,22 @@ def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     assert bot_params_list[0]["short"]["wallet_exposure_limit"] == 0.5
 
 
+def test_zero_coin_wallet_override_preserves_side_total_exposure():
+    config = _base_config()
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.5
+    config["coin_overrides"] = {
+        "BTC/USDT:USDT": {"bot": {"long": {"wallet_exposure_limit": 0.0}}}
+    }
+
+    bot_params_list, _, _, _ = prep_backtest_args(
+        config, _base_mss(), "binance"
+    )
+
+    assert bot_params_list[0]["long"]["wallet_exposure_limit"] == 0.0
+    assert bot_params_list[0]["long"]["total_wallet_exposure_limit"] == 1.5
+    assert bot_params_list[0]["long"]["n_positions"] > 0
+
+
 def test_prep_backtest_args_merges_conditional_hsl_override_per_coin():
     config = _multi_coin_config()
     config["live"]["hsl_signal_mode"] = "coin"

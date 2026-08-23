@@ -748,15 +748,13 @@ inline bool update_ema_multicoin_dual_side_hsl(
         if (long_strategy_eq_enabled) {
             update_hsl_strategy_equity_stats(
                 long_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_long + long_unrealized,
-                float(k)
+                starting_balance + account.realized_pnl_long + long_unrealized
             );
         }
         if (short_strategy_eq_enabled) {
             update_hsl_strategy_equity_stats(
                 short_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_short + short_unrealized,
-                float(k)
+                starting_balance + account.realized_pnl_short + short_unrealized
             );
         }
         return true;
@@ -772,8 +770,7 @@ inline bool update_ema_multicoin_dual_side_hsl(
             long_side.hsl_strategy_eq,
             starting_balance + (
                 unified ? account.realized_pnl_total : account.realized_pnl_long
-            ) + (unified ? long_unrealized + short_unrealized : long_unrealized),
-            float(k)
+            ) + (unified ? long_unrealized + short_unrealized : long_unrealized)
         );
     }
     if (short_strategy_eq_enabled) {
@@ -781,8 +778,7 @@ inline bool update_ema_multicoin_dual_side_hsl(
             short_side.hsl_strategy_eq,
             starting_balance + (
                 unified ? account.realized_pnl_total : account.realized_pnl_short
-            ) + (unified ? long_unrealized + short_unrealized : short_unrealized),
-            float(k)
+            ) + (unified ? long_unrealized + short_unrealized : short_unrealized)
         );
     }
     if (!update_joint_pside_hsl(
@@ -2231,8 +2227,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 || hsl_strategy_eq_sample_enabled) {
                 update_hsl_strategy_equity_stats(
                     side.hsl_strategy_eq,
-                    starting_balance + realized_pnl_cumsum_last + unrealized,
-                    float(k)
+                    starting_balance + realized_pnl_cumsum_last + unrealized
                 );
             }
             if (hsl_sample_enabled) {

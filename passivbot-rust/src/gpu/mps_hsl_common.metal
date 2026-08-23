@@ -219,8 +219,8 @@ struct HslSignal {
 struct HslStrategyEquityStats {
     bool initialized;
     float peak;
-    float peak_k;
-    float last_k;
+    float peak_sample_k;
+    float last_sample_k;
     float recovery_max_steps;
 };
 
@@ -228,32 +228,33 @@ inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
     HslStrategyEquityStats stats;
     stats.initialized = false;
     stats.peak = 0.0f;
-    stats.peak_k = -1.0f;
-    stats.last_k = -1.0f;
+    stats.peak_sample_k = -1.0f;
+    stats.last_sample_k = -1.0f;
     stats.recovery_max_steps = 0.0f;
     return stats;
 }
 
 inline void update_hsl_strategy_equity_stats(
     thread HslStrategyEquityStats& stats,
-    float strategy_equity,
-    float kf
+    float strategy_equity
 ) {
     if (!isfinite(strategy_equity)) return;
+    const float sample_k = stats.initialized
+        ? stats.last_sample_k + 1.0f : 0.0f;
     if (!stats.initialized) {
         stats.initialized = true;
         stats.peak = strategy_equity;
-        stats.peak_k = kf;
-        stats.last_k = kf;
+        stats.peak_sample_k = sample_k;
+        stats.last_sample_k = sample_k;
         return;
     }
-    stats.last_k = kf;
+    stats.last_sample_k = sample_k;
     if (strategy_equity > stats.peak) {
         stats.recovery_max_steps = fmax(
-            stats.recovery_max_steps, kf - stats.peak_k
+            stats.recovery_max_steps, sample_k - stats.peak_sample_k
         );
         stats.peak = strategy_equity;
-        stats.peak_k = kf;
+        stats.peak_sample_k = sample_k;
     }
 }
 
@@ -263,7 +264,7 @@ inline float hsl_strategy_equity_recovery_max_steps(
     if (!stats.initialized) return 0.0f;
     return fmax(
         stats.recovery_max_steps,
-        fmax(stats.last_k - stats.peak_k, 0.0f)
+        fmax(stats.last_sample_k - stats.peak_sample_k, 0.0f)
     );
 }
 

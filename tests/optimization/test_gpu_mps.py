@@ -243,9 +243,15 @@ kernel void passivbot_hsl_strategy_equity_recovery_probe(
     if (b > 0) return;
     HslStrategyEquityStats stats = init_hsl_strategy_equity_stats();
     for (int k = 0; k < 7; ++k) {
-        update_hsl_strategy_equity_stats(stats, samples[k], float(k));
+        update_hsl_strategy_equity_stats(stats, samples[k]);
     }
     output[0] = hsl_strategy_equity_recovery_max_steps(stats);
+    HslStrategyEquityStats resumed = init_hsl_strategy_equity_stats();
+    update_hsl_strategy_equity_stats(resumed, samples[0]);
+    update_hsl_strategy_equity_stats(resumed, samples[2]);
+    update_hsl_strategy_equity_stats(resumed, samples[3]);
+    update_hsl_strategy_equity_stats(resumed, samples[4]);
+    output[1] = hsl_strategy_equity_recovery_max_steps(resumed);
 }
 """
     samples = torch.tensor(
@@ -253,7 +259,7 @@ kernel void passivbot_hsl_strategy_equity_recovery_probe(
         dtype=torch.float32,
         device="mps",
     )
-    output = torch.zeros(1, dtype=torch.float32, device="mps")
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_source_py() + probe_kernel
     )
@@ -266,6 +272,10 @@ kernel void passivbot_hsl_strategy_equity_recovery_probe(
     # Exact Rust waits for a strictly greater sample, so the equal sample at
     # k=1 remains underwater until 101 at k=4.
     assert output[0].item() == 4.0
+    # Exact Rust compacts away halted cooldown bars before recovery analysis.
+    # The resumed sequence has four eligible samples, so recovery is three
+    # samples even though its source candle indices span five steps.
+    assert output[1].item() == 3.0
 
 
 @pytest.mark.skipif(
@@ -2998,6 +3008,62 @@ def test_mps_multicoin_coin_hsl_override_controls_enablement(
         assert output[f"hsl_{side}_enabled"].item()
         assert output["hsl_tier_samples_total"].item() > 0.0
         assert output["coin_fill_counts"][0, 1].item() >= 2.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_coin_hsl_recovery_uses_total_exposure_contract(
+    strategy_kind, side
+):
+    count = 64
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    closes[20:, 1] *= 0.7 if side == "long" else 1.3
+    override_cols = 29 if strategy_kind == "ema_anchor" else 44
+    wel_index = 11 if strategy_kind == "ema_anchor" else 24
+    hsl_start = 19 if strategy_kind == "ema_anchor" else 34
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    # A fixed per-coin WEL of zero disables entries, but does not change that
+    # coin's positive side total_wallet_exposure_limit. Exact Rust's HSL
+    # reporting contract checks the latter, so the enabled controller still
+    # samples aggregate side equity while coin one trades.
+    overrides[0, wel_index] = 0.0
+    overrides[1, hsl_start] = 0.0
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        collect_coin_fill_counts=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 2.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["coin_fill_counts"][0, 1].item() >= 1.0
+    assert output[f"hsl_strategy_eq_recovery_max_ms_{side}"].item() > 0.0
 
 
 @pytest.mark.skipif(
