@@ -101,6 +101,8 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_panic_loss_drawdown_count",
     "hsl_drawdown_ema_max_long",
     "hsl_drawdown_ema_max_short",
+    "hsl_strategy_eq_recovery_max_ms_long",
+    "hsl_strategy_eq_recovery_max_ms_short",
 }
 
 
@@ -675,6 +677,8 @@ def _combine_hedged_multicoin_hsl_outputs(long: dict, short: dict) -> dict:
         "hsl_panic_loss_drawdown_max",
         "hsl_drawdown_ema_max_long",
         "hsl_drawdown_ema_max_short",
+        "hsl_strategy_eq_recovery_max_ms_long",
+        "hsl_strategy_eq_recovery_max_ms_short",
     ):
         combined[key] = long[key].maximum(short[key])
 

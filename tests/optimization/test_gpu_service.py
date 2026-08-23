@@ -384,6 +384,8 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
         "hsl_halt_to_restart_equity_loss",
         "hsl_panic_close_loss_sum",
         "hsl_panic_loss_drawdown_count",
+        "hsl_strategy_eq_recovery_max_ms_long",
+        "hsl_strategy_eq_recovery_max_ms_short",
     } <= DIRECTIONAL_HSL_OUTPUT_KEYS
 
 
@@ -424,6 +426,9 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
         output[f"hsl_drawdown_ema_max_{side}"] = torch.tensor(
             [0.2 if side == "long" else 0.1]
         )
+        output[f"hsl_strategy_eq_recovery_max_ms_{side}"] = torch.tensor(
+            [7_200_000.0 if side == "long" else 3_600_000.0]
+        )
         return output
 
     combined = _combine_hedged_multicoin_hsl_outputs(
@@ -450,6 +455,8 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert combined["hsl_panic_loss_drawdown_count"].item() == 3.0
     assert combined["hsl_drawdown_ema_max_long"].item() == pytest.approx(0.2)
     assert combined["hsl_drawdown_ema_max_short"].item() == pytest.approx(0.1)
+    assert combined["hsl_strategy_eq_recovery_max_ms_long"].item() == 7_200_000.0
+    assert combined["hsl_strategy_eq_recovery_max_ms_short"].item() == 3_600_000.0
     assert combined["hsl_tier_samples_total"].item() == 10.0
     assert combined["hsl_tier_samples_red"].item() == 8.0
     assert combined["hsl_tier_samples_orange"].item() == 2.0
@@ -472,7 +479,7 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert panic["hard_stop_panic_close_loss_drawdown_pct_mean"].item() == (
         pytest.approx(0.8 / 3.0)
     )
-    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 27
+    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 29
 
 
 def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():

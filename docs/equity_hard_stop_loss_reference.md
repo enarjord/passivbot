@@ -137,6 +137,7 @@ These are the main parity surfaces that should be reviewed together:
    - Dual-side multi-coin EMA Anchor uses a fused shared-account strategy kernel for unified, pside, and coin signals, including shared lifecycle/panic-loss metrics and per-coin HSL overrides in coin mode
    - Dual-side multi-coin Trailing Martingale uses a fused shared-account strategy kernel for unified, pside, and coin signals, including shared lifecycle/panic-loss metrics and per-coin HSL overrides in coin mode
    - Apple MPS exports the worst EMA-smoothed strategy-equity drawdown for long and short HSL controllers; the account metric is the same `max(long, short)` reduction as exact Rust
+   - Apple MPS exports each HSL controller's longest strict strategy-equity time-to-exceed interval as `peak_recovery_{hours,days}_strategy_eq_{long,short}`, including an unrecovered tail through the backtest end
 
 ### Confirmed Gaps / Risks
 
@@ -149,14 +150,15 @@ These are the main parity surfaces that should be reviewed together:
    - Deprecated `*_hsl` metric names remain accepted as aliases for older configs/results
 3. Remaining GPU HSL metric gaps
    - Mean-worst-1% drawdown-EMA metrics need a bounded distribution reducer rather than a running maximum
-   - Strategy-equity recovery distributions and side-specific recovery metrics need additional per-side time-series state
+   - Strategy-equity recovery-distribution metrics need additional bounded per-side time-series state
+   - Raw per-side worst strategy-equity drawdown remains too sensitive to approximate proxy fill paths and stays fail closed pending a safer representation
 
 ### Missing or Weak Test Coverage
 
 1. End-to-end replay of one identical fill/candle history through live reconstruction and exact backtest orchestration; shared Rust primitive tests cover the calculations but not the complete orchestration trace
 2. Connector-level restart races while protective panic-close orders are live on an exchange
 3. Manual or external trading during downtime across the full exchange-adapter matrix
-4. Apple MPS parity for HSL mean-worst-1% drawdown-EMA and recovery-distribution metrics
+4. Apple MPS parity for HSL mean-worst-1% drawdown-EMA, raw per-side worst drawdown, and recovery-distribution metrics
 
 ## Optimizer Work
 

@@ -99,7 +99,7 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.arange(64, dtype=torch.float32).reshape(1, 64)
+    scalars = torch.arange(66, dtype=torch.float32).reshape(1, 66)
     gaps = torch.zeros((1, 128), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
@@ -113,6 +113,12 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     assert torch.equal(output["loss_sum_long"], scalars[:, 61])
     assert torch.equal(output["profit_sum_short"], scalars[:, 62])
     assert torch.equal(output["loss_sum_short"], scalars[:, 63])
+    assert torch.equal(
+        output["hsl_strategy_eq_recovery_max_ms_long"], scalars[:, 64]
+    )
+    assert torch.equal(
+        output["hsl_strategy_eq_recovery_max_ms_short"], scalars[:, 65]
+    )
 
 
 @pytest.mark.skipif(
@@ -220,6 +226,56 @@ kernel void passivbot_hsl_rolling_pnl_probe(
         0.0,
         1.0,
     ]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_hsl_strategy_equity_recovery_matches_exact_rust_recurrence():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_hsl_strategy_equity_recovery_probe(
+    constant float* samples,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    HslStrategyEquityStats stats = init_hsl_strategy_equity_stats();
+    for (int k = 0; k < 7; ++k) {
+        update_hsl_strategy_equity_stats(stats, samples[k]);
+    }
+    output[0] = hsl_strategy_equity_recovery_max_steps(stats);
+    HslStrategyEquityStats resumed = init_hsl_strategy_equity_stats();
+    update_hsl_strategy_equity_stats(resumed, samples[0]);
+    update_hsl_strategy_equity_stats(resumed, samples[2]);
+    update_hsl_strategy_equity_stats(resumed, samples[3]);
+    update_hsl_strategy_equity_stats(resumed, samples[4]);
+    output[1] = hsl_strategy_equity_recovery_max_steps(resumed);
+}
+"""
+    samples = torch.tensor(
+        [100.0, 100.0, 90.0, 95.0, 101.0, 101.0, 99.0],
+        dtype=torch.float32,
+        device="mps",
+    )
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_source_py() + probe_kernel
+    )
+
+    library.passivbot_hsl_strategy_equity_recovery_probe(
+        samples, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    # Exact Rust waits for a strictly greater sample, so the equal sample at
+    # k=1 remains underwater until 101 at k=4.
+    assert output[0].item() == 4.0
+    # Exact Rust compacts away halted cooldown bars before recovery analysis.
+    # The resumed sequence has four eligible samples, so recovery is three
+    # samples even though its source candle indices span five steps.
+    assert output[1].item() == 3.0
 
 
 @pytest.mark.skipif(
@@ -2727,6 +2783,10 @@ def test_mps_dual_multicoin_pside_hsl_runs_both_directional_controllers(
         assert output[f"hsl_triggers_{other_side}"].item() == 0.0
         assert output["hsl_trigger_drawdown_count"].item() == 1.0
         assert output["hsl_panic_loss_drawdown_count"].item() == 1.0
+        assert output[f"hsl_strategy_eq_recovery_max_ms_{side}"].item() > 0.0
+        assert output[
+            f"hsl_strategy_eq_recovery_max_ms_{other_side}"
+        ].item() == 0.0
         assert output["open_positions"].item() == 0.0
 
     from optimization.gpu.metrics import (
@@ -2856,6 +2916,7 @@ def test_mps_one_sided_multicoin_coin_hsl_isolates_each_coin_episode(
         output["hsl_panic_loss_drawdown_count"] == expected_episode_count
     ).all().item()
     assert (output["hsl_panic_close_loss_sum"] > 0.0).all().item()
+    assert (output[f"hsl_strategy_eq_recovery_max_ms_{side}"] > 0.0).all().item()
     if shock_coin == "both":
         assert (output["coin_fill_counts"] >= 2.0).all().item()
         assert (
@@ -2947,6 +3008,62 @@ def test_mps_multicoin_coin_hsl_override_controls_enablement(
         assert output[f"hsl_{side}_enabled"].item()
         assert output["hsl_tier_samples_total"].item() > 0.0
         assert output["coin_fill_counts"][0, 1].item() >= 2.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_coin_hsl_recovery_uses_total_exposure_contract(
+    strategy_kind, side
+):
+    count = 64
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    closes[20:, 1] *= 0.7 if side == "long" else 1.3
+    override_cols = 29 if strategy_kind == "ema_anchor" else 44
+    wel_index = 11 if strategy_kind == "ema_anchor" else 24
+    hsl_start = 19 if strategy_kind == "ema_anchor" else 34
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    # A fixed per-coin WEL of zero disables entries, but does not change that
+    # coin's positive side total_wallet_exposure_limit. Exact Rust's HSL
+    # reporting contract checks the latter, so the enabled controller still
+    # samples aggregate side equity while coin one trades.
+    overrides[0, wel_index] = 0.0
+    overrides[1, hsl_start] = 0.0
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        collect_coin_fill_counts=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 2.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["coin_fill_counts"][0, 1].item() >= 1.0
+    assert output[f"hsl_strategy_eq_recovery_max_ms_{side}"].item() > 0.0
 
 
 @pytest.mark.skipif(
@@ -3943,7 +4060,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_panic ? taker_fee : maker_fee" in source
-    assert "constant int SCALAR_COLS = 64" in source
+    assert "constant int SCALAR_COLS = 66" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
@@ -4223,7 +4340,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
     assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 64" in source
+    assert "constant int FUSED_SCALAR_COLS = 66" in source
 
     count = 512
     coin_count = 3
@@ -4335,7 +4452,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 64), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 66), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -4420,6 +4537,12 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 61])
     torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 62])
     torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 63])
+    torch.testing.assert_close(
+        runner_output["hsl_strategy_eq_recovery_max_ms_long"], scalars[:, 64]
+    )
+    torch.testing.assert_close(
+        runner_output["hsl_strategy_eq_recovery_max_ms_short"], scalars[:, 65]
+    )
     assert runner_output["alive"].cpu().tolist() == [
         True,
         True,
@@ -4461,6 +4584,10 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         "drawdown_worst_ema_strategy_eq",
         "drawdown_worst_ema_strategy_eq_long",
         "drawdown_worst_ema_strategy_eq_short",
+        "peak_recovery_hours_strategy_eq_long",
+        "peak_recovery_hours_strategy_eq_short",
+        "peak_recovery_days_strategy_eq_long",
+        "peak_recovery_days_strategy_eq_short",
     }
     proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
@@ -4524,6 +4651,15 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         )
         for item in service_results
     )
+    assert all(
+        item["peak_recovery_hours_strategy_eq_long"] >= 0.0
+        and item["peak_recovery_hours_strategy_eq_short"] >= 0.0
+        and item["peak_recovery_days_strategy_eq_long"]
+        == pytest.approx(item["peak_recovery_hours_strategy_eq_long"] / 24.0)
+        and item["peak_recovery_days_strategy_eq_short"]
+        == pytest.approx(item["peak_recovery_hours_strategy_eq_short"] / 24.0)
+        for item in service_results
+    )
 
     with pytest.raises(ValueError, match="84 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
@@ -4546,7 +4682,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 64), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 66), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -4582,7 +4718,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 64" in source
+    assert "constant int FUSED_SCALAR_COLS = 66" in source
 
     count = 512
     coin_count = 3
@@ -4718,7 +4854,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 64), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 66), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -4797,6 +4933,12 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     torch.testing.assert_close(runner_output["loss_sum_long"], scalars[:, 61])
     torch.testing.assert_close(runner_output["profit_sum_short"], scalars[:, 62])
     torch.testing.assert_close(runner_output["loss_sum_short"], scalars[:, 63])
+    torch.testing.assert_close(
+        runner_output["hsl_strategy_eq_recovery_max_ms_long"], scalars[:, 64]
+    )
+    torch.testing.assert_close(
+        runner_output["hsl_strategy_eq_recovery_max_ms_short"], scalars[:, 65]
+    )
     assert runner_output["alive"].cpu().tolist() == [
         True,
         True,
@@ -4842,6 +4984,10 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "drawdown_worst_ema_strategy_eq",
         "drawdown_worst_ema_strategy_eq_long",
         "drawdown_worst_ema_strategy_eq_short",
+        "peak_recovery_hours_strategy_eq_long",
+        "peak_recovery_hours_strategy_eq_short",
+        "peak_recovery_days_strategy_eq_long",
+        "peak_recovery_days_strategy_eq_short",
     }
     proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     width = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
@@ -4912,6 +5058,15 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         )
         for item in service_results
     )
+    assert all(
+        item["peak_recovery_hours_strategy_eq_long"] >= 0.0
+        and item["peak_recovery_hours_strategy_eq_short"] >= 0.0
+        and item["peak_recovery_days_strategy_eq_long"]
+        == pytest.approx(item["peak_recovery_hours_strategy_eq_long"] / 24.0)
+        and item["peak_recovery_days_strategy_eq_short"]
+        == pytest.approx(item["peak_recovery_hours_strategy_eq_short"] / 24.0)
+        for item in service_results
+    )
 
     with pytest.raises(ValueError, match="118 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
@@ -4938,7 +5093,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 64), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 66), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -5826,6 +5981,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     assert output["hsl_panic_loss_drawdown_min"][1].item() > 0.0
     assert output["hsl_panic_loss_drawdown_sum"][1].item() > 0.0
     assert output["hsl_panic_loss_drawdown_max"][1].item() > 0.0
+    assert output[f"hsl_strategy_eq_recovery_max_ms_{side}"][1].item() > 0.0
     assert output[size_key][9].item() == 0.0
     assert output["hsl_panic_close_loss_sum"][9].item() > 0.0
     assert output["hsl_panic_loss_drawdown_count"][9].item() == 1.0
@@ -5968,6 +6124,8 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
     assert output["hsl_triggers_long"][2].item() == 1.0
     assert output["hsl_triggers_short"][2].item() == 1.0
     assert output["hsl_trigger_drawdown_count"][2].item() == 2.0
+    assert output["hsl_strategy_eq_recovery_max_ms_long"][2].item() > 0.0
+    assert output["hsl_strategy_eq_recovery_max_ms_short"][2].item() > 0.0
     if signal_mode == "unified":
         assert output["hsl_panic_loss_drawdown_count"][2].item() >= 1.0
     else:

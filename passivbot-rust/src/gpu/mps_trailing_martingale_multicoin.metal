@@ -7,8 +7,8 @@ constant int OVERRIDE_COLS = 44;
 constant int HSL_OVERRIDE_START = 34;
 constant int COIN_COLS = 12;
 constant int DAILY_COLS = 9;
-constant int SCALAR_COLS = 59;
-constant int FUSED_SCALAR_COLS = 64;
+constant int SCALAR_COLS = 61;
+constant int FUSED_SCALAR_COLS = 66;
 constant int GAP_BINS = 128;
 
 // PASSIVBOT_HSL_COMMON
@@ -335,6 +335,7 @@ inline int recursive_grid_close_groups_after_reducer(
 struct TrailingMartingaleMulticoinSideState {
     HslState hsl;
     HslState coin_hsl[MAX_COINS];
+    HslStrategyEquityStats hsl_strategy_eq;
     ulong coin_hsl_entry_blocked_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
@@ -1233,6 +1234,7 @@ inline void init_trailing_martingale_multicoin_side_state(
     int coin_count
 ) {
     side.hsl = config.hsl_template;
+    side.hsl_strategy_eq = init_hsl_strategy_equity_stats();
     side.coin_hsl_entry_blocked_mask = 0ul;
     side.selection_initialized = false;
     side.max_tradable_seen = 0;
@@ -1592,6 +1594,8 @@ inline bool update_tm_multicoin_dual_side_hsl(
     if (long_config.coin_hsl_mode) {
         const bool long_active = long_effective_n_positions > 0;
         const bool short_active = short_effective_n_positions > 0;
+        bool long_strategy_eq_enabled = false;
+        bool short_strategy_eq_enabled = false;
         float portfolio_equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
@@ -1638,6 +1642,8 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 );
                 sample_enabled = sample_enabled
                     || long_side.coin_hsl[c].enabled;
+                long_strategy_eq_enabled = long_strategy_eq_enabled
+                    || long_side.coin_hsl[c].enabled;
                 sampled_tier = max(
                     sampled_tier, long_side.coin_hsl[c].tier
                 );
@@ -1657,6 +1663,8 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 );
                 sample_enabled = sample_enabled
                     || short_side.coin_hsl[c].enabled;
+                short_strategy_eq_enabled = short_strategy_eq_enabled
+                    || short_side.coin_hsl[c].enabled;
                 sampled_tier = max(
                     sampled_tier, short_side.coin_hsl[c].tier
                 );
@@ -1665,9 +1673,42 @@ inline bool update_tm_multicoin_dual_side_hsl(
                 );
             }
         }
+        if (long_strategy_eq_enabled) {
+            update_hsl_strategy_equity_stats(
+                long_side.hsl_strategy_eq,
+                starting_balance + account.realized_pnl_long + long_unrealized
+            );
+        }
+        if (short_strategy_eq_enabled) {
+            update_hsl_strategy_equity_stats(
+                short_side.hsl_strategy_eq,
+                starting_balance + account.realized_pnl_short + short_unrealized
+            );
+        }
         return true;
     }
 
+    const bool unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    const bool long_strategy_eq_enabled = long_side.hsl.enabled
+        && !long_side.hsl.halted;
+    const bool short_strategy_eq_enabled = short_side.hsl.enabled
+        && !short_side.hsl.halted;
+    if (long_strategy_eq_enabled) {
+        update_hsl_strategy_equity_stats(
+            long_side.hsl_strategy_eq,
+            starting_balance + (
+                unified ? account.realized_pnl_total : account.realized_pnl_long
+            ) + (unified ? long_unrealized + short_unrealized : long_unrealized)
+        );
+    }
+    if (short_strategy_eq_enabled) {
+        update_hsl_strategy_equity_stats(
+            short_side.hsl_strategy_eq,
+            starting_balance + (
+                unified ? account.realized_pnl_total : account.realized_pnl_short
+            ) + (unified ? long_unrealized + short_unrealized : short_unrealized)
+        );
+    }
     if (!update_joint_pside_hsl(
             long_side.hsl, short_side.hsl, account, starting_balance,
             long_unrealized, short_unrealized,
@@ -3452,6 +3493,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     scalars[scalar_offset + 61] = fills.loss_sum_long;
     scalars[scalar_offset + 62] = fills.profit_sum_short;
     scalars[scalar_offset + 63] = fills.loss_sum_short;
+    scalars[scalar_offset + 64] = hsl_strategy_equity_recovery_max_steps(
+        long_side.hsl_strategy_eq
+    ) * interval_ms;
+    scalars[scalar_offset + 65] = hsl_strategy_equity_recovery_max_steps(
+        short_side.hsl_strategy_eq
+    ) * interval_ms;
 }
 
 kernel void passivbot_trailing_martingale_multicoin_fused(
@@ -3741,6 +3788,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             && balance > 0.0f && equity > liquidation_floor) {
             int sampled_hsl_tier = 0;
             bool hsl_sample_enabled = !coin_hsl_mode && hsl.enabled;
+            const bool hsl_strategy_eq_sample_enabled = coin_hsl_mode
+                ? false : hsl.enabled && !hsl.halted;
             if (coin_hsl_mode) {
                 for (int c = 0; c < C; ++c) {
                     hsl_sample_enabled = hsl_sample_enabled || coin_hsl[c].enabled;
@@ -3774,6 +3823,13 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     float(k), interval_ms
                 );
                 sampled_hsl_tier = hsl.tier;
+            }
+            if ((coin_hsl_mode && effective_n_positions > 0 && hsl_sample_enabled)
+                || hsl_strategy_eq_sample_enabled) {
+                update_hsl_strategy_equity_stats(
+                    side.hsl_strategy_eq,
+                    starting_balance + realized_pnl_cumsum_last + unrealized
+                );
             }
             if (hsl_sample_enabled) {
                 hsl_tier_samples_total += 1.0f;
@@ -3956,6 +4012,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             scalar_offset + 32
         );
     }
+    scalars[scalar_offset + 59] = short_side ? 0.0f
+        : hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms;
+    scalars[scalar_offset + 60] = short_side
+        ? hsl_strategy_equity_recovery_max_steps(side.hsl_strategy_eq) * interval_ms
+        : 0.0f;
 }
 
 kernel void passivbot_trailing_martingale_multicoin(

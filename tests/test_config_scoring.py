@@ -59,6 +59,10 @@ def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
     assert default_objective_goal("strategy_eq_underwater_pct_mean") == "min"
     assert default_objective_goal("strategy_eq_underwater_pct_median") == "min"
     assert default_objective_goal("peak_recovery_days_strategy_eq") == "min"
+    assert default_objective_goal("peak_recovery_hours_strategy_eq_long") == "min"
+    assert default_objective_goal("peak_recovery_hours_strategy_eq_short") == "min"
+    assert default_objective_goal("peak_recovery_days_strategy_eq_long") == "min"
+    assert default_objective_goal("peak_recovery_days_strategy_eq_short") == "min"
 
 
 def test_strategy_eq_underwater_metrics_are_shared_despite_stat_like_suffixes():
