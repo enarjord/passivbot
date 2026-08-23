@@ -115,13 +115,13 @@ inline bool passes_min_effective_cost(
 
 inline bool realized_loss_proxy_allows_close(
     float qty, float close_price, float pprice, bool is_long,
-    float c_mult, float maker_fee, bool gate_enabled
+    float c_mult, float fee_rate, bool gate_enabled
 ) {
     if (!gate_enabled) return true;
     if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
     float gross_pnl = qty * c_mult
         * (is_long ? close_price - pprice : pprice - close_price);
-    float fee = qty * close_price * c_mult * maker_fee;
+    float fee = qty * close_price * c_mult * fee_rate;
     float net_pnl = gross_pnl - fee;
     // Enumerating and reserving the recursive TM close ladder at every candle
     // would make screening proportional to its 500-rung exact upper bound.
@@ -148,7 +148,7 @@ inline bool realized_loss_proxy_allows_reducer(
     bool is_long,
     bool is_unstuck,
     float c_mult,
-    float maker_fee,
+    float fee_rate,
     bool gate_enabled,
     float balance,
     float realized_pnl_cumsum_last,
@@ -159,13 +159,13 @@ inline bool realized_loss_proxy_allows_reducer(
     if (!is_unstuck) {
         return realized_loss_proxy_allows_close(
             qty, close_price, pprice, is_long,
-            c_mult, maker_fee, true
+            c_mult, fee_rate, true
         );
     }
     if (!(qty > 0.0f && close_price > 0.0f && pprice > 0.0f)) return false;
     float gross_pnl = qty * c_mult
         * (is_long ? close_price - pprice : pprice - close_price);
-    float fee = qty * close_price * c_mult * maker_fee;
+    float fee = qty * close_price * c_mult * fee_rate;
     float net_pnl = gross_pnl - fee;
     if (!isfinite(net_pnl)) return false;
     if (net_pnl >= 0.0f) return true;
@@ -957,6 +957,18 @@ inline void generate_orders(
             s.psize, s.pprice, balance, wel_target, wel_price,
             qty_step, min_qty, min_cost, c_mult
         ) : 0.0f;
+    bool wel_market = wel_qty > 0.0f
+        && should_use_ordinary_market_execution(
+            wel_ticks, !is_long, price_now, price_step,
+            s.market_orders_allowed, s.market_order_near_touch_threshold
+        );
+    if (wel_market) {
+        wel_qty = resize_market_close_qty(
+            wel_qty, s.psize, price_now,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    }
+    float wel_exec_price = wel_market ? price_now : wel_price;
 
     float twel_target = s.twel * s.twel_enforcer_threshold;
     int twel_ticks = is_long
@@ -970,6 +982,18 @@ inline void generate_orders(
             s.psize, s.pprice, balance, twel_target, twel_price,
             qty_step, min_qty, min_cost, c_mult
         ) : 0.0f;
+    bool twel_market = twel_qty > 0.0f
+        && should_use_ordinary_market_execution(
+            twel_ticks, !is_long, price_now, price_step,
+            s.market_orders_allowed, s.market_order_near_touch_threshold
+        );
+    if (twel_market) {
+        twel_qty = resize_market_close_qty(
+            twel_qty, s.psize, price_now,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    }
+    float twel_exec_price = twel_market ? price_now : twel_price;
 
     int unstuck_ticks = is_long ? touch_up_ticks : touch_down_ticks;
     float unstuck_price = float(unstuck_ticks) * price_step;
@@ -979,6 +1003,18 @@ inline void generate_orders(
             qty_step, min_qty, min_cost, c_mult
         )
         : 0.0f;
+    bool unstuck_market = unstuck_qty > 0.0f
+        && should_use_ordinary_market_execution(
+            unstuck_ticks, !is_long, price_now, price_step,
+            s.market_orders_allowed, s.market_order_near_touch_threshold
+        );
+    if (unstuck_market) {
+        unstuck_qty = resize_market_close_qty(
+            unstuck_qty, s.psize, price_now,
+            qty_step, min_qty, min_cost, c_mult
+        );
+    }
+    float unstuck_exec_price = unstuck_market ? price_now : unstuck_price;
 
     float ct = s.close_threshold_base + wer * s.close_threshold_we
         + s.vol1h * s.close_threshold_v1h + s.vol1m * s.close_threshold_v1m;
@@ -1045,28 +1081,32 @@ inline void generate_orders(
             qty_step, min_qty, min_cost, c_mult
         );
     }
+    float ordinary_min = s.close_market
+        ? min_entry_qty(price_now, qty_step, min_qty, min_cost, c_mult)
+        : close_mq;
+    int ordinary_min_relation = s.close_market ? 0 : close_mq_relation;
     bool ordinary_can_accompany_reducer = wel_qty <= 0.0f
         && trailing_close && s.close_qty > 0.0f;
     float finalized_wel_qty = finalized_reducer_qty(
-        s.psize, wel_qty, wel_price,
+        s.psize, wel_qty, wel_exec_price,
         qty_step, min_qty, min_cost, c_mult
     );
     float finalized_twel_qty = ordinary_can_accompany_reducer
         ? finalized_reducer_qty_with_ordinary(
-            s.psize, twel_qty, twel_price, s.close_qty, close_mq,
-            close_mq_relation, qty_step, min_qty, min_cost, c_mult
+            s.psize, twel_qty, twel_exec_price, s.close_qty, ordinary_min,
+            ordinary_min_relation, qty_step, min_qty, min_cost, c_mult
         )
         : finalized_reducer_qty(
-            s.psize, twel_qty, twel_price,
+            s.psize, twel_qty, twel_exec_price,
             qty_step, min_qty, min_cost, c_mult
         );
     float finalized_unstuck_qty = ordinary_can_accompany_reducer
         ? finalized_reducer_qty_with_ordinary(
-            s.psize, unstuck_qty, unstuck_price, s.close_qty, close_mq,
-            close_mq_relation, qty_step, min_qty, min_cost, c_mult
+            s.psize, unstuck_qty, unstuck_exec_price, s.close_qty, ordinary_min,
+            ordinary_min_relation, qty_step, min_qty, min_cost, c_mult
         )
         : finalized_reducer_qty(
-            s.psize, unstuck_qty, unstuck_price,
+            s.psize, unstuck_qty, unstuck_exec_price,
             qty_step, min_qty, min_cost, c_mult
         );
     int unstuck_order_type_id = is_long ? 9 : 20;
@@ -1093,9 +1133,12 @@ inline void generate_orders(
         ? unstuck_ticks : (use_twel ? twel_ticks : wel_ticks);
     float reducer_price = use_unstuck
         ? unstuck_price : (use_twel ? twel_price : wel_price);
+    bool reducer_market = use_unstuck
+        ? unstuck_market : (use_twel ? twel_market : wel_market);
+    float reducer_exec_price = reducer_market ? price_now : reducer_price;
     if (reducer_qty > 0.0f && reducer_ticks > 0) {
         float reducer_min = min_entry_qty(
-            reducer_price, qty_step, min_qty, min_cost, c_mult
+            reducer_exec_price, qty_step, min_qty, min_cost, c_mult
         );
         // WEL is emitted by the strategy itself and therefore suppresses a
         // trailing close. TWEL is appended by orchestration, so it retains an
@@ -1109,8 +1152,9 @@ inline void generate_orders(
                     round_step(s.psize - reducer_qty, qty_step), 0.0f
                 );
             }
-            bool ordinary_below_minimum = ordinary_qty < close_mq
-                || (ordinary_qty == close_mq && close_mq_relation > 0);
+            bool ordinary_below_minimum = ordinary_qty < ordinary_min
+                || (ordinary_qty == ordinary_min
+                    && ordinary_min_relation > 0);
             if (!ordinary_below_minimum) {
                 float remainder = fmax(
                     round_step(
@@ -1118,7 +1162,7 @@ inline void generate_orders(
                     ),
                     0.0f
                 );
-                float minimum_any = fmin(close_mq, reducer_min);
+                float minimum_any = fmin(ordinary_min, reducer_min);
                 if (remainder > 0.0f && remainder < minimum_any) {
                     ordinary_qty = fmin(
                         s.psize - reducer_qty,
@@ -1128,6 +1172,7 @@ inline void generate_orders(
                 s.secondary_close_ticks = s.close_ticks;
                 s.secondary_close_price = s.close_price;
                 s.secondary_close_qty = ordinary_qty;
+                s.secondary_close_market = s.close_market;
             }
         }
         if (s.secondary_close_qty <= 0.0f) {
@@ -1141,6 +1186,7 @@ inline void generate_orders(
         s.close_ticks = reducer_ticks;
         s.close_price = reducer_price;
         s.close_qty = reducer_qty;
+        s.close_market = reducer_market;
         s.close_is_exposure_reducer = true;
         s.close_is_twel_reducer = use_twel && !use_unstuck;
         s.close_is_unstuck_reducer = use_unstuck;
@@ -1864,7 +1910,8 @@ inline void passivbot_single_coin_impl(
                 if (!long_side.close_is_panic
                     && !realized_loss_proxy_allows_reducer(
                         adj, cp, long_side.pprice, true, selected_unstuck,
-                        c_mult, maker_fee, loss_gate_enabled, balance,
+                        c_mult, market_execution ? taker_fee : maker_fee,
+                        loss_gate_enabled, balance,
                         realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max,
                         max_realized_loss_pct)) continue;
@@ -2430,7 +2477,8 @@ inline void passivbot_single_coin_impl(
                 if (!short_side.close_is_panic
                     && !realized_loss_proxy_allows_reducer(
                         adj, cp, short_side.pprice, false, selected_unstuck,
-                        c_mult, maker_fee, loss_gate_enabled, balance,
+                        c_mult, market_execution ? taker_fee : maker_fee,
+                        loss_gate_enabled, balance,
                         realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max,
                         max_realized_loss_pct)) continue;
@@ -2748,10 +2796,17 @@ inline void passivbot_single_coin_impl(
                 && loss_gate_enabled
                 && long_side.close_is_exposure_reducer
                 && !realized_loss_proxy_allows_reducer(
-                    long_side.close_qty, long_side.close_price,
+                    long_side.close_qty,
+                    long_side.close_market
+                        ? ordinary_market_fill_price(
+                            close, false, market_order_slippage_pct, price_step
+                        )
+                        : long_side.close_price,
                     long_side.pprice, true,
                     long_side.close_is_unstuck_reducer,
-                    c_mult, maker_fee, true, balance,
+                    c_mult,
+                    long_side.close_market ? taker_fee : maker_fee,
+                    true, balance,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
                     max_realized_loss_pct
@@ -2779,10 +2834,17 @@ inline void passivbot_single_coin_impl(
                 && loss_gate_enabled
                 && short_side.close_is_exposure_reducer
                 && !realized_loss_proxy_allows_reducer(
-                    short_side.close_qty, short_side.close_price,
+                    short_side.close_qty,
+                    short_side.close_market
+                        ? ordinary_market_fill_price(
+                            close, true, market_order_slippage_pct, price_step
+                        )
+                        : short_side.close_price,
                     short_side.pprice, false,
                     short_side.close_is_unstuck_reducer,
-                    c_mult, maker_fee, true, balance,
+                    c_mult,
+                    short_side.close_market ? taker_fee : maker_fee,
+                    true, balance,
                     realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max,
                     max_realized_loss_pct

@@ -283,15 +283,16 @@ The supported slice is intentionally narrow:
   total-exposure repair, and realized-loss gating. Single-coin Trailing Martingale supports the
   same directional and position-mode topologies with HSL and one-sided minimum-effective-cost
   filtering when every enabled side's entry and close retracement lower bounds remain strictly
-  positive, auto-unstuck and exposure repair remain disabled, and
-  `live.max_realized_loss_pct >= 1`. The Metal proxy classifies each generated order against the
+  positive. Auto-unstuck, position- and total-exposure repair, and realized-loss gating may remain
+  enabled or tunable. The Metal proxy classifies each generated order against the
   current candle close using
   `live.market_order_near_touch_threshold`, retains that execution intent for the pending order,
   and fills promoted orders on the next valid candle at its adversely slipped, directionally
   rounded close with the taker fee. Market closes and short entries are resized at the executable
-  touch before they are retained. Trailing Martingale recursive market ladders, multi-coin market
-  execution, and its excluded risk-order interactions remain fail closed until their execution
-  ordering is modeled
+  touch before they are retained. Protective reducers are independently classified and resized
+  before reducer selection and aggregate allocation; adverse slippage and taker fees participate
+  in realized-loss gating. Trailing Martingale recursive market ladders and multi-coin market
+  execution remain fail closed until their execution ordering is modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

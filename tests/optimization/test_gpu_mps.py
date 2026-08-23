@@ -7508,7 +7508,12 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
 )
 @pytest.mark.parametrize(
     ("strategy_kind", "market_orders_allowed"),
-    [("ema_anchor", False), ("ema_anchor", True), ("trailing_martingale", False)],
+    [
+        ("ema_anchor", False),
+        ("ema_anchor", True),
+        ("trailing_martingale", False),
+        ("trailing_martingale", True),
+    ],
 )
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
@@ -7556,9 +7561,9 @@ def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
             )
             row[6] = 1.0
             row[7] = 10.0
-            row[11] = 0.0
+            row[11] = 0.001 if market_orders_allowed else 0.0
             row[16] = 0.5
-            row[20] = 0.0
+            row[20] = 0.001 if market_orders_allowed else 0.0
             row[23] = 100.0
             return row + row
         row = [
@@ -8257,7 +8262,10 @@ def test_mps_single_coin_exposure_headroom_and_entry_gate(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(
+    side, market_orders_allowed
+):
     count = 10
     close = np.full(count, 100.0)
     high = np.full(count, 102.0)
@@ -8280,9 +8288,9 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
     baseline = _tm_single_row()
     baseline[6] = 1.0
     baseline[7] = 10.0
-    baseline[11] = 0.0
+    baseline[11] = 0.001 if market_orders_allowed else 0.0
     baseline[16] = 10.0
-    baseline[20] = 0.0
+    baseline[20] = 0.001 if market_orders_allowed else 0.0
     repaired = list(baseline)
     repaired[
         TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
@@ -8300,6 +8308,8 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
         data,
         long_enabled=side == "long",
         short_enabled=side == "short",
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.001,
     ).run(
         np.asarray(
             [baseline + baseline, repaired + repaired], dtype=np.float64
@@ -8332,7 +8342,8 @@ def test_mps_tm_position_exposure_repair_reduces_strictly_below_target(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_single_coin_total_exposure_repair(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_single_coin_total_exposure_repair(side, market_orders_allowed):
     count = 10
     close = np.full(count, 100.0)
     high = np.full(count, 102.0)
@@ -8358,9 +8369,9 @@ def test_mps_tm_single_coin_total_exposure_repair(side):
     baseline = _tm_single_row(entry_gate=False, threshold=0.5)
     baseline[6] = 1.0
     baseline[7] = 10.0
-    baseline[11] = 0.0
+    baseline[11] = 0.001 if market_orders_allowed else 0.0
     baseline[16] = 10.0
-    baseline[20] = 0.0
+    baseline[20] = 0.001 if market_orders_allowed else 0.0
     repaired = list(baseline)
     repaired[
         TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
@@ -8373,6 +8384,8 @@ def test_mps_tm_single_coin_total_exposure_repair(side):
         data,
         long_enabled=side == "long",
         short_enabled=side == "short",
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.001,
     ).run(
         np.asarray(
             [baseline + baseline, repaired + repaired], dtype=np.float64
@@ -8767,7 +8780,10 @@ def test_mps_ema_zero_loss_budget_blocks_loss_below_balance_ulp():
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_realized_loss_gate_blocks_lossy_total_exposure_repair(
+    side, market_orders_allowed
+):
     count = 8
     close = np.full(count, 100.0)
     high = np.full(count, 100.0)
@@ -8803,12 +8819,16 @@ def test_mps_tm_realized_loss_gate_blocks_lossy_total_exposure_repair(side):
     )
     row[6] = 1.0
     row[7] = 10.0
-    row[11] = 0.0
+    row[11] = 0.001 if market_orders_allowed else 0.0
     row[16] = 10.0
-    row[20] = 0.0
+    row[20] = 0.001 if market_orders_allowed else 0.0
     kwargs = {
         "long_enabled": side == "long",
         "short_enabled": side == "short",
+        "market_orders_allowed": market_orders_allowed,
+        "market_order_near_touch_threshold": 0.001,
+        "market_order_slippage_pct": 0.01,
+        "taker_fee": 0.01,
     }
 
     ungated = MpsTrailingMartingaleRunner(
@@ -8888,7 +8908,10 @@ def test_mps_tm_loss_gate_rebuilds_profitable_ordinary_close_after_reducer(side)
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_realized_loss_gate_blocks_fee_only_ordinary_close(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_realized_loss_gate_blocks_fee_only_ordinary_close(
+    side, market_orders_allowed
+):
     count = 7
     close = np.full(count, 100.0)
     high = np.full(count, 100.0)
@@ -8930,13 +8953,17 @@ def test_mps_tm_realized_loss_gate_blocks_fee_only_ordinary_close(side):
     )
     row[6] = 0.1
     row[7] = 10.0
-    row[11] = 0.0
+    row[11] = 0.001 if market_orders_allowed else 0.0
     row[16] = -0.005
     row[17] = 0.0
-    row[20] = 0.0
+    row[20] = 0.001 if market_orders_allowed else 0.0
     kwargs = {
         "long_enabled": side == "long",
         "short_enabled": side == "short",
+        "market_orders_allowed": market_orders_allowed,
+        "market_order_near_touch_threshold": 0.001,
+        "market_order_slippage_pct": 0.01,
+        "taker_fee": 0.01,
     }
 
     ungated = MpsTrailingMartingaleRunner(
@@ -11646,6 +11673,12 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "should_use_ordinary_market_execution(" in source
     assert "ordinary_market_fill_price(" in source
     assert "resize_market_close_qty(" in source
+    assert (
+        "float reducer_exec_price = reducer_market ? price_now : reducer_price"
+        in source
+    )
+    assert "s.secondary_close_market = s.close_market" in source
+    assert "s.close_market = reducer_market" in source
     assert "entry_gen_market_price" in source
     assert "close_gen_market_price" in source
     assert "sim.market_orders_allowed = false" in source

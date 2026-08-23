@@ -75,7 +75,6 @@ from optimization.backends.gpu_backend import (
     _validate_seed_side_match,
     _validate_scope,
     _validate_tm_market_nonrecursive_bounds,
-    _validate_tm_market_ordering_bounds,
     _validate_tm_market_template_bounds,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
@@ -781,7 +780,7 @@ def test_gpu_suite_hsl_signal_override_revalidates_effective_topology():
         _gpu_suite_scenario_inputs(config, Suite())
 
 
-def test_gpu_suite_inputs_accept_single_coin_tm_market_hsl_and_min_cost():
+def test_gpu_suite_inputs_accept_single_coin_tm_market_hsl_min_cost_and_risk():
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["filter_by_min_effective_cost"] = True
@@ -789,7 +788,13 @@ def test_gpu_suite_inputs_accept_single_coin_tm_market_hsl_and_min_cost():
     config["live"]["market_orders_allowed"] = True
     config["live"]["hsl_signal_mode"] = "coin"
     config["live"]["pnls_max_lookback_days"] = "all"
+    config["live"]["max_realized_loss_pct"] = 0.05
     config["bot"]["long"]["hsl"]["enabled"] = True
+    config["bot"]["long"]["unstuck"]["enabled"] = True
+    config["bot"]["long"]["risk"][
+        "position_exposure_enforcer_enabled"
+    ] = True
+    config["bot"]["long"]["risk"]["total_exposure_enforcer_enabled"] = True
     ctx = SimpleNamespace(
         label="tm_market_hsl",
         overrides={},
@@ -813,7 +818,15 @@ def test_gpu_suite_inputs_accept_single_coin_tm_market_hsl_and_min_cost():
 
     assert len(prepared) == 1
     assert prepared[0]["config"]["live"]["market_orders_allowed"] is True
+    assert prepared[0]["config"]["live"]["max_realized_loss_pct"] == 0.05
     assert prepared[0]["config"]["bot"]["long"]["hsl"]["enabled"] is True
+    assert prepared[0]["config"]["bot"]["long"]["unstuck"]["enabled"] is True
+    assert (
+        prepared[0]["config"]["bot"]["long"]["risk"][
+            "position_exposure_enforcer_enabled"
+        ]
+        is True
+    )
     assert (
         prepared[0]["config"]["backtest"]["filter_by_min_effective_cost"]
         is True
@@ -1664,58 +1677,26 @@ def test_gpu_tm_market_execution_accepts_trailing_only_mode_bounds():
         "risk_total_exposure_enforcer_enabled",
     ],
 )
-def test_gpu_tm_market_execution_rejects_unmodeled_ordering_bounds(side, suffix):
+def test_gpu_tm_market_execution_accepts_risk_ordering_bounds(side, suffix):
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
     key = f"{side}_{suffix}"
-
-    with pytest.raises(ValueError, match=key):
-        _validate_tm_market_ordering_bounds(
-            {key: Bound(0.0, 1.0)}, {key: 0.0}, {side}, config
-        )
-
-
-def test_gpu_tm_market_execution_accepts_disabled_ordering_bounds():
-    config = _long_only_ema_config()
-    config["live"]["strategy_kind"] = "trailing_martingale"
-    config["live"]["market_orders_allowed"] = True
     bounds = {
-        f"{side}_{suffix}": Bound(0.0, 0.0)
-        for side in ("long", "short")
-        for suffix in (
-            "unstuck_enabled",
-            "risk_position_exposure_enforcer_enabled",
-            "risk_total_exposure_enforcer_enabled",
-        )
+        f"{side}_entry_retracement_base_pct": Bound(0.001, 0.1),
+        f"{side}_close_retracement_base_pct": Bound(0.001, 0.1),
+        key: Bound(0.0, 1.0),
     }
 
-    _validate_tm_market_ordering_bounds(bounds, {}, {"long", "short"}, config)
+    _validate_tm_market_template_bounds(bounds, {}, {side}, config, [])
 
 
-@pytest.mark.parametrize(
-    ("bounds", "message"),
-    [
-        (
-            {
-                "long_entry_retracement_base_pct": Bound(0.0, 0.1),
-                "long_close_retracement_base_pct": Bound(0.001, 0.1),
-            },
-            "Recursive market ladders",
-        ),
-        (
-            {
-                "long_entry_retracement_base_pct": Bound(0.001, 0.1),
-                "long_close_retracement_base_pct": Bound(0.001, 0.1),
-                "long_unstuck_enabled": Bound(0.0, 1.0),
-            },
-            "long_unstuck_enabled",
-        ),
-    ],
-)
-def test_gpu_tm_market_suite_validates_effective_scenarios_not_template(
-    bounds, message
-):
+def test_gpu_tm_market_suite_validates_effective_scenarios_not_template():
+    bounds = {
+        "long_entry_retracement_base_pct": Bound(0.0, 0.1),
+        "long_close_retracement_base_pct": Bound(0.001, 0.1),
+        "long_unstuck_enabled": Bound(0.0, 1.0),
+    }
     template = _long_only_ema_config()
     template["live"]["strategy_kind"] = "trailing_martingale"
     template["live"]["market_orders_allowed"] = True
@@ -1731,9 +1712,8 @@ def test_gpu_tm_market_suite_validates_effective_scenarios_not_template(
     scenario = copy.deepcopy(template)
     scenario["live"]["market_orders_allowed"] = False
     _validate_tm_market_nonrecursive_bounds(bounds, {}, {"long"}, scenario)
-    _validate_tm_market_ordering_bounds(bounds, {}, {"long"}, scenario)
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(ValueError, match="Recursive market ladders"):
         _validate_tm_market_template_bounds(
             bounds, {}, {"long"}, template, []
         )
@@ -1770,68 +1750,29 @@ def test_gpu_market_execution_fails_closed_outside_baseline_scope(
 
 
 @pytest.mark.parametrize(
-    ("mutate", "message"),
+    "mutate",
     [
-        (
-            lambda config: config["live"].__setitem__(
-                "max_realized_loss_pct", 0.5
-            ),
-            "live.max_realized_loss_pct",
+        lambda config: config["live"].__setitem__(
+            "max_realized_loss_pct", 0.5
         ),
-        (
-            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
-                "enabled", True
-            ),
-            "bot.long.unstuck.enabled",
+        lambda config: config["bot"]["long"]["unstuck"].__setitem__(
+            "enabled", True
         ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "position_exposure_enforcer_enabled", True
-            ),
-            "position_exposure_enforcer_enabled",
+        lambda config: config["bot"]["long"]["risk"].__setitem__(
+            "position_exposure_enforcer_enabled", True
         ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "total_exposure_enforcer_enabled", True
-            ),
-            "total_exposure_enforcer_enabled",
-        ),
-        (
-            lambda config: config.__setitem__(
-                "coin_overrides",
-                {"BTC": {"bot": {"long": {"unstuck": {"enabled": True}}}}},
-            ),
-            "coin_overrides.BTC.bot.long.unstuck.enabled",
-        ),
-        (
-            lambda config: config.__setitem__(
-                "coin_overrides",
-                {
-                    "BTC": {
-                        "bot": {
-                            "long": {
-                                "risk": {
-                                    "total_exposure_enforcer_enabled": True
-                                }
-                            }
-                        }
-                    }
-                },
-            ),
-            "coin_overrides.BTC.bot.long.risk.total_exposure_enforcer_enabled",
+        lambda config: config["bot"]["long"]["risk"].__setitem__(
+            "total_exposure_enforcer_enabled", True
         ),
     ],
 )
-def test_gpu_tm_market_execution_fails_closed_for_unmodeled_ordering(
-    mutate, message
-):
+def test_gpu_tm_market_execution_accepts_risk_ordering(mutate):
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
     mutate(config)
 
-    with pytest.raises(ValueError, match=message):
-        _validate_scope(config, _Evaluator())
+    assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("risk_feature", ["loss_gate", "unstuck", "twel_enforcer"])

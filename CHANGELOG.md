@@ -5,15 +5,17 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Extended single-coin Trailing Martingale ordinary market-order optimization on Apple MPS to
-  compatible HSL modes and one-sided minimum-effective-cost filtering. Recursive entry/close
-  modes, auto-unstuck, exposure repair, realized-loss gating, and multi-coin market execution
-  remain fail closed pending their execution-ordering slices.
+  compatible HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, position- and
+  total-exposure repair, and realized-loss gating. Market-promoted reducers are resized at
+  executable touch before selection and aggregate allocation, and adverse slippage plus taker fees
+  participate in the conservative loss projection. Recursive entry/close modes and multi-coin
+  market execution remain fail closed pending their dedicated slices.
 
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin
   Trailing Martingale, covering long, short, and dual-side near-touch trailing entries and closes,
   executable-touch minimum sizing, adverse slippage, and taker fees. Recursive entry/close modes,
-  auto-unstuck, exposure repair, realized-loss gating, and multi-coin combinations remain fail
-  closed until their Trailing Martingale market-order interactions are implemented.
+  and multi-coin combinations remain fail closed until their Trailing Martingale market-order
+  interactions are implemented.
 
 - Extended single-coin EMA Anchor ordinary market-order optimization on Apple MPS to compatible
   HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, total-exposure repair, and

@@ -971,52 +971,6 @@ def _validate_scope_config(
                 "GPU ordinary market execution currently requires single-coin "
                 "EMA Anchor or Trailing Martingale"
             )
-        if strategy_kind == "trailing_martingale":
-            unsupported_market_features = []
-            if max_realized_loss_pct < 1.0:
-                unsupported_market_features.append("live.max_realized_loss_pct")
-            for side in enabled_sides:
-                side_config = config.get("bot", {}).get(side, {}) or {}
-                if bool((side_config.get("unstuck", {}) or {}).get("enabled", False)):
-                    unsupported_market_features.append(
-                        f"bot.{side}.unstuck.enabled"
-                    )
-                risk = side_config.get("risk", {}) or {}
-                for key in (
-                    "position_exposure_enforcer_enabled",
-                    "total_exposure_enforcer_enabled",
-                ):
-                    if bool(risk.get(key, False)):
-                        unsupported_market_features.append(f"bot.{side}.risk.{key}")
-                for coin, patch in (config.get("coin_overrides") or {}).items():
-                    if not isinstance(patch, dict):
-                        continue
-                    override_side = (
-                        patch.get("bot", {}).get(side, {}) or {}
-                    )
-                    if bool(
-                        (override_side.get("unstuck", {}) or {}).get(
-                            "enabled", False
-                        )
-                    ):
-                        unsupported_market_features.append(
-                            f"coin_overrides.{coin}.bot.{side}.unstuck.enabled"
-                        )
-                    override_risk = override_side.get("risk", {}) or {}
-                    for key in (
-                        "position_exposure_enforcer_enabled",
-                        "total_exposure_enforcer_enabled",
-                    ):
-                        if bool(override_risk.get(key, False)):
-                            unsupported_market_features.append(
-                                f"coin_overrides.{coin}.bot.{side}.risk.{key}"
-                            )
-            if unsupported_market_features:
-                raise ValueError(
-                    "GPU Trailing Martingale ordinary market execution does not "
-                    "yet support risk ordering for: "
-                    + ", ".join(sorted(unsupported_market_features))
-                )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
         enabled_sides
     ) != 1:
@@ -2794,44 +2748,6 @@ def _validate_tm_market_nonrecursive_bounds(
         )
 
 
-def _validate_tm_market_ordering_bounds(
-    bound_by_key, base_by_key, enabled_sides, config
-) -> None:
-    if (
-        str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
-        != "trailing_martingale"
-        or not bool(config.get("live", {}).get("market_orders_allowed"))
-    ):
-        return
-    unsupported = []
-    for side in sorted(set(enabled_sides or ())):
-        for suffix in (
-            "unstuck_enabled",
-            "risk_position_exposure_enforcer_enabled",
-            "risk_total_exposure_enforcer_enabled",
-        ):
-            key = f"{side}_{suffix}"
-            bound = bound_by_key.get(key)
-            values = (
-                (float(bound.low), float(bound.high))
-                if bound is not None
-                else (float(base_by_key.get(key, 0.0)),) * 2
-            )
-            if any(
-                not math.isfinite(value)
-                or not math.isclose(value, 0.0, rel_tol=0.0, abs_tol=1.0e-12)
-                for value in values
-            ):
-                unsupported.append(f"{key} bounds={values}")
-    if unsupported:
-        raise ValueError(
-            "GPU Trailing Martingale ordinary market execution requires "
-            "unstuck and exposure-enforcer enablement bounds to remain pinned "
-            "false until their market ordering is modeled: "
-            + ", ".join(unsupported)
-        )
-
-
 def _validate_tm_market_template_bounds(
     bound_by_key, base_by_key, enabled_sides, config, suite_inputs
 ) -> None:
@@ -2840,9 +2756,6 @@ def _validate_tm_market_template_bounds(
     if suite_inputs:
         return
     _validate_tm_market_nonrecursive_bounds(
-        bound_by_key, base_by_key, enabled_sides, config
-    )
-    _validate_tm_market_ordering_bounds(
         bound_by_key, base_by_key, enabled_sides, config
     )
 
@@ -3408,12 +3321,6 @@ def run_backend(
             strategy_kind=strategy_kind,
         )
         _validate_tm_market_nonrecursive_bounds(
-            scenario_bound_by_key,
-            scenario_base_by_key,
-            scenario_enabled_sides,
-            item["config"],
-        )
-        _validate_tm_market_ordering_bounds(
             scenario_bound_by_key,
             scenario_base_by_key,
             scenario_enabled_sides,
