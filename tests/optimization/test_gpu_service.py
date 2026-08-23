@@ -873,8 +873,13 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             {
                 "n_positions": 2,
                 "total_wallet_exposure_limit": 1.0,
-                "position_exposure_enforcer_enabled": False,
-                "total_exposure_enforcer_enabled": False,
+                "position_exposure_enforcer_enabled": (
+                    strategy_kind == "trailing_martingale"
+                ),
+                "position_exposure_enforcer_threshold": 0.7,
+                "total_exposure_enforcer_enabled": True,
+                "total_exposure_enforcer_policy": "reduce_portfolio",
+                "total_exposure_enforcer_threshold": 0.8,
             }
         )
         # Construction must retain the fused shared-account path when both
@@ -909,6 +914,12 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "risk_twel_enforcer_policy": flat["risk_twel_enforcer_policy"],
             "risk_twel_enforcer_threshold": flat[
                 "risk_twel_enforcer_threshold"
+            ],
+            "risk_wel_enforcer_enabled": flat[
+                "risk_wel_enforcer_enabled"
+            ],
+            "risk_wel_enforcer_threshold": flat[
+                "risk_wel_enforcer_threshold"
             ],
             "unstuck_enabled": flat["unstuck_enabled"],
             "hsl_enabled": flat["hsl_enabled"],

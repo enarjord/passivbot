@@ -241,13 +241,13 @@ The supported slice is intentionally narrow:
   coin's equity tracking starts because Rust records an equity sample on every tracked step
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single-coin long, short, and dual-side runs,
-  one-sided multi-coin runs, and compatible suites. When current position exposure exceeds the
-  allowance-adjusted WEL times the positive threshold, Metal gives the passive reducer precedence
-  over the normal strategy close and sizes it strictly below that target. Static per-coin
-  overrides may change both fields in one-sided multi-coin runs. Dual-side multi-coin repair
-  remains fail closed until global cross-side selection and loss-budget reservation are modeled.
-  EMA Anchor position-exposure repair remains fail closed because its exact Rust strategy path
-  does not use this reducer
+  one- and dual-side multi-coin runs, and compatible suites. When current position exposure
+  exceeds the allowance-adjusted WEL times the positive threshold, Metal gives the passive reducer
+  precedence over the normal strategy close and sizes it strictly below that target. Static per-coin
+  overrides may change both fields in one- and dual-side multi-coin runs. The fused kernel computes
+  WEL and TWEL repair independently for each directional surface against the same pre-fill shared
+  account snapshot, matching exact Rust order generation. EMA Anchor position-exposure repair
+  remains fail closed because its exact Rust strategy path does not use this reducer
 - single-coin EMA Anchor models the cumulative realized-loss gate, including entry and close fees,
   shared long/short loss-budget accounting, and lossy total-exposure repairs. The proxy uses a
   conservative all-history loss envelope, so it may block a close that exact Rust admits after old
@@ -260,7 +260,7 @@ The supported slice is intentionally narrow:
   restrictions avoid unsafe cross-side loss-budget reservation and per-candle
   enumeration of TM's recursive 500-rung close ladder. Exact
   validation applies the configured rolling allowance and remains authoritative
-- BTC collateral remains disabled; dual-side multicoin total-exposure repair remains disabled
+- BTC collateral remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The
   screening proxy compares against the highest executable minimum observed for that coin in the
@@ -281,7 +281,7 @@ Unsupported combinations fail before optimization begins. Dual-side multi-coin E
 Trailing Martingale use fused shared-account Metal kernels in hedge mode. Every accepted metric
 still comes from the unchanged exact Rust portfolio backtest, and classification, rank, and drift
 gates halt material disagreement. Dual-side one-way arbitration, unmodeled non-bot suite scenario
-overrides and dual-side multi-coin exposure repair are not
+overrides are not
 silently approximated by this release.
 
 For a supported suite, each Metal candidate is dispatched across every prepared scenario. The GPU

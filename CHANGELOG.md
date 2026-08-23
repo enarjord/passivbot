@@ -57,7 +57,13 @@ All notable user-facing changes will be documented in this file.
   account kernel admits one global least-stuck candidate across both directional surfaces using
   exact Rust's price-difference, symbol-index, and long-before-short tie ordering, then applies the
   existing conservative realized-loss allowance. Exact Rust validation and drift gates remain
-  authoritative; dual-side multi-coin exposure repair remains fail closed.
+  authoritative.
+
+- Enabled fused dual-side multi-coin exposure repair in Apple MPS optimization. EMA Anchor and
+  Trailing Martingale now support per-side TWEL repair in shared-account runs, and Trailing
+  Martingale also supports its per-position WEL reducer and static coin overrides. Each directional
+  surface computes its exact-Rust-style action set from the same pre-fill shared account snapshot;
+  exact Rust validation and the existing drift gates remain authoritative.
 
 - Fixed finite `live.pnls_max_lookback_days` handling for single-coin `coin`-mode HSL on Apple
   MPS. EMA Anchor and Trailing Martingale screening now expire realized-PnL fill events with the
@@ -67,13 +73,11 @@ All notable user-facing changes will be documented in this file.
 - Added fused shared-account dual-side multi-coin Trailing Martingale screening to Apple MPS
   optimization. Long and short candidates now run in one portfolio kernel for unified, pside,
   and coin HSL, including shared event/tier metrics, directional PnL, coin overrides, forager
-  selection, and the existing TM entry/close behavior. Exact Rust remains authoritative;
-  dual-side exposure repair remains fail closed pending its global cross-side parity slice.
+  selection, and the existing TM entry/close behavior. Exact Rust remains authoritative.
 
 - Added fused shared-account dual-side multi-coin EMA Anchor screening to Apple MPS optimization.
   Unified, pside, and coin HSL now run inside one portfolio kernel, including per-coin HSL
-  overrides and shared event/tier scoring metrics. Exact Rust remains authoritative; dual-side
-  exposure repair remains fail closed.
+  overrides and shared event/tier scoring metrics. Exact Rust remains authoritative.
 
 - Added dual-side single-coin `unified` HSL to Apple MPS optimization for EMA Anchor and
   Trailing Martingale. Both Metal controllers now consume account-wide realized and unrealized

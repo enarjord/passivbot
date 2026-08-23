@@ -1800,7 +1800,7 @@ def test_gpu_multicoin_accepts_tm_total_exposure_repair(side, policy):
         "total_exposure_enforcer_enabled",
     ],
 )
-def test_gpu_dual_multicoin_rejects_tm_exposure_repair(repair_key):
+def test_gpu_dual_multicoin_accepts_tm_exposure_repair(repair_key):
     config = _directional_tm_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
@@ -1813,11 +1813,10 @@ def test_gpu_dual_multicoin_rejects_tm_exposure_repair(repair_key):
         risk["n_positions"] = 2
         risk[repair_key] = True
 
-    with pytest.raises(ValueError, match="global cross-side selection"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_dual_multicoin_rejects_tm_coin_override_exposure_repair():
+def test_gpu_dual_multicoin_accepts_tm_coin_override_exposure_repair():
     config = _directional_tm_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
@@ -1835,8 +1834,7 @@ def test_gpu_dual_multicoin_rejects_tm_coin_override_exposure_repair():
         }
     }
 
-    with pytest.raises(ValueError, match="global cross-side selection"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -1911,7 +1909,7 @@ def test_gpu_multicoin_accepts_ema_total_exposure_repair(
     )
 
 
-def test_gpu_dual_multicoin_rejects_ema_total_exposure_repair():
+def test_gpu_dual_multicoin_accepts_ema_total_exposure_repair():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["approved_coins"] = {
         "long": ["BTC", "ETH", "SOL"],
@@ -1924,8 +1922,7 @@ def test_gpu_dual_multicoin_rejects_ema_total_exposure_repair():
         risk["n_positions"] = 2
         risk["total_exposure_enforcer_enabled"] = True
 
-    with pytest.raises(ValueError, match="global cross-side selection"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
@@ -4720,7 +4717,7 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
         strategy_kind="trailing_martingale",
     )
 
-    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
+    for strategy_kind in ("trailing_martingale", "ema_anchor"):
         _validate_pinned_scope_bounds(
             {
                 "long_risk_total_exposure_enforcer_enabled": Bound(
@@ -4730,20 +4727,7 @@ def test_gpu_rejects_pinned_unsupported_exposure_repair_behavior():
             {"long_risk_total_exposure_enforcer_enabled": 0.0},
             {"long", "short"},
             coin_count=2,
-            strategy_kind="trailing_martingale",
-        )
-
-    with pytest.raises(ValueError, match="total_exposure_enforcer_enabled"):
-        _validate_pinned_scope_bounds(
-            {
-                "long_risk_total_exposure_enforcer_enabled": Bound(
-                    0.0, 1.0, None
-                )
-            },
-            {"long_risk_total_exposure_enforcer_enabled": 0.0},
-            {"long", "short"},
-            coin_count=2,
-            strategy_kind="ema_anchor",
+            strategy_kind=strategy_kind,
         )
 
 
