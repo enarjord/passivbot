@@ -1002,6 +1002,9 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
+        any_configured_hsl = any(
+            bool(bot.get("hsl_enabled")) for bot in (long_bot, short_bot)
+        )
         signal_mode = (
             backtest_params.get("equity_hard_stop_loss", {})
             .get("signal_mode", "unified")
@@ -1129,10 +1132,7 @@ class MpsSingleCoinProxy:
             if self.strategy_kind == "trailing_martingale"
             else MpsEmaAnchorRunner
         )
-        self.runner = runner_cls(
-            self.market,
-            self.run,
-            self.data,
+        runner_kwargs = dict(
             long_enabled=self.enabled["long"],
             short_enabled=self.enabled["short"],
             hedge_mode=bool(backtest_params["hedge_mode"]),
@@ -1150,6 +1150,21 @@ class MpsSingleCoinProxy:
             hsl_panic_market_short=hsl_panic_market["short"],
             pnl_lookback_bars=pnl_lookback_bars,
         )
+        if self.strategy_kind == "trailing_martingale":
+            runner_kwargs["hsl_enabled"] = any_configured_hsl
+        self.runner = runner_cls(
+            self.market,
+            self.run,
+            self.data,
+            **runner_kwargs,
+        )
+        shader_topology = getattr(self.runner, "shader_topology", "generic")
+        if shader_topology != "generic":
+            logging.info(
+                "GPU MPS specialized kernel selected | strategy=%s topology=%s",
+                self.strategy_kind,
+                shader_topology,
+            )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
         rows = []

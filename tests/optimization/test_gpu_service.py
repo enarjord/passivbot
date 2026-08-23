@@ -14,6 +14,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
+    trailing_martingale_shader_topology,
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
@@ -70,6 +71,29 @@ def test_directional_coin_hsl_lookback_bar_contract(
             },
             signal_mode=signal_mode,
             hsl_enabled=enabled,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("long_enabled", "short_enabled", "hsl_enabled", "expected"),
+    [
+        (True, False, False, "long_no_hsl"),
+        (False, True, False, "short_no_hsl"),
+        (True, True, False, "generic"),
+        (True, False, True, "generic"),
+        (False, True, True, "generic"),
+    ],
+)
+def test_trailing_martingale_shader_topology_is_fail_closed(
+    long_enabled, short_enabled, hsl_enabled, expected
+):
+    assert (
+        trailing_martingale_shader_topology(
+            long_enabled=long_enabled,
+            short_enabled=short_enabled,
+            hsl_enabled=hsl_enabled,
         )
         == expected
     )
