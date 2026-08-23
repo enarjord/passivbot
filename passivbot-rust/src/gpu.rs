@@ -432,9 +432,12 @@ mod tests {
         assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
         assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
         assert!(source.contains("const bool short_hsl_panic_market = settings[18] > 0.5f"));
-        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
-        assert!(source.contains("close * (1.0f - market_order_slippage_pct)"));
-        assert!(source.contains("close * (1.0f + market_order_slippage_pct)"));
+        assert!(source.contains("const bool market_orders_allowed = settings[19] > 0.5f"));
+        assert!(source
+            .contains("const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"));
+        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
+        assert!(source.contains("ordinary_market_fill_price("));
+        assert!(source.contains("resize_market_close_qty("));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert_eq!(source.matches("= fma(").count(), 6);
         assert!(!source.contains("alpha0 * close +"));

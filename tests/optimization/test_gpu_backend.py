@@ -692,6 +692,16 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
         ("live.hedge_mode", True, ("live", "hedge_mode")),
         ("live.hsl_signal_mode", "coin", ("live", "hsl_signal_mode")),
         (
+            "live.market_order_near_touch_threshold",
+            0.002,
+            ("live", "market_order_near_touch_threshold"),
+        ),
+        (
+            "live.market_orders_allowed",
+            True,
+            ("live", "market_orders_allowed"),
+        ),
+        (
             "live.max_realized_loss_pct",
             0.05,
             ("live", "max_realized_loss_pct"),
@@ -1514,12 +1524,6 @@ def test_suite_limit_metric_value_respects_reducer_and_scenario():
         (lambda config: config["backtest"].__setitem__("suite_enabled", True), "suite"),
         (
             lambda config: config["live"].__setitem__(
-                "market_orders_allowed", True
-            ),
-            "market_orders_allowed",
-        ),
-        (
-            lambda config: config["live"].__setitem__(
                 "strategy_kind", "trailing_grid_v7"
             ),
             "trailing_martingale",
@@ -1554,6 +1558,86 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
 def test_gpu_foundation_accepts_ema_long_single():
     assert _validate_scope(_long_only_ema_config(), _Evaluator()) == "bybit"
+
+
+def test_gpu_foundation_accepts_baseline_ema_single_coin_market_execution():
+    config = _long_only_ema_config()
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["market_order_near_touch_threshold"] = 0.002
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "evaluator", "message"),
+    [
+        (
+            lambda config: config["live"].__setitem__(
+                "strategy_kind", "trailing_martingale"
+            ),
+            _Evaluator,
+            "single-coin strategy_kind=ema_anchor",
+        ),
+        (
+            lambda config: config["live"].__setitem__(
+                "market_order_near_touch_threshold", -0.1
+            ),
+            _Evaluator,
+            "finite non-negative",
+        ),
+        (
+            lambda config: config["backtest"].__setitem__(
+                "filter_by_min_effective_cost", True
+            ),
+            _Evaluator,
+            "filter_by_min_effective_cost=false",
+        ),
+        (
+            lambda config: config["live"].__setitem__(
+                "max_realized_loss_pct", 0.5
+            ),
+            _Evaluator,
+            "max_realized_loss_pct>=1",
+        ),
+        (
+            lambda config: config["bot"]["long"]["hsl"].__setitem__(
+                "enabled", True
+            ),
+            _Evaluator,
+            "hsl.enabled=false",
+        ),
+        (
+            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
+                "enabled", True
+            ),
+            _Evaluator,
+            "unstuck.enabled=false",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "total_exposure_enforcer_enabled", True
+            ),
+            _Evaluator,
+            "total_exposure_enforcer_enabled=false",
+        ),
+        (
+            lambda config: config["live"]["approved_coins"].__setitem__(
+                "long", ["BTC", "ETH"]
+            ),
+            _MulticoinEvaluator,
+            "single-coin strategy_kind=ema_anchor",
+        ),
+    ],
+)
+def test_gpu_market_execution_fails_closed_outside_baseline_scope(
+    mutate, evaluator, message
+):
+    config = _long_only_ema_config()
+    config["live"]["market_orders_allowed"] = True
+    mutate(config)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_scope(config, evaluator())
 
 
 def test_gpu_foundation_accepts_one_sided_single_coin_hsl():

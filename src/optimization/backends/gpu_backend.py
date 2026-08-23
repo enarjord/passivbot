@@ -306,6 +306,8 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
     ("live", "forager_score_hysteresis_pct"),
     ("live", "hedge_mode"),
     ("live", "hsl_signal_mode"),
+    ("live", "market_order_near_touch_threshold"),
+    ("live", "market_orders_allowed"),
     ("live", "max_realized_loss_pct"),
     ("live", "pnls_max_lookback_days"),
 }
@@ -923,11 +925,6 @@ def _validate_scope_config(
                 "backtest.liquidation_threshold so the proxy has a proven lower "
                 "balance bound"
             )
-    if bool(config.get("live", {}).get("market_orders_allowed")):
-        raise ValueError(
-            "GPU foundation requires live.market_orders_allowed=false because the "
-            "screening proxy models resting maker orders only"
-        )
     if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
         raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
     max_realized_loss_pct = float(
@@ -959,6 +956,53 @@ def _validate_scope_config(
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:
         raise ValueError("GPU foundation requires at least one enabled side")
+    if bool(config.get("live", {}).get("market_orders_allowed")):
+        threshold = float(
+            config.get("live", {}).get("market_order_near_touch_threshold", 0.001)
+            or 0.0
+        )
+        if not math.isfinite(threshold) or threshold < 0.0:
+            raise ValueError(
+                "GPU market execution requires a finite non-negative "
+                "live.market_order_near_touch_threshold"
+            )
+        if strategy_kind != "ema_anchor" or coin_count != 1:
+            raise ValueError(
+                "GPU ordinary market execution currently requires single-coin "
+                "strategy_kind=ema_anchor"
+            )
+        if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
+            raise ValueError(
+                "GPU ordinary market execution currently requires "
+                "backtest.filter_by_min_effective_cost=false"
+            )
+        if max_realized_loss_pct < 1.0:
+            raise ValueError(
+                "GPU ordinary market execution currently requires "
+                "live.max_realized_loss_pct>=1 until market-close loss gating "
+                "is modeled"
+            )
+        for side in enabled_sides:
+            side_config = config["bot"][side]
+            if bool(side_config.get("hsl", {}).get("enabled")):
+                raise ValueError(
+                    "GPU ordinary market execution currently requires "
+                    f"bot.{side}.hsl.enabled=false"
+                )
+            if bool(side_config.get("unstuck", {}).get("enabled")):
+                raise ValueError(
+                    "GPU ordinary market execution currently requires "
+                    f"bot.{side}.unstuck.enabled=false"
+                )
+            if bool(
+                side_config.get("risk", {}).get(
+                    "total_exposure_enforcer_enabled", False
+                )
+            ):
+                raise ValueError(
+                    "GPU ordinary market execution currently requires "
+                    f"bot.{side}.risk.total_exposure_enforcer_enabled=false"
+                )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
         enabled_sides
     ) != 1:

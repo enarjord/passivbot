@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added baseline ordinary market-order execution to Apple MPS optimization for single-coin EMA
+  Anchor, including near-touch promotion, next-candle adverse slippage, taker fees, executable-touch
+  sizing, directional and one-way modes, and compatible suites. HSL, auto-unstuck, exposure repair,
+  realized-loss gating, minimum-effective-cost filtering, Trailing Martingale, and multi-coin
+  combinations remain fail closed while their market-order interactions are implemented.
+
 - Added Apple MPS suite scenario overrides for `live.hsl_signal_mode`. Coin, position-side, and
   unified HSL signal topology may now vary by scenario when each effective scenario passes the
   existing Metal topology and per-coin override checks.

@@ -124,10 +124,11 @@ The supported slice is intentionally narrow:
   config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
   EMA-anchor and trailing-martingale runs, starting balance, maker fee, liquidation threshold,
   taker fee, market-order slippage, minimum-effective-cost filtering, finite or all-history PnL
-  lookback, Forager hysteresis, hedge mode, and HSL signal mode are also supported, while other
-  non-bot override paths remain unsupported; combined scenarios may use canonical per-coin source
-  assignments, while an individual-exchange scenario fails closed if an effective assignment
-  for one of its prepared coins selects another exchange
+  lookback, Forager hysteresis, hedge mode, HSL signal mode, ordinary-market enablement, and its
+  near-touch threshold are also supported when the resulting scenario remains within the scope
+  below, while other non-bot override paths remain unsupported; combined scenarios may use
+  canonical per-coin source assignments, while an individual-exchange scenario fails closed if
+  an effective assignment for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor and trailing-martingale
   runs: active-strategy parameters, `risk.entry_cooldown_minutes`, and explicit
   `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and all six `unstuck` leaves are
@@ -276,7 +277,16 @@ The supported slice is intentionally narrow:
   multi-coin runs still require this option to be disabled because proxy position divergence and
   approximate multi-coin selection cannot conservatively bound exact Rust's cash balance for
   another flat side or coin
-- `live.market_orders_allowed: false`
+- `live.market_orders_allowed: false` for the complete strategy/risk surface. Single-coin EMA
+  Anchor also supports `true` for long-only, short-only, hedge-mode dual-side, one-way, and
+  compatible suite scenarios when HSL, auto-unstuck, and total-exposure repair are disabled,
+  `live.max_realized_loss_pct >= 1`, and minimum-effective-cost filtering is disabled. The Metal
+  proxy classifies each generated order against the current candle close using
+  `live.market_order_near_touch_threshold`, retains that execution intent for the pending order,
+  and fills promoted orders on the next valid candle at its adversely slipped, directionally
+  rounded close with the taker fee. Market closes and short entries are resized at the executable
+  touch before they are retained. Trailing Martingale, multi-coin market execution, and the
+  excluded risk-order interactions remain fail closed until their execution ordering is modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
@@ -308,11 +318,12 @@ multi-coin EMA Anchor and Trailing Martingale runs, `backtest.starting_balance`,
 `backtest.maker_fee_override`, `backtest.taker_fee_override`,
 `backtest.market_order_slippage_pct`, `backtest.filter_by_min_effective_cost`,
 `backtest.liquidation_threshold`, `live.pnls_max_lookback_days`,
-`live.forager_score_hysteresis_pct`, `live.hedge_mode`, and `live.hsl_signal_mode` are accepted
-because every scenario proxy consumes them through the canonical backtest payload and then passes
-the same fail-closed scope checks. Combined scenario `coin_sources` use the same prepared per-coin
-candles and market settings as exact Rust; their resolved OHLCV and market-settings exchanges are
-part of checkpoint
+`live.forager_score_hysteresis_pct`, `live.hedge_mode`, `live.hsl_signal_mode`,
+`live.market_orders_allowed`, and `live.market_order_near_touch_threshold` are accepted because
+every scenario proxy consumes them through the canonical backtest payload and then passes the same
+fail-closed scope checks. Combined scenario `coin_sources` use the same prepared per-coin candles
+and market settings as exact Rust; their resolved OHLCV and market-settings exchanges are part of
+checkpoint
 identity. Other non-bot paths remain rejected until their proxy semantics are modeled. The
 effective external suite definition and any `--scenarios` filter are
 stored in the run contract and checkpoint identity, with dynamic scenario dates resolved to the
