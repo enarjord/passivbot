@@ -567,7 +567,10 @@ class MpsEmaAnchorRunner:
             else 0
         )
         self.n_recovery_samples = (
-            max(1, (self.n + self.recovery_stride - 1) // self.recovery_stride)
+            max(
+                1,
+                (self.n + self.recovery_stride - 1) // self.recovery_stride + 1,
+            )
             if self.recovery_distribution_enabled
             else 1
         )

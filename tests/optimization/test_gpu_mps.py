@@ -5789,7 +5789,7 @@ def test_mps_ema_anchor_directionally_rounds_non_aligned_candle_touch():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_volume_uses_raw_non_positive_post_fill_balance():
+def test_mps_recovery_captures_early_post_fill_liquidation_endpoint():
     count = 64
     close = np.full(count, 100.0)
     high = np.full(count, 101.0)
@@ -5823,11 +5823,28 @@ def test_mps_volume_uses_raw_non_positive_post_fill_balance():
         dtype=np.float64,
     )
 
-    output = MpsEmaAnchorRunner(market, run, data).run(parameters)
+    runner = MpsEmaAnchorRunner(
+        market, run, data, recovery_distribution_enabled=True
+    )
+    output = runner.run(parameters)
     torch.mps.synchronize()
 
     assert output["day_has_fill"].sum().item() > 0
     assert output["day_volume"].sum().item() < 0.0
+    assert not output["alive"].item()
+    samples = output["strategy_eq_recovery_samples"][0]
+    finite_samples = samples[torch.isfinite(samples)]
+    assert finite_samples.numel() >= 2
+    assert finite_samples[-1].item() == pytest.approx(
+        run.starting_balance * run.liquidation_threshold
+    )
+    recovery = strategy_eq_recovery_distribution_from_samples(
+        output["strategy_eq_recovery_samples"],
+        sample_interval_days=output[
+            "strategy_eq_recovery_sample_interval_days"
+        ],
+    )
+    assert recovery[0, 3].item() > 0.0
 
 
 @pytest.mark.skipif(

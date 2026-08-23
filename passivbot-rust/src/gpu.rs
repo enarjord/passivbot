@@ -180,9 +180,10 @@ mod tests {
         assert!(source.contains("#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"));
         assert!(source.contains("const int recovery_stride = sizes[7]"));
         assert!(source.contains("const int recovery_sample_count = sizes[8]"));
-        assert!(source.contains("recovery_stride > 0 && k % recovery_stride == 0"));
-        assert!(source
-            .contains("recovery_samples[int(b) * recovery_sample_count + sample_index] = eqf"));
+        assert!(source.contains("int recovery_start_k = -1"));
+        assert!(source.contains("const bool recovery_terminal = liq || k == T - 2"));
+        assert!(source.contains("(recovery_elapsed + recovery_stride - 1) / recovery_stride"));
+        assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
     }
 
     #[test]

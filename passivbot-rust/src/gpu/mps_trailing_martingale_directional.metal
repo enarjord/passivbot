@@ -1199,6 +1199,9 @@ inline void passivbot_single_coin_impl(
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    int recovery_start_k = -1;
+#endif
     float hsl_tier_samples_total = 0.0f;
     float hsl_tier_samples_yellow = 0.0f;
     float hsl_tier_samples_orange = 0.0f;
@@ -2719,10 +2722,22 @@ inline void passivbot_single_coin_impl(
             bool liq = balance <= 0.0f || equity <= liq_floor;
             float eqf = liq ? liq_floor : equity;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-            if (recovery_stride > 0 && k % recovery_stride == 0) {
-                const int sample_index = k / recovery_stride;
-                if (sample_index < recovery_sample_count) {
-                    recovery_samples[int(b) * recovery_sample_count + sample_index] = eqf;
+            if (recovery_stride > 0 && recovery_start_k < 0) {
+                recovery_start_k = k;
+                recovery_samples[int(b) * recovery_sample_count] = eqf;
+            } else if (recovery_stride > 0) {
+                const int recovery_elapsed = k - recovery_start_k;
+                const bool recovery_terminal = liq || k == T - 2;
+                const bool recovery_regular = recovery_elapsed % recovery_stride == 0;
+                if (recovery_regular || recovery_terminal) {
+                    const int sample_index = recovery_terminal
+                        ? (recovery_elapsed + recovery_stride - 1) / recovery_stride
+                        : recovery_elapsed / recovery_stride;
+                    if (sample_index < recovery_sample_count) {
+                        recovery_samples[
+                            int(b) * recovery_sample_count + sample_index
+                        ] = eqf;
+                    }
                 }
             }
 #endif

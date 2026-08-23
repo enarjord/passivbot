@@ -5,8 +5,9 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Added global strategy-equity recovery-distribution scoring and limits to single-coin Apple MPS
-  optimization for EMA Anchor and Trailing Martingale. Directional kernels emit opt-in hourly
-  strategy-equity samples, and a bounded Metal postprocessor applies Rust's strict
+  optimization for EMA Anchor and Trailing Martingale. Directional kernels emit opt-in
+  candidate-relative hourly strategy-equity samples with mandatory initial and
+  terminal/liquidation endpoints, and a bounded Metal postprocessor applies Rust's strict
   time-to-exceed, percentile, and worst-tail definitions for
   `strategy_eq_recovery_days_{mean,median,p95,p99,mean_worst_5pct,mean_worst_1pct}`. Exact Rust
   validation and rolling drift gates remain authoritative. Histories with internal invalid candles
