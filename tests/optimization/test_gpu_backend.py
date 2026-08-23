@@ -76,6 +76,7 @@ from optimization.backends.gpu_backend import (
     _validate_scope,
     _validate_tm_market_nonrecursive_bounds,
     _validate_tm_market_ordering_bounds,
+    _validate_tm_market_template_bounds,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
     _GPU_SUITE_VIOLATION_KEY,
@@ -1651,6 +1652,52 @@ def test_gpu_tm_market_execution_accepts_disabled_ordering_bounds():
     }
 
     _validate_tm_market_ordering_bounds(bounds, {}, {"long", "short"}, config)
+
+
+@pytest.mark.parametrize(
+    ("bounds", "message"),
+    [
+        (
+            {
+                "long_entry_retracement_base_pct": Bound(0.0, 0.1),
+                "long_close_retracement_base_pct": Bound(0.001, 0.1),
+            },
+            "Recursive market ladders",
+        ),
+        (
+            {
+                "long_entry_retracement_base_pct": Bound(0.001, 0.1),
+                "long_close_retracement_base_pct": Bound(0.001, 0.1),
+                "long_unstuck_enabled": Bound(0.0, 1.0),
+            },
+            "long_unstuck_enabled",
+        ),
+    ],
+)
+def test_gpu_tm_market_suite_validates_effective_scenarios_not_template(
+    bounds, message
+):
+    template = _long_only_ema_config()
+    template["live"]["strategy_kind"] = "trailing_martingale"
+    template["live"]["market_orders_allowed"] = True
+
+    _validate_tm_market_template_bounds(
+        bounds,
+        {},
+        {"long"},
+        template,
+        [{"config": {"effective": True}}],
+    )
+
+    scenario = copy.deepcopy(template)
+    scenario["live"]["market_orders_allowed"] = False
+    _validate_tm_market_nonrecursive_bounds(bounds, {}, {"long"}, scenario)
+    _validate_tm_market_ordering_bounds(bounds, {}, {"long"}, scenario)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_tm_market_template_bounds(
+            bounds, {}, {"long"}, template, []
+        )
 
 
 @pytest.mark.parametrize(

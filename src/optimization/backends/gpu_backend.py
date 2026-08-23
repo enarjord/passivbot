@@ -2834,6 +2834,21 @@ def _validate_tm_market_ordering_bounds(
         )
 
 
+def _validate_tm_market_template_bounds(
+    bound_by_key, base_by_key, enabled_sides, config, suite_inputs
+) -> None:
+    """Validate a directly executed config, not a suite's override template."""
+
+    if suite_inputs:
+        return
+    _validate_tm_market_nonrecursive_bounds(
+        bound_by_key, base_by_key, enabled_sides, config
+    )
+    _validate_tm_market_ordering_bounds(
+        bound_by_key, base_by_key, enabled_sides, config
+    )
+
+
 def _validate_directional_search_space(
     bound_by_key, base_by_key, approved, enabled_sides, *, coin_count: int = 1
 ) -> None:
@@ -3349,11 +3364,12 @@ def run_backend(
         coin_count=max_coin_count,
         strategy_kind=strategy_kind,
     )
-    _validate_tm_market_nonrecursive_bounds(
-        bound_by_key, base_by_key, enabled_sides, proxy_config
-    )
-    _validate_tm_market_ordering_bounds(
-        bound_by_key, base_by_key, enabled_sides, proxy_config
+    _validate_tm_market_template_bounds(
+        bound_by_key,
+        base_by_key,
+        enabled_sides,
+        proxy_config,
+        suite_inputs,
     )
     _validate_hsl_bound_contracts(bound_by_key, proxy_config)
 
