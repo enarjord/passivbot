@@ -75,6 +75,7 @@ from optimization.backends.gpu_backend import (
     _validate_seed_side_match,
     _validate_scope,
     _validate_tm_market_nonrecursive_bounds,
+    _validate_tm_market_ordering_bounds,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
     _GPU_SUITE_VIOLATION_KEY,
@@ -1612,6 +1613,44 @@ def test_gpu_tm_market_execution_accepts_trailing_only_mode_bounds():
     }
 
     _validate_tm_market_nonrecursive_bounds(bounds, {}, {"long"}, config)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "unstuck_enabled",
+        "risk_position_exposure_enforcer_enabled",
+        "risk_total_exposure_enforcer_enabled",
+    ],
+)
+def test_gpu_tm_market_execution_rejects_unmodeled_ordering_bounds(side, suffix):
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    key = f"{side}_{suffix}"
+
+    with pytest.raises(ValueError, match=key):
+        _validate_tm_market_ordering_bounds(
+            {key: Bound(0.0, 1.0)}, {key: 0.0}, {side}, config
+        )
+
+
+def test_gpu_tm_market_execution_accepts_disabled_ordering_bounds():
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    bounds = {
+        f"{side}_{suffix}": Bound(0.0, 0.0)
+        for side in ("long", "short")
+        for suffix in (
+            "unstuck_enabled",
+            "risk_position_exposure_enforcer_enabled",
+            "risk_total_exposure_enforcer_enabled",
+        )
+    }
+
+    _validate_tm_market_ordering_bounds(bounds, {}, {"long", "short"}, config)
 
 
 @pytest.mark.parametrize(

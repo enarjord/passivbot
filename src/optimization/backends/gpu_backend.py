@@ -2796,6 +2796,44 @@ def _validate_tm_market_nonrecursive_bounds(
         )
 
 
+def _validate_tm_market_ordering_bounds(
+    bound_by_key, base_by_key, enabled_sides, config
+) -> None:
+    if (
+        str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+        != "trailing_martingale"
+        or not bool(config.get("live", {}).get("market_orders_allowed"))
+    ):
+        return
+    unsupported = []
+    for side in sorted(set(enabled_sides or ())):
+        for suffix in (
+            "unstuck_enabled",
+            "risk_position_exposure_enforcer_enabled",
+            "risk_total_exposure_enforcer_enabled",
+        ):
+            key = f"{side}_{suffix}"
+            bound = bound_by_key.get(key)
+            values = (
+                (float(bound.low), float(bound.high))
+                if bound is not None
+                else (float(base_by_key.get(key, 0.0)),) * 2
+            )
+            if any(
+                not math.isfinite(value)
+                or not math.isclose(value, 0.0, rel_tol=0.0, abs_tol=1.0e-12)
+                for value in values
+            ):
+                unsupported.append(f"{key} bounds={values}")
+    if unsupported:
+        raise ValueError(
+            "GPU Trailing Martingale ordinary market execution requires "
+            "unstuck and exposure-enforcer enablement bounds to remain pinned "
+            "false until their market ordering is modeled: "
+            + ", ".join(unsupported)
+        )
+
+
 def _validate_directional_search_space(
     bound_by_key, base_by_key, approved, enabled_sides, *, coin_count: int = 1
 ) -> None:
@@ -3314,6 +3352,9 @@ def run_backend(
     _validate_tm_market_nonrecursive_bounds(
         bound_by_key, base_by_key, enabled_sides, proxy_config
     )
+    _validate_tm_market_ordering_bounds(
+        bound_by_key, base_by_key, enabled_sides, proxy_config
+    )
     _validate_hsl_bound_contracts(bound_by_key, proxy_config)
 
     if suite_multicoin_sides is None:
@@ -3353,6 +3394,12 @@ def run_backend(
             strategy_kind=strategy_kind,
         )
         _validate_tm_market_nonrecursive_bounds(
+            scenario_bound_by_key,
+            scenario_base_by_key,
+            scenario_enabled_sides,
+            item["config"],
+        )
+        _validate_tm_market_ordering_bounds(
             scenario_bound_by_key,
             scenario_base_by_key,
             scenario_enabled_sides,
