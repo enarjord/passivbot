@@ -1463,6 +1463,17 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         long_side.coin_hsl[c].red_active_now = false;
         long_side.coin_hsl[c].orange_graceful_stop = false;
     }
+    ulong long_selection_blocked_mask = 0ul;
+    ulong short_selection_blocked_mask = 0ul;
+    ulong long_order_blocked_mask = 0ul;
+    ulong short_order_blocked_mask = 0ul;
+    compute_tm_multicoin_one_way_initial_blocks(
+        long_side, long_config, coin_overrides,
+        short_side, short_config, coin_overrides,
+        bars, coin_settings, 1, 3, 0, 0, true, true,
+        long_selection_blocked_mask, short_selection_blocked_mask,
+        long_order_blocked_mask, short_order_blocked_mask
+    );
     // Block the long side's highest-volume coin without affecting short.
     long_side.coin_hsl[0].enabled = true;
     long_side.coin_hsl[0].tier = 2;
@@ -1495,6 +1506,10 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         output[12 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
     output[15] = float(short_side.one_way_initial_blocked_mask);
+    output[16] = float(long_selection_blocked_mask);
+    output[17] = float(short_selection_blocked_mask);
+    output[18] = float(long_order_blocked_mask);
+    output[19] = float(short_order_blocked_mask);
 }
 """
 
@@ -1511,7 +1526,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     coin_overrides = torch.full(
         (3, 44), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(16, dtype=torch.float32, device="mps")
+    output = torch.zeros(20, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_trailing_martingale_multicoin_source_py()
@@ -1539,6 +1554,10 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         1.0,
         0.0,
         4.0,
+        0.0,
+        0.0,
+        0.0,
+        7.0,
     ]
 
 
@@ -2501,6 +2520,17 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         long_side.forager_volatility[c] = 0.0f;
         short_side.forager_volatility[c] = 0.0f;
     }
+    ulong long_selection_blocked_mask = 0ul;
+    ulong short_selection_blocked_mask = 0ul;
+    ulong long_order_blocked_mask = 0ul;
+    ulong short_order_blocked_mask = 0ul;
+    compute_ema_multicoin_one_way_initial_blocks(
+        long_side, long_config, coin_overrides,
+        short_side, short_config, coin_overrides,
+        bars, coin_settings, 1, 3, 0, 0, true, true,
+        long_selection_blocked_mask, short_selection_blocked_mask,
+        long_order_blocked_mask, short_order_blocked_mask
+    );
     update_ema_multicoin_side_selection(
         long_side, long_config, bars, coin_settings, coin_overrides,
         1, 3, false, true, 1, 0.0f, 0ul
@@ -2527,6 +2557,10 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         output[10 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
     output[13] = float(short_side.one_way_initial_blocked_mask);
+    output[14] = float(long_selection_blocked_mask);
+    output[15] = float(short_selection_blocked_mask);
+    output[16] = float(long_order_blocked_mask);
+    output[17] = float(short_order_blocked_mask);
 }
 """
 
@@ -2543,7 +2577,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     coin_overrides = torch.full(
         (3, 29), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(14, dtype=torch.float32, device="mps")
+    output = torch.zeros(18, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2568,6 +2602,10 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         1.0,
         0.0,
         4.0,
+        0.0,
+        0.0,
+        0.0,
+        7.0,
     ]
 
 

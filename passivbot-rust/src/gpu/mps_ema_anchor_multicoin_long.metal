@@ -2696,7 +2696,9 @@ inline float ema_multicoin_entry_initial_balance_pct(
 }
 
 // Match exact Rust's per-symbol one-way eligibility before Forager selection
-// and side-wide entry-cap allocation. Reentries and closes remain unblocked.
+// and side-wide entry-cap allocation. Opposite-held coins are excluded from
+// selection; flat/flat arbitration losers retain their selected slot but emit
+// no order. Reentries and closes remain unblocked.
 inline void compute_ema_multicoin_one_way_initial_blocks(
     thread EmaMulticoinSideState& long_side,
     thread const EmaMulticoinSideConfig& long_config,
@@ -2712,26 +2714,34 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
     int short_hsl_mode,
     bool long_can_generate,
     bool short_can_generate,
-    thread ulong& long_blocked_mask,
-    thread ulong& short_blocked_mask
+    thread ulong& long_selection_blocked_mask,
+    thread ulong& short_selection_blocked_mask,
+    thread ulong& long_order_blocked_mask,
+    thread ulong& short_order_blocked_mask
 ) {
-    long_blocked_mask = 0ul;
-    short_blocked_mask = 0ul;
+    long_selection_blocked_mask = 0ul;
+    short_selection_blocked_mask = 0ul;
+    long_order_blocked_mask = 0ul;
+    short_order_blocked_mask = 0ul;
     for (int c = 0; c < coin_count; ++c) {
         const ulong bit = 1ul << ulong(c);
         const bool has_long = long_side.psize[c] > 0.0f;
         const bool has_short = short_side.psize[c] > 0.0f;
         if (has_long && !has_short) {
-            short_blocked_mask |= bit;
+            short_selection_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
             continue;
         }
         if (has_short && !has_long) {
-            long_blocked_mask |= bit;
+            long_selection_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
             continue;
         }
         if (has_long && has_short) {
-            long_blocked_mask |= bit;
-            short_blocked_mask |= bit;
+            long_selection_blocked_mask |= bit;
+            short_selection_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
             continue;
         }
 
@@ -2757,16 +2767,16 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
             && short_wel != 0.0f
             && short_coin_mode == 0;
         if (long_eligible && !short_eligible) {
-            short_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
             continue;
         }
         if (short_eligible && !long_eligible) {
-            long_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
             continue;
         }
         if (!long_eligible && !short_eligible) {
-            long_blocked_mask |= bit;
-            short_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
             continue;
         }
         const float long_lower = fmin(
@@ -2788,9 +2798,9 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
         // Exact Rust blocks the side farther from triggering; stable ties
         // favor long.
         if (dist_long >= dist_short) {
-            short_blocked_mask |= bit;
+            short_order_blocked_mask |= bit;
         } else {
-            long_blocked_mask |= bit;
+            long_order_blocked_mask |= bit;
         }
     }
 }
@@ -3067,8 +3077,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side.hsl,
                 ema_multicoin_side_has_position(short_side, C)
             );
-        ulong long_one_way_blocked_mask = 0ul;
-        ulong short_one_way_blocked_mask = 0ul;
+        ulong long_one_way_selection_blocked_mask = 0ul;
+        ulong short_one_way_selection_blocked_mask = 0ul;
+        ulong long_one_way_order_blocked_mask = 0ul;
+        ulong short_one_way_order_blocked_mask = 0ul;
         if (!hedge_mode) {
             compute_ema_multicoin_one_way_initial_blocks(
                 long_side, long_config, long_coin_overrides,
@@ -3076,7 +3088,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 bars, coin_settings, k, C,
                 long_hsl_mode, short_hsl_mode,
                 long_can_generate, short_can_generate,
-                long_one_way_blocked_mask, short_one_way_blocked_mask
+                long_one_way_selection_blocked_mask,
+                short_one_way_selection_blocked_mask,
+                long_one_way_order_blocked_mask,
+                short_one_way_order_blocked_mask
             );
         }
         float long_unstuck_diff = INFINITY;
@@ -3115,7 +3130,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_side, long_config, bars, coin_settings,
                 long_coin_overrides, k, C, false, any_fill,
                 long_effective_n_positions, score_hysteresis,
-                long_one_way_blocked_mask
+                long_one_way_selection_blocked_mask
             );
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
@@ -3123,7 +3138,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 k, C, false, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
-                long_unstuck_coin, long_one_way_blocked_mask
+                long_unstuck_coin, long_one_way_order_blocked_mask
             );
         }
         if (short_can_generate) {
@@ -3131,7 +3146,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side, short_config, bars, coin_settings,
                 short_coin_overrides, k, C, true, any_fill,
                 short_effective_n_positions, score_hysteresis,
-                short_one_way_blocked_mask
+                short_one_way_selection_blocked_mask
             );
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,
@@ -3139,7 +3154,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 k, C, true, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
-                short_unstuck_coin, short_one_way_blocked_mask
+                short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
 
