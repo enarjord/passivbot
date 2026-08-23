@@ -781,6 +781,45 @@ def test_gpu_suite_hsl_signal_override_revalidates_effective_topology():
         _gpu_suite_scenario_inputs(config, Suite())
 
 
+def test_gpu_suite_inputs_accept_single_coin_tm_market_hsl_and_min_cost():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["filter_by_min_effective_cost"] = True
+    config["backtest"]["liquidation_threshold"] = 0.05
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["hsl_signal_mode"] = "coin"
+    config["live"]["pnls_max_lookback_days"] = "all"
+    config["bot"]["long"]["hsl"]["enabled"] = True
+    ctx = SimpleNamespace(
+        label="tm_market_hsl",
+        overrides={},
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert len(prepared) == 1
+    assert prepared[0]["config"]["live"]["market_orders_allowed"] is True
+    assert prepared[0]["config"]["bot"]["long"]["hsl"]["enabled"] is True
+    assert (
+        prepared[0]["config"]["backtest"]["filter_by_min_effective_cost"]
+        is True
+    )
+
+
 def test_gpu_suite_inputs_accept_scenario_local_modeled_coin_overrides():
     config = _long_only_ema_config()
     config["backtest"]["suite_enabled"] = True
@@ -1740,12 +1779,6 @@ def test_gpu_market_execution_fails_closed_outside_baseline_scope(
             "live.max_realized_loss_pct",
         ),
         (
-            lambda config: config["bot"]["long"]["hsl"].__setitem__(
-                "enabled", True
-            ),
-            "bot.long.hsl.enabled",
-        ),
-        (
             lambda config: config["bot"]["long"]["unstuck"].__setitem__(
                 "enabled", True
             ),
@@ -1815,9 +1848,13 @@ def test_gpu_market_execution_accepts_single_coin_ema_risk_ordering(risk_feature
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
-def test_gpu_market_execution_accepts_single_coin_ema_hsl(signal_mode):
+def test_gpu_market_execution_accepts_single_coin_hsl(
+    strategy_kind, signal_mode
+):
     config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = strategy_kind
     config["live"]["market_orders_allowed"] = True
     config["live"]["hsl_signal_mode"] = signal_mode
     config["live"]["pnls_max_lookback_days"] = "all"
@@ -1826,8 +1863,12 @@ def test_gpu_market_execution_accepts_single_coin_ema_hsl(signal_mode):
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
-def test_gpu_market_execution_accepts_hsl_with_min_effective_cost_filter():
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_gpu_market_execution_accepts_hsl_with_min_effective_cost_filter(
+    strategy_kind,
+):
     config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = strategy_kind
     config["live"]["market_orders_allowed"] = True
     config["live"]["hsl_signal_mode"] = "coin"
     config["live"]["pnls_max_lookback_days"] = "all"

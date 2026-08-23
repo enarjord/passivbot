@@ -6928,6 +6928,68 @@ kernel void passivbot_tm_recursive_close_generation_market_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_hsl_panic_replacement_clears_ordinary_market_state(side):
+    import passivbot_rust
+
+    params = torch.tensor(
+        _tm_single_row(), dtype=torch.float32, device="mps"
+    )
+    probe_kernel = r"""
+kernel void passivbot_tm_hsl_panic_state_probe(
+    constant float* params,
+    device float* output,
+    constant int& is_long_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool is_long = is_long_raw != 0;
+    TmSide side = load_side(params, 0, 100.0f);
+    side.psize = 0.2f;
+    side.close_market = true;
+    side.secondary_close_market = true;
+    side.secondary_close_qty = 0.1f;
+    side.close_is_exposure_reducer = true;
+    side.close_is_twel_reducer = true;
+    side.close_is_unstuck_reducer = true;
+    install_hsl_panic_close(side, is_long, 9999, 10001, 0.01f);
+
+    output[0] = float(side.close_ticks);
+    output[1] = side.close_price;
+    output[2] = side.close_qty;
+    output[3] = side.secondary_close_qty;
+    output[4] = float(side.close_market);
+    output[5] = float(side.secondary_close_market);
+    output[6] = float(side.close_is_exposure_reducer);
+    output[7] = float(side.close_is_twel_reducer);
+    output[8] = float(side.close_is_unstuck_reducer);
+    output[9] = float(side.close_is_panic);
+}
+"""
+    output = torch.zeros(10, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_hsl_panic_state_probe(
+        params,
+        output,
+        1 if side == "long" else 0,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    values = output.cpu().numpy()
+    expected_ticks = 9998.0 if side == "long" else 10002.0
+    assert values[0] == expected_ticks
+    assert values[1] == pytest.approx(expected_ticks * 0.01)
+    assert values[2] == pytest.approx(0.2)
+    assert values[3:9].tolist() == [0.0] * 6
+    assert values[9] == 1.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("hedge_mode", [False, True])
 def test_mps_tm_dual_side_market_entries_respect_position_mode(hedge_mode):
     count = 5
@@ -7202,25 +7264,22 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     market_output = market_runner.run(
         np.asarray([rows[1]], dtype=np.float64)
     )
-    ordinary_market_runner = None
-    ordinary_market_output = None
-    if strategy_kind == "ema_anchor":
-        ordinary_market_runner = runner_cls(
-            market,
-            run,
-            data,
-            long_enabled=side == "long",
-            short_enabled=side == "short",
-            taker_fee=0.01,
-            market_order_slippage_pct=0.02,
-            market_orders_allowed=True,
-            market_order_near_touch_threshold=0.001,
-            hsl_panic_market_long=side == "long",
-            hsl_panic_market_short=side == "short",
-        )
-        ordinary_market_output = ordinary_market_runner.run(
-            np.asarray([rows[1]], dtype=np.float64)
-        )
+    ordinary_market_runner = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        taker_fee=0.01,
+        market_order_slippage_pct=0.02,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        hsl_panic_market_long=side == "long",
+        hsl_panic_market_short=side == "short",
+    )
+    ordinary_market_output = ordinary_market_runner.run(
+        np.asarray([rows[1]], dtype=np.float64)
+    )
     gated_output = runner_cls(
         market,
         run,
@@ -7290,13 +7349,12 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         market_output["hsl_panic_close_loss_sum"].item()
         > output["hsl_panic_close_loss_sum"][1].item()
     )
-    if strategy_kind == "ema_anchor":
-        assert ordinary_market_runner.settings[19].item() == 1.0
-        assert ordinary_market_output[size_key].item() == 0.0
-        assert ordinary_market_output[trigger_key].item() == 1.0
-        assert ordinary_market_output["hsl_flatten_time_count"].item() == 1.0
-        assert ordinary_market_output["hsl_panic_close_loss_sum"].item() > 0.0
-        assert torch.isfinite(ordinary_market_output["balance"]).all()
+    assert ordinary_market_runner.settings[19].item() == 1.0
+    assert ordinary_market_output[size_key].item() == 0.0
+    assert ordinary_market_output[trigger_key].item() == 1.0
+    assert ordinary_market_output["hsl_flatten_time_count"].item() == 1.0
+    assert ordinary_market_output["hsl_panic_close_loss_sum"].item() > 0.0
+    assert torch.isfinite(ordinary_market_output["balance"]).all()
 
 
 @pytest.mark.skipif(
@@ -11245,7 +11303,10 @@ def test_mps_min_effective_cost_uses_downward_projected_cost_bound():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter():
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter(
+    strategy_kind,
+):
     count = 5
     close = np.full(count, 100.0)
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -11263,23 +11324,31 @@ def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter():
         count - 1,
     )
     data = build_mps_data(close, close, close, timestamps, run, market)
-    row = [
-        0.1,
-        2.0,
-        3.0,
-        0.0,
-        0.0005,
-        0.0,
-        0.0,
-        0.0,
-        2.0,
-        2.0,
-        0.0,
-        1.0,
-    ]
-    row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
+    if strategy_kind == "trailing_martingale":
+        row = _tm_single_row(initial_ema_dist=0.001)
+        row[6] = 0.2
+        runner_cls = MpsTrailingMartingaleRunner
+        expected_psize = 1.998
+    else:
+        row = [
+            0.1,
+            2.0,
+            3.0,
+            0.0,
+            0.0005,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            2.0,
+            0.0,
+            1.0,
+        ]
+        row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
+        runner_cls = MpsEmaAnchorRunner
+        expected_psize = 1.0
 
-    output = MpsEmaAnchorRunner(
+    output = runner_cls(
         market,
         run,
         data,
@@ -11287,12 +11356,12 @@ def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter():
         short_enabled=True,
         filter_by_min_effective_cost=True,
         market_orders_allowed=True,
-        market_order_near_touch_threshold=0.001,
+        market_order_near_touch_threshold=0.002,
     ).run(np.asarray([row + row], dtype=np.float64))
     torch.mps.synchronize()
 
     assert output["fill_count"].item() == 1.0
-    assert output["short_psize"].item() == pytest.approx(1.0)
+    assert output["short_psize"].item() == pytest.approx(expected_psize)
     assert output["short_pprice"].item() == pytest.approx(100.0)
 
 

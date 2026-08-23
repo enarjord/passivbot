@@ -977,8 +977,6 @@ def _validate_scope_config(
                 unsupported_market_features.append("live.max_realized_loss_pct")
             for side in enabled_sides:
                 side_config = config.get("bot", {}).get(side, {}) or {}
-                if _gpu_hsl_side_enabled(config, side):
-                    unsupported_market_features.append(f"bot.{side}.hsl.enabled")
                 if bool((side_config.get("unstuck", {}) or {}).get("enabled", False)):
                     unsupported_market_features.append(
                         f"bot.{side}.unstuck.enabled"
@@ -1016,7 +1014,7 @@ def _validate_scope_config(
             if unsupported_market_features:
                 raise ValueError(
                     "GPU Trailing Martingale ordinary market execution does not "
-                    "yet support risk/HSL ordering for: "
+                    "yet support risk ordering for: "
                     + ", ".join(sorted(unsupported_market_features))
                 )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
