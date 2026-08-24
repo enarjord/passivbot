@@ -282,17 +282,25 @@ The supported slice is intentionally narrow:
   suite scenarios, including HSL, one-sided minimum-effective-cost filtering, auto-unstuck,
   total-exposure repair, and realized-loss gating. Single-coin Trailing Martingale supports the
   same directional and position-mode topologies with HSL and one-sided minimum-effective-cost
-  filtering when every enabled side's entry and close retracement lower bounds remain strictly
-  positive. Auto-unstuck, position- and total-exposure repair, and realized-loss gating may remain
-  enabled or tunable. The Metal proxy classifies each generated order against the
+  filtering when every enabled side's entry retracement range is wholly recursive (its upper bound
+  is nonpositive) or wholly trailing (its lower bound remains float32-positive), and every close
+  retracement lower bound remains float32-positive. Bounds that cross entry modes fail closed.
+  Auto-unstuck, position- and total-exposure repair, and realized-loss gating may remain enabled or
+  tunable. The Metal proxy classifies each generated order against the
   current candle close using
   `live.market_order_near_touch_threshold`, retains that execution intent for the pending order,
   and fills promoted orders on the next valid candle at its adversely slipped, directionally
   rounded close with the taker fee. Market closes and short entries are resized at the executable
   touch before they are retained. Protective reducers are independently classified and resized
   before reducer selection and aggregate allocation; adverse slippage and taker fees participate
-  in realized-loss gating. Trailing Martingale recursive market ladders and multi-coin market
-  execution remain fail closed until their execution ordering is modeled
+  in realized-loss gating. For recursive Trailing Martingale entries, every ladder rung is
+  classified against the immutable generation market snapshot only when the original passive rung
+  is strictly next-candle reachable, then streamed through the strict total-exposure entry gate at
+  each limit price or executable market touch. Immutable strategy sizing uses its wallet-exposure
+  allowance separately from that portfolio gate; a partially retained TWEL boundary rung ends the
+  nearest-order prefix so no farther rung can reappear. Trailing Martingale recursive close market
+  ladders and multi-coin market execution remain fail closed until their execution ordering is
+  modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
