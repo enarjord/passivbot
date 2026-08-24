@@ -6638,8 +6638,13 @@ def test_mps_tm_near_touch_market_entry_uses_taker_fill(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_recursive_entry_promotes_each_near_touch_rung(side):
+@pytest.mark.parametrize(
+    ("side", "threshold", "expected_size"),
+    [("long", 0.1202, 1.201), ("short", 0.15, 1.499)],
+)
+def test_mps_tm_recursive_market_entry_retains_exact_twel_prefix(
+    side, threshold, expected_size
+):
     count = 5
     close = np.full(count, 100.0)
     high = np.full(count, 100.0)
@@ -6669,7 +6674,7 @@ def test_mps_tm_recursive_entry_promotes_each_near_touch_rung(side):
         gate_initial=False,
         gate_reentry=False,
         entry_gate=True,
-        threshold=0.12,
+        threshold=threshold,
     )
     row[4] = 1.0
     row[6] = 0.05
@@ -6701,14 +6706,16 @@ def test_mps_tm_recursive_entry_promotes_each_near_touch_rung(side):
 
     size_key = "psize" if side == "long" else "short_psize"
     assert resting["fill_count_entry"].item() >= 1.0
-    assert promoted["fill_count_entry"].item() >= 2.0
+    # Exact Rust retains the nearest full rungs plus at most one partially
+    # TWEL-cropped boundary rung.  It never lets a farther order reappear.
+    assert promoted["fill_count_entry"].item() == 3.0
     assert promoted["fill_count_entry"].item() > resting[
         "fill_count_entry"
     ].item()
-    assert promoted[size_key].item() > resting[size_key].item()
+    assert promoted[size_key].item() == pytest.approx(expected_size, abs=1.0e-4)
     # Rust's entry gate measures wallet exposure at the executable market
     # snapshot, before backtest-only adverse slippage is applied to the fill.
-    assert promoted[size_key].item() * 100.0 / 1_000.0 < 0.12
+    assert promoted[size_key].item() * 100.0 / 1_000.0 < threshold
     assert promoted["balance"].item() < 1_000.0
 
 
@@ -7742,9 +7749,9 @@ def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
 
     key = "psize" if side == "long" else "short_psize"
     remaining = output[key].cpu().numpy()
-    initial_size = (
-        9.0 if strategy_kind == "ema_anchor" and side == "short" else 10.0
-    )
+    # At the 101 short-entry limit, exact Rust's strict TWEL gate retains 9
+    # whole contracts; both strategy kernels must share that result.
+    initial_size = 9.0 if side == "short" else 10.0
     assert remaining[0] == pytest.approx(initial_size)
     assert remaining[1] == pytest.approx(initial_size - 1.0)
     assert remaining[2] == pytest.approx(initial_size)
@@ -7854,15 +7861,10 @@ def test_mps_single_coin_auto_unstuck_scales_loss_to_own_allowance(
 
     key = "psize" if side == "long" else "short_psize"
     remaining = output[key].cpu().numpy()
-    initial_size = (
-        9.0 if strategy_kind == "ema_anchor" and side == "short" else 10.0
-    )
+    initial_size = 9.0 if side == "short" else 10.0
     assert remaining[0] == pytest.approx(initial_size)
     assert remaining[1] == pytest.approx(initial_size - 1.0)
-    generous_remainder = (
-        1.0 if strategy_kind == "trailing_martingale" and side == "short" else 0.0
-    )
-    assert remaining[2] == pytest.approx(generous_remainder)
+    assert remaining[2] == pytest.approx(0.0)
 
     strict_output = runner_cls(
         market,
@@ -8080,8 +8082,7 @@ def test_mps_single_coin_auto_unstuck_selects_one_least_stuck_side(strategy_kind
     torch.mps.synchronize()
 
     assert output["psize"].item() == pytest.approx(9.0)
-    expected_short = 9.0 if strategy_kind == "ema_anchor" else 10.0
-    assert output["short_psize"].item() == pytest.approx(expected_short)
+    assert output["short_psize"].item() == pytest.approx(9.0)
 
 
 @pytest.mark.skipif(
@@ -8146,7 +8147,10 @@ def test_mps_tm_equal_unstuck_twel_reducers_keep_nearer_twel(side):
     # The equal-size TWEL reducer is one price band more executable than the
     # auto-unstuck reducer. The next candle crosses TWEL but only touches
     # unstuck, proving selection follows Rust's reachability tie-break.
-    assert output[size_key].item() == pytest.approx(5.0)
+    # The strict entry gate starts the short fixture at 9 rather than 10, so
+    # its equal-size selected reducer leaves 4 contracts instead of 5.
+    expected_size = 5.0 if side == "long" else 4.0
+    assert output[size_key].item() == pytest.approx(expected_size)
     assert output["total_wallet_exposure_max"].item() > 0.0
     fill_days = output["day_has_fill"]
     assert torch.isfinite(output["day_net_pnl"][fill_days]).all()
@@ -9691,7 +9695,9 @@ def test_mps_tm_off_tick_grid_precedes_reducer_for_volume(side):
     torch.mps.synchronize()
 
     entry_price = 99.0 if side == "long" else 101.0
-    entry_qty = 10.101 if side == "long" else 9.901
+    # Exact Rust's strict TWEL gate floors the short entry from the strategy's
+    # nearest-rounded 9.901 to 9.900 at the 101 limit price.
+    entry_qty = 10.101 if side == "long" else 9.9
     grid_price = 100.0 if side == "long" else 101.0
     grid_qty = 5.045 if side == "long" else 4.945
     reducer_price = 101.0 if side == "long" else 100.0
@@ -11806,12 +11812,14 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "close_gen_market_price" in source
     assert "sim.market_orders_allowed = false" in source
     assert source.count("ladder_side.market_orders_allowed = false") == 2
+    assert source.count("ladder_side.twel_entry_gate_enabled = false") == 2
     assert source.count("ladder_side.psize + strategy_eq") == 2
     assert "bool entry_market = rung == 0" not in source
     assert "entry_ticks, true, ladder_market_price" in source
     assert "entry_ticks, false, ladder_market_price" in source
     assert source.count("entry_strategy_qty") == 5
     assert source.count("if (!(eq > 0.0f)) break;") == 2
+    assert source.count("if (twel_boundary_partial) break;") == 2
     assert source.count("entry_passive_reachable") >= 6
     assert "gate_market_entry_by_twel_strict" not in source
     assert source.count("gate_entry_by_twel_strict(") == 4
@@ -12524,7 +12532,12 @@ def test_mps_trailing_martingale_entry_cap_uses_rust_nearest_step_rounding():
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
-    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row = _tm_single_row(
+        initial_ema_dist=0.0,
+        gate_initial=0.0,
+        gate_reentry=0.0,
+        entry_gate=False,
+    )
     row[6] = 2.0  # Oversize the initial order so the exposure cap crops it.
     row[7] = 0.5  # Keep any subsequent reentry far below the fixture market.
     row[16] = 0.5  # Keep the close above the fixture market.

@@ -1995,6 +1995,9 @@ inline void passivbot_single_coin_impl(
             int ladder_touch_ticks = long_side.entry_gen_touch_ticks;
             float ladder_market_price = long_side.entry_gen_market_price;
             TmSide gate_side = ladder_side;
+            // Rebuild the immutable strategy ladder against allowed WEL only.
+            // Portfolio TWEL gating is streamed separately through gate_side.
+            ladder_side.twel_entry_gate_enabled = false;
             int previous_ticks = 0;
             for (int rung = 0; rung < 500; ++rung) {
                 int entry_ticks = rung == 0
@@ -2009,6 +2012,7 @@ inline void passivbot_single_coin_impl(
                 );
                 if (strategy_eq <= 0.0f) break;
                 float eq = rung == 0 ? long_side.entry_qty : strategy_eq;
+                float ungated_eq = strategy_eq;
                 bool entry_market = should_use_ordinary_market_execution(
                     entry_ticks, true, ladder_market_price, price_step,
                     long_side.market_orders_allowed,
@@ -2026,6 +2030,8 @@ inline void passivbot_single_coin_impl(
                     // smaller later quantities may not reappear behind it.
                     if (!(eq > 0.0f)) break;
                 }
+                bool twel_boundary_partial = gate_side.twel_entry_gate_enabled
+                    && eq > 0.0f && eq < ungated_eq;
                 if ((!entry_market && entry_ticks <= low_nonfill_max_tick)
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
                 if (eq > 0.0f) {
@@ -2091,6 +2097,9 @@ inline void passivbot_single_coin_impl(
                         gate_side.psize = gate_psize;
                     }
                 }
+                // Exact Rust keeps at most one partially retained boundary
+                // order after removing the farther suffix.
+                if (twel_boundary_partial) break;
 
                 bool sim_flat = ladder_side.psize <= 0.0f;
                 float sim_psize = round_step(
@@ -2612,6 +2621,7 @@ inline void passivbot_single_coin_impl(
             int ladder_touch_ticks = short_side.entry_gen_touch_ticks;
             float ladder_market_price = short_side.entry_gen_market_price;
             TmSide gate_side = ladder_side;
+            ladder_side.twel_entry_gate_enabled = false;
             int previous_ticks = 0;
             for (int rung = 0; rung < 500; ++rung) {
                 int entry_ticks = rung == 0
@@ -2626,6 +2636,7 @@ inline void passivbot_single_coin_impl(
                 );
                 if (strategy_eq <= 0.0f) break;
                 float eq = rung == 0 ? short_side.entry_qty : strategy_eq;
+                float ungated_eq = strategy_eq;
                 bool entry_market = should_use_ordinary_market_execution(
                     entry_ticks, false, ladder_market_price, price_step,
                     short_side.market_orders_allowed,
@@ -2636,6 +2647,7 @@ inline void passivbot_single_coin_impl(
                         ladder_market_price, qty_step, min_qty, min_cost, c_mult
                     );
                     if (eq < market_min_q) eq = market_min_q;
+                    if (ungated_eq < market_min_q) ungated_eq = market_min_q;
                 }
                 if (rung > 0 && gate_side.twel_entry_gate_enabled) {
                     float entry_gate_price = entry_market
@@ -2646,6 +2658,8 @@ inline void passivbot_single_coin_impl(
                     );
                     if (!(eq > 0.0f)) break;
                 }
+                bool twel_boundary_partial = gate_side.twel_entry_gate_enabled
+                    && eq > 0.0f && eq < ungated_eq;
                 if ((!entry_market && entry_ticks > high_fill_max_tick)
                     || (rung > 0 && entry_ticks == previous_ticks)) break;
                 if (eq > 0.0f) {
@@ -2711,6 +2725,7 @@ inline void passivbot_single_coin_impl(
                         gate_side.psize = gate_psize;
                     }
                 }
+                if (twel_boundary_partial) break;
 
                 bool sim_flat = ladder_side.psize <= 0.0f;
                 float sim_psize = round_step(

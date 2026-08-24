@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   snapshot after the original passive rung is next-candle reachable, short entries are resized to
   the executable minimum, and executable ladder quantities stream through the strict
   total-exposure entry gate at their limit price or market touch. Strategy-ladder sizing retains
-  its separate wallet-exposure allowance before that portfolio gate is applied. Entry optimizer
+  its separate wallet-exposure allowance before that portfolio gate is applied; the retained
+  nearest prefix ends at the first partially cropped portfolio-boundary rung. Entry optimizer
   bounds must remain wholly recursive or wholly trailing;
   mode-crossing ranges, recursive close market ladders, and multi-coin market execution remain fail
   closed.
