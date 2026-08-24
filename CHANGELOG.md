@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added single-coin Trailing Martingale recursive-close market execution to Apple MPS
+  optimization. Exact passive next-candle expansion remains authoritative: a market-only next
+  close does not reveal the recursive suffix, while an expanded immutable ladder classifies and
+  executable-touch-sizes every emitted price group against its generation market snapshot.
+  Promoted grid groups and protective reducers retain canonical ordering, aggregate allocation,
+  realized-loss gating, adverse slippage, and taker fees. Entry and close optimizer bounds must
+  each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin market
+  execution remain fail closed.
+
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market
   snapshot after the original passive rung is next-candle reachable, short entries are resized to
@@ -11,22 +20,20 @@ All notable user-facing changes will be documented in this file.
   total-exposure entry gate at their limit price or market touch. Strategy-ladder sizing retains
   its separate wallet-exposure allowance before that portfolio gate is applied; the retained
   nearest prefix ends at the first partially cropped portfolio-boundary rung. Entry optimizer
-  bounds must remain wholly recursive or wholly trailing;
-  mode-crossing ranges, recursive close market ladders, and multi-coin market execution remain fail
-  closed.
+  bounds must remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin
+  market execution remain fail closed.
 
 - Extended single-coin Trailing Martingale ordinary market-order optimization on Apple MPS to
   compatible HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, position- and
   total-exposure repair, and realized-loss gating. Market-promoted reducers are resized at
   executable touch before selection and aggregate allocation, and adverse slippage plus taker fees
-  participate in the conservative loss projection. Recursive close modes and multi-coin market
-  execution remain fail closed pending their dedicated slices.
+  participate in the conservative loss projection. Multi-coin market execution remains fail
+  closed pending its dedicated slice.
 
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin
   Trailing Martingale, covering long, short, and dual-side near-touch trailing entries and closes,
-  executable-touch minimum sizing, adverse slippage, and taker fees. Recursive close modes and
-  multi-coin combinations remain fail closed until their Trailing Martingale market-order
-  interactions are implemented.
+  executable-touch minimum sizing, adverse slippage, and taker fees. Multi-coin combinations
+  remain fail closed until their Trailing Martingale market-order interactions are implemented.
 
 - Extended single-coin EMA Anchor ordinary market-order optimization on Apple MPS to compatible
   HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, total-exposure repair, and

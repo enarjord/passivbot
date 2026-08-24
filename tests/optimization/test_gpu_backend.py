@@ -1642,7 +1642,7 @@ def test_gpu_foundation_accepts_baseline_tm_single_coin_market_execution():
         ("long_entry_retracement_base_pct", 1.0e-50, 0.1),
     ],
 )
-def test_gpu_tm_market_execution_rejects_recursive_close_or_entry_mode_crossing(
+def test_gpu_tm_market_execution_rejects_entry_or_close_mode_crossing(
     key, low, high
 ):
     config = _long_only_ema_config()
@@ -1654,7 +1654,7 @@ def test_gpu_tm_market_execution_rejects_recursive_close_or_entry_mode_crossing(
     }
     bounds[key] = Bound(low, high)
 
-    with pytest.raises(ValueError, match="remain fail closed"):
+    with pytest.raises(ValueError, match="mode-crossing bounds remain fail closed"):
         _validate_tm_market_mode_bounds(bounds, {}, {"long"}, config)
 
 
@@ -1681,6 +1681,21 @@ def test_gpu_tm_market_execution_accepts_recursive_entry_mode_bounds(
     bounds = {
         "long_entry_retracement_base_pct": entry_bounds,
         "long_close_retracement_base_pct": Bound(0.001, 0.1),
+    }
+
+    _validate_tm_market_mode_bounds(bounds, {}, {"long"}, config)
+
+
+@pytest.mark.parametrize("close_bounds", [Bound(0.0, 0.0), Bound(-0.1, 0.0)])
+def test_gpu_tm_market_execution_accepts_recursive_close_mode_bounds(
+    close_bounds,
+):
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    bounds = {
+        "long_entry_retracement_base_pct": Bound(0.001, 0.1),
+        "long_close_retracement_base_pct": close_bounds,
     }
 
     _validate_tm_market_mode_bounds(bounds, {}, {"long"}, config)
@@ -1731,7 +1746,7 @@ def test_gpu_tm_market_suite_validates_effective_scenarios_not_template():
     scenario["live"]["market_orders_allowed"] = False
     _validate_tm_market_mode_bounds(bounds, {}, {"long"}, scenario)
 
-    with pytest.raises(ValueError, match="entry mode-crossing"):
+    with pytest.raises(ValueError, match="mode-crossing"):
         _validate_tm_market_template_bounds(
             bounds, {}, {"long"}, template, []
         )

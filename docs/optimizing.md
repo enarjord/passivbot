@@ -284,7 +284,8 @@ The supported slice is intentionally narrow:
   same directional and position-mode topologies with HSL and one-sided minimum-effective-cost
   filtering when every enabled side's entry retracement range is wholly recursive (its upper bound
   is nonpositive) or wholly trailing (its lower bound remains float32-positive), and every close
-  retracement lower bound remains float32-positive. Bounds that cross entry modes fail closed.
+  retracement range is likewise wholly recursive or wholly trailing. Bounds that cross either
+  mode boundary fail closed.
   Auto-unstuck, position- and total-exposure repair, and realized-loss gating may remain enabled or
   tunable. The Metal proxy classifies each generated order against the
   current candle close using
@@ -298,9 +299,13 @@ The supported slice is intentionally narrow:
   is strictly next-candle reachable, then streamed through the strict total-exposure entry gate at
   each limit price or executable market touch. Immutable strategy sizing uses its wallet-exposure
   allowance separately from that portfolio gate; a partially retained TWEL boundary rung ends the
-  nearest-order prefix so no farther rung can reappear. Trailing Martingale recursive close market
-  ladders and multi-coin market execution remain fail closed until their execution ordering is
-  modeled
+  nearest-order prefix so no farther rung can reappear. For recursive Trailing Martingale closes,
+  exact passive next-candle reachability still decides whether Rust emits only the next close or
+  expands the immutable ladder. Market policy cannot expose an unexpanded suffix. Once expanded,
+  every merged price group is classified and executable-touch-sized against the immutable
+  generation market, then ordered and allocated together with any protective reducer before
+  next-candle adverse slippage, taker fees, and realized-loss gating are applied. Multi-coin market
+  execution remains fail closed until its execution ordering is modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

@@ -2746,28 +2746,34 @@ def _validate_tm_market_mode_bounds(
 
         close_key = f"{side}_close_retracement_base_pct"
         close_bound = bound_by_key.get(close_key)
-        close_low = (
-            float(close_bound.low)
+        close_low, close_high = (
+            (float(close_bound.low), float(close_bound.high))
             if close_bound is not None
-            else float(base_by_key.get(close_key, 0.0))
+            else (float(base_by_key.get(close_key, 0.0)),) * 2
         )
         with np.errstate(over="ignore", under="ignore", invalid="ignore"):
             packed_close_low = np.float32(close_low)
+        recursive_only = close_high <= 0.0
+        trailing_only = (
+            close_low > 0.0
+            and np.isfinite(packed_close_low)
+            and packed_close_low > np.float32(0.0)
+        )
         if (
             not math.isfinite(close_low)
-            or close_low <= 0.0
-            or not np.isfinite(packed_close_low)
-            or packed_close_low <= np.float32(0.0)
+            or not math.isfinite(close_high)
+            or not (recursive_only or trailing_only)
         ):
-            unsupported.append(f"{close_key} lower={close_low}")
+            unsupported.append(
+                f"{close_key} bounds=({close_low}, {close_high})"
+            )
     if unsupported:
         raise ValueError(
             "GPU Trailing Martingale ordinary market execution currently "
             "requires each enabled side's entry retracement range to remain "
             "wholly recursive (high<=0) or wholly trailing with a float32-"
-            "positive lower bound, and close_retracement_base_pct to remain "
-            "strictly trailing. Recursive close market ladders and entry mode-"
-            "crossing bounds remain fail closed: "
+            "positive lower bound for both entry and close retracement. Entry "
+            "or close mode-crossing bounds remain fail closed: "
             + ", ".join(unsupported)
         )
 
