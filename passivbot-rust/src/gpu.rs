@@ -743,6 +743,15 @@ mod tests {
         assert!(source.contains("recursive_strategy_close_would_expand"));
         assert!(source.contains("selected.market = should_use_ordinary_market_execution"));
         assert_eq!(source.matches("bool all_below_min").count(), 2);
+        assert_eq!(
+            source
+                .matches("quantity_is_meaningfully_below(")
+                .count(),
+            13
+        );
+        assert!(!source.contains("trimmed_qty + 1.0e-6f"));
+        assert!(!source.contains("trimmed_group_qty + 1.0e-6f"));
+        assert!(!source.contains("close_gen_psize + 1.0e-6f"));
         assert_eq!(source.matches("bool normalize_close_groups").count(), 2);
         assert_eq!(source.matches("int collapse_ordinary_rank").count(), 2);
         assert_eq!(source.matches("bool selected_strategy_wel").count(), 2);

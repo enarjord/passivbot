@@ -540,6 +540,10 @@ inline float calc_close_qty(
     return qty;
 }
 
+inline bool quantity_is_meaningfully_below(float quantity, float boundary) {
+    return quantity * (1.0f + 1.0e-6f) < boundary;
+}
+
 inline float exposure_reducer_qty(
     float psize, float pprice, float balance, float target_exposure,
     float reducer_price, float qty_step, float min_qty, float min_cost,
@@ -1690,7 +1694,9 @@ inline void passivbot_single_coin_impl(
                     qty_step, min_qty, min_cost, c_mult
                 ) : 1.0e30f;
             bool all_below_min = !has_reducer
-                || long_side.close_gen_psize + 1.0e-6f < minimum_any;
+                || quantity_is_meaningfully_below(
+                    long_side.close_gen_psize, minimum_any
+                );
             bool any_group_market = false;
             int last_kept_rank = -1;
             for (int trim_rank = 0;
@@ -1712,9 +1718,13 @@ inline void passivbot_single_coin_impl(
                     qty_step, min_qty, min_cost, c_mult
                 );
                 all_below_min = all_below_min
-                    && long_side.close_gen_psize + 1.0e-6f < group_min;
-                bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
-                if (trimmed_qty + 1.0e-6f < group_min) {
+                    && quantity_is_meaningfully_below(
+                        long_side.close_gen_psize, group_min
+                    );
+                bool partial_trim = quantity_is_meaningfully_below(
+                    trimmed_qty, group.qty
+                );
+                if (quantity_is_meaningfully_below(trimmed_qty, group_min)) {
                     trimmed_qty = 0.0f;
                     if (partial_trim) remaining_budget = 0.0f;
                 }
@@ -1778,9 +1788,12 @@ inline void passivbot_single_coin_impl(
                         qty_step, min_qty, min_cost, c_mult
                     );
                     trimmed_group_qty = fmin(group.qty, remaining_budget);
-                    bool partial_trim = trimmed_group_qty + 1.0e-6f
-                        < group.qty;
-                    if (trimmed_group_qty + 1.0e-6f < group_min) {
+                    bool partial_trim = quantity_is_meaningfully_below(
+                        trimmed_group_qty, group.qty
+                    );
+                    if (quantity_is_meaningfully_below(
+                            trimmed_group_qty, group_min
+                        )) {
                         trimmed_group_qty = 0.0f;
                         if (partial_trim) remaining_budget = 0.0f;
                     }
@@ -2383,7 +2396,9 @@ inline void passivbot_single_coin_impl(
                     qty_step, min_qty, min_cost, c_mult
                 ) : 1.0e30f;
             bool all_below_min = !has_reducer
-                || short_side.close_gen_psize + 1.0e-6f < minimum_any;
+                || quantity_is_meaningfully_below(
+                    short_side.close_gen_psize, minimum_any
+                );
             bool any_group_market = false;
             int last_kept_rank = -1;
             for (int trim_rank = 0;
@@ -2405,9 +2420,13 @@ inline void passivbot_single_coin_impl(
                     qty_step, min_qty, min_cost, c_mult
                 );
                 all_below_min = all_below_min
-                    && short_side.close_gen_psize + 1.0e-6f < group_min;
-                bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
-                if (trimmed_qty + 1.0e-6f < group_min) {
+                    && quantity_is_meaningfully_below(
+                        short_side.close_gen_psize, group_min
+                    );
+                bool partial_trim = quantity_is_meaningfully_below(
+                    trimmed_qty, group.qty
+                );
+                if (quantity_is_meaningfully_below(trimmed_qty, group_min)) {
                     trimmed_qty = 0.0f;
                     if (partial_trim) remaining_budget = 0.0f;
                 }
@@ -2469,9 +2488,12 @@ inline void passivbot_single_coin_impl(
                         qty_step, min_qty, min_cost, c_mult
                     );
                     trimmed_group_qty = fmin(group.qty, remaining_budget);
-                    bool partial_trim = trimmed_group_qty + 1.0e-6f
-                        < group.qty;
-                    if (trimmed_group_qty + 1.0e-6f < group_min) {
+                    bool partial_trim = quantity_is_meaningfully_below(
+                        trimmed_group_qty, group.qty
+                    );
+                    if (quantity_is_meaningfully_below(
+                            trimmed_group_qty, group_min
+                        )) {
                         trimmed_group_qty = 0.0f;
                         if (partial_trim) remaining_budget = 0.0f;
                     }

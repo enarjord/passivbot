@@ -11,9 +11,10 @@ All notable user-facing changes will be documented in this file.
   Pre-gate WEL reachability still controls expansion when that reducer is later loss-gated.
   Passive WEL quantity seeds later rungs before executable-touch resizing, and a same-price WEL
   merges into the following ordinary group. Promoted grid groups and protective reducers retain
-  canonical ordering, aggregate position trimming, realized-loss gating, adverse slippage, and
-  taker fees. Entry and close optimizer bounds must each remain wholly recursive or wholly
-  trailing; mode-crossing ranges and multi-coin market execution remain fail closed.
+  canonical ordering, aggregate position trimming, quantity-relative minimum-size comparisons,
+  realized-loss gating, adverse slippage, and taker fees. Entry and close optimizer bounds must
+  each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin market
+  execution remain fail closed.
 
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market

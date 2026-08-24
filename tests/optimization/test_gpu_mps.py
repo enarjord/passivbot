@@ -7420,6 +7420,48 @@ kernel void passivbot_tm_recursive_close_pregate_wel_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_recursive_close_quantity_tolerance_scales_with_magnitude():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_close_quantity_tolerance_probe(
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    output[0] = quantity_is_meaningfully_below(9.5e-6f, 1.0e-5f)
+        ? 1.0f : 0.0f;
+    output[1] = quantity_is_meaningfully_below(9.999995e-6f, 1.0e-5f)
+        ? 1.0f : 0.0f;
+    output[2] = quantity_is_meaningfully_below(1.0e-5f, 1.0e-5f)
+        ? 1.0f : 0.0f;
+    output[3] = quantity_is_meaningfully_below(0.95f, 1.0f)
+        ? 1.0f : 0.0f;
+    output[4] = quantity_is_meaningfully_below(0.9999995f, 1.0f)
+        ? 1.0f : 0.0f;
+    output[5] = quantity_is_meaningfully_below(1.0f, 1.0f)
+        ? 1.0f : 0.0f;
+}
+"""
+    output = torch.zeros(6, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_close_quantity_tolerance_probe(
+        output,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    # The first sub-micro-step case was admitted by the former fixed +1e-6
+    # epsilon. The near-boundary cases remain equal within the same 1e-6
+    # relative tolerance at both tested quantity magnitudes.
+    assert output.cpu().tolist() == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_tm_recursive_market_groups_trim_to_position_before_fill():
     count = 8
     close = np.asarray(
