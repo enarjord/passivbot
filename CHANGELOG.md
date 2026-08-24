@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live bot startup on Windows without symlink privileges by writing a visible pointer to the
+  timestamped run log instead of failing while creating the stable log alias. Built-in monitor
+  tooling resolves that pointer so the stable per-user path remains tail-able.
+
 - Apple MPS single-coin HSL optimization now continues hard-stop sampling, rolling-PnL expiry,
   tier accounting, and restart checks through supported invalid candle tails. Tail candles remain
   non-tradable and cannot satisfy stale blocking orders. Forced-delist tails and multi-coin invalid
@@ -14,7 +18,6 @@ All notable user-facing changes will be documented in this file.
   exact Rust's 1,400-candle forced-delist threshold. Metal keeps the tail non-tradable and records
   balance-only account equity like exact Rust. HSL tails, forced-delist closes, and multi-coin
   invalid tails continue to fail closed.
-
 - Apple MPS multi-coin EMA Anchor optimization now supports any positive integer
   `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
   and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
@@ -117,7 +120,6 @@ All notable user-facing changes will be documented in this file.
   retain canonical ordering,
   aggregate position trimming, quantity-relative minimum-size comparisons, adverse slippage, and
   taker fees. Entry and close optimizer bounds may cross the recursive/trailing mode boundary.
-
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market
   snapshot after the original passive rung is next-candle reachable, short entries are resized to

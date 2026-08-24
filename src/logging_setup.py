@@ -18,6 +18,7 @@ DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%SZ"
 DEFAULT_LOG_FILENAME_MAX_LEN = 100
+_WINDOWS_SYMLINK_PRIVILEGE_NOT_HELD = 1314
 
 
 class PrefixFilter(logging.Filter):
@@ -153,6 +154,22 @@ def update_stable_log_alias(alias_path: str | Path, target_path: str | Path) -> 
     try:
         alias.symlink_to(relative_target)
     except OSError as exc:
+        if getattr(exc, "winerror", None) == _WINDOWS_SYMLINK_PRIVILEGE_NOT_HELD:
+            try:
+                alias.write_text(
+                    f"symlink unavailable; current run log:\n{target.resolve()}\n",
+                    encoding="utf-8",
+                )
+            except OSError as pointer_exc:
+                raise RuntimeError(
+                    f"failed to write stable live log pointer {alias} -> {target}: {pointer_exc}"
+                ) from pointer_exc
+            logging.getLogger(__name__).warning(
+                "[logging] symlink privilege unavailable; wrote stable live log pointer %s -> %s",
+                alias,
+                target,
+            )
+            return
         raise RuntimeError(
             f"failed to create stable live log alias {alias} -> {target}: {exc}"
         ) from exc
