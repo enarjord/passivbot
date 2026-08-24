@@ -742,6 +742,9 @@ mod tests {
         assert!(source.contains("recursive_close_groups"));
         assert!(source.contains("recursive_strategy_close_would_expand"));
         assert!(source.contains("selected.market = should_use_ordinary_market_execution"));
+        assert_eq!(source.matches("bool all_below_min").count(), 2);
+        assert_eq!(source.matches("bool normalize_close_groups").count(), 2);
+        assert_eq!(source.matches("int collapse_ordinary_rank").count(), 2);
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
         assert!(source.contains("const bool loss_gate_enabled = max_realized_loss_pct < 1.0f"));

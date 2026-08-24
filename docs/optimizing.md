@@ -303,9 +303,11 @@ The supported slice is intentionally narrow:
   exact passive next-candle reachability still decides whether Rust emits only the next close or
   expands the immutable ladder. Market policy cannot expose an unexpanded suffix. Once expanded,
   every merged price group is classified and executable-touch-sized against the immutable
-  generation market, then ordered and allocated together with any protective reducer before
-  next-candle adverse slippage, taker fees, and realized-loss gating are applied. Multi-coin market
-  execution remains fail closed until its execution ordering is modeled
+  generation market, then aggregate-trimmed to the position and ordered with any protective
+  reducer before next-candle adverse slippage, taker fees, and realized-loss gating are applied.
+  Strategy WEL reachability remains part of the pre-gate expansion decision even when that reducer
+  is subsequently rejected. Multi-coin market execution remains fail closed until its execution
+  ordering is modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

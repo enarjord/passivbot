@@ -1320,8 +1320,9 @@ inline int recursive_close_groups(
 // the immutable passive strategy orders would strictly fill. Conservative
 // tick bounds decide when this exact probe is necessary; this reconstruction
 // filters their harmless false positives before market policy can expose the
-// otherwise-unemitted suffix. Portfolio TWEL and unstuck reducers are appended
-// after strategy generation, so they must not decide strategy expansion.
+// otherwise-unemitted suffix. Strategy WEL remains part of this pre-loss-gate
+// decision even if it is rejected later. Portfolio TWEL and unstuck reducers
+// are appended after strategy generation, so they must not decide expansion.
 inline bool recursive_strategy_close_would_expand(
     thread const TmSide& source, bool is_long,
     int high_fill_max_tick, int low_nonfill_max_tick,
@@ -1333,9 +1334,6 @@ inline bool recursive_strategy_close_would_expand(
     sim.market_orders_allowed = false;
     sim.twel_enforcer_enabled = false;
     sim.unstuck_enabled = false;
-    if (source.close_loss_gate_disabled_reducers) {
-        sim.wel_enforcer_enabled = false;
-    }
     for (int rung = 0; rung < 500; ++rung) {
         generate_orders(
             sim, is_long, source.close_gen_balance, source.close_gen_pprice,
@@ -1667,19 +1665,22 @@ inline void passivbot_single_coin_impl(
                 ),
                 0.0f
             );
-            bool trim_for_reducer = long_side.close_is_exposure_reducer
+            bool has_reducer = long_side.close_is_exposure_reducer
                 && reducer_qty > 0.0f;
             float remaining_budget = ordinary_budget;
             float kept_ordinary = 0.0f;
-            float minimum_any = trim_for_reducer
+            float minimum_any = has_reducer
                 ? min_entry_qty(
                     reducer_market ? long_side.close_gen_market_price
                                    : reducer_price,
                     qty_step, min_qty, min_cost, c_mult
-                ) : 0.0f;
+                ) : 1.0e30f;
+            bool all_below_min = !has_reducer
+                || long_side.close_gen_psize + 1.0e-6f < minimum_any;
+            bool any_group_market = false;
             int last_kept_rank = -1;
             for (int trim_rank = 0;
-                trim_for_reducer && trim_rank < group_count;
+                trim_rank < group_count;
                 ++trim_rank) {
                 int wanted = reverse
                     ? group_count - trim_rank - 1 : trim_rank;
@@ -1688,12 +1689,15 @@ inline void passivbot_single_coin_impl(
                     min_qty, min_cost, c_mult, long_side.close_gen_psize,
                     grid_rung_limit, group
                 );
+                any_group_market = any_group_market || group.market;
                 float trimmed_qty = fmin(group.qty, remaining_budget);
                 float group_min = min_entry_qty(
                     group.market ? long_side.close_gen_market_price
                                  : group.price,
                     qty_step, min_qty, min_cost, c_mult
                 );
+                all_below_min = all_below_min
+                    && long_side.close_gen_psize + 1.0e-6f < group_min;
                 bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
                 if (trimmed_qty + 1.0e-6f < group_min) {
                     trimmed_qty = 0.0f;
@@ -1709,15 +1713,26 @@ inline void passivbot_single_coin_impl(
                     last_kept_rank = trim_rank;
                 }
             }
-            float dust_remainder = fmax(
-                round_step(
-                    long_side.close_gen_psize - reducer_qty - kept_ordinary,
-                    qty_step
-                ),
-                0.0f
-            );
+            bool normalize_close_groups = has_reducer || any_group_market;
+            int collapse_ordinary_rank = -1;
+            if (normalize_close_groups && all_below_min
+                && !has_reducer && group_count > 0) {
+                // Rust's below-minimum position exception collapses an
+                // ordinary ladder to its closest-to-fill order at full size.
+                collapse_ordinary_rank = 0;
+                kept_ordinary = long_side.close_gen_psize;
+                last_kept_rank = 0;
+            }
+            float dust_remainder = normalize_close_groups
+                ? fmax(
+                    round_step(
+                        long_side.close_gen_psize - reducer_qty - kept_ordinary,
+                        qty_step
+                    ),
+                    0.0f
+                ) : 0.0f;
             if (dust_remainder > 0.0f && dust_remainder < minimum_any
-                && last_kept_rank < 0) {
+                && last_kept_rank < 0 && has_reducer) {
                 reducer_qty = fmin(
                     long_side.close_gen_psize,
                     round_step(reducer_qty + dust_remainder, qty_step)
@@ -1737,7 +1752,10 @@ inline void passivbot_single_coin_impl(
                 );
                 if (group.qty <= 0.0f) break;
                 float trimmed_group_qty = group.qty;
-                if (trim_for_reducer) {
+                if (collapse_ordinary_rank >= 0) {
+                    trimmed_group_qty = rank == collapse_ordinary_rank
+                        ? long_side.close_gen_psize : 0.0f;
+                } else if (normalize_close_groups) {
                     float group_min = min_entry_qty(
                         group.market ? long_side.close_gen_market_price
                                      : group.price,
@@ -2331,19 +2349,22 @@ inline void passivbot_single_coin_impl(
                 ),
                 0.0f
             );
-            bool trim_for_reducer = short_side.close_is_exposure_reducer
+            bool has_reducer = short_side.close_is_exposure_reducer
                 && reducer_qty > 0.0f;
             float remaining_budget = ordinary_budget;
             float kept_ordinary = 0.0f;
-            float minimum_any = trim_for_reducer
+            float minimum_any = has_reducer
                 ? min_entry_qty(
                     reducer_market ? short_side.close_gen_market_price
                                    : reducer_price,
                     qty_step, min_qty, min_cost, c_mult
-                ) : 0.0f;
+                ) : 1.0e30f;
+            bool all_below_min = !has_reducer
+                || short_side.close_gen_psize + 1.0e-6f < minimum_any;
+            bool any_group_market = false;
             int last_kept_rank = -1;
             for (int trim_rank = 0;
-                trim_for_reducer && trim_rank < group_count;
+                trim_rank < group_count;
                 ++trim_rank) {
                 int wanted = reverse
                     ? group_count - trim_rank - 1 : trim_rank;
@@ -2352,12 +2373,15 @@ inline void passivbot_single_coin_impl(
                     min_qty, min_cost, c_mult, short_side.close_gen_psize,
                     grid_rung_limit, group
                 );
+                any_group_market = any_group_market || group.market;
                 float trimmed_qty = fmin(group.qty, remaining_budget);
                 float group_min = min_entry_qty(
                     group.market ? short_side.close_gen_market_price
                                  : group.price,
                     qty_step, min_qty, min_cost, c_mult
                 );
+                all_below_min = all_below_min
+                    && short_side.close_gen_psize + 1.0e-6f < group_min;
                 bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
                 if (trimmed_qty + 1.0e-6f < group_min) {
                     trimmed_qty = 0.0f;
@@ -2373,15 +2397,24 @@ inline void passivbot_single_coin_impl(
                     last_kept_rank = trim_rank;
                 }
             }
-            float dust_remainder = fmax(
-                round_step(
-                    short_side.close_gen_psize - reducer_qty - kept_ordinary,
-                    qty_step
-                ),
-                0.0f
-            );
+            bool normalize_close_groups = has_reducer || any_group_market;
+            int collapse_ordinary_rank = -1;
+            if (normalize_close_groups && all_below_min
+                && !has_reducer && group_count > 0) {
+                collapse_ordinary_rank = 0;
+                kept_ordinary = short_side.close_gen_psize;
+                last_kept_rank = 0;
+            }
+            float dust_remainder = normalize_close_groups
+                ? fmax(
+                    round_step(
+                        short_side.close_gen_psize - reducer_qty - kept_ordinary,
+                        qty_step
+                    ),
+                    0.0f
+                ) : 0.0f;
             if (dust_remainder > 0.0f && dust_remainder < minimum_any
-                && last_kept_rank < 0) {
+                && last_kept_rank < 0 && has_reducer) {
                 reducer_qty = fmin(
                     short_side.close_gen_psize,
                     round_step(reducer_qty + dust_remainder, qty_step)
@@ -2401,7 +2434,10 @@ inline void passivbot_single_coin_impl(
                 );
                 if (group.qty <= 0.0f) break;
                 float trimmed_group_qty = group.qty;
-                if (trim_for_reducer) {
+                if (collapse_ordinary_rank >= 0) {
+                    trimmed_group_qty = rank == collapse_ordinary_rank
+                        ? short_side.close_gen_psize : 0.0f;
+                } else if (normalize_close_groups) {
                     float group_min = min_entry_qty(
                         group.market ? short_side.close_gen_market_price
                                      : group.price,

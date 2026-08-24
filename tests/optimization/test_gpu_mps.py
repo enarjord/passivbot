@@ -7238,6 +7238,124 @@ kernel void passivbot_tm_recursive_close_market_minimum_probe(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_expansion_keeps_pregate_wel_reachability(side):
+    import passivbot_rust
+
+    row = _tm_single_row(
+        initial_ema_dist=0.0,
+        wel_enforcer_enabled=True,
+        wel_enforcer_threshold=0.05,
+    )
+    row[15] = 0.25
+    row[16] = 0.1
+    row[17] = 0.0
+    row[20] = 0.0
+    params = torch.tensor(row, dtype=torch.float32, device="mps")
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_close_pregate_wel_probe(
+    constant float* params,
+    device float* output,
+    constant int& is_long_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool is_long = is_long_raw != 0;
+    TmSide source = load_side(params, 0, 100.0f);
+    source.close_gen_balance = 1000.0f;
+    source.close_gen_psize = 1.0f;
+    source.close_gen_pprice = 100.0f;
+    source.close_gen_market_price = 100.0f;
+    source.close_gen_touch_down_ticks = 10000;
+    source.close_gen_touch_up_ticks = 10000;
+    source.close_gen_touch_nearest_ticks = 10000;
+    source.close_gen_touch_min_qty = 0.001f;
+    source.close_gen_touch_min_qty_relation = 0;
+
+    source.close_loss_gate_disabled_reducers = false;
+    output[0] = recursive_strategy_close_would_expand(
+        source, is_long, 10000, 9999,
+        0.001f, 0.01f, 0.001f, 0.0f, 1.0f
+    ) ? 1.0f : 0.0f;
+    source.close_loss_gate_disabled_reducers = true;
+    output[1] = recursive_strategy_close_would_expand(
+        source, is_long, 10000, 9999,
+        0.001f, 0.01f, 0.001f, 0.0f, 1.0f
+    ) ? 1.0f : 0.0f;
+}
+"""
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_close_pregate_wel_probe(
+        params,
+        output,
+        1 if side == "long" else 0,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [1.0, 1.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_recursive_market_groups_trim_to_position_before_fill():
+    count = 8
+    close = np.asarray(
+        [100.0, 100.0, 100.0, 100.0, 90.0, 90.0, 90.0, 90.0]
+    )
+    high = close.copy()
+    low = close.copy()
+    low[3] = 98.0
+    high[5] = 102.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 10.01, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.0)
+    row[6] = 0.041
+    row[15] = 0.01
+    row[16] = 0.005
+    row[17] = -0.01
+    row[20] = 0.0
+    row[23] = 100.0
+    params = np.asarray([row + row], dtype=np.float64)
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.2,
+    ).run(params)
+    torch.mps.synchronize()
+
+    # Multiple recursive groups resize against the same generation position.
+    # Rust trims their aggregate first, so no final below-minimum fragment is
+    # executed as a separate fill.
+    assert output["fill_count"].item() == 4.0
+    assert output["psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_hsl_panic_replacement_clears_ordinary_market_state(side):
     import passivbot_rust
 
@@ -11967,6 +12085,9 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "recursive_close_groups" in source
     assert "recursive_strategy_close_would_expand" in source
     assert "selected.market = should_use_ordinary_market_execution" in source
+    assert source.count("bool all_below_min") == 2
+    assert source.count("bool normalize_close_groups") == 2
+    assert source.count("int collapse_ordinary_rank") == 2
     assert source.count("group.market ?") >= 6
     assert source.count("float reducer_fee_rate = reducer_market") == 4
     assert "realized_loss_proxy_allows_close" in source

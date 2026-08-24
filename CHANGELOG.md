@@ -8,10 +8,11 @@ All notable user-facing changes will be documented in this file.
   optimization. Exact passive next-candle expansion remains authoritative: a market-only next
   close does not reveal the recursive suffix, while an expanded immutable ladder classifies and
   executable-touch-sizes every emitted price group against its generation market snapshot.
-  Promoted grid groups and protective reducers retain canonical ordering, aggregate allocation,
-  realized-loss gating, adverse slippage, and taker fees. Entry and close optimizer bounds must
-  each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin market
-  execution remain fail closed.
+  Pre-gate WEL reachability still controls expansion when that reducer is later loss-gated.
+  Promoted grid groups and protective reducers retain canonical ordering, aggregate position
+  trimming, realized-loss gating, adverse slippage, and taker fees. Entry and close optimizer
+  bounds must each remain wholly recursive or wholly trailing; mode-crossing ranges and
+  multi-coin market execution remain fail closed.
 
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market
