@@ -306,7 +306,9 @@ The supported slice is intentionally narrow:
   generation market, then aggregate-trimmed to the position and ordered with any protective
   reducer before next-candle adverse slippage, taker fees, and realized-loss gating are applied.
   Strategy WEL reachability remains part of the pre-gate expansion decision even when that reducer
-  is subsequently rejected. Multi-coin market execution remains fail closed until its execution
+  is subsequently rejected. Its passive quantity seeds the remaining immutable rungs before any
+  market minimum resize, and a WEL sharing the following ordinary rung's quantized price is merged
+  into that ordinary group. Multi-coin market execution remains fail closed until its execution
   ordering is modeled
 - no invalid candle tail after the selected coin's final valid candle
 

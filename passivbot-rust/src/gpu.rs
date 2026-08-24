@@ -745,6 +745,14 @@ mod tests {
         assert_eq!(source.matches("bool all_below_min").count(), 2);
         assert_eq!(source.matches("bool normalize_close_groups").count(), 2);
         assert_eq!(source.matches("int collapse_ordinary_rank").count(), 2);
+        assert_eq!(source.matches("bool selected_strategy_wel").count(), 2);
+        assert_eq!(
+            source
+                .matches("close_gen_psize - strategy_wel_qty")
+                .count(),
+            2
+        );
+        assert!(!source.contains("strategy_wel_qty = reducer_qty"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
         assert!(source.contains("const bool loss_gate_enabled = max_realized_loss_pct < 1.0f"));
