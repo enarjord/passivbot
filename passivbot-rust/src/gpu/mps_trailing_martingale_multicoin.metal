@@ -3,8 +3,10 @@ using namespace metal;
 
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 59;
-constant int OVERRIDE_COLS = 44;
+constant int OVERRIDE_COLS = 46;
 constant int HSL_OVERRIDE_START = 34;
+constant int GATE_INITIAL_OVERRIDE_COL = 44;
+constant int GATE_REENTRY_OVERRIDE_COL = 45;
 constant int COIN_COLS = 12;
 constant int DAILY_COLS = 9;
 #if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
@@ -698,7 +700,11 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         ? generation_touch_tick >= raw_tick
         : generation_touch_tick <= raw_tick;
     int entry_tick = touch_controls ? generation_touch_tick : raw_tick;
-    if (config.gate_reentry) {
+    bool coin_gate_reentry = coin_override_or(
+        coin_overrides, coin, GATE_REENTRY_OVERRIDE_COL,
+        config.gate_reentry ? 1.0f : 0.0f
+    ) > 0.5f;
+    if (coin_gate_reentry) {
         bool band_controls = short_side
             ? band_tick >= entry_tick : band_tick <= entry_tick;
         if (band_controls) entry_tick = band_tick;
@@ -3633,7 +3639,15 @@ inline void generate_tm_multicoin_side_orders(
                 / price_step - 1.0e-6f))
             : int(floor(lower * (1.0f - coin_initial_ema_dist)
                 / price_step + 1.0e-6f));
-        bool initial_touch_controls = !gate_initial || (short_side
+        bool coin_gate_initial = coin_override_or(
+            coin_overrides, c, GATE_INITIAL_OVERRIDE_COL,
+            gate_initial ? 1.0f : 0.0f
+        ) > 0.5f;
+        bool coin_gate_reentry = coin_override_or(
+            coin_overrides, c, GATE_REENTRY_OVERRIDE_COL,
+            gate_reentry ? 1.0f : 0.0f
+        ) > 0.5f;
+        bool initial_touch_controls = !coin_gate_initial || (short_side
             ? touch_down >= band_tick : touch_up <= band_tick);
         int initial_tick = initial_touch_controls ? entry_touch : band_tick;
         float initial_price = float(initial_tick) * price_step;
@@ -3706,7 +3720,7 @@ inline void generate_tm_multicoin_side_orders(
             : touch_up <= raw_reentry_tick);
         int reentry_tick = reentry_touch_controls
             ? entry_touch : raw_reentry_tick;
-        if (gate_reentry) {
+        if (coin_gate_reentry) {
             bool band_controls = short_side
                 ? band_tick >= reentry_tick : band_tick <= reentry_tick;
             if (band_controls) reentry_tick = band_tick;

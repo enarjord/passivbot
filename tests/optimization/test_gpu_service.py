@@ -9,6 +9,9 @@ from config.schema import get_template_config
 from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_PARAM_KEYS,
@@ -923,7 +926,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         (
             "trailing_martingale",
             "MpsTrailingMartingaleMulticoinFusedRunner",
-            44,
+            TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
             "shared-account-fused-tm-v1",
         ),
     ],
@@ -2151,6 +2154,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         **strategy_base,
         "entry": {
             **strategy_base["entry"],
+            "ema_gate_mode": "reentry",
             "threshold_base_pct": 0.25,
             "retracement_base_pct": 1.0e-50,
         },
@@ -2199,6 +2203,7 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {
+                                    "ema_gate_mode": "reentry",
                                     "threshold_base_pct": 0.25,
                                     "retracement_base_pct": 1.0e-50,
                                 },
@@ -2241,12 +2246,24 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 44)
+    assert matrix.shape == (2, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
     assert matrix[1, 11] == np.finfo(np.float32).tiny
     assert matrix[1, 15] == pytest.approx(0.5)
     assert matrix[1, 20] == np.finfo(np.float32).tiny
+    assert (
+        matrix[
+            1, TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN
+        ]
+        == 0.0
+    )
+    assert (
+        matrix[
+            1, TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN
+        ]
+        == 1.0
+    )
     assert matrix[1, 23] == pytest.approx(15.0)
     assert matrix[1, 24] == pytest.approx(0.4)
     assert matrix[1, 25] == pytest.approx(0.25)
@@ -2255,8 +2272,15 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 28:34].tolist() == pytest.approx(
         [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
     )
-    assert np.isnan(matrix[1, 34:]).all()
-    assert contract["values"][0] == [None] * 44
+    assert np.isnan(
+        matrix[
+            1,
+            34:TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
+        ]
+    ).all()
+    assert contract["values"][0] == [
+        None
+    ] * TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
 
 
 def test_trailing_parameter_matrix_keeps_nested_flattened_sides_separate():

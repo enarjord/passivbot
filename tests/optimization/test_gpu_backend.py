@@ -2725,17 +2725,6 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
     [
         {"live": {"leverage": 3}},
         {"bot": {"long": {"risk": {"n_positions": 2}}}},
-        {
-            "bot": {
-                "long": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"ema_gate_mode": "disabled"}
-                        }
-                    }
-                }
-            }
-        },
     ],
 )
 def test_gpu_multicoin_tm_coin_overrides_reject_unmodeled_leaves(patch):
@@ -2749,6 +2738,31 @@ def test_gpu_multicoin_tm_coin_overrides_reject_unmodeled_leaves(patch):
             enabled_sides=["long"],
             coin_count=3,
         )
+
+
+@pytest.mark.parametrize("mode", ["disabled", "initial", "reentry", "all"])
+def test_gpu_multicoin_tm_coin_overrides_accept_entry_ema_gate_mode(mode):
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"ema_gate_mode": mode}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind="trailing_martingale",
+        enabled_sides=["long"],
+        coin_count=3,
+    )
 
 
 @pytest.mark.parametrize(

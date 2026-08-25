@@ -135,8 +135,9 @@ The supported slice is intentionally narrow:
   supported. Trailing Martingale also supports per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
-  `risk.we_excess_allowance_mode`, trailing-martingale `entry.ema_gate_mode`, disabled sides, and
-  other override leaves fail closed. In one-sided `live.hsl_signal_mode: coin` runs, all ten HSL
+  `risk.we_excess_allowance_mode`, disabled sides, and other override leaves fail closed. Trailing
+  Martingale also resolves all four `entry.ema_gate_mode` values per coin and side. In one-sided
+  `live.hsl_signal_mode: coin` runs, all ten HSL
   leaves documented in `coin_overrides.md` are also supported. Fused dual-side EMA Anchor and
   Trailing Martingale coin mode resolve the same HSL leaves independently for long and short
 - one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with

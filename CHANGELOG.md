@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS multi-coin Trailing Martingale optimization now supports static per-coin
+  `entry.ema_gate_mode` overrides. Initial entries and recursive reentries independently inherit
+  or override their EMA gate for each coin and side, including fused long+short runs.
+
 - Apple MPS Trailing Martingale optimization with market orders may now search entry and close
   retracement bounds that cross between recursive and trailing modes. Metal selects the mode per
   candidate and per coin, with sign-preserving float32 packing for positive underflow values;

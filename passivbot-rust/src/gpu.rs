@@ -878,8 +878,10 @@ mod tests {
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 59"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 44"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 46"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
+        assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 44"));
+        assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 45"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 12"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));

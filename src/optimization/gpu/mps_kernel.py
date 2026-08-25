@@ -12,6 +12,7 @@ from optimization.gpu.model import (
     GAP_BINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
     encode_tm_retracement_base_pct,
@@ -1359,7 +1360,7 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
 class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent single-side multi-coin Trailing Martingale proxy on MPS."""
 
-    coin_override_cols = 44
+    coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
 
     def __init__(

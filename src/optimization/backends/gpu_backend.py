@@ -28,6 +28,7 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import (
     HSL_COIN_OVERRIDE_PATHS,
+    TRAILING_MARTINGALE_GATE_MODE_OVERRIDE_PATH,
     gpu_side_enabled,
     validate_hsl_override_patch,
     validate_hsl_signal_topology,
@@ -1280,6 +1281,7 @@ def _validate_gpu_coin_overrides(
         strategy_paths = {
             path for _key, path in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
         }
+        strategy_paths.add(TRAILING_MARTINGALE_GATE_MODE_OVERRIDE_PATH)
 
     def leaves(value, prefix=()):
         if isinstance(value, dict):
