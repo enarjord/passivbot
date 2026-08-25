@@ -12713,6 +12713,235 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_market_unstuck_sizes_at_touch_without_reseeding_grid(
+    side,
+):
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
+    constant float* bars,
+    constant int* touch_ticks,
+    constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    constant int& short_side_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool short_side = short_side_raw != 0;
+    TrailingMartingaleMulticoinSideConfig config =
+        load_trailing_martingale_multicoin_side_config(params, 0);
+    TrailingMartingaleMulticoinSideState state;
+    init_trailing_martingale_multicoin_side_state(
+        state, config, bars, coin_settings, coin_overrides, 1
+    );
+    state.selected[0] = true;
+    state.psize[0] = 10.0f;
+    state.pprice[0] = 100.0f;
+    state.position_open_k[0] = 0.0f;
+    state.position_last_fill_k[0] = 0.0f;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    generate_tm_multicoin_side_orders(
+        state, config, account,
+        bars, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides,
+        1, 1, short_side, 1, 1, 0, false, 1.0f,
+        true, 1.1f, 0, 0ul
+    );
+    output[0] = state.close_qty[0];
+    output[1] = state.close_grid_gen_psize[0];
+    output[2] = state.close_market[0] ? 1.0f : 0.0f;
+    output[3] = state.close_is_exposure_reducer[0] ? 1.0f : 0.0f;
+    output[4] = state.close_is_unstuck_reducer[0] ? 1.0f : 0.0f;
+    output[5] = state.close_gen_market_price[0];
+    output[6] = float(state.close_grid_max_rungs[0]);
+}
+"""
+    _, row = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=3, closes=(100.0, 100.0)
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_initial_qty_pct": 0.0,
+            "close_threshold_base_pct": 10.0,
+            "close_threshold_we_weight": 0.0,
+            "close_retracement_base_pct": 0.0,
+            "n_positions": 1.0,
+            "total_wallet_exposure_limit": 1.0,
+            "wel_enforcer_enabled": 0.0,
+            "twel_enforcer_enabled": 0.0,
+            "unstuck_enabled": 1.0,
+            "unstuck_ema_gating_enabled": 0.0,
+            "unstuck_close_pct": 0.1,
+            "unstuck_loss_allowance_pct": 0.2,
+            "unstuck_threshold": 0.5,
+        }
+    )
+    params = torch.tensor(
+        [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
+        dtype=torch.float32,
+        device="mps",
+    )
+    bars = torch.tensor(
+        [[[100.0, 100.0, 100.0, 1.0]], [[100.0, 100.0, 100.0, 1.0]]],
+        dtype=torch.float32,
+        device="mps",
+    )
+    touch_ticks = torch.full(
+        (2, 1, 2), 20_000, dtype=torch.int32, device="mps"
+    )
+    touch_nearest_ticks = torch.full(
+        (2, 1), 20_000, dtype=torch.int32, device="mps"
+    )
+    touch_min_qty_bits = torch.zeros(
+        (2, 1), dtype=torch.int32, device="mps"
+    )
+    touch_min_qty_relation = torch.zeros(
+        (2, 1), dtype=torch.int32, device="mps"
+    )
+    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings[0, 0] = 0.001
+    coin_settings[0, 1] = 0.01
+    coin_settings[0, 2] = 0.001
+    coin_settings[0, 3] = 100.0
+    coin_settings[0, 4] = 1.0
+    coin_settings[0, 7] = 10.0
+    coin_overrides = torch.full(
+        (1, 44), float("nan"), dtype=torch.float32, device="mps"
+    )
+    output = torch.zeros(7, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        + probe_kernel
+    )
+    library.passivbot_tm_multicoin_market_unstuck_reservation_probe(
+        bars,
+        touch_ticks,
+        touch_nearest_ticks,
+        touch_min_qty_bits,
+        touch_min_qty_relation,
+        coin_settings,
+        coin_overrides,
+        params,
+        output,
+        int(side == "short"),
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    # The passive unstuck request is 0.5 at price 200. Market policy enlarges
+    # the emitted reducer to the executable-touch minimum of 1.0 at 100, but
+    # external unstuck does not reseed Rust's full-size strategy ladder.
+    assert output.cpu().tolist() == pytest.approx(
+        [1.0, 10.0, 1.0, 1.0, 1.0, 100.0, 500.0], abs=2.0e-4
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
+    side,
+):
+    count = 6
+    closes = np.full((count, 2), 100.0)
+    if side == "long":
+        closes[3:, 0] = 97.5
+        closes[3:, 1] = 98.5
+        highs = closes + 0.01
+        lows = closes.copy()
+    else:
+        closes[3:, 0] = 102.5
+        closes[3:, 1] = 101.5
+        highs = closes.copy()
+        lows = closes - 0.01
+
+    def run_case(*, slippage, taker_fee):
+        markets = [
+            ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0, taker_fee),
+            ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0, taker_fee),
+        ]
+        overrides = np.full((2, 44), np.nan, dtype=np.float32)
+        # Exercise the effective per-coin runtime: the side template remains
+        # disabled while coin one alone enables auto-unstuck.
+        overrides[1, 28] = 1.0
+        runner, candidate = _multicoin_exposure_fixture(
+            "trailing_martingale",
+            side,
+            coin_overrides=overrides,
+            count=count,
+            markets=markets,
+            closes=closes,
+            highs=highs,
+            lows=lows,
+            market_orders_allowed=True,
+            market_order_near_touch_threshold=0.001,
+            market_order_slippage_pct=slippage,
+        )
+        values = dict(
+            zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate)
+        )
+        values.update(
+            {
+                "entry_initial_ema_dist": 0.01,
+                "entry_initial_qty_pct": 1.0,
+                "entry_threshold_base_pct": 10.0,
+                "entry_retracement_base_pct": 0.0,
+                "close_threshold_base_pct": 0.5,
+                "close_retracement_base_pct": 0.0,
+                "entry_cooldown_minutes": 100.0,
+                "gate_initial": 1.0,
+                "unstuck_enabled": 0.0,
+                "unstuck_ema_gating_enabled": 0.0,
+                "unstuck_close_pct": 0.1,
+                "unstuck_loss_allowance_pct": 0.2,
+                "unstuck_threshold": 0.5,
+            }
+        )
+        output = runner.run(
+            np.asarray(
+                [
+                    [
+                        values[key]
+                        for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+                    ]
+                ],
+                dtype=np.float64,
+            )
+        )
+        torch.mps.synchronize()
+        return output
+
+    no_cost = run_case(slippage=0.0, taker_fee=0.0)
+    slipped = run_case(slippage=0.01, taker_fee=0.0)
+    charged = run_case(slippage=0.01, taker_fee=0.002)
+    position_key = "psize" if side == "long" else "short_psize"
+
+    assert no_cost["fill_count"].item() > 2.0
+    assert slipped["fill_count"].item() == no_cost["fill_count"].item()
+    assert charged["fill_count"].item() == slipped["fill_count"].item()
+    assert slipped[position_key].item() == pytest.approx(
+        no_cost[position_key].item(), abs=2.0e-4
+    )
+    assert charged[position_key].item() == pytest.approx(
+        slipped[position_key].item(), abs=2.0e-4
+    )
+    assert slipped["balance"].item() < no_cost["balance"].item()
+    assert charged["balance"].item() < slipped["balance"].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_tm_multicoin_market_reducer_keeps_generation_dust_allocation():
     import passivbot_rust
 
@@ -12877,49 +13106,6 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         np.asarray(remaining_sizes)[:, 2:],
         [[1.0, 0.4, 150.0, 0.3, 0.0]] * 2,
         atol=2.0e-4,
-    )
-
-
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
-)
-def test_mps_tm_multicoin_unstuck_reserves_passive_grid_like_equal_wel():
-    runner, wel_candidate, _ = _tm_multicoin_off_tick_reducer_case(
-        "long", maker_fee=0.0
-    )
-    values = dict(
-        zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, wel_candidate)
-    )
-    values.update(
-        {
-            "wel_enforcer_enabled": 0.0,
-            "unstuck_enabled": 1.0,
-            "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_pct": 0.5102,
-            "unstuck_loss_allowance_pct": 0.2,
-            "unstuck_threshold": 0.5,
-        }
-    )
-    unstuck_candidate = [
-        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-    ]
-
-    output = runner.run(
-        np.asarray([wel_candidate, unstuck_candidate], dtype=np.float64)
-    )
-    torch.mps.synchronize()
-
-    # These candidates request the same touch and finalized reducer quantity.
-    # The ordinary passive grid must therefore be generated from the same
-    # reducer-reserved position size for WEL and unstuck.
-    assert output["psize"][1].item() == pytest.approx(
-        output["psize"][0].item(), abs=2.0e-4
-    )
-    assert output["balance"][1].item() == pytest.approx(
-        output["balance"][0].item(), abs=2.0e-4
-    )
-    assert output["day_volume"][1].sum().item() == pytest.approx(
-        output["day_volume"][0].sum().item(), rel=2.0e-5
     )
 
 

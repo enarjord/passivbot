@@ -337,9 +337,12 @@ The supported slice is intentionally narrow:
   `risk.total_exposure_entry_gate_enabled: true`, the proxy performs one deterministic global merge
   of first and recursive suffix rungs across coins, retains nearest orders, and can crop one
   minimum-valid boundary strictly below the TWEL cap. HSL, static coin overrides, and forager
-  selection remain supported. Position- and total-exposure repair, auto-unstuck, and realized-loss
-  gating remain fail closed for multi-coin Trailing Martingale market mode until their market
-  interactions are modeled.
+  selection remain supported. Position- and total-exposure repair plus the one globally selected
+  auto-unstuck reducer may promote to market, executable-touch-size before finalized reducer
+  selection, and retain adverse slippage plus taker fees. Static coin overrides may enable or tune
+  unstuck; recursive-grid reconstruction keeps the independently generated ordinary strategy
+  ladder when market sizing enlarges the external reducer. Realized-loss gating remains fail closed
+  for multi-coin Trailing Martingale market mode until its shared-budget interactions are modeled.
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
