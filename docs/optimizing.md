@@ -323,18 +323,22 @@ The supported slice is intentionally narrow:
   their market slippage and taker fees are included in the projected loss. Static coin overrides
   may enable or tune unstuck. Multi-coin Trailing Martingale supports ordinary market entries and
   ordinary strategy closes for long-only, short-only, fused long+short, hedge-mode, one-way, and
-  compatible suite runs when every enabled entry retracement range remains wholly trailing with a
-  float32-positive lower bound and every close retracement range remains wholly recursive or
-  wholly trailing. Static coin overrides may select either supported close mode per coin. It uses
+  compatible suite runs when every enabled entry and close retracement range remains wholly
+  recursive or wholly trailing. Recursive entry mode currently requires
+  `risk.total_exposure_entry_gate_enabled: false`; cross-coin allocation of multiple recursive
+  rungs remains fail closed until its dedicated slice. Static coin overrides may select either
+  supported entry or close mode per coin. It uses
   the same retained generation-time intent, next-valid-candle adverse fill, taker-fee,
   executable-touch minimum sizing for short entries and all closes, and portfolio entry-cap
   accounting contract. Passive next-candle reachability alone exposes a recursive close suffix;
   market promotion cannot expose an otherwise unexpanded ladder. Every emitted duplicate-merged
   group is classified and minimum-sized against the immutable generation market before aggregate
-  trimming to the position. HSL, static coin overrides, and forager selection remain supported.
-  Recursive entry modes, position- and total-exposure repair, auto-unstuck, and realized-loss
-  gating remain fail closed for multi-coin Trailing Martingale market mode until their market
-  interactions are modeled
+  trimming to the position. Recursive entries likewise expose their suffix only after strict
+  passive first-rung reachability, retain immutable strategy sizing, classify each emitted rung at
+  the generation market, and stage one order when entry cooldown is positive. HSL, static coin
+  overrides, and forager selection remain supported. Recursive-entry portfolio TWEL gating,
+  position- and total-exposure repair, auto-unstuck, and realized-loss gating remain fail closed
+  for multi-coin Trailing Martingale market mode until their market interactions are modeled.
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
