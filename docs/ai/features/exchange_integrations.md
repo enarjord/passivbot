@@ -462,6 +462,8 @@ Handling:
    request spacing below the venue's documented UID/IP rolling limit. Treat the observed
    `code=1, msg=Network Error` envelope like documented network error `10001`, and retry native
    market discovery with bounded backoff so a transient cold-start response is not permanent.
+   Attach the bounded venue code to the mapped exception for structured write diagnostics; do not
+   propagate response bodies, configured headers, or credentials into the public diagnostic path.
 4. Authenticate the private WebSocket with its seconds-based signature, subscribe to `order`, and
    send Bitunix's application-level JSON ping while idle; transport-level WebSocket heartbeats do
    not replace the venue keepalive. Enrich each order notification from REST detail before
@@ -474,8 +476,9 @@ Handling:
 5. Apply custom endpoint domain rewrites and `rest.url_overrides.api` to the native REST base, and
    merge `rest.extra_headers` into every request. Reject authentication header names
    case-insensitively in configured headers so proxy or user headers cannot collide with generated
-   signatures. Honor `disable_ws` for both private orders and public tickers: use REST order
-   polling and request only explicit, bounded symbol sets through REST depth.
+   signatures. Honor `disable_ws` for private orders and public market streams: use REST order
+   polling, request only explicit bounded symbol sets through REST depth, and leave canonical
+   candle refresh and repair to REST.
 6. Keep `bitunix: null` explicit in `broker_codes.hjson`; there is no Passivbot broker payload for
    this connector.
 
@@ -503,7 +506,11 @@ Handling:
    price for every limit order and every open order. Only terminal market-order detail may omit the
    request price.
 5. Bitunix has emitted `NEW_` on live order detail although its schema documents `NEW`. Normalize
-   only trailing underscore padding before applying the closed order-status allowlist.
+   only trailing underscore padding before applying the closed order-status allowlist. Pending
+   endpoint membership is itself authoritative evidence that an order remains pending, so retain
+   an otherwise unknown bounded code-like transition status as open until a later complete
+   pending snapshot removes it, with a rate-limited structured warning. Missing, free-form, and
+   oversized statuses remain invalid, and order-detail normalization keeps the strict allowlist.
 6. Page pending orders by `skip` to the required, stable reported total under one fixed `endTime`
    snapshot. Reject missing, changing, truncated, or duplicate pagination results before treating
    the account-critical open-order set as authoritative.
@@ -513,9 +520,10 @@ Handling:
    fill `clientId` values through order detail, but retain the exchange-truth fill with unknown
    attribution when terminal order detail has expired. This is the canonical fill source for
    realized PnL, unstuck accounting, and HSL replay.
-8. Reconstruct realized wallet balance as
-   `available + frozen + margin - crossUnrealizedPNL - isolationUnrealizedPNL`; do not feed
-   mark-to-market equity into Rust sizing.
+8. Reconstruct realized wallet balance as `available + frozen + margin`. These are the disjoint
+   available, order-locked, and position-margin quantities. Keep
+   `crossUnrealizedPNL + isolationUnrealizedPNL` separate as mark-to-market state so price movement
+   does not change Rust's realized sizing balance.
 
 Primary references: [place order](https://www.bitunix.com/api-docs/futures/trade/place_order.html),
 [pending positions](https://www.bitunix.com/api-docs/futures/position/get_pending_positions.html),
@@ -547,9 +555,27 @@ and deduplicate. This pagination supports live warmup, restart reconstruction, a
 indicators only. Bulk historical Bitunix data for backtesting or optimization is not a supported
 source.
 
+When WebSockets are enabled, multiplex the active forager candidates on the official
+`market_kline_1min` channel. Deterministically shard the sorted symbol set across public sockets,
+with no more than the venue's 300 subscriptions on each connection.
+The push timestamp is receipt/update time, so floor it to the one-minute bucket; normalize `b` as
+base volume and validate the complete OHLC row. Pass the changing open bucket through the generic
+successor-candle finalization boundary. Drop a transient internally inconsistent update instead of
+clamping exchange values or failing unrelated multiplexed symbols; a bounded consecutive run wakes
+the affected watcher into REST fallback and suspends new rows for that symbol until the watcher
+consumes the fallback signal. Startup basis, reconnect gaps, persistent malformed data, prolonged
+silence, and periodic integrity checks remain REST-owned; a transport failure wakes every affected
+watcher so provenance is cleared before bounded reconnect and REST fallback. Track application-data
+liveness per symbol so unrelated Kline traffic and control frames cannot conceal a stalled
+subscription, while also enforcing connection silence independently of the short receive polling
+used for subscription reconciliation. Validate subscription acknowledgements and wake only the
+rejected symbols into REST fallback when the response identifies them; an unscoped rejection
+conservatively wakes the pending subscription batch.
+
 Primary references: [ticker WebSocket](https://www.bitunix.com/api-docs/futures/websocket/public/Tickers%20Channel.html),
 [REST depth](https://www.bitunix.com/api-docs/futures/market/get_depth.html), and
-[kline API](https://www.bitunix.com/api-docs/futures/market/get_kline.html).
+[Kline WebSocket](https://www.bitunix.com/api-docs/futures/websocket/public/kline%20channel.html),
+and [kline API](https://www.bitunix.com/api-docs/futures/market/get_kline.html).
 
 ## WEEX Futures
 

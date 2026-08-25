@@ -18,6 +18,9 @@ DEFAULT_FORMAT = "%(asctime)s %(levelname)-8s %(message)s"
 DEFAULT_FORMAT_WITH_PREFIX = "%(asctime)s %(levelname)-8s [%(log_prefix)s] %(message)s"
 DEFAULT_DATEFMT = "%Y-%m-%dT%H:%M:%SZ"
 DEFAULT_LOG_FILENAME_MAX_LEN = 100
+STABLE_LOG_POINTER_HEADER = "symlink unavailable; current run log:"
+_WINDOWS_SYMLINK_PRIVILEGE_NOT_HELD = 1314
+_STABLE_LOG_POINTER_MAX_BYTES = 4096
 
 
 class PrefixFilter(logging.Filter):
@@ -140,7 +143,7 @@ def build_command_log_path(
 
 
 def update_stable_log_alias(alias_path: str | Path, target_path: str | Path) -> None:
-    """Point a stable log alias at the current run's timestamped logfile."""
+    """Point a stable log alias or pointer at the current run's timestamped logfile."""
     alias = Path(alias_path).expanduser()
     target = Path(target_path).expanduser()
     alias.parent.mkdir(parents=True, exist_ok=True)
@@ -153,9 +156,54 @@ def update_stable_log_alias(alias_path: str | Path, target_path: str | Path) -> 
     try:
         alias.symlink_to(relative_target)
     except OSError as exc:
+        if getattr(exc, "winerror", None) == _WINDOWS_SYMLINK_PRIVILEGE_NOT_HELD:
+            try:
+                alias.write_text(
+                    f"{STABLE_LOG_POINTER_HEADER}\n{target.resolve()}\n",
+                    encoding="utf-8",
+                )
+            except OSError as pointer_exc:
+                raise RuntimeError(
+                    f"failed to write stable live log pointer {alias} -> {target}: {pointer_exc}"
+                ) from pointer_exc
+            logging.getLogger(__name__).warning(
+                "[logging] symlink privilege unavailable; wrote stable live log pointer %s -> %s",
+                alias,
+                target,
+            )
+            return
         raise RuntimeError(
             f"failed to create stable live log alias {alias} -> {target}: {exc}"
         ) from exc
+
+
+def resolve_stable_log_alias(alias_path: str | Path) -> Path:
+    """Resolve the bounded Windows pointer fallback while leaving normal log paths unchanged."""
+    alias = Path(alias_path).expanduser()
+    try:
+        if alias.is_symlink() or not alias.is_file():
+            return alias
+        if alias.stat().st_size > _STABLE_LOG_POINTER_MAX_BYTES:
+            return alias
+        with alias.open("r", encoding="utf-8") as pointer_file:
+            pointer_text = pointer_file.read(_STABLE_LOG_POINTER_MAX_BYTES + 1)
+    except (OSError, UnicodeError):
+        return alias
+    if len(pointer_text) > _STABLE_LOG_POINTER_MAX_BYTES:
+        return alias
+
+    lines = pointer_text.splitlines()
+    if len(lines) != 2 or lines[0] != STABLE_LOG_POINTER_HEADER:
+        return alias
+    target = Path(lines[1])
+    if not target.is_absolute():
+        return alias
+    try:
+        if target.parent.resolve() != alias.parent.resolve():
+            return alias
+    except OSError:
+        return alias
+    return target
 
 
 def configure_logging(
@@ -176,7 +224,7 @@ def configure_logging(
     Args:
         debug: Logging level (0=warning, 1=info, 2=debug, 3=trace)
         log_file: Optional path to canonical log file
-        current_log_file: Optional stable alias path pointing at the current log file
+        current_log_file: Optional stable alias or pointer path for the current log file
         rotation: Enable log rotation
         max_bytes: Max bytes per log file before rotation
         backup_count: Number of backup files to keep

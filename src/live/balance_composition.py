@@ -270,6 +270,56 @@ def normalize_hyperliquid_unified_balance_composition(fetched: Any) -> dict[str,
     )
 
 
+def normalize_bitunix_balance_composition(fetched: Any) -> dict[str, Any]:
+    """Normalize documented Bitunix futures-account components for diagnostics.
+
+    Bitunix reports disjoint available, order-frozen, and position-margin
+    quantities. Their sum is the realized wallet balance; unrealized PnL is a
+    separate mark-to-market component and must not be subtracted from that sum.
+    """
+    source = "bitunix.info.account"
+    if not isinstance(fetched, Mapping):
+        return malformed_balance_composition(source=source, reason="invalid_payload")
+    info = fetched.get("info")
+    if not isinstance(info, Mapping):
+        return malformed_balance_composition(source=source, reason="missing_info")
+    asset = _asset_name(info.get("marginCoin"))
+    if asset is None:
+        return malformed_balance_composition(source=source, reason="missing_margin_coin")
+    available = _finite_number(info.get("available"))
+    frozen = _finite_number(info.get("frozen"))
+    margin = _finite_number(info.get("margin"))
+    cross_upnl = _finite_number(info.get("crossUnrealizedPNL"))
+    isolated_upnl = _finite_number(info.get("isolationUnrealizedPNL"))
+    if None in (available, frozen, margin, cross_upnl, isolated_upnl):
+        return malformed_balance_composition(source=source, reason="missing_account_fields")
+    wallet = available + frozen + margin
+    used = frozen + margin
+    unrealized_pnl = cross_upnl + isolated_upnl
+    if not all(math.isfinite(value) for value in (wallet, used, unrealized_pnl)):
+        return malformed_balance_composition(source=source, reason="non_finite_account")
+    return _finalize_snapshot(
+        status="available",
+        source=source,
+        assets=[
+            {
+                "asset": asset,
+                "amount": wallet,
+                "free_amount": available,
+                "used_amount": used,
+                "unrealized_pnl": unrealized_pnl,
+                "field_provenance": {
+                    "asset": "marginCoin",
+                    "amount": "account_components",
+                    "free_amount": "available",
+                    "used_amount": "frozen_margin",
+                    "unrealized_pnl": "account_unrealized_pnl",
+                },
+            }
+        ],
+    )
+
+
 def _select_gateio_account_row(fetched: Mapping[str, Any], quote: str) -> Mapping[str, Any] | None:
     """Pick the unique Gate futures-account row for the settle currency when possible.
 
@@ -400,6 +450,7 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         status not in {"available", "unavailable", "malformed"}
         or source
         not in {
+            "bitunix.info.account",
             "unsupported",
             "normalizer",
             "ccxt.unified_balance",
@@ -435,12 +486,23 @@ def public_balance_composition(value: Any) -> dict[str, Any] | None:
         provenance = item.get("field_provenance")
         if isinstance(provenance, Mapping):
             allowed_sources = {
-                "asset": {"ccy", "coin", "currency", "currency_map_key", "quote"},
-                "amount": {"cashBal", "total", "wallet_balance"},
+                "asset": {
+                    "ccy",
+                    "coin",
+                    "currency",
+                    "currency_map_key",
+                    "marginCoin",
+                    "quote",
+                },
+                "amount": {"account_components", "cashBal", "total", "wallet_balance"},
                 "free_amount": {"free", "available", "cross_available"},
-                "used_amount": {"used", "cross_margin"},
+                "used_amount": {"cross_margin", "frozen_margin", "used"},
                 "usd_value": "eqUsd",
-                "unrealized_pnl": {"upl", "cross_unrealised_pnl"},
+                "unrealized_pnl": {
+                    "account_unrealized_pnl",
+                    "cross_unrealised_pnl",
+                    "upl",
+                },
                 "liability": {"debt", "liab"},
                 "collateral_enabled": "collateralEnabled",
             }

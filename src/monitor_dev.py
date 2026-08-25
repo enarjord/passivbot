@@ -12,6 +12,7 @@ from urllib.error import URLError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
+from logging_setup import resolve_stable_log_alias
 from monitor_tui import MonitorTuiClient
 
 
@@ -24,7 +25,17 @@ def resolve_latest_log_file(*, logs_dir: str = "logs", explicit_log_file: Option
     candidates = [path for path in root.glob("*.log") if path.is_file()]
     if not candidates:
         return None
-    latest = max(candidates, key=lambda path: (path.stat().st_mtime, path.name))
+
+    def candidate_key(path: Path) -> tuple[float, bool, str]:
+        resolved_path = resolve_stable_log_alias(path)
+        try:
+            effective_mtime = resolved_path.stat().st_mtime
+        except FileNotFoundError:
+            effective_mtime = path.stat().st_mtime
+        is_stable_alias = path.is_symlink() or resolved_path != path
+        return effective_mtime, is_stable_alias, path.name
+
+    latest = max(candidates, key=candidate_key)
     return str(latest)
 
 

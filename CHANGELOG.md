@@ -11,6 +11,10 @@ All notable user-facing changes will be documented in this file.
   portfolio and coin HSL controllers continue through the surviving timeline. Forced-delist and
   all-coins-ended tails remain fail-closed.
 
+- Fixed live bot startup on Windows without symlink privileges by writing a visible pointer to the
+  timestamped run log instead of failing while creating the stable log alias. Built-in monitor
+  tooling resolves that pointer so the stable per-user path remains tail-able.
+
 - Apple MPS single-coin HSL optimization now continues hard-stop sampling, rolling-PnL expiry,
   tier accounting, and restart checks through supported invalid candle tails. Tail candles remain
   non-tradable and cannot satisfy stale blocking orders. Forced-delist tails and multi-coin invalid
@@ -33,6 +37,12 @@ All notable user-facing changes will be documented in this file.
   and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
   per-candle equivalents, while hourly windows and elapsed-day accounting retain exact Rust time
   semantics.
+
+- Hardened Bitunix live support: wallet balance now remains realized and stable across unrealized
+  PnL changes, pending-order snapshots retain code-like venue transition statuses until
+  authoritative absence, and forager candidates use native sharded one-minute Kline WebSockets
+  with canonical REST startup and gap recovery, per-symbol silence detection, and symbol-scoped
+  fallback when a subscription stalls or is rejected.
 
 - Apple MPS single-coin optimization now matches exact Rust hourly volatility windows when an
   aggregated candle interval does not evenly divide an hour, retaining the boundary-crossing
