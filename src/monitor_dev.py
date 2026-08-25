@@ -32,7 +32,8 @@ def resolve_latest_log_file(*, logs_dir: str = "logs", explicit_log_file: Option
             effective_mtime = resolved_path.stat().st_mtime
         except FileNotFoundError:
             effective_mtime = path.stat().st_mtime
-        return effective_mtime, resolved_path != path, path.name
+        is_stable_alias = path.is_symlink() or resolved_path != path
+        return effective_mtime, is_stable_alias, path.name
 
     latest = max(candidates, key=candidate_key)
     return str(latest)

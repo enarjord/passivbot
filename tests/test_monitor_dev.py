@@ -158,6 +158,20 @@ def test_monitor_tui_follows_auto_selected_pointer_file(tmp_path):
     assert list(client.state.recent_log_lines) == ["archived line"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX stable aliases use symlinks")
+def test_monitor_dev_prefers_stable_symlink_over_its_archive_target(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    archived_log = logs_dir / "20260406_140000_passivbot_live.log"
+    stable_log = logs_dir / "1account.log"
+    archived_log.write_text("archived line\n", encoding="utf-8")
+    stable_log.symlink_to(archived_log.name)
+
+    assert stable_log.stat().st_mtime == archived_log.stat().st_mtime
+    assert stable_log.name < archived_log.name
+    assert resolve_latest_log_file(logs_dir=str(logs_dir)) == str(stable_log)
+
+
 def test_monitor_dev_prefers_newer_unrelated_archive_over_old_stable_pointer(tmp_path):
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
