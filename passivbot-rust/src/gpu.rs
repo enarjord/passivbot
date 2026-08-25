@@ -715,14 +715,17 @@ mod tests {
                 .count(),
             2
         );
-        assert_eq!(source.matches("if (twel_boundary_partial) break;").count(), 2);
+        assert_eq!(
+            source.matches("if (twel_boundary_partial) break;").count(),
+            2
+        );
         assert_eq!(source.matches("= fma(").count(), 6);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
         assert_eq!(source.matches("const int touch_up_tick").count(), 1);
-        assert_eq!(source.matches("high_fill_max_tick").count(), 9);
-        assert_eq!(source.matches("low_nonfill_max_tick").count(), 9);
+        assert_eq!(source.matches("high_fill_max_tick").count(), 14);
+        assert_eq!(source.matches("low_nonfill_max_tick").count(), 14);
         assert!(!source.contains("nextafter("));
         assert!(source.contains("int cticks = touch_controls ? touch_nearest_ticks : target_ticks"));
         assert!(source.contains("remainder == mq && mq_relation > 0"));
@@ -737,6 +740,46 @@ mod tests {
         assert!(source.contains("entry_gen_balance"));
         assert!(source.contains("close_gen_balance"));
         assert!(source.contains("recursive_close_groups"));
+        assert!(source.contains("recursive_strategy_close_would_expand"));
+        assert!(source.contains("selected.market = should_use_ordinary_market_execution"));
+        assert_eq!(source.matches("bool all_below_min").count(), 1);
+        assert_eq!(
+            source
+                .matches("quantity_is_meaningfully_below(")
+                .count(),
+            10
+        );
+        assert!(!source.contains("trimmed_qty + 1.0e-6f"));
+        assert!(!source.contains("trimmed_group_qty + 1.0e-6f"));
+        assert!(!source.contains("close_gen_psize + 1.0e-6f"));
+        assert_eq!(source.matches("bool normalize_close_groups").count(), 3);
+        assert_eq!(source.matches("int collapse_ordinary_rank").count(), 3);
+        assert_eq!(source.matches("recursive_close_allocation(").count(), 5);
+        assert_eq!(source.matches("select_recursive_close_reducer(").count(), 3);
+        assert_eq!(source.matches("ReducerCandidate candidates[3]").count(), 2);
+        assert_eq!(source.matches("candidate_allocations[candidate_idx]").count(), 4);
+        assert_eq!(source.matches("candidates[candidate_idx].finalized_qty").count(), 4);
+        assert_eq!(
+            source
+                .matches("int prefix_merge_ticks = strategy_wel_qty > 0.0f")
+                .count(),
+            2
+        );
+        assert_eq!(
+            source
+                .matches("float prefix_merge_qty = strategy_wel_qty > 0.0f")
+                .count(),
+            2
+        );
+        assert!(!source.contains("int prefix_merge_ticks = selected_strategy_wel"));
+        assert!(!source.contains("float prefix_merge_qty = selected_strategy_wel"));
+        assert_eq!(
+            source
+                .matches("close_gen_psize - strategy_wel_qty")
+                .count(),
+            2
+        );
+        assert!(!source.contains("strategy_wel_qty = reducer_qty"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
         assert!(source.contains("const bool loss_gate_enabled = max_realized_loss_pct < 1.0f"));
@@ -755,6 +798,34 @@ mod tests {
         assert!(source.contains("resize_market_close_qty("));
         assert!(source.contains("entry_gen_market_price"));
         assert!(source.contains("close_gen_market_price"));
+        assert!(!source.contains("close_reducer_requested_qty, qty_step"));
+        assert!(source.contains("preferred.finalized_qty, gate_price"));
+        assert!(source.contains("source.close_gen_market_price, !is_long"));
+        assert!(source.contains("source.close_gen_balance"));
+        assert!(source.contains("close_gen_realized_pnl_cumsum_last"));
+        assert!(source.contains("close_gen_realized_pnl_cumsum_max"));
+        assert_eq!(source.matches("for (int allocation_pass = 0;").count(), 1);
+        assert!(source.contains("reducer_below_min && !all_below_min"));
+        assert!(source.contains("include_reducer = false"));
+        assert!(source.contains("allocation.normalize_close_groups = allocation_pass > 0"));
+        assert!(source.contains(
+            "source.close_gen_realized_pnl_cumsum_last,\n                source.close_gen_realized_pnl_cumsum_max"
+        ));
+        assert!(!source.contains("reducer_qty, reducer_fill_price"));
+        assert!(!source.contains("adj, reducer_fill_price"));
+        assert_eq!(source.matches("float group_gate_price").count(), 2);
+        assert!(source.contains(
+            "long_side.close_gen_market_price, false,\n                        market_order_slippage_pct"
+        ));
+        assert!(source.contains(
+            "short_side.close_gen_market_price, true,\n                        market_order_slippage_pct"
+        ));
+        assert!(source.contains(
+            "adj, group_gate_price, long_side.pprice, true"
+        ));
+        assert!(source.contains(
+            "adj, group_gate_price, short_side.pprice, false"
+        ));
         assert!(source.contains("the proxy uses a zero-loss envelope"));
         assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
         assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));
@@ -765,8 +836,8 @@ mod tests {
         assert!(source.contains("dust_remainder"));
         assert!(!source.contains("float primary_diff = fabs"));
         assert_eq!(source.matches("bool reducer_before_group").count(), 2);
-        assert!(source.contains("long_scan_close_grid = long_scan_close_grid"));
-        assert!(source.contains("short_scan_close_grid = short_scan_close_grid"));
+        assert!(source.contains("long_expand_close_grid = long_expand_close_grid"));
+        assert!(source.contains("short_expand_close_grid = short_expand_close_grid"));
         assert!(source.contains("const bool filter_by_min_effective_cost"));
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
