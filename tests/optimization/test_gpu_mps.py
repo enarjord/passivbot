@@ -1744,11 +1744,22 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     output[17] = float(short_selection_blocked_mask);
     output[18] = float(long_order_blocked_mask);
     output[19] = float(short_order_blocked_mask);
+    // Coin one is the current flat incumbent, but its validity window ended
+    // at k=1. With no fill or mask change, k=2 must still evict it and select
+    // the only surviving unblocked candidate.
+    update_tm_multicoin_side_selection(
+        short_side, short_config, bars, coin_settings, coin_overrides,
+        2, 3, true, false, 1, 0.0f, 4ul, false, 0.0f
+    );
+    for (int c = 0; c < 3; ++c) {
+        output[20 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+    }
 }
 """
 
     bars = torch.tensor(
         [
+            [[100.0, 100.0, 100.0, 1.0]] * 3,
             [[100.0, 100.0, 100.0, 1.0]] * 3,
             [[100.0, 100.0, 100.0, 1.0]] * 3,
         ],
@@ -1757,10 +1768,11 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     )
     coin_settings = torch.zeros((3, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 7] = 10.0
+    coin_settings[1, 7] = 1.0
     coin_overrides = torch.full(
         (3, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(20, dtype=torch.float32, device="mps")
+    output = torch.zeros(23, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_trailing_martingale_multicoin_source_py()
@@ -1792,6 +1804,9 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         0.0,
         0.0,
         7.0,
+        1.0,
+        0.0,
+        0.0,
     ]
 
 
@@ -2818,6 +2833,16 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     output[16] = float(long_order_blocked_mask);
     output[17] = float(short_order_blocked_mask);
 
+    // No fill or mask transition occurs at k=2, but coin zero has reached
+    // its tail. The validity transition must evict the flat incumbent.
+    update_ema_multicoin_side_selection(
+        long_side, long_config, bars, coin_settings, coin_overrides,
+        2, 3, false, false, 1, 0.0f, 0ul, false, 0.0f
+    );
+    for (int c = 0; c < 3; ++c) {
+        output[19 + c] = long_side.selected[c] ? 1.0f : 0.0f;
+    }
+
     // With an existing position, the caller cannot prove a positive exact
     // cash-balance floor. A zero lower bound must keep every other flat slot
     // out of the Forager selection even when its exchange minimum is small.
@@ -2845,17 +2870,19 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         [
             [[100.0, 100.0, 100.0, 1.0]] * 3,
             [[100.0, 100.0, 100.0, 1.0]] * 3,
+            [[100.0, 100.0, 100.0, 1.0]] * 3,
         ],
         dtype=torch.float32,
         device="mps",
     )
     coin_settings = torch.zeros((3, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 7] = 10.0
+    coin_settings[0, 7] = 1.0
     coin_settings[:, 12] = 1.0
     coin_overrides = torch.full(
         (3, 29), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(19, dtype=torch.float32, device="mps")
+    output = torch.zeros(22, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2884,6 +2911,9 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         0.0,
         0.0,
         7.0,
+        0.0,
+        0.0,
+        1.0,
         0.0,
     ]
 
@@ -4160,7 +4190,14 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
             long_coin_overrides=overrides,
             short_coin_overrides=overrides,
         )
-        params = np.asarray([row + row], dtype=np.float64)
+        short_row = list(row)
+        qty_key = (
+            "base_qty_pct"
+            if strategy_kind == "ema_anchor"
+            else "entry_initial_qty_pct"
+        )
+        short_row[keys.index(qty_key)] *= 0.5
+        params = np.asarray([row + short_row], dtype=np.float64)
     else:
         params = np.asarray([row], dtype=np.float64)
     output = runner.run(params)
@@ -4176,6 +4213,156 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
     )
     assert output["last_eq_ts"].item() > last_valid * run.interval_ms
     assert output["hsl_tier_samples_total"].item() > last_valid
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_twel_counts_tail_exposure_but_reduces_valid_coin(
+    strategy_kind, side
+):
+    import passivbot_rust
+
+    if strategy_kind == "ema_anchor":
+        probe_kernel = r"""
+kernel void passivbot_ema_multicoin_tail_twel_probe(
+    constant float* bars,
+    constant int* touch_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    constant int& short_side_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool short_side = short_side_raw != 0;
+    EmaMulticoinSideConfig config =
+        load_ema_multicoin_side_config(params, 0);
+    EmaMulticoinSideState side;
+    init_ema_multicoin_side_state(
+        side, config, coin_settings, coin_overrides, 2
+    );
+    side.selected[0] = true;
+    side.selected[1] = true;
+    side.psize[0] = 8.0f;
+    side.psize[1] = 3.0f;
+    side.pprice[0] = 100.0f;
+    side.pprice[1] = 100.0f;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    generate_ema_multicoin_side_orders(
+        side, config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 2, short_side, 1, 1, 0,
+        false, 0.001f, -2, 0ul
+    );
+    output[0] = side.twel_close_qty[0];
+    output[1] = side.twel_close_qty[1];
+}
+"""
+        source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
+        kernel_name = "passivbot_ema_multicoin_tail_twel_probe"
+        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    else:
+        probe_kernel = r"""
+kernel void passivbot_tm_multicoin_tail_twel_probe(
+    constant float* bars,
+    constant int* touch_ticks,
+    constant int* touch_nearest_ticks,
+    constant int* touch_min_qty_bits,
+    constant int* touch_min_qty_relation,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    constant int& short_side_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool short_side = short_side_raw != 0;
+    TrailingMartingaleMulticoinSideConfig config =
+        load_trailing_martingale_multicoin_side_config(params, 0);
+    TrailingMartingaleMulticoinSideState side;
+    init_trailing_martingale_multicoin_side_state(
+        side, config, coin_settings, coin_overrides, 2
+    );
+    side.selected[0] = true;
+    side.selected[1] = true;
+    side.psize[0] = 8.0f;
+    side.psize[1] = 3.0f;
+    side.pprice[0] = 100.0f;
+    side.pprice[1] = 100.0f;
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    generate_tm_multicoin_side_orders(
+        side, config, account,
+        bars, touch_ticks, touch_nearest_ticks,
+        touch_min_qty_bits, touch_min_qty_relation,
+        coin_settings, coin_overrides,
+        1, 2, short_side, 1, 1, 0, false, 1.0f,
+        false, 0.001f, 0.0f, -2, 0ul
+    );
+    output[0] = side.twel_close_qty[0];
+    output[1] = side.twel_close_qty[1];
+}
+"""
+        source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        kernel_name = "passivbot_tm_multicoin_tail_twel_probe"
+        keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+
+    runner, row, _run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=3,
+        closes=(100.0, 100.0),
+        last_valid_indices=(0, 2),
+        return_context=True,
+    )
+    values = dict(zip(keys, row))
+    values.update(
+        {
+            "n_positions": 1.0,
+            "total_wallet_exposure_limit": 1.0,
+            "twel_entry_gate_enabled": 0.0,
+            "twel_enforcer_threshold": 0.5,
+            "twel_enforcer_enabled": 1.0,
+            "twel_enforcer_reduce_portfolio": 1.0,
+            "unstuck_enabled": 0.0,
+        }
+    )
+    params = torch.tensor(
+        [values[key] for key in keys], dtype=torch.float32, device="mps"
+    )
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(source + probe_kernel)
+    kernel = getattr(library, kernel_name)
+    args = [data["bars"], data["touch_ticks"]]
+    if strategy_kind == "trailing_martingale":
+        args.extend(
+            [
+                data["touch_nearest_ticks"],
+                data["touch_min_qty_bits"],
+                data["touch_min_qty_relation"],
+            ]
+        )
+    args.extend(
+        [
+            data["coin_settings"],
+            runner.coin_overrides,
+            params,
+            output,
+            int(side == "short"),
+        ]
+    )
+    kernel(*args, threads=(1, 1, 1))
+    torch.mps.synchronize()
+
+    # Coin zero contributes 0.8 TWE, but it is beyond last_valid at k=1 and
+    # cannot be managed. Coin one contributes 0.3 TWE and must receive the
+    # reducer even though it cannot repair the full 1.1 -> 0.5 excess alone.
+    assert output[0].item() == 0.0
+    assert output[1].item() > 0.0
 
 
 @pytest.mark.skipif(
@@ -15824,7 +16011,7 @@ def test_mps_ema_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
+def test_mps_tm_multicoin_twel_repair_excludes_tailed_positions(side):
     count = 7
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
@@ -15832,8 +16019,8 @@ def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
     hlcvs[:, :, 1] = 99.0
     hlcvs[:, :, 2] = 100.0
     hlcvs[:, :, 3] = 100.0
-    # Coin zero delists after this close. Exact orchestration continues to use
-    # that clamped market price for open-position repair ranking.
+    # Coin zero tails after this close. It remains part of total exposure but
+    # is no longer a managed TWEL reducer candidate.
     hlcvs[3, 0, :3] = [111.0, 109.0, 110.0]
     hlcvs[4:, 0, :] = 0.0
     # The still-tradable coin is adverse for long and favorable for short.
@@ -15887,12 +16074,11 @@ def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
     size_key = "psize" if side == "long" else "short_psize"
     sizes = output[size_key].cpu().numpy()
     if side == "long":
-        # The favorable delisted long ranks first; its reducer cannot fill on
-        # invalid bars, so the live coin remains untouched.
+        # Only the tailed coin holds a long position, so no reachable repair
+        # exists and the total size stays unchanged.
         assert sizes[1] == pytest.approx(sizes[0])
     else:
-        # The adverse delisted short ranks behind the favorable live short,
-        # whose reducer remains reachable and therefore reduces total size.
+        # The surviving short position receives the reachable reducer.
         assert sizes[1] < sizes[0]
 
 
@@ -15900,7 +16086,7 @@ def test_mps_tm_multicoin_twel_ranking_clamps_delisted_market_price(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_ema_multicoin_twel_ranking_clamps_delisted_market_price(side):
+def test_mps_ema_multicoin_twel_repair_excludes_tailed_positions(side):
     count = 70
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
@@ -15908,8 +16094,9 @@ def test_mps_ema_multicoin_twel_ranking_clamps_delisted_market_price(side):
     hlcvs[:, :, 1] = 99.0
     hlcvs[:, :, 2] = 100.0
     hlcvs[:, :, 3] = 100.0
-    # Fill the wide-offset entries, then make coin zero favorable for long
-    # and adverse for short before it delists. Coin one has the inverse rank.
+    # Fill the wide-offset entries, then tail coin zero while coin one remains
+    # tradable. The tailed position stays in total exposure but cannot receive
+    # a reducer.
     hlcvs[62, 0, :3] = [140.0, 70.0, 130.0]
     hlcvs[62, 1, :3] = [130.0, 70.0, 90.0]
     hlcvs[63:, 0, :] = 0.0
@@ -15957,13 +16144,7 @@ def test_mps_ema_multicoin_twel_ranking_clamps_delisted_market_price(side):
 
     size_key = "psize" if side == "long" else "short_psize"
     sizes = output[size_key].cpu().numpy()
-    if side == "long":
-        # The favorable delisted long ranks first; its reducer cannot fill on
-        # invalid bars, so the live coin remains untouched.
-        assert sizes[1] == pytest.approx(sizes[0])
-    else:
-        # The favorable live short ranks before the adverse delisted short.
-        assert sizes[1] < sizes[0]
+    assert sizes[1] < sizes[0]
 
 
 @pytest.mark.skipif(
