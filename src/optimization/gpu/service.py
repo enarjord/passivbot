@@ -700,6 +700,14 @@ def _require_supported_multicoin_valid_tails(
     for coin, (first_valid_idx, last_valid_idx) in enumerate(
         zip(starts, tails)
     ):
+        # The exact payload uses this sentinel for a prepared coin with no
+        # valid candles.  It contributes neither coverage nor a forced-delist
+        # surface, but it remains present in the coin-indexed tensors.
+        if (
+            first_valid_idx == candle_count
+            and last_valid_idx == candle_count - 1
+        ):
+            continue
         _require_no_forced_delist_tail(last_valid_idx, candle_count)
         if not 0 <= first_valid_idx <= last_valid_idx:
             raise ValueError(
@@ -709,7 +717,12 @@ def _require_supported_multicoin_valid_tails(
                 f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
             )
         windows.append((first_valid_idx, last_valid_idx))
-    if max(tails) != int(candle_count) - 1:
+    if not windows:
+        raise ValueError(
+            "GPU multicoin proxy requires at least one coin with a non-empty "
+            "prepared valid range"
+        )
+    if max(last for _, last in windows) != int(candle_count) - 1:
         raise ValueError(
             "GPU multicoin proxy requires at least one coin to remain valid through "
             "the prepared endpoint while all-coins-ended tail accounting is not yet "
@@ -742,7 +755,7 @@ def _require_supported_multicoin_valid_tails(
         np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2
     )
     actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
-    coverage_start = min(starts)
+    coverage_start = min(first for first, _ in windows)
     missing = np.flatnonzero(~actual_coverage[coverage_start:])
     if missing.size:
         missing_idx = coverage_start + int(missing[0])

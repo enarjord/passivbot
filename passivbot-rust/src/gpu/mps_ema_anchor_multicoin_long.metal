@@ -417,7 +417,7 @@ inline float accumulate_ema_multicoin_side_unrealized_pnl(
         float close = bars[bar_offset + 2];
         bool valid = k >= int(coin_settings[coin_offset + 6])
             && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(close);
+            && isfinite(close);
         if (side.psize[c] > 0.0f && valid) {
             accumulator += side.psize[c]
                 * coin_settings[coin_offset + 4]
@@ -543,7 +543,7 @@ inline bool ema_multicoin_side_held_marks_are_valid(
             return false;
         }
         if (k > int(coin_settings[coin_offset + 7])) continue;
-        if (!finite_positive(bars[bar_offset + 2])) return false;
+        if (!isfinite(bars[bar_offset + 2])) return false;
     }
     return true;
 }
@@ -866,6 +866,7 @@ inline void update_ema_multicoin_side_selection(
         != side.one_way_initial_blocked_mask;
     side.one_way_initial_blocked_mask = one_way_initial_blocked_mask;
     ulong candle_eligibility_mask = 0ul;
+    int current_tradable_count = 0;
     bool flat_selected_became_ineligible = false;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
@@ -875,6 +876,9 @@ inline void update_ema_multicoin_side_selection(
             && finite_positive(bars[bar_offset + 2]);
         if (eligible_now) {
             candle_eligibility_mask |= 1ul << ulong(c);
+            if (coin_override_or(coin_overrides, c, 11, -1.0f) != 0.0f) {
+                current_tradable_count += 1;
+            }
         } else if (selected[c] && psize[c] <= 0.0f) {
             flat_selected_became_ineligible = true;
         }
@@ -897,7 +901,10 @@ inline void update_ema_multicoin_side_selection(
         if (selected[c]) active_count += 1;
         survivor[c] = false;
     }
-    int slots = max(effective_n_positions - active_count, 0);
+    // Exact selection shrinks with the currently eligible universe, while
+    // dynamic WEL sizing deliberately keeps the grow-only denominator.
+    int selection_n_positions = min(config.n_positions, current_tradable_count);
+    int slots = max(selection_n_positions - active_count, 0);
     int enabled_count = 0;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
@@ -1310,8 +1317,7 @@ inline void generate_ema_multicoin_side_orders(
                 int bar_offset = (k * C + c) * 4;
                 bool managed_candidate =
                     k >= int(coin_settings[coin_offset + 6])
-                    && k <= int(coin_settings[coin_offset + 7])
-                    && finite_positive(bars[bar_offset + 2]);
+                    && k <= int(coin_settings[coin_offset + 7]);
                 if (!managed_candidate) continue;
                 float c_mult = coin_settings[coin_offset + 4];
                 float exposure = psize[c] * pprice[c] * c_mult
@@ -2880,12 +2886,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
             bool valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
                 && finite_positive(close);
+            bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && isfinite(close);
             any_valid = any_valid || valid;
             if (psize[c] > 0.0f) {
                 has_open_position = true;
                 position_cost += psize[c] * pprice[c]
                     * coin_settings[coin_offset + 4];
-                if (valid) {
+                if (mark_valid) {
                     unrealized += psize[c] * coin_settings[coin_offset + 4]
                         * (short_side ? pprice[c] - close : close - pprice[c]);
                 }
@@ -2919,8 +2928,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     bool valid = k >= int(coin_settings[coin_offset + 6])
                         && k <= int(coin_settings[coin_offset + 7])
                         && finite_positive(close);
+                    bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && isfinite(close);
                     float coin_unrealized = psize[c] > 0.0f
-                        && valid
+                        && mark_valid
                         ? psize[c] * coin_settings[coin_offset + 4]
                             * (short_side ? pprice[c] - close : close - pprice[c])
                         : 0.0f;
@@ -3797,12 +3809,15 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             bool valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
                 && finite_positive(close);
+            bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && isfinite(close);
             any_valid = any_valid || valid;
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
                 net_position_cost += long_side.psize[c]
                     * long_side.pprice[c] * c_mult;
-                if (valid) {
+                if (mark_valid) {
                     long_unrealized += long_side.psize[c] * c_mult
                         * (close - long_side.pprice[c]);
                 }
@@ -3810,7 +3825,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             if (short_side.psize[c] > 0.0f) {
                 net_position_cost -= short_side.psize[c]
                     * short_side.pprice[c] * c_mult;
-                if (valid) {
+                if (mark_valid) {
                     short_unrealized += short_side.psize[c] * c_mult
                         * (short_side.pprice[c] - close);
                 }

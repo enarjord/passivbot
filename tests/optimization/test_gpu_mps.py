@@ -1664,6 +1664,8 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     short_config.w_volatility = 0.0f;
     long_config.initial_ema_dist = 0.0f;
     short_config.initial_ema_dist = 0.0f;
+    long_config.n_positions = 1;
+    short_config.n_positions = 1;
     long_side.selection_initialized = false;
     short_side.selection_initialized = false;
     long_side.previous_effective_n_positions = 0;
@@ -2765,6 +2767,8 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     short_config.w_volatility = 0.0f;
     long_config.offset = 0.0f;
     short_config.offset = 0.0f;
+    long_config.n_positions = 1;
+    short_config.n_positions = 1;
     long_side.selection_initialized = false;
     short_side.selection_initialized = false;
     long_side.previous_effective_n_positions = 0;
@@ -4256,6 +4260,7 @@ def test_mps_multicoin_reselects_recovered_flat_candidate(
         update_selection = "update_tm_multicoin_side_selection"
         source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
         keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    row[keys.index("n_positions")] = 1.0
     probe_kernel = f"""
 kernel void passivbot_multicoin_candidate_recovery_probe(
     constant float* bars,
@@ -4432,8 +4437,9 @@ kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("mark_case", ["tail", "in_range_zero"])
 def test_mps_multicoin_risk_reducers_exclude_tail_but_keep_its_exposure(
-    strategy_kind, side
+    strategy_kind, side, mark_case
 ):
     import passivbot_rust
 
@@ -4480,6 +4486,19 @@ kernel void passivbot_ema_multicoin_tail_twel_probe(
     output[2] = side.unstuck_close_qty[0];
     output[3] = side.unstuck_close_qty[1];
     output[4] = float(selected_unstuck);
+    output[5] = accumulate_ema_multicoin_side_unrealized_pnl(
+        side, bars, coin_settings, 1, 2, short_side, 0.0f
+    );
+    side.selection_initialized = false;
+    side.psize[1] = 0.0f;
+    side.selected[0] = false;
+    side.selected[1] = false;
+    update_ema_multicoin_side_selection(
+        side, config, bars, coin_settings, coin_overrides,
+        1, 2, short_side, true, 2, 0.0f, 0ul, false, 0.0f
+    );
+    output[6] = side.selected[0] ? 1.0f : 0.0f;
+    output[7] = side.selected[1] ? 1.0f : 0.0f;
 }
 """
         source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
@@ -4533,24 +4552,42 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     output[2] = side.unstuck_close_qty[0];
     output[3] = side.unstuck_close_qty[1];
     output[4] = float(selected_unstuck);
+    output[5] = accumulate_tm_multicoin_side_unrealized_pnl(
+        side, bars, coin_settings, 1, 2, short_side, 0.0f
+    );
+    side.selection_initialized = false;
+    side.psize[1] = 0.0f;
+    side.selected[0] = false;
+    side.selected[1] = false;
+    update_tm_multicoin_side_selection(
+        side, config, bars, coin_settings, coin_overrides,
+        1, 2, short_side, true, 2, 0.0f, 0ul, false, 0.0f
+    );
+    output[6] = side.selected[0] ? 1.0f : 0.0f;
+    output[7] = side.selected[1] ? 1.0f : 0.0f;
 }
 """
         source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
         kernel_name = "passivbot_tm_multicoin_tail_twel_probe"
         keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
 
+    closes = np.full((3, 2), 100.0)
+    last_valid_indices = (0, 2)
+    if mark_case == "in_range_zero":
+        closes[1, 0] = 0.0
+        last_valid_indices = (2, 2)
     runner, row, _run, data = _multicoin_exposure_fixture(
         strategy_kind,
         side,
         count=3,
-        closes=(100.0, 100.0),
-        last_valid_indices=(0, 2),
+        closes=closes,
+        last_valid_indices=last_valid_indices,
         return_context=True,
     )
     values = dict(zip(keys, row))
     values.update(
         {
-            "n_positions": 1.0,
+            "n_positions": 2.0,
             "total_wallet_exposure_limit": 1.0,
             "twel_entry_gate_enabled": 0.0,
             "twel_enforcer_threshold": 0.5,
@@ -4566,7 +4603,7 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     params = torch.tensor(
         [values[key] for key in keys], dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(5, dtype=torch.float32, device="mps")
+    output = torch.zeros(8, dtype=torch.float32, device="mps")
     library = torch.mps.compile_shader(source + probe_kernel)
     kernel = getattr(library, kernel_name)
     args = [data["bars"], data["touch_ticks"]]
@@ -4590,14 +4627,27 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     kernel(*args, threads=(1, 1, 1))
     torch.mps.synchronize()
 
-    # Coin zero contributes 0.8 TWE, but it is beyond last_valid at k=1 and
-    # cannot be managed. Coin one contributes 0.3 TWE and must receive both
-    # eligible risk reducers even though it cannot repair the full TWEL excess.
-    assert output[0].item() == 0.0
-    assert output[1].item() > 0.0
-    assert output[2].item() == 0.0
-    assert output[3].item() > 0.0
-    assert output[4].item() == 1.0
+    if mark_case == "tail":
+        # Coin zero contributes 0.8 TWE, but it is beyond last_valid at k=1
+        # and cannot be managed or marked. Coin one remains the only eligible
+        # risk-reducer candidate.
+        assert output[0].item() == 0.0
+        assert output[1].item() > 0.0
+        assert output[2].item() == 0.0
+        assert output[3].item() > 0.0
+        assert output[4].item() == 1.0
+        assert output[5].item() == 0.0
+    else:
+        # A finite zero mark is not entry-eligible, but exact Rust still marks
+        # and manages an existing in-range position at that price.
+        assert output[0].item() > 0.0
+        expected_upnl = 800.0 if side == "short" else -800.0
+        assert output[5].item() == pytest.approx(expected_upnl)
+
+    # Current entry capacity is one coin even though the grow-only WEL
+    # denominator remains two. The held ineligible coin consumes that slot.
+    assert output[6].item() == 1.0
+    assert output[7].item() == 0.0
 
 
 @pytest.mark.skipif(

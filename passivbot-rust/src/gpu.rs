@@ -514,7 +514,10 @@ mod tests {
         assert!(source.contains("if (k > int(coin_settings[coin_offset + 7])) continue;"));
         assert!(source.contains("bool long_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("bool short_coin_has_blocking_orders = valid &&"));
-        assert!(source.contains("if (valid) {\n                    unrealized +="));
+        assert!(source.contains("if (mark_valid) {\n                    unrealized +="));
+        assert!(source.contains(
+            "int selection_n_positions = min(config.n_positions, current_tradable_count);"
+        ));
         assert!(source.contains("flat_selected_became_ineligible"));
         assert!(source.contains("candle_eligibility_changed"));
         assert!(source.contains("candle_eligibility_mask"));
@@ -986,7 +989,10 @@ mod tests {
         assert!(source.contains("if (k > int(coin_settings[coin_offset + 7])) continue;"));
         assert!(source.contains("bool long_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("bool short_coin_has_blocking_orders = valid &&"));
-        assert!(source.contains("if (valid) {\n                    unrealized +="));
+        assert!(source.contains("if (mark_valid) {\n                    unrealized +="));
+        assert!(source.contains(
+            "int selection_n_positions = min(config.n_positions, current_tradable_count);"
+        ));
         assert!(source.contains("flat_selected_became_ineligible"));
         assert!(source.contains("candle_eligibility_changed"));
         assert!(source.contains("candle_eligibility_mask"));

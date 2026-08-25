@@ -1195,6 +1195,7 @@ def test_gpu_multicoin_proxy_accepts_staggered_ordinary_valid_tails():
     hlcvs = np.ones((100, 2, 4), dtype=np.float64)
     _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [99, 98])
     _require_supported_multicoin_valid_tails(hlcvs, [0, 50], [49, 99])
+    _require_supported_multicoin_valid_tails(hlcvs, [100, 0], [99, 99])
 
     with pytest.raises(ValueError, match="at least one coin to remain valid"):
         _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [98, 97])
@@ -1210,8 +1211,12 @@ def test_gpu_multicoin_proxy_accepts_staggered_ordinary_valid_tails():
         )
     with pytest.raises(ValueError, match="matching first/last"):
         _require_supported_multicoin_valid_tails(hlcvs, [0], [99, 98])
+    with pytest.raises(ValueError, match="non-empty prepared valid range"):
+        _require_supported_multicoin_valid_tails(
+            hlcvs, [100, 100], [99, 99]
+        )
     with pytest.raises(ValueError, match="first_valid_idx within"):
-        _require_supported_multicoin_valid_tails(hlcvs, [100, 0], [99, 99])
+        _require_supported_multicoin_valid_tails(hlcvs, [99, 0], [98, 99])
 
 
 def test_gpu_multicoin_proxy_rejects_all_invalid_gap_between_valid_windows():
