@@ -707,6 +707,140 @@ kernel void passivbot_ema_multicoin_side_state_isolation_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_ema_multicoin_fused_reducers_share_loss_budget_and_fallback():
+    import passivbot_rust
+
+    probe_kernel = r"""
+kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
+    constant float* bars,
+    constant float* coin_settings,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    EmaMulticoinSideState long_side;
+    EmaMulticoinSideState short_side;
+    for (int c = 0; c < MAX_COINS; ++c) {
+        long_side.psize[c] = 0.0f;
+        long_side.pprice[c] = 0.0f;
+        long_side.close_qty[c] = 0.0f;
+        long_side.close_tick[c] = 0;
+        long_side.close_market[c] = false;
+        long_side.secondary_close_qty[c] = 0.0f;
+        long_side.secondary_close_tick[c] = 0;
+        long_side.secondary_close_market[c] = false;
+        long_side.twel_close_qty[c] = 0.0f;
+        long_side.twel_close_tick[c] = 0;
+        long_side.unstuck_close_qty[c] = 0.0f;
+        long_side.unstuck_close_tick[c] = 0;
+        long_side.close_is_protective_reducer[c] = false;
+        long_side.close_is_unstuck_reducer[c] = false;
+        long_side.close_is_hsl_panic[c] = false;
+
+        short_side.psize[c] = 0.0f;
+        short_side.pprice[c] = 0.0f;
+        short_side.close_qty[c] = 0.0f;
+        short_side.close_tick[c] = 0;
+        short_side.close_market[c] = false;
+        short_side.secondary_close_qty[c] = 0.0f;
+        short_side.secondary_close_tick[c] = 0;
+        short_side.secondary_close_market[c] = false;
+        short_side.twel_close_qty[c] = 0.0f;
+        short_side.twel_close_tick[c] = 0;
+        short_side.unstuck_close_qty[c] = 0.0f;
+        short_side.unstuck_close_tick[c] = 0;
+        short_side.close_is_protective_reducer[c] = false;
+        short_side.close_is_unstuck_reducer[c] = false;
+        short_side.close_is_hsl_panic[c] = false;
+    }
+
+    // The long preferred TWEL close loses 15 and cannot spend the 10 budget.
+    // Its unstuck fallback loses 5. The short TWEL close loses 6, wins the
+    // next global quantity comparison, and leaves only 4 for that fallback.
+    long_side.psize[0] = 5.0f;
+    long_side.pprice[0] = 105.0f;
+    long_side.twel_close_qty[0] = 3.0f;
+    long_side.twel_close_tick[0] = 100;
+    long_side.unstuck_close_qty[0] = 1.0f;
+    long_side.unstuck_close_tick[0] = 100;
+
+    short_side.psize[1] = 5.0f;
+    short_side.pprice[1] = 97.0f;
+    short_side.twel_close_qty[1] = 2.0f;
+    short_side.twel_close_tick[1] = 100;
+
+    JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    finalize_ema_multicoin_reducers_fused(
+        long_side, short_side, account,
+        bars, coin_settings, 1, 2,
+        true, true, true, 0.0f, 0.0f, 0.01f
+    );
+
+    output[0] = long_side.close_qty[0];
+    output[1] = long_side.close_market[0] ? 1.0f : 0.0f;
+    output[2] = long_side.close_is_protective_reducer[0] ? 1.0f : 0.0f;
+    output[3] = long_side.close_is_unstuck_reducer[0] ? 1.0f : 0.0f;
+    output[4] = short_side.close_qty[1];
+    output[5] = short_side.close_market[1] ? 1.0f : 0.0f;
+    output[6] = short_side.close_is_protective_reducer[1] ? 1.0f : 0.0f;
+    output[7] = short_side.close_is_unstuck_reducer[1] ? 1.0f : 0.0f;
+}
+"""
+    bars = torch.zeros((2, 2, 4), dtype=torch.float32, device="mps")
+    bars[:, :, :3] = 100.0
+    bars[:, :, 3] = 1.0
+    coin_settings = torch.tensor(
+        [
+            [
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                60_000.0,
+                100.0,
+                1.0,
+                0.0,
+            ],
+            [
+                1.0,
+                1.0,
+                1.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                1.0,
+                60_000.0,
+                100.0,
+                1.0,
+                0.0,
+            ],
+        ],
+        dtype=torch.float32,
+        device="mps",
+    )
+    output = torch.zeros(8, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
+    )
+    library.passivbot_ema_multicoin_fused_reducer_budget_probe(
+        bars,
+        coin_settings,
+        output,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 1.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_tm_multicoin_side_states_are_isolated_for_fused_execution():
     import passivbot_rust
 
@@ -2396,14 +2530,14 @@ kernel void passivbot_ema_multicoin_shared_fill_phase_probe(
         long_side, account, fills,
         bars, fill_ticks, coin_settings, coin_overrides,
         coin_fill_counts, 0, 1, 1, false, true,
-        false, false, 1.0f, 0.0f, false, 1000.0f
+        false, 0.0f, false, 1000.0f
     );
     float balance_after_long = account.balance;
     bool short_filled = process_ema_multicoin_side_fills(
         short_side, account, fills,
         bars, fill_ticks, coin_settings, coin_overrides,
         coin_fill_counts, 0, 1, 1, true, true,
-        false, false, 1.0f, 0.0f, false, balance_after_long
+        false, 0.0f, false, balance_after_long
     );
 
     output[0] = long_filled ? 1.0f : 0.0f;
@@ -2660,17 +2794,17 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     long_side.selected[0] = true;
     short_side.selected[0] = true;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-        generate_ema_multicoin_side_orders(
-            long_side, long_config, account,
-            bars, touch_ticks, coin_settings, coin_overrides,
-            1, 1, false, 1, 1, 0, false, 1.0f,
-            false, 0.001f, -2, 0ul
-        );
-        generate_ema_multicoin_side_orders(
-            short_side, short_config, account,
-            bars, touch_ticks, coin_settings, coin_overrides,
-            1, 1, true, 1, 1, 0, false, 1.0f,
-            false, 0.001f, -2, 0ul
+    generate_ema_multicoin_side_orders(
+        long_side, long_config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 1, false, 1, 1, 0,
+        false, 0.001f, -2, 0ul
+    );
+    generate_ema_multicoin_side_orders(
+        short_side, short_config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 1, true, 1, 1, 0,
+        false, 0.001f, -2, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -2680,12 +2814,12 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     output[5] = short_side.close_qty[0];
     output[6] = account.balance;
     output[7] = account.realized_pnl_total;
-        generate_ema_multicoin_side_orders(
-            long_side, long_config, account,
-            bars, touch_ticks, coin_settings, coin_overrides,
-            1, 1, false, 1, 1, 0, false, 1.0f,
-            false, 0.001f, -2, 1ul
-        );
+    generate_ema_multicoin_side_orders(
+        long_side, long_config, account,
+        bars, touch_ticks, coin_settings, coin_overrides,
+        1, 1, false, 1, 1, 0,
+        false, 0.001f, -2, 1ul
+    );
     output[8] = long_side.entry_qty[0];
     output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
     output[10] = long_side.contribution[0];
@@ -4679,8 +4813,10 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert "twel_enforcer_reduce_portfolio" in source
     assert "clamped_market_price" in source
     assert "secondary_close_qty" in source
-    assert "realized_loss_proxy_allows_close" in source
-    assert "const bool loss_gate_enabled = run_settings[5] < 1.0f" in source
+    assert "finalize_ema_multicoin_reducers_one_side(" in source
+    assert "finalize_ema_multicoin_reducers_fused(" in source
+    assert "gate_ema_multicoin_close(" in source
+    assert "realized_loss_proxy_allows_close" not in source
     assert "constant int DAILY_COLS = 9" in source
     assert "day_min_balance" in source
     assert "coin_override_or" in source
@@ -9282,6 +9418,9 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
         highs=highs,
         lows=lows,
         max_realized_loss_pct=0.05,
+        market_orders_allowed=strategy_kind == "ema_anchor",
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
     )
     keys = (
         EMA_ANCHOR_MULTICOIN_PARAM_KEYS
@@ -9356,6 +9495,9 @@ def test_mps_single_side_multicoin_auto_unstuck_selects_only_one_coin(
         highs=highs,
         lows=lows,
         max_realized_loss_pct=0.0005,
+        market_orders_allowed=strategy_kind == "ema_anchor",
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
     )
     strict_output = strict_runner.run(
         np.asarray([enabled], dtype=np.float64)
@@ -11942,12 +12084,15 @@ def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
         "closes": closes,
         "highs": highs,
         "lows": lows,
+        "market_orders_allowed": True,
+        "market_order_near_touch_threshold": 0.001,
+        "market_order_slippage_pct": 0.01,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
         max_realized_loss_pct=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.1, **runner_kwargs
+        max_realized_loss_pct=0.001, **runner_kwargs
     )
     values = dict(zip(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidate))
     values.update(
@@ -11968,7 +12113,10 @@ def test_mps_ema_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
 
     size_key = "psize" if side == "long" else "short_psize"
     assert ungated[size_key].item() < gated[size_key].item()
-    assert gated["open_positions"].item() == pytest.approx(2.0)
+    # Both paths keep the same symbol open, but the shared loss allowance
+    # blocks part of the lossy repair and therefore retains more quantity.
+    assert ungated["open_positions"].item() == pytest.approx(1.0)
+    assert gated["open_positions"].item() == pytest.approx(1.0)
     assert gated["balance"].item() >= ungated["balance"].item()
 
 
@@ -11992,7 +12140,7 @@ def test_mps_ema_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
         max_realized_loss_pct=1.0, **runner_kwargs
     )
     gated_runner, _ = _multicoin_exposure_fixture(
-        max_realized_loss_pct=0.1, **runner_kwargs
+        max_realized_loss_pct=0.0, **runner_kwargs
     )
     candidate[
         EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")

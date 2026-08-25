@@ -8,10 +8,13 @@ All notable user-facing changes will be documented in this file.
   long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and
   ordinary-close intent, executes it on the next valid candle with adverse directional slippage
   and taker fees, applies executable-touch minimum sizing, and prices total-exposure entry
-  allocation at the market touch. HSL may coexist with this path. Auto-unstuck, total-exposure
-  repair, and realized-loss gating remain fail closed for multi-coin EMA market mode until their
-  protective reducer ordering is modeled; multi-coin Trailing Martingale market mode also remains
-  fail closed.
+  allocation at the market touch. HSL, auto-unstuck, TWEL repair, static unstuck overrides, and
+  realized-loss gating may coexist with this path. Metal finalizes TWEL and unstuck candidates
+  against ordinary closes, ranks their executable quantities globally across symbols and sides,
+  advances only a rejected position to its fallback, and spends one shared loss allowance before
+  gating ordinary closes. These generation-time decisions include market slippage and taker fees
+  and remain attached to pending orders. Multi-coin Trailing Martingale market mode remains fail
+  closed.
 
 - Added single-coin Trailing Martingale recursive-close market execution to Apple MPS
   optimization. Exact passive next-candle expansion remains authoritative: a market-only next

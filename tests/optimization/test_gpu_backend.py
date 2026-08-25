@@ -70,7 +70,6 @@ from optimization.backends.gpu_backend import (
     _validate_dual_multicoin_metrics,
     _validate_gpu_optimizer_overrides,
     _validate_gpu_coin_overrides,
-    _validate_ema_multicoin_market_foundation_bounds,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
@@ -2809,76 +2808,25 @@ def test_gpu_multicoin_ema_market_execution_accepts_hsl():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (
-            lambda config: config["live"].__setitem__(
-                "max_realized_loss_pct", 0.5
-            ),
-            "max_realized_loss_pct=1.0",
-        ),
-        (
-            lambda config: config["bot"]["long"]["risk"].__setitem__(
-                "total_exposure_enforcer_enabled", True
-            ),
-            "total_exposure_enforcer_enabled=false",
-        ),
-        (
-            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
-                "enabled", True
-            ),
-            "unstuck.enabled=false",
-        ),
-        (
-            lambda config: config.__setitem__(
-                "coin_overrides",
-                {
-                    "ETH": {
-                        "bot": {"long": {"unstuck": {"enabled": True}}}
-                    }
-                },
-            ),
-            "coin override unstuck.enabled=false",
-        ),
-    ],
-)
-def test_gpu_multicoin_ema_market_execution_rejects_unordered_risk_features(
-    mutate, message
-):
+@pytest.mark.parametrize("feature", ["loss_gate", "twel", "unstuck", "override"])
+def test_gpu_multicoin_ema_market_execution_accepts_protective_reducers(feature):
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
     config["live"]["market_orders_allowed"] = True
-    mutate(config)
+    if feature == "loss_gate":
+        config["live"]["max_realized_loss_pct"] = 0.05
+    elif feature == "twel":
+        config["bot"]["long"]["risk"][
+            "total_exposure_enforcer_enabled"
+        ] = True
+    elif feature == "unstuck":
+        config["bot"]["long"]["unstuck"]["enabled"] = True
+    else:
+        config["coin_overrides"] = {
+            "ETH": {"bot": {"long": {"unstuck": {"enabled": True}}}}
+        }
 
-    with pytest.raises(ValueError, match=message):
-        _validate_scope(config, _MulticoinEvaluator())
-
-
-@pytest.mark.parametrize(
-    "key",
-    ["long_risk_twel_enforcer_enabled", "long_unstuck_enabled"],
-)
-def test_gpu_multicoin_ema_market_execution_requires_risk_bounds_pinned_off(key):
-    config = _directional_ema_config(long_enabled=True, short_enabled=False)
-    config["live"]["market_orders_allowed"] = True
-    base = {key: 0.0}
-
-    _validate_ema_multicoin_market_foundation_bounds(
-        {key: Bound(0.0, 0.0)},
-        base,
-        {"long"},
-        config,
-        coin_count=3,
-    )
-    with pytest.raises(ValueError, match=key):
-        _validate_ema_multicoin_market_foundation_bounds(
-            {key: Bound(0.0, 1.0)},
-            base,
-            {"long"},
-            config,
-            coin_count=3,
-        )
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])

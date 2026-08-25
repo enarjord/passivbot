@@ -251,18 +251,21 @@ The supported slice is intentionally narrow:
   WEL and TWEL repair independently for each directional surface against the same pre-fill shared
   account snapshot, matching exact Rust order generation. EMA Anchor position-exposure repair
   remains fail closed because its exact Rust strategy path does not use this reducer
-- single-coin EMA Anchor models the cumulative realized-loss gate, including entry and close fees,
-  shared long/short loss-budget accounting, and lossy total-exposure repairs. The proxy uses a
-  conservative all-history loss envelope, so it may block a close that exact Rust admits after old
-  PnL ages out of `live.pnls_max_lookback_days`. Single-coin and one-sided multi-coin Trailing
-  Martingale permit the one selected auto-unstuck reducer to consume that same conservative budget,
-  while ordinary and exposure-repair closes retain the stricter zero-loss envelope. One-sided
-  multi-coin EMA Anchor applies the conservative budget only to its selected auto-unstuck reducer;
-  its other closes remain zero-loss. Fused dual-side multi-coin runs apply that same shared budget
-  to the one globally selected auto-unstuck reducer; their other closes remain zero-loss. These
-  restrictions avoid unsafe cross-side loss-budget reservation and per-candle
-  enumeration of TM's recursive 500-rung close ladder. Exact
-  validation applies the configured rolling allowance and remains authoritative
+- single- and multi-coin EMA Anchor model the cumulative realized-loss gate, including entry and
+  close fees, shared long/short loss-budget accounting, and lossy total-exposure repairs. For
+  multi-coin runs, Metal executable-touch-sizes each TWEL and unstuck candidate, finalizes it with
+  the ordinary strategy close, and considers the current largest finalized candidate globally
+  across symbols and sides. A rejected candidate advances only that position to its smaller
+  fallback. Accepted protective losses spend one shared allowance before ordinary closes are
+  checked in canonical long-then-short symbol order; HSL panic closes remain exempt. These are
+  generation-time decisions retained with the pending orders rather than reclassified at fill
+  time. The proxy uses a conservative all-history loss envelope, so it may block a close that exact
+  Rust admits after old PnL ages out of `live.pnls_max_lookback_days`. Single-coin and one-sided
+  multi-coin Trailing Martingale permit the one selected auto-unstuck reducer to consume that same
+  conservative budget, while ordinary and exposure-repair closes retain the stricter zero-loss
+  envelope. Those Trailing Martingale restrictions avoid unsafe cross-side loss-budget reservation
+  and per-candle enumeration of its recursive 500-rung close ladder. Exact validation applies the
+  configured rolling allowance and remains authoritative
 - BTC collateral remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
   projected initial-entry cost test with the configured wallet-exposure limit. The
@@ -311,15 +314,15 @@ The supported slice is intentionally narrow:
   into that ordinary group.
   Multi-coin EMA Anchor supports ordinary market entries and ordinary strategy closes for
   long-only, short-only, and fused long+short runs, including compatible suites, static coin
-  overrides, forager selection, the strict total-exposure entry gate, and HSL. The proxy stores
-  generation-time market intent, fills it on the next valid candle with adverse directional
-  slippage and the coin's taker fee, uses executable-touch minimum sizing for short entries and
-  closes, and accounts for market-touch cost while allocating the portfolio entry cap.
-  Until protective market-reducer ordering is modeled, every effective multi-coin EMA scenario
-  requires `live.max_realized_loss_pct: 1`, `unstuck.enabled: false`, and
-  `risk.total_exposure_enforcer_enabled: false` on each enabled side; optimizer enablement bounds
-  for unstuck and the TWEL enforcer must remain pinned off, and coin overrides may not enable
-  unstuck. Multi-coin Trailing Martingale ordinary market execution remains fail closed
+  overrides, forager selection, the strict total-exposure entry gate, TWEL repair, auto-unstuck,
+  realized-loss gating, and HSL. The proxy stores generation-time market intent, fills it on the
+  next valid candle with adverse directional slippage and the coin's taker fee, uses
+  executable-touch minimum sizing for short entries and all closes, and accounts for market-touch
+  cost while allocating the portfolio entry cap. Protective reducers participate in the same
+  finalized-quantity ordering, shared loss budget, and per-position fallback used by exact Rust;
+  their market slippage and taker fees are included in the projected loss. Static coin overrides
+  may enable or tune unstuck. Multi-coin Trailing Martingale ordinary market execution remains fail
+  closed
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
