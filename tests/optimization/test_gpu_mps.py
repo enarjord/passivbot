@@ -12503,21 +12503,33 @@ def _tm_multicoin_off_tick_reducer_case(
     market_orders_allowed=False,
     market_order_near_touch_threshold=0.02,
     market_order_slippage_pct=0.0,
+    generation_touch=None,
+    next_close=100.0,
+    min_cost=0.0,
+    collect_coin_fill_counts=False,
 ):
     count = 6
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    generation_touch = 100.4 if side == "long" else 100.6
+    if generation_touch is None:
+        generation_touch = 100.4 if side == "long" else 100.6
     hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
     hlcvs[:, 0, 0] = [100.0, 100.0, 100.0, 102.0, next_high, 100.0]
     hlcvs[:, 0, 1] = [100.0, 100.0, 100.0, 98.0, next_low, 100.0]
-    hlcvs[:, 0, 2] = [100.0, 100.0, 100.0, generation_touch, 100.0, 100.0]
+    hlcvs[:, 0, 2] = [
+        100.0,
+        100.0,
+        100.0,
+        generation_touch,
+        next_close,
+        100.0,
+    ]
     hlcvs[:, 0, 3] = 100.0
     hlcvs[:, 1, 0] = 121.0
     hlcvs[:, 1, 1] = 119.0
     hlcvs[:, 1, 2] = 120.0
     hlcvs[:, 1, 3] = 100.0
     market = ProxyMarket(
-        0.001, price_step, 0.001, 0.0, 1.0, maker_fee, taker_fee
+        0.001, price_step, 0.001, min_cost, 1.0, maker_fee, taker_fee
     )
     run = ProxyRun(
         1_000.0,
@@ -12568,6 +12580,7 @@ def _tm_multicoin_off_tick_reducer_case(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
+        collect_coin_fill_counts=collect_coin_fill_counts,
     )
     return runner, candidate, market
 
@@ -12748,7 +12761,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         config.close_qty_pct, config.close_threshold_base,
         config.close_threshold_we, config.close_threshold_v1h,
         config.close_threshold_v1m, 0.0f, 0.0f,
-        0.1f, 0.1f, 0.1f, 40.0f, 1.0f, 1, 0,
+        0.1f, 0.1f, 0.1f, 40.0f, 1.0f, 0, 0.0f, 1, 0,
         100.0f, true, 0.001f, 0.4f, probe_group
     );
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
@@ -13003,6 +13016,45 @@ def test_mps_tm_multicoin_market_grid_precedes_farther_reducer_for_volume(
     assert output["day_volume"].sum().item() == pytest.approx(
         expected_volume, rel=2.0e-5
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_same_tick_wel_resizes_merged_market_group_once(side):
+    runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
+        side,
+        maker_fee=0.0,
+        price_step=1.0,
+        close_qty_pct=0.1,
+        close_threshold_base=0.01,
+        close_threshold_we=-0.02,
+        next_high=99.0 if side == "long" else 101.0,
+        next_low=99.0 if side == "long" else 101.0,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.005,
+        generation_touch=99.0 if side == "long" else 101.0,
+        next_close=99.0 if side == "long" else 101.0,
+        min_cost=50.0,
+        collect_coin_fill_counts=True,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate))
+    values["wel_enforcer_threshold"] = 0.99
+    candidate = [
+        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    ]
+
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # Exact calc_closes_* merges the below-executable-minimum WEL prefix with
+    # the first same-tick recursive grid group before market sizing. The
+    # completed group therefore executes once, after the initial entry.
+    assert output["coin_fill_counts"][0, 0].item() == 2.0
+    assert output["fill_count"].item() == 2.0
+    assert output[size_key].item() > 0.0
 
 
 @pytest.mark.skipif(
