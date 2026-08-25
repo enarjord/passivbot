@@ -732,9 +732,14 @@ def _require_supported_multicoin_valid_tails(
         (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
         & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
     )
+    # Validate the representation consumed by Metal. The data packer casts
+    # bars to float32 and replaces non-finite packed values with zero, so a
+    # finite-positive float64 value is insufficient if it overflows or
+    # underflows during that conversion.
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        packed_hlc = np.asarray(values[:, :, :3], dtype=np.float32)
     actual_valid = np.all(
-        np.isfinite(values[:, :, :3]) & (values[:, :, :3] > 0.0),
-        axis=2,
+        np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2
     )
     actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
     coverage_start = min(starts)

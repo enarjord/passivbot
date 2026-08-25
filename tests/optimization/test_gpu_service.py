@@ -1239,6 +1239,26 @@ def test_gpu_multicoin_proxy_rejects_actual_all_invalid_candle_in_windows(
     _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
 
 
+@pytest.mark.parametrize(
+    "unpackable_value",
+    [
+        float(np.nextafter(0.0, 1.0)),
+        float(np.finfo(np.float32).max) * 2.0,
+    ],
+)
+def test_gpu_multicoin_proxy_rejects_all_invalid_after_float32_packing(
+    unpackable_value,
+):
+    hlcvs = np.ones((100, 2, 4), dtype=np.float64)
+    hlcvs[40, :, :3] = unpackable_value
+
+    with pytest.raises(ValueError, match=r"all-invalid candle.*candle_index=40"):
+        _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
+
+    hlcvs[40, 1, :3] = 1.0
+    _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
+
+
 def test_gpu_single_coin_proxy_accepts_short_invalid_tail_only():
     _require_no_forced_delist_tail(99, 100)
     _require_no_forced_delist_tail(98, 100)

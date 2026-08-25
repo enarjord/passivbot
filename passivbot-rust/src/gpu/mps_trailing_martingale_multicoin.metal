@@ -462,6 +462,7 @@ struct TrailingMartingaleMulticoinSideState {
 #endif
     ulong coin_hsl_entry_blocked_mask;
     ulong one_way_initial_blocked_mask;
+    ulong candle_eligibility_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
@@ -797,6 +798,7 @@ inline bool recursive_entry_gate_candidate_preferred(
 inline void apply_tm_multicoin_recursive_entry_twel_gate(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* bars,
     constant int* fill_ticks,
     constant float* coin_settings,
     constant float* coin_overrides,
@@ -856,6 +858,10 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         const int first_valid = int(coin_settings[coin_offset + 6]);
         const int last_valid = int(coin_settings[coin_offset + 7]);
         if (k < first_valid || k > last_valid) continue;
+        const int bar_offset = (k * C + c) * 4;
+        if (!finite_positive(bars[bar_offset + 0])
+            || !finite_positive(bars[bar_offset + 1])
+            || !finite_positive(bars[bar_offset + 2])) continue;
         int tick_offset = (k * C + c) * 2;
         bool first_passive_reachable = short_side
             ? first[c].ticks <= fill_ticks[tick_offset + 0]
@@ -1347,7 +1353,7 @@ inline bool process_tm_multicoin_side_fills(
     bool any_fill = false;
     for (int c = 0; c < C; ++c) filled_coin[c] = false;
     apply_tm_multicoin_recursive_entry_twel_gate(
-        side, config, fill_ticks, coin_settings, coin_overrides,
+        side, config, bars, fill_ticks, coin_settings, coin_overrides,
         k, C, short_side, market_order_near_touch_threshold
     );
     for (int c = 0; c < C; ++c) {
@@ -2124,6 +2130,7 @@ inline void init_trailing_martingale_multicoin_side_state(
 #endif
     side.coin_hsl_entry_blocked_mask = 0ul;
     side.one_way_initial_blocked_mask = 0ul;
+    side.candle_eligibility_mask = 0ul;
     side.entry_deferred_twel_gate = false;
     side.selection_initialized = false;
     side.max_tradable_seen = 0;
@@ -2730,20 +2737,27 @@ inline void update_tm_multicoin_side_selection(
     bool one_way_eligibility_changed = one_way_initial_blocked_mask
         != side.one_way_initial_blocked_mask;
     side.one_way_initial_blocked_mask = one_way_initial_blocked_mask;
+    ulong candle_eligibility_mask = 0ul;
     bool flat_selected_became_ineligible = false;
     for (int c = 0; c < coin_count; ++c) {
-        if (!selected[c] || psize[c] > 0.0f) continue;
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         bool eligible_now = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2]);
-        flat_selected_became_ineligible =
-            flat_selected_became_ineligible || !eligible_now;
+        if (eligible_now) {
+            candle_eligibility_mask |= 1ul << ulong(c);
+        } else if (selected[c] && psize[c] <= 0.0f) {
+            flat_selected_became_ineligible = true;
+        }
     }
+    bool candle_eligibility_changed = side.selection_initialized
+        && candle_eligibility_mask != side.candle_eligibility_mask;
+    side.candle_eligibility_mask = candle_eligibility_mask;
     bool reselect = !side.selection_initialized || any_fill
         || coin_hsl_eligibility_changed
         || one_way_eligibility_changed
+        || candle_eligibility_changed
         || flat_selected_became_ineligible
         || effective_n_positions != side.previous_effective_n_positions;
     if (!reselect) return;

@@ -4218,15 +4218,126 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_recursive_entry_twel_gate_does_not_expand_tailed_coin(side):
+def test_mps_multicoin_reselects_recovered_flat_candidate(
+    strategy_kind, side
+):
     import passivbot_rust
 
+    closes = np.full((4, 2), 100.0)
+    closes[2, 0] = 0.0
+    highs = np.full((4, 2), 101.0)
+    lows = np.full((4, 2), 99.0)
+    highs[2, 0] = 0.0
+    lows[2, 0] = 0.0
+    runner, row, _run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=4,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        return_context=True,
+    )
+    if strategy_kind == "ema_anchor":
+        state_type = "EmaMulticoinSideState"
+        config_type = "EmaMulticoinSideConfig"
+        load_config = "load_ema_multicoin_side_config"
+        init_state = "init_ema_multicoin_side_state"
+        update_selection = "update_ema_multicoin_side_selection"
+        source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
+        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    else:
+        state_type = "TrailingMartingaleMulticoinSideState"
+        config_type = "TrailingMartingaleMulticoinSideConfig"
+        load_config = "load_trailing_martingale_multicoin_side_config"
+        init_state = "init_trailing_martingale_multicoin_side_state"
+        update_selection = "update_tm_multicoin_side_selection"
+        source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+        keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    probe_kernel = f"""
+kernel void passivbot_multicoin_candidate_recovery_probe(
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    constant int& short_side_raw,
+    uint b [[thread_position_in_grid]]
+) {{
+    if (b > 0) return;
+    const int C = 2;
+    const bool short_side = short_side_raw != 0;
+    {config_type} config = {load_config}(params, 0);
+    {state_type} candidate_side;
+    {init_state}(
+        candidate_side, config, coin_settings, coin_overrides, C
+    );
+    candidate_side.forager_volume[0] = 200.0f;
+    candidate_side.forager_volume[1] = 100.0f;
+    {update_selection}(
+        candidate_side, config, bars, coin_settings, coin_overrides,
+        1, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
+    );
+    output[0] = candidate_side.selected[0] ? 1.0f : 0.0f;
+    output[1] = candidate_side.selected[1] ? 1.0f : 0.0f;
+    {update_selection}(
+        candidate_side, config, bars, coin_settings, coin_overrides,
+        2, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
+    );
+    output[2] = candidate_side.selected[0] ? 1.0f : 0.0f;
+    output[3] = candidate_side.selected[1] ? 1.0f : 0.0f;
+    {update_selection}(
+        candidate_side, config, bars, coin_settings, coin_overrides,
+        3, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
+    );
+    output[4] = candidate_side.selected[0] ? 1.0f : 0.0f;
+    output[5] = candidate_side.selected[1] ? 1.0f : 0.0f;
+}}
+"""
+    params = torch.tensor(row, dtype=torch.float32, device="mps")
+    output = torch.zeros(6, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(source + probe_kernel)
+    library.passivbot_multicoin_candidate_recovery_probe(
+        data["bars"],
+        data["coin_settings"],
+        runner.coin_overrides,
+        params,
+        output,
+        int(side == "short"),
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == [1.0, 0.0, 0.0, 1.0, 1.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("invalid_mode", ["tail", "internal"])
+def test_mps_tm_recursive_entry_twel_gate_does_not_expand_invalid_coin(
+    side, invalid_mode
+):
+    import passivbot_rust
+
+    closes = np.full((3, 2), 100.0)
+    highs = closes * 1.01
+    lows = closes * 0.99
+    last_valid_indices = (0, 2)
+    if invalid_mode == "internal":
+        last_valid_indices = (2, 2)
+        lows[1, 0] = 0.0
     runner, row, _run, data = _multicoin_exposure_fixture(
         "trailing_martingale",
         side,
         count=3,
-        last_valid_indices=(0, 2),
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        last_valid_indices=last_valid_indices,
         market_orders_allowed=True,
         return_context=True,
     )
@@ -4250,6 +4361,7 @@ def test_mps_tm_recursive_entry_twel_gate_does_not_expand_tailed_coin(side):
     output = torch.zeros(2, dtype=torch.float32, device="mps")
     probe_kernel = r"""
 kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
+    constant float* bars,
     constant int* fill_ticks,
     constant float* coin_settings,
     constant float* coin_overrides,
@@ -4288,7 +4400,7 @@ kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
     side.entry_gen_touch_tick[0] = short_side ? 0 : 100000000;
     side.entry_recursive_market_mode[0] = true;
     apply_tm_multicoin_recursive_entry_twel_gate(
-        side, config, fill_ticks, coin_settings, coin_overrides,
+        side, config, bars, fill_ticks, coin_settings, coin_overrides,
         k, C, short_side, 0.001f
     );
     output[0] = side.entry_qty[0];
@@ -4298,6 +4410,7 @@ kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     library = torch.mps.compile_shader(source + probe_kernel)
     library.passivbot_tm_multicoin_tail_recursive_gate_probe(
+        data["bars"],
         data["touch_ticks"],
         data["coin_settings"],
         runner.coin_overrides,
