@@ -27,6 +27,7 @@ from optimization.gpu.metrics import (
     _smoothed_gain_adg,
     _weighted_adg,
     _weighted_daily_series_metrics,
+    _weighted_subset_context,
     _weighted_subsets,
     _weighted_strategy_eq_metrics,
     compute_objectives,
@@ -718,6 +719,57 @@ def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
     # contains pre-cutoff volume, so only the unambiguous full-run tenth is
     # admitted; exact Rust validation owns partial-day volume after a cutoff.
     assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
+
+
+def test_weighted_suffix_admission_uses_integer_candle_steps():
+    interval_ms = 60_000
+    sample_count = 17_898
+    first_step = 1
+    last_step = first_step + sample_count - 1
+    active = torch.ones((1, 13), dtype=torch.bool)
+
+    _, _, subset_start_steps, _, _ = _weighted_subset_context(
+        active,
+        torch.tensor([np.float32(first_step * interval_ms)]),
+        torch.tensor([np.float32(last_step * interval_ms)]),
+        0.0,
+        interval_ms,
+    )
+    last_fill_ts = torch.tensor(
+        [np.float32((first_step + sample_count // 2) * interval_ms)]
+    )
+    last_fill_step = torch.floor(
+        last_fill_ts / float(interval_ms) + 0.5
+    ).to(torch.long)
+
+    # The equivalent float32 timestamp expressions differ by 64 ms at this
+    # realistic span. Integer candle-step admission still includes Rust's
+    # exact half-window boundary fill.
+    assert np.float32(first_step * interval_ms) + np.float32(
+        (sample_count // 2) * interval_ms
+    ) != last_fill_ts.item()
+    assert subset_start_steps[1].item() == last_fill_step.item()
+
+    day_end = torch.arange(100.0, 113.0).unsqueeze(0)
+    day_has_fill = torch.zeros_like(day_end, dtype=torch.bool)
+    day_has_fill[:, 6] = True
+    metrics = _weighted_daily_series_metrics(
+        day_end,
+        torch.zeros_like(day_end),
+        day_has_fill,
+        active,
+        torch.tensor([2.0]),
+        last_fill_ts,
+        torch.tensor([np.float32(first_step * interval_ms)]),
+        torch.tensor([np.float32(last_step * interval_ms)]),
+        0.0,
+        interval_ms,
+        {"equity_choppiness_w_usd"},
+    )
+
+    # Linear full and half-window daily series both have choppiness 1.0;
+    # Rust admits both and stops at the next suffix, for a weighted 0.2.
+    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(0.2)
 
 
 def test_weighted_subsets_normalize_relative_timestamps_to_unix_origin():

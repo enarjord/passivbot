@@ -721,45 +721,58 @@ def _weighted_subset_context(
 ):
     finite_timestamps = torch.isfinite(first_eq_ts) & torch.isfinite(last_eq_ts)
     timestamp_origin = float(first_timestamp)
-    relative_timestamps = finite_timestamps & (first_eq_ts < timestamp_origin)
-    first_eq_ts = torch.where(
-        relative_timestamps, first_eq_ts + timestamp_origin, first_eq_ts
-    )
-    last_eq_ts = torch.where(
-        relative_timestamps, last_eq_ts + timestamp_origin, last_eq_ts
-    )
-    sample_span = torch.where(
+    interval_ms_int = int(interval_ms)
+    timestamp_origin_int = int(round(timestamp_origin))
+
+    def relative_steps(timestamps):
+        relative_ms = torch.where(
+            timestamps < timestamp_origin,
+            timestamps,
+            timestamps - timestamp_origin,
+        )
+        return torch.floor(relative_ms / float(interval_ms_int) + 0.5).to(
+            torch.long
+        )
+
+    first_eq_steps = relative_steps(first_eq_ts)
+    last_eq_steps = relative_steps(last_eq_ts)
+    sample_count = torch.where(
         finite_timestamps,
-        (last_eq_ts - first_eq_ts) / float(interval_ms),
-        torch.zeros_like(first_eq_ts),
-    )
-    sample_count = (
-        torch.floor(sample_span + 0.5)
-        .to(torch.long)
-        .add(1)
-        .clamp(min=1)
-    )
+        last_eq_steps - first_eq_steps + 1,
+        torch.ones_like(first_eq_steps),
+    ).clamp(min=1)
     eligible = finite_timestamps & (sample_count >= 2)
     subsets = [active]
-    subset_start_timestamps = [first_eq_ts]
-    first_day = int(timestamp_origin) // 86_400_000
+    subset_start_steps = [first_eq_steps]
+    subset_start_timestamps = [
+        first_eq_steps * interval_ms_int + timestamp_origin_int
+    ]
+    first_day = timestamp_origin_int // 86_400_000
     day_ids = torch.arange(active.shape[1], device=active.device) + first_day
     for index in range(1, 10):
         fraction = 1.0 / (1.0 + index)
         start_position = torch.floor(
             sample_count.to(first_eq_ts.dtype) * (1.0 - fraction) + 0.5
         ).to(torch.long)
-        subset_start_ts = first_eq_ts + start_position.to(first_eq_ts.dtype) * float(
-            interval_ms
+        subset_start_step = first_eq_steps + start_position
+        subset_start_ts = (
+            subset_start_step * interval_ms_int + timestamp_origin_int
         )
-        subset_start_day = torch.floor(subset_start_ts / 86_400_000.0).to(
-            torch.long
+        subset_start_day = torch.div(
+            subset_start_ts, 86_400_000, rounding_mode="floor"
         )
         subsets.append(
             active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
         )
+        subset_start_steps.append(subset_start_step)
         subset_start_timestamps.append(subset_start_ts)
-    return eligible, subsets, subset_start_timestamps, day_ids
+    return (
+        eligible,
+        subsets,
+        subset_start_steps,
+        subset_start_timestamps,
+        day_ids,
+    )
 
 
 def _weighted_subsets(
@@ -769,7 +782,7 @@ def _weighted_subsets(
     first_timestamp,
     interval_ms,
 ):
-    eligible, subsets, _, _ = _weighted_subset_context(
+    eligible, subsets, _, _, _ = _weighted_subset_context(
         active,
         first_eq_ts,
         last_eq_ts,
@@ -842,7 +855,13 @@ def _weighted_daily_series_metrics(
     requested = set(requested) & WEIGHTED_DAILY_SERIES_METRICS
     if not requested:
         return {}
-    _, subsets, subset_start_timestamps, day_ids = _weighted_subset_context(
+    (
+        _,
+        subsets,
+        subset_start_steps,
+        subset_start_timestamps,
+        day_ids,
+    ) = _weighted_subset_context(
         active,
         first_eq_ts,
         last_eq_ts,
@@ -852,11 +871,14 @@ def _weighted_daily_series_metrics(
     fill_eligible = fill_count.to(torch.float64) > 1.0
     timestamp_origin = float(first_timestamp)
     finite_last_fill = torch.isfinite(last_fill_ts)
-    normalized_last_fill_ts = torch.where(
-        finite_last_fill & (last_fill_ts < timestamp_origin),
-        last_fill_ts + timestamp_origin,
+    relative_last_fill_ms = torch.where(
+        last_fill_ts < timestamp_origin,
         last_fill_ts,
+        last_fill_ts - timestamp_origin,
     )
+    last_fill_steps = torch.floor(
+        relative_last_fill_ms / float(interval_ms) + 0.5
+    ).to(torch.long)
     # Unlike weighted equity-return metrics, Rust's weighted shape and volume
     # analysis admits a one-sample equity run when it has multiple fills. The
     # full-run analysis contributes one tenth, then the first empty suffix ends
@@ -887,26 +909,20 @@ def _weighted_daily_series_metrics(
         "equity_jerkiness_w_usd": "equity_jerkiness_usd",
         "exponential_fit_error_w_usd": "exponential_fit_error_usd",
     }
-    for subset_index, (subset, subset_start_ts) in enumerate(
-        zip(subsets, subset_start_timestamps)
+    for subset_index, (subset, subset_start_step, subset_start_ts) in enumerate(
+        zip(subsets, subset_start_steps, subset_start_timestamps)
     ):
-        subset_eligible = eligible & (
-            normalized_last_fill_ts >= subset_start_ts
+        subset_eligible = (
+            eligible & finite_last_fill & (last_fill_steps >= subset_start_step)
         )
         if "volume_pct_per_day_avg_w" in requested:
             if subset_index == 0:
                 volume_fill_mask = day_has_fill & subset
             else:
-                subset_start_day = torch.floor(
-                    subset_start_ts / 86_400_000.0
-                ).to(torch.long)
-                day_start_ts = (
-                    subset_start_day.to(subset_start_ts.dtype) * 86_400_000.0
+                subset_start_day = torch.div(
+                    subset_start_ts, 86_400_000, rounding_mode="floor"
                 )
-                at_day_boundary = (
-                    (subset_start_ts - day_start_ts).abs()
-                    < max(float(interval_ms) * 0.5, 1.0)
-                )
+                at_day_boundary = subset_start_ts.remainder(86_400_000) == 0
                 complete_day_mask = (
                     day_ids.unsqueeze(0) > subset_start_day.unsqueeze(1)
                 )
