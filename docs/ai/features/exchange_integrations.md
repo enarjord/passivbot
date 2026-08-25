@@ -564,7 +564,11 @@ clamping exchange values or failing unrelated multiplexed symbols; a bounded con
 the affected watcher into REST fallback and suspends new rows for that symbol until the watcher
 consumes the fallback signal. Startup basis, reconnect gaps, persistent malformed data, prolonged
 silence, and periodic integrity checks remain REST-owned; a transport failure wakes every affected
-watcher so provenance is cleared before bounded reconnect and REST fallback.
+watcher so provenance is cleared before bounded reconnect and REST fallback. Enforce public-socket
+silence independently of the short receive polling used for subscription reconciliation. Validate
+subscription acknowledgements and wake only the rejected symbols into REST fallback when the
+response identifies them; an unscoped rejection conservatively wakes the pending subscription
+batch.
 
 Primary references: [ticker WebSocket](https://www.bitunix.com/api-docs/futures/websocket/public/Tickers%20Channel.html),
 [REST depth](https://www.bitunix.com/api-docs/futures/market/get_depth.html), and

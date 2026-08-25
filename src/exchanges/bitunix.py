@@ -1509,6 +1509,7 @@ class BitunixOrderStream:
     MAX_KLINE_SUBSCRIPTIONS = 300
     KLINE_QUEUE_SIZE = 4
     MAX_CONSECUTIVE_MALFORMED_KLINES = 5
+    KLINE_SILENCE_TIMEOUT_SECONDS = 45.0
 
     def __init__(self, rest: BitunixClient):
         self.rest = rest
@@ -1670,6 +1671,28 @@ class BitunixOrderStream:
         for queue in tuple(self._ohlcv_queues.values()):
             self._queue_latest(queue, error, clear=True)
 
+    def _queue_ohlcv_fallback(self, symbol: str, error: BaseException) -> bool:
+        queue = self._ohlcv_queues.get(symbol)
+        if queue is None:
+            return False
+        self._ohlcv_fallback_pending.add(symbol)
+        self._queue_latest(queue, error, clear=True)
+        return True
+
+    @staticmethod
+    def _subscription_ack_market_ids(payload: dict[str, Any]) -> set[str]:
+        market_ids: set[str] = set()
+        symbol = payload.get("symbol")
+        if symbol not in (None, ""):
+            market_ids.add(str(symbol))
+        for key in ("arg", "args"):
+            value = payload.get(key)
+            rows = value if isinstance(value, list) else [value]
+            for row in rows:
+                if isinstance(row, dict) and row.get("symbol") not in (None, ""):
+                    market_ids.add(str(row["symbol"]))
+        return market_ids
+
     def _ensure_ohlcv_task(self) -> None:
         if self._ohlcv_closed:
             raise NetworkError("Bitunix kline websocket is closed")
@@ -1693,6 +1716,8 @@ class BitunixOrderStream:
                 malformed_counts: dict[str, int] = {}
                 malformed_warned: set[str] = set()
                 last_ping_monotonic = time.monotonic()
+                last_frame_monotonic = last_ping_monotonic
+                pending_subscribe_ids: set[str] = set()
                 while not self._ohlcv_closed:
                     desired_by_id = {
                         str(self.rest.market(symbol)["id"]): symbol
@@ -1702,7 +1727,11 @@ class BitunixOrderStream:
                         raise ValueError(
                             "Bitunix kline websocket subscription limit exceeded"
                         )
-                    desired_ids = set(desired_by_id)
+                    desired_ids = {
+                        market_id
+                        for market_id, symbol in desired_by_id.items()
+                        if symbol not in self._ohlcv_fallback_pending
+                    }
                     removed = sorted(subscribed_ids - desired_ids)
                     added = sorted(desired_ids - subscribed_ids)
                     if removed:
@@ -1718,6 +1747,7 @@ class BitunixOrderStream:
                                 ],
                             }
                         )
+                        pending_subscribe_ids.difference_update(removed)
                     if added:
                         await ws.send_json(
                             {
@@ -1731,27 +1761,82 @@ class BitunixOrderStream:
                                 ],
                             }
                         )
+                        pending_subscribe_ids.update(added)
                     subscribed_ids = desired_ids
-                    if not desired_ids:
+                    if not desired_by_id:
                         return
                     now_monotonic = time.monotonic()
                     if now_monotonic - last_ping_monotonic >= self.PING_INTERVAL_SECONDS:
                         await ws.send_json({"op": "ping", "ping": int(time.time())})
                         last_ping_monotonic = now_monotonic
+                    silence_remaining = (
+                        self.KLINE_SILENCE_TIMEOUT_SECONDS
+                        - (now_monotonic - last_frame_monotonic)
+                    )
+                    if silence_remaining <= 0.0:
+                        raise NetworkError("Bitunix public kline websocket became silent")
                     try:
-                        message = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                        message = await asyncio.wait_for(
+                            ws.receive(), timeout=min(1.0, silence_remaining)
+                        )
                     except asyncio.TimeoutError:
+                        if (
+                            time.monotonic() - last_frame_monotonic
+                            >= self.KLINE_SILENCE_TIMEOUT_SECONDS
+                        ):
+                            raise NetworkError(
+                                "Bitunix public kline websocket became silent"
+                            )
                         continue
+                    last_frame_monotonic = time.monotonic()
                     if message.type == aiohttp.WSMsgType.TEXT:
                         payload = json.loads(message.data)
-                        if isinstance(payload, dict) and payload.get("op") in {
-                            "connect",
-                            "ping",
-                            "pong",
-                            "subscribe",
-                            "unsubscribe",
-                        }:
-                            continue
+                        if isinstance(payload, dict):
+                            operation = payload.get("op")
+                            if operation == "subscribe":
+                                acknowledged_ids = self._subscription_ack_market_ids(
+                                    payload
+                                )
+                                if not acknowledged_ids:
+                                    acknowledged_ids = set(pending_subscribe_ids)
+                                pending_subscribe_ids.difference_update(
+                                    acknowledged_ids
+                                )
+                                rejected = (
+                                    payload.get("code") not in (None, 0, "0")
+                                    or payload.get("success") is False
+                                )
+                                if rejected:
+                                    if not acknowledged_ids:
+                                        acknowledged_ids = set(subscribed_ids)
+                                    for market_id in sorted(acknowledged_ids):
+                                        symbol = desired_by_id.get(market_id)
+                                        if symbol is None:
+                                            continue
+                                        if self._queue_ohlcv_fallback(
+                                            symbol,
+                                            NetworkError(
+                                                "Bitunix public kline websocket "
+                                                "subscription was rejected"
+                                            ),
+                                        ):
+                                            logging.warning(
+                                                "[bitunix] [candle] websocket "
+                                                "subscription rejected | symbol=%s "
+                                                "action=rest_fallback",
+                                                symbol,
+                                            )
+                                    subscribed_ids.difference_update(
+                                        acknowledged_ids
+                                    )
+                                continue
+                            if operation in {
+                                "connect",
+                                "ping",
+                                "pong",
+                                "unsubscribe",
+                            }:
+                                continue
                         try:
                             symbol, rows = self._normalize_ohlcv_payload(payload)
                         except ValueError:
@@ -1788,16 +1873,12 @@ class BitunixOrderStream:
                                 malformed_counts[malformed_symbol]
                                 >= self.MAX_CONSECUTIVE_MALFORMED_KLINES
                             ):
-                                self._queue_latest(
-                                    malformed_queue,
+                                self._queue_ohlcv_fallback(
+                                    malformed_symbol,
                                     NetworkError(
                                         "Bitunix public kline websocket received "
                                         "consecutive malformed updates"
                                     ),
-                                    clear=True,
-                                )
-                                self._ohlcv_fallback_pending.add(
-                                    malformed_symbol
                                 )
                                 malformed_counts[malformed_symbol] = 0
                             continue

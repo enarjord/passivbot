@@ -1067,6 +1067,119 @@ async def test_order_stream_public_failure_wakes_all_watchers_for_rest_fallback(
 
 
 @pytest.mark.asyncio
+async def test_order_stream_silence_timeout_wakes_waiter_for_rest_fallback():
+    client = _prepared_client()
+    socket = _PublicKlineSocket()
+    session = _PublicKlineSession(socket)
+    client._get_session = AsyncMock(return_value=session)
+    stream = BitunixOrderStream(client)
+    stream.KLINE_SILENCE_TIMEOUT_SECONDS = 0.02
+
+    waiter = asyncio.create_task(
+        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
+    )
+
+    with pytest.raises(NetworkError, match="failed: NetworkError"):
+        await asyncio.wait_for(waiter, timeout=1.0)
+    assert session.connect_calls[0][1]["receive_timeout"] == 45.0
+    await stream.close()
+
+
+@pytest.mark.parametrize(
+    "rejection_fields",
+    [{"code": 10001}, {"success": False}],
+)
+@pytest.mark.asyncio
+async def test_order_stream_scopes_rejected_subscription_to_affected_watcher(
+    rejection_fields,
+    caplog,
+):
+    client = _prepared_client()
+    eth_symbol = "ETH/USDT:USDT"
+    eth_market = _market_for("ETHUSDT", eth_symbol)
+    client.markets[eth_symbol] = eth_market
+    client.markets_by_id["ETHUSDT"] = eth_market
+    client.symbols.append(eth_symbol)
+    socket = _PublicKlineSocket()
+    client._get_session = AsyncMock(
+        return_value=_PublicKlineSession(socket)
+    )
+    stream = BitunixOrderStream(client)
+
+    btc_waiter = asyncio.create_task(
+        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
+    )
+    eth_waiter = asyncio.create_task(stream.watch_ohlcv(eth_symbol, "1m"))
+    for _ in range(100):
+        subscribed = {
+            arg["symbol"]
+            for message in socket.sent
+            if message.get("op") == "subscribe"
+            for arg in message["args"]
+        }
+        if subscribed == {"BTCUSDT", "ETHUSDT"}:
+            break
+        await asyncio.sleep(0.01)
+
+    await socket.messages.put(
+        SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT,
+            data=json.dumps(
+                {
+                    "op": "subscribe",
+                    "args": [
+                        {
+                            "symbol": "BTCUSDT",
+                            "ch": "market_kline_1min",
+                        }
+                    ],
+                    "msg": "must not reach logs",
+                    **rejection_fields,
+                }
+            ),
+        )
+    )
+    await socket.messages.put(
+        SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT,
+            data=json.dumps(_kline_payload("ETHUSDT")),
+        )
+    )
+
+    with pytest.raises(NetworkError, match="subscription was rejected"):
+        await asyncio.wait_for(btc_waiter, timeout=1.0)
+    assert (await asyncio.wait_for(eth_waiter, timeout=1.0))[0][4] == 102.0
+    assert "symbol=BTC/USDT:USDT action=rest_fallback" in caplog.text
+    assert "must not reach logs" not in caplog.text
+    assert stream._ohlcv_task is not None
+    assert not stream._ohlcv_task.done()
+
+    btc_recovery = asyncio.create_task(
+        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
+    )
+    for _ in range(100):
+        btc_subscriptions = sum(
+            1
+            for message in socket.sent
+            if message.get("op") == "subscribe"
+            for arg in message["args"]
+            if arg["symbol"] == "BTCUSDT"
+        )
+        if btc_subscriptions >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert btc_subscriptions >= 2
+    await socket.messages.put(
+        SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT,
+            data=json.dumps(_kline_payload("BTCUSDT")),
+        )
+    )
+    assert (await asyncio.wait_for(btc_recovery, timeout=1.0))[0][4] == 102.0
+    await stream.close()
+
+
+@pytest.mark.asyncio
 async def test_order_stream_can_resubscribe_immediately_after_last_unwatch():
     client = _prepared_client()
     first_socket = _PublicKlineSocket()
