@@ -418,12 +418,29 @@ def test_pending_endpoint_conservatively_retains_safe_unknown_status(caplog):
         client._normalize_order(_order_row(status="CANCELING"))
 
 
-@pytest.mark.parametrize("status", [None, "", "bad status", "A" * 33])
+@pytest.mark.parametrize(
+    "status",
+    [
+        None,
+        "",
+        "bad status",
+        "A" * 33,
+        "CANCELING" + "_" * 24,
+        "NEW" + "_" * 30,
+    ],
+)
 def test_pending_endpoint_rejects_missing_or_malformed_status(status):
     client = _prepared_client()
 
     with pytest.raises(ValueError, match="Unknown Bitunix order status"):
         client._normalize_order(_order_row(status=status), pending_snapshot=True)
+
+
+def test_detail_endpoint_rejects_oversized_padded_known_status():
+    client = _prepared_client()
+
+    with pytest.raises(ValueError, match="Unknown Bitunix order status"):
+        client._normalize_order(_order_row(status="NEW" + "_" * 30))
 
 
 def test_pending_unknown_status_warning_is_throttled(monkeypatch, caplog):
@@ -1073,6 +1090,46 @@ async def test_order_stream_public_failure_wakes_all_watchers_for_rest_fallback(
     results = await asyncio.gather(*waiters, return_exceptions=True)
     assert all(isinstance(result, NetworkError) for result in results)
     assert all("NetworkError" in str(result) for result in results)
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_order_stream_transport_failure_preserves_every_fallback_signal():
+    client = _prepared_client()
+    eth_symbol = "ETH/USDT:USDT"
+    eth_market = _market_for("ETHUSDT", eth_symbol)
+    client.markets[eth_symbol] = eth_market
+    client.markets_by_id["ETHUSDT"] = eth_market
+    client.symbols.append(eth_symbol)
+    socket = _PublicKlineSocket()
+    client._get_session = AsyncMock(
+        return_value=_PublicKlineSession(socket)
+    )
+    stream = BitunixOrderStream(client)
+    symbols = {"BTC/USDT:USDT", eth_symbol}
+    for symbol in symbols:
+        stream._ohlcv_queues[symbol] = asyncio.Queue(
+            maxsize=stream.KLINE_QUEUE_SIZE
+        )
+    stream._ensure_ohlcv_task()
+    for _ in range(100):
+        if stream._ohlcv_ws is socket:
+            break
+        await asyncio.sleep(0.01)
+
+    await socket.messages.put(
+        SimpleNamespace(type=aiohttp.WSMsgType.ERROR, data="closed")
+    )
+    for _ in range(100):
+        if stream._ohlcv_task is None:
+            break
+        await asyncio.sleep(0.01)
+
+    assert stream._ohlcv_fallback_pending == symbols
+    for symbol in symbols:
+        queue = stream._ohlcv_queues[symbol]
+        assert queue.qsize() == 1
+        assert isinstance(queue.get_nowait(), NetworkError)
     await stream.close()
 
 

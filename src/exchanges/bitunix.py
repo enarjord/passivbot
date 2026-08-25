@@ -607,7 +607,10 @@ class BitunixClient:
     def _order_status(raw_status: Any) -> str:
         # Live REST currently emits ``NEW_`` although the public schema says
         # ``NEW``.  Treat only trailing enum padding as equivalent.
-        status = str(raw_status or "").upper().rstrip("_")
+        raw_token = str(raw_status or "").upper()
+        if not BitunixClient.ORDER_STATUS_TOKEN_RE.fullmatch(raw_token):
+            raise ValueError("Unknown Bitunix order status")
+        status = raw_token.rstrip("_")
         mapping = {
             "INIT": "open",
             "NEW": "open",
@@ -631,9 +634,10 @@ class BitunixClient:
         try:
             return self._order_status(raw_status)
         except ValueError:
-            token = str(raw_status or "").upper().rstrip("_")
-            if not self.ORDER_STATUS_TOKEN_RE.fullmatch(token):
+            raw_token = str(raw_status or "").upper()
+            if not self.ORDER_STATUS_TOKEN_RE.fullmatch(raw_token):
                 raise
+            token = raw_token.rstrip("_")
             now = time.monotonic()
             last = self._pending_status_warning_monotonic.get(token)
             if last is None or now - last >= self.PENDING_STATUS_WARNING_INTERVAL_SECONDS:
@@ -1677,9 +1681,7 @@ class BitunixOrderStream:
     ) -> None:
         targets = tuple(self._ohlcv_queues) if symbols is None else tuple(symbols)
         for symbol in targets:
-            queue = self._ohlcv_queues.get(symbol)
-            if queue is not None:
-                self._queue_latest(queue, error, clear=True)
+            self._queue_ohlcv_fallback(symbol, error)
 
     def _queue_ohlcv_fallback(self, symbol: str, error: BaseException) -> bool:
         queue = self._ohlcv_queues.get(symbol)
