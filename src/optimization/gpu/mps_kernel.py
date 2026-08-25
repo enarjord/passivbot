@@ -119,10 +119,11 @@ def _scale_single_coin_minute_parameters(
     """Convert minute-denominated directional inputs to candle periods.
 
     Exact Rust divides strategy EMA spans by the configured candle interval
-    before calculating their alphas. Entry and HSL cooldowns remain expressed
-    in elapsed minutes, so the single-coin Metal kernels consume their
-    equivalent fractional candle counts. Hour-denominated volatility spans and
-    HSL's sample-based drawdown EMA deliberately remain unchanged.
+    before calculating their alphas. It separately compounds HSL's one-minute
+    EMA decay over the elapsed minutes, so HSL spans are converted to the
+    equivalent per-candle alpha. Entry and HSL cooldowns remain expressed in
+    elapsed minutes and are converted to candle counts. Hour-denominated
+    volatility spans remain unchanged.
     """
 
     interval_minutes = float(interval_minutes)
@@ -146,6 +147,21 @@ def _scale_single_coin_minute_parameters(
         offset = side_index * side_width
         for key in minute_keys:
             scaled[:, offset + keys.index(key)] /= interval_minutes
+        if interval_minutes != 1.0:
+            hsl_span_column = offset + keys.index("hsl_ema_span_minutes")
+            hsl_spans = scaled[:, hsl_span_column]
+            if np.any(~np.isfinite(hsl_spans)) or np.any(hsl_spans < 1.0):
+                raise ValueError(
+                    "MPS HSL EMA span must be finite and at least one minute"
+                )
+            alpha_1m = 2.0 / (hsl_spans + 1.0)
+            decay_1m = 1.0 - alpha_1m
+            alpha_per_candle = np.ones_like(decay_1m)
+            positive_decay = decay_1m > 0.0
+            alpha_per_candle[positive_decay] = -np.expm1(
+                interval_minutes * np.log(decay_1m[positive_decay])
+            )
+            scaled[:, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
     return scaled
 
 

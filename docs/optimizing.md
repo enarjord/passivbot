@@ -799,8 +799,8 @@ Trade-offs:
 - Metrics are still time-correct because analysis uses timestamps rather than bar indices.
 - The Apple MPS backend supports aggregated intervals for single-coin EMA Anchor and Trailing
   Martingale runs. It converts minute-denominated strategy EMA spans and elapsed-time cooldowns to
-  candle periods before dispatch; exact Rust validation remains authoritative. Multi-coin MPS runs
-  currently require one-minute candles.
+  candle periods and compounds HSL's one-minute EMA decay over each candle before dispatch; exact
+  Rust validation remains authoritative. Multi-coin MPS runs currently require one-minute candles.
 
 ### Fine-Tuning Specific Parameters
 

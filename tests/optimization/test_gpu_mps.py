@@ -3064,7 +3064,129 @@ def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
             == 1.5
         )
         assert scaled[0, offset + keys.index(hour_span_key)] == 24.0
-        assert scaled[0, offset + keys.index("hsl_ema_span_minutes")] == 60.0
+        hsl_span = scaled[0, offset + keys.index("hsl_ema_span_minutes")]
+        alpha_1m = 2.0 / 61.0
+        alpha_5m = 2.0 / (hsl_span + 1.0)
+        assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
+
+
+@pytest.mark.parametrize("span", [1.0, 5.5, 60.0, 720.0])
+def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
+    side = {
+        key: float(index + 1)
+        for index, key in enumerate(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+    }
+    side["hsl_ema_span_minutes"] = span
+    original = np.asarray(
+        [[side[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS] * 2],
+        dtype=np.float64,
+    )
+
+    scaled = _scale_single_coin_minute_parameters(
+        original,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=5.0,
+    )
+
+    alpha_1m = 2.0 / (span + 1.0)
+    for side_index in range(2):
+        offset = side_index * len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+        effective_span = scaled[
+            0,
+            offset + EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index(
+                "hsl_ema_span_minutes"
+            ),
+        ]
+        alpha_5m = 2.0 / (effective_span + 1.0)
+        assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
+
+
+def test_single_coin_interval_packing_preserves_one_minute_hsl_span_exactly():
+    values = np.arange(
+        1,
+        len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) * 2 + 1,
+        dtype=np.float64,
+    ).reshape(1, -1)
+    for side_index in range(2):
+        values[
+            0,
+            side_index * len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+            + EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index("hsl_ema_span_minutes"),
+        ] = 5.5
+
+    scaled = _scale_single_coin_minute_parameters(
+        values,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=1.0,
+    )
+
+    assert np.array_equal(scaled, values)
+
+
+def test_single_coin_interval_packing_matches_exact_rust_hsl_elapsed_decay():
+    import passivbot_rust
+
+    side = {
+        key: float(index + 1)
+        for index, key in enumerate(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+    }
+    side["hsl_ema_span_minutes"] = 60.0
+    original = np.asarray(
+        [[side[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS] * 2],
+        dtype=np.float64,
+    )
+    scaled = _scale_single_coin_minute_parameters(
+        original,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=5.0,
+    )
+    effective_span = scaled[
+        0,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index("hsl_ema_span_minutes"),
+    ]
+    exact = passivbot_rust.EquityHardStopRuntime()
+    packed = passivbot_rust.EquityHardStopRuntime()
+    common = {
+        "red_threshold": 0.25,
+        "tier_ratio_yellow": 0.5,
+        "tier_ratio_orange": 0.75,
+    }
+    exact.apply_sample(
+        timestamp_ms=0,
+        equity=100.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=60.0,
+        **common,
+    )
+    packed.apply_sample(
+        timestamp_ms=0,
+        equity=100.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=effective_span,
+        **common,
+    )
+
+    exact_step = exact.apply_sample(
+        timestamp_ms=5 * 60_000,
+        equity=90.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=60.0,
+        **common,
+    )
+    packed_step = packed.apply_sample(
+        timestamp_ms=60_000,
+        equity=90.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=effective_span,
+        **common,
+    )
+
+    assert exact_step["drawdown_ema"] == pytest.approx(
+        packed_step["drawdown_ema"]
+    )
 
 
 def test_single_coin_interval_packing_rejects_invalid_interval():
@@ -3164,6 +3286,10 @@ def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
     assert packed[0, keys.index("ema_span_0")] == pytest.approx(2.0)
     assert packed[0, keys.index("entry_cooldown_minutes")] == pytest.approx(
         0.4
+    )
+    packed_hsl_span = packed[0, keys.index("hsl_ema_span_minutes")]
+    assert 2.0 / (packed_hsl_span + 1.0) == pytest.approx(
+        1.0 - (1.0 - 2.0 / 61.0) ** 5
     )
     assert output["balance"].device.type == "mps"
     assert torch.isfinite(output["balance"]).all()
