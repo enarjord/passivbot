@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS Trailing Martingale optimization with market orders may now search entry and close
+  retracement bounds that cross between recursive and trailing modes. Metal selects the mode per
+  candidate and per coin, with sign-preserving float32 packing for positive underflow values;
+  exact Rust validation and drift gates remain authoritative.
+
 - Added weighted daily-series scoring and limits to Apple MPS optimization for
   `volume_pct_per_day_avg_w`, `equity_choppiness_w`, `equity_jerkiness_w`, and
   `exponential_fit_error_w`. The proxy applies Rust's ten trailing windows to its existing compact
@@ -19,7 +24,8 @@ All notable user-facing changes will be documented in this file.
 
 - Added baseline multi-coin Trailing Martingale ordinary market execution to Apple MPS
   optimization for long-only, short-only, fused long+short, hedge-mode, one-way, and compatible
-  suite runs whose entry and close modes remain wholly trailing or wholly recursive. Metal retains
+  suite runs, with recursive or trailing entry and close mode selected per candidate and coin.
+  Metal retains
   generation-time market intent, executes promoted orders on the next valid candle with adverse
   directional slippage and taker fees, applies executable-touch minimum sizing to short entries and
   all closes, and prices the strict portfolio entry cap at the market touch. For recursive closes,
@@ -68,8 +74,7 @@ All notable user-facing changes will be documented in this file.
   is reallocated when another close remains executable. Promoted grid groups and protective reducers
   retain canonical ordering,
   aggregate position trimming, quantity-relative minimum-size comparisons, adverse slippage, and
-  taker fees. Entry and close optimizer bounds must
-  each remain wholly recursive or wholly trailing; mode-crossing ranges remain fail closed.
+  taker fees. Entry and close optimizer bounds may cross the recursive/trailing mode boundary.
 
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market
@@ -78,7 +83,7 @@ All notable user-facing changes will be documented in this file.
   total-exposure entry gate at their limit price or market touch. Strategy-ladder sizing retains
   its separate wallet-exposure allowance before that portfolio gate is applied; the retained
   nearest prefix ends at the first partially cropped portfolio-boundary rung. Entry optimizer
-  bounds must remain wholly recursive or wholly trailing; mode-crossing ranges remain fail closed.
+  bounds may cross the recursive/trailing mode boundary.
 
 - Extended single-coin Trailing Martingale ordinary market-order optimization on Apple MPS to
   compatible HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, position- and

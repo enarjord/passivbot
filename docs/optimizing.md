@@ -288,10 +288,11 @@ The supported slice is intentionally narrow:
   suite scenarios, including HSL, one-sided minimum-effective-cost filtering, auto-unstuck,
   total-exposure repair, and realized-loss gating. Single-coin Trailing Martingale supports the
   same directional and position-mode topologies with HSL and one-sided minimum-effective-cost
-  filtering when every enabled side's entry retracement range is wholly recursive (its upper bound
-  is nonpositive) or wholly trailing (its lower bound remains float32-positive), and every close
-  retracement range is likewise wholly recursive or wholly trailing. Bounds that cross either
-  mode boundary fail closed.
+  filtering. Entry and close retracement bounds may cross the recursive/trailing mode boundary:
+  each candidate independently selects recursive mode at a nonpositive base or trailing mode at a
+  positive base. An extremely small positive float64 value that would underflow during Metal
+  packing is raised to the smallest normal float32 solely in the screening proxy so its mode sign
+  agrees with exact Rust.
   Auto-unstuck, position- and total-exposure repair, and realized-loss gating may remain enabled or
   tunable. The Metal proxy classifies each generated order against the
   current candle close using
@@ -326,9 +327,8 @@ The supported slice is intentionally narrow:
   their market slippage and taker fees are included in the projected loss. Static coin overrides
   may enable or tune unstuck. Multi-coin Trailing Martingale supports ordinary market entries and
   ordinary strategy closes for long-only, short-only, fused long+short, hedge-mode, one-way, and
-  compatible suite runs when every enabled entry and close retracement range remains wholly
-  recursive or wholly trailing. Static coin overrides may select either supported entry or close
-  mode per coin. It uses
+  compatible suite runs. Entry and close retracement bounds may cross the recursive/trailing mode
+  boundary, and static coin overrides may select either mode per coin. It uses
   the same retained generation-time intent, next-valid-candle adverse fill, taker-fee,
   executable-touch minimum sizing for short entries and all closes, and portfolio entry-cap
   accounting contract. Passive next-candle reachability alone exposes a recursive close suffix;

@@ -402,6 +402,26 @@ TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
     ),
 )
 
+
+def encode_tm_retracement_base_pct(value) -> np.float32:
+    """Pack a TM retracement base without losing its recursive/trailing mode."""
+
+    value = float(value)
+    if not math.isfinite(value) or abs(value) > float(np.finfo(np.float32).max):
+        raise ValueError(
+            "Trailing Martingale retracement_base_pct must be finite and "
+            "representable as float32"
+        )
+    encoded = np.float32(value)
+    if value > 0.0 and encoded == np.float32(0.0):
+        # Rust selects trailing mode from the float64 sign. Preserve that mode
+        # in Metal even when an extremely small positive magnitude underflows
+        # during float32 packing. The smallest normal is used because GPU
+        # arithmetic may flush subnormal values to zero.
+        encoded = np.float32(np.finfo(np.float32).tiny)
+    return encoded
+
+
 GPU_STRATEGY_PARAM_KEYS = {
     "ema_anchor": EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     "trailing_martingale": TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,

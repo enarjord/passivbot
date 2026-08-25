@@ -22,6 +22,7 @@ from optimization.gpu.model import (
     build_mps_data,
     build_mps_multicoin_data,
     encode_hsl_panic_order_type,
+    encode_tm_retracement_base_pct,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
     validate_hsl_settings,
@@ -1636,7 +1637,16 @@ def _build_multicoin_tm_coin_overrides(
                 if value is missing:
                     break
             if value is not missing:
-                matrix[coin_index, column] = float(effective_strategy[key])
+                effective_value = float(effective_strategy[key])
+                matrix[coin_index, column] = (
+                    encode_tm_retracement_base_pct(effective_value)
+                    if key
+                    in {
+                        "entry_retracement_base_pct",
+                        "close_retracement_base_pct",
+                    }
+                    else effective_value
+                )
         risk_patch = side_patch.get("risk", {}) or {}
         if "entry_cooldown_minutes" in risk_patch:
             matrix[coin_index, cooldown_column] = float(
