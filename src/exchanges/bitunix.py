@@ -1508,6 +1508,7 @@ class BitunixOrderStream:
     KLINE_CHANNELS = {"1m": "market_kline_1min"}
     MAX_KLINE_SUBSCRIPTIONS = 300
     KLINE_QUEUE_SIZE = 4
+    MAX_CONSECUTIVE_MALFORMED_KLINES = 5
 
     def __init__(self, rest: BitunixClient):
         self.rest = rest
@@ -1688,6 +1689,8 @@ class BitunixOrderStream:
             ) as ws:
                 self._ohlcv_ws = ws
                 subscribed_ids: set[str] = set()
+                malformed_counts: dict[str, int] = {}
+                malformed_warned: set[str] = set()
                 last_ping_monotonic = time.monotonic()
                 while not self._ohlcv_closed:
                     desired_by_id = {
@@ -1748,7 +1751,53 @@ class BitunixOrderStream:
                             "unsubscribe",
                         }:
                             continue
-                        symbol, rows = self._normalize_ohlcv_payload(payload)
+                        try:
+                            symbol, rows = self._normalize_ohlcv_payload(payload)
+                        except ValueError:
+                            # Bitunix has emitted transient internally inconsistent
+                            # OHLC updates (for example, low one tick above open).
+                            # Never clamp or persist them, and do not sacrifice
+                            # unrelated multiplexed symbols. A bounded consecutive
+                            # run wakes only this watcher into generic REST fallback.
+                            market_id = (
+                                str(payload.get("symbol") or "")
+                                if isinstance(payload, dict)
+                                and payload.get("ch") == self.KLINE_CHANNELS["1m"]
+                                else ""
+                            )
+                            malformed_symbol = desired_by_id.get(market_id)
+                            malformed_queue = self._ohlcv_queues.get(
+                                malformed_symbol or ""
+                            )
+                            if malformed_symbol is None or malformed_queue is None:
+                                raise
+                            malformed_counts[malformed_symbol] = (
+                                malformed_counts.get(malformed_symbol, 0) + 1
+                            )
+                            if malformed_symbol not in malformed_warned:
+                                logging.warning(
+                                    "[bitunix] [candle] malformed kline update dropped "
+                                    "| symbol=%s action=drop_update "
+                                    "rest_fallback_after=%d",
+                                    malformed_symbol,
+                                    self.MAX_CONSECUTIVE_MALFORMED_KLINES,
+                                )
+                                malformed_warned.add(malformed_symbol)
+                            if (
+                                malformed_counts[malformed_symbol]
+                                >= self.MAX_CONSECUTIVE_MALFORMED_KLINES
+                            ):
+                                self._queue_latest(
+                                    malformed_queue,
+                                    NetworkError(
+                                        "Bitunix public kline websocket received "
+                                        "consecutive malformed updates"
+                                    ),
+                                    clear=True,
+                                )
+                                malformed_counts[malformed_symbol] = 0
+                            continue
+                        malformed_counts[symbol] = 0
                         queue = self._ohlcv_queues.get(symbol)
                         if queue is not None:
                             self._queue_latest(queue, rows)

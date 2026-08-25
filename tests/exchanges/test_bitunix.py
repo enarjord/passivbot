@@ -920,6 +920,7 @@ def test_order_stream_rejects_malformed_kline_payload(overrides, match):
 @pytest.mark.asyncio
 async def test_order_stream_multiplexes_public_klines_and_uses_json_ping(
     monkeypatch,
+    caplog,
 ):
     client = _prepared_client()
     eth_symbol = "ETH/USDT:USDT"
@@ -961,6 +962,12 @@ async def test_order_stream_multiplexes_public_klines_and_uses_json_ping(
     await socket.messages.put(
         SimpleNamespace(
             type=aiohttp.WSMsgType.TEXT,
+            data=json.dumps(_kline_payload("BTCUSDT", l="101")),
+        )
+    )
+    await socket.messages.put(
+        SimpleNamespace(
+            type=aiohttp.WSMsgType.TEXT,
             data=json.dumps(_kline_payload("BTCUSDT")),
         )
     )
@@ -974,10 +981,42 @@ async def test_order_stream_multiplexes_public_klines_and_uses_json_ping(
     btc_rows, eth_rows = await asyncio.gather(btc_waiter, eth_waiter)
     assert btc_rows[0][4] == 102.0
     assert eth_rows[0][4] == 101.0
+    assert "malformed kline update dropped" in caplog.text
 
     await stream.un_watch_ohlcv("BTC/USDT:USDT", "1m")
     await stream.un_watch_ohlcv(eth_symbol, "1m")
     assert socket.closed is True
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_order_stream_routes_persistent_malformed_klines_to_one_watcher():
+    client = _prepared_client()
+    socket = _PublicKlineSocket()
+    client._get_session = AsyncMock(
+        return_value=_PublicKlineSession(socket)
+    )
+    stream = BitunixOrderStream(client)
+
+    waiter = asyncio.create_task(
+        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
+    )
+    for _ in range(100):
+        if stream._ohlcv_ws is socket:
+            break
+        await asyncio.sleep(0.01)
+    for _ in range(stream.MAX_CONSECUTIVE_MALFORMED_KLINES):
+        await socket.messages.put(
+            SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(_kline_payload("BTCUSDT", l="101")),
+            )
+        )
+
+    with pytest.raises(NetworkError, match="consecutive malformed updates"):
+        await waiter
+    assert stream._ohlcv_task is not None
+    assert not stream._ohlcv_task.done()
     await stream.close()
 
 
