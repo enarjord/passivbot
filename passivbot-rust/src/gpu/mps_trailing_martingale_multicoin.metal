@@ -3879,6 +3879,26 @@ inline void generate_tm_multicoin_side_orders(
         float wel_reducer_exec_price = float(wel_reducer_tick) * price_step;
         float raw_unstuck_reducer_qty = unstuck_close_qty[c];
         int raw_unstuck_reducer_tick = unstuck_close_tick[c];
+        // Auto-unstuck is generated as a passive strategy-external intent.
+        // Preserve that immutable request for recursive-grid reconstruction;
+        // ordinary market policy may enlarge only the emitted reducer to the
+        // executable-touch minimum, exactly as the Rust orchestrator does.
+        float strategy_unstuck_reducer_qty = raw_unstuck_reducer_qty;
+        float unstuck_reducer_price =
+            float(raw_unstuck_reducer_tick) * price_step;
+        bool unstuck_reducer_market = raw_unstuck_reducer_qty > 0.0f
+            && should_use_ordinary_market_execution(
+                raw_unstuck_reducer_tick, short_side, price_now, price_step,
+                market_orders_allowed, market_order_near_touch_threshold
+            );
+        if (unstuck_reducer_market) {
+            raw_unstuck_reducer_qty = resize_market_close_qty(
+                raw_unstuck_reducer_qty, psize[c], price_now,
+                qty_step, min_qty, min_cost, c_mult
+            );
+        }
+        float unstuck_reducer_exec_price = unstuck_reducer_market
+            ? price_now : unstuck_reducer_price;
 
         float close_threshold = coin_close_threshold_base
             + wer * coin_close_threshold_we
@@ -4096,18 +4116,16 @@ inline void generate_tm_multicoin_side_orders(
                 psize[c], raw_twel_reducer_qty, twel_reducer_exec_price,
                 qty_step, min_qty, min_cost, c_mult
             );
-        float unstuck_reducer_price =
-            float(raw_unstuck_reducer_tick) * price_step;
         float finalized_unstuck_reducer_qty = ordinary_can_accompany_reducer
             ? finalized_reducer_qty_with_ordinary(
                 psize[c], raw_unstuck_reducer_qty,
-                unstuck_reducer_price, close_qty[c], minimum_close,
+                unstuck_reducer_exec_price, close_qty[c], minimum_close,
                 minimum_close_relation, qty_step, min_qty, min_cost,
                 c_mult
             )
             : finalized_reducer_qty(
                 psize[c], raw_unstuck_reducer_qty,
-                unstuck_reducer_price, qty_step, min_qty, min_cost,
+                unstuck_reducer_exec_price, qty_step, min_qty, min_cost,
                 c_mult
             );
         bool use_twel = finalized_twel_reducer_qty
@@ -4130,8 +4148,9 @@ inline void generate_tm_multicoin_side_orders(
             ? raw_unstuck_reducer_qty : exposure_reducer_qty;
         int reducer_tick = use_unstuck
             ? raw_unstuck_reducer_tick : exposure_reducer_tick;
-        bool reducer_market = !use_unstuck && (use_twel
-            ? twel_reducer_market : wel_reducer_market);
+        bool reducer_market = use_unstuck
+            ? unstuck_reducer_market
+            : (use_twel ? twel_reducer_market : wel_reducer_market);
         if (use_unstuck && !realized_loss_proxy_allows_reducer(
                 finalized_unstuck_reducer_qty,
                 float(reducer_tick) * price_step, pprice[c], short_side,
@@ -4191,7 +4210,8 @@ inline void generate_tm_multicoin_side_orders(
                 }
             } else if (!trailing_close) {
                 float reserved_grid_qty = use_unstuck
-                    ? reducer_qty : strategy_wel_reducer_qty;
+                    ? strategy_unstuck_reducer_qty
+                    : strategy_wel_reducer_qty;
                 close_reconstruct_after_reducer[c] = true;
                 close_gen_balance[c] = balance;
                 close_gen_allowed_wel[c] = allowed_coin_wel;
@@ -4216,7 +4236,7 @@ inline void generate_tm_multicoin_side_orders(
             close_qty[c] = reducer_qty;
             close_tick[c] = reducer_tick;
             close_market[c] = reducer_market;
-            if (reducer_market && !use_unstuck) {
+            if (reducer_market) {
                 // Generation-time executable-touch sizing remains
                 // authoritative for both trailing and recursive protective
                 // closes. Recursive ordinary generation already captures
@@ -4224,7 +4244,10 @@ inline void generate_tm_multicoin_side_orders(
                 // here before next-candle dust allocation as well.
                 close_gen_market_price[c] = price_now;
             }
-            close_is_exposure_reducer[c] = !use_unstuck;
+            // This flag identifies any protective reducer to the recursive
+            // fill/reconstruction path; unstuck has its own orthogonal flag
+            // for realized-loss allowance semantics.
+            close_is_exposure_reducer[c] = true;
             close_is_unstuck_reducer[c] = use_unstuck;
         }
     }

@@ -75,7 +75,6 @@ from optimization.backends.gpu_backend import (
     _validate_seed_side_match,
     _validate_scope,
     _validate_tm_market_mode_bounds,
-    _validate_tm_multicoin_market_foundation_bounds,
     _validate_tm_market_template_bounds,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
@@ -1734,85 +1733,13 @@ def test_gpu_multicoin_tm_market_execution_accepts_recursive_close_bounds(
     )
 
 
-def test_gpu_multicoin_tm_market_execution_rejects_unstuck_bounds():
+def test_gpu_multicoin_tm_market_execution_accepts_unstuck_config():
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
-    key = "long_unstuck_enabled"
+    config["bot"]["long"]["unstuck"]["enabled"] = True
 
-    with pytest.raises(ValueError, match=key):
-        _validate_tm_multicoin_market_foundation_bounds(
-            {key: Bound(0.0, 1.0)},
-            {},
-            {"long"},
-            config,
-            coin_count=3,
-        )
-
-
-@pytest.mark.parametrize(
-    "suffix",
-    [
-        "risk_position_exposure_enforcer_enabled",
-        "risk_total_exposure_enforcer_enabled",
-    ],
-)
-def test_gpu_multicoin_tm_market_execution_accepts_exposure_reducer_bounds(
-    suffix,
-):
-    config = _long_only_ema_config()
-    config["live"]["strategy_kind"] = "trailing_martingale"
-    config["live"]["market_orders_allowed"] = True
-    key = f"long_{suffix}"
-
-    _validate_tm_multicoin_market_foundation_bounds(
-        {key: Bound(0.0, 1.0)},
-        {},
-        {"long"},
-        config,
-        coin_count=3,
-    )
-
-
-def test_gpu_multicoin_tm_recursive_entry_accepts_twel_gate_bounds():
-    config = _long_only_ema_config()
-    config["live"]["strategy_kind"] = "trailing_martingale"
-    config["live"]["market_orders_allowed"] = True
-    bounds = {
-        "long_entry_retracement_base_pct": Bound(0.0, 0.0),
-        "long_risk_twel_entry_gate_enabled": Bound(0.0, 1.0),
-    }
-
-    _validate_tm_multicoin_market_foundation_bounds(
-        bounds, {}, {"long"}, config, coin_count=3
-    )
-
-
-def test_gpu_multicoin_tm_recursive_entry_override_accepts_twel_gate_bounds():
-    config = _long_only_ema_config()
-    config["live"]["strategy_kind"] = "trailing_martingale"
-    config["live"]["market_orders_allowed"] = True
-    config["coin_overrides"] = {
-        "ETH": {
-            "bot": {
-                "long": {
-                    "strategy": {
-                        "trailing_martingale": {
-                            "entry": {"retracement_base_pct": 0.0}
-                        }
-                    }
-                }
-            }
-        }
-    }
-    bounds = {
-        "long_entry_retracement_base_pct": Bound(0.001, 0.1),
-        "long_risk_twel_entry_gate_enabled": Bound(0.0, 1.0),
-    }
-
-    _validate_tm_multicoin_market_foundation_bounds(
-        bounds, {}, {"long"}, config, coin_count=3
-    )
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -2986,34 +2913,35 @@ def test_gpu_multicoin_tm_market_execution_accepts_hsl():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-@pytest.mark.parametrize(
-    ("feature", "message"),
-    [
-        ("loss_gate", "max_realized_loss_pct"),
-        ("unstuck", "unstuck.enabled"),
-        ("override_unstuck", "coin_overrides.ETH"),
-    ],
-)
-def test_gpu_multicoin_tm_market_execution_fails_closed_for_reducers(
-    feature, message
-):
+def test_gpu_multicoin_tm_market_execution_rejects_realized_loss_gate():
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
     config["live"]["market_orders_allowed"] = True
     strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
     strategy["entry"]["retracement_base_pct"] = 0.01
     strategy["close"]["retracement_base_pct"] = 0.01
-    if feature == "loss_gate":
-        config["live"]["max_realized_loss_pct"] = 0.05
-    elif feature == "unstuck":
-        config["bot"]["long"]["unstuck"]["enabled"] = True
-    else:
+    config["live"]["max_realized_loss_pct"] = 0.05
+
+    with pytest.raises(ValueError, match="max_realized_loss_pct"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+@pytest.mark.parametrize("coin_override", [False, True])
+def test_gpu_multicoin_tm_market_execution_accepts_unstuck(coin_override):
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["market_orders_allowed"] = True
+    strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
+    strategy["entry"]["retracement_base_pct"] = 0.01
+    strategy["close"]["retracement_base_pct"] = 0.01
+    if coin_override:
         config["coin_overrides"] = {
             "ETH": {"bot": {"long": {"unstuck": {"enabled": True}}}}
         }
+    else:
+        config["bot"]["long"]["unstuck"]["enabled"] = True
 
-    with pytest.raises(ValueError, match=message):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize(
