@@ -1094,6 +1094,39 @@ async def test_order_stream_public_failure_wakes_all_watchers_for_rest_fallback(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("setup_surface", ["session", "socket"])
+async def test_order_stream_setup_failure_wakes_shard_watchers(setup_surface):
+    client = _prepared_client()
+    eth_symbol = "ETH/USDT:USDT"
+    eth_market = _market_for("ETHUSDT", eth_symbol)
+    client.markets[eth_symbol] = eth_market
+    client.markets_by_id["ETHUSDT"] = eth_market
+    client.symbols.append(eth_symbol)
+    if setup_surface == "session":
+        client._get_session = AsyncMock(
+            side_effect=NetworkError("session unavailable")
+        )
+    else:
+        session = MagicMock()
+        session.ws_connect.side_effect = NetworkError("socket unavailable")
+        client._get_session = AsyncMock(return_value=session)
+    stream = BitunixOrderStream(client)
+
+    results = await asyncio.gather(
+        stream.watch_ohlcv("BTC/USDT:USDT", "1m"),
+        stream.watch_ohlcv(eth_symbol, "1m"),
+        return_exceptions=True,
+    )
+
+    assert all(isinstance(result, NetworkError) for result in results)
+    assert all(
+        f"failed: {type(result).__name__}" in str(result)
+        for result in results
+    )
+    await stream.close()
+
+
+@pytest.mark.asyncio
 async def test_order_stream_transport_failure_preserves_every_fallback_signal():
     client = _prepared_client()
     eth_symbol = "ETH/USDT:USDT"

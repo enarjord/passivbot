@@ -1734,7 +1734,9 @@ class BitunixOrderStream:
 
     async def _ohlcv_loop(self, shard_index: int) -> None:
         current_task = asyncio.current_task()
-        assigned_symbols: set[str] = set()
+        # Establish the shard's failure scope before market/session/socket setup.
+        # Any of those awaits may fail and must wake every current watcher.
+        assigned_symbols = set(self._ohlcv_shard_symbols(shard_index))
         subscribed_symbols_by_id: dict[str, str] = {}
         try:
             await self.rest._ensure_markets()
@@ -2003,6 +2005,7 @@ class BitunixOrderStream:
                 ),
                 symbols=(
                     assigned_symbols
+                    | set(self._ohlcv_shard_symbols(shard_index))
                     | set(subscribed_symbols_by_id.values())
                 ),
             )
