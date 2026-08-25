@@ -1,4 +1,3 @@
-import asyncio
 import os
 import subprocess
 import sys
@@ -6,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from logging_setup import STABLE_LOG_POINTER_HEADER
 from monitor_dev import _relay_launch_env, resolve_latest_log_file, wait_for_relay
 from monitor_tui import MonitorTuiClient
 
@@ -101,6 +101,61 @@ def test_monitor_tui_client_bootstraps_and_polls_log_tail(tmp_path):
     client._poll_log_tail_once()
 
     assert list(client.state.recent_log_lines)[-1] == "line three"
+
+
+def test_monitor_tui_client_follows_stable_pointer_across_run_changes(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    stable_log = logs_dir / "bot.log"
+    first_run_log = logs_dir / "first_run.log"
+    second_run_log = logs_dir / "second_run.log"
+    first_run_log.write_text("first run line\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{first_run_log.resolve()}\n",
+        encoding="utf-8",
+    )
+
+    client = MonitorTuiClient(
+        relay_url="http://127.0.0.1:8765",
+        log_file=str(stable_log),
+        log_bootstrap_lines=2,
+    )
+
+    assert client.state.followed_log_file == str(stable_log)
+    assert list(client.state.recent_log_lines) == ["first run line"]
+
+    second_run_log.write_text("second run line\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{second_run_log.resolve()}\n",
+        encoding="utf-8",
+    )
+    client._poll_log_tail_once()
+
+    assert list(client.state.recent_log_lines)[-1] == "second run line"
+
+
+def test_monitor_tui_follows_auto_selected_pointer_file(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    archived_log = logs_dir / "20260406_140000_passivbot_live.log"
+    stable_log = logs_dir / "bot.log"
+    archived_log.write_text("archived line\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{archived_log.resolve()}\n",
+        encoding="utf-8",
+    )
+    pointer_mtime = stable_log.stat().st_mtime + 10
+    os.utime(stable_log, (pointer_mtime, pointer_mtime))
+
+    selected_log = resolve_latest_log_file(logs_dir=str(logs_dir))
+    assert selected_log == str(stable_log)
+
+    client = MonitorTuiClient(
+        relay_url="http://127.0.0.1:8765",
+        log_file=selected_log,
+        log_bootstrap_lines=2,
+    )
+    assert list(client.state.recent_log_lines) == ["archived line"]
 
 
 def test_monitor_dev_tool_help_runs_without_import_errors():

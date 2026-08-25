@@ -18,7 +18,7 @@ This is the recommended way to work with Passivbot configs on the current config
 3. Use `passivbot backtest` first.
 4. Use `passivbot optimize` if you want to tune parameters or compare alternatives.
 5. Use `passivbot live` only after the config has been tested.
-6. Expect live runs to write a timestamped log file under `logs/` by default unless you set `logging.persist_to_file = false`, and to refresh `logs/{user}.log` as a stable alias to the current run.
+6. Expect live runs to write a timestamped log file under `logs/` by default unless you set `logging.persist_to_file = false`, and to refresh `logs/{user}.log` as a stable alias to the current run. Without Windows symlink privileges, the stable path is a text pointer which Passivbot's monitor tooling follows automatically.
 
 Example:
 
@@ -39,7 +39,7 @@ passivbot live configs/live/my_config.json
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
 - Do not paste old flat v7 trailing-grid fields into a v8 config. Run the migration helper so the fields land under `bot.<side>.strategy.trailing_grid_v7`.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
-- Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and monitor tooling can follow the stable `logs/{user}.log` alias.
+- Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and Passivbot's monitor tooling can follow the stable `logs/{user}.log` alias or Windows pointer.
 
 ## What The Default Profile Is
 

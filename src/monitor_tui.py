@@ -18,6 +18,8 @@ from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import aiohttp
 
+from logging_setup import resolve_stable_log_alias
+
 
 ANSI_RESET = "\x1b[0m"
 ANSI_BOLD_CYAN = "\x1b[1;36m"
@@ -1439,9 +1441,10 @@ class MonitorTuiClient:
 
     def _bootstrap_log_tail(self, path: Path) -> None:
         self.state.set_log_file(str(path))
-        self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
+        resolved_path = resolve_stable_log_alias(path)
+        self.state.push_log_lines(_read_last_lines(resolved_path, self.log_bootstrap_lines))
         try:
-            stat = path.stat()
+            stat = resolved_path.stat()
         except FileNotFoundError:
             self._log_tail_state = None
             return
@@ -1454,15 +1457,16 @@ class MonitorTuiClient:
             path = Path(self.log_file)
         if self.state.followed_log_file != str(path):
             self._bootstrap_log_tail(path)
+        resolved_path = resolve_stable_log_alias(path)
         try:
-            stat = path.stat()
+            stat = resolved_path.stat()
         except FileNotFoundError:
             self._log_tail_state = None
             return
         file_id = (int(stat.st_dev), int(stat.st_ino))
         size = int(stat.st_size)
         if self._log_tail_state is None:
-            self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            self._bootstrap_log_tail(path)
             return
         reset = size < self._log_tail_state.offset or (
             self._log_tail_state.dev,
@@ -1474,7 +1478,7 @@ class MonitorTuiClient:
                 self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(resolved_path, "r", encoding="utf-8") as f:
                 f.seek(read_from)
                 lines = f.read().splitlines()
                 new_offset = int(f.tell())

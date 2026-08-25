@@ -9,10 +9,12 @@ import pytest
 import logging_setup
 from logging_setup import (
     DEFAULT_DATEFMT,
+    STABLE_LOG_POINTER_HEADER,
     build_command_log_path,
     configure_logging,
     create_command_log_filename,
     resolve_live_log_file_settings,
+    resolve_stable_log_alias,
     update_stable_log_alias,
 )
 
@@ -133,8 +135,24 @@ def test_stable_log_alias_uses_pointer_for_windows_symlink_privilege_error(
 
     assert "wrote stable live log pointer" in caplog.text
     assert current_log.read_text(encoding="utf-8") == (
-        f"symlink unavailable; current run log:\n{archived_log.resolve()}\n"
+        f"{STABLE_LOG_POINTER_HEADER}\n{archived_log.resolve()}\n"
     )
+    assert resolve_stable_log_alias(current_log) == archived_log.resolve()
+
+
+def test_resolve_stable_log_alias_leaves_regular_logs_and_external_pointers_unchanged(tmp_path):
+    regular_log = tmp_path / "logs" / "regular.log"
+    regular_log.parent.mkdir(parents=True)
+    regular_log.write_text("normal log line\n", encoding="utf-8")
+    assert resolve_stable_log_alias(regular_log) == regular_log
+
+    external_log = tmp_path / "external.log"
+    pointer = regular_log.parent / "pointer.log"
+    pointer.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{external_log.resolve()}\n",
+        encoding="utf-8",
+    )
+    assert resolve_stable_log_alias(pointer) == pointer
 
 
 def test_stable_log_alias_raises_for_unrelated_symlink_error(monkeypatch, tmp_path):
