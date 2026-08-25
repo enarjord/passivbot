@@ -672,10 +672,16 @@ def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> No
 
 
 def _require_supported_multicoin_valid_tails(
-    first_valid_indices, last_valid_indices, candle_count: int
+    hlcvs, first_valid_indices, last_valid_indices
 ) -> None:
     """Accept staggered ordinary tails with continuous portfolio time coverage."""
 
+    values = np.asarray(hlcvs)
+    if values.ndim != 3 or values.shape[2] < 3:
+        raise ValueError(
+            "GPU multicoin proxy requires HLCVs shaped [time, coin, fields]"
+        )
+    candle_count = int(values.shape[0])
     starts = [int(value) for value in first_valid_indices]
     tails = [int(value) for value in last_valid_indices]
     if not starts or not tails:
@@ -684,6 +690,11 @@ def _require_supported_multicoin_valid_tails(
         raise ValueError(
             "GPU multicoin proxy requires matching first/last valid-index counts; "
             f"first_valid_indices={starts}, last_valid_indices={tails}"
+        )
+    if len(starts) != int(values.shape[1]):
+        raise ValueError(
+            "GPU multicoin proxy valid-index counts must match the prepared "
+            f"coin count; indices={len(starts)}, coins={values.shape[1]}"
         )
     windows = []
     for coin, (first_valid_idx, last_valid_idx) in enumerate(
@@ -716,6 +727,25 @@ def _require_supported_multicoin_valid_tails(
                 f"valid_windows={windows}"
             )
         covered_through = max(covered_through, last_valid_idx)
+    candle_indices = np.arange(candle_count, dtype=np.int64)[:, None]
+    within_declared_window = (
+        (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
+        & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
+    )
+    actual_valid = np.all(
+        np.isfinite(values[:, :, :3]) & (values[:, :, :3] > 0.0),
+        axis=2,
+    )
+    actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
+    coverage_start = min(starts)
+    missing = np.flatnonzero(~actual_coverage[coverage_start:])
+    if missing.size:
+        missing_idx = coverage_start + int(missing[0])
+        raise ValueError(
+            "GPU multicoin proxy does not yet model an all-invalid candle after "
+            "portfolio equity tracking may begin; "
+            f"candle_index={missing_idx}, valid_windows={windows}"
+        )
 
 
 def _require_no_internal_invalid_hsl_candles(
@@ -1960,9 +1990,9 @@ class MpsMulticoinProxy:
                 "live.forager_score_hysteresis_pct"
             )
         _require_supported_multicoin_valid_tails(
+            values,
             backtest_params["first_valid_indices"],
             backtest_params["last_valid_indices"],
-            len(values),
         )
 
         comparable_bot_keys = (
