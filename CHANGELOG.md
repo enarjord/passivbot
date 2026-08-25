@@ -6,21 +6,22 @@ All notable user-facing changes will be documented in this file.
 
 - Added baseline multi-coin Trailing Martingale ordinary market execution to Apple MPS
   optimization for long-only, short-only, fused long+short, hedge-mode, one-way, and compatible
-  suite runs whose entry and close modes remain wholly trailing or wholly recursive. Recursive
-  entry mode currently requires the portfolio TWEL entry gate disabled pending its dedicated
-  cross-coin multi-rung allocation slice. Metal retains generation-time
-  market intent, executes promoted orders on the next valid candle with adverse directional
-  slippage and taker fees, applies executable-touch minimum sizing to short entries and all closes,
-  and prices the strict portfolio entry cap at the market touch. For recursive closes, passive
+  suite runs whose entry and close modes remain wholly trailing or wholly recursive. Metal retains
+  generation-time market intent, executes promoted orders on the next valid candle with adverse
+  directional slippage and taker fees, applies executable-touch minimum sizing to short entries and
+  all closes, and prices the strict portfolio entry cap at the market touch. For recursive closes,
+  passive
   next-candle reachability alone decides whether to emit only the next close or the immutable
   recursive suffix; an emitted suffix promotes and minimum-sizes each merged group against its
   generation market before aggregate position trimming. Recursive entries retain immutable
   strategy sizing, require strict passive first-rung reachability before exposing their suffix,
   classify every emitted rung against the generation market, and preserve positive-cooldown
-  single-entry staging. Static coin overrides may select trailing or recursive entry and close mode
-  independently. HSL and forager selection remain supported. Recursive-entry portfolio TWEL
-  gating, position- and total-exposure repair, auto-unstuck, and realized-loss gating remain fail
-  closed in multi-coin Trailing Martingale market mode pending dedicated parity slices.
+  single-entry staging. The portfolio entry gate globally orders first and recursive suffix rungs,
+  removes the farthest orders with exact deterministic ties, and may retain one minimum-valid
+  partial boundary strictly below the TWEL cap. Static coin overrides may select trailing or
+  recursive entry and close mode independently. HSL and forager selection remain supported.
+  Position- and total-exposure repair, auto-unstuck, and realized-loss gating remain fail closed in
+  multi-coin Trailing Martingale market mode pending dedicated parity slices.
 
 - Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
   long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and

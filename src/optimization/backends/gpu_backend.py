@@ -933,7 +933,6 @@ def _validate_tm_multicoin_market_runtime_scope(
         unsupported.append(
             f"live.max_realized_loss_pct={max_loss} (required 1.0)"
         )
-    recursive_entry_sides = set()
     for side in sorted(set(enabled_sides or ())):
         side_config = config.get("bot", {}).get(side, {}) or {}
         risk = side_config.get("risk", {}) or {}
@@ -957,8 +956,6 @@ def _validate_tm_multicoin_market_runtime_scope(
             mode_supported = _tm_market_mode_value_supported(
                 value, allow_recursive=True
             )
-            if branch == "entry" and mode_supported and float(value) <= 0.0:
-                recursive_entry_sides.add(side)
             if not mode_supported:
                 requirement = "recursive or trailing"
                 unsupported.append(
@@ -1021,12 +1018,6 @@ def _validate_tm_multicoin_market_runtime_scope(
                     mode_supported = _tm_market_mode_value_supported(
                         value, allow_recursive=True
                     )
-                    if (
-                        branch == "entry"
-                        and mode_supported
-                        and float(value) <= 0.0
-                    ):
-                        recursive_entry_sides.add(side)
                     if not mode_supported:
                         requirement = "recursive or trailing"
                         unsupported.append(
@@ -1035,20 +1026,12 @@ def _validate_tm_multicoin_market_runtime_scope(
                             f"retracement_base_pct={value!r} "
                             f"(must remain {requirement})"
                         )
-    for side in sorted(recursive_entry_sides):
-        risk = config.get("bot", {}).get(side, {}).get("risk", {}) or {}
-        if bool(risk.get("total_exposure_entry_gate_enabled", True)):
-            unsupported.append(
-                f"bot.{side}.risk.total_exposure_entry_gate_enabled=true "
-                "(must remain false with recursive entry)"
-            )
     if unsupported:
         raise ValueError(
             "GPU multi-coin Trailing Martingale ordinary market execution "
             "currently supports wholly trailing or wholly recursive ordinary "
-            "entries and closes; recursive entries require the portfolio "
-            "TWEL entry gate disabled; position/TWEL reducers, auto-unstuck, "
-            "and realized-loss "
+            "entries and closes; position/TWEL reducers, auto-unstuck, and "
+            "realized-loss "
             "gating; unsupported settings: "
             + ", ".join(unsupported)
         )
@@ -2971,61 +2954,6 @@ def _validate_tm_multicoin_market_foundation_bounds(
         return
     unsupported = []
     for side in sorted(set(enabled_sides or ())):
-        entry_key = f"{side}_entry_retracement_base_pct"
-        entry_bound = bound_by_key.get(entry_key)
-        entry_high = (
-            float(entry_bound.high)
-            if entry_bound is not None
-            else float(base_by_key.get(entry_key, 0.0))
-        )
-        has_recursive_entry = entry_high <= 0.0
-        overrides = config.get("coin_overrides", {}) or {}
-        if not has_recursive_entry and isinstance(overrides, dict):
-            for patch in overrides.values():
-                if not isinstance(patch, dict):
-                    continue
-                side_patch = ((patch.get("bot", {}) or {}).get(side, {}) or {})
-                if not isinstance(side_patch, dict):
-                    continue
-                strategy_root = side_patch.get("strategy", {}) or {}
-                strategy_patch = (
-                    strategy_root.get("trailing_martingale", {}) or {}
-                    if isinstance(strategy_root, dict)
-                    else {}
-                )
-                entry_patch = (
-                    strategy_patch.get("entry", {}) or {}
-                    if isinstance(strategy_patch, dict)
-                    else {}
-                )
-                if not isinstance(entry_patch, dict):
-                    continue
-                value = entry_patch.get("retracement_base_pct")
-                if (
-                    value is not None
-                    and _tm_market_mode_value_supported(
-                        value, allow_recursive=True
-                    )
-                    and float(value) <= 0.0
-                ):
-                    has_recursive_entry = True
-                    break
-        if has_recursive_entry:
-            gate_key = f"{side}_risk_twel_entry_gate_enabled"
-            gate_bound = bound_by_key.get(gate_key)
-            gate_values = (
-                (float(gate_bound.low), float(gate_bound.high))
-                if gate_bound is not None
-                else (float(base_by_key.get(gate_key, 0.0)),) * 2
-            )
-            if any(
-                not math.isclose(value, 0.0, abs_tol=1.0e-12)
-                for value in gate_values
-            ):
-                unsupported.append(
-                    f"{gate_key} bounds={gate_values} "
-                    "(must remain 0.0 with recursive entry)"
-                )
         for suffix in (
             "risk_position_exposure_enforcer_enabled",
             "risk_total_exposure_enforcer_enabled",
