@@ -67,11 +67,14 @@ SUPPORTED_METRICS = (
     "drawdown_worst_ema_strategy_eq_short",
     "drawdown_worst_strategy_eq",
     "equity_choppiness_usd",
+    "equity_choppiness_w_usd",
     "equity_jerkiness_usd",
+    "equity_jerkiness_w_usd",
     "expected_shortfall_1pct_strategy_eq",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
     "exponential_fit_error_usd",
+    "exponential_fit_error_w_usd",
     "exposure_mean_ratio_usd",
     "exposure_ratio_usd",
     "fills_analysis_duration_days",
@@ -173,6 +176,7 @@ SUPPORTED_METRICS = (
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
     *_USD_STRATEGY_EQ_ALIASES,
     *_USD_PER_EXPOSURE_METRICS,
 )
@@ -793,6 +797,87 @@ WEIGHTED_STRATEGY_EQ_METRICS = {
     "sterling_ratio_strategy_eq_w",
 }
 
+WEIGHTED_DAILY_SERIES_METRICS = {
+    "equity_choppiness_w_usd",
+    "equity_jerkiness_w_usd",
+    "exponential_fit_error_w_usd",
+    "volume_pct_per_day_avg_w",
+}
+
+
+def _weighted_daily_series_metrics(
+    day_end_eq,
+    day_volume,
+    day_has_fill,
+    active,
+    fill_count,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+    requested,
+):
+    """Reduce Rust's weighted fill-day volume and daily equity-shape metrics."""
+
+    requested = set(requested) & WEIGHTED_DAILY_SERIES_METRICS
+    if not requested:
+        return {}
+    eligible, subsets = _weighted_subsets(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
+    # Rust returns before populating any weighted fields when there are fewer
+    # than two fills. Empty trailing fill suffixes end the subset loop and
+    # therefore contribute the same zero implied by the fixed /10 divisor.
+    eligible &= fill_count.to(torch.float64) > 1.0
+    totals = {
+        name: torch.zeros(
+            day_end_eq.shape[0],
+            dtype=day_end_eq.dtype,
+            device=day_end_eq.device,
+        )
+        for name in requested
+    }
+    shape_names = requested & {
+        "equity_choppiness_w_usd",
+        "equity_jerkiness_w_usd",
+        "exponential_fit_error_w_usd",
+    }
+    shape_sources = {
+        "equity_choppiness_w_usd": "equity_choppiness_usd",
+        "equity_jerkiness_w_usd": "equity_jerkiness_usd",
+        "exponential_fit_error_w_usd": "exponential_fit_error_usd",
+    }
+    for subset in subsets:
+        subset_fill_mask = day_has_fill & subset
+        subset_eligible = eligible & subset_fill_mask.any(dim=1)
+        if "volume_pct_per_day_avg_w" in requested:
+            fill_days = subset_fill_mask.sum(dim=1)
+            value = torch.where(
+                fill_days > 0,
+                torch.where(
+                    subset_fill_mask,
+                    day_volume,
+                    torch.zeros_like(day_volume),
+                ).sum(dim=1)
+                / fill_days.clamp(min=1).to(day_volume.dtype),
+                torch.zeros_like(totals["volume_pct_per_day_avg_w"]),
+            )
+            totals["volume_pct_per_day_avg_w"] += torch.where(
+                subset_eligible, value, torch.zeros_like(value)
+            )
+        if shape_names:
+            values = _equity_shape_metrics(day_end_eq, subset)
+            for name in shape_names:
+                value = values[shape_sources[name]]
+                totals[name] += torch.where(
+                    subset_eligible, value, torch.zeros_like(value)
+                )
+    return {name: value / 10.0 for name, value in totals.items()}
+
 
 def _weighted_strategy_eq_metrics(
     day_end_eq,
@@ -1329,6 +1414,20 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         run.interval_ms,
         requested_sources,
     )
+    weighted_daily_series_metrics = {}
+    if requested & WEIGHTED_DAILY_SERIES_METRICS:
+        weighted_daily_series_metrics = _weighted_daily_series_metrics(
+            day_end_eq,
+            day_volume,
+            day_has_fill,
+            active,
+            out["fill_count"],
+            out["first_eq_ts"],
+            out["last_eq_ts"],
+            data["ts0"],
+            run.interval_ms,
+            requested,
+        )
     shape_metric_names = {
         "equity_choppiness_usd",
         "equity_jerkiness_usd",
@@ -1606,6 +1705,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
+    objectives.update(weighted_daily_series_metrics)
     objectives.update(weighted_pnl_metrics)
     objectives.update(equity_shape_metrics)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
