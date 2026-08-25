@@ -237,7 +237,8 @@ The supported slice is intentionally narrow:
   limits use the proxy's active daily closing-equity samples and the exact Rust formulas. Candidates
   without fills retain Rust's default value of `1.0` for all three metrics. Their weighted variants
   and `volume_pct_per_day_avg_w` apply the same ten trailing slices as exact Rust to the compact
-  daily proxy series; exact validation and rolling drift gates remain authoritative
+  daily proxy series. Weighted volume excludes an ambiguous partial UTC cutoff day instead of
+  admitting pre-cutoff fills; exact validation and rolling drift gates remain authoritative
 - canonical USD `peak_recovery_hours_equity` and `peak_recovery_days_equity` scoring and limits
   use Metal's full-resolution maximum completed peak-to-peak recovery interval. As in exact Rust,
   an unrecovered final tail is not included and a candidate without fills returns zero. Fused

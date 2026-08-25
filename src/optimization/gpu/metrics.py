@@ -712,7 +712,7 @@ def _fill_gap_metrics(out, run):
     }
 
 
-def _weighted_subsets(
+def _weighted_subset_context(
     active,
     first_eq_ts,
     last_eq_ts,
@@ -741,6 +741,7 @@ def _weighted_subsets(
     )
     eligible = finite_timestamps & (sample_count >= 2)
     subsets = [active]
+    subset_start_timestamps = [first_eq_ts]
     first_day = int(timestamp_origin) // 86_400_000
     day_ids = torch.arange(active.shape[1], device=active.device) + first_day
     for index in range(1, 10):
@@ -757,6 +758,24 @@ def _weighted_subsets(
         subsets.append(
             active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
         )
+        subset_start_timestamps.append(subset_start_ts)
+    return eligible, subsets, subset_start_timestamps, day_ids
+
+
+def _weighted_subsets(
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+):
+    eligible, subsets, _, _ = _weighted_subset_context(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
     return eligible, subsets
 
 
@@ -811,6 +830,7 @@ def _weighted_daily_series_metrics(
     day_has_fill,
     active,
     fill_count,
+    last_fill_ts,
     first_eq_ts,
     last_eq_ts,
     first_timestamp,
@@ -822,7 +842,7 @@ def _weighted_daily_series_metrics(
     requested = set(requested) & WEIGHTED_DAILY_SERIES_METRICS
     if not requested:
         return {}
-    _, subsets = _weighted_subsets(
+    _, subsets, subset_start_timestamps, day_ids = _weighted_subset_context(
         active,
         first_eq_ts,
         last_eq_ts,
@@ -830,6 +850,13 @@ def _weighted_daily_series_metrics(
         interval_ms,
     )
     fill_eligible = fill_count.to(torch.float64) > 1.0
+    timestamp_origin = float(first_timestamp)
+    finite_last_fill = torch.isfinite(last_fill_ts)
+    normalized_last_fill_ts = torch.where(
+        finite_last_fill & (last_fill_ts < timestamp_origin),
+        last_fill_ts + timestamp_origin,
+        last_fill_ts,
+    )
     # Unlike weighted equity-return metrics, Rust's weighted shape and volume
     # analysis admits a one-sample equity run when it has multiple fills. The
     # full-run analysis contributes one tenth, then the first empty suffix ends
@@ -860,15 +887,42 @@ def _weighted_daily_series_metrics(
         "equity_jerkiness_w_usd": "equity_jerkiness_usd",
         "exponential_fit_error_w_usd": "exponential_fit_error_usd",
     }
-    for subset in subsets:
-        subset_fill_mask = day_has_fill & subset
-        subset_eligible = eligible & subset_fill_mask.any(dim=1)
+    for subset_index, (subset, subset_start_ts) in enumerate(
+        zip(subsets, subset_start_timestamps)
+    ):
+        subset_eligible = eligible & (
+            normalized_last_fill_ts >= subset_start_ts
+        )
         if "volume_pct_per_day_avg_w" in requested:
-            fill_days = subset_fill_mask.sum(dim=1)
+            if subset_index == 0:
+                volume_fill_mask = day_has_fill & subset
+            else:
+                subset_start_day = torch.floor(
+                    subset_start_ts / 86_400_000.0
+                ).to(torch.long)
+                day_start_ts = (
+                    subset_start_day.to(subset_start_ts.dtype) * 86_400_000.0
+                )
+                at_day_boundary = (
+                    (subset_start_ts - day_start_ts).abs()
+                    < max(float(interval_ms) * 0.5, 1.0)
+                )
+                complete_day_mask = (
+                    day_ids.unsqueeze(0) > subset_start_day.unsqueeze(1)
+                )
+                complete_day_mask |= at_day_boundary.unsqueeze(1) & (
+                    day_ids.unsqueeze(0) == subset_start_day.unsqueeze(1)
+                )
+                # Daily volume cannot distinguish fills before and after an
+                # intra-day cutoff. Exclude that ambiguous boundary day rather
+                # than admitting pre-cutoff fills; exact Rust validation owns
+                # the partial-day contribution.
+                volume_fill_mask = day_has_fill & subset & complete_day_mask
+            fill_days = volume_fill_mask.sum(dim=1)
             value = torch.where(
                 fill_days > 0,
                 torch.where(
-                    subset_fill_mask,
+                    volume_fill_mask,
                     day_volume,
                     torch.zeros_like(day_volume),
                 ).sum(dim=1)
@@ -876,7 +930,9 @@ def _weighted_daily_series_metrics(
                 torch.zeros_like(totals["volume_pct_per_day_avg_w"]),
             )
             totals["volume_pct_per_day_avg_w"] += torch.where(
-                subset_eligible, value, torch.zeros_like(value)
+                subset_eligible & (fill_days > 0),
+                value,
+                torch.zeros_like(value),
             )
         if shape_names:
             values = _equity_shape_metrics(day_end_eq, subset)
@@ -1439,6 +1495,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             day_has_fill,
             active,
             out["fill_count"],
+            out["last_fill_ts"],
             out["first_eq_ts"],
             out["last_eq_ts"],
             data["ts0"],

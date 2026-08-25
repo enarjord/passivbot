@@ -591,6 +591,7 @@ def test_weighted_daily_series_metrics_match_rust_suffix_contract():
         day_has_fill,
         active,
         torch.tensor([float(day_count)]),
+        torch.tensor([(day_count - 1) * day_ms], dtype=torch.float64),
         torch.tensor([0.0]),
         torch.tensor([(day_count - 1) * day_ms], dtype=torch.float64),
         0.0,
@@ -657,6 +658,7 @@ def test_weighted_daily_series_metrics_preserve_sparse_fill_rust_defaults():
         torch.ones_like(day_end, dtype=torch.bool),
         torch.tensor([1.0]),
         torch.tensor([0.0]),
+        torch.tensor([0.0]),
         torch.tensor([86_400_000.0]),
         0.0,
         86_400_000,
@@ -685,14 +687,36 @@ def test_weighted_daily_series_metrics_keep_one_sample_full_run_tenth():
         torch.tensor([2.0]),
         torch.tensor([0.0]),
         torch.tensor([0.0]),
+        torch.tensor([0.0]),
         0.0,
-        86_400_000,
+        60_000,
         requested,
     )
 
     assert metrics["equity_choppiness_w_usd"].item() == 0.0
     assert metrics["equity_jerkiness_w_usd"].item() == 0.0
     assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
+    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
+
+
+def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
+    metrics = _weighted_daily_series_metrics(
+        torch.tensor([[100.0]], dtype=torch.float64),
+        torch.tensor([[0.5]], dtype=torch.float64),
+        torch.tensor([[True]]),
+        torch.tensor([[True]]),
+        torch.tensor([2.0]),
+        torch.tensor([3_600_000.0]),
+        torch.tensor([0.0]),
+        torch.tensor([3_600_000.0]),
+        0.0,
+        60_000,
+        {"volume_pct_per_day_avg_w"},
+    )
+
+    # Every trailing cutoff is inside the same UTC day. The daily aggregate
+    # contains pre-cutoff volume, so only the unambiguous full-run tenth is
+    # admitted; exact Rust validation owns partial-day volume after a cutoff.
     assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
 
 
