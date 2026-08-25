@@ -24,9 +24,9 @@ All notable user-facing changes will be documented in this file.
   executable-touch minimum before finalized reducer selection, and retain adverse slippage plus
   taker fees. Auto-unstuck now follows the same contract: the one globally selected reducer may be
   enabled by the side template or a static coin override, is resized at the executable touch while
-  preserving its passive recursive-grid reservation, and fills with adverse slippage and taker
-  fees. Realized-loss gating remains fail closed in multi-coin Trailing Martingale market mode
-  pending its dedicated parity slice.
+  preserving the independently generated ordinary recursive ladder, and fills with adverse
+  slippage and taker fees. Realized-loss gating remains fail closed in multi-coin Trailing
+  Martingale market mode pending its dedicated parity slice.
 
 - Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
   long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and

@@ -340,9 +340,9 @@ The supported slice is intentionally narrow:
   selection remain supported. Position- and total-exposure repair plus the one globally selected
   auto-unstuck reducer may promote to market, executable-touch-size before finalized reducer
   selection, and retain adverse slippage plus taker fees. Static coin overrides may enable or tune
-  unstuck; recursive-grid reconstruction keeps its passive strategy reservation when market sizing
-  enlarges the emitted reducer. Realized-loss gating remains fail closed for multi-coin Trailing
-  Martingale market mode until its shared-budget interactions are modeled.
+  unstuck; recursive-grid reconstruction keeps the independently generated ordinary strategy
+  ladder when market sizing enlarges the external reducer. Realized-loss gating remains fail closed
+  for multi-coin Trailing Martingale market mode until its shared-budget interactions are modeled.
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

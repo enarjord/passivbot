@@ -3879,11 +3879,6 @@ inline void generate_tm_multicoin_side_orders(
         float wel_reducer_exec_price = float(wel_reducer_tick) * price_step;
         float raw_unstuck_reducer_qty = unstuck_close_qty[c];
         int raw_unstuck_reducer_tick = unstuck_close_tick[c];
-        // Auto-unstuck is generated as a passive strategy-external intent.
-        // Preserve that immutable request for recursive-grid reconstruction;
-        // ordinary market policy may enlarge only the emitted reducer to the
-        // executable-touch minimum, exactly as the Rust orchestrator does.
-        float strategy_unstuck_reducer_qty = raw_unstuck_reducer_qty;
         float unstuck_reducer_price =
             float(raw_unstuck_reducer_tick) * price_step;
         bool unstuck_reducer_market = raw_unstuck_reducer_qty > 0.0f
@@ -4209,9 +4204,11 @@ inline void generate_tm_multicoin_side_orders(
                     secondary_close_market[c] = close_market[c];
                 }
             } else if (!trailing_close) {
-                float reserved_grid_qty = use_unstuck
-                    ? strategy_unstuck_reducer_qty
-                    : strategy_wel_reducer_qty;
+                // Auto-unstuck is external to strategy generation. Preserve
+                // the immutable ordinary ladder and reserve only its optional
+                // strategy WEL prefix; aggregate allocation below trims that
+                // ladder around whichever external reducer wins.
+                float reserved_grid_qty = strategy_wel_reducer_qty;
                 close_reconstruct_after_reducer[c] = true;
                 close_gen_balance[c] = balance;
                 close_gen_allowed_wel[c] = allowed_coin_wel;

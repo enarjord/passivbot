@@ -12714,7 +12714,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_market_unstuck_sizes_at_touch_and_keeps_strategy_grid(
+def test_mps_tm_multicoin_market_unstuck_sizes_at_touch_without_reseeding_grid(
     side,
 ):
     import passivbot_rust
@@ -12838,10 +12838,10 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
     torch.mps.synchronize()
 
     # The passive unstuck request is 0.5 at price 200. Market policy enlarges
-    # only the emitted reducer to the executable-touch minimum of 1.0 at 100;
-    # the immutable recursive ladder still reserves the passive 0.5 request.
+    # the emitted reducer to the executable-touch minimum of 1.0 at 100, but
+    # external unstuck does not reseed Rust's full-size strategy ladder.
     assert output.cpu().tolist() == pytest.approx(
-        [1.0, 9.5, 1.0, 1.0, 1.0, 100.0, 499.0], abs=2.0e-4
+        [1.0, 10.0, 1.0, 1.0, 1.0, 100.0, 500.0], abs=2.0e-4
     )
 
 
@@ -13106,49 +13106,6 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         np.asarray(remaining_sizes)[:, 2:],
         [[1.0, 0.4, 150.0, 0.3, 0.0]] * 2,
         atol=2.0e-4,
-    )
-
-
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
-)
-def test_mps_tm_multicoin_unstuck_reserves_passive_grid_like_equal_wel():
-    runner, wel_candidate, _ = _tm_multicoin_off_tick_reducer_case(
-        "long", maker_fee=0.0
-    )
-    values = dict(
-        zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, wel_candidate)
-    )
-    values.update(
-        {
-            "wel_enforcer_enabled": 0.0,
-            "unstuck_enabled": 1.0,
-            "unstuck_ema_gating_enabled": 0.0,
-            "unstuck_close_pct": 0.5102,
-            "unstuck_loss_allowance_pct": 0.2,
-            "unstuck_threshold": 0.5,
-        }
-    )
-    unstuck_candidate = [
-        values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
-    ]
-
-    output = runner.run(
-        np.asarray([wel_candidate, unstuck_candidate], dtype=np.float64)
-    )
-    torch.mps.synchronize()
-
-    # These candidates request the same touch and finalized reducer quantity.
-    # The ordinary passive grid must therefore be generated from the same
-    # reducer-reserved position size for WEL and unstuck.
-    assert output["psize"][1].item() == pytest.approx(
-        output["psize"][0].item(), abs=2.0e-4
-    )
-    assert output["balance"][1].item() == pytest.approx(
-        output["balance"][0].item(), abs=2.0e-4
-    )
-    assert output["day_volume"][1].sum().item() == pytest.approx(
-        output["day_volume"][0].sum().item(), rel=2.0e-5
     )
 
 
