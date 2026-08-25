@@ -2913,17 +2913,32 @@ def test_gpu_multicoin_tm_market_execution_accepts_hsl():
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
-def test_gpu_multicoin_tm_market_execution_rejects_realized_loss_gate():
-    config = _directional_tm_config(long_enabled=True, short_enabled=False)
-    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+@pytest.mark.parametrize(
+    ("long_enabled", "short_enabled"),
+    [(True, False), (False, True), (True, True)],
+)
+@pytest.mark.parametrize("max_realized_loss_pct", [0.0, 0.05, 0.9999999995])
+def test_gpu_multicoin_tm_market_execution_accepts_realized_loss_gate(
+    long_enabled, short_enabled, max_realized_loss_pct
+):
+    config = _directional_tm_config(
+        long_enabled=long_enabled, short_enabled=short_enabled
+    )
+    coins = ["BTC", "ETH", "SOL"]
+    config["live"]["approved_coins"] = {
+        "long": coins if long_enabled else [],
+        "short": coins if short_enabled else [],
+    }
     config["live"]["market_orders_allowed"] = True
-    strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
-    strategy["entry"]["retracement_base_pct"] = 0.01
-    strategy["close"]["retracement_base_pct"] = 0.01
-    config["live"]["max_realized_loss_pct"] = 0.05
+    config["live"]["max_realized_loss_pct"] = max_realized_loss_pct
+    for side, enabled in (("long", long_enabled), ("short", short_enabled)):
+        if not enabled:
+            continue
+        strategy = config["bot"][side]["strategy"]["trailing_martingale"]
+        strategy["entry"]["retracement_base_pct"] = 0.01
+        strategy["close"]["retracement_base_pct"] = 0.01
 
-    with pytest.raises(ValueError, match="max_realized_loss_pct"):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("coin_override", [False, True])
@@ -2969,25 +2984,6 @@ def test_gpu_multicoin_tm_market_execution_accepts_exposure_reducers(
         config["bot"]["long"]["risk"][risk_key] = True
 
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
-
-
-@pytest.mark.parametrize(
-    "max_realized_loss_pct",
-    [np.nextafter(1.0, 0.0), 0.9999999995, 1.0000000005],
-)
-def test_gpu_multicoin_tm_market_execution_requires_exact_disabled_loss_gate(
-    max_realized_loss_pct,
-):
-    config = _directional_tm_config(long_enabled=True, short_enabled=False)
-    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
-    config["live"]["market_orders_allowed"] = True
-    config["live"]["max_realized_loss_pct"] = max_realized_loss_pct
-    strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
-    strategy["entry"]["retracement_base_pct"] = 0.01
-    strategy["close"]["retracement_base_pct"] = 0.01
-
-    with pytest.raises(ValueError, match="max_realized_loss_pct"):
-        _validate_scope(config, _MulticoinEvaluator())
 
 
 def test_gpu_multicoin_tm_recursive_entry_accepts_twel_entry_gate():

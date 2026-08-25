@@ -25,8 +25,9 @@ All notable user-facing changes will be documented in this file.
   taker fees. Auto-unstuck now follows the same contract: the one globally selected reducer may be
   enabled by the side template or a static coin override, is resized at the executable touch while
   preserving the independently generated ordinary recursive ladder, and fills with adverse
-  slippage and taker fees. Realized-loss gating remains fail closed in multi-coin Trailing
-  Martingale market mode pending its dedicated parity slice.
+  slippage and taker fees. Realized-loss gating now also composes with market execution: proxy
+  screening projects adverse slippage and taker fees for ordinary closes and protective reducers,
+  while exact Rust remains authoritative for the shared peak-balance allowance.
 
 - Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
   long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and

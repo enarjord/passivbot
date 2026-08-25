@@ -341,8 +341,10 @@ The supported slice is intentionally narrow:
   auto-unstuck reducer may promote to market, executable-touch-size before finalized reducer
   selection, and retain adverse slippage plus taker fees. Static coin overrides may enable or tune
   unstuck; recursive-grid reconstruction keeps the independently generated ordinary strategy
-  ladder when market sizing enlarges the external reducer. Realized-loss gating remains fail closed
-  for multi-coin Trailing Martingale market mode until its shared-budget interactions are modeled.
+  ladder when market sizing enlarges the external reducer. Realized-loss gating composes with these
+  market paths: the proxy projects adverse slippage and taker fees and keeps a conservative
+  zero-loss envelope for ordinary and exposure-repair closes, while exact Rust applies the shared
+  peak-balance allowance to every validation.
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

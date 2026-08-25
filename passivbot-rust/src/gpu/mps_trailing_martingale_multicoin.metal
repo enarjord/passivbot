@@ -3128,6 +3128,7 @@ inline void generate_tm_multicoin_side_orders(
     float max_realized_loss_pct,
     bool market_orders_allowed,
     float market_order_near_touch_threshold,
+    float market_order_slippage_pct,
     int forced_unstuck_coin,
     ulong one_way_initial_blocked_mask
 ) {
@@ -3345,15 +3346,8 @@ inline void generate_tm_multicoin_side_orders(
                 psize[best], ceil_step(reducer_qty, qty_step)
             );
             if (reducer_qty <= 1.0e-9f) continue;
-            bool reducer_allowed = realized_loss_proxy_allows_close(
-                    reducer_qty, reducer_price, pprice[best], short_side,
-                    c_mult, coin_settings[coin_offset + 5],
-                    loss_gate_enabled
-                );
-            if (reducer_allowed) {
-                twel_close_qty[best] = reducer_qty;
-                twel_close_tick[best] = reducer_tick;
-            }
+            twel_close_qty[best] = reducer_qty;
+            twel_close_tick[best] = reducer_tick;
             // Match exact Rust's two-stage contract: TWEL chooses and
             // accounts for its action set before the realized-loss
             // gate filters those actions.  A filtered reducer must
@@ -3858,13 +3852,6 @@ inline void generate_tm_multicoin_side_orders(
                 psize[c], pprice[c], balance, wel_target,
                 wel_reducer_price, qty_step, min_qty, min_cost, c_mult
             );
-            if (!realized_loss_proxy_allows_close(
-                    wel_reducer_qty, wel_reducer_price, pprice[c],
-                    short_side, c_mult, coin_settings[coin_offset + 5],
-                    loss_gate_enabled
-                )) {
-                wel_reducer_qty = 0.0f;
-            }
         }
         // Recursive strategy generation reserves the original passive WEL
         // request.  Market execution may enlarge the emitted candidate to an
@@ -3991,9 +3978,18 @@ inline void generate_tm_multicoin_side_orders(
             );
             minimum_close_relation = 0;
         }
+        float projected_close_price = close_market[c]
+            ? ordinary_market_fill_price(
+                price_now, short_side,
+                market_order_slippage_pct, price_step
+            )
+            : close_price;
+        float projected_close_fee = close_market[c]
+            ? coin_settings[coin_offset + 11]
+            : coin_settings[coin_offset + 5];
         if (!realized_loss_proxy_allows_close(
-                close_qty[c], close_price, pprice[c], short_side,
-                c_mult, coin_settings[coin_offset + 5],
+                close_qty[c], projected_close_price, pprice[c], short_side,
+                c_mult, projected_close_fee,
                 loss_gate_enabled
             )) {
             if (!trailing_close && close_qty[c] > 0.0f) {
@@ -4123,6 +4119,40 @@ inline void generate_tm_multicoin_side_orders(
                 unstuck_reducer_exec_price, qty_step, min_qty, min_cost,
                 c_mult
             );
+        float twel_gate_price = twel_reducer_market
+            ? ordinary_market_fill_price(
+                price_now, short_side,
+                market_order_slippage_pct, price_step
+            )
+            : twel_reducer_price;
+        float twel_gate_fee = twel_reducer_market
+            ? coin_settings[coin_offset + 11]
+            : coin_settings[coin_offset + 5];
+        if (!realized_loss_proxy_allows_close(
+                finalized_twel_reducer_qty, twel_gate_price, pprice[c],
+                short_side, c_mult, twel_gate_fee, loss_gate_enabled
+            )) {
+            raw_twel_reducer_qty = 0.0f;
+            finalized_twel_reducer_qty = 0.0f;
+            twel_reducer_market = false;
+        }
+        float wel_gate_price = wel_reducer_market
+            ? ordinary_market_fill_price(
+                price_now, short_side,
+                market_order_slippage_pct, price_step
+            )
+            : float(wel_reducer_tick) * price_step;
+        float wel_gate_fee = wel_reducer_market
+            ? coin_settings[coin_offset + 11]
+            : coin_settings[coin_offset + 5];
+        if (!realized_loss_proxy_allows_close(
+                finalized_wel_reducer_qty, wel_gate_price, pprice[c],
+                short_side, c_mult, wel_gate_fee, loss_gate_enabled
+            )) {
+            wel_reducer_qty = 0.0f;
+            finalized_wel_reducer_qty = 0.0f;
+            wel_reducer_market = false;
+        }
         bool use_twel = finalized_twel_reducer_qty
             > finalized_wel_reducer_qty;
         float exposure_reducer_qty = use_twel
@@ -4146,10 +4176,19 @@ inline void generate_tm_multicoin_side_orders(
         bool reducer_market = use_unstuck
             ? unstuck_reducer_market
             : (use_twel ? twel_reducer_market : wel_reducer_market);
+        float unstuck_gate_price = unstuck_reducer_market
+            ? ordinary_market_fill_price(
+                price_now, short_side,
+                market_order_slippage_pct, price_step
+            )
+            : float(raw_unstuck_reducer_tick) * price_step;
+        float unstuck_gate_fee = unstuck_reducer_market
+            ? coin_settings[coin_offset + 11]
+            : coin_settings[coin_offset + 5];
         if (use_unstuck && !realized_loss_proxy_allows_reducer(
                 finalized_unstuck_reducer_qty,
-                float(reducer_tick) * price_step, pprice[c], short_side,
-                c_mult, coin_settings[coin_offset + 5], true,
+                unstuck_gate_price, pprice[c], short_side,
+                c_mult, unstuck_gate_fee, true,
                 loss_gate_enabled, balance, realized_pnl_cumsum_last,
                 realized_pnl_cumsum_max, max_realized_loss_pct
             )) {
@@ -4738,6 +4777,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 loss_gate_enabled, max_realized_loss_pct,
                 market_orders_allowed,
                 market_order_near_touch_threshold,
+                market_order_slippage_pct,
                 long_unstuck_coin, long_one_way_order_blocked_mask
             );
         }
@@ -4758,6 +4798,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 loss_gate_enabled, max_realized_loss_pct,
                 market_orders_allowed,
                 market_order_near_touch_threshold,
+                market_order_slippage_pct,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
@@ -5352,6 +5393,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 loss_gate_enabled, max_realized_loss_pct,
                 market_orders_allowed,
                 market_order_near_touch_threshold,
+                market_order_slippage_pct,
                 -2, 0ul
             );
         }
