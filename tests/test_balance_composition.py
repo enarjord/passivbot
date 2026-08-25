@@ -10,6 +10,7 @@ from live.balance_composition import (
     balance_composition_signature,
     format_balance_composition_sample,
     malformed_balance_composition,
+    normalize_bitunix_balance_composition,
     normalize_ccxt_balance_composition,
     normalize_gateio_balance_composition,
     normalize_hyperliquid_unified_balance_composition,
@@ -33,6 +34,50 @@ def _okx_payload(details):
 
 def _hyperliquid_unified_payload(balances):
     return {"info": {"balances": balances}}
+
+
+def test_bitunix_balance_composition_keeps_wallet_and_upnl_separate():
+    snapshot = normalize_bitunix_balance_composition(
+        {
+            "info": {
+                "marginCoin": "USDT",
+                "available": "90",
+                "frozen": "4",
+                "margin": "6",
+                "crossUnrealizedPNL": "-3",
+                "isolationUnrealizedPNL": "1",
+            }
+        }
+    )
+
+    assert snapshot["status"] == "available"
+    assert snapshot["asset_balances"] == [
+        {
+            "asset": "USDT",
+            "amount": 100.0,
+            "free_amount": 90.0,
+            "used_amount": 10.0,
+            "unrealized_pnl": -2.0,
+            "field_provenance": {
+                "asset": "marginCoin",
+                "amount": "account_components",
+                "free_amount": "available",
+                "used_amount": "frozen_margin",
+                "unrealized_pnl": "account_unrealized_pnl",
+            },
+        }
+    ]
+    assert public_balance_composition(snapshot)["asset_balances"] == snapshot[
+        "asset_balances"
+    ]
+
+
+def test_bitunix_balance_composition_rejects_missing_account_fields():
+    assert normalize_bitunix_balance_composition(
+        {"info": {"marginCoin": "USDT", "available": "1"}}
+    ) == malformed_balance_composition(
+        source="bitunix.info.account", reason="missing_account_fields"
+    )
 
 
 def test_okx_balance_composition_keeps_only_proven_detail_fields():
