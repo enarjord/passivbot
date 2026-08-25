@@ -1157,7 +1157,9 @@ async def test_order_stream_scopes_rejected_subscription_to_affected_watcher(
     btc_recovery = asyncio.create_task(
         stream.watch_ohlcv("BTC/USDT:USDT", "1m")
     )
-    for _ in range(100):
+    # Subscription reconciliation polls at one-second intervals. Allow one
+    # complete poll plus scheduler slack before declaring recovery absent.
+    for _ in range(200):
         btc_subscriptions = sum(
             1
             for message in socket.sent
