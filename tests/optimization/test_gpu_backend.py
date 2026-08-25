@@ -1758,7 +1758,7 @@ def test_gpu_multicoin_tm_market_execution_rejects_reducer_bounds(suffix):
         )
 
 
-def test_gpu_multicoin_tm_recursive_entry_rejects_twel_gate_bounds():
+def test_gpu_multicoin_tm_recursive_entry_accepts_twel_gate_bounds():
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
@@ -1767,13 +1767,12 @@ def test_gpu_multicoin_tm_recursive_entry_rejects_twel_gate_bounds():
         "long_risk_twel_entry_gate_enabled": Bound(0.0, 1.0),
     }
 
-    with pytest.raises(ValueError, match="twel_entry_gate_enabled"):
-        _validate_tm_multicoin_market_foundation_bounds(
-            bounds, {}, {"long"}, config, coin_count=3
-        )
+    _validate_tm_multicoin_market_foundation_bounds(
+        bounds, {}, {"long"}, config, coin_count=3
+    )
 
 
-def test_gpu_multicoin_tm_recursive_entry_override_rejects_twel_gate_bounds():
+def test_gpu_multicoin_tm_recursive_entry_override_accepts_twel_gate_bounds():
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
@@ -1795,10 +1794,9 @@ def test_gpu_multicoin_tm_recursive_entry_override_rejects_twel_gate_bounds():
         "long_risk_twel_entry_gate_enabled": Bound(0.0, 1.0),
     }
 
-    with pytest.raises(ValueError, match="twel_entry_gate_enabled"):
-        _validate_tm_multicoin_market_foundation_bounds(
-            bounds, {}, {"long"}, config, coin_count=3
-        )
+    _validate_tm_multicoin_market_foundation_bounds(
+        bounds, {}, {"long"}, config, coin_count=3
+    )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -3031,7 +3029,7 @@ def test_gpu_multicoin_tm_market_execution_requires_exact_disabled_loss_gate(
         _validate_scope(config, _MulticoinEvaluator())
 
 
-def test_gpu_multicoin_tm_recursive_entry_requires_disabled_twel_entry_gate():
+def test_gpu_multicoin_tm_recursive_entry_accepts_twel_entry_gate():
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
     config["live"]["market_orders_allowed"] = True
@@ -3043,10 +3041,7 @@ def test_gpu_multicoin_tm_recursive_entry_requires_disabled_twel_entry_gate():
         "total_exposure_entry_gate_enabled"
     ] = True
 
-    with pytest.raises(
-        ValueError, match="total_exposure_entry_gate_enabled"
-    ):
-        _validate_scope(config, _MulticoinEvaluator())
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 def test_gpu_multicoin_tm_market_execution_accepts_recursive_entry():
@@ -3102,11 +3097,6 @@ def test_gpu_multicoin_tm_market_execution_validates_static_override_modes(
             }
         }
     }
-
-    if branch == "entry" and value <= 0.0:
-        config["bot"]["long"]["risk"][
-            "total_exposure_entry_gate_enabled"
-        ] = False
 
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
