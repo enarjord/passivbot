@@ -7843,6 +7843,74 @@ kernel void passivbot_tm_recursive_candidate_reselection_probe(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_recursive_finalization_drops_mixed_minimum_reducer():
+    import passivbot_rust
+
+    row = _tm_single_row(initial_ema_dist=0.01)
+    row[15] = 0.3
+    row[16] = 1.0
+    row[17] = 0.0
+    row[20] = 0.0
+    params = torch.tensor(row, dtype=torch.float32, device="mps")
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_mixed_minimum_reducer_probe(
+    constant float* params,
+    device float* output,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TmSide source = load_side(params, 0, 100.0f);
+    source.close_gen_balance = 1000.0f;
+    source.close_gen_psize = 4.0f;
+    source.close_gen_pprice = 100.0f;
+    source.close_gen_market_price = 100.0f;
+    source.close_gen_touch_down_ticks = 9999;
+    source.close_gen_touch_up_ticks = 10001;
+    source.close_gen_touch_nearest_ticks = 10000;
+    source.close_gen_touch_min_qty = 5.0f;
+    source.close_gen_touch_min_qty_relation = 0;
+    source.wel_enforcer_enabled = false;
+    source.twel_enforcer_enabled = false;
+    source.unstuck_enabled = false;
+    source.market_orders_allowed = true;
+    source.market_order_near_touch_threshold = 0.001f;
+
+    CloseGroup group;
+    int group_count = recursive_close_groups(
+        source, true, -1, 0.5f, 0.01f, 0.5f, 500.0f, 1.0f,
+        4.0f, 0, 0.0f, 500, group
+    );
+    RecursiveCloseAllocation allocation = recursive_close_allocation(
+        source, true, group_count, 4.0f, 4.0f, 100.0f, true,
+        0.5f, 0.01f, 0.5f, 500.0f, 1.0f,
+        0, 0.0f, 500
+    );
+    output[0] = float(group_count);
+    output[1] = allocation.reducer_qty;
+    output[2] = allocation.ordinary_budget;
+}
+"""
+    output = torch.zeros(3, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_mixed_minimum_reducer_probe(
+        params, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    values = output.cpu().tolist()
+    assert values[0] >= 1.0
+    # The full position is below the reducer's market-touch minimum (5.0),
+    # but the farther 200-price ordinary group has a 2.5 minimum. Exact Rust
+    # therefore filters the reducer and reallocates all 4.0 units to ordinary
+    # closes instead of collapsing to the protective order.
+    assert values[1:] == [0.0, 4.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_recursive_reducer_gate_falls_back_to_next_candidate(side):
     import passivbot_rust
@@ -7876,8 +7944,7 @@ kernel void passivbot_tm_recursive_reducer_gate_fallback_probe(
     candidates[1].order_type_id = is_long ? 10 : 21;
     int selected = select_recursive_close_reducer(
         candidates, is_long, source, 0.01f, 0.0f,
-        0.0f, 0.0f, 1.0f, true,
-        0.0f, 0.0f, 0.0f
+        0.0f, 0.0f, 1.0f, true, 0.0f
     );
     output[0] = float(selected);
 }
@@ -7930,8 +7997,7 @@ kernel void passivbot_tm_recursive_reducer_generation_gate_probe(
     candidates[0].market = true;
     int selected = select_recursive_close_reducer(
         candidates, is_long, source, 0.01f, 0.01f,
-        0.0f, 0.001f, 1.0f, true,
-        0.0f, 0.0f, 0.0f
+        0.0f, 0.001f, 1.0f, true, 0.0f
     );
     float adverse_next_fill = is_long ? 89.1f : 111.1f;
     bool adverse_next_allowed = realized_loss_proxy_allows_reducer(
@@ -7959,6 +8025,70 @@ kernel void passivbot_tm_recursive_reducer_generation_gate_probe(
     # fill would fail the same gate, proving that execution must not consult it
     # again after the order has already been emitted.
     assert output.cpu().tolist() == [0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_reducer_gate_uses_generation_pnl_snapshot(side):
+    import passivbot_rust
+
+    row = _tm_single_row()
+    params = torch.tensor(row, dtype=torch.float32, device="mps")
+    probe_kernel = r"""
+kernel void passivbot_tm_recursive_reducer_generation_pnl_probe(
+    constant float* params,
+    device float* output,
+    constant int& is_long_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    bool is_long = is_long_raw != 0;
+    TmSide source = load_side(params, 0, 100.0f);
+    source.close_gen_balance = 1000.0f;
+    source.close_gen_pprice = 100.0f;
+    source.close_gen_market_price = 100.0f;
+    ReducerCandidate candidates[3];
+    for (int i = 0; i < 3; ++i) {
+        candidates[i] = empty_reducer_candidate();
+    }
+    candidates[0].finalized_qty = 1.0f;
+    candidates[0].ticks = is_long ? 9900 : 10100;
+    candidates[0].price = is_long ? 99.0f : 101.0f;
+    candidates[0].order_type_id = is_long ? 9 : 20;
+    candidates[0].is_unstuck = true;
+
+    source.close_gen_realized_pnl_cumsum_last = 0.0f;
+    source.close_gen_realized_pnl_cumsum_max = 0.0f;
+    output[0] = float(select_recursive_close_reducer(
+        candidates, is_long, source, 0.01f, 0.0f,
+        0.0f, 0.0f, 1.0f, true, 0.01f
+    ));
+    source.close_gen_realized_pnl_cumsum_last = -10.0f;
+    source.close_gen_realized_pnl_cumsum_max = 0.0f;
+    output[1] = float(select_recursive_close_reducer(
+        candidates, is_long, source, 0.01f, 0.0f,
+        0.0f, 0.0f, 1.0f, true, 0.01f
+    ));
+}
+"""
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
+    )
+    library.passivbot_tm_recursive_reducer_generation_pnl_probe(
+        params,
+        output,
+        1 if side == "long" else 0,
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    # A fresh 1% budget admits the one-unit losing unstuck close. A generation
+    # snapshot already 10 units below its realized-PnL peak has no remaining
+    # room and rejects it, regardless of fills which occur on the next candle.
+    assert output.cpu().tolist() == [0.0, -1.0]
 
 
 @pytest.mark.skipif(
@@ -12732,6 +12862,11 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "close_gen_market_price" in source
     assert "preferred.finalized_qty, gate_price" in source
     assert "source.close_gen_market_price, !is_long" in source
+    assert "close_gen_realized_pnl_cumsum_last" in source
+    assert "close_gen_realized_pnl_cumsum_max" in source
+    assert source.count("for (int allocation_pass = 0;") == 1
+    assert "reducer_below_min && !all_below_min" in source
+    assert "include_reducer = false" in source
     assert "reducer_qty, reducer_fill_price" not in source
     assert "adj, reducer_fill_price" not in source
     assert "sim.market_orders_allowed = false" in source

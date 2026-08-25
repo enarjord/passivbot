@@ -284,6 +284,8 @@ struct TmSide {
     int entry_gen_touch_ticks;
     float close_gen_balance, close_gen_psize, close_gen_pprice;
     float close_gen_market_price;
+    float close_gen_realized_pnl_cumsum_last;
+    float close_gen_realized_pnl_cumsum_max;
     bool close_gen_unstuck_candidate_enabled;
     int close_gen_touch_down_ticks, close_gen_touch_up_ticks;
     int close_gen_touch_nearest_ticks;
@@ -455,6 +457,8 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.close_gen_balance = 0.0f;
     s.close_gen_psize = 0.0f; s.close_gen_pprice = 0.0f;
     s.close_gen_market_price = 0.0f;
+    s.close_gen_realized_pnl_cumsum_last = 0.0f;
+    s.close_gen_realized_pnl_cumsum_max = 0.0f;
     s.close_gen_unstuck_candidate_enabled = false;
     s.close_gen_touch_down_ticks = 0; s.close_gen_touch_up_ticks = 0;
     s.close_gen_touch_nearest_ticks = 0;
@@ -1385,101 +1389,117 @@ inline RecursiveCloseAllocation recursive_close_allocation(
     int grid_rung_limit
 ) {
     RecursiveCloseAllocation allocation;
-    allocation.reducer_qty = fmin(
+    float requested_reducer_qty = fmin(
         round_step(reducer_requested_qty, qty_step), position_size
     );
-    bool has_reducer = allocation.reducer_qty > 0.0f;
-    allocation.ordinary_budget = fmax(
-        round_step(
-            position_size - allocation.reducer_qty, qty_step
-        ),
-        0.0f
-    );
-    float remaining_budget = allocation.ordinary_budget;
-    float kept_ordinary = 0.0f;
-    allocation.minimum_any = has_reducer
-        ? min_entry_qty(
-            reducer_market ? source.close_gen_market_price : reducer_price,
-            qty_step, min_qty, min_cost, c_mult
-        ) : 1.0e30f;
-    bool all_below_min = !has_reducer
-        || quantity_is_meaningfully_below(
-            position_size, allocation.minimum_any
-        );
-    bool any_group_market = false;
-    allocation.last_kept_rank = -1;
-    bool reverse = source.close_threshold_we > 0.0f;
-    CloseGroup group;
-    for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
-        int wanted = reverse ? group_count - trim_rank - 1 : trim_rank;
-        recursive_close_groups(
-            source, is_long, wanted, qty_step, price_step,
-            min_qty, min_cost, c_mult, position_size,
-            prefix_merge_ticks, prefix_merge_qty,
-            grid_rung_limit, group
-        );
-        any_group_market = any_group_market || group.market;
-        float trimmed_qty = fmin(group.qty, remaining_budget);
-        float group_min = min_entry_qty(
-            group.market ? source.close_gen_market_price : group.price,
-            qty_step, min_qty, min_cost, c_mult
-        );
-        all_below_min = all_below_min
-            && quantity_is_meaningfully_below(
-                position_size, group_min
-            );
-        bool partial_trim = quantity_is_meaningfully_below(
-            trimmed_qty, group.qty
-        );
-        if (quantity_is_meaningfully_below(trimmed_qty, group_min)) {
-            trimmed_qty = 0.0f;
-            if (partial_trim) remaining_budget = 0.0f;
-        }
-        if (trimmed_qty > 0.0f) {
-            kept_ordinary += trimmed_qty;
-            remaining_budget = fmax(
-                round_step(remaining_budget - trimmed_qty, qty_step), 0.0f
-            );
-            allocation.minimum_any = fmin(
-                allocation.minimum_any, group_min
-            );
-            allocation.last_kept_rank = trim_rank;
-        }
-    }
-    allocation.normalize_close_groups = has_reducer || any_group_market;
-    allocation.collapse_ordinary_rank = -1;
-    if (allocation.normalize_close_groups && all_below_min
-        && !has_reducer && group_count > 0) {
-        // Rust's below-minimum position exception keeps one closest-to-fill
-        // ordinary close at the full position size.
-        allocation.collapse_ordinary_rank = 0;
-        kept_ordinary = position_size;
-        allocation.last_kept_rank = 0;
-    }
-    allocation.dust_remainder = allocation.normalize_close_groups
-        ? fmax(
-            round_step(
-                position_size - allocation.reducer_qty - kept_ordinary,
-                qty_step
-            ),
-            0.0f
-        ) : 0.0f;
-    if (allocation.dust_remainder > 0.0f
-        && allocation.dust_remainder < allocation.minimum_any
-        && allocation.last_kept_rank < 0 && has_reducer) {
-        allocation.reducer_qty = fmin(
-            position_size,
-            round_step(
-                allocation.reducer_qty + allocation.dust_remainder, qty_step
-            )
-        );
+    bool include_reducer = requested_reducer_qty > 0.0f;
+    // At most one retry is needed: if the reducer itself is below minimum but
+    // a mixed-price ordinary rung is executable, Rust filters that reducer and
+    // trims the ordinary ladder again without reserving any reducer quantity.
+    for (int allocation_pass = 0; allocation_pass < 2; ++allocation_pass) {
+        allocation.reducer_qty = include_reducer
+            ? requested_reducer_qty : 0.0f;
+        bool has_reducer = allocation.reducer_qty > 0.0f;
+        float reducer_min = has_reducer
+            ? min_entry_qty(
+                reducer_market ? source.close_gen_market_price : reducer_price,
+                qty_step, min_qty, min_cost, c_mult
+            ) : 1.0e30f;
         allocation.ordinary_budget = fmax(
             round_step(
                 position_size - allocation.reducer_qty, qty_step
             ),
             0.0f
         );
-        allocation.dust_remainder = 0.0f;
+        float remaining_budget = allocation.ordinary_budget;
+        float kept_ordinary = 0.0f;
+        allocation.minimum_any = reducer_min;
+        bool all_below_min = !has_reducer
+            || quantity_is_meaningfully_below(position_size, reducer_min);
+        bool any_group_market = false;
+        allocation.last_kept_rank = -1;
+        bool reverse = source.close_threshold_we > 0.0f;
+        CloseGroup group;
+        for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
+            int wanted = reverse ? group_count - trim_rank - 1 : trim_rank;
+            recursive_close_groups(
+                source, is_long, wanted, qty_step, price_step,
+                min_qty, min_cost, c_mult, position_size,
+                prefix_merge_ticks, prefix_merge_qty,
+                grid_rung_limit, group
+            );
+            any_group_market = any_group_market || group.market;
+            float trimmed_qty = fmin(group.qty, remaining_budget);
+            float group_min = min_entry_qty(
+                group.market ? source.close_gen_market_price : group.price,
+                qty_step, min_qty, min_cost, c_mult
+            );
+            all_below_min = all_below_min
+                && quantity_is_meaningfully_below(position_size, group_min);
+            bool partial_trim = quantity_is_meaningfully_below(
+                trimmed_qty, group.qty
+            );
+            if (quantity_is_meaningfully_below(trimmed_qty, group_min)) {
+                trimmed_qty = 0.0f;
+                if (partial_trim) remaining_budget = 0.0f;
+            }
+            if (trimmed_qty > 0.0f) {
+                kept_ordinary += trimmed_qty;
+                remaining_budget = fmax(
+                    round_step(remaining_budget - trimmed_qty, qty_step),
+                    0.0f
+                );
+                allocation.minimum_any = fmin(
+                    allocation.minimum_any, group_min
+                );
+                allocation.last_kept_rank = trim_rank;
+            }
+        }
+        bool reducer_below_min = has_reducer
+            && quantity_is_meaningfully_below(
+                allocation.reducer_qty, reducer_min
+            );
+        if (reducer_below_min && !all_below_min) {
+            include_reducer = false;
+            continue;
+        }
+        allocation.normalize_close_groups = has_reducer || any_group_market;
+        allocation.collapse_ordinary_rank = -1;
+        if (allocation.normalize_close_groups && all_below_min
+            && !has_reducer && group_count > 0) {
+            // Rust's below-minimum position exception keeps one
+            // closest-to-fill ordinary close at the full position size.
+            allocation.collapse_ordinary_rank = 0;
+            kept_ordinary = position_size;
+            allocation.last_kept_rank = 0;
+        }
+        allocation.dust_remainder = allocation.normalize_close_groups
+            ? fmax(
+                round_step(
+                    position_size - allocation.reducer_qty - kept_ordinary,
+                    qty_step
+                ),
+                0.0f
+            ) : 0.0f;
+        if (allocation.dust_remainder > 0.0f
+            && allocation.dust_remainder < allocation.minimum_any
+            && allocation.last_kept_rank < 0 && has_reducer) {
+            allocation.reducer_qty = fmin(
+                position_size,
+                round_step(
+                    allocation.reducer_qty + allocation.dust_remainder,
+                    qty_step
+                )
+            );
+            allocation.ordinary_budget = fmax(
+                round_step(
+                    position_size - allocation.reducer_qty, qty_step
+                ),
+                0.0f
+            );
+            allocation.dust_remainder = 0.0f;
+        }
+        return allocation;
     }
     return allocation;
 }
@@ -1497,8 +1517,6 @@ inline int select_recursive_close_reducer(
     float taker_fee,
     float c_mult,
     bool loss_gate_enabled,
-    float realized_pnl_cumsum_last,
-    float realized_pnl_cumsum_max,
     float max_realized_loss_pct
 ) {
     bool candidate_available[3] = {true, true, true};
@@ -1533,8 +1551,8 @@ inline int select_recursive_close_reducer(
                 source.close_gen_pprice, is_long,
                 preferred.is_unstuck, c_mult, gate_fee_rate,
                 loss_gate_enabled, source.close_gen_balance,
-                realized_pnl_cumsum_last,
-                realized_pnl_cumsum_max,
+                source.close_gen_realized_pnl_cumsum_last,
+                source.close_gen_realized_pnl_cumsum_max,
                 max_realized_loss_pct)) {
             return preferred_idx;
         }
@@ -1990,8 +2008,7 @@ inline void passivbot_single_coin_impl(
             int selected_candidate_idx = select_recursive_close_reducer(
                 candidates, true, long_side, price_step,
                 market_order_slippage_pct, maker_fee, taker_fee, c_mult,
-                loss_gate_enabled, realized_pnl_cumsum_last,
-                realized_pnl_cumsum_max, max_realized_loss_pct
+                loss_gate_enabled, max_realized_loss_pct
             );
 
             ReducerCandidate selected_reducer = empty_reducer_candidate();
@@ -2738,8 +2755,7 @@ inline void passivbot_single_coin_impl(
             int selected_candidate_idx = select_recursive_close_reducer(
                 candidates, false, short_side, price_step,
                 market_order_slippage_pct, maker_fee, taker_fee, c_mult,
-                loss_gate_enabled, realized_pnl_cumsum_last,
-                realized_pnl_cumsum_max, max_realized_loss_pct
+                loss_gate_enabled, max_realized_loss_pct
             );
 
             ReducerCandidate selected_reducer = empty_reducer_candidate();
@@ -3511,6 +3527,14 @@ inline void passivbot_single_coin_impl(
             // Recursive next-candle expansion must reconstruct every reducer
             // candidate which existed at this generation, even when singular
             // selection or its loss-gate fallback temporarily disabled it.
+            long_side.close_gen_realized_pnl_cumsum_last =
+                realized_pnl_cumsum_last;
+            long_side.close_gen_realized_pnl_cumsum_max =
+                realized_pnl_cumsum_max;
+            short_side.close_gen_realized_pnl_cumsum_last =
+                realized_pnl_cumsum_last;
+            short_side.close_gen_realized_pnl_cumsum_max =
+                realized_pnl_cumsum_max;
             long_side.close_gen_unstuck_candidate_enabled =
                 long_unstuck_selected;
             short_side.close_gen_unstuck_candidate_enabled =

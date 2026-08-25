@@ -747,7 +747,7 @@ mod tests {
             source
                 .matches("quantity_is_meaningfully_below(")
                 .count(),
-            9
+            10
         );
         assert!(!source.contains("trimmed_qty + 1.0e-6f"));
         assert!(!source.contains("trimmed_group_qty + 1.0e-6f"));
@@ -802,6 +802,14 @@ mod tests {
         assert!(source.contains("preferred.finalized_qty, gate_price"));
         assert!(source.contains("source.close_gen_market_price, !is_long"));
         assert!(source.contains("source.close_gen_balance"));
+        assert!(source.contains("close_gen_realized_pnl_cumsum_last"));
+        assert!(source.contains("close_gen_realized_pnl_cumsum_max"));
+        assert_eq!(source.matches("for (int allocation_pass = 0;").count(), 1);
+        assert!(source.contains("reducer_below_min && !all_below_min"));
+        assert!(source.contains("include_reducer = false"));
+        assert!(source.contains(
+            "source.close_gen_realized_pnl_cumsum_last,\n                source.close_gen_realized_pnl_cumsum_max"
+        ));
         assert!(!source.contains("reducer_qty, reducer_fill_price"));
         assert!(!source.contains("adj, reducer_fill_price"));
         assert_eq!(source.matches("float group_gate_price").count(), 2);
