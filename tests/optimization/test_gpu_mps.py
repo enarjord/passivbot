@@ -3253,6 +3253,59 @@ def test_mps_multicoin_min_cost_rejection_never_reuses_flat_cash_floor(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_min_cost_floor_expires_after_first_selection(
+    strategy_kind, side
+):
+    count = 10
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    highs = closes.copy()
+    lows = closes.copy()
+    if side == "long":
+        lows[6:, 1] = 108.0
+    else:
+        highs[6:, 1] = 132.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 1.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    unfiltered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 5),
+        collect_coin_fill_counts=True,
+    )
+    filtered, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 5),
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    parameters = np.asarray([row], dtype=np.float64)
+    unfiltered_output = unfiltered.run(parameters)
+    filtered_output = filtered.run(parameters)
+    torch.mps.synchronize()
+
+    assert unfiltered_output["coin_fill_counts"].cpu().tolist()[0][1] > 0.0
+    assert filtered_output["coin_fill_counts"].cpu().tolist()[0] == [0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("hedge_mode", [False, True])
 def test_mps_fused_min_cost_rejection_never_reuses_flat_cash_floor(
     strategy_kind, hedge_mode

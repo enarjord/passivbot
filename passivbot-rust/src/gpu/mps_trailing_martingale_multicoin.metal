@@ -4927,6 +4927,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }
+        if (filter_by_min_effective_cost
+            && (long_can_generate || short_can_generate)) {
+            min_cost_exact_open_uncertain = true;
+        }
 
         float long_unrealized = 0.0f;
         float short_unrealized = 0.0f;
@@ -5546,6 +5550,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 market_order_slippage_pct,
                 -2, 0ul
             );
+            if (filter_by_min_effective_cost) {
+                min_cost_exact_open_uncertain = true;
+            }
         }
 
         float unrealized = 0.0f;

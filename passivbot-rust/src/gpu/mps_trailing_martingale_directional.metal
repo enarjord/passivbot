@@ -3468,6 +3468,9 @@ inline void passivbot_single_coin_impl(
                     min_cost, c_mult, kf, block_short_initial
                 );
             }
+            if (filter_by_min_effective_cost && long_enabled && short_enabled) {
+                min_cost_exact_open_uncertain = true;
+            }
             // Exact Rust tries the next-largest protective reducer when the
             // winner is loss-gated. Auto-unstuck may consume the conservative
             // all-history budget; other TM reducers retain the zero-loss envelope.

@@ -1559,6 +1559,9 @@ inline void passivbot_single_coin_impl(
                     market_order_near_touch_threshold
                 );
             }
+            if (filter_by_min_effective_cost && long_enabled && short_enabled) {
+                min_cost_exact_open_uncertain = true;
+            }
 
             bool loss_gate_enabled = max_realized_loss_pct < 1.0f;
             float balance_peak = balance

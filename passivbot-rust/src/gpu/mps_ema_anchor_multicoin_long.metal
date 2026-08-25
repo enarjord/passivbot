@@ -2820,6 +2820,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 current_hsl_mode, market_orders_allowed,
                 market_order_near_touch_threshold, -2, 0ul
             );
+            if (filter_by_min_effective_cost) {
+                min_cost_exact_open_uncertain = true;
+            }
             finalize_ema_multicoin_reducers_one_side(
                 side, account, bars, coin_settings, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_threshold,
@@ -3722,6 +3725,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 market_orders_allowed, market_order_near_touch_threshold,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
+        }
+        if (filter_by_min_effective_cost
+            && (long_can_generate || short_can_generate)) {
+            min_cost_exact_open_uncertain = true;
         }
         if (long_can_generate || short_can_generate) {
             finalize_ema_multicoin_reducers_fused(

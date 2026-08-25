@@ -279,11 +279,13 @@ The supported slice is intentionally narrow:
   rounding cannot turn a just-below-threshold proxy projection into an admission. To remain
   conservative across float32 proxy versus float64 Rust path divergence, Metal uses the configured
   liquidation floor—not proxy balance—as the guaranteed cash-balance lower bound while the entire
-  portfolio is flat and Metal has not rejected a candidate that exact Rust may still admit. Once a
-  position is open or such a proxy false negative becomes possible, the liquidation floor bounds
-  equity but no longer proves a lower bound for exact cash. Metal therefore keeps that uncertainty
-  for the rest of the candidate backtest and immediately fails every flat coin/side closed in the
-  same candle, even if its own portfolio remains or becomes flat again. These candidates are
+  portfolio is flat and Metal has not rejected a candidate that exact Rust may still admit. For
+  multicoin and dual-side single-coin runs, the first independently selected or arbitrated candidate
+  set also exhausts this bound because later proxy/exact selection may diverge without a proxy fill.
+  Once any of those events occurs, the liquidation floor bounds equity but no longer proves a lower
+  bound for exact cash. Metal therefore keeps that uncertainty for the rest of the candidate
+  backtest and immediately fails every later flat coin/side closed, even if its own portfolio remains
+  or becomes flat again. These candidates are
   removed before Forager selection and one-way long/short arbitration; every open position remains
   managed. This supports single- and
   multi-coin, one- and dual-side EMA Anchor and Trailing Martingale runs and compatible suites.
