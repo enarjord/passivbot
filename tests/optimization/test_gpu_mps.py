@@ -12,6 +12,8 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
     _build_hourly_log_range,
@@ -830,6 +832,7 @@ kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
                 100.0,
                 1.0,
                 0.0,
+                0.0,
             ],
             [
                 1.0,
@@ -843,6 +846,7 @@ kernel void passivbot_ema_multicoin_fused_reducer_budget_probe(
                 60_000.0,
                 100.0,
                 1.0,
+                0.0,
                 0.0,
             ],
         ],
@@ -1539,7 +1543,7 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
     touch_nearest_ticks = torch.zeros(3, dtype=torch.int32, device="mps")
     touch_min_qty_bits = torch.zeros(3, dtype=torch.int32, device="mps")
     touch_min_qty_relation = torch.zeros(3, dtype=torch.int32, device="mps")
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 1.0
     coin_settings[0, 1] = 1.0
     coin_settings[0, 2] = 1.0
@@ -1655,7 +1659,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     compute_tm_multicoin_one_way_initial_blocks(
         long_side, long_config, coin_overrides,
         short_side, short_config, coin_overrides,
-        bars, coin_settings, 1, 3, 0, 0, true, true,
+        bars, coin_settings, 1, 3, 0, 0, 1, 1, true, true, false, 0.0f,
         long_selection_blocked_mask, short_selection_blocked_mask,
         long_order_blocked_mask, short_order_blocked_mask
     );
@@ -1665,11 +1669,11 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     long_side.coin_hsl[0].orange_graceful_stop = true;
     update_tm_multicoin_side_selection(
         long_side, long_config, bars, coin_settings, coin_overrides,
-        1, 3, false, true, 1, 0.0f, 0ul
+        1, 3, false, true, 1, 0.0f, 0ul, false, 0.0f
     );
     update_tm_multicoin_side_selection(
         short_side, short_config, bars, coin_settings, coin_overrides,
-        1, 3, true, true, 1, 0.0f, 0ul
+        1, 3, true, true, 1, 0.0f, 0ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
         output[c] = long_side.selected[c] ? 1.0f : 0.0f;
@@ -1685,7 +1689,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     // The changed mask must force reselection onto the next candidate.
     update_tm_multicoin_side_selection(
         short_side, short_config, bars, coin_settings, coin_overrides,
-        1, 3, true, false, 1, 0.0f, 4ul
+        1, 3, true, false, 1, 0.0f, 4ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
         output[12 + c] = short_side.selected[c] ? 1.0f : 0.0f;
@@ -1706,7 +1710,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         dtype=torch.float32,
         device="mps",
     )
-    coin_settings = torch.zeros((3, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((3, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 7] = 10.0
     coin_overrides = torch.full(
         (3, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), float("nan"), dtype=torch.float32, device="mps"
@@ -1848,7 +1852,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     touch_min_qty_relation = torch.zeros(
         (2, 1), dtype=torch.int32, device="mps"
     )
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -2016,7 +2020,7 @@ kernel void passivbot_tm_multicoin_dual_hsl_phase_probe(
     )
     invalid_bars = bars.clone()
     invalid_bars[:, 0, 2] = float("nan")
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 4] = 1.0
     output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
 
@@ -2181,7 +2185,7 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     )
     invalid_bars = bars.clone()
     invalid_bars[:, 0, 2] = float("nan")
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 4] = 1.0
     output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
 
@@ -2314,7 +2318,7 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         dtype=torch.float32,
         device="mps",
     )
-    coin_settings = torch.zeros((2, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((2, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 4] = 1.0
     coin_settings[:, 7] = 10.0
     coin_overrides = torch.full(
@@ -2465,7 +2469,7 @@ kernel void passivbot_tm_multicoin_candle_helpers_probe(
         dtype=torch.float32,
         device="mps",
     )
-    coin_settings = torch.zeros((2, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((2, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 4] = 1.0
     coin_settings[:, 7] = 10.0
     coin_overrides = torch.full(
@@ -2601,7 +2605,7 @@ kernel void passivbot_ema_multicoin_shared_fill_phase_probe(
     fill_ticks = torch.tensor(
         [[[100, 100]], [[110, 90]]], dtype=torch.int32, device="mps"
     )
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 1.0
     coin_settings[0, 1] = 1.0
     coin_settings[0, 4] = 1.0
@@ -2715,17 +2719,17 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     compute_ema_multicoin_one_way_initial_blocks(
         long_side, long_config, coin_overrides,
         short_side, short_config, coin_overrides,
-        bars, coin_settings, 1, 3, 0, 0, true, true,
+        bars, coin_settings, 1, 3, 0, 0, 1, 1, true, true, false, 0.0f,
         long_selection_blocked_mask, short_selection_blocked_mask,
         long_order_blocked_mask, short_order_blocked_mask
     );
     update_ema_multicoin_side_selection(
         long_side, long_config, bars, coin_settings, coin_overrides,
-        1, 3, false, true, 1, 0.0f, 0ul
+        1, 3, false, true, 1, 0.0f, 0ul, false, 0.0f
     );
     update_ema_multicoin_side_selection(
         short_side, short_config, bars, coin_settings, coin_overrides,
-        1, 3, true, true, 1, 0.0f, 0ul
+        1, 3, true, true, 1, 0.0f, 0ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
         output[c] = long_side.selected[c] ? 1.0f : 0.0f;
@@ -2739,7 +2743,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     // The mask transition must evict the blocked incumbent and promote next.
     update_ema_multicoin_side_selection(
         short_side, short_config, bars, coin_settings, coin_overrides,
-        1, 3, true, false, 1, 0.0f, 4ul
+        1, 3, true, false, 1, 0.0f, 4ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
         output[10 + c] = short_side.selected[c] ? 1.0f : 0.0f;
@@ -2749,6 +2753,27 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     output[15] = float(short_selection_blocked_mask);
     output[16] = float(long_order_blocked_mask);
     output[17] = float(short_order_blocked_mask);
+
+    // With an existing position, the caller cannot prove a positive exact
+    // cash-balance floor. A zero lower bound must keep every other flat slot
+    // out of the Forager selection even when its exchange minimum is small.
+    long_config.twel = 1.0f;
+    long_config.allowance_pct = 0.0f;
+    long_config.legacy_raw_allowance = false;
+    long_config.base_qty_pct = 1.0f;
+    long_side.selection_initialized = false;
+    long_side.previous_effective_n_positions = 0;
+    for (int c = 0; c < 3; ++c) {
+        long_side.psize[c] = c == 0 ? 1.0f : 0.0f;
+        long_side.selected[c] = false;
+        long_side.incumbent[c] = false;
+        long_side.survivor[c] = false;
+    }
+    update_ema_multicoin_side_selection(
+        long_side, long_config, bars, coin_settings, coin_overrides,
+        1, 3, false, true, 1, 0.0f, 0ul, true, 0.0f
+    );
+    output[18] = long_side.selected[1] || long_side.selected[2] ? 1.0f : 0.0f;
 }
 """
 
@@ -2760,12 +2785,13 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         dtype=torch.float32,
         device="mps",
     )
-    coin_settings = torch.zeros((3, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((3, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 7] = 10.0
+    coin_settings[:, 12] = 1.0
     coin_overrides = torch.full(
         (3, 29), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(18, dtype=torch.float32, device="mps")
+    output = torch.zeros(19, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2794,6 +2820,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         0.0,
         0.0,
         7.0,
+        0.0,
     ]
 
 
@@ -2878,7 +2905,7 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
         dtype=torch.int32,
         device="mps",
     )
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -2994,6 +3021,7 @@ def _multicoin_exposure_fixture(
     first_valid_indices=(0, 0),
     liquidation_threshold=0.05,
     collect_coin_fill_counts=False,
+    filter_by_min_effective_cost=False,
     market_order_slippage_pct=0.0,
     market_orders_allowed=False,
     market_order_near_touch_threshold=0.001,
@@ -3077,6 +3105,7 @@ def _multicoin_exposure_fixture(
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
+            filter_by_min_effective_cost=filter_by_min_effective_cost,
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -3137,6 +3166,7 @@ def _multicoin_exposure_fixture(
             coin_overrides=coin_overrides,
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
+            filter_by_min_effective_cost=filter_by_min_effective_cost,
             market_order_slippage_pct=market_order_slippage_pct,
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
@@ -3145,6 +3175,337 @@ def _multicoin_exposure_fixture(
     if return_context:
         return runner, row, runs[0], data
     return runner, row
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_min_cost_rejection_blocks_concurrent_flat_coins(
+    strategy_kind, side
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
+        for min_cost in (30.0, 5.0)
+    ]
+    unfiltered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=6,
+        markets=markets,
+        collect_coin_fill_counts=True,
+    )
+    filtered, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=6,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    parameters = np.asarray([row], dtype=np.float64)
+    unfiltered_output = unfiltered.run(parameters)
+    filtered_output = filtered.run(parameters)
+    torch.mps.synchronize()
+
+    assert unfiltered_output["coin_fill_counts"].cpu().tolist()[0][0] > 0.0
+    assert unfiltered_output["coin_fill_counts"].cpu().tolist()[0][1] > 0.0
+    assert filtered.settings.cpu()[-1].item() == 1.0
+    filtered_counts = filtered_output["coin_fill_counts"].cpu().tolist()[0]
+    assert filtered_counts[0] == 0.0
+    assert filtered_counts[1] == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_min_cost_rejection_never_reuses_flat_cash_floor(
+    strategy_kind, side
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
+        for min_cost in (60.0, 5.0)
+    ]
+    filtered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=10,
+        markets=markets,
+        first_valid_indices=(0, 5),
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    output = filtered.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Coin zero is screened while the proxy is flat. Exact Rust may admit that
+    # false negative using its higher current cash balance, so Metal must not
+    # reuse the liquidation floor when coin one becomes tradable later.
+    assert output["coin_fill_counts"].cpu().tolist()[0] == [0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_min_cost_floor_expires_after_first_selection(
+    strategy_kind, side
+):
+    count = 10
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    highs = closes.copy()
+    lows = closes.copy()
+    if side == "long":
+        lows[6:, 1] = 108.0
+    else:
+        highs[6:, 1] = 132.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 1.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    unfiltered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 5),
+        collect_coin_fill_counts=True,
+    )
+    filtered, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        markets=markets,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 5),
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    parameters = np.asarray([row], dtype=np.float64)
+    unfiltered_output = unfiltered.run(parameters)
+    filtered_output = filtered.run(parameters)
+    torch.mps.synchronize()
+
+    assert unfiltered_output["coin_fill_counts"].cpu().tolist()[0][1] > 0.0
+    assert filtered_output["coin_fill_counts"].cpu().tolist()[0] == [0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_mps_fused_min_cost_rejection_never_reuses_flat_cash_floor(
+    strategy_kind, hedge_mode
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
+        for min_cost in (60.0, 5.0)
+    ]
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=10,
+        markets=markets,
+        first_valid_indices=(0, 5),
+        return_context=True,
+    )
+    runner_cls = (
+        MpsEmaAnchorMulticoinFusedRunner
+        if strategy_kind == "ema_anchor"
+        else MpsTrailingMartingaleMulticoinFusedRunner
+    )
+    runner = runner_cls(
+        run,
+        data,
+        hedge_mode=hedge_mode,
+        filter_by_min_effective_cost=True,
+    )
+
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("override_kind", ["initial_qty", "wel_allowance"])
+def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
+    strategy_kind, override_kind
+):
+    override_cols = (
+        29
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+    )
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    if override_kind == "initial_qty":
+        qty_column = 0 if strategy_kind == "ema_anchor" else 6
+        overrides[0, qty_column] = 0.1
+        passing_overrides = overrides.copy()
+        passing_overrides[0, qty_column] = 1.0
+        min_cost = 5.0
+    else:
+        wel_column = (
+            11
+            if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+        )
+        allowance_column = (
+            12
+            if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN
+        )
+        overrides[:, wel_column] = 0.1
+        overrides[1, allowance_column] = 1.0
+        passing_overrides = overrides.copy()
+        passing_overrides[0, allowance_column] = 1.0
+        min_cost = 7.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        overrides,
+        count=6,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+    passing_runner, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        passing_overrides,
+        count=6,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    passing_output = passing_runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    counts = output["coin_fill_counts"].cpu().tolist()[0]
+    passing_counts = passing_output["coin_fill_counts"].cpu().tolist()[0]
+    assert counts == [0.0, 0.0]
+    assert passing_counts[0] > 0.0
+    assert passing_counts[1] > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_min_cost_blocks_new_flat_slot_while_portfolio_is_open():
+    strategy_kind = "trailing_martingale"
+    highs = np.tile(np.asarray([100.0, 120.0]), (10, 1))
+    lows = highs * 0.99
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 1.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    unfiltered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=10,
+        markets=markets,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 4),
+        collect_coin_fill_counts=True,
+    )
+    filtered, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=10,
+        markets=markets,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 4),
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("entry_initial_qty_pct")
+    ] = 0.5
+    parameters = np.asarray([row], dtype=np.float64)
+    unfiltered_output = unfiltered.run(parameters)
+    filtered_output = filtered.run(parameters)
+    torch.mps.synchronize()
+
+    unfiltered_counts = unfiltered_output["coin_fill_counts"].cpu().tolist()[0]
+    filtered_counts = filtered_output["coin_fill_counts"].cpu().tolist()[0]
+    assert unfiltered_counts[0] > 0.0
+    assert unfiltered_counts[1] > 0.0
+    assert filtered_counts[0] > 0.0
+    assert filtered_counts[1] == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_fused_one_way_min_cost_rejection_blocks_side_arbitration(strategy_kind):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=6,
+        markets=markets,
+        return_context=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    qty_key = (
+        "base_qty_pct"
+        if strategy_kind == "ema_anchor"
+        else "entry_initial_qty_pct"
+    )
+    long_row = list(row)
+    short_row = list(row)
+    long_row[keys.index(qty_key)] = 0.01
+    short_row[keys.index(qty_key)] = 1.0
+    runner_cls = (
+        MpsEmaAnchorMulticoinFusedRunner
+        if strategy_kind == "ema_anchor"
+        else MpsTrailingMartingaleMulticoinFusedRunner
+    )
+    runner = runner_cls(
+        run,
+        data,
+        hedge_mode=False,
+        filter_by_min_effective_cost=True,
+    )
+
+    output = runner.run(np.asarray([long_row + short_row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count_long"].item() == 0.0
+    assert output["fill_count"].item() == 0.0
 
 
 @pytest.mark.skipif(
@@ -6664,6 +7025,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
             1.0,
             0.0,
             0.001,
+            0.0,
         ],
         dtype=torch.float32,
         device="mps",
@@ -7257,6 +7619,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
             1.0,
             0.0,
             0.001,
+            0.0,
         ],
         dtype=torch.float32,
         device="mps",
@@ -12987,7 +13350,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
     touch_min_qty_relation = torch.zeros(
         (2, 1), dtype=torch.int32, device="mps"
     )
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -13122,7 +13485,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
     touch_min_qty_relation = torch.zeros(
         (2, 1), dtype=torch.int32, device="mps"
     )
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 0.001
     coin_settings[0, 1] = 0.01
     coin_settings[0, 2] = 0.001
@@ -13369,7 +13732,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
     touch_min_qty_relation = torch.zeros(
         (2, 1), dtype=torch.int32, device="mps"
     )
-    coin_settings = torch.zeros((1, 12), dtype=torch.float32, device="mps")
+    coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 0] = 0.1
     coin_settings[0, 1] = 0.1
     coin_settings[0, 2] = 0.1
@@ -15314,8 +15677,9 @@ def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
-    strategy_kind,
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_mps_dual_single_coin_min_cost_rejection_blocks_other_side(
+    strategy_kind, hedge_mode
 ):
     count = 5
     close = np.full(count, 100.0)
@@ -15368,13 +15732,13 @@ def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
         data,
         long_enabled=True,
         short_enabled=True,
-        hedge_mode=False,
+        hedge_mode=hedge_mode,
         filter_by_min_effective_cost=True,
     ).run(np.array([long_row + short_row], dtype=np.float64))
     torch.mps.synchronize()
 
-    assert output["day_has_fill"].sum().item() > 0
-    assert output["psize"].item() > 0.0
+    assert output["day_has_fill"].sum().item() == 0
+    assert output["psize"].item() == 0.0
     assert output["short_psize"].item() == 0.0
 
 

@@ -509,17 +509,22 @@ All notable user-facing changes will be documented in this file.
   `total_exposure_entry_gate_enabled` toggle, and `total_exposure_enforcer_threshold`; exact Rust
   backtests and the existing classification, rank, and drift gates remain authoritative.
 
-- Added `backtest.filter_by_min_effective_cost` support across the Apple MPS optimizer's EMA Anchor
-  and Trailing Martingale single-coin, single-side matrix, including long, short, and compatible
-  suites. The Metal proxy conservatively compares projected initial cost against the highest
-  executable exchange minimum in each prepared coin window, using the
-  configured wallet-exposure limit, a downward arithmetic bound for the float32 projection, and
-  the liquidation floor as a path-independent lower balance bound while the enabled side is flat.
-  If the enabled side is open, it remains managed without applying the flat-entry screen. Exact
-  Rust retains its current-close rule and remains authoritative through the normal validation and
-  drift gates. A finite positive liquidation threshold is required. Dual-side and multi-coin
-  filtering remain fail-closed because proxy position divergence prevents a proven cash-balance
-  bound for another flat side or coin.
+- Added `backtest.filter_by_min_effective_cost` support across the Apple MPS optimizer's complete
+  EMA Anchor and Trailing Martingale topology matrix: single- and multi-coin, long, short,
+  dual-side, and compatible suites. The Metal proxy conservatively compares projected initial cost
+  against the highest executable exchange minimum in each prepared coin window, using effective
+  wallet-exposure limits, static per-coin overrides, a downward arithmetic bound for the float32
+  projection, and the liquidation floor as a lower cash-balance bound while the whole portfolio is
+  flat. Once any position is open, Metal rejects a candidate that exact Rust may admit, or an
+  independently selected multicoin/dual-side candidate set has been generated, other flat slots
+  fail closed because the proxy can no longer prove that the equity floor also bounds exact cash.
+  This uncertainty is applied immediately where needed and remains sticky even if the proxy remains
+  or becomes flat again; failing
+  candidates are removed before Forager selection and one-way arbitration while every open
+  position remains managed. Exact Rust retains its current-close rule and remains
+  authoritative through the normal validation and drift gates. A finite positive liquidation
+  threshold is required; concurrent-slot runs may halt when the conservative false negatives push
+  proxy/exact rank agreement below the configured safety threshold.
 
 - Added static per-coin Trailing Martingale overrides to single-side and dual-side multi-coin Apple
   MPS optimization and compatible suites. The Metal proxy consumes exact-last per-coin strategy,

@@ -1077,6 +1077,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "requested_start_timestamp_ms": 0,
             "first_timestamp_ms": 0,
             "liquidation_threshold": 0.05,
+            "filter_by_min_effective_cost": True,
             "max_realized_loss_pct": 1.0,
             "market_order_slippage_pct": 0.0,
             "hedge_mode": config["live"]["hedge_mode"],
@@ -1143,6 +1144,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         is recovery_distribution_enabled
     )
     assert constructed["kwargs"]["hedge_mode"] is False
+    assert constructed["kwargs"]["filter_by_min_effective_cost"] is True
 
 
 def test_gpu_proxy_requires_complete_valid_tail():

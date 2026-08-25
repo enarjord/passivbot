@@ -3,7 +3,7 @@ using namespace metal;
 
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 42;
-constant int COIN_COLS = 12;
+constant int COIN_COLS = 13;
 constant int OVERRIDE_COLS = 29;
 constant int HSL_OVERRIDE_START = 19;
 constant int DAILY_COLS = 9;
@@ -829,7 +829,9 @@ inline void update_ema_multicoin_side_selection(
     bool any_fill,
     int effective_n_positions,
     float score_hysteresis,
-    ulong one_way_initial_blocked_mask
+    ulong one_way_initial_blocked_mask,
+    bool filter_by_min_effective_cost,
+    float guaranteed_balance_lower
 ) {
     thread HslState* coin_hsl = side.coin_hsl;
     thread ulong& coin_hsl_entry_blocked_mask =
@@ -882,11 +884,28 @@ inline void update_ema_multicoin_side_selection(
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         float coin_wel = coin_override_or(coin_overrides, c, 11, -1.0f);
+        float base_limit = coin_wel >= 0.0f
+            ? coin_wel : config.twel / fmax(float(effective_n_positions), 1.0f);
+        float allowance_pct = coin_override_or(
+            coin_overrides, c, 12, config.allowance_pct
+        );
+        float allowed_wel = allowed_wallet_exposure_limit(
+            base_limit, config.twel, allowance_pct,
+            config.legacy_raw_allowance
+        );
+        float initial_qty_pct = coin_override_or(
+            coin_overrides, c, 0, config.base_qty_pct
+        );
+        bool min_cost_eligible = passes_multicoin_min_effective_cost(
+            filter_by_min_effective_cost, guaranteed_balance_lower,
+            allowed_wel, initial_qty_pct, coin_settings[coin_offset + 12]
+        );
         bool enabled = !selected[c]
             && k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_wel != 0.0f
+            && min_cost_eligible
             && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul
             && (!config.coin_hsl_mode || (
                 coin_hsl_entry_blocked_mask & (1ul << ulong(c))
@@ -2620,6 +2639,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float market_order_near_touch_threshold = fmax(
         run_settings[10], 0.0f
     );
+    const bool filter_by_min_effective_cost = run_settings[11] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     thread float* psize = side.psize;
@@ -2649,6 +2669,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
+    bool min_cost_exact_open_uncertain = false;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
     float total_wallet_exposure_max = 0.0f;
@@ -2762,12 +2783,35 @@ inline void passivbot_ema_anchor_multicoin_impl(
         bool has_hsl_position = ema_multicoin_side_has_position(side, C);
         int current_hsl_mode = coin_hsl_mode
             ? 0 : hsl_mode(hsl, has_hsl_position);
+        // A proxy position or filter rejection can leave exact Rust in a
+        // different open/cash state. Once that can happen,
+        // never reuse the equity-derived liquidation floor as a cash bound,
+        // even if the proxy later looks flat.
+        if (has_hsl_position) min_cost_exact_open_uncertain = true;
+        float min_cost_balance_lower = min_cost_exact_open_uncertain
+            ? 0.0f : liquidation_floor;
+        if (filter_by_min_effective_cost && can_generate
+            && !min_cost_exact_open_uncertain
+            && multicoin_min_cost_rejection_possible(
+                side.psize, side.coin_hsl, config.coin_hsl_mode,
+                current_hsl_mode, config.twel, config.allowance_pct,
+                config.legacy_raw_allowance, config.base_qty_pct,
+                bars, coin_settings, coin_overrides, 11, 12, 0,
+                k, C, effective_n_positions,
+                min_cost_balance_lower
+            )) {
+            min_cost_exact_open_uncertain = true;
+            min_cost_balance_lower = 0.0f;
+        }
 
         if (can_generate) {
             update_ema_multicoin_side_selection(
                 side, config, bars, coin_settings, coin_overrides,
-                k, C, short_side, any_fill, effective_n_positions,
-                score_hysteresis, 0ul
+                k, C, short_side,
+                any_fill || min_cost_exact_open_uncertain,
+                effective_n_positions,
+                score_hysteresis, 0ul,
+                filter_by_min_effective_cost, min_cost_balance_lower
             );
             generate_ema_multicoin_side_orders(
                 side, config, account,
@@ -2776,6 +2820,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 current_hsl_mode, market_orders_allowed,
                 market_order_near_touch_threshold, -2, 0ul
             );
+            if (filter_by_min_effective_cost) {
+                min_cost_exact_open_uncertain = true;
+            }
             finalize_ema_multicoin_reducers_one_side(
                 side, account, bars, coin_settings, k, C, short_side,
                 market_orders_allowed, market_order_near_touch_threshold,
@@ -3141,8 +3188,12 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
     int coin_count,
     int long_hsl_mode,
     int short_hsl_mode,
+    int long_effective_n_positions,
+    int short_effective_n_positions,
     bool long_can_generate,
     bool short_can_generate,
+    bool filter_by_min_effective_cost,
+    float guaranteed_balance_lower,
     thread ulong& long_selection_blocked_mask,
     thread ulong& short_selection_blocked_mask,
     thread ulong& long_order_blocked_mask,
@@ -3182,6 +3233,44 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
         const float short_wel = coin_override_or(
             short_coin_overrides, c, 11, -1.0f
         );
+        const float long_base_limit = long_wel >= 0.0f
+            ? long_wel : long_config.twel
+                / fmax(float(long_effective_n_positions), 1.0f);
+        const float short_base_limit = short_wel >= 0.0f
+            ? short_wel : short_config.twel
+                / fmax(float(short_effective_n_positions), 1.0f);
+        const float long_allowed_wel = allowed_wallet_exposure_limit(
+            long_base_limit, long_config.twel,
+            coin_override_or(
+                long_coin_overrides, c, 12, long_config.allowance_pct
+            ),
+            long_config.legacy_raw_allowance
+        );
+        const float short_allowed_wel = allowed_wallet_exposure_limit(
+            short_base_limit, short_config.twel,
+            coin_override_or(
+                short_coin_overrides, c, 12, short_config.allowance_pct
+            ),
+            short_config.legacy_raw_allowance
+        );
+        const bool long_min_cost_eligible =
+            passes_multicoin_min_effective_cost(
+                filter_by_min_effective_cost, guaranteed_balance_lower,
+                long_allowed_wel,
+                coin_override_or(
+                    long_coin_overrides, c, 0, long_config.base_qty_pct
+                ),
+                coin_settings[coin_offset + 12]
+            );
+        const bool short_min_cost_eligible =
+            passes_multicoin_min_effective_cost(
+                filter_by_min_effective_cost, guaranteed_balance_lower,
+                short_allowed_wel,
+                coin_override_or(
+                    short_coin_overrides, c, 0, short_config.base_qty_pct
+                ),
+                coin_settings[coin_offset + 12]
+            );
         const int long_coin_mode = long_config.coin_hsl_mode
             ? hsl_mode(long_side.coin_hsl[c], false) : long_hsl_mode;
         const int short_coin_mode = short_config.coin_hsl_mode
@@ -3191,9 +3280,11 @@ inline void compute_ema_multicoin_one_way_initial_blocks(
             && finite_positive(close);
         const bool long_eligible = long_can_generate && coin_tradable
             && long_wel != 0.0f
+            && long_min_cost_eligible
             && long_coin_mode == 0;
         const bool short_eligible = short_can_generate && coin_tradable
             && short_wel != 0.0f
+            && short_min_cost_eligible
             && short_coin_mode == 0;
         if (long_eligible && !short_eligible) {
             short_order_blocked_mask |= bit;
@@ -3336,6 +3427,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const float market_order_near_touch_threshold = fmax(
         run_settings[12], 0.0f
     );
+    const bool filter_by_min_effective_cost = run_settings[13] > 0.5f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
@@ -3344,6 +3436,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     EmaMulticoinFillState fills = init_ema_multicoin_fill_state();
     bool alive = true;
     bool equity_started = false;
+    bool min_cost_exact_open_uncertain = false;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     float run_peak = -INFINITY;
@@ -3497,16 +3590,55 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         equity_started = equity_started
             || long_can_generate || short_can_generate;
 
+        const bool long_has_position =
+            ema_multicoin_side_has_position(long_side, C);
+        const bool short_has_position =
+            ema_multicoin_side_has_position(short_side, C);
+        if (long_has_position || short_has_position) {
+            min_cost_exact_open_uncertain = true;
+        }
+        float min_cost_balance_lower =
+            min_cost_exact_open_uncertain
+            ? 0.0f : liquidation_floor;
         int long_hsl_mode = long_config.coin_hsl_mode ? 0
             : hsl_mode(
                 long_side.hsl,
-                ema_multicoin_side_has_position(long_side, C)
+                long_has_position
             );
         int short_hsl_mode = short_config.coin_hsl_mode ? 0
             : hsl_mode(
                 short_side.hsl,
-                ema_multicoin_side_has_position(short_side, C)
+                short_has_position
             );
+        if (filter_by_min_effective_cost
+            && !min_cost_exact_open_uncertain
+            && (
+                (long_can_generate
+                    && multicoin_min_cost_rejection_possible(
+                        long_side.psize, long_side.coin_hsl,
+                        long_config.coin_hsl_mode, long_hsl_mode,
+                        long_config.twel, long_config.allowance_pct,
+                        long_config.legacy_raw_allowance,
+                        long_config.base_qty_pct,
+                        bars, coin_settings, long_coin_overrides, 11, 12, 0,
+                        k, C, long_effective_n_positions,
+                        min_cost_balance_lower
+                    ))
+                || (short_can_generate
+                    && multicoin_min_cost_rejection_possible(
+                        short_side.psize, short_side.coin_hsl,
+                        short_config.coin_hsl_mode, short_hsl_mode,
+                        short_config.twel, short_config.allowance_pct,
+                        short_config.legacy_raw_allowance,
+                        short_config.base_qty_pct,
+                        bars, coin_settings, short_coin_overrides, 11, 12, 0,
+                        k, C, short_effective_n_positions,
+                        min_cost_balance_lower
+                    ))
+            )) {
+            min_cost_exact_open_uncertain = true;
+            min_cost_balance_lower = 0.0f;
+        }
         ulong long_one_way_selection_blocked_mask = 0ul;
         ulong short_one_way_selection_blocked_mask = 0ul;
         ulong long_one_way_order_blocked_mask = 0ul;
@@ -3517,7 +3649,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_side, short_config, short_coin_overrides,
                 bars, coin_settings, k, C,
                 long_hsl_mode, short_hsl_mode,
+                long_effective_n_positions,
+                short_effective_n_positions,
                 long_can_generate, short_can_generate,
+                filter_by_min_effective_cost, min_cost_balance_lower,
                 long_one_way_selection_blocked_mask,
                 short_one_way_selection_blocked_mask,
                 long_one_way_order_blocked_mask,
@@ -3558,9 +3693,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         if (long_can_generate) {
             update_ema_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings,
-                long_coin_overrides, k, C, false, any_fill,
+                long_coin_overrides, k, C, false,
+                any_fill || min_cost_exact_open_uncertain,
                 long_effective_n_positions, score_hysteresis,
-                long_one_way_selection_blocked_mask
+                long_one_way_selection_blocked_mask,
+                filter_by_min_effective_cost, min_cost_balance_lower
             );
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
@@ -3574,9 +3711,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         if (short_can_generate) {
             update_ema_multicoin_side_selection(
                 short_side, short_config, bars, coin_settings,
-                short_coin_overrides, k, C, true, any_fill,
+                short_coin_overrides, k, C, true,
+                any_fill || min_cost_exact_open_uncertain,
                 short_effective_n_positions, score_hysteresis,
-                short_one_way_selection_blocked_mask
+                short_one_way_selection_blocked_mask,
+                filter_by_min_effective_cost, min_cost_balance_lower
             );
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,
@@ -3586,6 +3725,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 market_orders_allowed, market_order_near_touch_threshold,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
+        }
+        if (filter_by_min_effective_cost
+            && (long_can_generate || short_can_generate)) {
+            min_cost_exact_open_uncertain = true;
         }
         if (long_can_generate || short_can_generate) {
             finalize_ema_multicoin_reducers_fused(

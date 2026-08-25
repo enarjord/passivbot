@@ -1058,24 +1058,9 @@ def _validate_scope_config(
                 _validate_tm_multicoin_market_runtime_scope(
                     config, enabled_sides
                 )
-    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
-        enabled_sides
-    ) != 1:
-        raise ValueError(
-            "GPU min-effective-cost filtering currently requires exactly one "
-            "enabled side because proxy position divergence prevents a proven "
-            "cash-balance bound for the opposite flat side"
-        )
     if coin_count > 1:
         from optimization.gpu.model import MPS_MULTICOIN_MAX_COINS
 
-        if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
-            raise ValueError(
-                "GPU multicoin optimization currently requires "
-                "backtest.filter_by_min_effective_cost=false because the "
-                "approximate proxy path cannot conservatively bound exact Rust's "
-                "portfolio balance"
-            )
         if coin_count > MPS_MULTICOIN_MAX_COINS:
             raise ValueError(
                 "GPU multicoin foundation supports at most "

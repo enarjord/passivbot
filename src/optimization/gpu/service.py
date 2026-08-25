@@ -2159,6 +2159,9 @@ class MpsMulticoinProxy:
                 self.needed_metrics
                 & {"fills_active_symbols_count", "fills_top_symbol_share"}
             ),
+            "filter_by_min_effective_cost": bool(
+                backtest_params.get("filter_by_min_effective_cost", False)
+            ),
             "market_order_slippage_pct": float(
                 backtest_params.get("market_order_slippage_pct", 0.0)
             ),

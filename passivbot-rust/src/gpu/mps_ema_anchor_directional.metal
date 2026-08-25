@@ -1101,6 +1101,7 @@ inline void passivbot_single_coin_impl(
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     bool alive = hsl_modes_valid;
+    bool min_cost_exact_open_uncertain = false;
     int liq_day = hsl_modes_valid ? -1 : 0;
     float held_max_min = 0.0f;
     float held_sum_min = 0.0f;
@@ -1481,12 +1482,11 @@ inline void passivbot_single_coin_impl(
         if (gen) {
             long_side.close_is_panic = false;
             short_side.close_is_panic = false;
-            // When both sides are flat, an exact Rust path that remains alive has
-            // balance above liq_floor. If either side is open, equity cannot bound
-            // exact cash balance, so flat-side eligibility uses zero and fails closed.
-            float guaranteed_balance_lower =
-                long_side.psize <= 0.0f && short_side.psize <= 0.0f
-                ? liq_floor : 0.0f;
+            if (long_side.psize > 0.0f || short_side.psize > 0.0f) {
+                min_cost_exact_open_uncertain = true;
+            }
+            float guaranteed_balance_lower = min_cost_exact_open_uncertain
+                ? 0.0f : liq_floor;
             bool long_min_cost_eligible = passes_min_effective_cost(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
                 long_side.allowed_wel, long_side.base_qty_pct, max_effective_min_cost
@@ -1495,6 +1495,25 @@ inline void passivbot_single_coin_impl(
                 filter_by_min_effective_cost, guaranteed_balance_lower,
                 short_side.allowed_wel, short_side.base_qty_pct, max_effective_min_cost
             );
+            if (filter_by_min_effective_cost
+                && !min_cost_exact_open_uncertain
+                && (
+                    (long_enabled && long_side.psize <= 0.0f
+                        && !long_min_cost_eligible)
+                    || (short_enabled && short_side.psize <= 0.0f
+                        && !short_min_cost_eligible)
+                )) {
+                min_cost_exact_open_uncertain = true;
+                guaranteed_balance_lower = 0.0f;
+                long_min_cost_eligible = passes_min_effective_cost(
+                    true, guaranteed_balance_lower, long_side.allowed_wel,
+                    long_side.base_qty_pct, max_effective_min_cost
+                );
+                short_min_cost_eligible = passes_min_effective_cost(
+                    true, guaranteed_balance_lower, short_side.allowed_wel,
+                    short_side.base_qty_pct, max_effective_min_cost
+                );
+            }
             bool block_long_initial = !long_min_cost_eligible || long_hsl_mode != 0;
             bool block_short_initial = !short_min_cost_eligible || short_hsl_mode != 0;
             if (long_enabled && short_enabled && !hedge_mode) {
@@ -1539,6 +1558,9 @@ inline void passivbot_single_coin_impl(
                     block_short_initial, market_orders_allowed,
                     market_order_near_touch_threshold
                 );
+            }
+            if (filter_by_min_effective_cost && long_enabled && short_enabled) {
+                min_cost_exact_open_uncertain = true;
             }
 
             bool loss_gate_enabled = max_realized_loss_pct < 1.0f;

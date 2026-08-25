@@ -1904,13 +1904,12 @@ def test_gpu_market_execution_accepts_hsl_with_min_effective_cost_filter(
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
-def test_gpu_market_execution_rejects_dual_side_min_effective_cost_filter():
+def test_gpu_market_execution_accepts_dual_side_min_effective_cost_filter():
     config = _directional_ema_config(long_enabled=True, short_enabled=True)
     config["live"]["market_orders_allowed"] = True
     config["backtest"]["filter_by_min_effective_cost"] = True
 
-    with pytest.raises(ValueError, match="requires exactly one enabled side"):
-        _validate_scope(config, _Evaluator())
+    assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
 def test_gpu_foundation_accepts_one_sided_single_coin_hsl():
@@ -2400,7 +2399,7 @@ def test_gpu_foundation_rejects_min_effective_cost_without_positive_liquidation_
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("suite_enabled", [False, True])
-def test_gpu_foundation_rejects_dual_side_min_effective_cost_filter(
+def test_gpu_foundation_accepts_dual_side_min_effective_cost_filter(
     strategy_kind, suite_enabled
 ):
     builder = (
@@ -2412,14 +2411,16 @@ def test_gpu_foundation_rejects_dual_side_min_effective_cost_filter(
     config["backtest"]["filter_by_min_effective_cost"] = True
     config["backtest"]["suite_enabled"] = suite_enabled
 
-    with pytest.raises(ValueError, match="exactly one enabled side"):
+    assert (
         _validate_scope(config, _Evaluator(), allow_suite=suite_enabled)
+        == "bybit"
+    )
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("suite_enabled", [False, True])
 @pytest.mark.parametrize("dual_side", [False, True])
-def test_gpu_foundation_rejects_multicoin_min_effective_cost_filter(
+def test_gpu_foundation_accepts_multicoin_min_effective_cost_filter(
     strategy_kind, suite_enabled, dual_side
 ):
     builder = (
@@ -2437,15 +2438,14 @@ def test_gpu_foundation_rejects_multicoin_min_effective_cost_filter(
     config["backtest"]["filter_by_min_effective_cost"] = True
     config["backtest"]["suite_enabled"] = suite_enabled
 
-    with pytest.raises(
-        ValueError,
-        match="exactly one enabled side|cannot conservatively bound exact Rust",
-    ):
+    assert (
         _validate_scope(
             config,
             _MulticoinEvaluator(),
             allow_suite=suite_enabled,
         )
+        == "bybit"
+    )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

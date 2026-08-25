@@ -207,6 +207,82 @@ inline float allowed_wallet_exposure_limit(
     return base_limit * (1.0f + effective);
 }
 
+inline bool passes_multicoin_min_effective_cost(
+    bool enabled, float guaranteed_balance_lower, float wel,
+    float initial_qty_pct, float max_effective_min_cost
+) {
+    if (!enabled) return true;
+    float rounded_projected_cost = guaranteed_balance_lower * wel * initial_qty_pct;
+    // Discount by 16 float32 unit roundoffs. This covers upward encoding and
+    // multiply rounding of all three operands before the conservative compare.
+    float projected_cost_lower = rounded_projected_cost
+        * (1.0f - 9.5367431640625e-7f);
+    return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
+        && projected_cost_lower >= max_effective_min_cost;
+}
+
+inline bool multicoin_min_cost_rejection_possible(
+    thread const float* psize,
+    thread HslState* coin_hsl,
+    bool coin_hsl_mode,
+    int current_hsl_mode,
+    float twel,
+    float allowance_pct,
+    bool legacy_raw_allowance,
+    float initial_qty_pct,
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    int wel_override_col,
+    int allowance_override_col,
+    int initial_qty_override_col,
+    int k,
+    int coin_count,
+    int effective_n_positions,
+    float guaranteed_balance_lower
+) {
+    if (effective_n_positions <= 0 || !(guaranteed_balance_lower > 0.0f)) {
+        return false;
+    }
+    for (int c = 0; c < coin_count; ++c) {
+        if (psize[c] > 0.0f) continue;
+        const int coin_offset = c * COIN_COLS;
+        const int bar_offset = (k * coin_count + c) * 4;
+        const float coin_wel = coin_override_or(
+            coin_overrides, c, wel_override_col, -1.0f
+        );
+        const int coin_mode = coin_hsl_mode
+            ? hsl_mode(coin_hsl[c], false) : current_hsl_mode;
+        if (k < int(coin_settings[coin_offset + 8])
+            || k > int(coin_settings[coin_offset + 7])
+            || !finite_positive(bars[bar_offset + 2])
+            || coin_wel == 0.0f
+            || coin_mode != 0) {
+            continue;
+        }
+        const float base_limit = coin_wel >= 0.0f
+            ? coin_wel : twel / fmax(float(effective_n_positions), 1.0f);
+        const float allowed_wel = allowed_wallet_exposure_limit(
+            base_limit, twel,
+            coin_override_or(
+                coin_overrides, c, allowance_override_col, allowance_pct
+            ),
+            legacy_raw_allowance
+        );
+        if (!passes_multicoin_min_effective_cost(
+            true, guaranteed_balance_lower, allowed_wel,
+            coin_override_or(
+                coin_overrides, c, initial_qty_override_col,
+                initial_qty_pct
+            ),
+            coin_settings[coin_offset + 12]
+        )) {
+            return true;
+        }
+    }
+    return false;
+}
+
 inline float clamped_market_price(
     constant float* bars, constant float* coin_settings,
     int k, int coin, int coin_count
