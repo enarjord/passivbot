@@ -1761,7 +1761,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
         1, 1, false, 1, 1, 0, false, 1.0f,
-        false, 0.001f, -2, 0ul
+        false, 0.001f, 0.0f, -2, 0ul
     );
     generate_tm_multicoin_side_orders(
         short_side, short_config, account,
@@ -1769,7 +1769,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
         1, 1, true, 1, 1, 0, false, 1.0f,
-        false, 0.001f, -2, 0ul
+        false, 0.001f, 0.0f, -2, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -1785,7 +1785,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
         1, 1, false, 1, 1, 0, false, 1.0f,
-        false, 0.001f, -2, 1ul
+        false, 0.001f, 0.0f, -2, 1ul
     );
     output[8] = long_side.entry_qty[0];
     output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
@@ -12625,7 +12625,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
         1, 1, short_side, 1, 1, 0, false, 1.0f,
-        true, 1.1f, -2, 0ul
+        true, 1.1f, 0.0f, -2, 0ul
     );
     output[0] = side.close_qty[0];
     output[1] = side.close_grid_gen_psize[0];
@@ -12753,7 +12753,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
         1, 1, short_side, 1, 1, 0, false, 1.0f,
-        true, 1.1f, 0, 0ul
+        true, 1.1f, 0.0f, 0, 0ul
     );
     output[0] = state.close_qty[0];
     output[1] = state.close_grid_gen_psize[0];
@@ -12865,7 +12865,7 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
         highs = closes.copy()
         lows = closes - 0.01
 
-    def run_case(*, slippage, taker_fee):
+    def run_case(*, slippage, taker_fee, max_realized_loss_pct=1.0):
         markets = [
             ProxyMarket(1.0, 0.01, 1.0, 0.0, 1.0, 0.0, taker_fee),
             ProxyMarket(1.0, 0.01, 2.0, 0.0, 1.0, 0.0, taker_fee),
@@ -12886,6 +12886,7 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
             market_orders_allowed=True,
             market_order_near_touch_threshold=0.001,
             market_order_slippage_pct=slippage,
+            max_realized_loss_pct=max_realized_loss_pct,
         )
         values = dict(
             zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, candidate)
@@ -12924,6 +12925,9 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
     no_cost = run_case(slippage=0.0, taker_fee=0.0)
     slipped = run_case(slippage=0.01, taker_fee=0.0)
     charged = run_case(slippage=0.01, taker_fee=0.002)
+    strict = run_case(
+        slippage=0.01, taker_fee=0.002, max_realized_loss_pct=0.0
+    )
     position_key = "psize" if side == "long" else "short_psize"
 
     assert no_cost["fill_count"].item() > 2.0
@@ -12935,8 +12939,10 @@ def test_mps_tm_multicoin_market_unstuck_override_pays_slippage_and_taker_fee(
     assert charged[position_key].item() == pytest.approx(
         slipped[position_key].item(), abs=2.0e-4
     )
+    assert strict[position_key].item() > charged[position_key].item()
     assert slipped["balance"].item() < no_cost["balance"].item()
     assert charged["balance"].item() < slipped["balance"].item()
+    assert strict["balance"].item() >= charged["balance"].item()
 
 
 @pytest.mark.skipif(
@@ -13669,7 +13675,10 @@ def test_mps_tm_multicoin_total_exposure_repair_policy(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(
+    side, market_orders_allowed
+):
     overrides = np.full((2, 44), np.nan, dtype=np.float32)
     overrides[0, 24] = 0.1
     runner_kwargs = {
@@ -13678,6 +13687,9 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
         "coin_overrides": overrides,
         "count": 10,
         "closes": (100.0, 100.0),
+        "market_orders_allowed": market_orders_allowed,
+        "market_order_near_touch_threshold": 1.1,
+        "market_order_slippage_pct": 0.01,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
         max_realized_loss_pct=1.0, **runner_kwargs
@@ -13713,9 +13725,20 @@ def test_mps_tm_multicoin_loss_gate_blocks_lossy_total_exposure_repair(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(
+    side, market_orders_allowed
+):
     markets = [
-        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001)
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            0.0 if market_orders_allowed else 0.001,
+            0.001,
+        )
         for _ in range(2)
     ]
     runner_kwargs = {
@@ -13724,6 +13747,9 @@ def test_mps_tm_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
         "count": 10,
         "closes": (100.0, 100.0),
         "markets": markets,
+        "market_orders_allowed": market_orders_allowed,
+        "market_order_near_touch_threshold": 1.1,
+        "market_order_slippage_pct": 0.001,
     }
     ungated_runner, candidate = _multicoin_exposure_fixture(
         max_realized_loss_pct=1.0, **runner_kwargs

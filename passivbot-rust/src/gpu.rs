@@ -1083,6 +1083,9 @@ mod tests {
         assert!(source.contains("twel_close_qty"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const bool loss_gate_enabled = run_settings[5] < 1.0f"));
+        assert!(source.contains("float projected_close_fee = close_market[c]"));
+        assert!(source.contains("float twel_gate_fee = twel_reducer_market"));
+        assert!(source.contains("float unstuck_gate_fee = unstuck_reducer_market"));
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
         ));

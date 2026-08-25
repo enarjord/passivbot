@@ -928,11 +928,6 @@ def _validate_tm_multicoin_market_runtime_scope(
     """Reject multi-coin TM market features not modeled by this slice."""
 
     unsupported = []
-    max_loss = float(config.get("live", {}).get("max_realized_loss_pct", 1.0))
-    if max_loss != 1.0:
-        unsupported.append(
-            f"live.max_realized_loss_pct={max_loss} (required 1.0)"
-        )
     for side in sorted(set(enabled_sides or ())):
         side_config = config.get("bot", {}).get(side, {}) or {}
         strategy = (
