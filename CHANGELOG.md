@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS multi-coin EMA Anchor optimization now supports any positive integer
+  `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
+  and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
+  per-candle equivalents, while hourly windows and elapsed-day accounting retain exact Rust time
+  semantics. Multi-coin Trailing Martingale remains one-minute-only pending its dedicated parity
+  slice.
+
 - Apple MPS single-coin optimization now matches exact Rust hourly volatility windows when an
   aggregated candle interval does not evenly divide an hour, retaining the boundary-crossing
   candle in the following hourly bucket instead of dropping it.
@@ -11,8 +18,7 @@ All notable user-facing changes will be documented in this file.
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports any positive
   integer `backtest.candle_interval_minutes`. Minute-denominated strategy EMA spans, HSL EMA decay,
   and entry/HSL cooldowns are converted to per-candle equivalents for Metal while timestamp-based
-  metrics and exact Rust validation retain elapsed-time semantics; multi-coin MPS runs remain
-  one-minute-only.
+  metrics and exact Rust validation retain elapsed-time semantics.
 
 - Apple MPS multi-coin Trailing Martingale optimization now supports static per-coin
   `entry.ema_gate_mode` overrides. Initial entries and recursive reentries independently inherit

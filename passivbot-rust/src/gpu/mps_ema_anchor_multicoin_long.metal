@@ -80,8 +80,6 @@ struct EmaMulticoinSideState {
     float volatility_1h[MAX_COINS];
     float forager_volume[MAX_COINS];
     float forager_volatility[MAX_COINS];
-    float hour_high[MAX_COINS];
-    float hour_low[MAX_COINS];
     float psize[MAX_COINS];
     float pprice[MAX_COINS];
     float last_increase_k[MAX_COINS];
@@ -299,7 +297,6 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
 inline void init_ema_multicoin_side_state(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
-    constant float* bars,
     constant float* coin_settings,
     constant float* coin_overrides,
     int coin_count
@@ -324,12 +321,6 @@ inline void init_ema_multicoin_side_state(
         side.volatility_1h[c] = 0.0f;
         side.forager_volume[c] = seed_volume;
         side.forager_volatility[c] = 0.0f;
-        side.hour_high[c] = -INFINITY;
-        side.hour_low[c] = INFINITY;
-        if (c < coin_count && int(coin_settings[c * COIN_COLS + 6]) == 0) {
-            side.hour_high[c] = bars[c * 4 + 0];
-            side.hour_low[c] = bars[c * 4 + 1];
-        }
         side.psize[c] = 0.0f;
         side.pprice[c] = 0.0f;
         side.last_increase_k[c] = -1.0e20f;
@@ -437,12 +428,11 @@ inline void update_ema_multicoin_side_indicators(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
     constant float* bars,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     int k,
-    int coin_count,
-    int start_hour_minute
+    int coin_count
 ) {
-    const bool hour_boundary = ((start_hour_minute + k) % 60) == 0;
     for (int c = 0; c < coin_count; ++c) {
         const int coin_offset = c * COIN_COLS;
         const int bar_offset = (k * coin_count + c) * 4;
@@ -455,23 +445,15 @@ inline void update_ema_multicoin_side_indicators(
         const bool valid = k >= first_valid && k <= last_valid
             && finite_positive(high) && finite_positive(low)
             && finite_positive(close);
-        if (hour_boundary) {
-            if (side.hour_high[c] > 0.0f
-                && isfinite(side.hour_low[c]) && side.hour_low[c] > 0.0f
-                && side.alpha_1h_coin[c] > 0.0f) {
-                float hour_range = log(side.hour_high[c] / side.hour_low[c]);
-                side.volatility_1h[c] = fma(
-                    side.alpha_1h_coin[c],
-                    hour_range - side.volatility_1h[c],
-                    side.volatility_1h[c]
-                );
-            }
-            side.hour_high[c] = -INFINITY;
-            side.hour_low[c] = INFINITY;
+        const float hour_range = hour_log_ranges[k * coin_count + c];
+        if (hour_range >= 0.0f && side.alpha_1h_coin[c] > 0.0f) {
+            side.volatility_1h[c] = fma(
+                side.alpha_1h_coin[c],
+                hour_range - side.volatility_1h[c],
+                side.volatility_1h[c]
+            );
         }
         if (!valid) continue;
-        side.hour_high[c] = fmax(side.hour_high[c], high);
-        side.hour_low[c] = fmin(side.hour_low[c], low);
         float log_range = log(high / low);
         side.ema0[c] = fma(
             side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
@@ -2576,6 +2558,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     constant float* coin_overrides,
     constant float* params,
@@ -2599,7 +2582,6 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const int requested_start_k = sizes[4];
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
-    const int start_hour_minute = sizes[7];
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     const int recovery_stride = sizes[8];
     const int recovery_sample_count = sizes[9];
@@ -2622,7 +2604,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const bool legacy_raw_allowance = config.legacy_raw_allowance;
     EmaMulticoinSideState side;
     init_ema_multicoin_side_state(
-        side, config, bars, coin_settings, coin_overrides, C
+        side, config, coin_settings, coin_overrides, C
     );
     thread HslState& hsl = side.hsl;
     const bool coin_hsl_mode = config.coin_hsl_mode;
@@ -2710,7 +2692,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float& day_fill_count = fills.day_fill_count;
 
     for (int k = 1; k < stop_k; ++k) {
-        const int day_index = (start_day_minute + k) / 1440;
+        const int day_index = multicoin_utc_day_index(
+            start_day_minute, k, interval_ms
+        );
         if (day_index != current_day) {
             if (day_touched && current_day >= 0 && current_day < D) {
                 int output = (int(b) * D + current_day) * DAILY_COLS;
@@ -2762,7 +2746,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
         }
 
         update_ema_multicoin_side_indicators(
-            side, config, bars, coin_settings, k, C, start_hour_minute
+            side, config, bars, hour_log_ranges,
+            coin_settings, k, C
         );
 
         int tradable_count = count_ema_multicoin_tradable_coins(
@@ -2947,7 +2932,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
-                int active_fill_day = int(float(k) - first_eq_k) / 1440;
+                int active_fill_day = multicoin_active_fill_day(
+                    k, int(first_eq_k), interval_ms
+                );
                 if (active_fill_day != last_active_fill_day) {
                     fills_active_days_count += 1.0f;
                     last_active_fill_day = active_fill_day;
@@ -3329,6 +3316,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
@@ -3352,7 +3340,6 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const int requested_start_k = sizes[4];
     const int global_warmup = sizes[5];
     const int start_day_minute = sizes[6];
-    const int start_hour_minute = sizes[7];
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     const int recovery_stride = sizes[8];
     const int recovery_sample_count = sizes[9];
@@ -3406,11 +3393,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
     init_ema_multicoin_side_state(
-        long_side, long_config, bars, coin_settings,
+        long_side, long_config, coin_settings,
         long_coin_overrides, C
     );
     init_ema_multicoin_side_state(
-        short_side, short_config, bars, coin_settings,
+        short_side, short_config, coin_settings,
         short_coin_overrides, C
     );
 
@@ -3473,7 +3460,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float day_start_balance = account.balance;
 
     for (int k = 1; k < stop_k; ++k) {
-        const int day_index = (start_day_minute + k) / 1440;
+        const int day_index = multicoin_utc_day_index(
+            start_day_minute, k, interval_ms
+        );
         if (day_index != current_day) {
             if (day_touched && current_day >= 0 && current_day < D) {
                 int output = (int(b) * D + current_day) * DAILY_COLS;
@@ -3552,12 +3541,12 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         }
 
         update_ema_multicoin_side_indicators(
-            long_side, long_config, bars, coin_settings,
-            k, C, start_hour_minute
+            long_side, long_config, bars, hour_log_ranges,
+            coin_settings, k, C
         );
         update_ema_multicoin_side_indicators(
-            short_side, short_config, bars, coin_settings,
-            k, C, start_hour_minute
+            short_side, short_config, bars, hour_log_ranges,
+            coin_settings, k, C
         );
         int long_tradable_count = count_ema_multicoin_tradable_coins(
             bars, coin_settings, long_coin_overrides, k, C
@@ -3812,7 +3801,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
             if (any_fill) {
-                int active_fill_day = int(float(k) - first_eq_k) / 1440;
+                int active_fill_day = multicoin_active_fill_day(
+                    k, int(first_eq_k), interval_ms
+                );
                 if (active_fill_day != last_active_fill_day) {
                     fills_active_days_count += 1.0f;
                     last_active_fill_day = active_fill_day;
@@ -4063,6 +4054,7 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     constant float* long_coin_overrides,
     constant float* short_coin_overrides,
@@ -4080,7 +4072,7 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_fused_impl(
-        bars, fill_ticks, touch_ticks, coin_settings,
+        bars, fill_ticks, touch_ticks, hour_log_ranges, coin_settings,
         long_coin_overrides, short_coin_overrides,
         params, run_settings, sizes, end_steps,
         daily, scalars, gap_hist, coin_fill_counts,
@@ -4095,6 +4087,7 @@ kernel void passivbot_ema_anchor_multicoin(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     constant float* coin_overrides,
     constant float* params,
@@ -4112,7 +4105,8 @@ kernel void passivbot_ema_anchor_multicoin(
 ) {
     const bool short_side = run_settings[3] > 0.5f;
     passivbot_ema_anchor_multicoin_impl(
-        bars, fill_ticks, touch_ticks, coin_settings, coin_overrides, params, run_settings,
+        bars, fill_ticks, touch_ticks, hour_log_ranges,
+        coin_settings, coin_overrides, params, run_settings,
         sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
@@ -4125,6 +4119,7 @@ kernel void passivbot_ema_anchor_multicoin_long(
     constant float* bars,
     constant int* fill_ticks,
     constant int* touch_ticks,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     constant float* coin_overrides,
     constant float* params,
@@ -4141,7 +4136,8 @@ kernel void passivbot_ema_anchor_multicoin_long(
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_impl(
-        bars, fill_ticks, touch_ticks, coin_settings, coin_overrides, params, run_settings,
+        bars, fill_ticks, touch_ticks, hour_log_ranges,
+        coin_settings, coin_overrides, params, run_settings,
         sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,

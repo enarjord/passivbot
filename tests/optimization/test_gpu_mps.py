@@ -5,6 +5,10 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     ProxyMarket,
@@ -30,6 +34,8 @@ from optimization.gpu.mps_kernel import (
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
+    _scale_directional_minute_parameters,
+    _scale_ema_multicoin_coin_overrides,
     _scale_single_coin_minute_parameters,
     _with_hsl_ema_tail,
     _with_hsl_features,
@@ -2235,6 +2241,7 @@ def test_mps_ema_multicoin_candle_helpers_advance_independent_sides():
     probe_kernel = r"""
 kernel void passivbot_ema_multicoin_candle_helpers_probe(
     constant float* bars,
+    constant float* hour_log_ranges,
     constant float* coin_settings,
     constant float* coin_overrides,
     device float* output,
@@ -2275,10 +2282,6 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         short_side.forager_volume[c] = 0.0f;
         long_side.forager_volatility[c] = 0.0f;
         short_side.forager_volatility[c] = 0.0f;
-        long_side.hour_high[c] = c == 0 ? 105.0f : 205.0f;
-        long_side.hour_low[c] = c == 0 ? 95.0f : 195.0f;
-        short_side.hour_high[c] = long_side.hour_high[c];
-        short_side.hour_low[c] = long_side.hour_low[c];
         long_side.psize[c] = c == 0 ? 2.0f : 0.2f;
         long_side.pprice[c] = c == 0 ? 90.0f : 100.0f;
         short_side.psize[c] = c == 0 ? 3.0f : 0.2f;
@@ -2291,10 +2294,12 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         short_side, bars, coin_settings, 1, 2, true, 1.0e9f
     );
     update_ema_multicoin_side_indicators(
-        long_side, long_config, bars, coin_settings, 1, 2, 59
+        long_side, long_config, bars, hour_log_ranges,
+        coin_settings, 1, 2
     );
     update_ema_multicoin_side_indicators(
-        short_side, short_config, bars, coin_settings, 1, 2, 59
+        short_side, short_config, bars, hour_log_ranges,
+        coin_settings, 1, 2
     );
     output[2] = float(count_ema_multicoin_tradable_coins(
         bars, coin_settings, coin_overrides, 1, 2
@@ -2326,13 +2331,23 @@ kernel void passivbot_ema_multicoin_candle_helpers_probe(
         (2, 29), float("nan"), dtype=torch.float32, device="mps"
     )
     coin_overrides[1, 11] = 0.0
+    hour_log_ranges = torch.tensor(
+        [[-1.0, -1.0], [np.log(105.0 / 95.0), np.log(205.0 / 195.0)]],
+        dtype=torch.float32,
+        device="mps",
+    )
     output = torch.zeros(12, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
     )
     library.passivbot_ema_multicoin_candle_helpers_probe(
-        bars, coin_settings, coin_overrides, output, threads=(1, 1, 1)
+        bars,
+        hour_log_ranges,
+        coin_settings,
+        coin_overrides,
+        output,
+        threads=(1, 1, 1),
     )
     torch.mps.synchronize()
 
@@ -2849,10 +2864,10 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     EmaMulticoinSideState long_side;
     EmaMulticoinSideState short_side;
     init_ema_multicoin_side_state(
-        long_side, long_config, bars, coin_settings, coin_overrides, 1
+        long_side, long_config, coin_settings, coin_overrides, 1
     );
     init_ema_multicoin_side_state(
-        short_side, short_config, bars, coin_settings, coin_overrides, 1
+        short_side, short_config, coin_settings, coin_overrides, 1
     );
     long_side.selected[0] = true;
     short_side.selected[0] = true;
@@ -3203,6 +3218,87 @@ def test_single_coin_interval_packing_rejects_invalid_interval():
         )
 
 
+def test_multicoin_ema_interval_packing_scales_forager_and_directional_spans():
+    values = {
+        key: float(index + 1)
+        for index, key in enumerate(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+    }
+    values.update(
+        {
+            "ema_span_0": 30.0,
+            "ema_span_1": 90.0,
+            "offset_volatility_ema_span_1h": 24.0,
+            "offset_volatility_ema_span_1m": 120.0,
+            "forager_volume_ema_span_1m": 180.0,
+            "forager_volatility_ema_span_1m": 240.0,
+            "entry_cooldown_minutes": 15.0,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_cooldown_minutes_after_red": 35.0,
+        }
+    )
+    original = np.asarray(
+        [[values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS] * 2],
+        dtype=np.float64,
+    )
+
+    scaled = _scale_directional_minute_parameters(
+        original,
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=5.0,
+    )
+
+    for side_index in range(2):
+        offset = side_index * len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+        for key, expected in (
+            ("ema_span_0", 6.0),
+            ("ema_span_1", 18.0),
+            ("offset_volatility_ema_span_1m", 24.0),
+            ("forager_volume_ema_span_1m", 36.0),
+            ("forager_volatility_ema_span_1m", 48.0),
+            ("entry_cooldown_minutes", 3.0),
+            ("hsl_cooldown_minutes_after_red", 7.0),
+        ):
+            assert scaled[0, offset + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index(key)] == expected
+        assert scaled[
+            0,
+            offset
+            + EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index(
+                "offset_volatility_ema_span_1h"
+            ),
+        ] == 24.0
+
+
+def test_multicoin_ema_interval_packing_scales_only_finite_coin_overrides():
+    overrides = np.full(
+        (2, EMA_ANCHOR_COIN_OVERRIDE_COLS), np.nan, dtype=np.float64
+    )
+    ema0_column = EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0")
+    ema1_column = EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1")
+    volatility_1m_column = EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
+        "offset_volatility_ema_span_1m"
+    )
+    hsl_span_column = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + 2
+    hsl_cooldown_column = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + 3
+    overrides[0, ema0_column] = 35.0
+    overrides[0, ema1_column] = 70.0
+    overrides[0, volatility_1m_column] = 140.0
+    overrides[0, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = 21.0
+    overrides[0, hsl_span_column] = 60.0
+    overrides[0, hsl_cooldown_column] = 28.0
+
+    scaled = _scale_ema_multicoin_coin_overrides(overrides, 7.0)
+
+    assert scaled[0, ema0_column] == 5.0
+    assert scaled[0, ema1_column] == 10.0
+    assert scaled[0, volatility_1m_column] == 20.0
+    assert scaled[0, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] == 3.0
+    assert scaled[0, hsl_cooldown_column] == 4.0
+    alpha_7m = 2.0 / (float(scaled[0, hsl_span_column]) + 1.0)
+    assert alpha_7m == pytest.approx(1.0 - (1.0 - 2.0 / 61.0) ** 7)
+    assert np.isnan(scaled[1]).all()
+
+
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
@@ -3367,9 +3463,14 @@ def _multicoin_exposure_fixture(
     market_order_near_touch_threshold=0.001,
     hsl_panic_market=False,
     return_context=False,
+    interval_minutes=1,
 ):
     coin_count = 2
-    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    interval_ms = int(interval_minutes) * 60_000
+    timestamps = (
+        1_700_000_000_000
+        + np.arange(count, dtype=np.int64) * interval_ms
+    )
     hlcvs = np.empty((count, coin_count, 4), dtype=np.float64)
     close_matrix = np.asarray(closes, dtype=np.float64)
     for coin in range(coin_count):
@@ -3399,14 +3500,20 @@ def _multicoin_exposure_fixture(
             int(timestamps[0]),
             int(timestamps[0]),
             int(timestamps[0]),
-            60_000,
+            interval_ms,
             liquidation_threshold,
             first_valid_indices[coin],
             count - 1,
         )
         for coin in range(coin_count)
     ]
-    data = build_mps_multicoin_data(hlcvs, timestamps, runs, markets)
+    data = build_mps_multicoin_data(
+        hlcvs,
+        timestamps,
+        runs,
+        markets,
+        include_hourly_ranges=strategy_kind == "ema_anchor",
+    )
     if strategy_kind == "ema_anchor":
         values = {
             "base_qty_pct": 1.0,
@@ -3515,6 +3622,67 @@ def _multicoin_exposure_fixture(
     if return_context:
         return runner, row, runs[0], data
     return runner, row
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("interval_minutes", [5, 7])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_aggregated_interval_directional_smoke(
+    interval_minutes, side
+):
+    runner, row = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        count=420,
+        interval_minutes=interval_minutes,
+    )
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert runner.interval_minutes == interval_minutes
+    assert torch.isfinite(output["day_end_eq"]).any().item()
+    assert torch.isfinite(output["last_eq_ts"]).all().item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("interval_minutes", [5, 7])
+def test_mps_ema_multicoin_aggregated_interval_fused_smoke(interval_minutes):
+    _, row, run, data = _multicoin_exposure_fixture(
+        "ema_anchor",
+        "long",
+        count=420,
+        interval_minutes=interval_minutes,
+        return_context=True,
+    )
+    runner = MpsEmaAnchorMulticoinFusedRunner(run, data)
+
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert runner.interval_minutes == interval_minutes
+    assert torch.isfinite(output["day_end_eq"]).any().item()
+    assert torch.isfinite(output["last_eq_ts"]).all().item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_aggregated_interval_fails_closed():
+    with pytest.raises(
+        ValueError,
+        match="Trailing Martingale currently supports one-minute candles only",
+    ):
+        _multicoin_exposure_fixture(
+            "trailing_martingale",
+            "long",
+            count=32,
+            interval_minutes=5,
+        )
 
 
 @pytest.mark.skipif(
@@ -7436,6 +7604,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         data["bars"],
         data["fill_ticks"],
         data["touch_ticks"],
+        data["hour_log_ranges"],
         data["coin_settings"],
         overrides,
         overrides,
@@ -7720,6 +7889,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         data["bars"],
         data["fill_ticks"],
         data["touch_ticks"],
+        data["hour_log_ranges"],
         data["coin_settings"],
         override_unstuck,
         overrides,

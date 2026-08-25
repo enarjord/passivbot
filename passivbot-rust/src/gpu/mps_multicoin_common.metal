@@ -98,6 +98,23 @@ inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }
 
+inline int multicoin_interval_minutes(float interval_ms) {
+    return max(1, int(interval_ms / 60000.0f + 0.5f));
+}
+
+inline int multicoin_utc_day_index(
+    int start_day_minute, int k, float interval_ms
+) {
+    return (start_day_minute + k * multicoin_interval_minutes(interval_ms))
+        / 1440;
+}
+
+inline int multicoin_active_fill_day(
+    int k, int first_eq_k, float interval_ms
+) {
+    return ((k - first_eq_k) * multicoin_interval_minutes(interval_ms)) / 1440;
+}
+
 inline float float32_floor_nonnegative(float value) {
     if (!(value > 0.0f) || !isfinite(value)) return fmax(value, 0.0f);
     return as_type<float>(as_type<uint>(value) - 1u);

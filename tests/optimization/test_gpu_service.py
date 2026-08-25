@@ -934,19 +934,38 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
 
 
 @pytest.mark.parametrize(
-    ("strategy_kind", "runner_name", "override_cols", "proxy_mode"),
+    (
+        "strategy_kind",
+        "runner_name",
+        "override_cols",
+        "proxy_mode",
+        "interval_minutes",
+        "expected_interval_error",
+    ),
     [
         (
             "ema_anchor",
             "MpsEmaAnchorMulticoinFusedRunner",
             29,
             "shared-account-fused-ema-v1",
+            5,
+            False,
         ),
         (
             "trailing_martingale",
             "MpsTrailingMartingaleMulticoinFusedRunner",
             TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
             "shared-account-fused-tm-v1",
+            1,
+            False,
+        ),
+        (
+            "trailing_martingale",
+            "MpsTrailingMartingaleMulticoinFusedRunner",
+            TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+            "shared-account-fused-tm-v1",
+            5,
+            True,
         ),
     ],
 )
@@ -970,6 +989,8 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     runner_name,
     override_cols,
     proxy_mode,
+    interval_minutes,
+    expected_interval_error,
     needed_metrics,
     tail_enabled,
     raw_drawdown_enabled,
@@ -1083,7 +1104,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             for _ in range(2)
         ],
         backtest_params={
-            "candle_interval_minutes": 1,
+            "candle_interval_minutes": interval_minutes,
             "dynamic_wel_by_tradability": True,
             "forager_score_hysteresis_pct": 0.0,
             "last_valid_indices": [3, 3],
@@ -1121,7 +1142,25 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
 
     monkeypatch.setattr(mps_kernel, runner_name, FakeFusedRunner)
     values = np.ones((4, 2, 4), dtype=np.float64)
-    timestamps = np.arange(4, dtype=np.int64) * 60_000
+    timestamps = np.arange(4, dtype=np.int64) * interval_minutes * 60_000
+
+    if expected_interval_error:
+        with pytest.raises(
+            ValueError,
+            match="Trailing Martingale currently supports one-minute candles only",
+        ):
+            MpsMulticoinEmaProxy(
+                config=config,
+                hlcvs=values,
+                mss={"BTC": {}, "ETH": {}},
+                btc=np.ones(4, dtype=np.float64),
+                timestamps=timestamps,
+                exchange="bybit",
+                batch_size=8,
+                needed_metrics=needed_metrics,
+            )
+        assert constructed == {}
+        return
 
     proxy = MpsMulticoinEmaProxy(
         config=config,
@@ -1135,6 +1174,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
 
     assert isinstance(proxy.fused_runner, FakeFusedRunner)
+    assert constructed["run"].interval_ms == interval_minutes * 60_000
     assert proxy.runners == {}
     assert proxy.coin_override_contract["proxy_mode"] == proxy_mode
     assert proxy.coin_override_contract["hsl_proxy_mode"] == proxy_mode

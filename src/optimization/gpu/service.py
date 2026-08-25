@@ -10,7 +10,13 @@ import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
 from optimization.gpu.model import (
-    EMA_ANCHOR_PARAM_KEYS,
+    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     GPU_STRATEGY_PARAM_KEYS,
     HSL_COIN_OVERRIDE_PATHS,
@@ -1545,10 +1551,8 @@ def _build_multicoin_ema_coin_overrides(
 
         resolve_override = _get_backtest_coin_override
 
-    override_keys = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
-    hsl_start_column = 19
     matrix = np.full(
-        (len(coins), hsl_start_column + len(HSL_COIN_OVERRIDE_PATHS)),
+        (len(coins), EMA_ANCHOR_COIN_OVERRIDE_COLS),
         np.nan,
         dtype=np.float32,
     )
@@ -1558,12 +1562,12 @@ def _build_multicoin_ema_coin_overrides(
         strategy_patch = side_patch.get("strategy", {}).get("ema_anchor", {}) or {}
         effective_strategy = payload.strategy_params_list[coin_index][side]
         effective_bot = payload.bot_params_list[coin_index][side]
-        for column, key in enumerate(override_keys):
+        for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS):
             if key in strategy_patch:
                 matrix[coin_index, column] = float(effective_strategy[key])
         risk_patch = side_patch.get("risk", {}) or {}
         if "entry_cooldown_minutes" in risk_patch:
-            matrix[coin_index, 10] = float(
+            matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = float(
                 effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
             )
         # Exact payload construction keeps per-side universe eligibility in
@@ -1573,9 +1577,11 @@ def _build_multicoin_ema_coin_overrides(
         if not bool(effective_bot.get("entry_eligible", True)) or (
             "wallet_exposure_limit" in side_patch
         ):
-            matrix[coin_index, 11] = float(effective_bot["wallet_exposure_limit"])
+            matrix[
+                coin_index, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+            ] = float(effective_bot["wallet_exposure_limit"])
         if "we_excess_allowance_pct" in risk_patch:
-            matrix[coin_index, 12] = float(
+            matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
             )
         unstuck_patch = side_patch.get("unstuck", {}) or {}
@@ -1588,14 +1594,14 @@ def _build_multicoin_ema_coin_overrides(
                 ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
                 ("threshold", "unstuck_threshold"),
             ),
-            start=13,
+            start=EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
         _pack_multicoin_hsl_overrides(
             matrix,
             row=coin_index,
-            start_column=hsl_start_column,
+            start_column=EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
             side_patch=side_patch,
             effective_bot=effective_bot,
         )
@@ -1873,8 +1879,17 @@ class MpsMulticoinProxy:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
-        if int(backtest_params.get("candle_interval_minutes", 1)) != 1:
-            raise ValueError("MPS multicoin proxy currently supports one-minute candles only")
+        candle_interval_minutes = _single_coin_candle_interval_minutes(
+            backtest_params
+        )
+        if (
+            self.strategy_kind == "trailing_martingale"
+            and candle_interval_minutes != 1
+        ):
+            raise ValueError(
+                "MPS multicoin Trailing Martingale currently supports one-minute "
+                "candles only"
+            )
         if not bool(backtest_params.get("dynamic_wel_by_tradability")):
             raise ValueError(
                 "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
@@ -2106,7 +2121,7 @@ class MpsMulticoinProxy:
             )
             for item in payload.exchange_params
         ]
-        interval_ms = int(backtest_params["candle_interval_minutes"]) * 60_000
+        interval_ms = candle_interval_minutes * 60_000
         runs = [
             ProxyRun(
                 starting_balance=float(backtest_params["starting_balance"]),
@@ -2144,7 +2159,7 @@ class MpsMulticoinProxy:
             | _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
         ):
             wallet_exposure_column = (
-                11
+                EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
                 if self.strategy_kind == "ema_anchor"
                 else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
             )
@@ -2161,7 +2176,11 @@ class MpsMulticoinProxy:
                 tracking_start_indices=[run.trade_start_idx for run in runs],
             )
         self.data = build_mps_multicoin_data(
-            values, timestamps, runs=runs, markets=markets
+            values,
+            timestamps,
+            runs=runs,
+            markets=markets,
+            include_hourly_ranges=self.strategy_kind == "ema_anchor",
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
         self.runners = {}

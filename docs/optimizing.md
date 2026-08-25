@@ -798,10 +798,12 @@ Trade-offs:
 - Intra-interval fill ordering is lost (fills occur only at the aggregated bar boundaries).
 - Metrics are still time-correct because analysis uses timestamps rather than bar indices.
 - The Apple MPS backend supports aggregated intervals for single-coin EMA Anchor and Trailing
-  Martingale runs. It converts minute-denominated strategy EMA spans and elapsed-time cooldowns to
-  candle periods, compounds HSL's one-minute EMA decay over each candle, and preserves Rust's
-  boundary-crossing behavior when an interval does not evenly divide an hour; exact Rust validation
-  remains authoritative. Multi-coin MPS runs currently require one-minute candles.
+  Martingale runs, plus multi-coin EMA Anchor runs in long-only, short-only, and fused long+short
+  form. It converts minute-denominated strategy and Forager EMA spans, static per-coin overrides,
+  and elapsed-time cooldowns to candle periods, compounds HSL's one-minute EMA decay over each
+  candle, and preserves Rust's boundary-crossing behavior when an interval does not evenly divide
+  an hour; exact Rust validation remains authoritative. Multi-coin Trailing Martingale runs
+  currently require one-minute candles.
 
 ### Fine-Tuning Specific Parameters
 
