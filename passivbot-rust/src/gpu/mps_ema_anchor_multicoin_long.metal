@@ -7,7 +7,10 @@ constant int COIN_COLS = 13;
 constant int OVERRIDE_COLS = 29;
 constant int HSL_OVERRIDE_START = 19;
 constant int DAILY_COLS = 9;
-#if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+constant int SCALAR_COLS = 67;
+constant int FUSED_SCALAR_COLS = 72;
+#elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
 constant int SCALAR_COLS = 65;
 constant int FUSED_SCALAR_COLS = 70;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
@@ -597,6 +600,7 @@ inline bool update_ema_multicoin_dual_side_hsl(
     constant float* bars,
     constant float* coin_settings,
     int k,
+    int day_index,
     int coin_count,
     float starting_balance,
     float interval_ms,
@@ -747,7 +751,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
 #endif
             update_hsl_strategy_equity_stats(
                 long_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_long + long_unrealized
+                starting_balance + account.realized_pnl_long + long_unrealized,
+                day_index
             );
         }
         if (short_strategy_eq_enabled) {
@@ -758,7 +763,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
 #endif
             update_hsl_strategy_equity_stats(
                 short_side.hsl_strategy_eq,
-                starting_balance + account.realized_pnl_short + short_unrealized
+                starting_balance + account.realized_pnl_short + short_unrealized,
+                day_index
             );
         }
         return true;
@@ -774,7 +780,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
             long_side.hsl_strategy_eq,
             starting_balance + (
                 unified ? account.realized_pnl_total : account.realized_pnl_long
-            ) + (unified ? long_unrealized + short_unrealized : long_unrealized)
+            ) + (unified ? long_unrealized + short_unrealized : long_unrealized),
+            day_index
         );
     }
     if (short_strategy_eq_enabled) {
@@ -782,7 +789,8 @@ inline bool update_ema_multicoin_dual_side_hsl(
             short_side.hsl_strategy_eq,
             starting_balance + (
                 unified ? account.realized_pnl_total : account.realized_pnl_short
-            ) + (unified ? long_unrealized + short_unrealized : short_unrealized)
+            ) + (unified ? long_unrealized + short_unrealized : short_unrealized),
+            day_index
         );
     }
     if (!update_joint_pside_hsl(
@@ -2979,7 +2987,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #endif
                 update_hsl_strategy_equity_stats(
                     side.hsl_strategy_eq,
-                    starting_balance + realized_pnl_cumsum_last + unrealized
+                    starting_balance + realized_pnl_cumsum_last + unrealized,
+                    day_index
                 );
             }
             if (hsl_sample_enabled) {
@@ -3206,6 +3215,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
         : hsl_strategy_equity_drawdown_max(side.hsl_strategy_eq);
     scalars[scalar_offset + 64] = short_side
         ? hsl_strategy_equity_drawdown_max(side.hsl_strategy_eq) : 0.0f;
+#endif
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    scalars[scalar_offset + 65] = short_side ? 0.0f
+        : hsl_strategy_equity_drawdown_mean_worst_1pct(side.hsl_strategy_eq);
+    scalars[scalar_offset + 66] = short_side
+        ? hsl_strategy_equity_drawdown_mean_worst_1pct(side.hsl_strategy_eq)
+        : 0.0f;
 #endif
 }
 
@@ -3846,7 +3862,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             bool hsl_valid = update_ema_multicoin_dual_side_hsl(
                 long_side, long_config, long_effective_n_positions,
                 short_side, short_config, short_effective_n_positions,
-                account, bars, coin_settings, k, C,
+                account, bars, coin_settings, k, day_index, C,
                 starting_balance, interval_ms,
                 sample_enabled, sampled_tier
             );
@@ -4118,6 +4134,16 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     scalars[scalar_offset + 69] = hsl_strategy_equity_drawdown_max(
         short_side.hsl_strategy_eq
     );
+#endif
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    scalars[scalar_offset + 70]
+        = hsl_strategy_equity_drawdown_mean_worst_1pct(
+            long_side.hsl_strategy_eq
+        );
+    scalars[scalar_offset + 71]
+        = hsl_strategy_equity_drawdown_mean_worst_1pct(
+            short_side.hsl_strategy_eq
+        );
 #endif
 }
 

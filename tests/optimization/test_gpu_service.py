@@ -560,6 +560,8 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
         "hsl_strategy_eq_recovery_max_ms_short",
         "hsl_drawdown_ema_mean_worst_1pct_long",
         "hsl_drawdown_ema_mean_worst_1pct_short",
+        "hsl_drawdown_raw_mean_worst_1pct_long",
+        "hsl_drawdown_raw_mean_worst_1pct_short",
     } <= DIRECTIONAL_HSL_OUTPUT_KEYS
 
 
@@ -606,6 +608,9 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
         output[f"hsl_drawdown_ema_mean_worst_1pct_{side}"] = torch.tensor(
             [0.18 if side == "long" else 0.09]
         )
+        output[f"hsl_drawdown_raw_mean_worst_1pct_{side}"] = torch.tensor(
+            [0.16 if side == "long" else 0.07]
+        )
         return output
 
     combined = _combine_hedged_multicoin_hsl_outputs(
@@ -640,6 +645,12 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert combined["hsl_drawdown_ema_mean_worst_1pct_short"].item() == pytest.approx(
         0.09
     )
+    assert combined["hsl_drawdown_raw_mean_worst_1pct_long"].item() == pytest.approx(
+        0.16
+    )
+    assert combined["hsl_drawdown_raw_mean_worst_1pct_short"].item() == pytest.approx(
+        0.07
+    )
     assert combined["hsl_tier_samples_total"].item() == 10.0
     assert combined["hsl_tier_samples_red"].item() == 8.0
     assert combined["hsl_tier_samples_orange"].item() == 2.0
@@ -662,7 +673,7 @@ def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():
     assert panic["hard_stop_panic_close_loss_drawdown_pct_mean"].item() == (
         pytest.approx(0.8 / 3.0)
     )
-    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 33
+    assert len(DIRECTIONAL_HSL_OUTPUT_KEYS) == 35
 
 
 def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
@@ -971,13 +982,15 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "needed_metrics",
         "tail_enabled",
         "raw_drawdown_enabled",
+        "raw_tail_enabled",
         "recovery_distribution_enabled",
     ),
     [
-        ({"hard_stop_time_in_red_pct"}, False, False, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False),
-        ({"drawdown_worst_strategy_eq_long"}, False, True, False),
-        ({"strategy_eq_recovery_days_p99"}, False, False, True),
+        ({"hard_stop_time_in_red_pct"}, False, False, False, False),
+        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
+        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
+        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
+        ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
     ],
 )
 def test_multicoin_proxy_constructs_fused_shared_account_runner(
@@ -990,6 +1003,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     needed_metrics,
     tail_enabled,
     raw_drawdown_enabled,
+    raw_tail_enabled,
     recovery_distribution_enabled,
 ):
     torch = pytest.importorskip("torch")
@@ -1183,6 +1197,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         constructed["kwargs"]["hsl_raw_drawdown_enabled"]
         is raw_drawdown_enabled
     )
+    assert constructed["kwargs"]["hsl_raw_tail_enabled"] is raw_tail_enabled
     assert (
         constructed["kwargs"]["recovery_distribution_enabled"]
         is recovery_distribution_enabled

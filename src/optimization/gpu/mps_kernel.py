@@ -32,18 +32,22 @@ MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
 MPS_MULTICOIN_BASE_SCALAR_COLS = 61
 MPS_MULTICOIN_EMA_TAIL_SCALAR_COLS = 63
-MPS_MULTICOIN_SCALAR_COLS = 65
+MPS_MULTICOIN_RAW_DRAWDOWN_SCALAR_COLS = 65
+MPS_MULTICOIN_SCALAR_COLS = 67
 MPS_DIRECTIONAL_BASE_SCALAR_COLS = 66
 MPS_DIRECTIONAL_EMA_TAIL_SCALAR_COLS = 68
-MPS_DIRECTIONAL_SCALAR_COLS = 70
+MPS_DIRECTIONAL_RAW_DRAWDOWN_SCALAR_COLS = 70
+MPS_DIRECTIONAL_SCALAR_COLS = 72
 MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 66
 MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 68
-MPS_MULTICOIN_FUSED_SCALAR_COLS = 70
+MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 70
+MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
 MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 
 _HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
 _HSL_RAW_DRAWDOWN_DEFINE = "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
+_HSL_RAW_TAIL_DEFINE = "#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 1\n"
 _RECOVERY_DISTRIBUTION_DEFINE = (
     "#define PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED 1\n"
 )
@@ -62,13 +66,20 @@ def _with_hsl_features(
     *,
     ema_tail_enabled: bool,
     raw_drawdown_enabled: bool,
+    raw_tail_enabled: bool,
 ) -> str:
+    if raw_tail_enabled and not raw_drawdown_enabled:
+        raise ValueError("HSL raw-tail metrics require raw-drawdown metrics")
     source = _with_hsl_ema_tail(source, ema_tail_enabled)
-    if not raw_drawdown_enabled:
-        return source
-    if "#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED" not in source:
-        raise RuntimeError("MPS source is missing the HSL raw-drawdown feature guard")
-    return _HSL_RAW_DRAWDOWN_DEFINE + source
+    if raw_drawdown_enabled:
+        if "#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED" not in source:
+            raise RuntimeError("MPS source is missing the HSL raw-drawdown feature guard")
+        source = _HSL_RAW_DRAWDOWN_DEFINE + source
+    if raw_tail_enabled:
+        if "#ifndef PASSIVBOT_HSL_RAW_TAIL_ENABLED" not in source:
+            raise RuntimeError("MPS source is missing the HSL raw-tail feature guard")
+        source = _HSL_RAW_TAIL_DEFINE + source
+    return source
 
 
 def _with_recovery_distribution(source: str, enabled: bool) -> str:
@@ -292,6 +303,7 @@ def _scalar_column_or_zero(scalars, index: int):
 def _shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
@@ -304,6 +316,7 @@ def _shader_library(
                 passivbot_rust.mps_ema_anchor_source_py(),
                 ema_tail_enabled=hsl_ema_tail_enabled,
                 raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                raw_tail_enabled=hsl_raw_tail_enabled,
             ),
             recovery_distribution_enabled,
         )
@@ -314,6 +327,7 @@ def _shader_library(
 def _trailing_martingale_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
@@ -326,6 +340,7 @@ def _trailing_martingale_shader_library(
                 passivbot_rust.mps_trailing_martingale_source_py(),
                 ema_tail_enabled=hsl_ema_tail_enabled,
                 raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                raw_tail_enabled=hsl_raw_tail_enabled,
             ),
             recovery_distribution_enabled,
         )
@@ -368,6 +383,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
@@ -380,6 +396,7 @@ def _ema_anchor_multicoin_shader_library(
                 passivbot_rust.mps_ema_anchor_multicoin_source_py(),
                 ema_tail_enabled=hsl_ema_tail_enabled,
                 raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                raw_tail_enabled=hsl_raw_tail_enabled,
             ),
             recovery_distribution_enabled,
         )
@@ -390,6 +407,7 @@ def _ema_anchor_multicoin_shader_library(
 def _trailing_martingale_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
@@ -402,6 +420,7 @@ def _trailing_martingale_multicoin_shader_library(
                 passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
                 ema_tail_enabled=hsl_ema_tail_enabled,
                 raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                raw_tail_enabled=hsl_raw_tail_enabled,
             ),
             recovery_distribution_enabled,
         )
@@ -578,6 +597,12 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         ),
         "hsl_drawdown_raw_max_long": _scalar_column_or_zero(scalars, 63),
         "hsl_drawdown_raw_max_short": _scalar_column_or_zero(scalars, 64),
+        "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(
+            scalars, 65
+        ),
+        "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(
+            scalars, 66
+        ),
     }
 
 
@@ -602,6 +627,12 @@ def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
             ),
             "hsl_drawdown_raw_max_long": _scalar_column_or_zero(scalars, 68),
             "hsl_drawdown_raw_max_short": _scalar_column_or_zero(scalars, 69),
+            "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(
+                scalars, 70
+            ),
+            "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(
+                scalars, 71
+            ),
         }
     )
     return output
@@ -702,6 +733,12 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         ),
         "hsl_drawdown_raw_max_long": _scalar_column_or_zero(scalars, 68),
         "hsl_drawdown_raw_max_short": _scalar_column_or_zero(scalars, 69),
+        "hsl_drawdown_raw_mean_worst_1pct_long": _scalar_column_or_zero(
+            scalars, 70
+        ),
+        "hsl_drawdown_raw_mean_worst_1pct_short": _scalar_column_or_zero(
+            scalars, 71
+        ),
     }
 
 
@@ -728,6 +765,7 @@ class MpsEmaAnchorRunner:
         pnl_lookback_bars: int = 0,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
     ):
         self.market = market
@@ -782,6 +820,7 @@ class MpsEmaAnchorRunner:
         self.pnl_lookback_bars = pnl_lookback_bars
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
+        self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.rolling_capacity = (
             MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
@@ -902,11 +941,15 @@ class MpsEmaAnchorRunner:
                         (
                             batch_size,
                             MPS_DIRECTIONAL_SCALAR_COLS
-                            if self.hsl_raw_drawdown_enabled
+                            if self.hsl_raw_tail_enabled
                             else (
-                                MPS_DIRECTIONAL_EMA_TAIL_SCALAR_COLS
-                                if self.hsl_ema_tail_enabled
-                                else MPS_DIRECTIONAL_BASE_SCALAR_COLS
+                                MPS_DIRECTIONAL_RAW_DRAWDOWN_SCALAR_COLS
+                                if self.hsl_raw_drawdown_enabled
+                                else (
+                                    MPS_DIRECTIONAL_EMA_TAIL_SCALAR_COLS
+                                    if self.hsl_ema_tail_enabled
+                                    else MPS_DIRECTIONAL_BASE_SCALAR_COLS
+                                )
                             ),
                         ),
                         dtype=torch.float32,
@@ -998,6 +1041,7 @@ class MpsEmaAnchorRunner:
         library = _shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
         )
         compiled = time.perf_counter()
@@ -1067,6 +1111,7 @@ class MpsEmaAnchorMulticoinRunner:
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
     ):
         if side not in {"long", "short"}:
@@ -1077,13 +1122,20 @@ class MpsEmaAnchorMulticoinRunner:
         self.collect_coin_fill_counts = bool(collect_coin_fill_counts)
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
+        self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
-        if self.hsl_raw_drawdown_enabled:
+        if self.hsl_raw_tail_enabled:
             self.scalar_cols = (
                 MPS_MULTICOIN_FUSED_SCALAR_COLS
                 if fused
                 else MPS_MULTICOIN_SCALAR_COLS
+            )
+        elif self.hsl_raw_drawdown_enabled:
+            self.scalar_cols = (
+                MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS
+                if fused
+                else MPS_MULTICOIN_RAW_DRAWDOWN_SCALAR_COLS
             )
         elif self.hsl_ema_tail_enabled:
             self.scalar_cols = (
@@ -1328,6 +1380,7 @@ class MpsEmaAnchorMulticoinRunner:
         return _ema_anchor_multicoin_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
         )
 
@@ -1450,6 +1503,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         hedge_mode: bool = True,
     ):
@@ -1468,6 +1522,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
         )
         if short_coin_overrides is None:
@@ -1619,6 +1674,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
     ):
         super().__init__(
@@ -1636,6 +1692,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_panic_market=hsl_panic_market,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
         )
 
@@ -1661,6 +1718,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         return _trailing_martingale_multicoin_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
         )
 
@@ -1733,6 +1791,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
+        hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         hedge_mode: bool = True,
     ):
@@ -1751,6 +1810,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+            hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
         )
         if short_coin_overrides is None:
@@ -1875,6 +1935,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         if self.shader_topology != "generic":
             self.hsl_ema_tail_enabled = False
             self.hsl_raw_drawdown_enabled = False
+            self.hsl_raw_tail_enabled = False
 
     def _shader_library(self):
         if self.shader_topology == "long_no_hsl":
@@ -1888,6 +1949,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         return _trailing_martingale_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
+            self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
         )
 

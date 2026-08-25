@@ -1080,6 +1080,8 @@ def test_hard_stop_raw_drawdown_metrics_map_each_side():
         {
             "hsl_drawdown_raw_max_long": torch.tensor([0.17, 0.0]),
             "hsl_drawdown_raw_max_short": torch.tensor([0.08, 0.23]),
+            "hsl_drawdown_raw_mean_worst_1pct_long": torch.tensor([0.12, 0.0]),
+            "hsl_drawdown_raw_mean_worst_1pct_short": torch.tensor([0.06, 0.19]),
         }
     )
 
@@ -1089,6 +1091,12 @@ def test_hard_stop_raw_drawdown_metrics_map_each_side():
     assert metrics["drawdown_worst_strategy_eq_short"].tolist() == pytest.approx(
         [0.08, 0.23]
     )
+    assert metrics[
+        "drawdown_worst_mean_1pct_strategy_eq_long"
+    ].tolist() == pytest.approx([0.12, 0.0])
+    assert metrics[
+        "drawdown_worst_mean_1pct_strategy_eq_short"
+    ].tolist() == pytest.approx([0.06, 0.19])
 
 
 def test_hard_stop_raw_drawdown_metrics_fail_closed_without_outputs():
@@ -1099,7 +1107,11 @@ def test_hard_stop_raw_drawdown_metrics_fail_closed_without_outputs():
 
     with pytest.raises(RuntimeError, match="hsl_drawdown_raw_max_short"):
         _hard_stop_raw_drawdown_metrics(
-            {"hsl_drawdown_raw_max_long": torch.tensor([0.1])}
+            {
+                "hsl_drawdown_raw_max_long": torch.tensor([0.1]),
+                "hsl_drawdown_raw_mean_worst_1pct_long": torch.tensor([0.08]),
+                "hsl_drawdown_raw_mean_worst_1pct_short": torch.tensor([0.05]),
+            }
         )
 
 

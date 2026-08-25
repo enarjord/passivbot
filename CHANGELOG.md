@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS HSL optimization now supports per-side
+  `drawdown_worst_mean_1pct_strategy_eq_{long,short}` scoring and limits for EMA Anchor and
+  Trailing Martingale across single-coin, one-sided multi-coin, and fused dual-side multi-coin
+  topologies. The opt-in Metal proxy reduces full-resolution controller drawdowns to one worst
+  sample per observed day, then applies a bounded logarithmic tail histogram; exact Rust
+  validation and rolling drift gates remain authoritative.
+
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports staggered
   ordinary invalid candle tails when at least one prepared coin remains valid through the endpoint,
   every tail stays below exact Rust's forced-delist threshold, and at least one candle whose packed

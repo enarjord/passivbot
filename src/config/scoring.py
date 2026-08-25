@@ -85,6 +85,8 @@ DEFAULT_OBJECTIVE_GOALS = {
     "drawdown_worst_mean_1pct_ema_strategy_eq_long": "min",
     "drawdown_worst_mean_1pct_ema_strategy_eq_short": "min",
     "drawdown_worst_mean_1pct_strategy_eq": "min",
+    "drawdown_worst_mean_1pct_strategy_eq_long": "min",
+    "drawdown_worst_mean_1pct_strategy_eq_short": "min",
     "strategy_eq_underwater_pct_mean": "min",
     "strategy_eq_underwater_pct_median": "min",
     "strategy_eq_recovery_days_mean": "min",

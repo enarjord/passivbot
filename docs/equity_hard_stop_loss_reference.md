@@ -138,6 +138,7 @@ These are the main parity surfaces that should be reviewed together:
    - Dual-side multi-coin Trailing Martingale uses a fused shared-account strategy kernel for unified, pside, and coin signals, including shared lifecycle/panic-loss metrics and per-coin HSL overrides in coin mode
    - Apple MPS exports the worst EMA-smoothed strategy-equity drawdown for long and short HSL controllers; the account metric is the same `max(long, short)` reduction as exact Rust
    - Apple MPS exports the raw worst strategy-equity drawdown for each long and short HSL controller through opt-in bounded peak-and-maximum state; exact Rust validation remains authoritative for proxy-fill drift
+   - Apple MPS exports the raw mean-worst-1% daily strategy-equity drawdown for each long and short HSL controller through opt-in daily-worst state and a bounded logarithmic tail histogram; exact Rust validation and rolling drift gates remain authoritative
    - Apple MPS exports each HSL controller's longest strict strategy-equity time-to-exceed interval as `peak_recovery_{hours,days}_strategy_eq_{long,short}`, including an unrecovered tail through the backtest end
 
 ### Confirmed Gaps / Risks

@@ -142,7 +142,7 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.arange(70, dtype=torch.float32).reshape(1, 70)
+    scalars = torch.arange(72, dtype=torch.float32).reshape(1, 72)
     gaps = torch.zeros((1, 128), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
@@ -170,6 +170,12 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     )
     assert torch.equal(output["hsl_drawdown_raw_max_long"], scalars[:, 68])
     assert torch.equal(output["hsl_drawdown_raw_max_short"], scalars[:, 69])
+    assert torch.equal(
+        output["hsl_drawdown_raw_mean_worst_1pct_long"], scalars[:, 70]
+    )
+    assert torch.equal(
+        output["hsl_drawdown_raw_mean_worst_1pct_short"], scalars[:, 71]
+    )
 
 
 def test_hsl_ema_tail_source_variant_is_opt_in_and_guarded():
@@ -187,14 +193,55 @@ def test_hsl_raw_drawdown_source_variant_is_opt_in_and_guarded():
     source = "#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED\nbody"
 
     assert _with_hsl_features(
-        source, ema_tail_enabled=False, raw_drawdown_enabled=False
+        source,
+        ema_tail_enabled=False,
+        raw_drawdown_enabled=False,
+        raw_tail_enabled=False,
     ) is source
     assert _with_hsl_features(
-        source, ema_tail_enabled=False, raw_drawdown_enabled=True
+        source,
+        ema_tail_enabled=False,
+        raw_drawdown_enabled=True,
+        raw_tail_enabled=False,
     ) == ("#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n" + source)
     with pytest.raises(RuntimeError, match="raw-drawdown feature guard"):
         _with_hsl_features(
-            "body", ema_tail_enabled=False, raw_drawdown_enabled=True
+            "body",
+            ema_tail_enabled=False,
+            raw_drawdown_enabled=True,
+            raw_tail_enabled=False,
+        )
+    with pytest.raises(ValueError, match="require raw-drawdown"):
+        _with_hsl_features(
+            source,
+            ema_tail_enabled=False,
+            raw_drawdown_enabled=False,
+            raw_tail_enabled=True,
+        )
+
+
+def test_hsl_raw_tail_source_variant_is_separately_opt_in_and_guarded():
+    source = (
+        "#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED\n"
+        "#ifndef PASSIVBOT_HSL_RAW_TAIL_ENABLED\nbody"
+    )
+
+    assert _with_hsl_features(
+        source,
+        ema_tail_enabled=False,
+        raw_drawdown_enabled=True,
+        raw_tail_enabled=True,
+    ) == (
+        "#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 1\n"
+        "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
+        + source
+    )
+    with pytest.raises(RuntimeError, match="raw-tail feature guard"):
+        _with_hsl_features(
+            "#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED\nbody",
+            ema_tail_enabled=False,
+            raw_drawdown_enabled=True,
+            raw_tail_enabled=True,
         )
 
 
@@ -250,6 +297,7 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
         self.hsl_raw_drawdown_enabled = bool(
             kwargs["hsl_raw_drawdown_enabled"]
         )
+        self.hsl_raw_tail_enabled = bool(kwargs["hsl_raw_tail_enabled"])
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
     runner = MpsTrailingMartingaleRunner(
@@ -259,11 +307,13 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
         hsl_enabled=False,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        hsl_raw_tail_enabled=True,
     )
 
     assert runner.shader_topology == "long_no_hsl"
     assert runner.hsl_ema_tail_enabled is False
     assert runner.hsl_raw_drawdown_enabled is False
+    assert runner.hsl_raw_tail_enabled is False
 
 
 @pytest.mark.parametrize("recovery_enabled", [False, True])
@@ -309,6 +359,7 @@ def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatc
         self.short_enabled = False
         self.hsl_ema_tail_enabled = False
         self.hsl_raw_drawdown_enabled = False
+        self.hsl_raw_tail_enabled = False
         self.recovery_distribution_enabled = False
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
@@ -441,14 +492,14 @@ kernel void passivbot_hsl_strategy_equity_recovery_probe(
     if (b > 0) return;
     HslStrategyEquityStats stats = init_hsl_strategy_equity_stats();
     for (int k = 0; k < 7; ++k) {
-        update_hsl_strategy_equity_stats(stats, samples[k]);
+        update_hsl_strategy_equity_stats(stats, samples[k], 0);
     }
     output[0] = hsl_strategy_equity_recovery_max_steps(stats);
     HslStrategyEquityStats resumed = init_hsl_strategy_equity_stats();
-    update_hsl_strategy_equity_stats(resumed, samples[0]);
-    update_hsl_strategy_equity_stats(resumed, samples[2]);
-    update_hsl_strategy_equity_stats(resumed, samples[3]);
-    update_hsl_strategy_equity_stats(resumed, samples[4]);
+    update_hsl_strategy_equity_stats(resumed, samples[0], 0);
+    update_hsl_strategy_equity_stats(resumed, samples[2], 0);
+    update_hsl_strategy_equity_stats(resumed, samples[3], 0);
+    update_hsl_strategy_equity_stats(resumed, samples[4], 0);
     output[1] = hsl_strategy_equity_recovery_max_steps(resumed);
 }
 """
@@ -530,9 +581,10 @@ kernel void passivbot_hsl_strategy_equity_raw_drawdown_probe(
     if (b > 0) return;
     HslStrategyEquityStats stats = init_hsl_strategy_equity_stats();
     for (int k = 0; k < 5; ++k) {
-        update_hsl_strategy_equity_stats(stats, samples[k]);
+        update_hsl_strategy_equity_stats(stats, samples[k], k / 2);
     }
     output[0] = hsl_strategy_equity_drawdown_max(stats);
+    output[1] = hsl_strategy_equity_drawdown_mean_worst_1pct(stats);
 }
 """
     samples = torch.tensor(
@@ -540,11 +592,12 @@ kernel void passivbot_hsl_strategy_equity_raw_drawdown_probe(
         dtype=torch.float32,
         device="mps",
     )
-    output = torch.zeros(1, dtype=torch.float32, device="mps")
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
     source = _with_hsl_features(
         passivbot_rust.mps_ema_anchor_source_py(),
         ema_tail_enabled=False,
         raw_drawdown_enabled=True,
+        raw_tail_enabled=True,
     )
     library = torch.mps.compile_shader(source + probe_kernel)
     library.passivbot_hsl_strategy_equity_raw_drawdown_probe(
@@ -552,7 +605,11 @@ kernel void passivbot_hsl_strategy_equity_raw_drawdown_probe(
     )
     torch.mps.synchronize()
 
-    assert output.item() == pytest.approx(0.2, abs=1.0e-6)
+    assert output[0].item() == pytest.approx(0.2, abs=1.0e-6)
+    # The two intraday lows reduce to daily worst values of 0.1 and 0.2;
+    # the open terminal day contributes zero. With three observed days, Rust's
+    # floor(1%) contract retains the single worst day.
+    assert output[1].item() == pytest.approx(0.2, abs=1.0e-6)
 
 
 @pytest.mark.skipif(
@@ -2022,7 +2079,7 @@ kernel void passivbot_tm_multicoin_dual_hsl_phase_probe(
         bool valid = update_tm_multicoin_dual_side_hsl(
             long_side, long_config, long_slots,
             short_side, short_config, short_slots,
-            account, selected_bars, coin_settings, k, 1,
+                account, selected_bars, coin_settings, k, 0, 1,
             100.0f, 60000.0f, sample_enabled, sampled_tier
         );
         all_valid = all_valid && valid;
@@ -2189,7 +2246,7 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
         bool valid = update_ema_multicoin_dual_side_hsl(
             long_side, long_config, long_slots,
             short_side, short_config, short_slots,
-            account, selected_bars, coin_settings, k, 1,
+                account, selected_bars, coin_settings, k, 0, 1,
             100.0f, 60000.0f, sample_enabled, sampled_tier
         );
         all_valid = all_valid && valid;
@@ -6704,6 +6761,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         passivbot_rust.mps_ema_anchor_multicoin_source_py(),
         ema_tail_enabled=True,
         raw_drawdown_enabled=True,
+        raw_tail_enabled=True,
     )
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
@@ -8425,9 +8483,10 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         passivbot_rust.mps_ema_anchor_multicoin_source_py(),
         ema_tail_enabled=True,
         raw_drawdown_enabled=True,
+        raw_tail_enabled=True,
     )
     assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 70" in source
+    assert "constant int FUSED_SCALAR_COLS = 72" in source
 
     count = 512
     coin_count = 3
@@ -8558,7 +8617,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 70), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -8630,6 +8689,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        hsl_raw_tail_enabled=True,
         recovery_distribution_enabled=True,
     )
     torch.testing.assert_close(runner.settings, run_settings)
@@ -8673,6 +8733,12 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     torch.testing.assert_close(
         runner_output["hsl_drawdown_raw_max_short"], scalars[:, 69]
+    )
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_raw_mean_worst_1pct_long"], scalars[:, 70]
+    )
+    torch.testing.assert_close(
+        runner_output["hsl_drawdown_raw_mean_worst_1pct_short"], scalars[:, 71]
     )
     assert runner_output["alive"].cpu().tolist() == [
         True,
@@ -8845,7 +8911,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 70), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 72), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -8992,9 +9058,10 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
         ema_tail_enabled=True,
         raw_drawdown_enabled=True,
+        raw_tail_enabled=True,
     )
     assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 70" in source
+    assert "constant int FUSED_SCALAR_COLS = 72" in source
 
     count = 512
     coin_count = 3
@@ -9154,7 +9221,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 70), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -9224,6 +9291,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         collect_coin_fill_counts=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        hsl_raw_tail_enabled=True,
         recovery_distribution_enabled=True,
     )
     torch.testing.assert_close(runner.settings, run_settings)
@@ -9455,7 +9523,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 70), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 72), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -12127,6 +12195,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         pnl_lookback_bars=5,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        hsl_raw_tail_enabled=True,
     ).run(np.asarray(rows, dtype=np.float64))
     market_runner = runner_cls(
         market,
@@ -12209,6 +12278,9 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
     assert output[f"hsl_strategy_eq_recovery_max_ms_{side}"][1].item() > 0.0
     assert output[f"hsl_drawdown_ema_mean_worst_1pct_{side}"][1].item() > 0.0
     assert output[f"hsl_drawdown_raw_max_{side}"][1].item() > 0.0
+    assert output[
+        f"hsl_drawdown_raw_mean_worst_1pct_{side}"
+    ][1].item() > 0.0
     assert output[
         f"hsl_drawdown_ema_mean_worst_1pct_{'short' if side == 'long' else 'long'}"
     ][1].item() == 0.0
@@ -12348,6 +12420,7 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
         short_enabled=True,
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
+        hsl_raw_tail_enabled=True,
     ).run(rows)
     torch.mps.synchronize()
 
@@ -12368,6 +12441,8 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
     assert output["hsl_drawdown_ema_mean_worst_1pct_short"][2].item() > 0.0
     assert output["hsl_drawdown_raw_max_long"][2].item() > 0.0
     assert output["hsl_drawdown_raw_max_short"][2].item() > 0.0
+    assert output["hsl_drawdown_raw_mean_worst_1pct_long"][2].item() > 0.0
+    assert output["hsl_drawdown_raw_mean_worst_1pct_short"][2].item() > 0.0
     if signal_mode == "unified":
         assert output["hsl_panic_loss_drawdown_count"][2].item() >= 1.0
     else:

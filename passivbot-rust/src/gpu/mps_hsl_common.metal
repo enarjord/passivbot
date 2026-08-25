@@ -11,6 +11,10 @@
 #define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_RAW_TAIL_ENABLED
+#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0
+#endif
+
 #define HSL_EMA_TAIL_BINS 32
 
 constant int HSL_SIGNAL_UNIFIED = 0;
@@ -235,6 +239,13 @@ struct HslStrategyEquityStats {
 #if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
     float drawdown_max;
 #endif
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    int current_drawdown_day;
+    float current_day_drawdown_worst;
+    float completed_day_count;
+    float daily_drawdown_counts[HSL_EMA_TAIL_BINS];
+    float daily_drawdown_sums[HSL_EMA_TAIL_BINS];
+#endif
 };
 
 inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
@@ -247,12 +258,44 @@ inline HslStrategyEquityStats init_hsl_strategy_equity_stats() {
 #if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
     stats.drawdown_max = 0.0f;
 #endif
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    stats.current_drawdown_day = -1;
+    stats.current_day_drawdown_worst = 0.0f;
+    stats.completed_day_count = 0.0f;
+    for (int i = 0; i < HSL_EMA_TAIL_BINS; ++i) {
+        stats.daily_drawdown_counts[i] = 0.0f;
+        stats.daily_drawdown_sums[i] = 0.0f;
+    }
+#endif
     return stats;
+}
+
+inline int hsl_drawdown_tail_bin(float value) {
+    // Cover fourteen octaves over [2^-14, 1) so low-drawdown Pareto members
+    // remain rankable without increasing thread-local state. Edge bins retain
+    // smaller values and overflow respectively. Actual sums are not clamped,
+    // so values outside the covered range keep their magnitude.
+    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
+        * 2.2857142857142856f;
+    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
+}
+
+inline void flush_hsl_strategy_equity_daily_drawdown(
+    thread HslStrategyEquityStats& stats
+) {
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    if (stats.current_drawdown_day < 0) return;
+    int bin = hsl_drawdown_tail_bin(stats.current_day_drawdown_worst);
+    stats.completed_day_count += 1.0f;
+    stats.daily_drawdown_counts[bin] += 1.0f;
+    stats.daily_drawdown_sums[bin] += stats.current_day_drawdown_worst;
+#endif
 }
 
 inline void update_hsl_strategy_equity_stats(
     thread HslStrategyEquityStats& stats,
-    float strategy_equity
+    float strategy_equity,
+    int day_index
 ) {
     if (!isfinite(strategy_equity)) return;
     const float sample_k = stats.initialized
@@ -262,6 +305,10 @@ inline void update_hsl_strategy_equity_stats(
         stats.peak = strategy_equity;
         stats.peak_sample_k = sample_k;
         stats.last_sample_k = sample_k;
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+        stats.current_drawdown_day = day_index;
+        stats.current_day_drawdown_worst = 0.0f;
+#endif
         return;
     }
     stats.last_sample_k = sample_k;
@@ -273,10 +320,22 @@ inline void update_hsl_strategy_equity_stats(
         stats.peak_sample_k = sample_k;
     }
 #if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-    stats.drawdown_max = fmax(
-        stats.drawdown_max,
-        (stats.peak - strategy_equity) / fmax(fabs(stats.peak), 1.0e-12f)
-    );
+    float drawdown = (stats.peak - strategy_equity)
+        / fmax(fabs(stats.peak), 1.0e-12f);
+    stats.drawdown_max = fmax(stats.drawdown_max, drawdown);
+#endif
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    float daily_drawdown = (stats.peak - strategy_equity)
+        / fmax(fabs(stats.peak), 1.0e-12f);
+    if (day_index > stats.current_drawdown_day) {
+        flush_hsl_strategy_equity_daily_drawdown(stats);
+        stats.current_drawdown_day = day_index;
+        stats.current_day_drawdown_worst = daily_drawdown;
+    } else {
+        stats.current_day_drawdown_worst = fmax(
+            stats.current_day_drawdown_worst, daily_drawdown
+        );
+    }
 #endif
 }
 
@@ -285,6 +344,34 @@ inline float hsl_strategy_equity_drawdown_max(
 ) {
 #if PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
     return stats.drawdown_max;
+#else
+    return 0.0f;
+#endif
+}
+
+inline float hsl_strategy_equity_drawdown_mean_worst_1pct(
+    thread HslStrategyEquityStats& stats
+) {
+#if PASSIVBOT_HSL_RAW_TAIL_ENABLED
+    float sample_count = stats.completed_day_count
+        + (stats.current_drawdown_day >= 0 ? 1.0f : 0.0f);
+    if (!(sample_count > 0.0f)) return 0.0f;
+    float worst_n = fmax(floor(sample_count * 0.01f), 1.0f);
+    float remaining = worst_n;
+    float total = 0.0f;
+    int current_bin = stats.current_drawdown_day >= 0
+        ? hsl_drawdown_tail_bin(stats.current_day_drawdown_worst) : -1;
+    for (int i = HSL_EMA_TAIL_BINS - 1; i >= 0 && remaining > 0.0f; --i) {
+        float count = stats.daily_drawdown_counts[i]
+            + (i == current_bin ? 1.0f : 0.0f);
+        if (!(count > 0.0f)) continue;
+        float sum = stats.daily_drawdown_sums[i]
+            + (i == current_bin ? stats.current_day_drawdown_worst : 0.0f);
+        float take = fmin(count, remaining);
+        total += sum * (take / count);
+        remaining -= take;
+    }
+    return total / worst_n;
 #else
     return 0.0f;
 #endif
@@ -332,13 +419,7 @@ inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats() {
 }
 
 inline int hsl_drawdown_ema_tail_bin(float value) {
-    // Cover fourteen octaves over [2^-14, 1) so low-drawdown Pareto members
-    // remain rankable without increasing thread-local state. Edge bins retain
-    // smaller values and overflow respectively. Actual sums are not clamped,
-    // so values outside the covered range keep their magnitude.
-    float scaled = (log2(fmax(value, 0.00006103515625f)) + 14.0f)
-        * 2.2857142857142856f;
-    return clamp(int(floor(scaled)), 0, HSL_EMA_TAIL_BINS - 1);
+    return hsl_drawdown_tail_bin(value);
 }
 
 inline void update_hsl_drawdown_ema_tail_stats(

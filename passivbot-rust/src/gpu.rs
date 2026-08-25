@@ -154,6 +154,12 @@ mod tests {
                 .count(),
             1
         );
+        assert_eq!(
+            source
+                .matches("inline float hsl_strategy_equity_drawdown_mean_worst_1pct(")
+                .count(),
+            1
+        );
         for signature in [
             "inline HslDrawdownEmaTailStats init_hsl_drawdown_ema_tail_stats(",
             "inline int hsl_drawdown_ema_tail_bin(",
@@ -164,6 +170,7 @@ mod tests {
         }
         assert!(source.contains("#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 0"));
         assert!(source.contains("#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 0"));
+        assert!(source.contains("#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0"));
         assert_eq!(
             source
                 .matches("inline float hsl_strategy_equity_drawdown_max(")
@@ -376,7 +383,7 @@ mod tests {
         assert!(source.contains("constant int DAILY_COLS = 8"));
         assert!(source.contains("constant int SCALAR_COLS = 66"));
         assert!(source.contains("constant int SCALAR_COLS = 68"));
-        assert!(source.contains("constant int SCALAR_COLS = 70"));
+        assert!(source.contains("constant int SCALAR_COLS = 72"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -492,10 +499,10 @@ mod tests {
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
         assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 65"));
+        assert!(source.contains("constant int SCALAR_COLS = 67"));
         assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
         assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 70"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -697,7 +704,7 @@ mod tests {
         assert!(source.contains("try_restart_hsl("));
         assert!(source.contains("constant int SCALAR_COLS = 66"));
         assert!(source.contains("constant int SCALAR_COLS = 68"));
-        assert!(source.contains("constant int SCALAR_COLS = 70"));
+        assert!(source.contains("constant int SCALAR_COLS = 72"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -937,10 +944,10 @@ mod tests {
         assert!(source.contains("never reuse the equity-derived liquidation floor"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
         assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 65"));
+        assert!(source.contains("constant int SCALAR_COLS = 67"));
         assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
         assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 70"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")

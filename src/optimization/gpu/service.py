@@ -125,6 +125,8 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_drawdown_ema_mean_worst_1pct_short",
     "hsl_drawdown_raw_max_long",
     "hsl_drawdown_raw_max_short",
+    "hsl_drawdown_raw_mean_worst_1pct_long",
+    "hsl_drawdown_raw_mean_worst_1pct_short",
 }
 
 
@@ -342,6 +344,10 @@ _HSL_EMA_TAIL_METRICS = {
 _HSL_RAW_DRAWDOWN_METRICS = {
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",
+}
+_HSL_RAW_TAIL_METRICS = {
+    "drawdown_worst_mean_1pct_strategy_eq_long",
+    "drawdown_worst_mean_1pct_strategy_eq_short",
 }
 _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
     "strategy_eq_recovery_days_mean",
@@ -984,6 +990,8 @@ def _combine_hedged_multicoin_hsl_outputs(long: dict, short: dict) -> dict:
         "hsl_drawdown_ema_mean_worst_1pct_short",
         "hsl_drawdown_raw_max_long",
         "hsl_drawdown_raw_max_short",
+        "hsl_drawdown_raw_mean_worst_1pct_long",
+        "hsl_drawdown_raw_mean_worst_1pct_short",
         "hsl_strategy_eq_recovery_max_ms_long",
         "hsl_strategy_eq_recovery_max_ms_short",
     ):
@@ -1500,7 +1508,11 @@ class MpsSingleCoinProxy:
                 self.needed_metrics & _HSL_EMA_TAIL_METRICS
             ),
             hsl_raw_drawdown_enabled=bool(
-                self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
+                self.needed_metrics
+                & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
+            ),
+            hsl_raw_tail_enabled=bool(
+                self.needed_metrics & _HSL_RAW_TAIL_METRICS
             ),
             recovery_distribution_enabled=bool(
                 self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
@@ -2316,7 +2328,11 @@ class MpsMulticoinProxy:
                 self.needed_metrics & _HSL_EMA_TAIL_METRICS
             ),
             "hsl_raw_drawdown_enabled": bool(
-                self.needed_metrics & _HSL_RAW_DRAWDOWN_METRICS
+                self.needed_metrics
+                & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
+            ),
+            "hsl_raw_tail_enabled": bool(
+                self.needed_metrics & _HSL_RAW_TAIL_METRICS
             ),
             "recovery_distribution_enabled": bool(
                 self.needed_metrics
