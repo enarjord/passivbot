@@ -103,6 +103,13 @@ inline float float32_floor_nonnegative(float value) {
     return as_type<float>(as_type<uint>(value) - 1u);
 }
 
+inline bool realized_loss_gate_allows(
+    float net_pnl, float remaining_loss_budget, bool gate_enabled
+) {
+    return !gate_enabled || net_pnl >= 0.0f
+        || -net_pnl <= remaining_loss_budget;
+}
+
 // Joint-side account state for the fused multi-coin portfolio path. Exact
 // Rust processes every long fill before every short fill for a candle; callers
 // preserve that ordering while this state owns the one shared cash balance and
