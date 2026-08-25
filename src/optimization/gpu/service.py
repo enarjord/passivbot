@@ -655,6 +655,43 @@ def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None
         )
 
 
+def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> None:
+    """Accept ordinary invalid tails but reject Rust's forced-delist boundary.
+
+    Exact Rust treats a coin as delisted, and force-closes its open positions,
+    when at least 1,400 prepared candles follow its final valid candle.  The
+    single-coin kernels model shorter invalid tails as non-tradable balance-only
+    equity samples; forced delist fills are a separate parity surface.
+    """
+
+    last_valid_idx = int(last_valid_idx)
+    candle_count = int(candle_count)
+    if last_valid_idx < 0 or last_valid_idx >= candle_count:
+        raise ValueError(
+            "GPU single-coin proxy requires last_valid_idx within the prepared "
+            f"candle range; last_valid_idx={last_valid_idx}, "
+            f"candle_count={candle_count}"
+        )
+    if last_valid_idx + 1400 < candle_count:
+        raise ValueError(
+            "GPU single-coin proxy does not yet model Rust forced-delist closes "
+            "when at least 1,400 prepared candles follow the final valid candle; "
+            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
+def _require_supported_single_coin_valid_tail(
+    last_valid_idx: int, candle_count: int, *, hsl_enabled: bool
+) -> None:
+    _require_no_forced_delist_tail(last_valid_idx, candle_count)
+    if bool(hsl_enabled) and int(last_valid_idx) != int(candle_count) - 1:
+        raise ValueError(
+            "MPS single-coin HSL does not yet model hard-stop state updates "
+            "after the coin's final valid candle; "
+            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
 def _require_no_internal_invalid_hsl_candles(
     high, low, close, *, first_valid_idx: int, last_valid_idx: int
 ) -> None:
@@ -1192,10 +1229,6 @@ class MpsSingleCoinProxy:
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
-        _require_complete_valid_tail(
-            int(backtest_params["last_valid_indices"][0]), len(hlcvs)
-        )
-
         long_bot = payload.bot_params_list[0]["long"]
         short_bot = payload.bot_params_list[0]["short"]
         self.enabled = {
@@ -1222,6 +1255,11 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
+        _require_supported_single_coin_valid_tail(
+            int(backtest_params["last_valid_indices"][0]),
+            len(hlcvs),
+            hsl_enabled=bool(hsl_enabled_sides),
+        )
         any_configured_hsl = any(
             bool(bot.get("hsl_enabled")) for bot in (long_bot, short_bot)
         )

@@ -1032,9 +1032,10 @@ inline void passivbot_single_coin_impl(
     const int D = sizes[2];
     const int P = sizes[3];
     const int first_valid = sizes[4];
+    const int last_valid = sizes[7];
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
-    const int recovery_stride = sizes[7];
-    const int recovery_sample_count = sizes[8];
+    const int recovery_stride = sizes[8];
+    const int recovery_sample_count = sizes[9];
 #endif
     if (b >= uint(B)) return;
 
@@ -1760,9 +1761,13 @@ inline void passivbot_single_coin_impl(
             }
         }
 
-        float long_unreal = long_side.psize > 0.0f
+        // Exact Rust keeps sampling account equity through a short invalid
+        // tail, but excludes positions whose coin is no longer valid.  Such a
+        // tail is non-tradable and therefore contributes balance-only equity.
+        const bool after_valid_tail = k > last_valid;
+        float long_unreal = valid && long_side.psize > 0.0f
             ? long_side.psize * c_mult * (close - long_side.pprice) : 0.0f;
-        float short_unreal = short_side.psize > 0.0f
+        float short_unreal = valid && short_side.psize > 0.0f
             ? short_side.psize * c_mult * (short_side.pprice - close) : 0.0f;
         float equity = balance + long_unreal + short_unreal;
         const bool rolling_pnl_overflowed =
@@ -1872,7 +1877,7 @@ inline void passivbot_single_coin_impl(
                 try_restart_hsl(short_hsl, kf, equity);
             }
         }
-        bool active = eq_started && alive && valid;
+        bool active = eq_started && alive && (valid || after_valid_tail);
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;
             last_eq_k = kf;

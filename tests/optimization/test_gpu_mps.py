@@ -3502,6 +3502,101 @@ def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
+    strategy_kind, side
+):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 10
+    last_valid = 6
+    close = np.full(count, np.nan)
+    high = np.full(count, np.nan)
+    low = np.full(count, np.nan)
+    close[: last_valid + 1] = 100.0
+    high[: last_valid + 1] = 100.0
+    low[: last_valid + 1] = 100.0
+    if side == "long":
+        low[3] = 98.0
+        high[last_valid] = 80.0
+        low[last_valid] = 80.0
+        close[last_valid] = 80.0
+    else:
+        high[3] = 102.0
+        high[last_valid] = 120.0
+        low[last_valid] = 120.0
+        close[last_valid] = 120.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        last_valid,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "ema_anchor":
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 0.0,
+                "offset": 0.01,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 100.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+    else:
+        row = _tm_single_row(initial_ema_dist=0.01)
+        row[
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "entry_cooldown_minutes"
+            )
+        ] = 100.0
+        runner_cls = MpsTrailingMartingaleRunner
+
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key].item() > 0.0
+    assert output["day_end_eq"][0, 0].item() == pytest.approx(
+        output["balance"].item()
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 def test_mps_single_coin_active_fill_day_bucket_uses_elapsed_time(
     strategy_kind,
 ):

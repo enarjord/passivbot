@@ -977,6 +977,7 @@ class MpsEmaAnchorRunner:
                 self.run_config.first_valid_idx,
                 self.rolling_capacity,
                 self.pnl_lookback_bars,
+                self.run_config.last_valid_idx,
             ]
             if self.recovery_distribution_enabled:
                 size_values.extend(

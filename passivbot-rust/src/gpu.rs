@@ -178,14 +178,17 @@ mod tests {
     fn assert_directional_recovery_sampling_contract(source: &str) {
         assert_eq!(source.matches("device float* recovery_samples").count(), 2);
         assert!(source.contains("#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"));
-        assert!(source.contains("const int recovery_stride = sizes[7]"));
-        assert!(source.contains("const int recovery_sample_count = sizes[8]"));
+        assert!(source.contains("const int last_valid = sizes[7]"));
+        assert!(source.contains("const int recovery_stride = sizes[8]"));
+        assert!(source.contains("const int recovery_sample_count = sizes[9]"));
         assert!(source.contains("int recovery_start_k = -1"));
         assert!(source.contains("const bool recovery_terminal = liq || k == T - 2"));
         assert!(source.contains("(recovery_elapsed + recovery_stride - 1) / recovery_stride"));
         assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
         assert!(source.contains("const bool rolling_pnl_overflowed ="));
         assert!(source.contains("= RECOVERY_FAIL_CLOSED_SENTINEL;"));
+        assert!(source.contains("const bool after_valid_tail = k > last_valid"));
+        assert!(source.contains("(valid || after_valid_tail)"));
     }
 
     #[test]
