@@ -1033,6 +1033,8 @@ inline bool process_tm_multicoin_side_fills(
                 fill_price, qty_step, min_qty, min_cost, c_mult
             );
             int last_kept_rank = -1;
+            bool all_groups_below_min = close_recursive_market_mode[c]
+                && group_count > 0;
             for (int trim_rank = 0; trim_rank < group_count; ++trim_rank) {
                 int wanted = reverse
                     ? group_count - trim_rank - 1 : trim_rank;
@@ -1072,8 +1074,11 @@ inline bool process_tm_multicoin_side_fills(
                     group.market ? close_gen_market_price[c] : group.price,
                     qty_step, min_qty, min_cost, c_mult
                 );
-                bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
-                if (trimmed_qty + 1.0e-6f < group_min) {
+                all_groups_below_min = all_groups_below_min
+                    && psize[c] * (1.0f + 1.0e-6f) < group_min;
+                bool partial_trim = trimmed_qty * (1.0f + 1.0e-6f)
+                    < group.qty;
+                if (trimmed_qty * (1.0f + 1.0e-6f) < group_min) {
                     trimmed_qty = 0.0f;
                     if (partial_trim) remaining_budget = 0.0f;
                 }
@@ -1088,6 +1093,16 @@ inline bool process_tm_multicoin_side_fills(
                     minimum_any = fmin(minimum_any, group_min);
                     last_kept_rank = trim_rank;
                 }
+            }
+            int collapse_ordinary_rank = -1;
+            if (all_groups_below_min && reducer_qty <= 0.0f) {
+                // Rust preserves one closest-to-fill close at the full
+                // remaining position when every recursive group is below
+                // the executable minimum. This includes market-promoted
+                // groups whose resize already retained that exception.
+                collapse_ordinary_rank = 0;
+                kept_ordinary = psize[c];
+                last_kept_rank = 0;
             }
             float dust_remainder = fmax(
                 round_step(
@@ -1143,28 +1158,34 @@ inline bool process_tm_multicoin_side_fills(
                     group.market ? close_gen_market_price[c] : group.price,
                     qty_step, min_qty, min_cost, c_mult
                 );
-                float trimmed_group_qty = fmin(
-                    group.qty, remaining_budget
-                );
-                bool partial_trim = trimmed_group_qty + 1.0e-6f
-                    < group.qty;
-                if (trimmed_group_qty + 1.0e-6f < group_min) {
-                    trimmed_group_qty = 0.0f;
-                    if (partial_trim) remaining_budget = 0.0f;
-                }
-                if (trimmed_group_qty > 0.0f) {
-                    remaining_budget = fmax(
-                        round_step(
-                            remaining_budget - trimmed_group_qty,
-                            qty_step
-                        ),
-                        0.0f
-                    );
-                    if (rank == last_kept_rank && dust_remainder > 0.0f
-                        && dust_remainder < minimum_any) {
-                        trimmed_group_qty = round_step(
-                            trimmed_group_qty + dust_remainder, qty_step
+                float trimmed_group_qty = 0.0f;
+                if (collapse_ordinary_rank >= 0) {
+                    trimmed_group_qty = rank == collapse_ordinary_rank
+                        ? ordinary_budget : 0.0f;
+                } else {
+                    trimmed_group_qty = fmin(group.qty, remaining_budget);
+                    bool partial_trim = trimmed_group_qty
+                        * (1.0f + 1.0e-6f) < group.qty;
+                    if (trimmed_group_qty * (1.0f + 1.0e-6f)
+                        < group_min) {
+                        trimmed_group_qty = 0.0f;
+                        if (partial_trim) remaining_budget = 0.0f;
+                    }
+                    if (trimmed_group_qty > 0.0f) {
+                        remaining_budget = fmax(
+                            round_step(
+                                remaining_budget - trimmed_group_qty,
+                                qty_step
+                            ),
+                            0.0f
                         );
+                        if (rank == last_kept_rank
+                            && dust_remainder > 0.0f
+                            && dust_remainder < minimum_any) {
+                            trimmed_group_qty = round_step(
+                                trimmed_group_qty + dust_remainder, qty_step
+                            );
+                        }
                     }
                 }
                 bool reducer_before_group = filled_close

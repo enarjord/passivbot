@@ -5430,6 +5430,62 @@ def test_mps_tm_multicoin_recursive_market_close_uses_executable_minimum(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+def test_mps_tm_multicoin_recursive_market_close_preserves_below_min_position():
+    count = 7
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    closes[3:, 0] = 50.0
+    highs = closes.copy()
+    lows = closes.copy()
+    highs[4, 0] = 100.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 600.0, 1.0, 0.0),
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0),
+    ]
+    overrides = np.full((2, 44), np.nan, dtype=np.float32)
+    overrides[1, 24] = 0.0
+    runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        "short",
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.02,
+    )
+    for key, value in {
+        "entry_initial_ema_dist": 0.0005,
+        "entry_retracement_base_pct": 0.001,
+        "close_qty_pct": 0.1,
+        "close_threshold_base_pct": 0.0005,
+        "close_threshold_we_weight": 0.01,
+        "close_retracement_base_pct": 0.0,
+        "entry_cooldown_minutes": 100.0,
+    }.items():
+        row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+
+    output = runner.run(
+        np.asarray([row], dtype=np.float64),
+        end_steps=np.asarray([5], dtype=np.int32),
+    )
+    torch.mps.synchronize()
+
+    # The short opens while the executable minimum is six units. After price
+    # halves, the minimum rises to twelve units, above the whole remaining
+    # position. Exact Rust preserves one recursive market close at the full
+    # position size instead of filtering every group and leaving dust open.
+    assert output["fill_count_entry"].item() == 1.0
+    assert output["fill_count"].item() == 2.0
+    assert output["coin_fill_counts"].cpu().tolist() == [[2.0, 0.0]]
+    assert output["short_psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_short_market_entry_uses_executable_minimum():
     count = 5
     closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
