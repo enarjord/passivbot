@@ -382,6 +382,10 @@ mod tests {
         assert!(source.contains("scalars[so + 51] = fill_count_entry"));
         assert!(source.contains("scalars[so + 52] = fill_count_long"));
         assert!(source.contains("scalars[so + 53] = fills_active_days_count"));
+        assert!(source.contains("const float fill_day_candles = 86400000.0f / interval_ms"));
+        assert!(source.contains(
+            "int active_fill_day = elapsed_fill_day_bucket(\n                    kf, first_eq_k, interval_ms"
+        ));
         assert!(source.contains("scalars[so + 54] = pnl_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[so + 55] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[so + 56] = held_count"));
@@ -684,6 +688,10 @@ mod tests {
         assert!(source.contains("scalars[so + 51] = fill_count_entry"));
         assert!(source.contains("scalars[so + 52] = fill_count_long"));
         assert!(source.contains("scalars[so + 53] = fills_active_days_count"));
+        assert!(source.contains("const float fill_day_candles = 86400000.0f / interval_ms"));
+        assert!(source.contains(
+            "int active_fill_day = elapsed_fill_day_bucket(\n                    kf, first_eq_k, interval_ms"
+        ));
         assert!(source.contains("scalars[so + 54] = pnl_recovery_max_min * interval_ms"));
         assert!(source.contains("scalars[so + 55] = held_sum_min * interval_ms"));
         assert!(source.contains("scalars[so + 56] = held_count"));

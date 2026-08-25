@@ -243,6 +243,23 @@ def _mps_dispatch_batch_size(
     return min(requested_batch_size, safe_batch_size)
 
 
+def _single_coin_candle_interval_minutes(backtest_params: dict) -> int:
+    raw_interval = backtest_params.get("candle_interval_minutes", 1)
+    try:
+        interval = float(raw_interval)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "MPS single-coin proxy requires candle_interval_minutes to be an "
+            "integer >= 1"
+        ) from exc
+    if not np.isfinite(interval) or interval < 1.0 or not interval.is_integer():
+        raise ValueError(
+            "MPS single-coin proxy requires candle_interval_minutes to be an "
+            "integer >= 1"
+        )
+    return int(interval)
+
+
 def _log_mps_dispatch_cap(
     *,
     requested_batch_size: int,
@@ -1166,10 +1183,9 @@ class MpsSingleCoinProxy:
                 f"prepared {len(payload.bot_params_list)}"
             )
         backtest_params = payload.backtest_params
-        if int(backtest_params.get("candle_interval_minutes", 1)) != 1:
-            raise ValueError(
-                "GPU foundation currently supports one-minute candles only"
-            )
+        candle_interval_minutes = _single_coin_candle_interval_minutes(
+            backtest_params
+        )
         _require_complete_valid_tail(
             int(backtest_params["last_valid_indices"][0]), len(hlcvs)
         )
@@ -1287,7 +1303,7 @@ class MpsSingleCoinProxy:
             maker_fee=float(market_params["maker_fee"]),
             taker_fee=float(market_params["taker_fee"]),
         )
-        interval_ms = int(backtest_params["candle_interval_minutes"]) * 60_000
+        interval_ms = candle_interval_minutes * 60_000
         pnl_lookback_bars = _directional_coin_hsl_lookback_bars(
             backtest_params,
             signal_mode=signal_mode,

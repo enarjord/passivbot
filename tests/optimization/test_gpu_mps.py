@@ -30,6 +30,7 @@ from optimization.gpu.mps_kernel import (
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
+    _scale_single_coin_minute_parameters,
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
@@ -3005,6 +3006,345 @@ _HSL_DISABLED_VALUES = {
 def _single_coin_param_row(values, keys):
     merged = {**_UNSTUCK_DISABLED_VALUES, **_HSL_DISABLED_VALUES, **values}
     return [merged[key] for key in keys]
+
+
+@pytest.mark.parametrize(
+    ("keys", "minute_span_key", "hour_span_key"),
+    [
+        (
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+            "offset_volatility_ema_span_1m",
+            "offset_volatility_ema_span_1h",
+        ),
+        (
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+            "volatility_ema_span_1m",
+            "volatility_ema_span_1h",
+        ),
+    ],
+)
+def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
+    keys, minute_span_key, hour_span_key
+):
+    side = {key: float(index + 1) for index, key in enumerate(keys)}
+    side.update(
+        {
+            "ema_span_0": 30.0,
+            "ema_span_1": 90.0,
+            minute_span_key: 120.0,
+            hour_span_key: 24.0,
+            "entry_cooldown_minutes": 2.0,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_cooldown_minutes_after_red": 7.5,
+        }
+    )
+    original = np.asarray(
+        [[side[key] for key in keys] * 2], dtype=np.float64
+    )
+
+    scaled = _scale_single_coin_minute_parameters(
+        original, keys, sides=2, interval_minutes=5.0
+    )
+
+    assert np.array_equal(
+        original,
+        np.asarray([[side[key] for key in keys] * 2], dtype=np.float64),
+    )
+    for side_index in range(2):
+        offset = side_index * len(keys)
+        assert scaled[0, offset + keys.index("ema_span_0")] == 6.0
+        assert scaled[0, offset + keys.index("ema_span_1")] == 18.0
+        assert scaled[0, offset + keys.index(minute_span_key)] == 24.0
+        assert scaled[0, offset + keys.index("entry_cooldown_minutes")] == 0.4
+        assert (
+            scaled[
+                0,
+                offset + keys.index("hsl_cooldown_minutes_after_red"),
+            ]
+            == 1.5
+        )
+        assert scaled[0, offset + keys.index(hour_span_key)] == 24.0
+        hsl_span = scaled[0, offset + keys.index("hsl_ema_span_minutes")]
+        alpha_1m = 2.0 / 61.0
+        alpha_5m = 2.0 / (hsl_span + 1.0)
+        assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
+
+
+@pytest.mark.parametrize("span", [1.0, 5.5, 60.0, 720.0])
+def test_single_coin_interval_packing_compounds_hsl_elapsed_minute_decay(span):
+    side = {
+        key: float(index + 1)
+        for index, key in enumerate(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+    }
+    side["hsl_ema_span_minutes"] = span
+    original = np.asarray(
+        [[side[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS] * 2],
+        dtype=np.float64,
+    )
+
+    scaled = _scale_single_coin_minute_parameters(
+        original,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=5.0,
+    )
+
+    alpha_1m = 2.0 / (span + 1.0)
+    for side_index in range(2):
+        offset = side_index * len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+        effective_span = scaled[
+            0,
+            offset + EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index(
+                "hsl_ema_span_minutes"
+            ),
+        ]
+        alpha_5m = 2.0 / (effective_span + 1.0)
+        assert alpha_5m == pytest.approx(1.0 - (1.0 - alpha_1m) ** 5)
+
+
+def test_single_coin_interval_packing_preserves_one_minute_hsl_span_exactly():
+    values = np.arange(
+        1,
+        len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) * 2 + 1,
+        dtype=np.float64,
+    ).reshape(1, -1)
+    for side_index in range(2):
+        values[
+            0,
+            side_index * len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+            + EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index("hsl_ema_span_minutes"),
+        ] = 5.5
+
+    scaled = _scale_single_coin_minute_parameters(
+        values,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=1.0,
+    )
+
+    assert np.array_equal(scaled, values)
+
+
+def test_single_coin_interval_packing_matches_exact_rust_hsl_elapsed_decay():
+    import passivbot_rust
+
+    side = {
+        key: float(index + 1)
+        for index, key in enumerate(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+    }
+    side["hsl_ema_span_minutes"] = 60.0
+    original = np.asarray(
+        [[side[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS] * 2],
+        dtype=np.float64,
+    )
+    scaled = _scale_single_coin_minute_parameters(
+        original,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        sides=2,
+        interval_minutes=5.0,
+    )
+    effective_span = scaled[
+        0,
+        EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS.index("hsl_ema_span_minutes"),
+    ]
+    exact = passivbot_rust.EquityHardStopRuntime()
+    packed = passivbot_rust.EquityHardStopRuntime()
+    common = {
+        "red_threshold": 0.25,
+        "tier_ratio_yellow": 0.5,
+        "tier_ratio_orange": 0.75,
+    }
+    exact.apply_sample(
+        timestamp_ms=0,
+        equity=100.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=60.0,
+        **common,
+    )
+    packed.apply_sample(
+        timestamp_ms=0,
+        equity=100.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=effective_span,
+        **common,
+    )
+
+    exact_step = exact.apply_sample(
+        timestamp_ms=5 * 60_000,
+        equity=90.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=60.0,
+        **common,
+    )
+    packed_step = packed.apply_sample(
+        timestamp_ms=60_000,
+        equity=90.0,
+        peak_strategy_equity=100.0,
+        ema_span_minutes=effective_span,
+        **common,
+    )
+
+    assert exact_step["drawdown_ema"] == pytest.approx(
+        packed_step["drawdown_ema"]
+    )
+
+
+def test_single_coin_interval_packing_rejects_invalid_interval():
+    values = np.zeros(
+        (1, len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) * 2), dtype=np.float64
+    )
+
+    with pytest.raises(ValueError, match="at least one minute"):
+        _scale_single_coin_minute_parameters(
+            values,
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+            sides=2,
+            interval_minutes=0.0,
+        )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 32
+    interval_ms = 5 * 60_000
+    phase = np.linspace(0.0, 4.0 * np.pi, count)
+    close = 100.0 + np.sin(phase)
+    high = close * 1.01
+    low = close * 0.99
+    timestamps = (
+        1_700_000_000_000
+        + np.arange(count, dtype=np.int64) * interval_ms
+    )
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        2,
+        2,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        interval_ms,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "ema_anchor":
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 10.0,
+                "ema_span_1": 30.0,
+                "entry_double_down_factor": 1.5,
+                "offset": 0.01,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 60.0,
+                "offset_volatility_ema_span_1m": 60.0,
+                "entry_cooldown_minutes": 2.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+    else:
+        row = _tm_single_row(initial_ema_dist=0.01)
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("ema_span_0")] = 10.0
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("ema_span_1")] = 30.0
+        row[
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "entry_cooldown_minutes"
+            )
+        ] = 2.0
+        runner_cls = MpsTrailingMartingaleRunner
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+    params = np.asarray([row + row], dtype=np.float64)
+
+    runner = runner_cls(
+        market, run, data, long_enabled=True, short_enabled=False
+    )
+    packed = runner._pack_params(params)
+    output = runner.run(params)
+    torch.mps.synchronize()
+
+    assert runner.interval_minutes == 5.0
+    assert packed[0, keys.index("ema_span_0")] == pytest.approx(2.0)
+    assert packed[0, keys.index("entry_cooldown_minutes")] == pytest.approx(
+        0.4
+    )
+    packed_hsl_span = packed[0, keys.index("hsl_ema_span_minutes")]
+    assert 2.0 / (packed_hsl_span + 1.0) == pytest.approx(
+        1.0 - (1.0 - 2.0 / 61.0) ** 5
+    )
+    assert output["balance"].device.type == "mps"
+    assert torch.isfinite(output["balance"]).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_active_fill_day_bucket_uses_elapsed_time(
+    strategy_kind,
+):
+    import passivbot_rust
+
+    cases = np.asarray(
+        [
+            [1_439.0, 0.0, 60_000.0],
+            [1_440.0, 0.0, 60_000.0],
+            [297.0, 10.0, 5.0 * 60_000.0],
+            [298.0, 10.0, 5.0 * 60_000.0],
+            [215.0, 10.0, 7.0 * 60_000.0],
+            [216.0, 10.0, 7.0 * 60_000.0],
+        ],
+        dtype=np.float32,
+    )
+    expected = [0, 1, 0, 1, 0, 1]
+    probe_kernel = r"""
+kernel void passivbot_elapsed_fill_day_bucket_probe(
+    constant float* cases [[buffer(0)]],
+    device int* output [[buffer(1)]],
+    uint b [[thread_position_in_grid]]
+) {
+    int offset = int(b) * 3;
+    output[b] = elapsed_fill_day_bucket(
+        cases[offset], cases[offset + 1], cases[offset + 2]
+    );
+}
+"""
+    source = (
+        passivbot_rust.mps_ema_anchor_source_py()
+        if strategy_kind == "ema_anchor"
+        else passivbot_rust.mps_trailing_martingale_source_py()
+    )
+    library = torch.mps.compile_shader(source + probe_kernel)
+    inputs = torch.tensor(cases, dtype=torch.float32, device="mps").contiguous()
+    output = torch.zeros(len(cases), dtype=torch.int32, device="mps")
+
+    library.passivbot_elapsed_fill_day_bucket_probe(
+        inputs,
+        output,
+        threads=(len(cases), 1, 1),
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == expected
 
 
 def _multicoin_exposure_fixture(
