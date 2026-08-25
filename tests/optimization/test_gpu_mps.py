@@ -7888,9 +7888,10 @@ kernel void passivbot_tm_recursive_mixed_minimum_reducer_probe(
     output[0] = float(group_count);
     output[1] = allocation.reducer_qty;
     output[2] = allocation.ordinary_budget;
+    output[3] = allocation.normalize_close_groups ? 1.0f : 0.0f;
 }
 """
-    output = torch.zeros(3, dtype=torch.float32, device="mps")
+    output = torch.zeros(4, dtype=torch.float32, device="mps")
     library = torch.mps.compile_shader(
         passivbot_rust.mps_trailing_martingale_source_py() + probe_kernel
     )
@@ -7905,7 +7906,7 @@ kernel void passivbot_tm_recursive_mixed_minimum_reducer_probe(
     # but the farther 200-price ordinary group has a 2.5 minimum. Exact Rust
     # therefore filters the reducer and reallocates all 4.0 units to ordinary
     # closes instead of collapsing to the protective order.
-    assert values[1:] == [0.0, 4.0]
+    assert values[1:] == [0.0, 4.0, 1.0]
 
 
 @pytest.mark.skipif(
@@ -12867,6 +12868,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert source.count("for (int allocation_pass = 0;") == 1
     assert "reducer_below_min && !all_below_min" in source
     assert "include_reducer = false" in source
+    assert "allocation.normalize_close_groups = allocation_pass > 0" in source
     assert "reducer_qty, reducer_fill_price" not in source
     assert "adj, reducer_fill_price" not in source
     assert "sim.market_orders_allowed = false" in source

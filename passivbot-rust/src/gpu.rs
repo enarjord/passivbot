@@ -807,6 +807,7 @@ mod tests {
         assert_eq!(source.matches("for (int allocation_pass = 0;").count(), 1);
         assert!(source.contains("reducer_below_min && !all_below_min"));
         assert!(source.contains("include_reducer = false"));
+        assert!(source.contains("allocation.normalize_close_groups = allocation_pass > 0"));
         assert!(source.contains(
             "source.close_gen_realized_pnl_cumsum_last,\n                source.close_gen_realized_pnl_cumsum_max"
         ));

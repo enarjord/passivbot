@@ -1463,7 +1463,11 @@ inline RecursiveCloseAllocation recursive_close_allocation(
             include_reducer = false;
             continue;
         }
-        allocation.normalize_close_groups = has_reducer || any_group_market;
+        // The reducer-drop retry still represents a normalized close set:
+        // minimum filtering and aggregate position trimming above must remain
+        // authoritative even when every surviving ordinary group is passive.
+        allocation.normalize_close_groups = allocation_pass > 0
+            || has_reducer || any_group_market;
         allocation.collapse_ordinary_rank = -1;
         if (allocation.normalize_close_groups && all_below_min
             && !has_reducer && group_count > 0) {

@@ -15,8 +15,9 @@ All notable user-facing changes will be documented in this file.
   selection, retry the next finalized candidate when the preferred reducer is loss-gated, and gate
   promoted reducers and grid groups at their generation-time projected market price while retaining
   the next-candle price for fills. Reducer loss budgets retain their generation-time realized-PnL
-  snapshot, and below-minimum reducers are removed and the ordinary ladder reallocated when another
-  close remains executable. Promoted grid groups and protective reducers retain canonical ordering,
+  snapshot, and below-minimum reducers are removed while the ordinary ladder remains normalized and
+  is reallocated when another close remains executable. Promoted grid groups and protective reducers
+  retain canonical ordering,
   aggregate position trimming, quantity-relative minimum-size comparisons, adverse slippage, and
   taker fees. Entry and close optimizer bounds must
   each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin market
