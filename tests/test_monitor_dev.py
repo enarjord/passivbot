@@ -139,13 +139,13 @@ def test_monitor_tui_follows_auto_selected_pointer_file(tmp_path):
     logs_dir.mkdir()
     archived_log = logs_dir / "20260406_140000_passivbot_live.log"
     stable_log = logs_dir / "bot.log"
-    archived_log.write_text("archived line\n", encoding="utf-8")
     stable_log.write_text(
         f"{STABLE_LOG_POINTER_HEADER}\n{archived_log.resolve()}\n",
         encoding="utf-8",
     )
-    pointer_mtime = stable_log.stat().st_mtime + 10
-    os.utime(stable_log, (pointer_mtime, pointer_mtime))
+    archived_log.write_text("archived line\n", encoding="utf-8")
+    archive_mtime = stable_log.stat().st_mtime + 10
+    os.utime(archived_log, (archive_mtime, archive_mtime))
 
     selected_log = resolve_latest_log_file(logs_dir=str(logs_dir))
     assert selected_log == str(stable_log)
@@ -156,6 +156,43 @@ def test_monitor_tui_follows_auto_selected_pointer_file(tmp_path):
         log_bootstrap_lines=2,
     )
     assert list(client.state.recent_log_lines) == ["archived line"]
+
+
+def test_monitor_dev_prefers_newer_unrelated_archive_over_old_stable_pointer(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    older_archive = logs_dir / "older_archive.log"
+    stable_log = logs_dir / "bot.log"
+    newer_archive = logs_dir / "newer_archive.log"
+    older_archive.write_text("older\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{older_archive.resolve()}\n",
+        encoding="utf-8",
+    )
+    newer_archive.write_text("newer\n", encoding="utf-8")
+    newer_mtime = older_archive.stat().st_mtime + 10
+    os.utime(newer_archive, (newer_mtime, newer_mtime))
+
+    assert resolve_latest_log_file(logs_dir=str(logs_dir)) == str(newer_archive)
+
+
+def test_monitor_dev_imports_without_unix_terminal_modules():
+    code = (
+        "import sys; "
+        "sys.path.insert(0, 'src'); "
+        "sys.modules['termios'] = None; "
+        "sys.modules['tty'] = None; "
+        "import monitor_dev, monitor_tui; "
+        "assert not monitor_tui.TERMINAL_CONTROL_SUPPORTED"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_monitor_dev_tool_help_runs_without_import_errors():

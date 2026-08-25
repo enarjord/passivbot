@@ -5,9 +5,7 @@ import json
 import os
 import shutil
 import sys
-import termios
 import time
-import tty
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -16,9 +14,18 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
+try:
+    import termios
+    import tty
+except ImportError:  # pragma: no cover - exercised by a subprocess import test
+    termios = None
+    tty = None
+
 import aiohttp
 
 from logging_setup import resolve_stable_log_alias
+
+TERMINAL_CONTROL_SUPPORTED = termios is not None and tty is not None
 
 
 ANSI_RESET = "\x1b[0m"
@@ -1283,7 +1290,7 @@ class MonitorTuiClient:
             ]
             if self.log_file:
                 tasks.append(asyncio.create_task(self._log_tail_loop(Path(self.log_file))))
-            if sys.stdin.isatty():
+            if sys.stdin.isatty() and TERMINAL_CONTROL_SUPPORTED:
                 tasks.append(asyncio.create_task(self._command_loop()))
             try:
                 await asyncio.gather(*tasks)
@@ -1386,6 +1393,8 @@ class MonitorTuiClient:
             sys.stdout.flush()
 
     async def _command_loop(self) -> None:
+        if not TERMINAL_CONTROL_SUPPORTED:
+            return
         fd = sys.stdin.fileno()
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[str] = asyncio.Queue()
