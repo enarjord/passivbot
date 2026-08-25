@@ -2780,6 +2780,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
             && k > max(global_warmup, 1) && k >= requested_start_k;
         equity_started = equity_started || can_generate;
         bool has_hsl_position = ema_multicoin_side_has_position(side, C);
+        const float min_cost_balance_lower = has_hsl_position
+            ? 0.0f : liquidation_floor;
         int current_hsl_mode = coin_hsl_mode
             ? 0 : hsl_mode(hsl, has_hsl_position);
 
@@ -2788,7 +2790,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 side, config, bars, coin_settings, coin_overrides,
                 k, C, short_side, any_fill, effective_n_positions,
                 score_hysteresis, 0ul,
-                filter_by_min_effective_cost, liquidation_floor
+                filter_by_min_effective_cost, min_cost_balance_lower
             );
             generate_ema_multicoin_side_orders(
                 side, config, account,
@@ -3563,15 +3565,26 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         equity_started = equity_started
             || long_can_generate || short_can_generate;
 
+        const bool long_has_position =
+            ema_multicoin_side_has_position(long_side, C);
+        const bool short_has_position =
+            ema_multicoin_side_has_position(short_side, C);
+        // The liquidation floor bounds equity, but it bounds cash balance only
+        // while the whole portfolio is flat. With any open position, no
+        // positive exact-cash lower bound is proven, so flat candidates fail
+        // closed while held positions remain managed.
+        const float min_cost_balance_lower =
+            long_has_position || short_has_position
+            ? 0.0f : liquidation_floor;
         int long_hsl_mode = long_config.coin_hsl_mode ? 0
             : hsl_mode(
                 long_side.hsl,
-                ema_multicoin_side_has_position(long_side, C)
+                long_has_position
             );
         int short_hsl_mode = short_config.coin_hsl_mode ? 0
             : hsl_mode(
                 short_side.hsl,
-                ema_multicoin_side_has_position(short_side, C)
+                short_has_position
             );
         ulong long_one_way_selection_blocked_mask = 0ul;
         ulong short_one_way_selection_blocked_mask = 0ul;
@@ -3586,7 +3599,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_effective_n_positions,
                 short_effective_n_positions,
                 long_can_generate, short_can_generate,
-                filter_by_min_effective_cost, liquidation_floor,
+                filter_by_min_effective_cost, min_cost_balance_lower,
                 long_one_way_selection_blocked_mask,
                 short_one_way_selection_blocked_mask,
                 long_one_way_order_blocked_mask,
@@ -3630,7 +3643,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 long_coin_overrides, k, C, false, any_fill,
                 long_effective_n_positions, score_hysteresis,
                 long_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, liquidation_floor
+                filter_by_min_effective_cost, min_cost_balance_lower
             );
             generate_ema_multicoin_side_orders(
                 long_side, long_config, account,
@@ -3647,7 +3660,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 short_coin_overrides, k, C, true, any_fill,
                 short_effective_n_positions, score_hysteresis,
                 short_one_way_selection_blocked_mask,
-                filter_by_min_effective_cost, liquidation_floor
+                filter_by_min_effective_cost, min_cost_balance_lower
             );
             generate_ema_multicoin_side_orders(
                 short_side, short_config, account,

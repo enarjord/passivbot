@@ -514,11 +514,13 @@ All notable user-facing changes will be documented in this file.
   dual-side, and compatible suites. The Metal proxy conservatively compares projected initial cost
   against the highest executable exchange minimum in each prepared coin window, using effective
   wallet-exposure limits, static per-coin overrides, a downward arithmetic bound for the float32
-  projection, and the liquidation floor as a path-independent lower balance bound. In multi-coin
-  runs, failing flat candidates are removed before Forager selection and one-way arbitration while
-  open positions remain managed. Exact Rust retains its current-close rule and remains
+  projection, and the liquidation floor as a lower cash-balance bound while the whole portfolio is
+  flat. Once any position is open, other flat slots fail closed because that floor bounds equity,
+  not cash; failing candidates are removed before Forager selection and one-way arbitration while
+  every open position remains managed. Exact Rust retains its current-close rule and remains
   authoritative through the normal validation and drift gates. A finite positive liquidation
-  threshold is required.
+  threshold is required; concurrent-slot runs may halt when the conservative false negatives push
+  proxy/exact rank agreement below the configured safety threshold.
 
 - Added static per-coin Trailing Martingale overrides to single-side and dual-side multi-coin Apple
   MPS optimization and compatible suites. The Metal proxy consumes exact-last per-coin strategy,

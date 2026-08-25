@@ -2753,6 +2753,27 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     output[15] = float(short_selection_blocked_mask);
     output[16] = float(long_order_blocked_mask);
     output[17] = float(short_order_blocked_mask);
+
+    // With an existing position, the caller cannot prove a positive exact
+    // cash-balance floor. A zero lower bound must keep every other flat slot
+    // out of the Forager selection even when its exchange minimum is small.
+    long_config.twel = 1.0f;
+    long_config.allowance_pct = 0.0f;
+    long_config.legacy_raw_allowance = false;
+    long_config.base_qty_pct = 1.0f;
+    long_side.selection_initialized = false;
+    long_side.previous_effective_n_positions = 0;
+    for (int c = 0; c < 3; ++c) {
+        long_side.psize[c] = c == 0 ? 1.0f : 0.0f;
+        long_side.selected[c] = false;
+        long_side.incumbent[c] = false;
+        long_side.survivor[c] = false;
+    }
+    update_ema_multicoin_side_selection(
+        long_side, long_config, bars, coin_settings, coin_overrides,
+        1, 3, false, true, 1, 0.0f, 0ul, true, 0.0f
+    );
+    output[18] = long_side.selected[1] || long_side.selected[2] ? 1.0f : 0.0f;
 }
 """
 
@@ -2766,10 +2787,11 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
     )
     coin_settings = torch.zeros((3, 13), dtype=torch.float32, device="mps")
     coin_settings[:, 7] = 10.0
+    coin_settings[:, 12] = 1.0
     coin_overrides = torch.full(
         (3, 29), float("nan"), dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(18, dtype=torch.float32, device="mps")
+    output = torch.zeros(19, dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_multicoin_source_py() + probe_kernel
@@ -2798,6 +2820,7 @@ kernel void passivbot_ema_multicoin_selection_phase_probe(
         0.0,
         0.0,
         7.0,
+        0.0,
     ]
 
 
@@ -3247,6 +3270,55 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
     counts = output["coin_fill_counts"].cpu().tolist()[0]
     assert counts[0] == 0.0
     assert counts[1] > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_min_cost_blocks_new_flat_slot_while_portfolio_is_open():
+    strategy_kind = "trailing_martingale"
+    highs = np.tile(np.asarray([100.0, 120.0]), (10, 1))
+    lows = highs * 0.99
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 1.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    unfiltered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=10,
+        markets=markets,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 4),
+        collect_coin_fill_counts=True,
+    )
+    filtered, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=10,
+        markets=markets,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(0, 4),
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index("entry_initial_qty_pct")
+    ] = 0.5
+    parameters = np.asarray([row], dtype=np.float64)
+    unfiltered_output = unfiltered.run(parameters)
+    filtered_output = filtered.run(parameters)
+    torch.mps.synchronize()
+
+    unfiltered_counts = unfiltered_output["coin_fill_counts"].cpu().tolist()[0]
+    filtered_counts = filtered_output["coin_fill_counts"].cpu().tolist()[0]
+    assert unfiltered_counts[0] > 0.0
+    assert unfiltered_counts[1] > 0.0
+    assert filtered_counts[0] > 0.0
+    assert filtered_counts[1] == 0.0
 
 
 @pytest.mark.skipif(

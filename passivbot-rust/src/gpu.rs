@@ -468,6 +468,9 @@ mod tests {
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
+        assert_eq!(source.matches("const float min_cost_balance_lower").count(), 2);
+        assert!(source.contains("long_has_position || short_has_position"));
+        assert!(source.contains("positive exact-cash lower bound is proven"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
@@ -886,6 +889,9 @@ mod tests {
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
+        assert_eq!(source.matches("const float min_cost_balance_lower").count(), 2);
+        assert!(source.contains("long_has_position || short_has_position"));
+        assert!(source.contains("positive exact-cash lower bound is proven"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
         assert!(source.contains("constant int SCALAR_COLS = 63"));
         assert!(source.contains("constant int SCALAR_COLS = 65"));
