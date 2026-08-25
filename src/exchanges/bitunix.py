@@ -27,6 +27,7 @@ from ccxt.base.errors import (
 from config.access import require_live_value
 from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
+from live.balance_composition import normalize_bitunix_balance_composition
 from passivbot import logging
 from utils import symbol_to_coin
 
@@ -116,6 +117,8 @@ class BitunixClient:
     DEFAULT_MAKER_FEE = 0.0002
     DEFAULT_TAKER_FEE = 0.0006
     RESERVED_AUTH_HEADERS = frozenset({"api-key", "nonce", "timestamp", "sign"})
+    ORDER_STATUS_TOKEN_RE = re.compile(r"[A-Z][A-Z0-9_]{0,31}")
+    PENDING_STATUS_WARNING_INTERVAL_SECONDS = 300.0
 
     has = {
         "cancelOrder": True,
@@ -204,6 +207,7 @@ class BitunixClient:
         self._ticker_tasks: list[asyncio.Task] = []
         self._ticker_subscription_ids: tuple[str, ...] = ()
         self._ticker_ready = asyncio.Event()
+        self._pending_status_warning_monotonic: dict[str, float] = {}
         self._closed = False
 
     def milliseconds(self) -> int:
@@ -260,26 +264,34 @@ class BitunixClient:
         code_text = str(code)
         safe_message = str(message or "Bitunix API error")[:240]
         text = f"Bitunix error {code_text}: {safe_message}"
+        error_type: type[Exception]
         if code_text in {"403", "10003", "10004", "10007"}:
-            raise AuthenticationError(text)
+            error_type = AuthenticationError
         # The documented transport code is 10001. The live trading-pairs
         # endpoint also emits code 1 with the same message; classify both as
         # retryable network failures instead of permanent bad requests.
-        if code_text == "10001" or (
+        elif code_text == "10001" or (
             code_text == "1" and safe_message.strip().lower() == "network error"
         ):
-            raise NetworkError(text)
-        if code_text in {"10005", "10006", "429"}:
-            raise RateLimitExceeded(text)
-        if code_text == "20007":
-            raise OrderNotFound(text)
-        if code_text in {"20003", "20004"}:
-            raise InsufficientFunds(text)
-        if code_text.startswith("3"):
-            raise InvalidOrder(text)
-        if code_text.startswith("2") or code_text.startswith("1"):
-            raise BadRequest(text)
-        raise ExchangeError(text)
+            error_type = NetworkError
+        elif code_text in {"10005", "10006", "429"}:
+            error_type = RateLimitExceeded
+        elif code_text == "20007":
+            error_type = OrderNotFound
+        elif code_text in {"20003", "20004"}:
+            error_type = InsufficientFunds
+        elif code_text.startswith("3"):
+            error_type = InvalidOrder
+        elif code_text.startswith("2") or code_text.startswith("1"):
+            error_type = BadRequest
+        else:
+            error_type = ExchangeError
+        error = error_type(text)
+        # Generic live diagnostics read only bounded structured attributes.
+        # Retaining the numeric/code token here makes failed writes actionable
+        # without publishing the response message or payload.
+        error.code = code_text
+        raise error
 
     async def _request(
         self,
@@ -467,7 +479,11 @@ class BitunixClient:
             raw.get("isolationUnrealizedPNL"),
             field="account.isolationUnrealizedPNL",
         )
-        wallet = available + frozen + margin - cross_upnl - isolated_upnl
+        # Bitunix documents these as disjoint available, order-locked, and
+        # position-locked quantities. Unrealized PnL is mark-to-market state,
+        # not a realized wallet component; subtracting it makes sizing move
+        # with every mark-price update.
+        wallet = available + frozen + margin
         if not math.isfinite(wallet) or wallet < 0.0:
             raise ValueError("Bitunix account response produced invalid wallet balance")
         return {
@@ -604,7 +620,32 @@ class BitunixClient:
             raise ValueError(f"Unknown Bitunix order status {status!r}")
         return mapping[status]
 
-    def _normalize_order(self, row: dict) -> dict:
+    def _pending_order_status(self, raw_status: Any) -> str:
+        """Classify one row returned by the authoritative pending endpoint.
+
+        Endpoint membership proves the order is still pending even when the
+        venue introduces a new code-like transition enum. Preserve that order
+        conservatively until a later complete snapshot removes it. Missing or
+        malformed status values remain invalid.
+        """
+        try:
+            return self._order_status(raw_status)
+        except ValueError:
+            token = str(raw_status or "").upper().rstrip("_")
+            if not self.ORDER_STATUS_TOKEN_RE.fullmatch(token):
+                raise
+            now = time.monotonic()
+            last = self._pending_status_warning_monotonic.get(token)
+            if last is None or now - last >= self.PENDING_STATUS_WARNING_INTERVAL_SECONDS:
+                logging.warning(
+                    "[bitunix] [order] pending endpoint returned unrecognized status "
+                    "| status=%s action=retain_as_open_until_authoritative_absence",
+                    token,
+                )
+                self._pending_status_warning_monotonic[token] = now
+            return "open"
+
+    def _normalize_order(self, row: dict, *, pending_snapshot: bool = False) -> dict:
         market_id = str(row.get("symbol") or "")
         symbol = self.safe_symbol(market_id)
         raw_side = str(row.get("side") or "").upper()
@@ -651,8 +692,11 @@ class BitunixClient:
         ).lower()
         if order_type not in {"limit", "market"}:
             raise ValueError("Bitunix order missing LIMIT/MARKET order type")
-        status = self._order_status(
-            row.get("status") or row.get("orderStatus")
+        raw_status = row.get("status") or row.get("orderStatus")
+        status = (
+            self._pending_order_status(raw_status)
+            if pending_snapshot
+            else self._order_status(raw_status)
         )
         price_required = order_type == "limit" or status == "open"
         price = _float(
@@ -780,7 +824,10 @@ class BitunixClient:
                 "Bitunix open-orders pagination returned duplicate or incomplete rows"
             )
         return sorted(
-            (self._normalize_order(row) for row in rows.values()),
+            (
+                self._normalize_order(row, pending_snapshot=True)
+                for row in rows.values()
+            ),
             key=lambda order: order["timestamp"],
         )
 
@@ -1453,17 +1500,24 @@ class BitunixClient:
 
 
 class BitunixOrderStream:
-    """Private Bitunix order websocket enriched through authoritative REST detail."""
+    """Native private-order and multiplexed public-candle WebSocket boundary."""
 
     id = "bitunix"
-    has = {"watchOrders": True}
+    has = {"watchOrders": True, "watchOHLCV": True}
     PING_INTERVAL_SECONDS = 15.0
+    KLINE_CHANNELS = {"1m": "market_kline_1min"}
+    MAX_KLINE_SUBSCRIPTIONS = 300
+    KLINE_QUEUE_SIZE = 4
 
     def __init__(self, rest: BitunixClient):
         self.rest = rest
         self.options: dict[str, Any] = {}
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._last_ping_monotonic = time.monotonic()
+        self._ohlcv_ws: aiohttp.ClientWebSocketResponse | None = None
+        self._ohlcv_task: asyncio.Task | None = None
+        self._ohlcv_queues: dict[str, asyncio.Queue] = {}
+        self._ohlcv_closed = False
 
     async def _receive_with_keepalive(
         self, ws: aiohttp.ClientWebSocketResponse
@@ -1568,7 +1622,199 @@ class BitunixOrderStream:
                 self._ws = None
                 raise NetworkError("Bitunix private order websocket disconnected")
 
+    def _normalize_ohlcv_payload(self, payload: Any) -> tuple[str, list[list[float]]]:
+        if not isinstance(payload, dict):
+            raise ValueError("Bitunix kline websocket payload is not an object")
+        if payload.get("ch") != self.KLINE_CHANNELS["1m"]:
+            raise ValueError("Bitunix kline websocket payload has unexpected channel")
+        market_id = str(payload.get("symbol") or "")
+        symbol = self.rest.safe_symbol(market_id)
+        timestamp = _int(payload.get("ts"), field="kline websocket ts")
+        if timestamp <= 0:
+            raise ValueError("Bitunix kline websocket has invalid timestamp")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise ValueError("Bitunix kline websocket data is not an object")
+        open_price = _float(data.get("o"), field="kline websocket open")
+        high = _float(data.get("h"), field="kline websocket high")
+        low = _float(data.get("l"), field="kline websocket low")
+        close = _float(data.get("c"), field="kline websocket close")
+        base_volume = _float(data.get("b"), field="kline websocket base volume")
+        if min(open_price, high, low, close) <= 0.0 or base_volume < 0.0:
+            raise ValueError("Bitunix kline websocket has invalid price or volume")
+        if low > min(open_price, close) or high < max(open_price, close) or low > high:
+            raise ValueError("Bitunix kline websocket has inconsistent OHLC values")
+        bucket_timestamp = timestamp - timestamp % self.rest.timeframe_milliseconds["1m"]
+        return symbol, [
+            [bucket_timestamp, open_price, high, low, close, base_volume]
+        ]
+
+    @staticmethod
+    def _queue_latest(queue: asyncio.Queue, item: Any, *, clear: bool = False) -> None:
+        if clear:
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        while queue.full():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        queue.put_nowait(item)
+
+    def _broadcast_ohlcv_error(self, error: BaseException) -> None:
+        for queue in tuple(self._ohlcv_queues.values()):
+            self._queue_latest(queue, error, clear=True)
+
+    def _ensure_ohlcv_task(self) -> None:
+        if self._ohlcv_closed:
+            raise NetworkError("Bitunix kline websocket is closed")
+        if self._ohlcv_task is None or self._ohlcv_task.done():
+            self._ohlcv_task = asyncio.create_task(
+                self._ohlcv_loop(), name="bitunix-public-klines"
+            )
+
+    async def _ohlcv_loop(self) -> None:
+        current_task = asyncio.current_task()
+        try:
+            await self.rest._ensure_markets()
+            session = await self.rest._get_session()
+            async with session.ws_connect(
+                self.rest.PUBLIC_WS_URL,
+                heartbeat=20.0,
+                receive_timeout=45.0,
+            ) as ws:
+                self._ohlcv_ws = ws
+                subscribed_ids: set[str] = set()
+                last_ping_monotonic = time.monotonic()
+                while not self._ohlcv_closed:
+                    desired_by_id = {
+                        str(self.rest.market(symbol)["id"]): symbol
+                        for symbol in tuple(self._ohlcv_queues)
+                    }
+                    if len(desired_by_id) > self.MAX_KLINE_SUBSCRIPTIONS:
+                        raise ValueError(
+                            "Bitunix kline websocket subscription limit exceeded"
+                        )
+                    desired_ids = set(desired_by_id)
+                    removed = sorted(subscribed_ids - desired_ids)
+                    added = sorted(desired_ids - subscribed_ids)
+                    if removed:
+                        await ws.send_json(
+                            {
+                                "op": "unsubscribe",
+                                "args": [
+                                    {
+                                        "symbol": market_id,
+                                        "ch": self.KLINE_CHANNELS["1m"],
+                                    }
+                                    for market_id in removed
+                                ],
+                            }
+                        )
+                    if added:
+                        await ws.send_json(
+                            {
+                                "op": "subscribe",
+                                "args": [
+                                    {
+                                        "symbol": market_id,
+                                        "ch": self.KLINE_CHANNELS["1m"],
+                                    }
+                                    for market_id in added
+                                ],
+                            }
+                        )
+                    subscribed_ids = desired_ids
+                    if not desired_ids:
+                        return
+                    now_monotonic = time.monotonic()
+                    if now_monotonic - last_ping_monotonic >= self.PING_INTERVAL_SECONDS:
+                        await ws.send_json({"op": "ping", "ping": int(time.time())})
+                        last_ping_monotonic = now_monotonic
+                    try:
+                        message = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if message.type == aiohttp.WSMsgType.TEXT:
+                        payload = json.loads(message.data)
+                        if isinstance(payload, dict) and payload.get("op") in {
+                            "connect",
+                            "ping",
+                            "pong",
+                            "subscribe",
+                            "unsubscribe",
+                        }:
+                            continue
+                        symbol, rows = self._normalize_ohlcv_payload(payload)
+                        queue = self._ohlcv_queues.get(symbol)
+                        if queue is not None:
+                            self._queue_latest(queue, rows)
+                    elif message.type in {
+                        aiohttp.WSMsgType.CLOSED,
+                        aiohttp.WSMsgType.ERROR,
+                    }:
+                        raise NetworkError("Bitunix public kline websocket disconnected")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logging.debug(
+                "[ws] bitunix public kline reconnect | error_type=%s",
+                type(exc).__name__,
+            )
+            self._broadcast_ohlcv_error(
+                NetworkError(
+                    "Bitunix public kline websocket failed: "
+                    f"{type(exc).__name__}"
+                )
+            )
+        finally:
+            self._ohlcv_ws = None
+            if self._ohlcv_task is current_task:
+                self._ohlcv_task = None
+
+    async def watch_ohlcv(self, symbol: str, timeframe: str = "1m") -> list[list[float]]:
+        if timeframe not in self.KLINE_CHANNELS:
+            raise BadRequest(f"Unsupported Bitunix WebSocket OHLCV timeframe {timeframe!r}")
+        await self.rest._ensure_markets()
+        self.rest.market(symbol)
+        queue = self._ohlcv_queues.get(symbol)
+        if queue is None:
+            queue = asyncio.Queue(maxsize=self.KLINE_QUEUE_SIZE)
+            self._ohlcv_queues[symbol] = queue
+        self._ensure_ohlcv_task()
+        item = await queue.get()
+        if isinstance(item, BaseException):
+            raise item
+        if item is None:
+            raise NetworkError("Bitunix kline websocket subscription was removed")
+        return item
+
+    async def un_watch_ohlcv(self, symbol: str, timeframe: str = "1m") -> None:
+        if timeframe not in self.KLINE_CHANNELS:
+            raise BadRequest(f"Unsupported Bitunix WebSocket OHLCV timeframe {timeframe!r}")
+        queue = self._ohlcv_queues.pop(symbol, None)
+        if queue is not None:
+            self._queue_latest(queue, None, clear=True)
+        if not self._ohlcv_queues and self._ohlcv_task is not None:
+            task = self._ohlcv_task
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if self._ohlcv_task is task:
+                self._ohlcv_task = None
+
     async def close(self) -> None:
+        self._ohlcv_closed = True
+        for queue in tuple(self._ohlcv_queues.values()):
+            self._queue_latest(queue, None, clear=True)
+        self._ohlcv_queues.clear()
+        ohlcv_task = self._ohlcv_task
+        if ohlcv_task is not None:
+            ohlcv_task.cancel()
+            await asyncio.gather(ohlcv_task, return_exceptions=True)
+        self._ohlcv_task = None
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
         self._ws = None
@@ -1615,6 +1861,10 @@ class BitunixBot(CCXTBot):
             if isinstance(source, str) and source.strip():
                 ticker["source"] = source.strip()
         return tickers
+
+    def _normalize_balance_diagnostics(self, fetched: object) -> dict:
+        """Expose only documented Bitunix account components for diagnostics."""
+        return normalize_bitunix_balance_composition(fetched)
 
     async def update_exchange_config(self) -> None:
         current = await self.cca.fetch_position_mode()
