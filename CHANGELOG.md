@@ -6,13 +6,17 @@ All notable user-facing changes will be documented in this file.
 
 - Added baseline multi-coin Trailing Martingale ordinary market execution to Apple MPS
   optimization for long-only, short-only, fused long+short, hedge-mode, one-way, and compatible
-  suite runs whose entry and close modes remain wholly trailing. Metal retains generation-time
+  suite runs whose entry modes remain wholly trailing and whose close modes remain wholly
+  trailing or wholly recursive. Metal retains generation-time
   market intent, executes promoted orders on the next valid candle with adverse directional
   slippage and taker fees, applies executable-touch minimum sizing to short entries and all closes,
-  and prices the strict portfolio entry cap at the market touch. HSL, static coin overrides, and
-  forager selection remain supported. Recursive entry and close ladders, position- and
-  total-exposure repair, auto-unstuck, and realized-loss gating remain fail closed in multi-coin
-  Trailing Martingale market mode pending dedicated parity slices.
+  and prices the strict portfolio entry cap at the market touch. For recursive closes, passive
+  next-candle reachability alone decides whether to emit only the next close or the immutable
+  recursive suffix; an emitted suffix promotes and minimum-sizes each merged group against its
+  generation market before aggregate position trimming. Static coin overrides may select trailing
+  or recursive close mode independently. HSL and forager selection remain supported. Recursive
+  entry ladders, position- and total-exposure repair, auto-unstuck, and realized-loss gating remain
+  fail closed in multi-coin Trailing Martingale market mode pending dedicated parity slices.
 
 - Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
   long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and

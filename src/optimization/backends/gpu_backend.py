@@ -906,19 +906,20 @@ def _validate_resume_evidence_budget(
         )
 
 
-def _tm_market_trailing_value_supported(value) -> bool:
+def _tm_market_mode_value_supported(
+    value, *, allow_recursive: bool = False
+) -> bool:
     try:
         value = float(value)
     except (TypeError, ValueError):
         return False
     with np.errstate(over="ignore", under="ignore", invalid="ignore"):
         packed = np.float32(value)
-    return (
-        math.isfinite(value)
-        and value > 0.0
-        and np.isfinite(packed)
-        and packed > 0.0
-    )
+    if not math.isfinite(value) or not np.isfinite(packed):
+        return False
+    if allow_recursive and value <= 0.0:
+        return True
+    return value > 0.0 and packed > 0.0
 
 
 def _validate_tm_multicoin_market_runtime_scope(
@@ -952,10 +953,16 @@ def _validate_tm_multicoin_market_runtime_scope(
             value = (strategy.get(branch, {}) or {}).get(
                 "retracement_base_pct", 0.0
             )
-            if not _tm_market_trailing_value_supported(value):
+            if not _tm_market_mode_value_supported(
+                value, allow_recursive=branch == "close"
+            ):
+                requirement = (
+                    "recursive or trailing" if branch == "close" else "trailing"
+                )
                 unsupported.append(
                     f"bot.{side}.strategy.trailing_martingale.{branch}."
-                    f"retracement_base_pct={value!r} (must remain trailing)"
+                    f"retracement_base_pct={value!r} "
+                    f"(must remain {requirement})"
                 )
 
     overrides = config.get("coin_overrides", {}) or {}
@@ -1009,16 +1016,25 @@ def _validate_tm_multicoin_market_runtime_scope(
                     if "retracement_base_pct" not in branch_patch:
                         continue
                     value = branch_patch["retracement_base_pct"]
-                    if not _tm_market_trailing_value_supported(value):
+                    if not _tm_market_mode_value_supported(
+                        value, allow_recursive=branch == "close"
+                    ):
+                        requirement = (
+                            "recursive or trailing"
+                            if branch == "close"
+                            else "trailing"
+                        )
                         unsupported.append(
                             f"coin_overrides.{coin}.bot.{side}.strategy."
                             f"trailing_martingale.{branch}."
-                            f"retracement_base_pct={value!r} (must remain trailing)"
+                            f"retracement_base_pct={value!r} "
+                            f"(must remain {requirement})"
                         )
     if unsupported:
         raise ValueError(
             "GPU multi-coin Trailing Martingale ordinary market execution "
-            "currently supports wholly trailing ordinary entries and closes "
+            "currently supports wholly trailing ordinary entries and wholly "
+            "trailing or wholly recursive ordinary closes "
             "without position/TWEL reducers, auto-unstuck, or realized-loss "
             "gating; unsupported settings: "
             + ", ".join(unsupported)
@@ -2883,11 +2899,7 @@ def _validate_tm_market_mode_bounds(
             and np.isfinite(packed_close_low)
             and packed_close_low > np.float32(0.0)
         )
-        mode_supported = (
-            trailing_only
-            if coin_count > 1
-            else recursive_only or trailing_only
-        )
+        mode_supported = recursive_only or trailing_only
         if (
             not math.isfinite(close_low)
             or not math.isfinite(close_high)
@@ -2897,7 +2909,7 @@ def _validate_tm_market_mode_bounds(
                 f"{close_key} bounds=({close_low}, {close_high})"
             )
     if unsupported:
-        supported_modes = (
+        entry_modes = (
             "wholly trailing with a float32-positive lower bound"
             if coin_count > 1
             else "wholly recursive (high<=0) or wholly trailing with a "
@@ -2906,8 +2918,9 @@ def _validate_tm_market_mode_bounds(
         raise ValueError(
             "GPU Trailing Martingale ordinary market execution currently "
             "requires each enabled side's entry retracement range to remain "
-            f"{supported_modes} for both entry and close retracement. Entry "
-            "or close unsupported/mode-crossing bounds remain fail closed: "
+            f"{entry_modes}, and close retracement to remain wholly recursive "
+            "(high<=0) or wholly trailing with a float32-positive lower bound. "
+            "Entry or close unsupported/mode-crossing bounds remain fail closed: "
             + ", ".join(unsupported)
         )
 
