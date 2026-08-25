@@ -3295,6 +3295,58 @@ def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
     assert torch.isfinite(output["balance"]).all()
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_active_fill_day_bucket_uses_elapsed_time(
+    strategy_kind,
+):
+    import passivbot_rust
+
+    cases = np.asarray(
+        [
+            [1_439.0, 0.0, 60_000.0],
+            [1_440.0, 0.0, 60_000.0],
+            [297.0, 10.0, 5.0 * 60_000.0],
+            [298.0, 10.0, 5.0 * 60_000.0],
+            [215.0, 10.0, 7.0 * 60_000.0],
+            [216.0, 10.0, 7.0 * 60_000.0],
+        ],
+        dtype=np.float32,
+    )
+    expected = [0, 1, 0, 1, 0, 1]
+    probe_kernel = r"""
+kernel void passivbot_elapsed_fill_day_bucket_probe(
+    constant float* cases [[buffer(0)]],
+    device int* output [[buffer(1)]],
+    uint b [[thread_position_in_grid]]
+) {
+    int offset = int(b) * 3;
+    output[b] = elapsed_fill_day_bucket(
+        cases[offset], cases[offset + 1], cases[offset + 2]
+    );
+}
+"""
+    source = (
+        passivbot_rust.mps_ema_anchor_source_py()
+        if strategy_kind == "ema_anchor"
+        else passivbot_rust.mps_trailing_martingale_source_py()
+    )
+    library = torch.mps.compile_shader(source + probe_kernel)
+    inputs = torch.tensor(cases, dtype=torch.float32, device="mps").contiguous()
+    output = torch.zeros(len(cases), dtype=torch.int32, device="mps")
+
+    library.passivbot_elapsed_fill_day_bucket_probe(
+        inputs,
+        output,
+        threads=(len(cases), 1, 1),
+    )
+    torch.mps.synchronize()
+
+    assert output.cpu().tolist() == expected
+
+
 def _multicoin_exposure_fixture(
     strategy_kind,
     side,

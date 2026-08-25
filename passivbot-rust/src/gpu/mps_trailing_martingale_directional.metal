@@ -15,6 +15,11 @@ constant int SIDE_PARAMS = 51;
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
 
+inline int elapsed_fill_day_bucket(float k, float first_eq_k, float interval_ms) {
+    const float fill_day_candles = 86400000.0f / interval_ms;
+    return int((k - first_eq_k) / fill_day_candles);
+}
+
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
 }
@@ -3706,7 +3711,9 @@ inline void passivbot_single_coin_impl(
             if (first_eq_k < 0.0f) first_eq_k = kf;
             last_eq_k = kf;
             if (any_fill) {
-                int active_fill_day = int(kf - first_eq_k) / 1440;
+                int active_fill_day = elapsed_fill_day_bucket(
+                    kf, first_eq_k, interval_ms
+                );
                 if (active_fill_day != last_active_fill_day) {
                     fills_active_days_count += 1.0f;
                     last_active_fill_day = active_fill_day;
