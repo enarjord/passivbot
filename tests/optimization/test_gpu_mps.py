@@ -266,6 +266,40 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
     assert runner.hsl_raw_drawdown_enabled is False
 
 
+@pytest.mark.parametrize("recovery_enabled", [False, True])
+@pytest.mark.parametrize("runner_name", ["ema_anchor", "trailing_martingale"])
+def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
+    runner_name, recovery_enabled
+):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    runner_cls = (
+        MpsEmaAnchorRunner
+        if runner_name == "ema_anchor"
+        else MpsTrailingMartingaleRunner
+    )
+    runner = object.__new__(runner_cls)
+    runner.n = 17
+    runner.n_days = 2
+    runner.run_config = ProxyRun(
+        1_000.0, 1, 1, 0, 0, 0, 60_000, 0.05, 3, 11
+    )
+    runner.rolling_capacity = 9
+    runner.pnl_lookback_bars = 7
+    runner.recovery_distribution_enabled = recovery_enabled
+    runner.recovery_stride = 60
+    runner.n_recovery_samples = 4
+
+    actual = runner._single_coin_size_values(5, 13)
+
+    assert actual == [5, 17, 2, 13, 3, 9, 7, 11] + (
+        [60, 4] if recovery_enabled else []
+    )
+
+
 def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):
     from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner

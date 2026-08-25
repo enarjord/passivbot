@@ -952,6 +952,23 @@ class MpsEmaAnchorRunner:
             self._recovery_buffers[batch_size].fill_(float("nan"))
         return self._recovery_buffers[batch_size]
 
+    def _single_coin_size_values(
+        self, batch_size: int, parameter_count: int
+    ) -> list[int]:
+        values = [
+            int(batch_size),
+            self.n,
+            self.n_days,
+            int(parameter_count),
+            self.run_config.first_valid_idx,
+            self.rolling_capacity,
+            self.pnl_lookback_bars,
+            self.run_config.last_valid_idx,
+        ]
+        if self.recovery_distribution_enabled:
+            values.extend([self.recovery_stride, self.n_recovery_samples])
+        return values
+
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
         started = time.perf_counter()
         matrix = self._pack_params(params)
@@ -969,20 +986,9 @@ class MpsEmaAnchorRunner:
         )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
-            size_values = [
-                batch_size,
-                self.n,
-                self.n_days,
-                matrix.shape[1],
-                self.run_config.first_valid_idx,
-                self.rolling_capacity,
-                self.pnl_lookback_bars,
-                self.run_config.last_valid_idx,
-            ]
-            if self.recovery_distribution_enabled:
-                size_values.extend(
-                    [self.recovery_stride, self.n_recovery_samples]
-                )
+            size_values = self._single_coin_size_values(
+                batch_size, int(matrix.shape[1])
+            )
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
                 dtype=torch.int32,
@@ -1920,19 +1926,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
-            size_values = [
-                batch_size,
-                self.n,
-                self.n_days,
-                matrix.shape[1],
-                self.run_config.first_valid_idx,
-                self.rolling_capacity,
-                self.pnl_lookback_bars,
-            ]
-            if self.recovery_distribution_enabled:
-                size_values.extend(
-                    [self.recovery_stride, self.n_recovery_samples]
-                )
+            size_values = self._single_coin_size_values(
+                batch_size, int(matrix.shape[1])
+            )
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
                 dtype=torch.int32,
