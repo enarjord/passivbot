@@ -45,12 +45,12 @@ from optimization.gpu.service import (
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
     _require_multicoin_metric_topology,
-    _require_complete_valid_tail,
     _require_no_forced_delist_tail,
     _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
     _require_no_internal_invalid_multicoin_hsl_candles,
     _require_no_internal_invalid_single_coin_recovery_candles,
+    _require_supported_multicoin_valid_tails,
     _refresh_hedged_multicoin_hsl_at_portfolio_cutoff,
     _single_coin_candle_interval_minutes,
     _single_coin_exposure_params,
@@ -1103,7 +1103,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "candle_interval_minutes": interval_minutes,
             "dynamic_wel_by_tradability": True,
             "forager_score_hysteresis_pct": 0.0,
-            "last_valid_indices": [3, 3],
+            "last_valid_indices": [2, 3],
             "first_valid_indices": [0, 0],
             "equity_hard_stop_loss": {"signal_mode": "coin"},
             "coins": ["BTC", "ETH"],
@@ -1191,11 +1191,15 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert constructed["kwargs"]["filter_by_min_effective_cost"] is True
 
 
-def test_gpu_multicoin_proxy_requires_complete_valid_tail():
-    _require_complete_valid_tail(99, 100)
+def test_gpu_multicoin_proxy_accepts_staggered_ordinary_valid_tails():
+    _require_supported_multicoin_valid_tails([99, 98], 100)
 
-    with pytest.raises(ValueError, match="force-realizes open positions"):
-        _require_complete_valid_tail(98, 100)
+    with pytest.raises(ValueError, match="at least one coin to remain valid"):
+        _require_supported_multicoin_valid_tails([98, 97], 100)
+    with pytest.raises(ValueError, match="forced-delist closes"):
+        _require_supported_multicoin_valid_tails([99, 0], 1401)
+    with pytest.raises(ValueError, match="at least one prepared coin"):
+        _require_supported_multicoin_valid_tails([], 100)
 
 
 def test_gpu_single_coin_proxy_accepts_short_invalid_tail_only():

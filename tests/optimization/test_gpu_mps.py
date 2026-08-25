@@ -2067,6 +2067,8 @@ kernel void passivbot_tm_multicoin_dual_hsl_phase_probe(
     invalid_bars[:, 0, 2] = float("nan")
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 4] = 1.0
+    coin_settings[0, 6] = 0.0
+    coin_settings[0, 7] = 5.0
     output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
@@ -2232,6 +2234,8 @@ kernel void passivbot_ema_multicoin_dual_hsl_phase_probe(
     invalid_bars[:, 0, 2] = float("nan")
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device="mps")
     coin_settings[0, 4] = 1.0
+    coin_settings[0, 6] = 0.0
+    coin_settings[0, 7] = 5.0
     output = torch.zeros((8, 12), dtype=torch.float32, device="mps")
 
     library = torch.mps.compile_shader(
@@ -3830,6 +3834,7 @@ def _multicoin_exposure_fixture(
     lows=None,
     max_realized_loss_pct=1.0,
     first_valid_indices=(0, 0),
+    last_valid_indices=None,
     liquidation_threshold=0.05,
     collect_coin_fill_counts=False,
     filter_by_min_effective_cost=False,
@@ -3841,6 +3846,8 @@ def _multicoin_exposure_fixture(
     interval_minutes=1,
 ):
     coin_count = 2
+    if last_valid_indices is None:
+        last_valid_indices = (count - 1,) * coin_count
     interval_ms = int(interval_minutes) * 60_000
     timestamps = (
         1_700_000_000_000
@@ -3878,7 +3885,7 @@ def _multicoin_exposure_fixture(
             interval_ms,
             liquidation_threshold,
             first_valid_indices[coin],
-            count - 1,
+            last_valid_indices[coin],
         )
         for coin in range(coin_count)
     ]
@@ -4087,6 +4094,88 @@ def test_mps_tm_multicoin_aggregated_interval_fused_smoke(interval_minutes):
     assert runner.interval_minutes == interval_minutes
     assert torch.isfinite(output["day_end_eq"]).any().item()
     assert torch.isfinite(output["last_eq_ts"]).all().item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
+    strategy_kind, topology
+):
+    count = 12
+    last_valid = 6
+    closes = np.full((count, 2), 100.0)
+    # Keep a positive packed mark after the explicit validity window so this
+    # exercises the index boundary rather than relying on NaNs becoming zero.
+    closes[last_valid + 1 :, 0] = 123.0
+    highs = closes.copy()
+    lows = closes.copy()
+    highs[3, :] = 101.0
+    lows[3, :] = 99.0
+    if strategy_kind == "ema_anchor":
+        override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
+        wallet_exposure_column = 11
+        keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        fused_runner_cls = MpsEmaAnchorMulticoinFusedRunner
+    else:
+        override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+        wallet_exposure_column = 24
+        keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        fused_runner_cls = MpsTrailingMartingaleMulticoinFusedRunner
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[1, wallet_exposure_column] = 0.0
+    fixture_side = topology if topology != "fused" else "long"
+    runner, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        fixture_side,
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        last_valid_indices=(last_valid, count - 1),
+        return_context=True,
+    )
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.9,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 1.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 0.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    if topology == "fused":
+        runner = fused_runner_cls(
+            run,
+            data,
+            long_coin_overrides=overrides,
+            short_coin_overrides=overrides,
+        )
+        params = np.asarray([row + row], dtype=np.float64)
+    else:
+        params = np.asarray([row], dtype=np.float64)
+    output = runner.run(params)
+    torch.mps.synchronize()
+
+    assert output["balance"].item() > 0.0
+    if topology in {"long", "fused"}:
+        assert output["psize"].item() > 0.0
+    if topology in {"short", "fused"}:
+        assert output["short_psize"].item() > 0.0
+    assert output["day_end_eq"][0, 0].item() == pytest.approx(
+        output["balance"].item()
+    )
+    assert output["last_eq_ts"].item() > last_valid * run.interval_ms
+    assert output["hsl_tier_samples_total"].item() > last_valid
 
 
 @pytest.mark.skipif(

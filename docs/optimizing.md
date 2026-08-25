@@ -366,8 +366,14 @@ The supported slice is intentionally narrow:
   equity and elapsed-time accounting through the prepared endpoint. HSL-enabled runs also continue
   hard-stop sampling, rolling-PnL expiry, tier accounting, and restart checks without treating stale
   orders as blocking
-- forced-delist tails and any multi-coin invalid tail remain fail-closed until their hard-stop and
-  forced-close semantics are modeled
+- multi-coin runs may include staggered invalid tails while at least one prepared coin remains
+  valid through the endpoint and every tail stays below exact Rust's 1,400-candle forced-delist
+  threshold. Tailed coins are non-tradable, contribute no unrealized PnL, and cannot leave stale
+  orders blocking HSL; dynamic tradability, portfolio/coin HSL, equity, and elapsed-time accounting
+  continue on the surviving timeline
+- forced-delist tails and multi-coin histories in which every coin ends before the prepared
+  endpoint remain fail-closed until their forced-close and all-invalid endpoint semantics are
+  modeled
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
 Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every

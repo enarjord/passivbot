@@ -646,15 +646,6 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
     }
 
 
-def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
-    if int(last_valid_idx) != int(candle_count) - 1:
-        raise ValueError(
-            "GPU foundation requires the final prepared candle to be valid because "
-            "the exact Rust backtest force-realizes open positions at its valid tail; "
-            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
-        )
-
-
 def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> None:
     """Accept ordinary invalid tails but reject Rust's forced-delist boundary.
 
@@ -668,15 +659,33 @@ def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> No
     candle_count = int(candle_count)
     if last_valid_idx < 0 or last_valid_idx >= candle_count:
         raise ValueError(
-            "GPU single-coin proxy requires last_valid_idx within the prepared "
+            "GPU proxy requires last_valid_idx within the prepared "
             f"candle range; last_valid_idx={last_valid_idx}, "
             f"candle_count={candle_count}"
         )
     if last_valid_idx + 1400 < candle_count:
         raise ValueError(
-            "GPU single-coin proxy does not yet model Rust forced-delist closes "
+            "GPU proxy does not yet model Rust forced-delist closes "
             "when at least 1,400 prepared candles follow the final valid candle; "
             f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
+def _require_supported_multicoin_valid_tails(
+    last_valid_indices, candle_count: int
+) -> None:
+    """Accept staggered ordinary tails while keeping endpoint semantics explicit."""
+
+    tails = [int(value) for value in last_valid_indices]
+    if not tails:
+        raise ValueError("GPU multicoin proxy requires at least one prepared coin")
+    for last_valid_idx in tails:
+        _require_no_forced_delist_tail(last_valid_idx, candle_count)
+    if max(tails) != int(candle_count) - 1:
+        raise ValueError(
+            "GPU multicoin proxy requires at least one coin to remain valid through "
+            "the prepared endpoint while all-coins-ended tail accounting is not yet "
+            f"modeled; last_valid_indices={tails}, candle_count={candle_count}"
         )
 
 
@@ -1921,8 +1930,9 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires a finite non-negative "
                 "live.forager_score_hysteresis_pct"
             )
-        for last_valid_idx in backtest_params["last_valid_indices"]:
-            _require_complete_valid_tail(int(last_valid_idx), len(values))
+        _require_supported_multicoin_valid_tails(
+            backtest_params["last_valid_indices"], len(values)
+        )
 
         comparable_bot_keys = (
             "total_wallet_exposure_limit",

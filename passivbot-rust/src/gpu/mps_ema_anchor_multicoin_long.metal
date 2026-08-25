@@ -413,7 +413,10 @@ inline float accumulate_ema_multicoin_side_unrealized_pnl(
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         float close = bars[bar_offset + 2];
-        if (side.psize[c] > 0.0f && finite_positive(close)) {
+        bool valid = k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(close);
+        if (side.psize[c] > 0.0f && valid) {
             accumulator += side.psize[c]
                 * coin_settings[coin_offset + 4]
                 * (short_side
@@ -534,10 +537,11 @@ inline bool ema_multicoin_side_held_marks_are_valid(
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         if (!finite_positive(side.pprice[c])
-            || !finite_positive(bars[bar_offset + 2])
             || !finite_positive(coin_settings[coin_offset + 4])) {
             return false;
         }
+        if (k > int(coin_settings[coin_offset + 7])) continue;
+        if (!finite_positive(bars[bar_offset + 2])) return false;
     }
     return true;
 }
@@ -545,6 +549,9 @@ inline bool ema_multicoin_side_held_marks_are_valid(
 inline bool ema_multicoin_side_has_blocking_orders(
     thread EmaMulticoinSideState& side,
     thread const EmaMulticoinSideConfig& config,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
     int coin_count
 ) {
     bool side_has_position = config.coin_hsl_mode
@@ -552,6 +559,12 @@ inline bool ema_multicoin_side_has_blocking_orders(
     int side_mode = config.coin_hsl_mode
         ? 0 : hsl_mode(side.hsl, side_has_position);
     for (int c = 0; c < coin_count; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        bool valid = k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(bars[bar_offset + 2]);
+        if (!valid) continue;
         int mode = config.coin_hsl_mode
             ? hsl_mode(side.coin_hsl[c], side.psize[c] > 0.0f)
             : side_mode;
@@ -613,10 +626,10 @@ inline bool update_ema_multicoin_dual_side_hsl(
         short_side, coin_count
     );
     bool long_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
-        long_side, long_config, coin_count
+        long_side, long_config, bars, coin_settings, k, coin_count
     );
     bool short_has_blocking_orders = ema_multicoin_side_has_blocking_orders(
-        short_side, short_config, coin_count
+        short_side, short_config, bars, coin_settings, k, coin_count
     );
 
     if (long_config.coin_hsl_mode) {
@@ -636,13 +649,16 @@ inline bool update_ema_multicoin_dual_side_hsl(
             int bar_offset = (k * coin_count + c) * 4;
             float close = bars[bar_offset + 2];
             float c_mult = coin_settings[coin_offset + 4];
+            bool valid = k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && finite_positive(close);
             float long_coin_unrealized = long_side.psize[c] > 0.0f
-                    && finite_positive(close)
+                    && valid
                 ? long_side.psize[c] * c_mult
                     * (close - long_side.pprice[c])
                 : 0.0f;
             float short_coin_unrealized = short_side.psize[c] > 0.0f
-                    && finite_positive(close)
+                    && valid
                 ? short_side.psize[c] * c_mult
                     * (short_side.pprice[c] - close)
                 : 0.0f;
@@ -652,12 +668,12 @@ inline bool update_ema_multicoin_dual_side_hsl(
             int short_mode = hsl_mode(
                 short_side.coin_hsl[c], short_side.psize[c] > 0.0f
             );
-            bool long_coin_has_blocking_orders = long_mode != 3 && (
+            bool long_coin_has_blocking_orders = valid && long_mode != 3 && (
                 long_side.entry_qty[c] > 0.0f
                     || long_side.close_qty[c] > 0.0f
                     || long_side.secondary_close_qty[c] > 0.0f
             );
-            bool short_coin_has_blocking_orders = short_mode != 3 && (
+            bool short_coin_has_blocking_orders = valid && short_mode != 3 && (
                 short_side.entry_qty[c] > 0.0f
                     || short_side.close_qty[c] > 0.0f
                     || short_side.secondary_close_qty[c] > 0.0f
@@ -2824,22 +2840,23 @@ inline void passivbot_ema_anchor_multicoin_impl(
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
-            if (k >= int(coin_settings[coin_offset + 6])
+            bool valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close)) {
-                any_valid = true;
-            }
+                && finite_positive(close);
+            any_valid = any_valid || valid;
             if (psize[c] > 0.0f) {
                 has_open_position = true;
                 position_cost += psize[c] * pprice[c]
                     * coin_settings[coin_offset + 4];
-                unrealized += psize[c] * coin_settings[coin_offset + 4]
-                    * (short_side ? pprice[c] - close : close - pprice[c]);
+                if (valid) {
+                    unrealized += psize[c] * coin_settings[coin_offset + 4]
+                        * (short_side ? pprice[c] - close : close - pprice[c]);
+                }
             }
             int coin_mode = coin_hsl_mode
                 ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
                 : current_hsl_mode;
-            if (coin_mode != 3 && (
+            if (valid && coin_mode != 3 && (
                     entry_qty[c] > 0.0f || close_qty[c] > 0.0f
                         || secondary_close_qty[c] > 0.0f
                 )) {
@@ -2862,13 +2879,16 @@ inline void passivbot_ema_anchor_multicoin_impl(
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
                     float close = bars[bar_offset + 2];
+                    bool valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && finite_positive(close);
                     float coin_unrealized = psize[c] > 0.0f
-                        && finite_positive(close)
+                        && valid
                         ? psize[c] * coin_settings[coin_offset + 4]
                             * (short_side ? pprice[c] - close : close - pprice[c])
                         : 0.0f;
                     int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
-                    bool coin_has_blocking_orders = coin_mode != 3 && (
+                    bool coin_has_blocking_orders = valid && coin_mode != 3 && (
                         entry_qty[c] > 0.0f || close_qty[c] > 0.0f
                             || secondary_close_qty[c] > 0.0f
                     );
