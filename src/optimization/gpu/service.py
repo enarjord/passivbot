@@ -17,7 +17,17 @@ from optimization.gpu.model import (
     MPS_MULTICOIN_MAX_COINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
@@ -1602,15 +1612,8 @@ def _build_multicoin_tm_coin_overrides(
 
         resolve_override = _get_backtest_coin_override
 
-    cooldown_column = len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS)
-    wallet_exposure_column = cooldown_column + 1
-    allowance_pct_column = wallet_exposure_column + 1
-    wel_enforcer_enabled_column = allowance_pct_column + 1
-    wel_enforcer_threshold_column = wel_enforcer_enabled_column + 1
-    unstuck_start_column = wel_enforcer_threshold_column + 1
-    hsl_start_column = unstuck_start_column + 6
     matrix = np.full(
-        (len(coins), hsl_start_column + len(HSL_COIN_OVERRIDE_PATHS)),
+        (len(coins), TRAILING_MARTINGALE_COIN_OVERRIDE_COLS),
         np.nan,
         dtype=np.float32,
     )
@@ -1647,27 +1650,52 @@ def _build_multicoin_tm_coin_overrides(
                     }
                     else effective_value
                 )
+        entry_patch = strategy_patch.get("entry", {}) or {}
+        if "ema_gate_mode" in entry_patch:
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
+            ] = float(effective_strategy["gate_initial"])
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
+            ] = float(effective_strategy["gate_reentry"])
         risk_patch = side_patch.get("risk", {}) or {}
         if "entry_cooldown_minutes" in risk_patch:
-            matrix[coin_index, cooldown_column] = float(
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
+            ] = float(
                 effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
             )
         if not bool(effective_bot.get("entry_eligible", True)) or (
             "wallet_exposure_limit" in side_patch
         ):
-            matrix[coin_index, wallet_exposure_column] = float(
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
+            ] = float(
                 effective_bot["wallet_exposure_limit"]
             )
         if "we_excess_allowance_pct" in risk_patch:
-            matrix[coin_index, allowance_pct_column] = float(
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
+            ] = float(
                 effective_bot.get("risk_we_excess_allowance_pct", 0.0) or 0.0
             )
         if "position_exposure_enforcer_enabled" in risk_patch:
-            matrix[coin_index, wel_enforcer_enabled_column] = float(
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
+            ] = float(
                 bool(effective_bot.get("risk_wel_enforcer_enabled", False))
             )
         if "position_exposure_enforcer_threshold" in risk_patch:
-            matrix[coin_index, wel_enforcer_threshold_column] = float(
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
+            ] = float(
                 effective_bot.get("risk_wel_enforcer_threshold", 0.0) or 0.0
             )
         unstuck_patch = side_patch.get("unstuck", {}) or {}
@@ -1680,14 +1708,14 @@ def _build_multicoin_tm_coin_overrides(
                 ("loss_allowance_pct", "unstuck_loss_allowance_pct"),
                 ("threshold", "unstuck_threshold"),
             ),
-            start=unstuck_start_column,
+            start=TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
         _pack_multicoin_hsl_overrides(
             matrix,
             row=coin_index,
-            start_column=hsl_start_column,
+            start_column=TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
             side_patch=side_patch,
             effective_bot=effective_bot,
         )
