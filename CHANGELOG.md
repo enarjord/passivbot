@@ -6,10 +6,11 @@ All notable user-facing changes will be documented in this file.
 
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports staggered
   ordinary invalid candle tails when at least one prepared coin remains valid through the endpoint
-  and every tail stays below exact Rust's forced-delist threshold. Tailed coins become
-  non-tradable, contribute no unrealized PnL, and cannot leave stale orders blocking HSL, while
-  portfolio and coin HSL controllers continue through the surviving timeline. Forced-delist and
-  all-coins-ended tails remain fail-closed.
+  every tail stays below exact Rust's forced-delist threshold, and the coins' valid ranges jointly
+  cover every candle after coverage begins. Tailed coins become non-tradable, contribute no
+  unrealized PnL, and cannot leave stale orders blocking HSL, while portfolio and coin HSL
+  controllers continue through the surviving timeline. Forced-delist tails, all-coins-ended tails,
+  and all-invalid gaps remain fail-closed.
 
 - Fixed live bot startup on Windows without symlink privileges by writing a visible pointer to the
   timestamped run log instead of failing while creating the stable log alias. Built-in monitor

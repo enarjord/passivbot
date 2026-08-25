@@ -4218,6 +4218,105 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_entry_twel_gate_does_not_expand_tailed_coin(side):
+    import passivbot_rust
+
+    runner, row, _run, data = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=3,
+        last_valid_indices=(0, 2),
+        market_orders_allowed=True,
+        return_context=True,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_double_down_factor": 1.0,
+            "entry_initial_qty_pct": 0.1,
+            "entry_threshold_base_pct": 0.01,
+            "total_wallet_exposure_limit": 1.0,
+            "n_positions": 1.0,
+            "twel_entry_gate_enabled": 1.0,
+            "twel_enforcer_threshold": 1.0,
+        }
+    )
+    params = torch.tensor(
+        [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS],
+        dtype=torch.float32,
+        device="mps",
+    )
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    probe_kernel = r"""
+kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
+    constant int* fill_ticks,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    constant int& short_side_raw,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    const int C = 2;
+    const int k = 1;
+    const bool short_side = short_side_raw != 0;
+    TrailingMartingaleMulticoinSideConfig config =
+        load_trailing_martingale_multicoin_side_config(params, 0);
+    TrailingMartingaleMulticoinSideState side;
+    init_trailing_martingale_multicoin_side_state(
+        side, config, coin_settings, coin_overrides, C
+    );
+    const int tick_offset = (k * C) * 2;
+    const float price_step = coin_settings[1];
+    side.entry_deferred_twel_gate = true;
+    side.psize[0] = 1.0f;
+    side.pprice[0] = 100.0f;
+    side.entry_tick[0] = short_side
+        ? fill_ticks[tick_offset]
+        : fill_ticks[tick_offset + 1] + 1;
+    side.entry_order_type[0] = short_side ? 15 : 4;
+    side.entry_strategy_qty[0] = 1.0f;
+    side.entry_qty[0] = 1.0f;
+    side.entry_gen_balance[0] = 1000.0f;
+    side.entry_gen_allowed_wel[0] = 1.0f;
+    side.entry_gen_market_price[0] = 100.0f;
+    side.entry_gen_psize[0] = 1.0f;
+    side.entry_gen_pprice[0] = 100.0f;
+    side.entry_gen_initial_tick[0] = int(rint(100.0f / price_step));
+    side.entry_gen_touch_tick[0] = short_side ? 0 : 100000000;
+    side.entry_recursive_market_mode[0] = true;
+    apply_tm_multicoin_recursive_entry_twel_gate(
+        side, config, fill_ticks, coin_settings, coin_overrides,
+        k, C, short_side, 0.001f
+    );
+    output[0] = side.entry_qty[0];
+    output[1] = float(side.entry_gate_suffix_keep_count[0]);
+}
+"""
+    source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
+    library = torch.mps.compile_shader(source + probe_kernel)
+    library.passivbot_tm_multicoin_tail_recursive_gate_probe(
+        data["touch_ticks"],
+        data["coin_settings"],
+        runner.coin_overrides,
+        params,
+        output,
+        int(side == "short"),
+        threads=(1, 1, 1),
+    )
+    torch.mps.synchronize()
+
+    # Exact Rust retains the already generated next entry but does not expand
+    # its recursive market suffix once NextCandle.tradable becomes false.
+    assert output[0].item() > 0.0
+    assert output[1].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_multicoin_risk_reducers_exclude_tail_but_keep_its_exposure(

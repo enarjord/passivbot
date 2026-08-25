@@ -850,6 +850,12 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         if (!first_pending[c] || !side.entry_recursive_market_mode[c]) {
             continue;
         }
+        // Exact Rust retains the already generated next entry in the global
+        // TWEL gate, but NextCandle.tradable=false prevents recursively
+        // expanding its market-fill suffix outside this coin's valid window.
+        const int first_valid = int(coin_settings[coin_offset + 6]);
+        const int last_valid = int(coin_settings[coin_offset + 7]);
+        if (k < first_valid || k > last_valid) continue;
         int tick_offset = (k * C + c) * 2;
         bool first_passive_reachable = short_side
             ? first[c].ticks <= fill_ticks[tick_offset + 0]

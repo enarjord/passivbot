@@ -1192,14 +1192,26 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
 
 
 def test_gpu_multicoin_proxy_accepts_staggered_ordinary_valid_tails():
-    _require_supported_multicoin_valid_tails([99, 98], 100)
+    _require_supported_multicoin_valid_tails([0, 0], [99, 98], 100)
+    _require_supported_multicoin_valid_tails([0, 50], [49, 99], 100)
 
     with pytest.raises(ValueError, match="at least one coin to remain valid"):
-        _require_supported_multicoin_valid_tails([98, 97], 100)
+        _require_supported_multicoin_valid_tails([0, 0], [98, 97], 100)
     with pytest.raises(ValueError, match="forced-delist closes"):
-        _require_supported_multicoin_valid_tails([99, 0], 1401)
+        _require_supported_multicoin_valid_tails([0, 0], [1400, 0], 1401)
     with pytest.raises(ValueError, match="at least one prepared coin"):
-        _require_supported_multicoin_valid_tails([], 100)
+        _require_supported_multicoin_valid_tails([], [], 100)
+    with pytest.raises(ValueError, match="matching first/last"):
+        _require_supported_multicoin_valid_tails([0], [99, 98], 100)
+    with pytest.raises(ValueError, match="first_valid_idx within"):
+        _require_supported_multicoin_valid_tails([100, 0], [99, 99], 100)
+
+
+def test_gpu_multicoin_proxy_rejects_all_invalid_gap_between_valid_windows():
+    with pytest.raises(ValueError, match=r"all-invalid gap.*gap_start=40"):
+        _require_supported_multicoin_valid_tails(
+            [0, 60], [39, 99], 100
+        )
 
 
 def test_gpu_single_coin_proxy_accepts_short_invalid_tail_only():

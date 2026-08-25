@@ -967,6 +967,9 @@ mod tests {
         assert!(source.contains(
             "apply_tm_multicoin_recursive_entry_twel_gate("
         ));
+        assert!(source.contains(
+            "if (k < first_valid || k > last_valid) continue;"
+        ));
         assert!(source.contains("entry_gate_suffix_keep_count"));
         assert!(source.contains("entry_gate_suffix_partial_qty"));
         assert!(source.contains("accumulate_tm_multicoin_side_unrealized_pnl("));

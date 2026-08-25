@@ -672,21 +672,50 @@ def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> No
 
 
 def _require_supported_multicoin_valid_tails(
-    last_valid_indices, candle_count: int
+    first_valid_indices, last_valid_indices, candle_count: int
 ) -> None:
-    """Accept staggered ordinary tails while keeping endpoint semantics explicit."""
+    """Accept staggered ordinary tails with continuous portfolio time coverage."""
 
+    starts = [int(value) for value in first_valid_indices]
     tails = [int(value) for value in last_valid_indices]
-    if not tails:
+    if not starts or not tails:
         raise ValueError("GPU multicoin proxy requires at least one prepared coin")
-    for last_valid_idx in tails:
+    if len(starts) != len(tails):
+        raise ValueError(
+            "GPU multicoin proxy requires matching first/last valid-index counts; "
+            f"first_valid_indices={starts}, last_valid_indices={tails}"
+        )
+    windows = []
+    for coin, (first_valid_idx, last_valid_idx) in enumerate(
+        zip(starts, tails)
+    ):
         _require_no_forced_delist_tail(last_valid_idx, candle_count)
+        if not 0 <= first_valid_idx <= last_valid_idx:
+            raise ValueError(
+                "GPU multicoin proxy requires each first_valid_idx within its "
+                "prepared valid range; "
+                f"coin={coin}, first_valid_idx={first_valid_idx}, "
+                f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+            )
+        windows.append((first_valid_idx, last_valid_idx))
     if max(tails) != int(candle_count) - 1:
         raise ValueError(
             "GPU multicoin proxy requires at least one coin to remain valid through "
             "the prepared endpoint while all-coins-ended tail accounting is not yet "
             f"modeled; last_valid_indices={tails}, candle_count={candle_count}"
         )
+    windows.sort()
+    covered_through = windows[0][1]
+    for first_valid_idx, last_valid_idx in windows[1:]:
+        if first_valid_idx > covered_through + 1:
+            raise ValueError(
+                "GPU multicoin proxy does not yet model an all-invalid gap after "
+                "portfolio equity tracking may begin; "
+                f"gap_start={covered_through + 1}, "
+                f"gap_end={first_valid_idx - 1}, "
+                f"valid_windows={windows}"
+            )
+        covered_through = max(covered_through, last_valid_idx)
 
 
 def _require_no_internal_invalid_hsl_candles(
@@ -1931,7 +1960,9 @@ class MpsMulticoinProxy:
                 "live.forager_score_hysteresis_pct"
             )
         _require_supported_multicoin_valid_tails(
-            backtest_params["last_valid_indices"], len(values)
+            backtest_params["first_valid_indices"],
+            backtest_params["last_valid_indices"],
+            len(values),
         )
 
         comparable_bot_keys = (
