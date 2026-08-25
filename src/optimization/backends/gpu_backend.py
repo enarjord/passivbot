@@ -935,15 +935,6 @@ def _validate_tm_multicoin_market_runtime_scope(
         )
     for side in sorted(set(enabled_sides or ())):
         side_config = config.get("bot", {}).get(side, {}) or {}
-        risk = side_config.get("risk", {}) or {}
-        if bool(risk.get("position_exposure_enforcer_enabled", False)):
-            unsupported.append(
-                f"bot.{side}.risk.position_exposure_enforcer_enabled=true"
-            )
-        if bool(risk.get("total_exposure_enforcer_enabled", False)):
-            unsupported.append(
-                f"bot.{side}.risk.total_exposure_enforcer_enabled=true"
-            )
         if bool((side_config.get("unstuck", {}) or {}).get("enabled", False)):
             unsupported.append(f"bot.{side}.unstuck.enabled=true")
         strategy = (
@@ -976,23 +967,6 @@ def _validate_tm_multicoin_market_runtime_scope(
                 side_patch = bot_patch.get(side, {}) or {}
                 if not isinstance(side_patch, dict):
                     continue
-                risk_patch = side_patch.get("risk", {}) or {}
-                if not isinstance(risk_patch, dict):
-                    risk_patch = {}
-                if bool(
-                    risk_patch.get("position_exposure_enforcer_enabled", False)
-                ):
-                    unsupported.append(
-                        f"coin_overrides.{coin}.bot.{side}.risk."
-                        "position_exposure_enforcer_enabled=true"
-                    )
-                if bool(
-                    risk_patch.get("total_exposure_enforcer_enabled", False)
-                ):
-                    unsupported.append(
-                        f"coin_overrides.{coin}.bot.{side}.risk."
-                        "total_exposure_enforcer_enabled=true"
-                    )
                 unstuck_patch = side_patch.get("unstuck", {}) or {}
                 if not isinstance(unstuck_patch, dict):
                     unstuck_patch = {}
@@ -1030,9 +1004,8 @@ def _validate_tm_multicoin_market_runtime_scope(
         raise ValueError(
             "GPU multi-coin Trailing Martingale ordinary market execution "
             "currently supports wholly trailing or wholly recursive ordinary "
-            "entries and closes; position/TWEL reducers, auto-unstuck, and "
-            "realized-loss "
-            "gating; unsupported settings: "
+            "entries and closes plus position/TWEL reducers; auto-unstuck "
+            "and realized-loss gating remain unsupported; settings: "
             + ", ".join(unsupported)
         )
 
@@ -2954,11 +2927,7 @@ def _validate_tm_multicoin_market_foundation_bounds(
         return
     unsupported = []
     for side in sorted(set(enabled_sides or ())):
-        for suffix in (
-            "risk_position_exposure_enforcer_enabled",
-            "risk_total_exposure_enforcer_enabled",
-            "unstuck_enabled",
-        ):
+        for suffix in ("unstuck_enabled",):
             key = f"{side}_{suffix}"
             bound = bound_by_key.get(key)
             values = (

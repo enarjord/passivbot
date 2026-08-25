@@ -20,8 +20,10 @@ All notable user-facing changes will be documented in this file.
   removes the farthest orders with exact deterministic ties, and may retain one minimum-valid
   partial boundary strictly below the TWEL cap. Static coin overrides may select trailing or
   recursive entry and close mode independently. HSL and forager selection remain supported.
-  Position- and total-exposure repair, auto-unstuck, and realized-loss gating remain fail closed in
-  multi-coin Trailing Martingale market mode pending dedicated parity slices.
+  Position- and total-exposure repair may now promote to market execution, resize against the
+  executable-touch minimum before finalized reducer selection, and retain adverse slippage plus
+  taker fees. Auto-unstuck and realized-loss gating remain fail closed in multi-coin Trailing
+  Martingale market mode pending dedicated parity slices.
 
 - Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
   long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and

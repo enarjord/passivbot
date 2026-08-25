@@ -12490,7 +12490,15 @@ def test_mps_tm_same_tick_twel_and_grid_use_separate_volume_denominators(side):
 
 
 def _tm_multicoin_off_tick_reducer_case(
-    side, *, maker_fee, close_qty_pct=1.0, close_threshold_we=0.0
+    side,
+    *,
+    maker_fee,
+    taker_fee=0.0,
+    close_qty_pct=1.0,
+    close_threshold_we=0.0,
+    market_orders_allowed=False,
+    market_order_near_touch_threshold=0.02,
+    market_order_slippage_pct=0.0,
 ):
     count = 6
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
@@ -12504,7 +12512,9 @@ def _tm_multicoin_off_tick_reducer_case(
     hlcvs[:, 1, 1] = 119.0
     hlcvs[:, 1, 2] = 120.0
     hlcvs[:, 1, 3] = 100.0
-    market = ProxyMarket(0.001, 1.0, 0.001, 0.0, 1.0, maker_fee)
+    market = ProxyMarket(
+        0.001, 1.0, 0.001, 0.0, 1.0, maker_fee, taker_fee
+    )
     run = ProxyRun(
         1_000.0,
         1,
@@ -12547,7 +12557,13 @@ def _tm_multicoin_off_tick_reducer_case(
     overrides = np.full((2, 44), np.nan, dtype=np.float32)
     overrides[1, 24] = 0.0
     runner = MpsTrailingMartingaleMulticoinRunner(
-        run, data, side=side, coin_overrides=overrides
+        run,
+        data,
+        side=side,
+        coin_overrides=overrides,
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=market_order_near_touch_threshold,
+        market_order_slippage_pct=market_order_slippage_pct,
     )
     return runner, candidate, market
 
@@ -12642,6 +12658,58 @@ def test_mps_tm_multicoin_off_tick_grid_precedes_reducer_for_volume(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_market_grid_precedes_farther_reducer_for_volume(
+    side,
+):
+    runner, candidate, market = _tm_multicoin_off_tick_reducer_case(
+        side,
+        maker_fee=0.001,
+        taker_fee=0.002,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.006,
+        market_order_slippage_pct=0.01,
+    )
+    output = runner.run(np.asarray([candidate], dtype=np.float64))
+    torch.mps.synchronize()
+
+    entry_price = 99.0 if side == "long" else 101.0
+    entry_qty = 10.101 if side == "long" else 9.9
+    grid_qty = 5.045 if side == "long" else 4.945
+    reducer_qty = entry_qty - grid_qty
+    market_fill_price = 99.0 if side == "long" else 101.0
+    balance = 1_000.0 - entry_qty * entry_price * market.maker_fee
+    expected_volume = entry_qty * entry_price / balance
+    grid_pnl = grid_qty * (
+        market_fill_price - entry_price
+        if side == "long"
+        else entry_price - market_fill_price
+    )
+    balance += (
+        grid_pnl
+        - grid_qty * market_fill_price * market.taker_fee
+    )
+    expected_volume += grid_qty * market_fill_price / balance
+    reducer_pnl = reducer_qty * (
+        market_fill_price - entry_price
+        if side == "long"
+        else entry_price - market_fill_price
+    )
+    balance += (
+        reducer_pnl
+        - reducer_qty * market_fill_price * market.taker_fee
+    )
+    expected_volume += reducer_qty * market_fill_price / balance
+
+    assert output["balance"].item() == pytest.approx(balance, abs=3.0e-4)
+    assert output["day_volume"].sum().item() == pytest.approx(
+        expected_volume, rel=2.0e-5
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_tm_multicoin_reducer_consumes_one_recursive_close_slot(side):
     runner, candidate, _ = _tm_multicoin_off_tick_reducer_case(
         side,
@@ -12687,6 +12755,82 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("repair_kind", ["position", "total"])
+def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
+    side, repair_kind
+):
+    market_no_fee = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0, 0.0)
+        for _ in range(2)
+    ]
+    market_with_taker_fee = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0, 0.002)
+        for _ in range(2)
+    ]
+    passive_runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=10,
+        markets=market_no_fee,
+    )
+    promoted_runner, _ = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=10,
+        markets=market_no_fee,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.002,
+        market_order_slippage_pct=0.01,
+    )
+    fee_runner, _ = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=10,
+        markets=market_with_taker_fee,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.002,
+        market_order_slippage_pct=0.01,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_cooldown_minutes": 100.0,
+            "twel_entry_gate_enabled": 0.0,
+            "wel_enforcer_threshold": 0.5,
+            "twel_enforcer_threshold": 0.5,
+            "wel_enforcer_enabled": float(repair_kind == "position"),
+            "twel_enforcer_enabled": float(repair_kind == "total"),
+            "twel_enforcer_reduce_portfolio": float(
+                repair_kind == "total"
+            ),
+        }
+    )
+    candidate = np.asarray(
+        [
+            [
+                values[key]
+                for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+            ]
+        ],
+        dtype=np.float64,
+    )
+
+    passive = passive_runner.run(candidate)
+    promoted = promoted_runner.run(candidate)
+    charged = fee_runner.run(candidate)
+    torch.mps.synchronize()
+
+    # The promoted protective reducer crosses immediately at an adverse
+    # directional price; adding a nonzero taker fee then lowers balance again.
+    assert promoted["loss_sum"].item() > passive["loss_sum"].item() + 1.0
+    assert promoted["balance"].item() < passive["balance"].item() - 1.0
+    assert charged["balance"].item() < promoted["balance"].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize(
     ("strategy_kind", "repair_kind"),
     [
@@ -12695,8 +12839,9 @@ def test_mps_tm_multicoin_global_position_exposure_repair(side):
         ("trailing_martingale", "position"),
     ],
 )
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
 def test_mps_fused_dual_multicoin_exposure_repair(
-    strategy_kind, repair_kind
+    strategy_kind, repair_kind, market_orders_allowed
 ):
     fixture_kwargs = {"count": 10}
     if strategy_kind == "ema_anchor":
@@ -12718,10 +12863,22 @@ def test_mps_fused_dual_multicoin_exposure_repair(
         **fixture_kwargs,
     )
     if strategy_kind == "ema_anchor":
-        runner = MpsEmaAnchorMulticoinFusedRunner(run, data)
+        runner = MpsEmaAnchorMulticoinFusedRunner(
+            run,
+            data,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=0.002,
+            market_order_slippage_pct=0.01,
+        )
         param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
     else:
-        runner = MpsTrailingMartingaleMulticoinFusedRunner(run, data)
+        runner = MpsTrailingMartingaleMulticoinFusedRunner(
+            run,
+            data,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=0.002,
+            market_order_slippage_pct=0.01,
+        )
         param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
 
     baseline = list(baseline)
@@ -12752,6 +12909,90 @@ def test_mps_fused_dual_multicoin_exposure_repair(
     assert output["short_psize"][0].item() > 0.0
     assert output["psize"][1].item() < output["psize"][0].item()
     assert output["short_psize"][1].item() < output["short_psize"][0].item()
+    assert output["fill_count"][1].item() > output["fill_count"][0].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("repair_kind", ["position", "total"])
+def test_mps_tm_fused_one_way_multicoin_market_exposure_repair(repair_kind):
+    _, baseline, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        "long",
+        count=10,
+        return_context=True,
+    )
+    runner = MpsTrailingMartingaleMulticoinFusedRunner(
+        run,
+        data,
+        hedge_mode=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.002,
+        market_order_slippage_pct=0.01,
+    )
+    baseline = list(baseline)
+    baseline[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_cooldown_minutes"
+        )
+    ] = 100.0
+    baseline[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_initial_ema_dist"
+        )
+    ] = 0.01
+    repaired = list(baseline)
+    if repair_kind == "position":
+        repaired[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "wel_enforcer_enabled"
+            )
+        ] = 1.0
+        repaired[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "wel_enforcer_threshold"
+            )
+        ] = 0.5
+    else:
+        repaired[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "twel_entry_gate_enabled"
+            )
+        ] = 0.0
+        repaired[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "twel_enforcer_threshold"
+            )
+        ] = 0.5
+        repaired[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "twel_enforcer_enabled"
+            )
+        ] = 1.0
+        repaired[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "twel_enforcer_reduce_portfolio"
+            )
+        ] = 1.0
+
+    output = runner.run(
+        np.asarray(
+            [baseline + baseline, repaired + repaired], dtype=np.float64
+        )
+    )
+    torch.mps.synchronize()
+
+    baseline_size = (
+        output["psize"][0].item() + output["short_psize"][0].item()
+    )
+    repaired_size = (
+        output["psize"][1].item() + output["short_psize"][1].item()
+    )
+    assert (output["psize"][0].item() > 0.0) != (
+        output["short_psize"][0].item() > 0.0
+    )
+    assert 0.0 < repaired_size < baseline_size
     assert output["fill_count"][1].item() > output["fill_count"][0].item()
 
 
@@ -13865,15 +14106,27 @@ def test_mps_tm_multicoin_finalized_reducer_tie_keeps_nearer_wel(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_static_override_repairs_only_selected_symbol(side):
+@pytest.mark.parametrize("market_orders_allowed", [False, True])
+def test_mps_tm_multicoin_static_override_repairs_only_selected_symbol(
+    side, market_orders_allowed
+):
     overrides = np.full((2, 44), np.nan, dtype=np.float32)
     overrides[0, 26] = 1.0
     overrides[0, 27] = 0.5
     baseline_runner, baseline = _multicoin_exposure_fixture(
-        "trailing_martingale", side, count=10
+        "trailing_martingale",
+        side,
+        count=10,
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.002,
     )
     override_runner, overridden = _multicoin_exposure_fixture(
-        "trailing_martingale", side, overrides, count=10
+        "trailing_martingale",
+        side,
+        overrides,
+        count=10,
+        market_orders_allowed=market_orders_allowed,
+        market_order_near_touch_threshold=0.002,
     )
     baseline_output = baseline_runner.run(
         np.asarray([baseline], dtype=np.float64)
