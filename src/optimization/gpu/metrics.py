@@ -822,17 +822,26 @@ def _weighted_daily_series_metrics(
     requested = set(requested) & WEIGHTED_DAILY_SERIES_METRICS
     if not requested:
         return {}
-    eligible, subsets = _weighted_subsets(
+    _, subsets = _weighted_subsets(
         active,
         first_eq_ts,
         last_eq_ts,
         first_timestamp,
         interval_ms,
     )
-    # Rust returns before populating any weighted fields when there are fewer
-    # than two fills. Empty trailing fill suffixes end the subset loop and
-    # therefore contribute the same zero implied by the fixed /10 divisor.
-    eligible &= fill_count.to(torch.float64) > 1.0
+    fill_eligible = fill_count.to(torch.float64) > 1.0
+    # Unlike weighted equity-return metrics, Rust's weighted shape and volume
+    # analysis admits a one-sample equity run when it has multiple fills. The
+    # full-run analysis contributes one tenth, then the first empty suffix ends
+    # the loop. Only finite, ordered timestamps and one active sample are
+    # required here.
+    eligible = (
+        fill_eligible
+        & torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts >= first_eq_ts)
+        & active.any(dim=1)
+    )
     totals = {
         name: torch.zeros(
             day_end_eq.shape[0],
@@ -876,7 +885,15 @@ def _weighted_daily_series_metrics(
                 totals[name] += torch.where(
                     subset_eligible, value, torch.zeros_like(value)
                 )
-    return {name: value / 10.0 for name, value in totals.items()}
+    result = {name: value / 10.0 for name, value in totals.items()}
+    # analyze_backtest returns early for zero or one fill. Preserve the custom
+    # Analysis defaults for weighted shape metrics; weighted volume defaults
+    # to zero.
+    for name in shape_names:
+        result[name] = torch.where(
+            fill_eligible, result[name], torch.ones_like(result[name])
+        )
+    return result
 
 
 def _weighted_strategy_eq_metrics(

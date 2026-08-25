@@ -639,7 +639,7 @@ def test_weighted_daily_series_metrics_match_rust_suffix_contract():
     )
 
 
-def test_weighted_daily_series_metrics_require_two_fills_like_rust():
+def test_weighted_daily_series_metrics_preserve_sparse_fill_rust_defaults():
     day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
     requested = set(
         [
@@ -664,7 +664,36 @@ def test_weighted_daily_series_metrics_require_two_fills_like_rust():
     )
 
     assert set(metrics) == requested
-    assert all(value.item() == 0.0 for value in metrics.values())
+    assert metrics["volume_pct_per_day_avg_w"].item() == 0.0
+    for name in requested - {"volume_pct_per_day_avg_w"}:
+        assert metrics[name].item() == 1.0
+
+
+def test_weighted_daily_series_metrics_keep_one_sample_full_run_tenth():
+    requested = {
+        "equity_choppiness_w_usd",
+        "equity_jerkiness_w_usd",
+        "exponential_fit_error_w_usd",
+        "volume_pct_per_day_avg_w",
+    }
+
+    metrics = _weighted_daily_series_metrics(
+        torch.tensor([[100.0]], dtype=torch.float64),
+        torch.tensor([[0.5]], dtype=torch.float64),
+        torch.tensor([[True]]),
+        torch.tensor([[True]]),
+        torch.tensor([2.0]),
+        torch.tensor([0.0]),
+        torch.tensor([0.0]),
+        0.0,
+        86_400_000,
+        requested,
+    )
+
+    assert metrics["equity_choppiness_w_usd"].item() == 0.0
+    assert metrics["equity_jerkiness_w_usd"].item() == 0.0
+    assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
+    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
 
 
 def test_weighted_subsets_normalize_relative_timestamps_to_unix_origin():
