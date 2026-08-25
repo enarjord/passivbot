@@ -7081,7 +7081,82 @@ def test_mps_tm_expanded_recursive_close_promotes_each_emitted_group(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_same_tick_wel_merges_into_recursive_market_group(side):
+def test_mps_tm_recursive_market_loss_gate_uses_generation_projection(side):
+    count = 6
+    entry_market = 99.0 if side == "long" else 101.0
+    favorable_next = 110.0 if side == "long" else 90.0
+    close = np.asarray(
+        [100.0, 100.0, 100.0, entry_market, favorable_next, favorable_next]
+    )
+    high = close.copy()
+    low = close.copy()
+    if side == "long":
+        high[3], low[3] = 100.0, 98.0
+        high[4], low[4] = 110.0, 99.0
+    else:
+        high[3], low[3] = 102.0, 100.0
+        high[4], low[4] = 101.0, 90.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.01)
+    row[6] = 1.0
+    row[11] = 0.001
+    row[15] = 0.25
+    row[16] = 0.005
+    row[17] = 0.001
+    row[20] = 0.0
+    row[23] = 100.0
+    params = np.asarray([row + row], dtype=np.float64)
+    common = {
+        "long_enabled": side == "long",
+        "short_enabled": side == "short",
+        "hsl_enabled": False,
+        "taker_fee": 0.01,
+        "market_order_slippage_pct": 0.01,
+        "market_orders_allowed": True,
+        "market_order_near_touch_threshold": 0.02,
+    }
+
+    ungated = MpsTrailingMartingaleRunner(
+        market, run, data, **common
+    ).run(params)
+    gated = MpsTrailingMartingaleRunner(
+        market, run, data, max_realized_loss_pct=0.0, **common
+    ).run(params)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # The next candle gaps far enough to make its actual market fills
+    # profitable. Exact Rust nevertheless removed these recursive market
+    # groups when their generation-time projected slippage and taker fee were
+    # lossy; the favorable next-candle price must not re-admit them.
+    assert ungated["fill_count"].item() > 1.0
+    assert ungated[size_key].item() == 0.0
+    assert gated["fill_count"].item() == 1.0
+    assert gated[size_key].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("winning_reducer", ["wel", "twel"])
+def test_mps_tm_same_tick_wel_merges_into_recursive_market_group(
+    side, winning_reducer
+):
     count = 6
     close = np.full(count, 99.0 if side == "long" else 101.0)
     close[:3] = 100.0
@@ -7110,8 +7185,11 @@ def test_mps_tm_same_tick_wel_merges_into_recursive_market_group(side):
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = _tm_single_row(
         initial_ema_dist=0.01,
+        entry_gate=False,
         wel_enforcer_enabled=True,
         wel_enforcer_threshold=0.5,
+        twel_enforcer_enabled=winning_reducer == "twel",
+        threshold=0.25 if winning_reducer == "twel" else 1.0,
     )
     row[6] = 1.0
     row[15] = 0.25
@@ -7134,9 +7212,13 @@ def test_mps_tm_same_tick_wel_merges_into_recursive_market_group(side):
 
     size_key = "psize" if side == "long" else "short_psize"
     # calc_closes_* emits WEL first and then an ordinary close at the same
-    # quantized touch. Rust merges them, retaining the later ordinary type, so
-    # market execution and loss gating see one full-position close.
-    assert output["fill_count"].item() == 2.0
+    # quantized touch. Rust merges them before orchestration chooses the
+    # protective reducer, retaining the later ordinary type. The merged WEL
+    # quantity therefore remains in the ordinary group even when larger TWEL
+    # wins; market execution and loss gating still close the full position.
+    assert output["fill_count"].item() == (
+        2.0 if winning_reducer == "wel" else 3.0
+    )
     assert output[size_key].item() == 0.0
 
 
@@ -7510,6 +7592,69 @@ def test_mps_tm_recursive_market_groups_trim_to_position_before_fill():
     # Rust trims their aggregate first, so no final below-minimum fragment is
     # executed as a separate fill.
     assert output["fill_count"].item() == 4.0
+    assert output["psize"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_recursive_ladder_refinalizes_requested_reducer_qty():
+    count = 7
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[3] = 98.0
+    high[4] = 201.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.5, 0.01, 0.5, 500.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.01,
+        gate_initial=1.0,
+        gate_reentry=0.0,
+        entry_gate=False,
+        threshold=0.3,
+        twel_enforcer_enabled=True,
+    )
+    row[6] = 1.0
+    row[7] = 10.0
+    row[11] = 0.0
+    row[15] = 0.3
+    row[16] = 1.0
+    row[17] = 0.0
+    row[20] = 0.0
+    row[23] = 100.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        hsl_enabled=False,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # The near-touch TWEL request leaves a remainder below its own executable
+    # minimum, so singular finalization expands it to the whole position. The
+    # immutable recursive ladder also has a farther passive rung whose lower
+    # price-specific minimum admits that remainder. Exact Rust re-finalizes
+    # the original TWEL request with the expanded set, yielding two closes.
+    assert output["fill_count"].item() == 3.0
     assert output["psize"].item() == 0.0
 
 

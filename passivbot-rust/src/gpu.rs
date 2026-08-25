@@ -757,6 +757,20 @@ mod tests {
         assert_eq!(source.matches("bool selected_strategy_wel").count(), 2);
         assert_eq!(
             source
+                .matches("int prefix_merge_ticks = strategy_wel_qty > 0.0f")
+                .count(),
+            2
+        );
+        assert_eq!(
+            source
+                .matches("float prefix_merge_qty = strategy_wel_qty > 0.0f")
+                .count(),
+            2
+        );
+        assert!(!source.contains("int prefix_merge_ticks = selected_strategy_wel"));
+        assert!(!source.contains("float prefix_merge_qty = selected_strategy_wel"));
+        assert_eq!(
+            source
                 .matches("close_gen_psize - strategy_wel_qty")
                 .count(),
             2
@@ -780,6 +794,25 @@ mod tests {
         assert!(source.contains("resize_market_close_qty("));
         assert!(source.contains("entry_gen_market_price"));
         assert!(source.contains("close_gen_market_price"));
+        assert_eq!(
+            source
+                .matches("close_reducer_requested_qty, qty_step")
+                .count(),
+            2
+        );
+        assert_eq!(source.matches("float group_gate_price").count(), 2);
+        assert!(source.contains(
+            "long_side.close_gen_market_price, false,\n                        market_order_slippage_pct"
+        ));
+        assert!(source.contains(
+            "short_side.close_gen_market_price, true,\n                        market_order_slippage_pct"
+        ));
+        assert!(source.contains(
+            "adj, group_gate_price, long_side.pprice, true"
+        ));
+        assert!(source.contains(
+            "adj, group_gate_price, short_side.pprice, false"
+        ));
         assert!(source.contains("the proxy uses a zero-loss envelope"));
         assert!(source.contains("int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500"));
         assert!(source.contains("long_side.close_gen_psize - strategy_wel_qty"));

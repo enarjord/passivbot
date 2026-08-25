@@ -278,6 +278,7 @@ struct TmSide {
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks, secondary_close_ticks;
     float entry_price, close_price, entry_qty, entry_strategy_qty, close_qty;
+    float close_reducer_requested_qty;
     float secondary_close_price, secondary_close_qty;
     float entry_gen_balance, entry_gen_psize, entry_gen_pprice, entry_gen_kf;
     float entry_gen_market_price;
@@ -310,6 +311,7 @@ inline void install_hsl_panic_close(
         : max(touch_up_tick + 1, 1);
     side.close_price = float(side.close_ticks) * price_step;
     side.close_qty = side.psize;
+    side.close_reducer_requested_qty = 0.0f;
     side.secondary_close_qty = 0.0f;
     side.close_is_exposure_reducer = false;
     side.close_is_twel_reducer = false;
@@ -410,6 +412,7 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.last_inc_k = -1.0f; s.pos_open_k = -1.0f;
     s.entry_ticks = 0; s.entry_qty = 0.0f; s.entry_strategy_qty = 0.0f;
     s.close_ticks = 0; s.close_qty = 0.0f;
+    s.close_reducer_requested_qty = 0.0f;
     s.entry_price = 0.0f; s.close_price = 0.0f;
     s.secondary_close_ticks = 0; s.secondary_close_qty = 0.0f;
     s.secondary_close_price = 0.0f;
@@ -813,6 +816,7 @@ inline void generate_orders(
     s.close_is_twel_reducer = false;
     s.close_is_unstuck_reducer = false;
     s.close_loss_gate_disabled_reducers = false;
+    s.close_reducer_requested_qty = 0.0f;
     s.secondary_close_ticks = 0;
     s.secondary_close_price = 0.0f;
     s.secondary_close_qty = 0.0f;
@@ -1147,6 +1151,12 @@ inline void generate_orders(
         ? unstuck_market : (use_twel ? twel_market : wel_market);
     float reducer_exec_price = reducer_market ? price_now : reducer_price;
     if (reducer_qty > 0.0f && reducer_ticks > 0) {
+        // Preserve the selected executable-touch-sized request separately
+        // from singular-order finalization. If the next candle expands the
+        // immutable recursive ladder, Rust re-finalizes this quantity with
+        // the complete ordinary close set instead of carrying forward a
+        // singular close that absorbed the position remainder.
+        s.close_reducer_requested_qty = reducer_qty;
         float reducer_min = min_entry_qty(
             reducer_exec_price, qty_step, min_qty, min_cost, c_mult
         );
@@ -1637,7 +1647,10 @@ inline void passivbot_single_coin_impl(
             bool selected_strategy_wel = false;
             if (long_side.close_is_exposure_reducer) {
                 reducer_qty = fmin(
-                    round_step(long_side.close_qty, qty_step), long_side.psize
+                    round_step(
+                        long_side.close_reducer_requested_qty, qty_step
+                    ),
+                    long_side.psize
                 );
                 reducer_ticks = long_side.close_ticks;
                 reducer_price = long_side.close_price;
@@ -1654,9 +1667,9 @@ inline void passivbot_single_coin_impl(
             grid_source.wel_enforcer_enabled = false;
             grid_source.twel_enforcer_enabled = false;
             grid_source.unstuck_enabled = false;
-            int prefix_merge_ticks = selected_strategy_wel
+            int prefix_merge_ticks = strategy_wel_qty > 0.0f
                 ? strategy_wel_ticks : 0;
-            float prefix_merge_qty = selected_strategy_wel
+            float prefix_merge_qty = strategy_wel_qty > 0.0f
                 ? strategy_wel_qty : 0.0f;
             CloseGroup group;
             int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500;
@@ -1890,12 +1903,17 @@ inline void passivbot_single_coin_impl(
                     ? ordinary_market_fill_price(
                         close, false, market_order_slippage_pct, price_step
                     ) : group.price;
+                float group_gate_price = group.market
+                    ? ordinary_market_fill_price(
+                        long_side.close_gen_market_price, false,
+                        market_order_slippage_pct, price_step
+                    ) : group.price;
                 float group_fee_rate = group.market ? taker_fee : maker_fee;
                 float pnl = adj * c_mult
                     * (group_fill_price - long_side.pprice);
                 float fee = adj * group_fill_price * c_mult * group_fee_rate;
                 if (!realized_loss_proxy_allows_close(
-                        adj, group_fill_price, long_side.pprice, true,
+                        adj, group_gate_price, long_side.pprice, true,
                         c_mult, group_fee_rate, loss_gate_enabled)) continue;
                 if (long_side.close_is_panic) {
                     record_hsl_panic_fill(
@@ -2339,7 +2357,10 @@ inline void passivbot_single_coin_impl(
             bool selected_strategy_wel = false;
             if (short_side.close_is_exposure_reducer) {
                 reducer_qty = fmin(
-                    round_step(short_side.close_qty, qty_step), short_side.psize
+                    round_step(
+                        short_side.close_reducer_requested_qty, qty_step
+                    ),
+                    short_side.psize
                 );
                 reducer_ticks = short_side.close_ticks;
                 reducer_price = short_side.close_price;
@@ -2356,9 +2377,9 @@ inline void passivbot_single_coin_impl(
             grid_source.wel_enforcer_enabled = false;
             grid_source.twel_enforcer_enabled = false;
             grid_source.unstuck_enabled = false;
-            int prefix_merge_ticks = selected_strategy_wel
+            int prefix_merge_ticks = strategy_wel_qty > 0.0f
                 ? strategy_wel_ticks : 0;
-            float prefix_merge_qty = selected_strategy_wel
+            float prefix_merge_qty = strategy_wel_qty > 0.0f
                 ? strategy_wel_qty : 0.0f;
             CloseGroup group;
             int grid_rung_limit = strategy_wel_qty > 0.0f ? 499 : 500;
@@ -2590,12 +2611,17 @@ inline void passivbot_single_coin_impl(
                     ? ordinary_market_fill_price(
                         close, true, market_order_slippage_pct, price_step
                     ) : group.price;
+                float group_gate_price = group.market
+                    ? ordinary_market_fill_price(
+                        short_side.close_gen_market_price, true,
+                        market_order_slippage_pct, price_step
+                    ) : group.price;
                 float group_fee_rate = group.market ? taker_fee : maker_fee;
                 float pnl = adj * c_mult
                     * (short_side.pprice - group_fill_price);
                 float fee = adj * group_fill_price * c_mult * group_fee_rate;
                 if (!realized_loss_proxy_allows_close(
-                        adj, group_fill_price, short_side.pprice, false,
+                        adj, group_gate_price, short_side.pprice, false,
                         c_mult, group_fee_rate, loss_gate_enabled)) continue;
                 if (short_side.close_is_panic) {
                     record_hsl_panic_fill(
