@@ -13166,6 +13166,56 @@ def test_mps_tm_multicoin_market_exposure_repair_uses_slippage_and_taker_fee(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_trailing_market_exposure_repair_stays_partial(side):
+    baseline_runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=10
+    )
+    promoted_runner, _ = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=10,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.002,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_cooldown_minutes": 100.0,
+            "close_threshold_base_pct": 10.0,
+            "close_retracement_base_pct": 0.01,
+            "wel_enforcer_enabled": 1.0,
+            "wel_enforcer_threshold": 0.5,
+        }
+    )
+    candidate = np.asarray(
+        [
+            [
+                values[key]
+                for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+            ]
+        ],
+        dtype=np.float64,
+    )
+
+    baseline = baseline_runner.run(candidate)
+    promoted = promoted_runner.run(candidate)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    # A trailing strategy does not otherwise populate the recursive close
+    # snapshot. The promoted WEL reducer must retain its generation touch so
+    # the next-candle allocator cannot interpret zero as an infinite minimum
+    # and absorb the whole remaining position.
+    assert baseline[size_key].item() > 0.0
+    assert promoted[size_key].item() == pytest.approx(
+        baseline[size_key].item(), abs=2.0e-4
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize(
     ("strategy_kind", "repair_kind"),
     [

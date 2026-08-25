@@ -4117,6 +4117,14 @@ inline void generate_tm_multicoin_side_orders(
             close_qty[c] = reducer_qty;
             close_tick[c] = reducer_tick;
             close_market[c] = reducer_market;
+            if (reducer_market && !use_unstuck) {
+                // Generation-time executable-touch sizing remains
+                // authoritative for both trailing and recursive protective
+                // closes. Recursive ordinary generation already captures
+                // this snapshot above; trailing reducers need it persisted
+                // here before next-candle dust allocation as well.
+                close_gen_market_price[c] = price_now;
+            }
             close_is_exposure_reducer[c] = !use_unstuck;
             close_is_unstuck_reducer[c] = use_unstuck;
         }
