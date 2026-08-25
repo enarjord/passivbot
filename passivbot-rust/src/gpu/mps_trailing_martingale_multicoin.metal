@@ -4788,7 +4788,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         if (long_has_position || short_has_position) {
             min_cost_exact_open_uncertain = true;
         }
-        const float min_cost_balance_lower =
+        float min_cost_balance_lower =
             min_cost_exact_open_uncertain
             ? 0.0f : liquidation_floor;
         int long_hsl_mode = long_config.coin_hsl_mode ? 0
@@ -4828,6 +4828,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     ))
             )) {
             min_cost_exact_open_uncertain = true;
+            min_cost_balance_lower = 0.0f;
         }
         ulong long_one_way_selection_blocked_mask = 0ul;
         ulong short_one_way_selection_blocked_mask = 0ul;
@@ -5506,7 +5507,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         // never reuse the equity-derived liquidation floor as a cash bound,
         // even if the proxy later looks flat.
         if (has_hsl_position) min_cost_exact_open_uncertain = true;
-        const float min_cost_balance_lower = min_cost_exact_open_uncertain
+        float min_cost_balance_lower = min_cost_exact_open_uncertain
             ? 0.0f : liquidation_floor;
         if (filter_by_min_effective_cost && can_generate
             && !min_cost_exact_open_uncertain
@@ -5519,6 +5520,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 min_cost_balance_lower
             )) {
             min_cost_exact_open_uncertain = true;
+            min_cost_balance_lower = 0.0f;
         }
 
         if (can_generate) {

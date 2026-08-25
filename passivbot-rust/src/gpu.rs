@@ -424,6 +424,8 @@ mod tests {
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
         assert!(source.contains("float guaranteed_balance_lower"));
+        assert_eq!(source.matches("bool min_cost_exact_open_uncertain").count(), 1);
+        assert!(source.contains("guaranteed_balance_lower = 0.0f"));
         assert!(source.contains("realized_loss_gate_allows"));
         assert!(source.contains("float32_floor_nonnegative"));
         assert!(source.contains("record_realized_net"));
@@ -468,10 +470,7 @@ mod tests {
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
-        assert_eq!(
-            source.matches("const float min_cost_balance_lower").count(),
-            2
-        );
+        assert_eq!(source.matches("float min_cost_balance_lower =").count(), 2);
         assert!(source.contains("long_has_position || short_has_position"));
         assert!(source.contains("multicoin_min_cost_rejection_possible"));
         assert_eq!(
@@ -874,6 +873,8 @@ mod tests {
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
         assert!(source.contains("float guaranteed_balance_lower"));
+        assert_eq!(source.matches("bool min_cost_exact_open_uncertain").count(), 1);
+        assert!(source.contains("guaranteed_balance_lower = 0.0f"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert!(source.contains("for (int rung = 0; rung < 500; ++rung)"));
         assert!(source.contains("cooldown_min != 0.0f"));
@@ -897,10 +898,7 @@ mod tests {
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
-        assert_eq!(
-            source.matches("const float min_cost_balance_lower").count(),
-            2
-        );
+        assert_eq!(source.matches("float min_cost_balance_lower =").count(), 2);
         assert!(source.contains("long_has_position || short_has_position"));
         assert!(source.contains("multicoin_min_cost_rejection_possible"));
         assert_eq!(

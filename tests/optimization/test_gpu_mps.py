@@ -3182,7 +3182,7 @@ def _multicoin_exposure_fixture(
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_min_effective_cost_filters_each_flat_coin(
+def test_mps_multicoin_min_cost_rejection_blocks_concurrent_flat_coins(
     strategy_kind, side
 ):
     markets = [
@@ -3215,7 +3215,7 @@ def test_mps_multicoin_min_effective_cost_filters_each_flat_coin(
     assert filtered.settings.cpu()[-1].item() == 1.0
     filtered_counts = filtered_output["coin_fill_counts"].cpu().tolist()[0]
     assert filtered_counts[0] == 0.0
-    assert filtered_counts[1] > 0.0
+    assert filtered_counts[1] == 0.0
 
 
 @pytest.mark.skipif(
@@ -3304,6 +3304,8 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
     if override_kind == "initial_qty":
         qty_column = 0 if strategy_kind == "ema_anchor" else 6
         overrides[0, qty_column] = 0.1
+        passing_overrides = overrides.copy()
+        passing_overrides[0, qty_column] = 1.0
         min_cost = 5.0
     else:
         wel_column = (
@@ -3318,6 +3320,8 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
         )
         overrides[:, wel_column] = 0.1
         overrides[1, allowance_column] = 1.0
+        passing_overrides = overrides.copy()
+        passing_overrides[0, allowance_column] = 1.0
         min_cost = 7.0
     markets = [
         ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
@@ -3332,13 +3336,25 @@ def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
         collect_coin_fill_counts=True,
         filter_by_min_effective_cost=True,
     )
+    passing_runner, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        passing_overrides,
+        count=6,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
 
     output = runner.run(np.asarray([row], dtype=np.float64))
+    passing_output = passing_runner.run(np.asarray([row], dtype=np.float64))
     torch.mps.synchronize()
 
     counts = output["coin_fill_counts"].cpu().tolist()[0]
-    assert counts[0] == 0.0
-    assert counts[1] > 0.0
+    passing_counts = passing_output["coin_fill_counts"].cpu().tolist()[0]
+    assert counts == [0.0, 0.0]
+    assert passing_counts[0] > 0.0
+    assert passing_counts[1] > 0.0
 
 
 @pytest.mark.skipif(
@@ -3394,7 +3410,7 @@ def test_mps_tm_multicoin_min_cost_blocks_new_flat_slot_while_portfolio_is_open(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_mps_fused_one_way_min_cost_filters_before_side_arbitration(strategy_kind):
+def test_mps_fused_one_way_min_cost_rejection_blocks_side_arbitration(strategy_kind):
     markets = [
         ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
         for _ in range(2)
@@ -3436,7 +3452,7 @@ def test_mps_fused_one_way_min_cost_filters_before_side_arbitration(strategy_kin
     torch.mps.synchronize()
 
     assert output["fill_count_long"].item() == 0.0
-    assert output["fill_count"].item() > 0.0
+    assert output["fill_count"].item() == 0.0
 
 
 @pytest.mark.skipif(
@@ -15608,8 +15624,9 @@ def test_mps_short_market_entry_respects_eligible_min_effective_cost_filter(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
-    strategy_kind,
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_mps_dual_single_coin_min_cost_rejection_blocks_other_side(
+    strategy_kind, hedge_mode
 ):
     count = 5
     close = np.full(count, 100.0)
@@ -15662,13 +15679,13 @@ def test_mps_one_way_min_cost_eligibility_precedes_distance_arbitration(
         data,
         long_enabled=True,
         short_enabled=True,
-        hedge_mode=False,
+        hedge_mode=hedge_mode,
         filter_by_min_effective_cost=True,
     ).run(np.array([long_row + short_row], dtype=np.float64))
     torch.mps.synchronize()
 
-    assert output["day_has_fill"].sum().item() > 0
-    assert output["psize"].item() > 0.0
+    assert output["day_has_fill"].sum().item() == 0
+    assert output["psize"].item() == 0.0
     assert output["short_psize"].item() == 0.0
 
 

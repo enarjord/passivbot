@@ -517,8 +517,9 @@ All notable user-facing changes will be documented in this file.
   projection, and the liquidation floor as a lower cash-balance bound while the whole portfolio is
   flat. Once any position is open, or once Metal rejects a candidate that exact Rust may admit,
   other flat slots fail closed because the proxy can no longer prove that the equity floor also
-  bounds exact cash. This uncertainty is sticky even if the proxy remains or becomes flat again;
-  failing candidates are removed before Forager selection and one-way arbitration while every open
+  bounds exact cash. This uncertainty is applied immediately to every flat coin and side in the
+  same candle and remains sticky even if the proxy remains or becomes flat again; failing
+  candidates are removed before Forager selection and one-way arbitration while every open
   position remains managed. Exact Rust retains its current-close rule and remains
   authoritative through the normal validation and drift gates. A finite positive liquidation
   threshold is required; concurrent-slot runs may halt when the conservative false negatives push
