@@ -465,6 +465,12 @@ struct TrailingMartingaleMulticoinSideState {
     float pprice[MAX_COINS];
     float last_increase_k[MAX_COINS];
     float entry_qty[MAX_COINS];
+    float entry_strategy_qty[MAX_COINS];
+    float entry_gen_balance[MAX_COINS];
+    float entry_gen_allowed_wel[MAX_COINS];
+    float entry_gen_market_price[MAX_COINS];
+    float entry_gen_psize[MAX_COINS];
+    float entry_gen_pprice[MAX_COINS];
     float close_qty[MAX_COINS];
     float secondary_close_qty[MAX_COINS];
     float twel_close_qty[MAX_COINS];
@@ -483,6 +489,8 @@ struct TrailingMartingaleMulticoinSideState {
     float max_since_open[MAX_COINS];
     float min_since_max[MAX_COINS];
     int entry_tick[MAX_COINS];
+    int entry_gen_initial_tick[MAX_COINS];
+    int entry_gen_touch_tick[MAX_COINS];
     int close_tick[MAX_COINS];
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
@@ -492,6 +500,7 @@ struct TrailingMartingaleMulticoinSideState {
     bool incumbent[MAX_COINS];
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
+    bool entry_recursive_market_mode[MAX_COINS];
     bool close_reconstruct_after_reducer[MAX_COINS];
     bool close_recursive_market_mode[MAX_COINS];
     bool filled_coin[MAX_COINS];
@@ -568,6 +577,162 @@ struct TrailingMartingaleMulticoinSideConfig {
     HslState hsl_template;
     bool coin_hsl_mode;
 };
+
+struct RecursiveEntryCandidate {
+    int ticks;
+    float price;
+    float strategy_qty;
+    float executable_qty;
+    bool market;
+};
+
+// Rebuild one recursive grid reentry from an immutable generation snapshot.
+// Portfolio TWEL gating is intentionally outside this helper; the baseline
+// multi-coin recursive-entry slice fails closed while that gate is enabled.
+inline RecursiveEntryCandidate next_recursive_grid_entry(
+    thread const TrailingMartingaleMulticoinSideState& side,
+    thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* coin_overrides,
+    int coin,
+    bool short_side,
+    float sim_psize,
+    float sim_pprice,
+    float generation_balance,
+    float allowed_wel,
+    int generation_initial_tick,
+    int generation_touch_tick,
+    float generation_market_price,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold
+) {
+    RecursiveEntryCandidate out;
+    out.ticks = 0;
+    out.price = 0.0f;
+    out.strategy_qty = 0.0f;
+    out.executable_qty = 0.0f;
+    out.market = false;
+    if (!(sim_psize > 0.0f && sim_pprice > 0.0f
+        && generation_balance > 0.0f && allowed_wel > 0.0f)) return out;
+
+    float initial_ema_dist = coin_override_or(
+        coin_overrides, coin, 5, config.initial_ema_dist
+    );
+    float initial_qty_pct = coin_override_or(
+        coin_overrides, coin, 6, config.initial_qty_pct
+    );
+    float threshold_base = coin_override_or(
+        coin_overrides, coin, 7, config.entry_threshold_base
+    );
+    float threshold_we = coin_override_or(
+        coin_overrides, coin, 8, config.entry_threshold_we
+    );
+    float threshold_v1h = coin_override_or(
+        coin_overrides, coin, 9, config.entry_threshold_v1h
+    );
+    float threshold_v1m = coin_override_or(
+        coin_overrides, coin, 10, config.entry_threshold_v1m
+    );
+    float ddf = coin_override_or(coin_overrides, coin, 4, config.ddf);
+    float band = short_side
+        ? fmax(side.ema0[coin], fmax(side.ema1[coin], side.ema2[coin]))
+        : fmin(side.ema0[coin], fmin(side.ema1[coin], side.ema2[coin]));
+    int band_tick = short_side
+        ? int(ceil(
+            band * (1.0f + initial_ema_dist) / price_step - 1.0e-6f
+        ))
+        : int(floor(
+            band * (1.0f - initial_ema_dist) / price_step + 1.0e-6f
+        ));
+    int initial_tick = generation_initial_tick;
+    float initial_price = float(initial_tick) * price_step;
+    float min_iq = min_entry_qty(
+        initial_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float iq = fmax(min_iq, round_step(
+        generation_balance * allowed_wel * initial_qty_pct
+            / fmax(initial_price * c_mult, 1.0e-12f),
+        qty_step
+    ));
+    float iq_effective = sim_psize < iq
+        ? fmax(round_step(sim_psize, qty_step), min_iq) : iq;
+    float we = sim_psize * sim_pprice * c_mult / generation_balance;
+    if (we >= allowed_wel * 0.999f) return out;
+    float wer = we / fmax(allowed_wel, 1.0e-12f);
+    float multiplier = fmax(
+        1.0f + side.volatility_1h[coin] * threshold_v1h
+            + side.volatility_1m[coin] * threshold_v1m
+            + wer * threshold_we,
+        1.0f
+    );
+    float threshold = fmax(threshold_base, 0.0f) * multiplier;
+    float target = sim_pprice * (
+        short_side ? 1.0f + threshold : 1.0f - threshold
+    );
+    int raw_tick = short_side
+        ? int(ceil(target / price_step - 1.0e-6f))
+        : int(floor(target / price_step + 1.0e-6f));
+    bool touch_controls = short_side
+        ? generation_touch_tick >= raw_tick
+        : generation_touch_tick <= raw_tick;
+    int entry_tick = touch_controls ? generation_touch_tick : raw_tick;
+    if (config.gate_reentry) {
+        bool band_controls = short_side
+            ? band_tick >= entry_tick : band_tick <= entry_tick;
+        if (band_controls) entry_tick = band_tick;
+    }
+    if (entry_tick <= 1) return out;
+    float entry_price = float(entry_tick) * price_step;
+    float min_rq = min_entry_qty(
+        entry_price, qty_step, min_qty, min_cost, c_mult
+    );
+    float rq = fmax(iq_effective, fmax(min_rq, round_step(
+        fmax(
+            sim_psize * ddf,
+            generation_balance * allowed_wel * initial_qty_pct
+                / fmax(entry_price * c_mult, 1.0e-12f)
+        ),
+        qty_step
+    )));
+    float we_if = (sim_psize * sim_pprice + rq * entry_price)
+        * c_mult / fmax(generation_balance, 1.0e-9f);
+    float crop_fraction = (allowed_wel - we)
+        / fmax(we_if - we, 1.0e-12f);
+    float rq_crop = fmax(
+        round_step(rq * crop_fraction, qty_step), min_rq
+    );
+    if (we_if > allowed_wel * 1.01f && rq_crop < rq) rq = rq_crop;
+    float headroom = (
+        allowed_wel * generation_balance - sim_psize * sim_pprice * c_mult
+    ) / fmax(entry_price * c_mult, 1.0e-12f);
+    if ((sim_psize * sim_pprice + rq * entry_price) * c_mult
+        / fmax(generation_balance, 1.0e-9f) > allowed_wel * 1.01f) {
+        rq = fmin(rq, fmax(floor_step(headroom, qty_step), 0.0f));
+    }
+    if (rq * (1.0f + 1.0e-6f) < min_rq) return out;
+
+    out.ticks = entry_tick;
+    out.price = entry_price;
+    out.strategy_qty = rq;
+    out.executable_qty = rq;
+    out.market = should_use_ordinary_market_execution(
+        entry_tick, !short_side, generation_market_price, price_step,
+        market_orders_allowed, market_order_near_touch_threshold
+    );
+    if (short_side && out.market) {
+        out.executable_qty = fmax(
+            out.executable_qty,
+            min_entry_qty(
+                generation_market_price, qty_step, min_qty, min_cost, c_mult
+            )
+        );
+    }
+    return out;
+}
 
 // Shared fill accounting is separate from strategy-side state so a fused
 // long+short kernel can apply both directional fill passes to one account and
@@ -842,6 +1007,12 @@ inline bool process_tm_multicoin_side_fills(
     thread float* psize = side.psize;
     thread float* pprice = side.pprice;
     thread float* entry_qty = side.entry_qty;
+    thread float* entry_strategy_qty = side.entry_strategy_qty;
+    thread float* entry_gen_balance = side.entry_gen_balance;
+    thread float* entry_gen_allowed_wel = side.entry_gen_allowed_wel;
+    thread float* entry_gen_market_price = side.entry_gen_market_price;
+    thread float* entry_gen_psize = side.entry_gen_psize;
+    thread float* entry_gen_pprice = side.entry_gen_pprice;
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* close_gen_balance = side.close_gen_balance;
@@ -849,6 +1020,8 @@ inline bool process_tm_multicoin_side_fills(
     thread float* close_gen_market_price = side.close_gen_market_price;
     thread float* close_grid_gen_psize = side.close_grid_gen_psize;
     thread int* entry_tick = side.entry_tick;
+    thread int* entry_gen_initial_tick = side.entry_gen_initial_tick;
+    thread int* entry_gen_touch_tick = side.entry_gen_touch_tick;
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* close_grid_max_rungs = side.close_grid_max_rungs;
@@ -857,6 +1030,8 @@ inline bool process_tm_multicoin_side_fills(
     thread bool* close_recursive_market_mode =
         side.close_recursive_market_mode;
     thread bool* filled_coin = side.filled_coin;
+    thread bool* entry_recursive_market_mode =
+        side.entry_recursive_market_mode;
     thread bool* entry_market = side.entry_market;
     thread bool* close_market = side.close_market;
     thread bool* secondary_close_market = side.secondary_close_market;
@@ -1330,11 +1505,89 @@ inline bool process_tm_multicoin_side_fills(
             }
         }
 
-        bool filled_entry = entry_qty[c] > 0.0f
-            && (entry_market[c] || (short_side
+        bool first_entry_passive_reachable = entry_qty[c] > 0.0f
+            && (short_side
                 ? entry_tick[c] <= fill_ticks[tick_offset + 0]
-                : entry_tick[c] > fill_ticks[tick_offset + 1]));
-        if (filled_entry) {
+                : entry_tick[c] > fill_ticks[tick_offset + 1]);
+        bool filled_entry = entry_qty[c] > 0.0f
+            && (entry_market[c] || first_entry_passive_reachable);
+        if (filled_entry && entry_recursive_market_mode[c]) {
+            float sim_psize = entry_gen_psize[c];
+            float sim_pprice = entry_gen_pprice[c];
+            int sim_touch_tick = entry_gen_touch_tick[c];
+            int previous_ticks = 0;
+            for (int rung = 0; rung < 500; ++rung) {
+                RecursiveEntryCandidate candidate;
+                if (rung == 0) {
+                    candidate.ticks = entry_tick[c];
+                    candidate.price = float(entry_tick[c]) * price_step;
+                    candidate.strategy_qty = entry_strategy_qty[c];
+                    candidate.executable_qty = entry_qty[c];
+                    candidate.market = entry_market[c];
+                } else {
+                    candidate = next_recursive_grid_entry(
+                        side, config, coin_overrides, c, short_side,
+                        sim_psize, sim_pprice, entry_gen_balance[c],
+                        entry_gen_allowed_wel[c], entry_gen_initial_tick[c],
+                        sim_touch_tick, entry_gen_market_price[c],
+                        qty_step, price_step, min_qty, min_cost, c_mult,
+                        true, market_order_near_touch_threshold
+                    );
+                }
+                if (!(candidate.strategy_qty > 0.0f
+                    && candidate.executable_qty > 0.0f
+                    && candidate.ticks > 1)) break;
+                if (rung > 0 && candidate.ticks == previous_ticks) break;
+                bool passive_reachable = short_side
+                    ? candidate.ticks <= fill_ticks[tick_offset + 0]
+                    : candidate.ticks > fill_ticks[tick_offset + 1];
+                if (!candidate.market && !passive_reachable) break;
+                float fill_price = candidate.market
+                    ? ordinary_market_fill_price(
+                        close, !short_side,
+                        market_order_slippage_pct, price_step
+                    )
+                    : candidate.price;
+                float adjusted = round_step(
+                    candidate.executable_qty, qty_step
+                );
+                float fee = adjusted * fill_price * c_mult
+                    * (candidate.market ? taker_fee : maker_fee);
+                record_tm_multicoin_entry_fill(
+                    side, account, fills, coin_fill_counts,
+                    int(b), C, c, k, fee, adjusted, fill_price,
+                    close, c_mult, short_side, collect_coin_fill_counts,
+                    hsl_equity_before_fills
+                );
+                apply_tm_multicoin_entry_position(
+                    side, fills, c, k, adjusted, fill_price,
+                    qty_step, c_mult, balance
+                );
+                any_fill = true;
+
+                float new_sim_psize = round_step(
+                    sim_psize + candidate.strategy_qty, qty_step
+                );
+                sim_pprice = sim_psize <= 0.0f
+                    ? candidate.price
+                    : sim_pprice * (
+                        sim_psize / fmax(new_sim_psize, 1.0e-12f)
+                    ) + candidate.price * (
+                        candidate.strategy_qty
+                            / fmax(new_sim_psize, 1.0e-12f)
+                    );
+                sim_psize = new_sim_psize;
+                previous_ticks = candidate.ticks;
+                sim_touch_tick = short_side
+                    ? max(sim_touch_tick, candidate.ticks)
+                    : min(sim_touch_tick, candidate.ticks);
+                if (rung == 0 && !first_entry_passive_reachable) break;
+                if (coin_override_or(
+                        coin_overrides, c, 23, config.cooldown_min
+                    ) != 0.0f) break;
+            }
+            entry_qty[c] = 0.0f;
+        } else if (filled_entry) {
             float fill_price = entry_market[c]
                 ? ordinary_market_fill_price(
                     close, !short_side,
@@ -1480,6 +1733,12 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.pprice[c] = 0.0f;
         side.last_increase_k[c] = -1.0e20f;
         side.entry_qty[c] = 0.0f;
+        side.entry_strategy_qty[c] = 0.0f;
+        side.entry_gen_balance[c] = 0.0f;
+        side.entry_gen_allowed_wel[c] = 0.0f;
+        side.entry_gen_market_price[c] = 0.0f;
+        side.entry_gen_psize[c] = 0.0f;
+        side.entry_gen_pprice[c] = 0.0f;
         side.close_qty[c] = 0.0f;
         side.secondary_close_qty[c] = 0.0f;
         side.twel_close_qty[c] = 0.0f;
@@ -1498,6 +1757,8 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.max_since_open[c] = 0.0f;
         side.min_since_max[c] = INFINITY;
         side.entry_tick[c] = 0;
+        side.entry_gen_initial_tick[c] = 0;
+        side.entry_gen_touch_tick[c] = 0;
         side.close_tick[c] = 0;
         side.secondary_close_tick[c] = 0;
         side.twel_close_tick[c] = 0;
@@ -1507,6 +1768,7 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.incumbent[c] = false;
         side.survivor[c] = false;
         side.entry_candidate[c] = false;
+        side.entry_recursive_market_mode[c] = false;
         side.close_reconstruct_after_reducer[c] = false;
         side.close_recursive_market_mode[c] = false;
         side.filled_coin[c] = false;
@@ -2507,6 +2769,12 @@ inline void generate_tm_multicoin_side_orders(
     thread float* pprice = side.pprice;
     thread float* last_increase_k = side.last_increase_k;
     thread float* entry_qty = side.entry_qty;
+    thread float* entry_strategy_qty = side.entry_strategy_qty;
+    thread float* entry_gen_balance = side.entry_gen_balance;
+    thread float* entry_gen_allowed_wel = side.entry_gen_allowed_wel;
+    thread float* entry_gen_market_price = side.entry_gen_market_price;
+    thread float* entry_gen_psize = side.entry_gen_psize;
+    thread float* entry_gen_pprice = side.entry_gen_pprice;
     thread float* close_qty = side.close_qty;
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* twel_close_qty = side.twel_close_qty;
@@ -2524,6 +2792,8 @@ inline void generate_tm_multicoin_side_orders(
     thread float* max_since_open = side.max_since_open;
     thread float* min_since_max = side.min_since_max;
     thread int* entry_tick = side.entry_tick;
+    thread int* entry_gen_initial_tick = side.entry_gen_initial_tick;
+    thread int* entry_gen_touch_tick = side.entry_gen_touch_tick;
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* twel_close_tick = side.twel_close_tick;
@@ -2531,6 +2801,8 @@ inline void generate_tm_multicoin_side_orders(
     thread int* close_grid_max_rungs = side.close_grid_max_rungs;
     thread bool* selected = side.selected;
     thread bool* entry_candidate = side.entry_candidate;
+    thread bool* entry_recursive_market_mode =
+        side.entry_recursive_market_mode;
     thread bool* close_reconstruct_after_reducer =
         side.close_reconstruct_after_reducer;
     thread bool* close_recursive_market_mode =
@@ -2816,6 +3088,15 @@ inline void generate_tm_multicoin_side_orders(
     }
     for (int c = 0; c < C; ++c) {
         entry_qty[c] = 0.0f;
+        entry_strategy_qty[c] = 0.0f;
+        entry_recursive_market_mode[c] = false;
+        entry_gen_balance[c] = 0.0f;
+        entry_gen_allowed_wel[c] = 0.0f;
+        entry_gen_market_price[c] = 0.0f;
+        entry_gen_psize[c] = 0.0f;
+        entry_gen_pprice[c] = 0.0f;
+        entry_gen_initial_tick[c] = 0;
+        entry_gen_touch_tick[c] = 0;
         close_qty[c] = 0.0f;
         secondary_close_qty[c] = 0.0f;
         entry_market[c] = false;
@@ -3064,6 +3345,7 @@ inline void generate_tm_multicoin_side_orders(
         )) {
             quantity = 0.0f;
         }
+        float strategy_quantity = quantity;
         bool candidate_entry_market = quantity > 0.0f
             && should_use_ordinary_market_execution(
                 candidate_entry_tick, !short_side, price_now, price_step,
@@ -3082,8 +3364,20 @@ inline void generate_tm_multicoin_side_orders(
             quantity = executable_entry_min;
         }
         entry_qty[c] = quantity;
+        entry_strategy_qty[c] = strategy_quantity;
         entry_tick[c] = candidate_entry_tick;
         entry_market[c] = candidate_entry_market && quantity > 0.0f;
+        if (coin_entry_retracement_base <= 0.0f && quantity > 0.0f
+            && market_orders_allowed) {
+            entry_recursive_market_mode[c] = true;
+            entry_gen_balance[c] = balance;
+            entry_gen_allowed_wel[c] = allowed_coin_wel;
+            entry_gen_market_price[c] = price_now;
+            entry_gen_psize[c] = psize[c];
+            entry_gen_pprice[c] = pprice[c];
+            entry_gen_initial_tick[c] = initial_tick;
+            entry_gen_touch_tick[c] = entry_touch;
+        }
         minimum_entry[c] = executable_entry_min;
         entry_candidate[c] = quantity > 0.0f;
         contribution[c] = quantity > 0.0f
