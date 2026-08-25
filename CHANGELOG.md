@@ -29,9 +29,9 @@ All notable user-facing changes will be documented in this file.
 
 - Hardened Bitunix live support: wallet balance now remains realized and stable across unrealized
   PnL changes, pending-order snapshots retain code-like venue transition statuses until
-  authoritative absence, and forager candidates use the native multiplexed one-minute Kline
-  WebSocket with canonical REST startup and gap recovery, bounded silence detection, and
-  symbol-scoped fallback when a subscription is rejected.
+  authoritative absence, and forager candidates use native sharded one-minute Kline WebSockets
+  with canonical REST startup and gap recovery, per-symbol silence detection, and symbol-scoped
+  fallback when a subscription stalls or is rejected.
 
 - Apple MPS single-coin optimization now matches exact Rust hourly volatility windows when an
   aggregated candle interval does not evenly divide an hour, retaining the boundary-crossing

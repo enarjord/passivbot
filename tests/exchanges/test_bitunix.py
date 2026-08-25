@@ -134,6 +134,16 @@ class _PublicKlineSession:
         return _PublicKlineSocketContext(self.socket)
 
 
+class _PublicKlineSessionPool:
+    def __init__(self, sockets):
+        self.sockets = iter(sockets)
+        self.connect_calls = []
+
+    def ws_connect(self, url, **kwargs):
+        self.connect_calls.append((url, kwargs))
+        return _PublicKlineSocketContext(next(self.sockets))
+
+
 def _order_row(**overrides):
     row = {
         "orderId": "order-1",
@@ -1082,6 +1092,139 @@ async def test_order_stream_silence_timeout_wakes_waiter_for_rest_fallback():
     with pytest.raises(NetworkError, match="failed: NetworkError"):
         await asyncio.wait_for(waiter, timeout=1.0)
     assert session.connect_calls[0][1]["receive_timeout"] == 45.0
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_order_stream_tracks_kline_silence_per_subscription():
+    client = _prepared_client()
+    eth_symbol = "ETH/USDT:USDT"
+    eth_market = _market_for("ETHUSDT", eth_symbol)
+    client.markets[eth_symbol] = eth_market
+    client.markets_by_id["ETHUSDT"] = eth_market
+    client.symbols.append(eth_symbol)
+    socket = _PublicKlineSocket()
+    client._get_session = AsyncMock(
+        return_value=_PublicKlineSession(socket)
+    )
+    stream = BitunixOrderStream(client)
+    stream.KLINE_SILENCE_TIMEOUT_SECONDS = 0.05
+
+    btc_waiter = asyncio.create_task(
+        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
+    )
+    eth_waiter = asyncio.create_task(stream.watch_ohlcv(eth_symbol, "1m"))
+    for _ in range(100):
+        subscribed = {
+            arg["symbol"]
+            for message in socket.sent
+            if message.get("op") == "subscribe"
+            for arg in message["args"]
+        }
+        if subscribed == {"BTCUSDT", "ETHUSDT"}:
+            break
+        await asyncio.sleep(0.01)
+    assert subscribed == {"BTCUSDT", "ETHUSDT"}
+
+    eth_rows = None
+    for _ in range(8):
+        await socket.messages.put(
+            SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps({"op": "pong"}),
+            )
+        )
+        await socket.messages.put(
+            SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(_kline_payload("ETHUSDT")),
+            )
+        )
+        if eth_rows is None and eth_waiter.done():
+            eth_rows = eth_waiter.result()
+        await asyncio.sleep(0.01)
+
+    with pytest.raises(NetworkError, match="subscription became silent"):
+        await asyncio.wait_for(btc_waiter, timeout=1.0)
+    if eth_rows is None:
+        eth_rows = await asyncio.wait_for(eth_waiter, timeout=1.0)
+    assert eth_rows[0][4] == 102.0
+    assert eth_symbol not in stream._ohlcv_fallback_pending
+    assert stream._ohlcv_task is not None
+    assert not stream._ohlcv_task.done()
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_order_stream_shards_kline_subscriptions_at_connection_limit():
+    client = _prepared_client()
+    symbols_by_id = {
+        "ETHUSDT": "ETH/USDT:USDT",
+        "SOLUSDT": "SOL/USDT:USDT",
+    }
+    for market_id, symbol in symbols_by_id.items():
+        market = _market_for(market_id, symbol)
+        client.markets[symbol] = market
+        client.markets_by_id[market_id] = market
+        client.symbols.append(symbol)
+    sockets = [_PublicKlineSocket(), _PublicKlineSocket()]
+    session = _PublicKlineSessionPool(sockets)
+    client._get_session = AsyncMock(return_value=session)
+    stream = BitunixOrderStream(client)
+    stream.MAX_KLINE_SUBSCRIPTIONS = 2
+
+    market_symbols = {
+        "BTCUSDT": "BTC/USDT:USDT",
+        **symbols_by_id,
+    }
+    waiters = {
+        market_id: asyncio.create_task(stream.watch_ohlcv(symbol, "1m"))
+        for market_id, symbol in market_symbols.items()
+    }
+    for _ in range(100):
+        subscribed = {
+            arg["symbol"]
+            for socket in sockets
+            for message in socket.sent
+            if message.get("op") == "subscribe"
+            for arg in message["args"]
+        }
+        if subscribed == set(market_symbols):
+            break
+        await asyncio.sleep(0.01)
+
+    assert subscribed == set(market_symbols)
+    assert len(session.connect_calls) == 2
+    assert len(stream._ohlcv_tasks) == 2
+    subscription_counts = {market_id: 0 for market_id in market_symbols}
+    for socket in sockets:
+        socket_subscriptions = {
+            arg["symbol"]
+            for message in socket.sent
+            if message.get("op") == "subscribe"
+            for arg in message["args"]
+        }
+        assert len(socket_subscriptions) <= stream.MAX_KLINE_SUBSCRIPTIONS
+        for market_id in socket_subscriptions:
+            subscription_counts[market_id] += 1
+            await socket.messages.put(
+                SimpleNamespace(
+                    type=aiohttp.WSMsgType.TEXT,
+                    data=json.dumps(_kline_payload(market_id)),
+                )
+            )
+
+    results = await asyncio.gather(*waiters.values())
+    assert all(rows[0][4] == 102.0 for rows in results)
+    assert set(subscription_counts.values()) == {1}
+
+    await stream.un_watch_ohlcv("SOL/USDT:USDT", "1m")
+    assert len(stream._ohlcv_tasks) == 1
+    assert sum(socket.closed for socket in sockets) == 1
+    await stream.un_watch_ohlcv("BTC/USDT:USDT", "1m")
+    await stream.un_watch_ohlcv("ETH/USDT:USDT", "1m")
+    assert not stream._ohlcv_tasks
+    assert all(socket.closed for socket in sockets)
     await stream.close()
 
 

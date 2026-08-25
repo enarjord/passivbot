@@ -1518,6 +1518,8 @@ class BitunixOrderStream:
         self._last_ping_monotonic = time.monotonic()
         self._ohlcv_ws: aiohttp.ClientWebSocketResponse | None = None
         self._ohlcv_task: asyncio.Task | None = None
+        self._ohlcv_sockets: dict[int, aiohttp.ClientWebSocketResponse] = {}
+        self._ohlcv_tasks: dict[int, asyncio.Task] = {}
         self._ohlcv_queues: dict[str, asyncio.Queue] = {}
         self._ohlcv_fallback_pending: set[str] = set()
         self._ohlcv_closed = False
@@ -1667,9 +1669,17 @@ class BitunixOrderStream:
                 break
         queue.put_nowait(item)
 
-    def _broadcast_ohlcv_error(self, error: BaseException) -> None:
-        for queue in tuple(self._ohlcv_queues.values()):
-            self._queue_latest(queue, error, clear=True)
+    def _broadcast_ohlcv_error(
+        self,
+        error: BaseException,
+        *,
+        symbols: Iterable[str] | None = None,
+    ) -> None:
+        targets = tuple(self._ohlcv_queues) if symbols is None else tuple(symbols)
+        for symbol in targets:
+            queue = self._ohlcv_queues.get(symbol)
+            if queue is not None:
+                self._queue_latest(queue, error, clear=True)
 
     def _queue_ohlcv_fallback(self, symbol: str, error: BaseException) -> bool:
         queue = self._ohlcv_queues.get(symbol)
@@ -1693,16 +1703,37 @@ class BitunixOrderStream:
                     market_ids.add(str(row["symbol"]))
         return market_ids
 
+    def _ohlcv_shard_symbols(self, shard_index: int) -> list[str]:
+        start = shard_index * self.MAX_KLINE_SUBSCRIPTIONS
+        end = start + self.MAX_KLINE_SUBSCRIPTIONS
+        return sorted(self._ohlcv_queues)[start:end]
+
+    def _required_ohlcv_shards(self) -> int:
+        if not self._ohlcv_queues:
+            return 0
+        return (
+            len(self._ohlcv_queues) + self.MAX_KLINE_SUBSCRIPTIONS - 1
+        ) // self.MAX_KLINE_SUBSCRIPTIONS
+
     def _ensure_ohlcv_task(self) -> None:
         if self._ohlcv_closed:
             raise NetworkError("Bitunix kline websocket is closed")
-        if self._ohlcv_task is None or self._ohlcv_task.done():
-            self._ohlcv_task = asyncio.create_task(
-                self._ohlcv_loop(), name="bitunix-public-klines"
+        for shard_index in range(self._required_ohlcv_shards()):
+            task = self._ohlcv_tasks.get(shard_index)
+            if task is not None and not task.done():
+                continue
+            task = asyncio.create_task(
+                self._ohlcv_loop(shard_index),
+                name=f"bitunix-public-klines-{shard_index}",
             )
+            self._ohlcv_tasks[shard_index] = task
+            if shard_index == 0:
+                self._ohlcv_task = task
 
-    async def _ohlcv_loop(self) -> None:
+    async def _ohlcv_loop(self, shard_index: int) -> None:
         current_task = asyncio.current_task()
+        assigned_symbols: set[str] = set()
+        subscribed_symbols_by_id: dict[str, str] = {}
         try:
             await self.rest._ensure_markets()
             session = await self.rest._get_session()
@@ -1711,22 +1742,53 @@ class BitunixOrderStream:
                 heartbeat=20.0,
                 receive_timeout=45.0,
             ) as ws:
-                self._ohlcv_ws = ws
+                self._ohlcv_sockets[shard_index] = ws
+                if shard_index == 0:
+                    self._ohlcv_ws = ws
                 subscribed_ids: set[str] = set()
                 malformed_counts: dict[str, int] = {}
                 malformed_warned: set[str] = set()
                 last_ping_monotonic = time.monotonic()
                 last_frame_monotonic = last_ping_monotonic
+                last_symbol_activity: dict[str, float] = {}
                 pending_subscribe_ids: set[str] = set()
                 while not self._ohlcv_closed:
+                    shard_symbols = self._ohlcv_shard_symbols(shard_index)
+                    assigned_symbols = set(shard_symbols)
                     desired_by_id = {
                         str(self.rest.market(symbol)["id"]): symbol
-                        for symbol in tuple(self._ohlcv_queues)
+                        for symbol in shard_symbols
                     }
-                    if len(desired_by_id) > self.MAX_KLINE_SUBSCRIPTIONS:
-                        raise ValueError(
-                            "Bitunix kline websocket subscription limit exceeded"
+                    if not desired_by_id:
+                        return
+                    now_monotonic = time.monotonic()
+                    for market_id in tuple(subscribed_ids):
+                        symbol = subscribed_symbols_by_id.get(market_id)
+                        if (
+                            symbol is None
+                            or symbol in self._ohlcv_fallback_pending
+                        ):
+                            continue
+                        last_activity = last_symbol_activity.get(
+                            symbol, now_monotonic
                         )
+                        if (
+                            now_monotonic - last_activity
+                            < self.KLINE_SILENCE_TIMEOUT_SECONDS
+                        ):
+                            continue
+                        if self._queue_ohlcv_fallback(
+                            symbol,
+                            NetworkError(
+                                "Bitunix public kline websocket subscription "
+                                "became silent"
+                            ),
+                        ):
+                            logging.warning(
+                                "[bitunix] [candle] websocket subscription silent "
+                                "| symbol=%s action=rest_fallback",
+                                symbol,
+                            )
                     desired_ids = {
                         market_id
                         for market_id, symbol in desired_by_id.items()
@@ -1747,7 +1809,13 @@ class BitunixOrderStream:
                                 ],
                             }
                         )
-                        pending_subscribe_ids.difference_update(removed)
+                        for market_id in removed:
+                            pending_subscribe_ids.discard(market_id)
+                            removed_symbol = subscribed_symbols_by_id.pop(
+                                market_id, None
+                            )
+                            if removed_symbol is not None:
+                                last_symbol_activity.pop(removed_symbol, None)
                     if added:
                         await ws.send_json(
                             {
@@ -1762,10 +1830,15 @@ class BitunixOrderStream:
                             }
                         )
                         pending_subscribe_ids.update(added)
+                        for market_id in added:
+                            symbol = desired_by_id[market_id]
+                            subscribed_symbols_by_id[market_id] = symbol
+                            last_symbol_activity[symbol] = now_monotonic
+                    for market_id in desired_ids & subscribed_ids:
+                        subscribed_symbols_by_id[market_id] = desired_by_id[
+                            market_id
+                        ]
                     subscribed_ids = desired_ids
-                    if not desired_by_id:
-                        return
-                    now_monotonic = time.monotonic()
                     if now_monotonic - last_ping_monotonic >= self.PING_INTERVAL_SECONDS:
                         await ws.send_json({"op": "ping", "ping": int(time.time())})
                         last_ping_monotonic = now_monotonic
@@ -1812,6 +1885,10 @@ class BitunixOrderStream:
                                     for market_id in sorted(acknowledged_ids):
                                         symbol = desired_by_id.get(market_id)
                                         if symbol is None:
+                                            symbol = subscribed_symbols_by_id.get(
+                                                market_id
+                                            )
+                                        if symbol is None:
                                             continue
                                         if self._queue_ohlcv_fallback(
                                             symbol,
@@ -1829,6 +1906,15 @@ class BitunixOrderStream:
                                     subscribed_ids.difference_update(
                                         acknowledged_ids
                                     )
+                                else:
+                                    for market_id in acknowledged_ids:
+                                        symbol = subscribed_symbols_by_id.get(
+                                            market_id
+                                        )
+                                        if symbol is not None:
+                                            last_symbol_activity[symbol] = (
+                                                last_frame_monotonic
+                                            )
                                 continue
                             if operation in {
                                 "connect",
@@ -1856,6 +1942,8 @@ class BitunixOrderStream:
                                 malformed_symbol or ""
                             )
                             if malformed_symbol is None or malformed_queue is None:
+                                if market_id in self.rest.markets_by_id:
+                                    continue
                                 raise
                             malformed_counts[malformed_symbol] = (
                                 malformed_counts.get(malformed_symbol, 0) + 1
@@ -1882,6 +1970,10 @@ class BitunixOrderStream:
                                 )
                                 malformed_counts[malformed_symbol] = 0
                             continue
+                        market_id = str(payload.get("symbol") or "")
+                        if desired_by_id.get(market_id) != symbol:
+                            continue
+                        last_symbol_activity[symbol] = last_frame_monotonic
                         malformed_counts[symbol] = 0
                         queue = self._ohlcv_queues.get(symbol)
                         if (
@@ -1898,19 +1990,29 @@ class BitunixOrderStream:
             raise
         except Exception as exc:
             logging.debug(
-                "[ws] bitunix public kline reconnect | error_type=%s",
+                "[ws] bitunix public kline reconnect | shard=%d error_type=%s",
+                shard_index,
                 type(exc).__name__,
             )
             self._broadcast_ohlcv_error(
                 NetworkError(
                     "Bitunix public kline websocket failed: "
                     f"{type(exc).__name__}"
-                )
+                ),
+                symbols=(
+                    assigned_symbols
+                    | set(subscribed_symbols_by_id.values())
+                ),
             )
         finally:
-            self._ohlcv_ws = None
-            if self._ohlcv_task is current_task:
-                self._ohlcv_task = None
+            if self._ohlcv_sockets.get(shard_index) is not None:
+                self._ohlcv_sockets.pop(shard_index, None)
+            if self._ohlcv_tasks.get(shard_index) is current_task:
+                self._ohlcv_tasks.pop(shard_index, None)
+            if shard_index == 0:
+                self._ohlcv_ws = None
+                if self._ohlcv_task is current_task:
+                    self._ohlcv_task = None
 
     async def watch_ohlcv(self, symbol: str, timeframe: str = "1m") -> list[list[float]]:
         if timeframe not in self.KLINE_CHANNELS:
@@ -1937,12 +2039,19 @@ class BitunixOrderStream:
         self._ohlcv_fallback_pending.discard(symbol)
         if queue is not None:
             self._queue_latest(queue, None, clear=True)
-        if not self._ohlcv_queues and self._ohlcv_task is not None:
-            task = self._ohlcv_task
+        required_shards = self._required_ohlcv_shards()
+        obsolete_tasks = [
+            task
+            for shard_index, task in tuple(self._ohlcv_tasks.items())
+            if shard_index >= required_shards
+        ]
+        for task in obsolete_tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-            if self._ohlcv_task is task:
-                self._ohlcv_task = None
+        if obsolete_tasks:
+            await asyncio.gather(*obsolete_tasks, return_exceptions=True)
+        if required_shards == 0:
+            self._ohlcv_task = None
+            self._ohlcv_ws = None
 
     async def close(self) -> None:
         self._ohlcv_closed = True
@@ -1950,11 +2059,15 @@ class BitunixOrderStream:
             self._queue_latest(queue, None, clear=True)
         self._ohlcv_queues.clear()
         self._ohlcv_fallback_pending.clear()
-        ohlcv_task = self._ohlcv_task
-        if ohlcv_task is not None:
-            ohlcv_task.cancel()
-            await asyncio.gather(ohlcv_task, return_exceptions=True)
+        ohlcv_tasks = tuple(self._ohlcv_tasks.values())
+        for task in ohlcv_tasks:
+            task.cancel()
+        if ohlcv_tasks:
+            await asyncio.gather(*ohlcv_tasks, return_exceptions=True)
+        self._ohlcv_tasks.clear()
+        self._ohlcv_sockets.clear()
         self._ohlcv_task = None
+        self._ohlcv_ws = None
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
         self._ws = None
