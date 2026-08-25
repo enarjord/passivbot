@@ -1011,6 +1011,55 @@ async def test_unsubscribe_wakeup_exception_is_consumed_before_watcher_retiremen
 
 
 @pytest.mark.asyncio
+async def test_retiring_watcher_does_not_resubscribe_after_inflight_ingestion():
+    ingest_started = asyncio.Event()
+    release_ingest = asyncio.Event()
+    unsubscribe_called = asyncio.Event()
+
+    class _CountingCCP:
+        def __init__(self):
+            self.watch_calls = 0
+
+        async def watch_ohlcv(self, _symbol, _timeframe):
+            self.watch_calls += 1
+            if self.watch_calls > 1:
+                raise AssertionError("retired watcher recreated its subscription")
+            return [[ONE_MIN_MS, 1.0, 1.0, 1.0, 1.0, 1.0]]
+
+        async def un_watch_ohlcv(self, _symbol, _timeframe):
+            unsubscribe_called.set()
+
+    class _BlockingManager:
+        async def ingest_live_ws_ohlcv(self, _symbol, _rows):
+            ingest_started.set()
+            await release_ingest.wait()
+
+    ccp = _CountingCCP()
+    symbol = "BTC/USDT:USDT"
+    bot = SimpleNamespace(
+        ccp=ccp,
+        cm=_BlockingManager(),
+        stop_signal_received=False,
+    )
+    watcher = asyncio.create_task(
+        candle_ws.watch_forager_ws_symbol(bot, symbol)
+    )
+    await asyncio.wait_for(ingest_started.wait(), timeout=1.0)
+    retirement = asyncio.create_task(
+        candle_ws._retire_watcher(bot, symbol, watcher)
+    )
+    await asyncio.wait_for(unsubscribe_called.wait(), timeout=1.0)
+
+    release_ingest.set()
+    await asyncio.wait_for(retirement, timeout=1.0)
+
+    assert watcher.done()
+    assert watcher.cancelled() is False
+    assert ccp.watch_calls == 1
+    assert not candle_ws._watcher_is_retiring(bot, symbol, watcher)
+
+
+@pytest.mark.asyncio
 async def test_bulk_watcher_retirement_uses_one_supported_unsubscribe():
     class _BulkWakeupCCP:
         def __init__(self):

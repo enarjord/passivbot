@@ -304,6 +304,11 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
     watcher_task = asyncio.current_task()
     try:
         while not bool(getattr(bot, "stop_signal_received", False)):
+            # Retirement may begin while this task is ingesting the previous
+            # row. Do not let that old generation loop back into a connector
+            # after its subscription has already been removed.
+            if _watcher_is_retiring(bot, symbol, watcher_task):
+                break
             try:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
                 if _watcher_is_retiring(bot, symbol, watcher_task):
