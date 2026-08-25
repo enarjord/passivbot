@@ -1538,7 +1538,13 @@ def _build_multicoin_ema_coin_overrides(
             matrix[coin_index, 10] = float(
                 effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
             )
-        if "wallet_exposure_limit" in side_patch:
+        # Exact payload construction keeps per-side universe eligibility in
+        # entry_eligible and uses a zero WEL sentinel for an ineligible coin.
+        # Preserve that sentinel even when no explicit coin override exists so
+        # fused long/short proxies may screen different side universes.
+        if not bool(effective_bot.get("entry_eligible", True)) or (
+            "wallet_exposure_limit" in side_patch
+        ):
             matrix[coin_index, 11] = float(effective_bot["wallet_exposure_limit"])
         if "we_excess_allowance_pct" in risk_patch:
             matrix[coin_index, 12] = float(
@@ -1635,7 +1641,9 @@ def _build_multicoin_tm_coin_overrides(
             matrix[coin_index, cooldown_column] = float(
                 effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
             )
-        if "wallet_exposure_limit" in side_patch:
+        if not bool(effective_bot.get("entry_eligible", True)) or (
+            "wallet_exposure_limit" in side_patch
+        ):
             matrix[coin_index, wallet_exposure_column] = float(
                 effective_bot["wallet_exposure_limit"]
             )
@@ -1787,21 +1795,6 @@ class MpsMulticoinProxy:
             self.needed_metrics,
             shared_account_controller=self.shared_account_fused,
         )
-        if len(enabled_sides) == 2:
-            approved = config.get("live", {}).get("approved_coins", {}) or {}
-            ignored = config.get("live", {}).get("ignored_coins", {}) or {}
-            for label, values_by_side in (
-                ("approved", approved),
-                ("ignored", ignored),
-            ):
-                if set(values_by_side.get("long", []) or []) != set(
-                    values_by_side.get("short", []) or []
-                ):
-                    raise ValueError(
-                        "MPS dual-side multicoin proxy requires matching "
-                        f"long/short {label}_coins"
-                    )
-
         payload = build_backtest_payload(
             np.ascontiguousarray(values),
             mss,

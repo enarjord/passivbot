@@ -3105,7 +3105,7 @@ def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_kind):
+def test_gpu_multicoin_foundation_accepts_asymmetric_dual_side_coins(strategy_kind):
     builder = (
         _directional_tm_config
         if strategy_kind == "trailing_martingale"
@@ -3120,8 +3120,12 @@ def test_gpu_multicoin_foundation_rejects_asymmetric_dual_side_coins(strategy_ki
     config["live"]["forager_score_hysteresis_pct"] = 0.0
     config["backtest"]["dynamic_wel_by_tradability"] = True
 
-    with pytest.raises(ValueError, match="matching long/short approved_coins"):
-        _validate_scope(config, _MulticoinEvaluator())
+    config["live"]["ignored_coins"] = {
+        "long": [],
+        "short": ["DOGE"],
+    }
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize(
