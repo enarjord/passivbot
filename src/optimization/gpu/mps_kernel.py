@@ -16,7 +16,10 @@ from optimization.gpu.model import (
     GAP_BINS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
     encode_tm_retracement_base_pct,
@@ -190,36 +193,33 @@ def _scale_single_coin_minute_parameters(
     )
 
 
-def _scale_ema_multicoin_coin_overrides(
-    coin_overrides: np.ndarray, interval_minutes: float
+def _scale_multicoin_coin_overrides(
+    coin_overrides: np.ndarray,
+    interval_minutes: float,
+    *,
+    expected_cols: int,
+    label: str,
+    minute_columns: set[int],
+    hsl_start_column: int,
 ) -> np.ndarray:
-    """Convert finite exact-last EMA coin overrides to candle periods."""
+    """Convert finite exact-last minute overrides to candle periods."""
 
     scaled = np.array(coin_overrides, dtype=np.float64, copy=True)
-    if scaled.ndim != 2 or scaled.shape[1] != EMA_ANCHOR_COIN_OVERRIDE_COLS:
+    if scaled.ndim != 2 or scaled.shape[1] != expected_cols:
         raise ValueError(
-            "expected multicoin EMA override matrix with "
-            f"{EMA_ANCHOR_COIN_OVERRIDE_COLS} columns, got {scaled.shape}"
+            f"expected multicoin {label} override matrix with "
+            f"{expected_cols} columns, got {scaled.shape}"
         )
     interval_minutes = float(interval_minutes)
     if not np.isfinite(interval_minutes) or interval_minutes < 1.0:
         raise ValueError(
             "MPS candle interval must be finite and at least one minute"
         )
-    minute_columns = {
-        EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
-        EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
-        EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
-            "offset_volatility_ema_span_1m"
-        ),
-        EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
-        EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + 3,
-    }
-    for column in minute_columns:
+    for column in minute_columns | {hsl_start_column + 3}:
         finite = np.isfinite(scaled[:, column])
         scaled[finite, column] /= interval_minutes
     if interval_minutes != 1.0:
-        hsl_span_column = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + 2
+        hsl_span_column = hsl_start_column + 2
         finite = np.isfinite(scaled[:, hsl_span_column])
         hsl_spans = scaled[finite, hsl_span_column]
         if np.any(hsl_spans < 1.0):
@@ -235,6 +235,51 @@ def _scale_ema_multicoin_coin_overrides(
         )
         scaled[finite, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
     return np.ascontiguousarray(scaled, dtype=np.float32)
+
+
+def _scale_ema_multicoin_coin_overrides(
+    coin_overrides: np.ndarray, interval_minutes: float
+) -> np.ndarray:
+    """Convert finite exact-last EMA coin overrides to candle periods."""
+
+    return _scale_multicoin_coin_overrides(
+        coin_overrides,
+        interval_minutes,
+        expected_cols=EMA_ANCHOR_COIN_OVERRIDE_COLS,
+        label="EMA",
+        minute_columns={
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
+            EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
+                "offset_volatility_ema_span_1m"
+            ),
+            EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+        },
+        hsl_start_column=EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
+    )
+
+
+def _scale_tm_multicoin_coin_overrides(
+    coin_overrides: np.ndarray, interval_minutes: float
+) -> np.ndarray:
+    """Convert finite exact-last TM coin overrides to candle periods."""
+
+    override_keys = tuple(
+        key for key, _path in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
+    )
+    return _scale_multicoin_coin_overrides(
+        coin_overrides,
+        interval_minutes,
+        expected_cols=TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+        label="Trailing Martingale",
+        minute_columns={
+            override_keys.index("ema_span_0"),
+            override_keys.index("ema_span_1"),
+            override_keys.index("volatility_ema_span_1m"),
+            TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
+        },
+        hsl_start_column=TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
+    )
 
 
 def _scalar_column_or_zero(scalars, index: int):
@@ -997,7 +1042,6 @@ class MpsEmaAnchorMulticoinRunner:
     coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
     coin_override_label = "EMA"
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
-    supports_aggregated_intervals = True
 
     def __init__(
         self,
@@ -1057,11 +1101,6 @@ class MpsEmaAnchorMulticoinRunner:
                 "MPS multicoin runner requires a positive whole-minute candle interval"
             )
         self.interval_minutes = int(interval_minutes)
-        if not self.supports_aggregated_intervals and self.interval_minutes != 1:
-            raise ValueError(
-                "MPS multicoin Trailing Martingale currently supports one-minute "
-                "candles only"
-            )
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
@@ -1084,11 +1123,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.touch_nearest_ticks = data["touch_nearest_ticks"]
         self.touch_min_qty_bits = data["touch_min_qty_bits"]
         self.touch_min_qty_relation = data["touch_min_qty_relation"]
-        self.hour_log_ranges = (
-            data["hour_log_ranges"]
-            if self.supports_aggregated_intervals
-            else None
-        )
+        self.hour_log_ranges = data["hour_log_ranges"]
         self.coin_settings = data["coin_settings"]
         if coin_overrides is None:
             coin_overrides = np.full(
@@ -1555,10 +1590,10 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
 
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
-    supports_aggregated_intervals = False
-
     def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
-        return np.ascontiguousarray(coin_overrides, dtype=np.float32)
+        return _scale_tm_multicoin_coin_overrides(
+            coin_overrides, self.interval_minutes
+        )
 
     def __init__(
         self,
@@ -1605,8 +1640,14 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
                 "expected multicoin Trailing Martingale parameter matrix with "
                 f"{expected} columns, got {got}"
             )
+        scaled = _scale_directional_minute_parameters(
+            params,
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
+            sides=1,
+            interval_minutes=self.interval_minutes,
+        )
         return _pack_tm_parameter_matrix(
-            params, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
+            scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
         )
 
     def _library(self):
@@ -1637,6 +1678,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.touch_nearest_ticks,
             self.touch_min_qty_bits,
             self.touch_min_qty_relation,
+            self.hour_log_ranges,
             self.coin_settings,
             self.coin_overrides,
             params_mps,
@@ -1718,7 +1760,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 f"matrix shaped {expected_shape}, got {short_coin_overrides.shape}"
             )
         self.short_coin_overrides = torch.as_tensor(
-            np.ascontiguousarray(short_coin_overrides), device="mps"
+            self._prepare_coin_overrides(short_coin_overrides), device="mps"
         )
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             float(max_realized_loss_pct)
@@ -1755,8 +1797,14 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 "expected fused multicoin Trailing Martingale parameter matrix "
                 f"with {expected} columns, got {got}"
             )
+        scaled = _scale_directional_minute_parameters(
+            params,
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
+            sides=2,
+            interval_minutes=self.interval_minutes,
+        )
         return _pack_tm_parameter_matrix(
-            params, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=2
+            scaled, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=2
         )
 
     def _dispatch(
@@ -1780,6 +1828,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             self.touch_nearest_ticks,
             self.touch_min_qty_bits,
             self.touch_min_qty_relation,
+            self.hour_log_ranges,
             self.coin_settings,
             self.coin_overrides,
             self.short_coin_overrides,

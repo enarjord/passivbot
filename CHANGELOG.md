@@ -8,8 +8,13 @@ All notable user-facing changes will be documented in this file.
   `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
   and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
   per-candle equivalents, while hourly windows and elapsed-day accounting retain exact Rust time
-  semantics. Multi-coin Trailing Martingale remains one-minute-only pending its dedicated parity
-  slice.
+  semantics.
+
+- Apple MPS multi-coin Trailing Martingale optimization now supports any positive integer
+  `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
+  and static per-coin minute spans, Forager spans, HSL decay, and cooldowns are converted to
+  per-candle equivalents, while hourly windows and elapsed-day accounting retain exact Rust time
+  semantics.
 
 - Apple MPS single-coin optimization now matches exact Rust hourly volatility windows when an
   aggregated candle interval does not evenly divide an hour, retaining the boundary-crossing
