@@ -189,6 +189,9 @@ mod tests {
         assert!(source.contains("= RECOVERY_FAIL_CLOSED_SENTINEL;"));
         assert!(source.contains("const bool after_valid_tail = k > last_valid"));
         assert!(source.contains("(valid || after_valid_tail)"));
+        assert!(source.contains("const bool hsl_step = gen || (eq_started && after_valid_tail)"));
+        assert!(source.contains("bool long_blocking_orders = valid &&"));
+        assert!(source.contains("bool short_blocking_orders = valid &&"));
     }
 
     #[test]

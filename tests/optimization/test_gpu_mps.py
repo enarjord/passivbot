@@ -3537,8 +3537,9 @@ def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("hsl_enabled", [False, True])
 def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
-    strategy_kind, side
+    strategy_kind, side, hsl_enabled
 ):
     from optimization.gpu.mps_kernel import (
         MpsEmaAnchorRunner,
@@ -3602,6 +3603,7 @@ def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
             EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
         )
         runner_cls = MpsEmaAnchorRunner
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
     else:
         row = _tm_single_row(initial_ema_dist=0.01)
         row[
@@ -3610,6 +3612,27 @@ def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
             )
         ] = 100.0
         runner_cls = MpsTrailingMartingaleRunner
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+
+    if hsl_enabled:
+        for key, value in {
+            "hsl_enabled": 1.0,
+            "hsl_red_threshold": 0.005,
+            "hsl_ema_span_minutes": 1.0,
+            "hsl_cooldown_minutes_after_red": 0.0,
+            "hsl_no_restart_drawdown_threshold": 1.0,
+            "hsl_restart_policy": 2.0,
+            "hsl_tier_ratio_yellow": 0.5,
+            "hsl_tier_ratio_orange": 0.75,
+            "hsl_orange_graceful_stop": 0.0,
+            "hsl_signal_mode": 0.0,
+            "hsl_slot_count": 1.0,
+        }.items():
+            row[keys.index(key)] = value
+
+    runner_kwargs = {}
+    if strategy_kind == "trailing_martingale":
+        runner_kwargs["hsl_enabled"] = hsl_enabled
 
     output = runner_cls(
         market,
@@ -3617,6 +3640,7 @@ def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
         data,
         long_enabled=side == "long",
         short_enabled=side == "short",
+        **runner_kwargs,
     ).run(np.asarray([row + row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -3625,6 +3649,121 @@ def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
     assert output["day_end_eq"][0, 0].item() == pytest.approx(
         output["balance"].item()
     )
+    if hsl_enabled:
+        expected_hsl_samples = (
+            (output["last_eq_ts"] - output["first_eq_ts"]) / 60_000.0 + 1.0
+        )
+        assert output["hsl_tier_samples_total"].item() == pytest.approx(
+            expected_hsl_samples.item()
+        )
+        assert output["hsl_tier_samples_red"].item() > 0.0
+        assert (
+            output["hsl_tier_samples_red"].item()
+            < output["hsl_tier_samples_total"].item()
+        )
+        assert output[f"hsl_triggers_{side}"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_single_coin_hsl_can_restart_during_invalid_tail(
+    strategy_kind, side
+):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 15
+    last_valid = 10
+    close = np.full(count, np.nan)
+    close[:8] = 100.0
+    close[8 : last_valid + 1] = 70.0 if side == "long" else 130.0
+    high = np.where(np.isfinite(close), close * 1.02, np.nan)
+    low = np.where(np.isfinite(close), close * 0.98, np.nan)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        last_valid,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "trailing_martingale":
+        row = _tm_single_row(initial_ema_dist=0.0)
+        row[6] = 0.5
+        row[7] = 0.5
+        row[16] = 0.5
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsTrailingMartingaleRunner
+    else:
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.5,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 1.0,
+                "offset": 0.0,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+        runner_cls = MpsEmaAnchorRunner
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.01,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 2.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 0.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 0.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[keys.index(key)] = value
+
+    runner_kwargs = {}
+    if strategy_kind == "trailing_martingale":
+        runner_kwargs["hsl_enabled"] = True
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        **runner_kwargs,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key].item() == 0.0
+    assert output[f"hsl_triggers_{side}"].item() == 1.0
+    assert output[f"hsl_restarts_{side}"].item() == 1.0
+    assert output["last_eq_ts"].item() > last_valid * run.interval_ms
 
 
 @pytest.mark.skipif(
