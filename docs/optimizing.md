@@ -360,12 +360,14 @@ The supported slice is intentionally narrow:
   market paths: the proxy projects adverse slippage and taker fees and keeps a conservative
   zero-loss envelope for ordinary and exposure-repair closes, while exact Rust applies the shared
   peak-balance allowance to every validation.
-- single-coin runs with HSL disabled may include invalid candles after the selected coin's final
-  valid candle while the tail remains below exact Rust's 1,400-candle forced-delist threshold;
-  Metal treats those candles as non-tradable, excludes the open position's unrealized PnL, and
-  continues balance-only equity and elapsed-time accounting through the prepared endpoint
-- single-coin HSL tails, forced-delist tails, and any multi-coin invalid tail remain fail-closed
-  until their hard-stop and forced-close semantics are modeled
+- single-coin runs may include invalid candles after the selected coin's final valid candle while
+  the tail remains below exact Rust's 1,400-candle forced-delist threshold; Metal treats those
+  candles as non-tradable, excludes the open position's unrealized PnL, and continues balance-only
+  equity and elapsed-time accounting through the prepared endpoint. HSL-enabled runs also continue
+  hard-stop sampling, rolling-PnL expiry, tier accounting, and restart checks without treating stale
+  orders as blocking
+- forced-delist tails and any multi-coin invalid tail remain fail-closed until their hard-stop and
+  forced-close semantics are modeled
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
 Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every

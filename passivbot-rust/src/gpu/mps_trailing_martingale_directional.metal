@@ -3619,12 +3619,13 @@ inline void passivbot_single_coin_impl(
             alive = false;
             liq_day = di;
         }
-        if (gen && valid && alive && balance > 0.0f && equity > liq_floor) {
-            bool long_blocking_orders = long_hsl_mode != 3 && (
+        const bool hsl_step = gen || (eq_started && after_valid_tail);
+        if (hsl_step && alive && balance > 0.0f && equity > liq_floor) {
+            bool long_blocking_orders = valid && long_hsl_mode != 3 && (
                 long_side.entry_qty > 0.0f || long_side.close_qty > 0.0f
                     || long_side.secondary_close_qty > 0.0f
             );
-            bool short_blocking_orders = short_hsl_mode != 3 && (
+            bool short_blocking_orders = valid && short_hsl_mode != 3 && (
                 short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
                     || short_side.secondary_close_qty > 0.0f
             );

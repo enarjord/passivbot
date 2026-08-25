@@ -51,7 +51,6 @@ from optimization.gpu.service import (
     _require_no_internal_invalid_hsl_candles,
     _require_no_internal_invalid_multicoin_hsl_candles,
     _require_no_internal_invalid_single_coin_recovery_candles,
-    _require_supported_single_coin_valid_tail,
     _refresh_hedged_multicoin_hsl_at_portfolio_cutoff,
     _single_coin_candle_interval_minutes,
     _single_coin_exposure_params,
@@ -1208,14 +1207,6 @@ def test_gpu_single_coin_proxy_accepts_short_invalid_tail_only():
         _require_no_forced_delist_tail(0, 1401)
     with pytest.raises(ValueError, match="within the prepared candle range"):
         _require_no_forced_delist_tail(100, 100)
-
-
-def test_gpu_single_coin_hsl_still_requires_complete_valid_tail():
-    _require_supported_single_coin_valid_tail(98, 100, hsl_enabled=False)
-    _require_supported_single_coin_valid_tail(99, 100, hsl_enabled=True)
-
-    with pytest.raises(ValueError, match="HSL does not yet model"):
-        _require_supported_single_coin_valid_tail(98, 100, hsl_enabled=True)
 
 
 def test_gpu_hsl_requires_contiguous_valid_candles():

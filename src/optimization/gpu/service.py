@@ -680,18 +680,6 @@ def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> No
         )
 
 
-def _require_supported_single_coin_valid_tail(
-    last_valid_idx: int, candle_count: int, *, hsl_enabled: bool
-) -> None:
-    _require_no_forced_delist_tail(last_valid_idx, candle_count)
-    if bool(hsl_enabled) and int(last_valid_idx) != int(candle_count) - 1:
-        raise ValueError(
-            "MPS single-coin HSL does not yet model hard-stop state updates "
-            "after the coin's final valid candle; "
-            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
-        )
-
-
 def _require_no_internal_invalid_hsl_candles(
     high, low, close, *, first_valid_idx: int, last_valid_idx: int
 ) -> None:
@@ -1255,10 +1243,9 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
-        _require_supported_single_coin_valid_tail(
+        _require_no_forced_delist_tail(
             int(backtest_params["last_valid_indices"][0]),
             len(hlcvs),
-            hsl_enabled=bool(hsl_enabled_sides),
         )
         any_configured_hsl = any(
             bool(bot.get("hsl_enabled")) for bot in (long_bot, short_bot)
