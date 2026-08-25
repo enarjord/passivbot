@@ -1702,8 +1702,7 @@ def test_gpu_tm_market_execution_accepts_recursive_close_mode_bounds(
     _validate_tm_market_mode_bounds(bounds, {}, {"long"}, config)
 
 
-@pytest.mark.parametrize("phase", ["entry", "close"])
-def test_gpu_multicoin_tm_market_execution_rejects_recursive_mode_bounds(phase):
+def test_gpu_multicoin_tm_market_execution_rejects_recursive_entry_mode_bounds():
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_martingale"
     config["live"]["market_orders_allowed"] = True
@@ -1711,12 +1710,29 @@ def test_gpu_multicoin_tm_market_execution_rejects_recursive_mode_bounds(phase):
         "long_entry_retracement_base_pct": Bound(0.001, 0.1),
         "long_close_retracement_base_pct": Bound(0.001, 0.1),
     }
-    bounds[f"long_{phase}_retracement_base_pct"] = Bound(0.0, 0.0)
+    bounds["long_entry_retracement_base_pct"] = Bound(0.0, 0.0)
 
     with pytest.raises(ValueError, match="wholly trailing"):
         _validate_tm_market_mode_bounds(
             bounds, {}, {"long"}, config, coin_count=3
         )
+
+
+@pytest.mark.parametrize("close_bounds", [Bound(0.0, 0.0), Bound(-0.1, 0.0)])
+def test_gpu_multicoin_tm_market_execution_accepts_recursive_close_bounds(
+    close_bounds,
+):
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_martingale"
+    config["live"]["market_orders_allowed"] = True
+    bounds = {
+        "long_entry_retracement_base_pct": Bound(0.001, 0.1),
+        "long_close_retracement_base_pct": close_bounds,
+    }
+
+    _validate_tm_market_mode_bounds(
+        bounds, {}, {"long"}, config, coin_count=3
+    )
 
 
 @pytest.mark.parametrize(
@@ -2973,18 +2989,30 @@ def test_gpu_multicoin_tm_market_execution_requires_exact_disabled_loss_gate(
         _validate_scope(config, _MulticoinEvaluator())
 
 
-@pytest.mark.parametrize("branch", ["entry", "close"])
-def test_gpu_multicoin_tm_market_execution_fails_closed_for_recursive_mode(branch):
+def test_gpu_multicoin_tm_market_execution_fails_closed_for_recursive_entry():
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
     config["live"]["market_orders_allowed"] = True
     strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
     strategy["entry"]["retracement_base_pct"] = 0.01
     strategy["close"]["retracement_base_pct"] = 0.01
-    strategy[branch]["retracement_base_pct"] = 0.0
+    strategy["entry"]["retracement_base_pct"] = 0.0
 
-    with pytest.raises(ValueError, match=f"{branch}.*must remain trailing"):
+    with pytest.raises(ValueError, match="entry.*must remain trailing"):
         _validate_scope(config, _MulticoinEvaluator())
+
+
+def test_gpu_multicoin_tm_market_execution_accepts_recursive_close():
+    config = _directional_tm_config(long_enabled=True, short_enabled=True)
+    coins = ["BTC", "ETH", "SOL"]
+    config["live"]["approved_coins"] = {"long": coins, "short": coins}
+    config["live"]["market_orders_allowed"] = True
+    for side in ("long", "short"):
+        strategy = config["bot"][side]["strategy"]["trailing_martingale"]
+        strategy["entry"]["retracement_base_pct"] = 0.01
+        strategy["close"]["retracement_base_pct"] = 0.0
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
 @pytest.mark.parametrize("branch", ["entry", "close"])
@@ -3012,7 +3040,7 @@ def test_gpu_multicoin_tm_market_execution_validates_static_override_modes(
         }
     }
 
-    if value > 0.0:
+    if value > 0.0 or branch == "close":
         assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
     else:
         with pytest.raises(ValueError, match=f"{branch}.*must remain trailing"):

@@ -227,6 +227,7 @@ struct CloseGroup {
     int ticks;
     float price;
     float qty;
+    bool market;
 };
 
 // Rebuild Rust's post-reducer recursive grid and return its number of
@@ -258,11 +259,16 @@ inline int recursive_grid_close_groups_after_reducer(
     float c_mult,
     int max_rungs,
     int wanted_group,
+    float generation_market_price,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold,
+    float market_resize_psize,
     thread CloseGroup& selected
 ) {
     selected.ticks = 0;
     selected.price = 0.0f;
     selected.qty = 0.0f;
+    selected.market = false;
     float sim_psize = psize;
     bool have_group = false;
     int group_count = 0;
@@ -336,7 +342,101 @@ inline int recursive_grid_close_groups_after_reducer(
         }
         ++group_count;
     }
+    if (selected.qty > 0.0f && selected.ticks > 0) {
+        selected.market = should_use_ordinary_market_execution(
+            selected.ticks, short_side, generation_market_price,
+            price_step, market_orders_allowed,
+            market_order_near_touch_threshold
+        );
+        if (selected.market) {
+            selected.qty = resize_market_close_qty(
+                selected.qty, market_resize_psize,
+                generation_market_price,
+                qty_step, min_qty, min_cost, c_mult
+            );
+        }
+    }
     return group_count;
+}
+
+// Exact Rust decides whether to expose a recursive close suffix from the
+// immutable passive strategy ladder. Market promotion is intentionally absent
+// here: a market-only next close must fill by itself and must not reveal later
+// recursive rungs.
+inline bool recursive_grid_close_would_expand(
+    bool short_side,
+    float psize,
+    float pprice,
+    float generation_balance,
+    float allowed_wel,
+    int touch_down,
+    int touch_up,
+    int touch_nearest,
+    float touch_min_qty,
+    int touch_min_qty_relation,
+    float close_qty_pct,
+    float close_threshold_base,
+    float close_threshold_we,
+    float close_threshold_v1h,
+    float close_threshold_v1m,
+    float volatility_1h,
+    float volatility_1m,
+    float qty_step,
+    float price_step,
+    float min_qty,
+    float min_cost,
+    float c_mult,
+    int max_rungs,
+    int high_fill_max_tick,
+    int low_nonfill_max_tick
+) {
+    float sim_psize = psize;
+    for (int rung = 0; rung < max_rungs && sim_psize > 0.0f; ++rung) {
+        float we = sim_psize * pprice * c_mult
+            / fmax(generation_balance, 1.0e-9f);
+        float wer = we / fmax(allowed_wel, 1.0e-12f);
+        float threshold = close_threshold_base
+            + wer * close_threshold_we
+            + volatility_1h * close_threshold_v1h
+            + volatility_1m * close_threshold_v1m;
+        float target = pprice * (
+            short_side ? 1.0f - threshold : 1.0f + threshold
+        );
+        int target_tick = short_side
+            ? int(floor(target / price_step + 1.0e-6f))
+            : int(ceil(target / price_step - 1.0e-6f));
+        int close_touch = short_side ? touch_down : touch_up;
+        bool touch_controls = short_side
+            ? close_touch < target_tick : close_touch > target_tick;
+        int order_tick = touch_controls ? touch_nearest : target_tick;
+        float order_price = float(order_tick) * price_step;
+        float minimum_close = touch_controls
+            ? touch_min_qty
+            : min_entry_qty(
+                order_price, qty_step, min_qty, min_cost, c_mult
+            );
+        int minimum_relation = touch_controls ? touch_min_qty_relation : 0;
+        float close_pct = close_threshold_we == 0.0f
+            ? 1.0f : close_qty_pct;
+        float order_qty = round_step(
+            calc_close_qty(
+                sim_psize, pprice, generation_balance, allowed_wel,
+                minimum_close, minimum_relation, close_pct,
+                qty_step, c_mult
+            ),
+            qty_step
+        );
+        if (order_qty <= 0.0f || order_tick <= 0) break;
+        bool reachable = short_side
+            ? order_tick > low_nonfill_max_tick
+            : order_tick <= high_fill_max_tick;
+        if (reachable) return true;
+        sim_psize = fmax(
+            round_step(sim_psize - fmin(order_qty, sim_psize), qty_step),
+            0.0f
+        );
+    }
+    return false;
 }
 
 // One complete directional Trailing Martingale portfolio. Keeping the mutable
@@ -371,6 +471,7 @@ struct TrailingMartingaleMulticoinSideState {
     float unstuck_close_qty[MAX_COINS];
     float close_gen_balance[MAX_COINS];
     float close_gen_allowed_wel[MAX_COINS];
+    float close_gen_market_price[MAX_COINS];
     float close_grid_gen_psize[MAX_COINS];
     float position_open_k[MAX_COINS];
     float position_last_fill_k[MAX_COINS];
@@ -392,6 +493,7 @@ struct TrailingMartingaleMulticoinSideState {
     bool survivor[MAX_COINS];
     bool entry_candidate[MAX_COINS];
     bool close_reconstruct_after_reducer[MAX_COINS];
+    bool close_recursive_market_mode[MAX_COINS];
     bool filled_coin[MAX_COINS];
     bool entry_market[MAX_COINS];
     bool close_market[MAX_COINS];
@@ -653,6 +755,7 @@ inline void finalize_tm_multicoin_close_position(
     side.close_market[coin] = false;
     side.secondary_close_market[coin] = false;
     side.close_reconstruct_after_reducer[coin] = false;
+    side.close_recursive_market_mode[coin] = false;
     side.close_is_unstuck_reducer[coin] = false;
     side.close_is_hsl_panic[coin] = false;
     side.filled_coin[coin] = true;
@@ -724,6 +827,7 @@ inline bool process_tm_multicoin_side_fills(
     bool loss_gate_enabled,
     float max_realized_loss_pct,
     float market_order_slippage_pct,
+    float market_order_near_touch_threshold,
     bool hsl_panic_market,
     thread float& hsl_equity_before_fills
 ) {
@@ -742,6 +846,7 @@ inline bool process_tm_multicoin_side_fills(
     thread float* secondary_close_qty = side.secondary_close_qty;
     thread float* close_gen_balance = side.close_gen_balance;
     thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
+    thread float* close_gen_market_price = side.close_gen_market_price;
     thread float* close_grid_gen_psize = side.close_grid_gen_psize;
     thread int* entry_tick = side.entry_tick;
     thread int* close_tick = side.close_tick;
@@ -749,6 +854,8 @@ inline bool process_tm_multicoin_side_fills(
     thread int* close_grid_max_rungs = side.close_grid_max_rungs;
     thread bool* close_reconstruct_after_reducer =
         side.close_reconstruct_after_reducer;
+    thread bool* close_recursive_market_mode =
+        side.close_recursive_market_mode;
     thread bool* filled_coin = side.filled_coin;
     thread bool* entry_market = side.entry_market;
     thread bool* close_market = side.close_market;
@@ -801,10 +908,47 @@ inline bool process_tm_multicoin_side_fills(
             && (secondary_close_market[c] || (short_side
                 ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
                 : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]));
+        bool recursive_market_expand = psize[c] > 0.0f
+            && close_recursive_market_mode[c]
+            && !close_is_hsl_panic[c]
+            && recursive_grid_close_would_expand(
+                short_side,
+                close_grid_gen_psize[c],
+                pprice[c],
+                close_gen_balance[c],
+                close_gen_allowed_wel[c],
+                touch_ticks[((k - 1) * C + c) * 2 + 0],
+                touch_ticks[((k - 1) * C + c) * 2 + 1],
+                touch_nearest_ticks[(k - 1) * C + c],
+                as_type<float>(touch_min_qty_bits[(k - 1) * C + c]),
+                touch_min_qty_relation[(k - 1) * C + c],
+                coin_override_or(coin_overrides, c, 15, close_qty_pct),
+                coin_override_or(
+                    coin_overrides, c, 16, close_threshold_base
+                ),
+                coin_override_or(coin_overrides, c, 17, close_threshold_we),
+                coin_override_or(
+                    coin_overrides, c, 18, close_threshold_v1h
+                ),
+                coin_override_or(
+                    coin_overrides, c, 19, close_threshold_v1m
+                ),
+                volatility_1h[c],
+                volatility_1m[c],
+                qty_step,
+                price_step,
+                min_qty,
+                min_cost,
+                c_mult,
+                close_grid_max_rungs[c],
+                fill_ticks[tick_offset + 0],
+                fill_ticks[tick_offset + 1]
+            );
         bool rebuild_grid = psize[c] > 0.0f
             && close_reconstruct_after_reducer[c]
-            && !close_market[c]
+            && (!close_recursive_market_mode[c] || recursive_market_expand)
             && !close_is_hsl_panic[c];
+        if (recursive_market_expand) filled_close = false;
         if (filled_close || filled_secondary_close || rebuild_grid) {
             float fill_price = primary_market
                 ? ordinary_market_fill_price(
@@ -812,9 +956,10 @@ inline bool process_tm_multicoin_side_fills(
                     market_order_slippage_pct, price_step
                 )
                 : float(close_tick[c]) * price_step;
-            float reducer_qty = fmin(
-                round_step(close_qty[c], qty_step), psize[c]
-            );
+            float reducer_qty = rebuild_grid
+                    && close_recursive_market_mode[c]
+                ? 0.0f
+                : fmin(round_step(close_qty[c], qty_step), psize[c]);
             float grid_gen_psize = close_grid_gen_psize[c];
             int gen_tick_offset = 0;
             float coin_close_qty_pct = 0.0f;
@@ -870,6 +1015,10 @@ inline bool process_tm_multicoin_side_fills(
                     c_mult,
                     close_grid_max_rungs[c],
                     -1,
+                    close_gen_market_price[c],
+                    close_recursive_market_mode[c],
+                    market_order_near_touch_threshold,
+                    grid_gen_psize,
                     group
                 );
                 reverse = coin_close_threshold_we > 0.0f;
@@ -912,11 +1061,16 @@ inline bool process_tm_multicoin_side_fills(
                     c_mult,
                     close_grid_max_rungs[c],
                     wanted,
+                    close_gen_market_price[c],
+                    close_recursive_market_mode[c],
+                    market_order_near_touch_threshold,
+                    grid_gen_psize,
                     group
                 );
                 float trimmed_qty = fmin(group.qty, remaining_budget);
                 float group_min = min_entry_qty(
-                    group.price, qty_step, min_qty, min_cost, c_mult
+                    group.market ? close_gen_market_price[c] : group.price,
+                    qty_step, min_qty, min_cost, c_mult
                 );
                 bool partial_trim = trimmed_qty + 1.0e-6f < group.qty;
                 if (trimmed_qty + 1.0e-6f < group_min) {
@@ -978,11 +1132,16 @@ inline bool process_tm_multicoin_side_fills(
                     c_mult,
                     close_grid_max_rungs[c],
                     wanted,
+                    close_gen_market_price[c],
+                    close_recursive_market_mode[c],
+                    market_order_near_touch_threshold,
+                    grid_gen_psize,
                     group
                 );
                 if (group.qty <= 0.0f) break;
                 float group_min = min_entry_qty(
-                    group.price, qty_step, min_qty, min_cost, c_mult
+                    group.market ? close_gen_market_price[c] : group.price,
+                    qty_step, min_qty, min_cost, c_mult
                 );
                 float trimmed_group_qty = fmin(
                     group.qty, remaining_budget
@@ -1042,26 +1201,33 @@ inline bool process_tm_multicoin_side_fills(
                         executed_close = true;
                     }
                 }
-                bool reachable = short_side
+                bool reachable = group.market || (short_side
                     ? group.ticks > fill_ticks[tick_offset + 1]
-                    : group.ticks <= fill_ticks[tick_offset + 0];
+                    : group.ticks <= fill_ticks[tick_offset + 0]);
                 if (!reachable) break;
                 float group_qty = trimmed_group_qty;
                 if (group_qty <= 0.0f) continue;
                 float grid_qty = fmin(
                     round_step(group_qty, qty_step), psize[c]
                 );
+                float group_fill_price = group.market
+                    ? ordinary_market_fill_price(
+                        close, short_side,
+                        market_order_slippage_pct, price_step
+                    )
+                    : group.price;
+                float group_fee_rate = group.market ? taker_fee : maker_fee;
                 float grid_pnl = grid_qty * c_mult * (short_side
-                    ? pprice[c] - group.price
-                    : group.price - pprice[c]);
+                    ? pprice[c] - group_fill_price
+                    : group_fill_price - pprice[c]);
                 if (!realized_loss_proxy_allows_close(
-                        grid_qty, group.price, pprice[c], short_side,
-                        c_mult, maker_fee, loss_gate_enabled
+                        grid_qty, group_fill_price, pprice[c], short_side,
+                        c_mult, group_fee_rate, loss_gate_enabled
                     )) {
                     continue;
                 }
                 float grid_net_pnl = grid_pnl
-                    - grid_qty * group.price * c_mult * maker_fee;
+                    - grid_qty * group_fill_price * c_mult * group_fee_rate;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, grid_pnl, grid_net_pnl,
@@ -1072,7 +1238,7 @@ inline bool process_tm_multicoin_side_fills(
                 psize[c] = fmax(
                     round_step(psize[c] - grid_qty, qty_step), 0.0f
                 );
-                day_volume += grid_qty * group.price * c_mult / balance;
+                day_volume += grid_qty * group_fill_price * c_mult / balance;
                 executed_close = true;
                 if (psize[c] <= 0.0f) break;
             }
@@ -1299,6 +1465,7 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.unstuck_close_qty[c] = 0.0f;
         side.close_gen_balance[c] = 0.0f;
         side.close_gen_allowed_wel[c] = 0.0f;
+        side.close_gen_market_price[c] = 0.0f;
         side.close_grid_gen_psize[c] = 0.0f;
         side.position_open_k[c] = -1.0f;
         side.position_last_fill_k[c] = -1.0f;
@@ -1320,6 +1487,7 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.survivor[c] = false;
         side.entry_candidate[c] = false;
         side.close_reconstruct_after_reducer[c] = false;
+        side.close_recursive_market_mode[c] = false;
         side.filled_coin[c] = false;
         side.entry_market[c] = false;
         side.close_market[c] = false;
@@ -2324,6 +2492,7 @@ inline void generate_tm_multicoin_side_orders(
     thread float* unstuck_close_qty = side.unstuck_close_qty;
     thread float* close_gen_balance = side.close_gen_balance;
     thread float* close_gen_allowed_wel = side.close_gen_allowed_wel;
+    thread float* close_gen_market_price = side.close_gen_market_price;
     thread float* close_grid_gen_psize = side.close_grid_gen_psize;
     thread float* position_open_k = side.position_open_k;
     thread float* position_last_fill_k = side.position_last_fill_k;
@@ -2343,6 +2512,8 @@ inline void generate_tm_multicoin_side_orders(
     thread bool* entry_candidate = side.entry_candidate;
     thread bool* close_reconstruct_after_reducer =
         side.close_reconstruct_after_reducer;
+    thread bool* close_recursive_market_mode =
+        side.close_recursive_market_mode;
     thread bool* entry_market = side.entry_market;
     thread bool* close_market = side.close_market;
     thread bool* secondary_close_market = side.secondary_close_market;
@@ -2631,8 +2802,10 @@ inline void generate_tm_multicoin_side_orders(
         secondary_close_market[c] = false;
         secondary_close_tick[c] = 0;
         close_reconstruct_after_reducer[c] = false;
+        close_recursive_market_mode[c] = false;
         close_is_hsl_panic[c] = false;
         close_grid_gen_psize[c] = 0.0f;
+        close_gen_market_price[c] = 0.0f;
         close_grid_max_rungs[c] = 500;
         contribution[c] = 0.0f;
         entry_candidate[c] = false;
@@ -2993,6 +3166,19 @@ inline void generate_tm_multicoin_side_orders(
                 && (!trailing_close || close_triggered)
             ? clip : 0.0f;
         close_tick[c] = candidate_close_tick;
+        if (!trailing_close && close_qty[c] > 0.0f
+            && market_orders_allowed) {
+            // Preserve the passive recursive strategy snapshot. On the next
+            // candle it alone decides whether the full suffix is emitted;
+            // ordinary market promotion is applied only after that decision.
+            close_reconstruct_after_reducer[c] = true;
+            close_recursive_market_mode[c] = true;
+            close_gen_balance[c] = balance;
+            close_gen_allowed_wel[c] = allowed_coin_wel;
+            close_gen_market_price[c] = price_now;
+            close_grid_gen_psize[c] = psize[c];
+            close_grid_max_rungs[c] = 500;
+        }
         close_market[c] = close_qty[c] > 0.0f
             && should_use_ordinary_market_execution(
                 candidate_close_tick, short_side, price_now, price_step,
@@ -3252,7 +3438,9 @@ inline void generate_tm_multicoin_side_orders(
             close_market[c] = false;
             secondary_close_market[c] = false;
             close_reconstruct_after_reducer[c] = false;
+            close_recursive_market_mode[c] = false;
             close_grid_gen_psize[c] = 0.0f;
+            close_gen_market_price[c] = 0.0f;
             close_is_unstuck_reducer[c] = false;
             close_is_hsl_panic[c] = true;
         }
@@ -3479,6 +3667,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_fill_counts, int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
             max_realized_loss_pct, market_order_slippage_pct,
+            market_order_near_touch_threshold,
             long_hsl_panic_market, long_hsl_equity_before_fills
         );
         float short_hsl_equity_before_fills = account.balance;
@@ -3500,6 +3689,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_fill_counts, int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
             max_realized_loss_pct, market_order_slippage_pct,
+            market_order_near_touch_threshold,
             short_hsl_panic_market, short_hsl_equity_before_fills
         );
         bool any_fill = long_fill || short_fill;
@@ -4193,6 +4383,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,
             max_realized_loss_pct, market_order_slippage_pct,
+            market_order_near_touch_threshold,
             hsl_panic_market, hsl_equity_before_fills
         );
         if (any_fill) {
