@@ -561,9 +561,10 @@ The push timestamp is receipt/update time, so floor it to the one-minute bucket;
 base volume and validate the complete OHLC row. Pass the changing open bucket through the generic
 successor-candle finalization boundary. Drop a transient internally inconsistent update instead of
 clamping exchange values or failing unrelated multiplexed symbols; a bounded consecutive run wakes
-the affected watcher into REST fallback. Startup basis, reconnect gaps, persistent malformed data,
-prolonged silence, and periodic integrity checks remain REST-owned; a transport failure wakes every
-affected watcher so provenance is cleared before bounded reconnect and REST fallback.
+the affected watcher into REST fallback and suspends new rows for that symbol until the watcher
+consumes the fallback signal. Startup basis, reconnect gaps, persistent malformed data, prolonged
+silence, and periodic integrity checks remain REST-owned; a transport failure wakes every affected
+watcher so provenance is cleared before bounded reconnect and REST fallback.
 
 Primary references: [ticker WebSocket](https://www.bitunix.com/api-docs/futures/websocket/public/Tickers%20Channel.html),
 [REST depth](https://www.bitunix.com/api-docs/futures/market/get_depth.html), and

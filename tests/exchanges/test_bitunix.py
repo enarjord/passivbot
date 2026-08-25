@@ -997,10 +997,10 @@ async def test_order_stream_routes_persistent_malformed_klines_to_one_watcher():
         return_value=_PublicKlineSession(socket)
     )
     stream = BitunixOrderStream(client)
-
-    waiter = asyncio.create_task(
-        stream.watch_ohlcv("BTC/USDT:USDT", "1m")
-    )
+    symbol = "BTC/USDT:USDT"
+    queue = asyncio.Queue(maxsize=stream.KLINE_QUEUE_SIZE)
+    stream._ohlcv_queues[symbol] = queue
+    stream._ensure_ohlcv_task()
     for _ in range(100):
         if stream._ohlcv_ws is socket:
             break
@@ -1012,9 +1012,23 @@ async def test_order_stream_routes_persistent_malformed_klines_to_one_watcher():
                 data=json.dumps(_kline_payload("BTCUSDT", l="101")),
             )
         )
+    for _ in range(stream.KLINE_QUEUE_SIZE + 2):
+        await socket.messages.put(
+            SimpleNamespace(
+                type=aiohttp.WSMsgType.TEXT,
+                data=json.dumps(_kline_payload("BTCUSDT")),
+            )
+        )
+    for _ in range(100):
+        if socket.messages.empty():
+            break
+        await asyncio.sleep(0.01)
 
+    assert queue.qsize() == 1
+    assert symbol in stream._ohlcv_fallback_pending
     with pytest.raises(NetworkError, match="consecutive malformed updates"):
-        await waiter
+        await stream.watch_ohlcv(symbol, "1m")
+    assert symbol not in stream._ohlcv_fallback_pending
     assert stream._ohlcv_task is not None
     assert not stream._ohlcv_task.done()
     await stream.close()

@@ -1518,6 +1518,7 @@ class BitunixOrderStream:
         self._ohlcv_ws: aiohttp.ClientWebSocketResponse | None = None
         self._ohlcv_task: asyncio.Task | None = None
         self._ohlcv_queues: dict[str, asyncio.Queue] = {}
+        self._ohlcv_fallback_pending: set[str] = set()
         self._ohlcv_closed = False
 
     async def _receive_with_keepalive(
@@ -1795,11 +1796,17 @@ class BitunixOrderStream:
                                     ),
                                     clear=True,
                                 )
+                                self._ohlcv_fallback_pending.add(
+                                    malformed_symbol
+                                )
                                 malformed_counts[malformed_symbol] = 0
                             continue
                         malformed_counts[symbol] = 0
                         queue = self._ohlcv_queues.get(symbol)
-                        if queue is not None:
+                        if (
+                            queue is not None
+                            and symbol not in self._ohlcv_fallback_pending
+                        ):
                             self._queue_latest(queue, rows)
                     elif message.type in {
                         aiohttp.WSMsgType.CLOSED,
@@ -1836,6 +1843,7 @@ class BitunixOrderStream:
         self._ensure_ohlcv_task()
         item = await queue.get()
         if isinstance(item, BaseException):
+            self._ohlcv_fallback_pending.discard(symbol)
             raise item
         if item is None:
             raise NetworkError("Bitunix kline websocket subscription was removed")
@@ -1845,6 +1853,7 @@ class BitunixOrderStream:
         if timeframe not in self.KLINE_CHANNELS:
             raise BadRequest(f"Unsupported Bitunix WebSocket OHLCV timeframe {timeframe!r}")
         queue = self._ohlcv_queues.pop(symbol, None)
+        self._ohlcv_fallback_pending.discard(symbol)
         if queue is not None:
             self._queue_latest(queue, None, clear=True)
         if not self._ohlcv_queues and self._ohlcv_task is not None:
@@ -1859,6 +1868,7 @@ class BitunixOrderStream:
         for queue in tuple(self._ohlcv_queues.values()):
             self._queue_latest(queue, None, clear=True)
         self._ohlcv_queues.clear()
+        self._ohlcv_fallback_pending.clear()
         ohlcv_task = self._ohlcv_task
         if ohlcv_task is not None:
             ohlcv_task.cancel()
