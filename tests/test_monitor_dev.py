@@ -1,4 +1,3 @@
-import asyncio
 import os
 import subprocess
 import sys
@@ -6,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from logging_setup import STABLE_LOG_POINTER_HEADER
 from monitor_dev import _relay_launch_env, resolve_latest_log_file, wait_for_relay
 from monitor_tui import MonitorTuiClient
 
@@ -101,6 +101,112 @@ def test_monitor_tui_client_bootstraps_and_polls_log_tail(tmp_path):
     client._poll_log_tail_once()
 
     assert list(client.state.recent_log_lines)[-1] == "line three"
+
+
+def test_monitor_tui_client_follows_stable_pointer_across_run_changes(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    stable_log = logs_dir / "bot.log"
+    first_run_log = logs_dir / "first_run.log"
+    second_run_log = logs_dir / "second_run.log"
+    first_run_log.write_text("first run line\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{first_run_log.resolve()}\n",
+        encoding="utf-8",
+    )
+
+    client = MonitorTuiClient(
+        relay_url="http://127.0.0.1:8765",
+        log_file=str(stable_log),
+        log_bootstrap_lines=2,
+    )
+
+    assert client.state.followed_log_file == str(stable_log)
+    assert list(client.state.recent_log_lines) == ["first run line"]
+
+    second_run_log.write_text("second run line\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{second_run_log.resolve()}\n",
+        encoding="utf-8",
+    )
+    client._poll_log_tail_once()
+
+    assert list(client.state.recent_log_lines)[-1] == "second run line"
+
+
+def test_monitor_tui_follows_auto_selected_pointer_file(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    archived_log = logs_dir / "20260406_140000_passivbot_live.log"
+    stable_log = logs_dir / "bot.log"
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{archived_log.resolve()}\n",
+        encoding="utf-8",
+    )
+    archived_log.write_text("archived line\n", encoding="utf-8")
+    archive_mtime = stable_log.stat().st_mtime + 10
+    os.utime(archived_log, (archive_mtime, archive_mtime))
+
+    selected_log = resolve_latest_log_file(logs_dir=str(logs_dir))
+    assert selected_log == str(stable_log)
+
+    client = MonitorTuiClient(
+        relay_url="http://127.0.0.1:8765",
+        log_file=selected_log,
+        log_bootstrap_lines=2,
+    )
+    assert list(client.state.recent_log_lines) == ["archived line"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX stable aliases use symlinks")
+def test_monitor_dev_prefers_stable_symlink_over_its_archive_target(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    archived_log = logs_dir / "20260406_140000_passivbot_live.log"
+    stable_log = logs_dir / "1account.log"
+    archived_log.write_text("archived line\n", encoding="utf-8")
+    stable_log.symlink_to(archived_log.name)
+
+    assert stable_log.stat().st_mtime == archived_log.stat().st_mtime
+    assert stable_log.name < archived_log.name
+    assert resolve_latest_log_file(logs_dir=str(logs_dir)) == str(stable_log)
+
+
+def test_monitor_dev_prefers_newer_unrelated_archive_over_old_stable_pointer(tmp_path):
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    older_archive = logs_dir / "older_archive.log"
+    stable_log = logs_dir / "bot.log"
+    newer_archive = logs_dir / "newer_archive.log"
+    older_archive.write_text("older\n", encoding="utf-8")
+    stable_log.write_text(
+        f"{STABLE_LOG_POINTER_HEADER}\n{older_archive.resolve()}\n",
+        encoding="utf-8",
+    )
+    newer_archive.write_text("newer\n", encoding="utf-8")
+    newer_mtime = older_archive.stat().st_mtime + 10
+    os.utime(newer_archive, (newer_mtime, newer_mtime))
+
+    assert resolve_latest_log_file(logs_dir=str(logs_dir)) == str(newer_archive)
+
+
+def test_monitor_dev_imports_without_unix_terminal_modules():
+    code = (
+        "import sys; "
+        "sys.path.insert(0, 'src'); "
+        "sys.modules['termios'] = None; "
+        "sys.modules['tty'] = None; "
+        "import monitor_dev, monitor_tui; "
+        "assert not monitor_tui.TERMINAL_CONTROL_SUPPORTED"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_monitor_dev_tool_help_runs_without_import_errors():

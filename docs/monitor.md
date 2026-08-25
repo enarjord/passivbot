@@ -120,7 +120,8 @@ Current behavior:
 Live bots now keep both:
 
 - a timestamped per-run logfile under `logs/`
-- a stable `logs/{user}.log` alias to the current run
+- a stable `logs/{user}.log` alias to the current run; without Windows symlink privileges this is a
+  text pointer which the built-in monitor follows automatically
 
 So local monitor tooling can either follow the stable per-user path explicitly or let `monitor-dev`
 pick the newest logfile automatically.

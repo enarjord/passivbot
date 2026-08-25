@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live bot startup on Windows without symlink privileges by writing a visible pointer to the
+  timestamped run log instead of failing while creating the stable log alias. Built-in monitor
+  tooling resolves that pointer so the stable per-user path remains tail-able.
+
 - Apple MPS single-coin HSL optimization now continues hard-stop sampling, rolling-PnL expiry,
   tier accounting, and restart checks through supported invalid candle tails. Tail candles remain
   non-tradable and cannot satisfy stale blocking orders. Forced-delist tails and multi-coin invalid

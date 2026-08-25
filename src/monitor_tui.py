@@ -5,9 +5,7 @@ import json
 import os
 import shutil
 import sys
-import termios
 import time
-import tty
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -16,7 +14,18 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
+try:
+    import termios
+    import tty
+except ImportError:  # pragma: no cover - exercised by a subprocess import test
+    termios = None
+    tty = None
+
 import aiohttp
+
+from logging_setup import resolve_stable_log_alias
+
+TERMINAL_CONTROL_SUPPORTED = termios is not None and tty is not None
 
 
 ANSI_RESET = "\x1b[0m"
@@ -1281,7 +1290,7 @@ class MonitorTuiClient:
             ]
             if self.log_file:
                 tasks.append(asyncio.create_task(self._log_tail_loop(Path(self.log_file))))
-            if sys.stdin.isatty():
+            if sys.stdin.isatty() and TERMINAL_CONTROL_SUPPORTED:
                 tasks.append(asyncio.create_task(self._command_loop()))
             try:
                 await asyncio.gather(*tasks)
@@ -1384,6 +1393,8 @@ class MonitorTuiClient:
             sys.stdout.flush()
 
     async def _command_loop(self) -> None:
+        if not TERMINAL_CONTROL_SUPPORTED:
+            return
         fd = sys.stdin.fileno()
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[str] = asyncio.Queue()
@@ -1439,9 +1450,10 @@ class MonitorTuiClient:
 
     def _bootstrap_log_tail(self, path: Path) -> None:
         self.state.set_log_file(str(path))
-        self.state.push_log_lines(_read_last_lines(path, self.log_bootstrap_lines))
+        resolved_path = resolve_stable_log_alias(path)
+        self.state.push_log_lines(_read_last_lines(resolved_path, self.log_bootstrap_lines))
         try:
-            stat = path.stat()
+            stat = resolved_path.stat()
         except FileNotFoundError:
             self._log_tail_state = None
             return
@@ -1454,15 +1466,16 @@ class MonitorTuiClient:
             path = Path(self.log_file)
         if self.state.followed_log_file != str(path):
             self._bootstrap_log_tail(path)
+        resolved_path = resolve_stable_log_alias(path)
         try:
-            stat = path.stat()
+            stat = resolved_path.stat()
         except FileNotFoundError:
             self._log_tail_state = None
             return
         file_id = (int(stat.st_dev), int(stat.st_ino))
         size = int(stat.st_size)
         if self._log_tail_state is None:
-            self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
+            self._bootstrap_log_tail(path)
             return
         reset = size < self._log_tail_state.offset or (
             self._log_tail_state.dev,
@@ -1474,7 +1487,7 @@ class MonitorTuiClient:
                 self._log_tail_state = _LogTailState(file_id[0], file_id[1], size)
             return
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(resolved_path, "r", encoding="utf-8") as f:
                 f.seek(read_from)
                 lines = f.read().splitlines()
                 new_offset = int(f.tell())
