@@ -1489,8 +1489,17 @@ inline bool process_tm_multicoin_side_fills(
             );
             float remaining_budget = ordinary_budget;
             float kept_ordinary = 0.0f;
+            // A market reducer was sized and admitted against the executable
+            // touch captured when the order was generated.  Keep that same
+            // minimum for recursive-ladder dust allocation; the next
+            // candle's slipped fill price may change realized PnL, but must
+            // not rewrite an already emitted quantity.
+            float reducer_allocation_price = primary_market
+                    && close_is_exposure_reducer[c]
+                ? close_gen_market_price[c] : fill_price;
             float minimum_any = min_entry_qty(
-                fill_price, qty_step, min_qty, min_cost, c_mult
+                reducer_allocation_price,
+                qty_step, min_qty, min_cost, c_mult
             );
             int last_kept_rank = -1;
             bool all_groups_below_min = close_recursive_market_mode[c]
@@ -1655,18 +1664,20 @@ inline bool process_tm_multicoin_side_fills(
                         : close_tick[c] < group.ticks);
                 if (reducer_before_group) {
                     float qty = fmin(reducer_qty, psize[c]);
+                    float reducer_fee_rate = primary_market
+                        ? taker_fee : maker_fee;
                     float pnl = qty * c_mult * (short_side
                         ? pprice[c] - fill_price
                         : fill_price - pprice[c]);
                     if (realized_loss_proxy_allows_reducer(
                             qty, fill_price, pprice[c], short_side,
-                            c_mult, maker_fee,
+                            c_mult, reducer_fee_rate,
                             close_is_unstuck_reducer[c], loss_gate_enabled,
                             balance, realized_pnl_cumsum_last,
                             realized_pnl_cumsum_max, max_realized_loss_pct
                         )) {
                         float net_pnl = pnl
-                            - qty * fill_price * c_mult * maker_fee;
+                            - qty * fill_price * c_mult * reducer_fee_rate;
                         record_tm_multicoin_close_fill(
                             side, account, fills, coin_fill_counts,
                             int(b), C, c, k, pnl, net_pnl, qty,
@@ -1757,16 +1768,16 @@ inline bool process_tm_multicoin_side_fills(
                     && close_is_hsl_panic[c];
                 bool market_execution = use_secondary
                     ? secondary_close_market[c] : primary_market;
+                float fee_rate = market_execution ? taker_fee : maker_fee;
                 if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
                         qty, price, pprice[c], short_side,
-                        c_mult, maker_fee, is_unstuck, loss_gate_enabled,
+                        c_mult, fee_rate, is_unstuck, loss_gate_enabled,
                         balance, realized_pnl_cumsum_last,
                         realized_pnl_cumsum_max, max_realized_loss_pct
                     )) {
                     continue;
                 }
-                float net_pnl = pnl - qty * price * c_mult
-                    * (market_execution ? taker_fee : maker_fee);
+                float net_pnl = pnl - qty * price * c_mult * fee_rate;
                 record_tm_multicoin_close_fill(
                     side, account, fills, coin_fill_counts,
                     int(b), C, c, k, pnl, net_pnl, qty,
@@ -3829,6 +3840,11 @@ inline void generate_tm_multicoin_side_orders(
                 wel_reducer_qty = 0.0f;
             }
         }
+        // Recursive strategy generation reserves the original passive WEL
+        // request.  Market execution may enlarge the emitted candidate to an
+        // executable-touch minimum, but that policy sizing must not alter the
+        // immutable strategy ladder reconstructed from the remaining size.
+        float strategy_wel_reducer_qty = wel_reducer_qty;
         bool wel_reducer_market = wel_reducer_qty > 0.0f
             && should_use_ordinary_market_execution(
                 wel_reducer_tick, short_side, price_now, price_step,
@@ -4076,7 +4092,7 @@ inline void generate_tm_multicoin_side_orders(
                 }
             } else if (!trailing_close) {
                 float reserved_grid_qty = use_unstuck
-                    ? reducer_qty : wel_reducer_qty;
+                    ? reducer_qty : strategy_wel_reducer_qty;
                 close_reconstruct_after_reducer[c] = true;
                 close_gen_balance[c] = balance;
                 close_gen_allowed_wel[c] = allowed_coin_wel;
