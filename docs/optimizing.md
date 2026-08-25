@@ -308,8 +308,18 @@ The supported slice is intentionally narrow:
   Strategy WEL reachability remains part of the pre-gate expansion decision even when that reducer
   is subsequently rejected. Its passive quantity seeds the remaining immutable rungs before any
   market minimum resize, and a WEL sharing the following ordinary rung's quantized price is merged
-  into that ordinary group. Multi-coin market execution remains fail closed until its execution
-  ordering is modeled
+  into that ordinary group.
+  Multi-coin EMA Anchor supports ordinary market entries and ordinary strategy closes for
+  long-only, short-only, and fused long+short runs, including compatible suites, static coin
+  overrides, forager selection, the strict total-exposure entry gate, and HSL. The proxy stores
+  generation-time market intent, fills it on the next valid candle with adverse directional
+  slippage and the coin's taker fee, uses executable-touch minimum sizing for short entries and
+  closes, and accounts for market-touch cost while allocating the portfolio entry cap.
+  Until protective market-reducer ordering is modeled, every effective multi-coin EMA scenario
+  requires `live.max_realized_loss_pct: 1`, `unstuck.enabled: false`, and
+  `risk.total_exposure_enforcer_enabled: false` on each enabled side; optimizer enablement bounds
+  for unstuck and the TWEL enforcer must remain pinned off, and coin overrides may not enable
+  unstuck. Multi-coin Trailing Martingale ordinary market execution remains fail closed
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

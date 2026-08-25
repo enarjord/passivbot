@@ -153,6 +153,9 @@ struct EmaMulticoinSideState {
     int secondary_close_tick[MAX_COINS];
     int twel_close_tick[MAX_COINS];
     int unstuck_close_tick[MAX_COINS];
+    bool entry_market[MAX_COINS];
+    bool close_market[MAX_COINS];
+    bool secondary_close_market[MAX_COINS];
     bool close_is_unstuck_reducer[MAX_COINS];
     bool close_is_hsl_panic[MAX_COINS];
     bool selected[MAX_COINS];
@@ -397,6 +400,9 @@ inline void init_ema_multicoin_side_state(
         side.secondary_close_tick[c] = 0;
         side.twel_close_tick[c] = 0;
         side.unstuck_close_tick[c] = 0;
+        side.entry_market[c] = false;
+        side.close_market[c] = false;
+        side.secondary_close_market[c] = false;
         side.close_is_unstuck_reducer[c] = false;
         side.close_is_hsl_panic[c] = false;
         side.coin_realized_pnl[c] = 0.0f;
@@ -1205,6 +1211,8 @@ inline void generate_ema_multicoin_side_orders(
     int current_hsl_mode,
     bool loss_gate_enabled,
     float max_realized_loss_pct,
+    bool market_orders_allowed,
+    float market_order_near_touch_threshold,
     int forced_unstuck_coin,
     ulong one_way_initial_blocked_mask
 ) {
@@ -1255,6 +1263,9 @@ inline void generate_ema_multicoin_side_orders(
     thread int* secondary_close_tick = side.secondary_close_tick;
     thread int* twel_close_tick = side.twel_close_tick;
     thread int* unstuck_close_tick = side.unstuck_close_tick;
+    thread bool* entry_market = side.entry_market;
+    thread bool* close_market = side.close_market;
+    thread bool* secondary_close_market = side.secondary_close_market;
     thread bool* close_is_unstuck_reducer =
         side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
@@ -1529,6 +1540,9 @@ inline void generate_ema_multicoin_side_orders(
         close_qty[c] = 0.0f;
         secondary_close_qty[c] = 0.0f;
         secondary_close_tick[c] = 0;
+        entry_market[c] = false;
+        close_market[c] = false;
+        secondary_close_market[c] = false;
         close_is_hsl_panic[c] = false;
         contribution[c] = 0.0f;
         entry_candidate[c] = false;
@@ -1600,10 +1614,22 @@ inline void generate_ema_multicoin_side_orders(
         int candidate_close_tick = short_side ? bid_tick : ask_tick;
         float entry_price = short_side ? ask_price : bid_price;
         float close_price = short_side ? bid_price : ask_price;
+        bool candidate_entry_market = should_use_ordinary_market_execution(
+            candidate_entry_tick, !short_side, price_now, price_step,
+            market_orders_allowed, market_order_near_touch_threshold
+        );
+        float entry_exposure_price = candidate_entry_market
+            ? price_now : entry_price;
         float minimum = min_entry_qty(
             entry_price, qty_step, min_qty, min_cost, c_mult
         );
-        minimum_entry[c] = minimum;
+        float market_entry_minimum = candidate_entry_market
+            ? min_entry_qty(
+                price_now, qty_step, min_qty, min_cost, c_mult
+            ) : minimum;
+        float effective_entry_minimum = short_side && candidate_entry_market
+            ? market_entry_minimum : minimum;
+        minimum_entry[c] = effective_entry_minimum;
         float coin_cooldown_min = ceil(coin_override_or(
             coin_overrides, c, 10, cooldown_min
         ));
@@ -1630,20 +1656,29 @@ inline void generate_ema_multicoin_side_orders(
                 base_qty * fmax(1.0f + fmax(wallet_ratio, 0.0f) * coin_ddf, 1.0f),
                 qty_step
             );
+            if (short_side && candidate_entry_market
+                && quantity < market_entry_minimum) {
+                quantity = market_entry_minimum;
+            }
             float headroom = (
                 position_cap * balance - psize[c] * pprice[c] * c_mult
-            ) / fmax(entry_price * c_mult, 1.0e-12f);
-            bool over = (psize[c] * pprice[c] + quantity * entry_price) * c_mult
+            ) / fmax(entry_exposure_price * c_mult, 1.0e-12f);
+            bool over = (
+                psize[c] * pprice[c] + quantity * entry_exposure_price
+            ) * c_mult
                 / fmax(balance, 1.0e-9f) >= position_cap;
             if (over) {
                 float capped = floor_step(headroom, qty_step);
-                quantity = capped > 0.0f && capped + 1.0e-6f >= minimum
+                quantity = capped > 0.0f
+                        && capped + 1.0e-6f >= effective_entry_minimum
                     ? capped : 0.0f;
             }
             entry_qty[c] = quantity;
             entry_tick[c] = candidate_entry_tick;
+            entry_market[c] = candidate_entry_market && quantity > 0.0f;
             entry_candidate[c] = quantity > 0.0f;
-            contribution[c] = quantity * entry_price * c_mult / balance;
+            contribution[c] = quantity * entry_exposure_price * c_mult
+                / balance;
         }
         if (psize[c] > 0.0f && close_price > 0.0f) {
             float minimum_close = min_entry_qty(
@@ -1658,6 +1693,16 @@ inline void generate_ema_multicoin_side_orders(
                     || psize[c] - clip < minimum_close
                 ? psize[c] : clip;
             close_tick[c] = candidate_close_tick;
+            close_market[c] = should_use_ordinary_market_execution(
+                candidate_close_tick, short_side, price_now, price_step,
+                market_orders_allowed, market_order_near_touch_threshold
+            );
+            if (close_market[c]) {
+                close_qty[c] = resize_market_close_qty(
+                    close_qty[c], psize[c], price_now,
+                    qty_step, min_qty, min_cost, c_mult
+                );
+            }
         }
 
         // Reserve the side-wide protective reducer and trim the
@@ -1667,12 +1712,14 @@ inline void generate_ema_multicoin_side_orders(
         float raw_unstuck_qty = unstuck_close_qty[c];
         int raw_unstuck_tick = unstuck_close_tick[c];
         float finalized_twel_qty = finalized_reducer_qty_with_ordinary(
-            psize[c], close_qty[c], close_price,
+            psize[c], close_qty[c],
+            close_market[c] ? price_now : close_price,
             raw_twel_qty, float(raw_twel_tick) * price_step,
             qty_step, min_qty, min_cost, c_mult
         );
         float finalized_unstuck_qty = finalized_reducer_qty_with_ordinary(
-            psize[c], close_qty[c], close_price,
+            psize[c], close_qty[c],
+            close_market[c] ? price_now : close_price,
             raw_unstuck_qty, float(raw_unstuck_tick) * price_step,
             qty_step, min_qty, min_cost, c_mult
         );
@@ -1727,7 +1774,8 @@ inline void generate_ema_multicoin_side_orders(
             float ordinary_qty = close_qty[c];
             if (ordinary_qty > 0.0f) {
                 float ordinary_min = min_entry_qty(
-                    close_price, qty_step, min_qty, min_cost, c_mult
+                    close_market[c] ? price_now : close_price,
+                    qty_step, min_qty, min_cost, c_mult
                 );
                 if (ordinary_qty + reducer_qty > psize[c]) {
                     ordinary_qty = fmax(
@@ -1759,6 +1807,7 @@ inline void generate_ema_multicoin_side_orders(
                     }
                     secondary_close_qty[c] = ordinary_qty;
                     secondary_close_tick[c] = close_tick[c];
+                    secondary_close_market[c] = close_market[c];
                 }
             }
             if (secondary_close_qty[c] <= 0.0f) {
@@ -1772,6 +1821,7 @@ inline void generate_ema_multicoin_side_orders(
             }
             close_qty[c] = reducer_qty;
             close_tick[c] = reducer_tick;
+            close_market[c] = false;
             close_is_unstuck_reducer[c] = reducer_is_unstuck;
         }
         if (close_qty[c] > 0.0f && !realized_loss_proxy_allows_reducer(
@@ -1783,6 +1833,7 @@ inline void generate_ema_multicoin_side_orders(
                 realized_pnl_cumsum_max, max_realized_loss_pct
             )) {
             close_qty[c] = 0.0f;
+            close_market[c] = false;
             close_is_unstuck_reducer[c] = false;
         }
         if (secondary_close_qty[c] > 0.0f
@@ -1793,6 +1844,7 @@ inline void generate_ema_multicoin_side_orders(
                 coin_settings[coin_offset + 5], loss_gate_enabled
             )) {
             secondary_close_qty[c] = 0.0f;
+            secondary_close_market[c] = false;
         }
     }
 
@@ -1843,7 +1895,11 @@ inline void generate_ema_multicoin_side_orders(
             float qty_step = coin_settings[coin_offset + 0];
             float price_step = coin_settings[coin_offset + 1];
             float c_mult = coin_settings[coin_offset + 4];
-            float price = float(entry_tick[best]) * price_step;
+            float price = entry_market[best]
+                ? clamped_market_price(
+                    bars, coin_settings, k, best, C
+                )
+                : float(entry_tick[best]) * price_step;
             float room_cost = fmax((total_cap - running_twe) * balance, 0.0f);
             float partial = floor_step(
                 room_cost / fmax(price * c_mult, 1.0e-12f), qty_step
@@ -1875,8 +1931,15 @@ inline void generate_ema_multicoin_side_orders(
             );
             secondary_close_qty[c] = 0.0f;
             secondary_close_tick[c] = 0;
+            close_market[c] = false;
+            secondary_close_market[c] = false;
             close_is_unstuck_reducer[c] = false;
             close_is_hsl_panic[c] = true;
+        }
+        if (!(entry_qty[c] > 0.0f)) entry_market[c] = false;
+        if (!(close_qty[c] > 0.0f)) close_market[c] = false;
+        if (!(secondary_close_qty[c] > 0.0f)) {
+            secondary_close_market[c] = false;
         }
     }
 }
@@ -1916,6 +1979,9 @@ inline bool process_ema_multicoin_side_fills(
     thread int* entry_tick = side.entry_tick;
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
+    thread bool* entry_market = side.entry_market;
+    thread bool* close_market = side.close_market;
+    thread bool* secondary_close_market = side.secondary_close_market;
     thread bool* close_is_unstuck_reducer = side.close_is_unstuck_reducer;
     thread bool* close_is_hsl_panic = side.close_is_hsl_panic;
     thread float* coin_realized_pnl = side.coin_realized_pnl;
@@ -1951,15 +2017,17 @@ inline bool process_ema_multicoin_side_fills(
             : hsl_panic_market;
         bool primary_market_panic = close_is_hsl_panic[c]
             && coin_hsl_panic_market;
+        bool primary_ordinary_market = !close_is_hsl_panic[c]
+            && close_market[c];
         bool filled_close = close_qty[c] > 0.0f && psize[c] > 0.0f
-            && (primary_market_panic || (short_side
+            && (primary_market_panic || primary_ordinary_market || (short_side
                 ? close_tick[c] > fill_ticks[tick_offset + 1]
                 : close_tick[c] <= fill_ticks[tick_offset + 0]));
         bool filled_secondary_close = secondary_close_qty[c] > 0.0f
             && psize[c] > 0.0f
-            && (short_side
+            && (secondary_close_market[c] || (short_side
                 ? secondary_close_tick[c] > fill_ticks[tick_offset + 1]
-                : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]);
+                : secondary_close_tick[c] <= fill_ticks[tick_offset + 0]));
         bool secondary_first = filled_secondary_close
             && (!filled_close || (short_side
                 ? secondary_close_tick[c] > close_tick[c]
@@ -1976,18 +2044,11 @@ inline bool process_ema_multicoin_side_fills(
             float requested_qty = use_secondary
                 ? secondary_close_qty[c] : close_qty[c];
             bool market_panic = !use_secondary && primary_market_panic;
-            float fill_price = market_panic
-                ? fmax(
-                    short_side
-                        ? ceil_step(
-                            close * (1.0f + market_order_slippage_pct),
-                            price_step
-                        )
-                        : floor_step(
-                            close * (1.0f - market_order_slippage_pct),
-                            price_step
-                        ),
-                    price_step
+            bool market_execution = market_panic || (use_secondary
+                ? secondary_close_market[c] : primary_ordinary_market);
+            float fill_price = market_execution
+                ? ordinary_market_fill_price(
+                    close, short_side, market_order_slippage_pct, price_step
                 )
                 : float(executed_tick) * price_step;
             float adjusted = fmin(
@@ -1999,14 +2060,15 @@ inline bool process_ema_multicoin_side_fills(
                 : fill_price - pprice[c]);
             float net_pnl = pnl
                 - adjusted * fill_price * c_mult
-                    * (market_panic ? taker_fee : maker_fee);
+                    * (market_execution ? taker_fee : maker_fee);
             bool is_unstuck = !use_secondary
                 && close_is_unstuck_reducer[c];
             bool is_hsl_panic = !use_secondary
                 && close_is_hsl_panic[c];
             if (!is_hsl_panic && !realized_loss_proxy_allows_reducer(
                     adjusted, fill_price, pprice[c], short_side,
-                    c_mult, maker_fee, is_unstuck, loss_gate_enabled,
+                    c_mult, market_execution ? taker_fee : maker_fee,
+                    is_unstuck, loss_gate_enabled,
                     balance, realized_pnl_cumsum_last,
                     realized_pnl_cumsum_max, max_realized_loss_pct
                 )) {
@@ -2066,8 +2128,10 @@ inline bool process_ema_multicoin_side_fills(
             fills.day_volume += fabs(adjusted) * fill_price * c_mult / balance;
             if (use_secondary) {
                 secondary_close_qty[c] = 0.0f;
+                secondary_close_market[c] = false;
             } else {
                 close_qty[c] = 0.0f;
+                close_market[c] = false;
                 close_is_unstuck_reducer[c] = false;
                 close_is_hsl_panic[c] = false;
             }
@@ -2077,13 +2141,19 @@ inline bool process_ema_multicoin_side_fills(
 
         bool was_flat = psize[c] <= 0.0f;
         bool filled_entry = entry_qty[c] > 0.0f
-            && (short_side
+            && (entry_market[c] || (short_side
                 ? entry_tick[c] <= fill_ticks[tick_offset + 0]
-                : entry_tick[c] > fill_ticks[tick_offset + 1]);
+                : entry_tick[c] > fill_ticks[tick_offset + 1]));
         if (filled_entry) {
-            float fill_price = float(entry_tick[c]) * price_step;
+            float fill_price = entry_market[c]
+                ? ordinary_market_fill_price(
+                    close, !short_side,
+                    market_order_slippage_pct, price_step
+                )
+                : float(entry_tick[c]) * price_step;
             float adjusted = round_step(entry_qty[c], qty_step);
-            float fee = adjusted * fill_price * c_mult * maker_fee;
+            float fee = adjusted * fill_price * c_mult
+                * (entry_market[c] ? taker_fee : maker_fee);
             record_realized_net(
                 -fee, account,
                 fills.day_fill_count, fills.fill_count,
@@ -2116,6 +2186,7 @@ inline bool process_ema_multicoin_side_fills(
             last_increase_k[c] = float(k);
             fills.day_volume += fabs(adjusted) * fill_price * c_mult / balance;
             entry_qty[c] = 0.0f;
+            entry_market[c] = false;
             any_fill = true;
         }
         if (executed_close || filled_entry) {
@@ -2195,6 +2266,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     const float max_realized_loss_pct = run_settings[5];
     const float market_order_slippage_pct = fmax(run_settings[7], 0.0f);
     const bool hsl_panic_market = run_settings[8] > 0.5f;
+    const bool market_orders_allowed = run_settings[9] > 0.5f;
+    const float market_order_near_touch_threshold = fmax(
+        run_settings[10], 0.0f
+    );
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     thread float* psize = side.psize;
@@ -2350,7 +2425,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 bars, touch_ticks, coin_settings, coin_overrides,
                 k, C, short_side, tradable_count, effective_n_positions,
                 current_hsl_mode, loss_gate_enabled,
-                max_realized_loss_pct, -2, 0ul
+                max_realized_loss_pct, market_orders_allowed,
+                market_order_near_touch_threshold, -2, 0ul
             );
         }
 
@@ -2904,6 +2980,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     const bool long_hsl_panic_market = run_settings[8] > 0.5f;
     const bool short_hsl_panic_market = run_settings[9] > 0.5f;
     const bool hedge_mode = run_settings[10] > 0.5f;
+    const bool market_orders_allowed = run_settings[11] > 0.5f;
+    const float market_order_near_touch_threshold = fmax(
+        run_settings[12], 0.0f
+    );
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     JointPortfolioAccount account = init_joint_portfolio_account(
@@ -3138,6 +3218,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 k, C, false, long_tradable_count,
                 long_effective_n_positions, long_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
+                market_orders_allowed, market_order_near_touch_threshold,
                 long_unstuck_coin, long_one_way_order_blocked_mask
             );
         }
@@ -3154,6 +3235,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 k, C, true, short_tradable_count,
                 short_effective_n_positions, short_hsl_mode,
                 loss_gate_enabled, max_realized_loss_pct,
+                market_orders_allowed, market_order_near_touch_threshold,
                 short_unstuck_coin, short_one_way_order_blocked_mask
             );
         }

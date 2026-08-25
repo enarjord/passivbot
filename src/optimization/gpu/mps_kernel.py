@@ -839,6 +839,8 @@ class MpsEmaAnchorMulticoinRunner:
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         market_order_slippage_pct: float = 0.0,
+        market_orders_allowed: bool = False,
+        market_order_near_touch_threshold: float = 0.001,
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -933,6 +935,16 @@ class MpsEmaAnchorMulticoinRunner:
             raise ValueError(
                 "market_order_slippage_pct must be finite and non-negative"
             )
+        market_order_near_touch_threshold = float(
+            market_order_near_touch_threshold
+        )
+        if (
+            not np.isfinite(market_order_near_touch_threshold)
+            or market_order_near_touch_threshold < 0.0
+        ):
+            raise ValueError(
+                "market_order_near_touch_threshold must be finite and non-negative"
+            )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
@@ -947,6 +959,8 @@ class MpsEmaAnchorMulticoinRunner:
                 float(self.collect_coin_fill_counts),
                 market_order_slippage_pct,
                 float(bool(hsl_panic_market)),
+                float(bool(market_orders_allowed)),
+                market_order_near_touch_threshold,
             ],
             dtype=torch.float32,
             device="mps",
@@ -1180,6 +1194,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         market_order_slippage_pct: float = 0.0,
+        market_orders_allowed: bool = False,
+        market_order_near_touch_threshold: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
@@ -1196,6 +1212,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -1222,6 +1240,9 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             max_realized_loss_pct
         )
         market_order_slippage_pct = float(market_order_slippage_pct)
+        market_order_near_touch_threshold = float(
+            market_order_near_touch_threshold
+        )
         liq_floor = max(0.0, run.starting_balance) * max(
             0.0, run.liquidation_threshold
         )
@@ -1238,6 +1259,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
                 float(bool(hedge_mode)),
+                float(bool(market_orders_allowed)),
+                market_order_near_touch_threshold,
             ],
             dtype=torch.float32,
             device="mps",
@@ -1325,6 +1348,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         market_order_slippage_pct: float = 0.0,
+        market_orders_allowed: bool = False,
+        market_order_near_touch_threshold: float = 0.001,
         hsl_panic_market: bool = False,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -1339,6 +1364,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
@@ -1423,6 +1450,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         max_realized_loss_pct: float = 1.0,
         collect_coin_fill_counts: bool = False,
         market_order_slippage_pct: float = 0.0,
+        market_orders_allowed: bool = False,
+        market_order_near_touch_threshold: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_ema_tail_enabled: bool = False,
@@ -1439,6 +1468,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market_long,
             hsl_ema_tail_enabled=hsl_ema_tail_enabled,
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,

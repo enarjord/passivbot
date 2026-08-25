@@ -966,11 +966,45 @@ def _validate_scope_config(
                 "GPU market execution requires a finite non-negative "
                 "live.market_order_near_touch_threshold"
             )
-        if coin_count != 1:
-            raise ValueError(
-                "GPU ordinary market execution currently requires single-coin "
-                "EMA Anchor or Trailing Martingale"
-            )
+        if coin_count > 1:
+            if strategy_kind != "ema_anchor":
+                raise ValueError(
+                    "GPU multicoin ordinary market execution currently supports "
+                    "EMA Anchor only"
+                )
+            if not math.isclose(
+                max_realized_loss_pct, 1.0, abs_tol=1.0e-12
+            ):
+                raise ValueError(
+                    "GPU multicoin EMA ordinary market execution currently "
+                    "requires live.max_realized_loss_pct=1.0"
+                )
+            for side in enabled_sides:
+                side_config = config["bot"][side]
+                risk = side_config.get("risk", {}) or {}
+                if bool(risk.get("total_exposure_enforcer_enabled", False)):
+                    raise ValueError(
+                        "GPU multicoin EMA ordinary market execution currently "
+                        f"requires bot.{side}.risk."
+                        "total_exposure_enforcer_enabled=false"
+                    )
+                if bool((side_config.get("unstuck", {}) or {}).get("enabled", False)):
+                    raise ValueError(
+                        "GPU multicoin EMA ordinary market execution currently "
+                        f"requires bot.{side}.unstuck.enabled=false"
+                    )
+            for symbol, patch in (config.get("coin_overrides", {}) or {}).items():
+                bot_patch = (patch or {}).get("bot", {}) or {}
+                for side in enabled_sides:
+                    unstuck_patch = (
+                        (bot_patch.get(side, {}) or {}).get("unstuck", {}) or {}
+                    )
+                    if bool(unstuck_patch.get("enabled", False)):
+                        raise ValueError(
+                            "GPU multicoin EMA ordinary market execution currently "
+                            "requires coin override unstuck.enabled=false; "
+                            f"got {symbol} {side}"
+                        )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
         enabled_sides
     ) != 1:
@@ -2709,6 +2743,46 @@ def _validate_pinned_scope_bounds(
             )
 
 
+def _validate_ema_multicoin_market_foundation_bounds(
+    bound_by_key,
+    base_by_key,
+    enabled_sides,
+    config,
+    *,
+    coin_count: int,
+) -> None:
+    if (
+        int(coin_count) <= 1
+        or str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+        != "ema_anchor"
+        or not bool(config.get("live", {}).get("market_orders_allowed"))
+    ):
+        return
+    pinned = {
+        f"{side}_{suffix}": 0.0
+        for side in set(enabled_sides or ())
+        for suffix in (
+            "risk_twel_enforcer_enabled",
+            "unstuck_enabled",
+        )
+    }
+    for key, expected in sorted(pinned.items()):
+        bound = bound_by_key.get(key)
+        values = (
+            (float(bound.low), float(bound.high))
+            if bound is not None
+            else (float(base_by_key.get(key, expected)),) * 2
+        )
+        if any(
+            not math.isclose(value, expected, abs_tol=1.0e-12)
+            for value in values
+        ):
+            raise ValueError(
+                "GPU multicoin EMA ordinary market execution currently requires "
+                f"{key} to remain pinned at {expected}; got bounds {values}"
+            )
+
+
 def _validate_tm_market_mode_bounds(
     bound_by_key, base_by_key, enabled_sides, config
 ) -> None:
@@ -3305,6 +3379,13 @@ def run_backend(
         coin_count=max_coin_count,
         strategy_kind=strategy_kind,
     )
+    _validate_ema_multicoin_market_foundation_bounds(
+        bound_by_key,
+        base_by_key,
+        enabled_sides,
+        proxy_config,
+        coin_count=max_coin_count,
+    )
     _validate_tm_market_template_bounds(
         bound_by_key,
         base_by_key,
@@ -3349,6 +3430,13 @@ def run_backend(
             scenario_enabled_sides,
             coin_count=item["coin_count"],
             strategy_kind=strategy_kind,
+        )
+        _validate_ema_multicoin_market_foundation_bounds(
+            scenario_bound_by_key,
+            scenario_base_by_key,
+            scenario_enabled_sides,
+            item["config"],
+            coin_count=item["coin_count"],
         )
         _validate_tm_market_mode_bounds(
             scenario_bound_by_key,

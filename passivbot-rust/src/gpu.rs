@@ -438,6 +438,8 @@ mod tests {
         assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("ordinary_market_fill_price("));
         assert!(source.contains("resize_market_close_qty("));
+        assert!(source.contains("position_size <= requested_qty"));
+        assert!(source.contains("remainder + tolerance < minimum_qty"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert_eq!(source.matches("= fma(").count(), 6);
         assert!(!source.contains("alpha0 * close +"));
@@ -570,7 +572,21 @@ mod tests {
         );
         assert!(source.contains("coin_hsl_eligibility_changed"));
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
-        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
+        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
+        assert!(source.contains("const bool market_orders_allowed = run_settings[9] > 0.5f"));
+        assert!(source.contains(
+            "const bool market_orders_allowed = run_settings[11] > 0.5f"
+        ));
+        assert!(source.contains("should_use_ordinary_market_execution("));
+        assert!(source.contains("ordinary_market_fill_price("));
+        assert!(source.contains("resize_market_close_qty("));
+        assert!(source.contains("bool entry_market[MAX_COINS]"));
+        assert!(source.contains("bool close_market[MAX_COINS]"));
+        assert!(source.contains("bool secondary_close_market[MAX_COINS]"));
+        assert!(source.contains(
+            "contribution[c] = quantity * entry_exposure_price"
+        ));
+        assert!(source.contains("float price = entry_market[best]"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source

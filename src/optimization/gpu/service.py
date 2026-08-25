@@ -2130,6 +2130,12 @@ class MpsMulticoinProxy:
             "market_order_slippage_pct": float(
                 backtest_params.get("market_order_slippage_pct", 0.0)
             ),
+            "market_orders_allowed": bool(
+                backtest_params.get("market_orders_allowed", False)
+            ),
+            "market_order_near_touch_threshold": float(
+                backtest_params.get("market_order_near_touch_threshold", 0.001)
+            ),
             "hsl_ema_tail_enabled": bool(
                 self.needed_metrics & _HSL_EMA_TAIL_METRICS
             ),

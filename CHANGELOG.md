@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added baseline multi-coin EMA Anchor ordinary market execution to Apple MPS optimization for
+  long-only, short-only, and fused long+short runs. The proxy retains generation-time entry and
+  ordinary-close intent, executes it on the next valid candle with adverse directional slippage
+  and taker fees, applies executable-touch minimum sizing, and prices total-exposure entry
+  allocation at the market touch. HSL may coexist with this path. Auto-unstuck, total-exposure
+  repair, and realized-loss gating remain fail closed for multi-coin EMA market mode until their
+  protective reducer ordering is modeled; multi-coin Trailing Martingale market mode also remains
+  fail closed.
+
 - Added single-coin Trailing Martingale recursive-close market execution to Apple MPS
   optimization. Exact passive next-candle expansion remains authoritative: a market-only next
   close does not reveal the recursive suffix, while an expanded immutable ladder classifies and
@@ -20,8 +29,8 @@ All notable user-facing changes will be documented in this file.
   retain canonical ordering,
   aggregate position trimming, quantity-relative minimum-size comparisons, adverse slippage, and
   taker fees. Entry and close optimizer bounds must
-  each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin market
-  execution remain fail closed.
+  each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin Trailing
+  Martingale market execution remain fail closed.
 
 - Added single-coin Trailing Martingale recursive-entry market execution to Apple MPS optimization.
   Every immutable strategy-ladder rung is independently promoted against its generation market
@@ -31,14 +40,14 @@ All notable user-facing changes will be documented in this file.
   its separate wallet-exposure allowance before that portfolio gate is applied; the retained
   nearest prefix ends at the first partially cropped portfolio-boundary rung. Entry optimizer
   bounds must remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin
-  market execution remain fail closed.
+  Trailing Martingale market execution remain fail closed.
 
 - Extended single-coin Trailing Martingale ordinary market-order optimization on Apple MPS to
   compatible HSL modes, one-sided minimum-effective-cost filtering, auto-unstuck, position- and
   total-exposure repair, and realized-loss gating. Market-promoted reducers are resized at
   executable touch before selection and aggregate allocation, and adverse slippage plus taker fees
-  participate in the conservative loss projection. Multi-coin market execution remains fail
-  closed pending its dedicated slice.
+  participate in the conservative loss projection. Multi-coin Trailing Martingale market
+  execution remains fail closed pending its dedicated slice.
 
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin
   Trailing Martingale, covering long, short, and dual-side near-touch trailing entries and closes,
@@ -55,8 +64,8 @@ All notable user-facing changes will be documented in this file.
 - Added baseline ordinary market-order execution to Apple MPS optimization for single-coin EMA
   Anchor, including near-touch promotion, next-candle adverse slippage, taker fees, executable-touch
   sizing, directional and one-way modes, and compatible suites. Auto-unstuck, exposure repair,
-  realized-loss gating, Trailing Martingale, and multi-coin combinations remain fail closed while
-  their market-order interactions are implemented.
+  realized-loss gating, and Trailing Martingale were added in later slices; baseline multi-coin
+  EMA Anchor support is now also available under the restrictions described above.
 
 - Added Apple MPS suite scenario overrides for `live.hsl_signal_mode`. Coin, position-side, and
   unified HSL signal topology may now vary by scenario when each effective scenario passes the

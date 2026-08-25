@@ -70,6 +70,7 @@ from optimization.backends.gpu_backend import (
     _validate_dual_multicoin_metrics,
     _validate_gpu_optimizer_overrides,
     _validate_gpu_coin_overrides,
+    _validate_ema_multicoin_market_foundation_bounds,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
     _validate_seed_side_match,
@@ -1762,13 +1763,6 @@ def test_gpu_tm_market_suite_validates_effective_scenarios_not_template():
             _Evaluator,
             "finite non-negative",
         ),
-        (
-            lambda config: config["live"]["approved_coins"].__setitem__(
-                "long", ["BTC", "ETH"]
-            ),
-            _MulticoinEvaluator,
-            "single-coin EMA Anchor or Trailing Martingale",
-        ),
     ],
 )
 def test_gpu_market_execution_fails_closed_outside_baseline_scope(
@@ -1780,6 +1774,15 @@ def test_gpu_market_execution_fails_closed_outside_baseline_scope(
 
     with pytest.raises(ValueError, match=message):
         _validate_scope(config, evaluator())
+
+
+def test_gpu_multicoin_tm_market_execution_remains_fail_closed():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH"]
+    config["live"]["market_orders_allowed"] = True
+
+    with pytest.raises(ValueError, match="supports EMA Anchor only"):
+        _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize(
@@ -2769,6 +2772,113 @@ def test_gpu_multicoin_foundation_accepts_forager_score_hysteresis():
     config["backtest"]["dynamic_wel_by_tradability"] = True
 
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("long_enabled", "short_enabled"),
+    [(True, False), (False, True), (True, True)],
+)
+def test_gpu_multicoin_ema_accepts_ordinary_market_execution(
+    long_enabled, short_enabled
+):
+    config = _directional_ema_config(
+        long_enabled=long_enabled, short_enabled=short_enabled
+    )
+    config["live"]["approved_coins"] = {
+        side: ["BTC", "ETH", "SOL"] if enabled else []
+        for side, enabled in (
+            ("long", long_enabled),
+            ("short", short_enabled),
+        )
+    }
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["market_order_near_touch_threshold"] = 0.002
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+def test_gpu_multicoin_ema_market_execution_accepts_hsl():
+    config = _directional_ema_config(long_enabled=True, short_enabled=True)
+    coins = ["BTC", "ETH", "SOL"]
+    config["live"]["approved_coins"] = {"long": coins, "short": coins}
+    config["live"]["market_orders_allowed"] = True
+    for side in ("long", "short"):
+        config["bot"][side]["risk"]["n_positions"] = 3
+        config["bot"][side]["hsl"]["enabled"] = True
+
+    assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda config: config["live"].__setitem__(
+                "max_realized_loss_pct", 0.5
+            ),
+            "max_realized_loss_pct=1.0",
+        ),
+        (
+            lambda config: config["bot"]["long"]["risk"].__setitem__(
+                "total_exposure_enforcer_enabled", True
+            ),
+            "total_exposure_enforcer_enabled=false",
+        ),
+        (
+            lambda config: config["bot"]["long"]["unstuck"].__setitem__(
+                "enabled", True
+            ),
+            "unstuck.enabled=false",
+        ),
+        (
+            lambda config: config.__setitem__(
+                "coin_overrides",
+                {
+                    "ETH": {
+                        "bot": {"long": {"unstuck": {"enabled": True}}}
+                    }
+                },
+            ),
+            "coin override unstuck.enabled=false",
+        ),
+    ],
+)
+def test_gpu_multicoin_ema_market_execution_rejects_unordered_risk_features(
+    mutate, message
+):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["market_orders_allowed"] = True
+    mutate(config)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["long_risk_twel_enforcer_enabled", "long_unstuck_enabled"],
+)
+def test_gpu_multicoin_ema_market_execution_requires_risk_bounds_pinned_off(key):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["live"]["market_orders_allowed"] = True
+    base = {key: 0.0}
+
+    _validate_ema_multicoin_market_foundation_bounds(
+        {key: Bound(0.0, 0.0)},
+        base,
+        {"long"},
+        config,
+        coin_count=3,
+    )
+    with pytest.raises(ValueError, match=key):
+        _validate_ema_multicoin_market_foundation_bounds(
+            {key: Bound(0.0, 1.0)},
+            base,
+            {"long"},
+            config,
+            coin_count=3,
+        )
 
 
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
