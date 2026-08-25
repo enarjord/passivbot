@@ -14,6 +14,7 @@ from optimization.gpu.model import (
     ProxyRun,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+    encode_tm_retracement_base_pct,
     trailing_martingale_shader_topology,
 )
 
@@ -81,6 +82,30 @@ def _encode_max_realized_loss_pct(value: float) -> float:
     if float(encoded) > value:
         encoded = np.nextafter(encoded, np.float32(-np.inf))
     return float(encoded)
+
+
+def _pack_tm_parameter_matrix(
+    params: np.ndarray, keys: tuple[str, ...], *, sides: int
+) -> np.ndarray:
+    """Pack TM rows while preserving each candidate's retracement mode sign."""
+
+    matrix = np.ascontiguousarray(params, dtype=np.float32)
+    side_width = len(keys)
+    for side_index in range(sides):
+        offset = side_index * side_width
+        for key in (
+            "entry_retracement_base_pct",
+            "close_retracement_base_pct",
+        ):
+            column = offset + keys.index(key)
+            positive_underflow = (params[:, column] > 0.0) & (
+                matrix[:, column] == np.float32(0.0)
+            )
+            if np.any(positive_underflow):
+                matrix[positive_underflow, column] = encode_tm_retracement_base_pct(
+                    np.finfo(np.float64).tiny
+                )
+    return matrix
 
 
 def _scalar_column_or_zero(scalars, index: int):
@@ -1380,7 +1405,9 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
                 "expected multicoin Trailing Martingale parameter matrix with "
                 f"{expected} columns, got {got}"
             )
-        return np.ascontiguousarray(params, dtype=np.float32)
+        return _pack_tm_parameter_matrix(
+            params, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=1
+        )
 
     def _library(self):
         return _trailing_martingale_multicoin_shader_library(
@@ -1525,7 +1552,9 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 "expected fused multicoin Trailing Martingale parameter matrix "
                 f"with {expected} columns, got {got}"
             )
-        return np.ascontiguousarray(params, dtype=np.float32)
+        return _pack_tm_parameter_matrix(
+            params, TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, sides=2
+        )
 
     def _dispatch(
         self,
@@ -1611,7 +1640,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "expected directional trailing-martingale parameter matrix with "
                 f"{expected} columns, got {got}"
             )
-        return np.ascontiguousarray(params, dtype=np.float32)
+        return _pack_tm_parameter_matrix(
+            params, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
+        )
 
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
         started = time.perf_counter()

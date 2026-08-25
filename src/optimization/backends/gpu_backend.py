@@ -913,13 +913,9 @@ def _tm_market_mode_value_supported(
         value = float(value)
     except (TypeError, ValueError):
         return False
-    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-        packed = np.float32(value)
-    if not math.isfinite(value) or not np.isfinite(packed):
+    if not math.isfinite(value) or abs(value) > float(np.finfo(np.float32).max):
         return False
-    if allow_recursive and value <= 0.0:
-        return True
-    return value > 0.0 and packed > 0.0
+    return allow_recursive or value > 0.0
 
 
 def _validate_tm_multicoin_market_runtime_scope(
@@ -941,7 +937,7 @@ def _validate_tm_multicoin_market_runtime_scope(
                 value, allow_recursive=True
             )
             if not mode_supported:
-                requirement = "recursive or trailing"
+                requirement = "finite and float32-representable"
                 unsupported.append(
                     f"bot.{side}.strategy.trailing_martingale.{branch}."
                     f"retracement_base_pct={value!r} "
@@ -979,7 +975,7 @@ def _validate_tm_multicoin_market_runtime_scope(
                         value, allow_recursive=True
                     )
                     if not mode_supported:
-                        requirement = "recursive or trailing"
+                        requirement = "finite and float32-representable"
                         unsupported.append(
                             f"coin_overrides.{coin}.bot.{side}.strategy."
                             f"trailing_martingale.{branch}."
@@ -989,8 +985,8 @@ def _validate_tm_multicoin_market_runtime_scope(
     if unsupported:
         raise ValueError(
             "GPU multi-coin Trailing Martingale ordinary market execution "
-            "currently supports wholly trailing or wholly recursive ordinary "
-            "entries and closes plus position/TWEL/auto-unstuck reducers; "
+            "requires finite float32-representable ordinary entry and close "
+            "retracement bases and supports position/TWEL/auto-unstuck reducers; "
             "settings: "
             + ", ".join(unsupported)
         )
@@ -2800,66 +2796,25 @@ def _validate_tm_market_mode_bounds(
         return
     unsupported = []
     for side in sorted(set(enabled_sides or ())):
-        entry_key = f"{side}_entry_retracement_base_pct"
-        entry_bound = bound_by_key.get(entry_key)
-        entry_low, entry_high = (
-            (float(entry_bound.low), float(entry_bound.high))
-            if entry_bound is not None
-            else (float(base_by_key.get(entry_key, 0.0)),) * 2
-        )
-        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-            packed_entry_low = np.float32(entry_low)
-        recursive_only = entry_high <= 0.0
-        trailing_only = (
-            entry_low > 0.0
-            and np.isfinite(packed_entry_low)
-            and packed_entry_low > np.float32(0.0)
-        )
-        mode_supported = recursive_only or trailing_only
-        if (
-            not math.isfinite(entry_low)
-            or not math.isfinite(entry_high)
-            or not mode_supported
-        ):
-            unsupported.append(
-                f"{entry_key} bounds=({entry_low}, {entry_high})"
+        for phase in ("entry", "close"):
+            key = f"{side}_{phase}_retracement_base_pct"
+            bound = bound_by_key.get(key)
+            low, high = (
+                (float(bound.low), float(bound.high))
+                if bound is not None
+                else (float(base_by_key.get(key, 0.0)),) * 2
             )
-
-        close_key = f"{side}_close_retracement_base_pct"
-        close_bound = bound_by_key.get(close_key)
-        close_low, close_high = (
-            (float(close_bound.low), float(close_bound.high))
-            if close_bound is not None
-            else (float(base_by_key.get(close_key, 0.0)),) * 2
-        )
-        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
-            packed_close_low = np.float32(close_low)
-        recursive_only = close_high <= 0.0
-        trailing_only = (
-            close_low > 0.0
-            and np.isfinite(packed_close_low)
-            and packed_close_low > np.float32(0.0)
-        )
-        mode_supported = recursive_only or trailing_only
-        if (
-            not math.isfinite(close_low)
-            or not math.isfinite(close_high)
-            or not mode_supported
-        ):
-            unsupported.append(
-                f"{close_key} bounds=({close_low}, {close_high})"
-            )
+            if any(
+                not math.isfinite(value)
+                or abs(value) > float(np.finfo(np.float32).max)
+                for value in (low, high)
+            ):
+                unsupported.append(f"{key} bounds=({low}, {high})")
     if unsupported:
-        entry_modes = (
-            "wholly recursive (high<=0) or wholly trailing with a "
-            "float32-positive lower bound"
-        )
         raise ValueError(
             "GPU Trailing Martingale ordinary market execution currently "
-            "requires each enabled side's entry retracement range to remain "
-            f"{entry_modes}, and close retracement to remain wholly recursive "
-            "(high<=0) or wholly trailing with a float32-positive lower bound. "
-            "Entry or close unsupported/mode-crossing bounds remain fail closed: "
+            "requires finite float32-representable entry and close retracement "
+            "bounds. Unsupported bounds remain fail closed: "
             + ", ".join(unsupported)
         )
 

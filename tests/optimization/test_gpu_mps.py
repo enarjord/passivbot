@@ -24,6 +24,7 @@ from optimization.gpu.mps_kernel import (
     MpsTrailingMartingaleMulticoinFusedRunner,
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
+    _pack_tm_parameter_matrix,
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
@@ -82,6 +83,28 @@ def _assert_fill_scalar_contract(output):
         account_recovery[has_equity] <= equity_span[has_equity] + 1.0e-6
     ).all()
     assert (account_recovery[~has_equity] == 0.0).all()
+
+
+def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
+    width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+    params = np.zeros((1, width * 2), dtype=np.float64)
+    entry_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_retracement_base_pct"
+    )
+    close_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "close_retracement_base_pct"
+    )
+    params[0, entry_column] = 1.0e-50
+    params[0, width + close_column] = 1.0e-50
+
+    packed = _pack_tm_parameter_matrix(
+        params, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
+    )
+
+    assert packed[0, entry_column] == np.finfo(np.float32).tiny
+    assert packed[0, width + close_column] == np.finfo(np.float32).tiny
+    assert packed[0, close_column] == 0.0
+    assert packed[0, width + entry_column] == 0.0
 
 
 @pytest.mark.parametrize(
@@ -5177,6 +5200,56 @@ def test_mps_tm_multicoin_recursive_market_entry_does_not_expose_suffix(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_batch_selects_market_mode_per_candidate(side):
+    count = 6
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    highs = closes.copy()
+    lows = closes.copy()
+    if side == "long":
+        lows[3] = closes[3] * 0.8
+    else:
+        highs[3] = closes[3] * 1.2
+    runner, recursive = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        first_valid_indices=(2, 2),
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+    )
+    for key, value in {
+        "entry_double_down_factor": 1.0,
+        "entry_initial_qty_pct": 0.1,
+        "entry_initial_ema_dist": 0.0005,
+        "entry_threshold_base_pct": 0.01,
+        "entry_retracement_base_pct": 0.0,
+        "close_retracement_base_pct": 0.01,
+        "twel_entry_gate_enabled": 0.0,
+        "entry_cooldown_minutes": 0.0,
+    }.items():
+        recursive[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+    trailing = recursive.copy()
+    trailing[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_retracement_base_pct"
+        )
+    ] = 0.01
+
+    output = runner.run(np.asarray([recursive, trailing], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count_entry"].cpu().tolist()[0] > 2.0
+    assert output["fill_count_entry"].cpu().tolist()[1] == 2.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("cooldown, expands", [(0.0, True), (100.0, False)])
 def test_mps_tm_multicoin_recursive_market_entry_passive_suffix(
     side, cooldown, expands
@@ -8156,6 +8229,68 @@ def test_mps_tm_near_touch_market_entry_uses_taker_fill(
     # Market promotion guarantees rung zero, but exact Rust does not expand a
     # recursive ladder unless the original passive order strictly crosses.
     assert market_output["fill_count_entry"].item() == 1.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_batch_selects_recursive_or_trailing_market_mode_per_candidate(side):
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[3] = 99.89
+    high[3] = 100.11
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    recursive = _tm_single_row(
+        initial_ema_dist=0.001,
+        gate_initial=False,
+        gate_reentry=False,
+        entry_gate=True,
+        threshold=0.1202,
+    )
+    recursive[4] = 1.0
+    recursive[6] = 0.05
+    recursive[7] = 0.001
+    recursive[11] = 0.0
+    recursive[16] = 10.0
+    recursive[20] = 0.001
+    trailing = recursive.copy()
+    trailing[11] = 0.001
+    params = np.asarray(
+        [recursive + recursive, trailing + trailing], dtype=np.float64
+    )
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+        taker_fee=0.01,
+        market_order_slippage_pct=0.01,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.003,
+    ).run(params)
+    torch.mps.synchronize()
+
+    assert output["fill_count_entry"].cpu().tolist() == [3.0, 1.0]
 
 
 @pytest.mark.skipif(

@@ -2149,8 +2149,16 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     }
     strategy_override = {
         **strategy_base,
-        "entry": {**strategy_base["entry"], "threshold_base_pct": 0.25},
-        "close": {**strategy_base["close"], "qty_pct": 0.5},
+        "entry": {
+            **strategy_base["entry"],
+            "threshold_base_pct": 0.25,
+            "retracement_base_pct": 1.0e-50,
+        },
+        "close": {
+            **strategy_base["close"],
+            "qty_pct": 0.5,
+            "retracement_base_pct": 1.0e-50,
+        },
     }
     payload = SimpleNamespace(
         strategy_params_list=[
@@ -2190,8 +2198,14 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                     "long": {
                         "strategy": {
                             "trailing_martingale": {
-                                "entry": {"threshold_base_pct": 0.25},
-                                "close": {"qty_pct": 0.5},
+                                "entry": {
+                                    "threshold_base_pct": 0.25,
+                                    "retracement_base_pct": 1.0e-50,
+                                },
+                                "close": {
+                                    "qty_pct": 0.5,
+                                    "retracement_base_pct": 1.0e-50,
+                                },
                             }
                         },
                         "risk": {
@@ -2230,7 +2244,9 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
     assert matrix.shape == (2, 44)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, 7] == pytest.approx(0.25)
+    assert matrix[1, 11] == np.finfo(np.float32).tiny
     assert matrix[1, 15] == pytest.approx(0.5)
+    assert matrix[1, 20] == np.finfo(np.float32).tiny
     assert matrix[1, 23] == pytest.approx(15.0)
     assert matrix[1, 24] == pytest.approx(0.4)
     assert matrix[1, 25] == pytest.approx(0.25)
