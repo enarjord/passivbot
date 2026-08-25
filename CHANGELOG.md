@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin optimization now matches exact Rust hourly volatility windows when an
+  aggregated candle interval does not evenly divide an hour, retaining the boundary-crossing
+  candle in the following hourly bucket instead of dropping it.
+
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports any positive
   integer `backtest.candle_interval_minutes`. Minute-denominated strategy EMA spans, HSL EMA decay,
   and entry/HSL cooldowns are converted to per-candle equivalents for Metal while timestamp-based

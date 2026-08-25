@@ -4741,6 +4741,39 @@ def test_initial_single_candle_hour_bucket_matches_rust_skip_contract():
     assert hour_log_range[61] == pytest.approx(np.log(106.0 / 94.0))
 
 
+def test_nondivisor_interval_hour_bucket_matches_rust_boundary_overlap():
+    interval_ms = 7 * 60_000
+    timestamps = np.arange(20, dtype=np.int64) * interval_ms
+    high = np.full(20, 101.0)
+    low = np.full(20, 99.0)
+    # The 00:56 candle crosses the 01:00 boundary. Exact Rust includes it in
+    # both the hour ending at 01:03 and the next window starting from floor(
+    # 01:00 / seven minutes), because an aggregated candle cannot be split.
+    high[8] = 200.0
+    low[8] = 50.0
+    run = ProxyRun(
+        starting_balance=1_000.0,
+        warmup_bars=1,
+        trade_start_idx=1,
+        requested_start_ts_ms=0,
+        guard_ts_ms=0,
+        first_ts_ms=0,
+        interval_ms=interval_ms,
+        liquidation_threshold=0.05,
+        first_valid_idx=0,
+        last_valid_idx=len(timestamps) - 1,
+    )
+
+    hour_log_range, hour_valid = _build_hourly_log_range(
+        high, low, timestamps, run
+    )
+
+    assert hour_valid[9]
+    assert hour_valid[18]
+    assert hour_log_range[9] == pytest.approx(np.log(200.0 / 50.0))
+    assert hour_log_range[18] == pytest.approx(np.log(200.0 / 50.0))
+
+
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )

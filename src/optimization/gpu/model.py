@@ -575,7 +575,6 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
     boundary[1:] = hour_idx[1:] > hour_idx[:-1]
     hour_log_range = np.zeros(n, dtype=np.float32)
     hour_valid = np.zeros(n, dtype=bool)
-    last_boundary = 0
     last_hour_boundary_ms = (int(timestamps[0]) // 3_600_000) * 3_600_000
     first_valid = max(0, run.first_valid_idx)
     latest = None
@@ -585,7 +584,13 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
         current_ts = int(derived_timestamps[k])
         window_start_ms = max(int(timestamps[0]), last_hour_boundary_ms)
         if current_ts > window_start_ms + run.interval_ms:
-            start = max(last_boundary, first_valid)
+            start = max(
+                int(
+                    (window_start_ms - int(timestamps[0]))
+                    // run.interval_ms
+                ),
+                first_valid,
+            )
             end = min(k - 1, run.last_valid_idx)
             if end >= start:
                 h_segment = high[start : end + 1]
@@ -599,7 +604,6 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
         if latest is not None:
             hour_log_range[k] = latest
             hour_valid[k] = True
-        last_boundary = k
         last_hour_boundary_ms = (current_ts // 3_600_000) * 3_600_000
     return hour_log_range, hour_valid
 
