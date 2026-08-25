@@ -742,19 +742,23 @@ mod tests {
         assert!(source.contains("recursive_close_groups"));
         assert!(source.contains("recursive_strategy_close_would_expand"));
         assert!(source.contains("selected.market = should_use_ordinary_market_execution"));
-        assert_eq!(source.matches("bool all_below_min").count(), 2);
+        assert_eq!(source.matches("bool all_below_min").count(), 1);
         assert_eq!(
             source
                 .matches("quantity_is_meaningfully_below(")
                 .count(),
-            13
+            9
         );
         assert!(!source.contains("trimmed_qty + 1.0e-6f"));
         assert!(!source.contains("trimmed_group_qty + 1.0e-6f"));
         assert!(!source.contains("close_gen_psize + 1.0e-6f"));
-        assert_eq!(source.matches("bool normalize_close_groups").count(), 2);
-        assert_eq!(source.matches("int collapse_ordinary_rank").count(), 2);
-        assert_eq!(source.matches("bool selected_strategy_wel").count(), 2);
+        assert_eq!(source.matches("bool normalize_close_groups").count(), 3);
+        assert_eq!(source.matches("int collapse_ordinary_rank").count(), 3);
+        assert_eq!(source.matches("recursive_close_allocation(").count(), 5);
+        assert_eq!(source.matches("select_recursive_close_reducer(").count(), 3);
+        assert_eq!(source.matches("ReducerCandidate candidates[3]").count(), 2);
+        assert_eq!(source.matches("candidate_allocations[candidate_idx]").count(), 4);
+        assert_eq!(source.matches("candidates[candidate_idx].finalized_qty").count(), 4);
         assert_eq!(
             source
                 .matches("int prefix_merge_ticks = strategy_wel_qty > 0.0f")
@@ -794,12 +798,12 @@ mod tests {
         assert!(source.contains("resize_market_close_qty("));
         assert!(source.contains("entry_gen_market_price"));
         assert!(source.contains("close_gen_market_price"));
-        assert_eq!(
-            source
-                .matches("close_reducer_requested_qty, qty_step")
-                .count(),
-            2
-        );
+        assert!(!source.contains("close_reducer_requested_qty, qty_step"));
+        assert!(source.contains("preferred.finalized_qty, gate_price"));
+        assert!(source.contains("source.close_gen_market_price, !is_long"));
+        assert!(source.contains("source.close_gen_balance"));
+        assert!(!source.contains("reducer_qty, reducer_fill_price"));
+        assert!(!source.contains("adj, reducer_fill_price"));
         assert_eq!(source.matches("float group_gate_price").count(), 2);
         assert!(source.contains(
             "long_side.close_gen_market_price, false,\n                        market_order_slippage_pct"

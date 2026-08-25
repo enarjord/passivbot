@@ -11,11 +11,12 @@ All notable user-facing changes will be documented in this file.
   Pre-gate WEL reachability still controls expansion when that reducer is later loss-gated.
   Passive WEL quantity seeds later rungs before executable-touch resizing, and a same-price WEL
   merges into the following ordinary group even when TWEL or unstuck wins reducer selection.
-  Expanded ladders re-finalize the selected reducer's original executable-touch-sized request,
-  and promoted grid groups apply realized-loss gating to their generation-time projected market
-  price while retaining the next-candle price for fills. Promoted grid groups and protective
-  reducers retain canonical ordering, aggregate position trimming, quantity-relative minimum-size
-  comparisons, adverse slippage, and taker fees. Entry and close optimizer bounds must
+  Expanded ladders independently re-finalize every WEL, TWEL, and unstuck request before reducer
+  selection, retry the next finalized candidate when the preferred reducer is loss-gated, and gate
+  promoted reducers and grid groups at their generation-time projected market price while retaining
+  the next-candle price for fills. Promoted grid groups and protective reducers retain canonical
+  ordering, aggregate position trimming, quantity-relative minimum-size comparisons, adverse
+  slippage, and taker fees. Entry and close optimizer bounds must
   each remain wholly recursive or wholly trailing; mode-crossing ranges and multi-coin market
   execution remain fail closed.
 
