@@ -207,6 +207,20 @@ inline float allowed_wallet_exposure_limit(
     return base_limit * (1.0f + effective);
 }
 
+inline bool passes_multicoin_min_effective_cost(
+    bool enabled, float guaranteed_balance_lower, float wel,
+    float initial_qty_pct, float max_effective_min_cost
+) {
+    if (!enabled) return true;
+    float rounded_projected_cost = guaranteed_balance_lower * wel * initial_qty_pct;
+    // Discount by 16 float32 unit roundoffs. This covers upward encoding and
+    // multiply rounding of all three operands before the conservative compare.
+    float projected_cost_lower = rounded_projected_cost
+        * (1.0f - 9.5367431640625e-7f);
+    return isfinite(rounded_projected_cost) && rounded_projected_cost > 0.0f
+        && projected_cost_lower >= max_effective_min_cost;
+}
+
 inline float clamped_market_price(
     constant float* bars, constant float* coin_settings,
     int k, int coin, int coin_count

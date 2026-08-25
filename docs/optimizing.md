@@ -272,18 +272,18 @@ The supported slice is intentionally narrow:
   configured rolling allowance and remains authoritative
 - BTC collateral remains disabled
 - `backtest.filter_by_min_effective_cost` may be enabled or disabled. When enabled, Metal uses the
-  projected initial-entry cost test with the configured wallet-exposure limit. The
-  screening proxy compares against the highest executable minimum observed for that coin in the
-  prepared window, rounds that threshold upward, and discounts the projected float32 product so
-  boundary rounding cannot turn a just-below-threshold proxy projection into an admission. To
-  remain conservative across float32 proxy versus float64 Rust path divergence, Metal uses the
-  configured liquidation floor—not proxy balance—as the guaranteed balance lower bound while
-  the single enabled side is flat. Once that side is open it remains managed. This may produce
-  proxy false negatives, which exact validation may admit. A finite positive
-  `backtest.liquidation_threshold` and exactly one enabled side are required. Dual-side and
-  multi-coin runs still require this option to be disabled because proxy position divergence and
-  approximate multi-coin selection cannot conservatively bound exact Rust's cash balance for
-  another flat side or coin
+  projected initial-entry cost test with the effective wallet-exposure limit, including dynamic
+  position counts and static per-coin wallet-exposure, allowance, and initial-quantity overrides.
+  The screening proxy compares each coin against its highest executable minimum over the prepared
+  window, rounds that threshold upward, and discounts the projected float32 product so boundary
+  rounding cannot turn a just-below-threshold proxy projection into an admission. To remain
+  conservative across float32 proxy versus float64 Rust path divergence, Metal uses the configured
+  liquidation floor—not proxy balance—as the guaranteed balance lower bound for every flat
+  coin/side. Flat candidates that fail this proof are removed before Forager selection and
+  one-way long/short arbitration; an open position remains managed. This supports single- and
+  multi-coin, one- and dual-side EMA Anchor and Trailing Martingale runs and compatible suites.
+  The all-history minimum and liquidation-floor bound may produce proxy false negatives, which
+  exact validation may admit. A finite positive `backtest.liquidation_threshold` is required
 - `live.market_orders_allowed: false` for the complete strategy/risk surface. Single-coin EMA
   Anchor supports `true` for long-only, short-only, hedge-mode dual-side, one-way, and compatible
   suite scenarios, including HSL, one-sided minimum-effective-cost filtering, auto-unstuck,

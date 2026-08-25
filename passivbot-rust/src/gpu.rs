@@ -466,7 +466,8 @@ mod tests {
         assert!(source.contains("constant int HSL_OVERRIDE_START = 19"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("coin_override_or"));
-        assert!(source.contains("constant int COIN_COLS = 12"));
+        assert!(source.contains("constant int COIN_COLS = 13"));
+        assert!(source.contains("passes_multicoin_min_effective_cost"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
@@ -883,7 +884,8 @@ mod tests {
         assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 44"));
         assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 45"));
         assert!(source.contains("apply_coin_hsl_overrides("));
-        assert!(source.contains("constant int COIN_COLS = 12"));
+        assert!(source.contains("constant int COIN_COLS = 13"));
+        assert!(source.contains("passes_multicoin_min_effective_cost"));
         assert!(source.contains("constant int SCALAR_COLS = 61"));
         assert!(source.contains("constant int SCALAR_COLS = 63"));
         assert!(source.contains("constant int SCALAR_COLS = 65"));

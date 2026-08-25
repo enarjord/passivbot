@@ -967,7 +967,7 @@ def build_mps_multicoin_data(
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
-    coin_settings = np.empty((coin_count, 12), dtype=np.float32)
+    coin_settings = np.empty((coin_count, 13), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
             raise ValueError("MPS multicoin runs must use one shared candle interval")
@@ -988,6 +988,7 @@ def build_mps_multicoin_data(
         min_qty_bits, min_qty_relation = _minimum_entry_qty_encoding(close, market)
         touch_min_qty_bits[:, coin] = min_qty_bits
         touch_min_qty_relation[:, coin] = min_qty_relation
+        max_effective_min_cost = _maximum_effective_min_cost(close, market)
         seed_index = min(max(int(run.first_valid_idx), 0), candle_count - 1)
         seed_close = float(close[seed_index])
         high_seed = float(values[seed_index, coin, 0])
@@ -1011,6 +1012,7 @@ def build_mps_multicoin_data(
             seed_close if np.isfinite(seed_close) and seed_close > 0.0 else 0.0,
             volume_seed * typical_seed,
             market.taker_fee,
+            max_effective_min_cost,
         )
 
     invariant_bytes = (
