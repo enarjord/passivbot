@@ -516,7 +516,7 @@ mod tests {
         assert!(source.contains("bool short_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("if (valid) {\n                    unrealized +="));
         assert!(source.contains("flat_selected_became_ineligible"));
-        assert!(source.contains("bool managed_candidate ="));
+        assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
         assert!(source.contains("any_valid = any_valid || valid;"));
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("if (long_side.hsl.signal_mode != short_side.hsl.signal_mode)"));
@@ -980,7 +980,7 @@ mod tests {
         assert!(source.contains("bool short_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("if (valid) {\n                    unrealized +="));
         assert!(source.contains("flat_selected_became_ineligible"));
-        assert!(source.contains("bool managed_candidate ="));
+        assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
         assert!(source.contains("any_valid = any_valid || valid;"));
         assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));

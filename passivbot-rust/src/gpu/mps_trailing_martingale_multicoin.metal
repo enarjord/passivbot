@@ -2948,6 +2948,11 @@ inline int select_tm_multicoin_unstuck_coin(
         const int bar_offset = (k * coin_count + c) * 4;
         const int tick_offset = (k * coin_count + c) * 2;
         const float price_now = bars[bar_offset + 2];
+        const bool managed_candidate =
+            k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(price_now);
+        if (!managed_candidate) continue;
         const float c_mult = coin_settings[coin_offset + 4];
         const float price_step = coin_settings[coin_offset + 1];
         const bool coin_unstuck_enabled = coin_override_or(
@@ -3469,6 +3474,11 @@ inline void generate_tm_multicoin_side_orders(
         int bar_offset = (k * C + c) * 4;
         int tick_offset = (k * C + c) * 2;
         float price_now = bars[bar_offset + 2];
+        bool managed_candidate =
+            k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(price_now);
+        if (!managed_candidate) continue;
         float c_mult = coin_settings[coin_offset + 4];
         float qty_step = coin_settings[coin_offset + 0];
         float price_step = coin_settings[coin_offset + 1];

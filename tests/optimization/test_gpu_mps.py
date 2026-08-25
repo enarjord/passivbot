@@ -4220,7 +4220,7 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_twel_counts_tail_exposure_but_reduces_valid_coin(
+def test_mps_multicoin_risk_reducers_exclude_tail_but_keep_its_exposure(
     strategy_kind, side
 ):
     import passivbot_rust
@@ -4252,6 +4252,11 @@ kernel void passivbot_ema_multicoin_tail_twel_probe(
     side.pprice[0] = 100.0f;
     side.pprice[1] = 100.0f;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    float selected_diff = INFINITY;
+    int selected_unstuck = select_ema_multicoin_unstuck_coin(
+        side, config, account, bars, touch_ticks, coin_settings,
+        coin_overrides, 1, 2, short_side, 1, selected_diff
+    );
     generate_ema_multicoin_side_orders(
         side, config, account,
         bars, touch_ticks, coin_settings, coin_overrides,
@@ -4260,6 +4265,9 @@ kernel void passivbot_ema_multicoin_tail_twel_probe(
     );
     output[0] = side.twel_close_qty[0];
     output[1] = side.twel_close_qty[1];
+    output[2] = side.unstuck_close_qty[0];
+    output[3] = side.unstuck_close_qty[1];
+    output[4] = float(selected_unstuck);
 }
 """
         source = passivbot_rust.mps_ema_anchor_multicoin_source_py()
@@ -4295,6 +4303,11 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     side.pprice[0] = 100.0f;
     side.pprice[1] = 100.0f;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
+    float selected_diff = INFINITY;
+    int selected_unstuck = select_tm_multicoin_unstuck_coin(
+        side, config, account, bars, touch_ticks, coin_settings,
+        coin_overrides, 1, 2, short_side, 1, selected_diff
+    );
     generate_tm_multicoin_side_orders(
         side, config, account,
         bars, touch_ticks, touch_nearest_ticks,
@@ -4305,6 +4318,9 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     );
     output[0] = side.twel_close_qty[0];
     output[1] = side.twel_close_qty[1];
+    output[2] = side.unstuck_close_qty[0];
+    output[3] = side.unstuck_close_qty[1];
+    output[4] = float(selected_unstuck);
 }
 """
         source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
@@ -4328,13 +4344,17 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
             "twel_enforcer_threshold": 0.5,
             "twel_enforcer_enabled": 1.0,
             "twel_enforcer_reduce_portfolio": 1.0,
-            "unstuck_enabled": 0.0,
+            "unstuck_enabled": 1.0,
+            "unstuck_ema_gating_enabled": 0.0,
+            "unstuck_close_pct": 0.1,
+            "unstuck_loss_allowance_pct": 1.0,
+            "unstuck_threshold": 0.1,
         }
     )
     params = torch.tensor(
         [values[key] for key in keys], dtype=torch.float32, device="mps"
     )
-    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    output = torch.zeros(5, dtype=torch.float32, device="mps")
     library = torch.mps.compile_shader(source + probe_kernel)
     kernel = getattr(library, kernel_name)
     args = [data["bars"], data["touch_ticks"]]
@@ -4359,10 +4379,13 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     torch.mps.synchronize()
 
     # Coin zero contributes 0.8 TWE, but it is beyond last_valid at k=1 and
-    # cannot be managed. Coin one contributes 0.3 TWE and must receive the
-    # reducer even though it cannot repair the full 1.1 -> 0.5 excess alone.
+    # cannot be managed. Coin one contributes 0.3 TWE and must receive both
+    # eligible risk reducers even though it cannot repair the full TWEL excess.
     assert output[0].item() == 0.0
     assert output[1].item() > 0.0
+    assert output[2].item() == 0.0
+    assert output[3].item() > 0.0
+    assert output[4].item() == 1.0
 
 
 @pytest.mark.skipif(
