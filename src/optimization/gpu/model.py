@@ -129,6 +129,26 @@ HSL_COIN_OVERRIDE_PATHS = (
     ("hsl_panic_market", ("panic_close_order_type",)),
 )
 
+EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS = tuple(EMA_ANCHOR_PARAM_KEYS[:-2])
+EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN = len(
+    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS
+)
+EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN = (
+    EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 1
+)
+EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN = (
+    EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 2
+)
+EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN = (
+    EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN + 3
+)
+EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN = (
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN + 6
+)
+EMA_ANCHOR_COIN_OVERRIDE_COLS = (
+    EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + len(HSL_COIN_OVERRIDE_PATHS)
+)
+
 
 def encode_hsl_panic_order_type(value, *, field_name: str) -> float:
     if not isinstance(value, str):
@@ -918,6 +938,8 @@ def build_mps_multicoin_data(
     timestamps_ms,
     runs: list[ProxyRun],
     markets: list[ProxyMarket],
+    *,
+    include_hourly_ranges: bool = True,
 ):
     """Pack compact multicoin inputs for the persistent Apple MPS kernel.
 
@@ -959,10 +981,12 @@ def build_mps_multicoin_data(
         raise ValueError("MPS multicoin proxy requires at least three candles")
     intervals = np.diff(timestamps)
     interval_ms = int(runs[0].interval_ms)
+    if interval_ms <= 0 or interval_ms % 60_000 != 0:
+        raise ValueError(
+            "MPS multicoin proxy requires a positive whole-minute candle interval"
+        )
     if np.any(intervals != interval_ms):
         raise ValueError("MPS multicoin proxy requires a continuous candle timeline")
-    if interval_ms != 60_000:
-        raise ValueError("MPS multicoin proxy currently supports one-minute candles only")
 
     bars = np.ascontiguousarray(values[:, :, :4], dtype=np.float32)
     bars[~np.isfinite(bars)] = 0.0
@@ -971,6 +995,14 @@ def build_mps_multicoin_data(
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
+    if include_hourly_ranges:
+        # A valid log range is always non-negative, so -1.0 is an unambiguous
+        # sentinel and avoids a second dense per-candle/per-coin validity tensor.
+        hour_log_ranges = np.full(
+            (candle_count, coin_count), -1.0, dtype=np.float32
+        )
+    else:
+        hour_log_ranges = None
     coin_settings = np.empty((coin_count, 13), dtype=np.float32)
     for coin, (run, market) in enumerate(zip(runs, markets)):
         if run.interval_ms != interval_ms:
@@ -978,6 +1010,13 @@ def build_mps_multicoin_data(
         high = values[:, coin, 0].astype(np.float64, copy=False)
         low = values[:, coin, 1].astype(np.float64, copy=False)
         close = values[:, coin, 2].astype(np.float64, copy=False)
+        if hour_log_ranges is not None:
+            coin_hour_log_range, coin_hour_valid = _build_hourly_log_range(
+                high, low, timestamps, run
+            )
+            hour_log_ranges[coin_hour_valid, coin] = coin_hour_log_range[
+                coin_hour_valid
+            ]
         high_fill, low_nonfill = _strict_fill_tick_boundaries(
             high, low, market.price_step
         )
@@ -1026,6 +1065,7 @@ def build_mps_multicoin_data(
         + touch_nearest_ticks.nbytes
         + touch_min_qty_bits.nbytes
         + touch_min_qty_relation.nbytes
+        + (hour_log_ranges.nbytes if hour_log_ranges is not None else 0)
     )
     recommended = None
     recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
@@ -1043,7 +1083,7 @@ def build_mps_multicoin_data(
 
     first_day = int(timestamps[0] // 86_400_000)
     last_day = int(timestamps[-1] // 86_400_000)
-    return {
+    packed = {
         "bars": tensor(bars, dtype=torch.float32),
         "fill_ticks": tensor(fill_ticks, dtype=torch.int32),
         "touch_ticks": tensor(touch_ticks, dtype=torch.int32),
@@ -1061,3 +1101,8 @@ def build_mps_multicoin_data(
         "start_minute_of_hour": int((timestamps[0] // 60_000) % 60),
         "invariant_bytes": invariant_bytes,
     }
+    if hour_log_ranges is not None:
+        packed["hour_log_ranges"] = tensor(
+            hour_log_ranges, dtype=torch.float32
+        )
+    return packed

@@ -7,6 +7,10 @@ import numpy as np
 import torch
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     GAP_BINS,
@@ -109,7 +113,7 @@ def _pack_tm_parameter_matrix(
     return matrix
 
 
-def _scale_single_coin_minute_parameters(
+def _scale_directional_minute_parameters(
     params: np.ndarray,
     keys: tuple[str, ...],
     *,
@@ -129,7 +133,7 @@ def _scale_single_coin_minute_parameters(
     interval_minutes = float(interval_minutes)
     if not np.isfinite(interval_minutes) or interval_minutes < 1.0:
         raise ValueError(
-            "MPS single-coin candle interval must be finite and at least one minute"
+            "MPS candle interval must be finite and at least one minute"
         )
     scaled = np.array(params, dtype=np.float64, copy=True)
     minute_keys = {
@@ -142,6 +146,10 @@ def _scale_single_coin_minute_parameters(
         minute_keys.add("offset_volatility_ema_span_1m")
     if "volatility_ema_span_1m" in keys:
         minute_keys.add("volatility_ema_span_1m")
+    if "forager_volume_ema_span_1m" in keys:
+        minute_keys.add("forager_volume_ema_span_1m")
+    if "forager_volatility_ema_span_1m" in keys:
+        minute_keys.add("forager_volatility_ema_span_1m")
     side_width = len(keys)
     for side_index in range(sides):
         offset = side_index * side_width
@@ -163,6 +171,70 @@ def _scale_single_coin_minute_parameters(
             )
             scaled[:, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
     return scaled
+
+
+def _scale_single_coin_minute_parameters(
+    params: np.ndarray,
+    keys: tuple[str, ...],
+    *,
+    sides: int,
+    interval_minutes: float,
+) -> np.ndarray:
+    """Compatibility wrapper for the original single-coin helper name."""
+
+    return _scale_directional_minute_parameters(
+        params,
+        keys,
+        sides=sides,
+        interval_minutes=interval_minutes,
+    )
+
+
+def _scale_ema_multicoin_coin_overrides(
+    coin_overrides: np.ndarray, interval_minutes: float
+) -> np.ndarray:
+    """Convert finite exact-last EMA coin overrides to candle periods."""
+
+    scaled = np.array(coin_overrides, dtype=np.float64, copy=True)
+    if scaled.ndim != 2 or scaled.shape[1] != EMA_ANCHOR_COIN_OVERRIDE_COLS:
+        raise ValueError(
+            "expected multicoin EMA override matrix with "
+            f"{EMA_ANCHOR_COIN_OVERRIDE_COLS} columns, got {scaled.shape}"
+        )
+    interval_minutes = float(interval_minutes)
+    if not np.isfinite(interval_minutes) or interval_minutes < 1.0:
+        raise ValueError(
+            "MPS candle interval must be finite and at least one minute"
+        )
+    minute_columns = {
+        EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
+        EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
+        EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
+            "offset_volatility_ema_span_1m"
+        ),
+        EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+        EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + 3,
+    }
+    for column in minute_columns:
+        finite = np.isfinite(scaled[:, column])
+        scaled[finite, column] /= interval_minutes
+    if interval_minutes != 1.0:
+        hsl_span_column = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN + 2
+        finite = np.isfinite(scaled[:, hsl_span_column])
+        hsl_spans = scaled[finite, hsl_span_column]
+        if np.any(hsl_spans < 1.0):
+            raise ValueError(
+                "MPS HSL EMA span override must be at least one minute"
+            )
+        alpha_1m = 2.0 / (hsl_spans + 1.0)
+        decay_1m = 1.0 - alpha_1m
+        alpha_per_candle = np.ones_like(decay_1m)
+        positive_decay = decay_1m > 0.0
+        alpha_per_candle[positive_decay] = -np.expm1(
+            interval_minutes * np.log(decay_1m[positive_decay])
+        )
+        scaled[finite, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
+    return np.ascontiguousarray(scaled, dtype=np.float32)
 
 
 def _scalar_column_or_zero(scalars, index: int):
@@ -922,9 +994,10 @@ class MpsEmaAnchorRunner:
 class MpsEmaAnchorMulticoinRunner:
     """Persistent single-side multi-coin EMA Anchor screening runner on MPS."""
 
-    coin_override_cols = 29
+    coin_override_cols = EMA_ANCHOR_COIN_OVERRIDE_COLS
     coin_override_label = "EMA"
     scalar_cols = MPS_MULTICOIN_SCALAR_COLS
+    supports_aggregated_intervals = True
 
     def __init__(
         self,
@@ -974,6 +1047,21 @@ class MpsEmaAnchorMulticoinRunner:
                 else MPS_MULTICOIN_BASE_SCALAR_COLS
             )
         self.run_config = run
+        interval_minutes = float(run.interval_ms) / 60_000.0
+        if (
+            not np.isfinite(interval_minutes)
+            or interval_minutes < 1.0
+            or not interval_minutes.is_integer()
+        ):
+            raise ValueError(
+                "MPS multicoin runner requires a positive whole-minute candle interval"
+            )
+        self.interval_minutes = int(interval_minutes)
+        if not self.supports_aggregated_intervals and self.interval_minutes != 1:
+            raise ValueError(
+                "MPS multicoin Trailing Martingale currently supports one-minute "
+                "candles only"
+            )
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
@@ -996,6 +1084,11 @@ class MpsEmaAnchorMulticoinRunner:
         self.touch_nearest_ticks = data["touch_nearest_ticks"]
         self.touch_min_qty_bits = data["touch_min_qty_bits"]
         self.touch_min_qty_relation = data["touch_min_qty_relation"]
+        self.hour_log_ranges = (
+            data["hour_log_ranges"]
+            if self.supports_aggregated_intervals
+            else None
+        )
         self.coin_settings = data["coin_settings"]
         if coin_overrides is None:
             coin_overrides = np.full(
@@ -1009,7 +1102,7 @@ class MpsEmaAnchorMulticoinRunner:
                 f"got {coin_overrides.shape}"
             )
         self.coin_overrides = torch.as_tensor(
-            np.ascontiguousarray(coin_overrides), device="mps"
+            self._prepare_coin_overrides(coin_overrides), device="mps"
         )
         forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
         if not np.isfinite(forager_score_hysteresis_pct) or (
@@ -1080,6 +1173,11 @@ class MpsEmaAnchorMulticoinRunner:
             ),
         )
 
+    def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
+        return _scale_ema_multicoin_coin_overrides(
+            coin_overrides, self.interval_minutes
+        )
+
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         expected = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         if params.ndim != 2 or params.shape[1] != expected:
@@ -1087,7 +1185,15 @@ class MpsEmaAnchorMulticoinRunner:
             raise ValueError(
                 f"expected multicoin EMA parameter matrix with {expected} columns, got {got}"
             )
-        return np.ascontiguousarray(params, dtype=np.float32)
+        return np.ascontiguousarray(
+            _scale_directional_minute_parameters(
+                params,
+                EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+                sides=1,
+                interval_minutes=self.interval_minutes,
+            ),
+            dtype=np.float32,
+        )
 
     def _output_buffers(self, batch_size: int):
         if batch_size not in self._buffers:
@@ -1157,6 +1263,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
+            self.hour_log_ranges,
             self.coin_settings,
             self.coin_overrides,
             params_mps,
@@ -1335,7 +1442,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 f"{expected_shape}, got {short_coin_overrides.shape}"
             )
         self.short_coin_overrides = torch.as_tensor(
-            np.ascontiguousarray(short_coin_overrides), device="mps"
+            self._prepare_coin_overrides(short_coin_overrides), device="mps"
         )
         max_realized_loss_pct = float(max_realized_loss_pct)
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
@@ -1377,7 +1484,15 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 "expected fused multicoin EMA parameter matrix with "
                 f"{expected} columns, got {got}"
             )
-        return np.ascontiguousarray(params, dtype=np.float32)
+        return np.ascontiguousarray(
+            _scale_directional_minute_parameters(
+                params,
+                EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+                sides=2,
+                interval_minutes=self.interval_minutes,
+            ),
+            dtype=np.float32,
+        )
 
     def _dispatch(
         self,
@@ -1397,6 +1512,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             self.bars,
             self.fill_ticks,
             self.touch_ticks,
+            self.hour_log_ranges,
             self.coin_settings,
             self.coin_overrides,
             self.short_coin_overrides,
@@ -1439,6 +1555,10 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
 
     coin_override_cols = TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
     coin_override_label = "Trailing Martingale"
+    supports_aggregated_intervals = False
+
+    def _prepare_coin_overrides(self, coin_overrides: np.ndarray) -> np.ndarray:
+        return np.ascontiguousarray(coin_overrides, dtype=np.float32)
 
     def __init__(
         self,

@@ -100,10 +100,10 @@ and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
 The supported slice is intentionally narrow:
 
 - Apple Silicon with `torch.backends.mps.is_available()`
-- one prepared dataset per independent run or suite scenario; single-coin runs accept any
-  positive integer `backtest.candle_interval_minutes`, while multi-coin runs remain restricted to
-  one-minute candles; the dataset may be an individual exchange or the canonical combined
-  multi-exchange dataset
+- one prepared dataset per independent run or suite scenario; single-coin runs and multi-coin EMA
+  Anchor runs accept any positive integer `backtest.candle_interval_minutes`, while multi-coin
+  Trailing Martingale runs remain restricted to one-minute candles; the dataset may be an
+  individual exchange or the canonical combined multi-exchange dataset
 - `strategy_kind: ema_anchor` or `trailing_martingale`, with long-only, short-only, or
   long+short enabled for one coin
 - long-only, short-only, or dual-side hedge-mode and one-way multi-coin EMA-anchor and
@@ -798,10 +798,12 @@ Trade-offs:
 - Intra-interval fill ordering is lost (fills occur only at the aggregated bar boundaries).
 - Metrics are still time-correct because analysis uses timestamps rather than bar indices.
 - The Apple MPS backend supports aggregated intervals for single-coin EMA Anchor and Trailing
-  Martingale runs. It converts minute-denominated strategy EMA spans and elapsed-time cooldowns to
-  candle periods, compounds HSL's one-minute EMA decay over each candle, and preserves Rust's
-  boundary-crossing behavior when an interval does not evenly divide an hour; exact Rust validation
-  remains authoritative. Multi-coin MPS runs currently require one-minute candles.
+  Martingale runs, plus multi-coin EMA Anchor runs in long-only, short-only, and fused long+short
+  form. It converts minute-denominated strategy and Forager EMA spans, static per-coin overrides,
+  and elapsed-time cooldowns to candle periods, compounds HSL's one-minute EMA decay over each
+  candle, and preserves Rust's boundary-crossing behavior when an interval does not evenly divide
+  an hour; exact Rust validation remains authoritative. Multi-coin Trailing Martingale runs
+  currently require one-minute candles.
 
 ### Fine-Tuning Specific Parameters
 
