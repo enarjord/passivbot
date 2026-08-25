@@ -67,11 +67,14 @@ SUPPORTED_METRICS = (
     "drawdown_worst_ema_strategy_eq_short",
     "drawdown_worst_strategy_eq",
     "equity_choppiness_usd",
+    "equity_choppiness_w_usd",
     "equity_jerkiness_usd",
+    "equity_jerkiness_w_usd",
     "expected_shortfall_1pct_strategy_eq",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
     "exponential_fit_error_usd",
+    "exponential_fit_error_w_usd",
     "exposure_mean_ratio_usd",
     "exposure_ratio_usd",
     "fills_analysis_duration_days",
@@ -173,6 +176,7 @@ SUPPORTED_METRICS = (
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
+    "volume_pct_per_day_avg_w",
     *_USD_STRATEGY_EQ_ALIASES,
     *_USD_PER_EXPOSURE_METRICS,
 )
@@ -708,7 +712,7 @@ def _fill_gap_metrics(out, run):
     }
 
 
-def _weighted_subsets(
+def _weighted_subset_context(
     active,
     first_eq_ts,
     last_eq_ts,
@@ -717,42 +721,74 @@ def _weighted_subsets(
 ):
     finite_timestamps = torch.isfinite(first_eq_ts) & torch.isfinite(last_eq_ts)
     timestamp_origin = float(first_timestamp)
-    relative_timestamps = finite_timestamps & (first_eq_ts < timestamp_origin)
-    first_eq_ts = torch.where(
-        relative_timestamps, first_eq_ts + timestamp_origin, first_eq_ts
-    )
-    last_eq_ts = torch.where(
-        relative_timestamps, last_eq_ts + timestamp_origin, last_eq_ts
-    )
-    sample_span = torch.where(
+    interval_ms_int = int(interval_ms)
+    timestamp_origin_int = int(round(timestamp_origin))
+
+    def relative_steps(timestamps):
+        relative_ms = torch.where(
+            timestamps < timestamp_origin,
+            timestamps,
+            timestamps - timestamp_origin,
+        )
+        return torch.floor(relative_ms / float(interval_ms_int) + 0.5).to(
+            torch.long
+        )
+
+    first_eq_steps = relative_steps(first_eq_ts)
+    last_eq_steps = relative_steps(last_eq_ts)
+    sample_count = torch.where(
         finite_timestamps,
-        (last_eq_ts - first_eq_ts) / float(interval_ms),
-        torch.zeros_like(first_eq_ts),
-    )
-    sample_count = (
-        torch.floor(sample_span + 0.5)
-        .to(torch.long)
-        .add(1)
-        .clamp(min=1)
-    )
+        last_eq_steps - first_eq_steps + 1,
+        torch.ones_like(first_eq_steps),
+    ).clamp(min=1)
     eligible = finite_timestamps & (sample_count >= 2)
     subsets = [active]
-    first_day = int(timestamp_origin) // 86_400_000
+    subset_start_steps = [first_eq_steps]
+    subset_start_timestamps = [
+        first_eq_steps * interval_ms_int + timestamp_origin_int
+    ]
+    first_day = timestamp_origin_int // 86_400_000
     day_ids = torch.arange(active.shape[1], device=active.device) + first_day
     for index in range(1, 10):
         fraction = 1.0 / (1.0 + index)
         start_position = torch.floor(
             sample_count.to(first_eq_ts.dtype) * (1.0 - fraction) + 0.5
         ).to(torch.long)
-        subset_start_ts = first_eq_ts + start_position.to(first_eq_ts.dtype) * float(
-            interval_ms
+        subset_start_step = first_eq_steps + start_position
+        subset_start_ts = (
+            subset_start_step * interval_ms_int + timestamp_origin_int
         )
-        subset_start_day = torch.floor(subset_start_ts / 86_400_000.0).to(
-            torch.long
+        subset_start_day = torch.div(
+            subset_start_ts, 86_400_000, rounding_mode="floor"
         )
         subsets.append(
             active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
         )
+        subset_start_steps.append(subset_start_step)
+        subset_start_timestamps.append(subset_start_ts)
+    return (
+        eligible,
+        subsets,
+        subset_start_steps,
+        subset_start_timestamps,
+        day_ids,
+    )
+
+
+def _weighted_subsets(
+    active,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+):
+    eligible, subsets, _, _, _ = _weighted_subset_context(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
     return eligible, subsets
 
 
@@ -792,6 +828,144 @@ WEIGHTED_STRATEGY_EQ_METRICS = {
     "calmar_ratio_strategy_eq_w",
     "sterling_ratio_strategy_eq_w",
 }
+
+WEIGHTED_DAILY_SERIES_METRICS = {
+    "equity_choppiness_w_usd",
+    "equity_jerkiness_w_usd",
+    "exponential_fit_error_w_usd",
+    "volume_pct_per_day_avg_w",
+}
+
+
+def _weighted_daily_series_metrics(
+    day_end_eq,
+    day_volume,
+    day_has_fill,
+    active,
+    fill_count,
+    last_fill_ts,
+    first_eq_ts,
+    last_eq_ts,
+    first_timestamp,
+    interval_ms,
+    requested,
+):
+    """Reduce Rust's weighted fill-day volume and daily equity-shape metrics."""
+
+    requested = set(requested) & WEIGHTED_DAILY_SERIES_METRICS
+    if not requested:
+        return {}
+    (
+        _,
+        subsets,
+        subset_start_steps,
+        subset_start_timestamps,
+        day_ids,
+    ) = _weighted_subset_context(
+        active,
+        first_eq_ts,
+        last_eq_ts,
+        first_timestamp,
+        interval_ms,
+    )
+    fill_eligible = fill_count.to(torch.float64) > 1.0
+    timestamp_origin = float(first_timestamp)
+    finite_last_fill = torch.isfinite(last_fill_ts)
+    relative_last_fill_ms = torch.where(
+        last_fill_ts < timestamp_origin,
+        last_fill_ts,
+        last_fill_ts - timestamp_origin,
+    )
+    last_fill_steps = torch.floor(
+        relative_last_fill_ms / float(interval_ms) + 0.5
+    ).to(torch.long)
+    # Unlike weighted equity-return metrics, Rust's weighted shape and volume
+    # analysis admits a one-sample equity run when it has multiple fills. The
+    # full-run analysis contributes one tenth, then the first empty suffix ends
+    # the loop. Only finite, ordered timestamps and one active sample are
+    # required here.
+    eligible = (
+        fill_eligible
+        & torch.isfinite(first_eq_ts)
+        & torch.isfinite(last_eq_ts)
+        & (last_eq_ts >= first_eq_ts)
+        & active.any(dim=1)
+    )
+    totals = {
+        name: torch.zeros(
+            day_end_eq.shape[0],
+            dtype=day_end_eq.dtype,
+            device=day_end_eq.device,
+        )
+        for name in requested
+    }
+    shape_names = requested & {
+        "equity_choppiness_w_usd",
+        "equity_jerkiness_w_usd",
+        "exponential_fit_error_w_usd",
+    }
+    shape_sources = {
+        "equity_choppiness_w_usd": "equity_choppiness_usd",
+        "equity_jerkiness_w_usd": "equity_jerkiness_usd",
+        "exponential_fit_error_w_usd": "exponential_fit_error_usd",
+    }
+    for subset_index, (subset, subset_start_step, subset_start_ts) in enumerate(
+        zip(subsets, subset_start_steps, subset_start_timestamps)
+    ):
+        subset_eligible = (
+            eligible & finite_last_fill & (last_fill_steps >= subset_start_step)
+        )
+        if "volume_pct_per_day_avg_w" in requested:
+            if subset_index == 0:
+                volume_fill_mask = day_has_fill & subset
+            else:
+                subset_start_day = torch.div(
+                    subset_start_ts, 86_400_000, rounding_mode="floor"
+                )
+                at_day_boundary = subset_start_ts.remainder(86_400_000) == 0
+                complete_day_mask = (
+                    day_ids.unsqueeze(0) > subset_start_day.unsqueeze(1)
+                )
+                complete_day_mask |= at_day_boundary.unsqueeze(1) & (
+                    day_ids.unsqueeze(0) == subset_start_day.unsqueeze(1)
+                )
+                # Daily volume cannot distinguish fills before and after an
+                # intra-day cutoff. Exclude that ambiguous boundary day rather
+                # than admitting pre-cutoff fills; exact Rust validation owns
+                # the partial-day contribution.
+                volume_fill_mask = day_has_fill & subset & complete_day_mask
+            fill_days = volume_fill_mask.sum(dim=1)
+            value = torch.where(
+                fill_days > 0,
+                torch.where(
+                    volume_fill_mask,
+                    day_volume,
+                    torch.zeros_like(day_volume),
+                ).sum(dim=1)
+                / fill_days.clamp(min=1).to(day_volume.dtype),
+                torch.zeros_like(totals["volume_pct_per_day_avg_w"]),
+            )
+            totals["volume_pct_per_day_avg_w"] += torch.where(
+                subset_eligible & (fill_days > 0),
+                value,
+                torch.zeros_like(value),
+            )
+        if shape_names:
+            values = _equity_shape_metrics(day_end_eq, subset)
+            for name in shape_names:
+                value = values[shape_sources[name]]
+                totals[name] += torch.where(
+                    subset_eligible, value, torch.zeros_like(value)
+                )
+    result = {name: value / 10.0 for name, value in totals.items()}
+    # analyze_backtest returns early for zero or one fill. Preserve the custom
+    # Analysis defaults for weighted shape metrics; weighted volume defaults
+    # to zero.
+    for name in shape_names:
+        result[name] = torch.where(
+            fill_eligible, result[name], torch.ones_like(result[name])
+        )
+    return result
 
 
 def _weighted_strategy_eq_metrics(
@@ -1329,6 +1503,21 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         run.interval_ms,
         requested_sources,
     )
+    weighted_daily_series_metrics = {}
+    if requested & WEIGHTED_DAILY_SERIES_METRICS:
+        weighted_daily_series_metrics = _weighted_daily_series_metrics(
+            day_end_eq,
+            day_volume,
+            day_has_fill,
+            active,
+            out["fill_count"],
+            out["last_fill_ts"],
+            out["first_eq_ts"],
+            out["last_eq_ts"],
+            data["ts0"],
+            run.interval_ms,
+            requested,
+        )
     shape_metric_names = {
         "equity_choppiness_usd",
         "equity_jerkiness_usd",
@@ -1606,6 +1795,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
+    objectives.update(weighted_daily_series_metrics)
     objectives.update(weighted_pnl_metrics)
     objectives.update(equity_shape_metrics)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():

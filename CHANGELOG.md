@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added weighted daily-series scoring and limits to Apple MPS optimization for
+  `volume_pct_per_day_avg_w`, `equity_choppiness_w`, `equity_jerkiness_w`, and
+  `exponential_fit_error_w`. The proxy applies Rust's ten trailing windows to its existing compact
+  fill-volume and account-equity day series, excluding ambiguous partial cutoff-day volume rather
+  than admitting pre-cutoff fills, while exact Rust validation and rolling drift gates remain
+  authoritative.
+
 - Added asymmetric long/short coin universes to non-suite dual-side Apple MPS multi-coin EMA
   Anchor and Trailing Martingale optimization. The proxy now preserves exact payload `entry_eligible`
   decisions as side-specific zero-exposure coin overrides, so Forager selection, dynamic wallet

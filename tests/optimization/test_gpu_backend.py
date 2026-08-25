@@ -3129,6 +3129,22 @@ def test_gpu_multicoin_foundation_accepts_asymmetric_dual_side_coins(strategy_ki
 
 
 @pytest.mark.parametrize(
+    ("metric", "goal"),
+    [
+        ("equity_choppiness_w", "min"),
+        ("equity_jerkiness_w", "min"),
+        ("exponential_fit_error_w", "min"),
+        ("volume_pct_per_day_avg_w", "max"),
+    ],
+)
+def test_gpu_foundation_accepts_weighted_daily_series_metrics(metric, goal):
+    config = _long_only_ema_config()
+    config["optimize"]["scoring"] = [{"goal": goal, "metric": metric}]
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
     "metric",
     [
         "entry_initial_balance_pct_long",
@@ -3164,6 +3180,7 @@ def test_gpu_multicoin_foundation_accepts_asymmetric_dual_side_coins(strategy_ki
         "total_wallet_exposure_max",
         "total_wallet_exposure_mean",
         "volume_pct_per_day_avg",
+        "volume_pct_per_day_avg_w",
     ],
 )
 def test_gpu_dual_multicoin_rejects_unreconstructable_metrics(metric):
@@ -3217,6 +3234,7 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
             "total_wallet_exposure_max",
             "total_wallet_exposure_mean",
             "volume_pct_per_day_avg",
+            "volume_pct_per_day_avg_w",
         },
         coin_count=3,
         enabled_sides={"long"},

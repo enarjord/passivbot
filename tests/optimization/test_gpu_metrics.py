@@ -26,6 +26,8 @@ from optimization.gpu.metrics import (
     _smoothed_adg,
     _smoothed_gain_adg,
     _weighted_adg,
+    _weighted_daily_series_metrics,
+    _weighted_subset_context,
     _weighted_subsets,
     _weighted_strategy_eq_metrics,
     compute_objectives,
@@ -567,6 +569,207 @@ def test_weighted_daily_pnl_metrics_match_rust_suffix_contract():
     assert requested <= set(SUPPORTED_METRICS)
     for name, value in expected.items():
         assert metrics[name].item() == pytest.approx(value)
+
+
+def test_weighted_daily_series_metrics_match_rust_suffix_contract():
+    day_ms = 86_400_000
+    day_count = 100
+    day_index = torch.arange(day_count, dtype=torch.float64)
+    day_end = (100.0 * torch.exp(day_index * 0.001)).unsqueeze(0)
+    day_volume = (day_index + 1.0).unsqueeze(0)
+    active = torch.ones_like(day_end, dtype=torch.bool)
+    day_has_fill = torch.ones_like(active)
+    requested = {
+        "equity_choppiness_w_usd",
+        "equity_jerkiness_w_usd",
+        "exponential_fit_error_w_usd",
+        "volume_pct_per_day_avg_w",
+    }
+
+    metrics = _weighted_daily_series_metrics(
+        day_end,
+        day_volume,
+        day_has_fill,
+        active,
+        torch.tensor([float(day_count)]),
+        torch.tensor([(day_count - 1) * day_ms], dtype=torch.float64),
+        torch.tensor([0.0]),
+        torch.tensor([(day_count - 1) * day_ms], dtype=torch.float64),
+        0.0,
+        day_ms,
+        requested,
+    )
+
+    starts = [0, 50, 67, 75, 80, 83, 86, 88, 89, 90]
+
+    def reference_shape(values):
+        values = np.asarray(values, dtype=np.float64)
+        choppiness = np.abs(np.diff(values)).sum() / abs(values[-1] - values[0])
+        jerkiness = np.mean(
+            np.abs(values[2:] - 2.0 * values[1:-1] + values[:-2])
+            / np.abs((values[:-2] + values[1:-1] + values[2:]) / 3.0)
+        )
+        x = np.arange(len(values), dtype=np.float64)
+        y = np.log(values)
+        slope = (
+            len(values) * np.sum(x * y) - np.sum(x) * np.sum(y)
+        ) / (len(values) * np.sum(x * x) - np.sum(x) ** 2)
+        intercept = (np.sum(y) - slope * np.sum(x)) / len(values)
+        fit_error = np.mean((slope * x + intercept - y) ** 2)
+        return choppiness, jerkiness, fit_error
+
+    expected_shape = np.asarray(
+        [reference_shape(day_end[0, start:].numpy()) for start in starts]
+    ).mean(axis=0)
+    expected_volume = np.mean(
+        [day_volume[0, start:].mean().item() for start in starts]
+    )
+
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(
+        expected_shape[0]
+    )
+    assert metrics["equity_jerkiness_w_usd"].item() == pytest.approx(
+        expected_shape[1]
+    )
+    assert metrics["exponential_fit_error_w_usd"].item() == pytest.approx(
+        expected_shape[2], abs=1e-24
+    )
+    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(
+        expected_volume
+    )
+
+
+def test_weighted_daily_series_metrics_preserve_sparse_fill_rust_defaults():
+    day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
+    requested = set(
+        [
+            "equity_choppiness_w_usd",
+            "equity_jerkiness_w_usd",
+            "exponential_fit_error_w_usd",
+            "volume_pct_per_day_avg_w",
+        ]
+    )
+
+    metrics = _weighted_daily_series_metrics(
+        day_end,
+        torch.tensor([[0.5, 0.0]], dtype=torch.float64),
+        torch.tensor([[True, False]]),
+        torch.ones_like(day_end, dtype=torch.bool),
+        torch.tensor([1.0]),
+        torch.tensor([0.0]),
+        torch.tensor([0.0]),
+        torch.tensor([86_400_000.0]),
+        0.0,
+        86_400_000,
+        requested,
+    )
+
+    assert set(metrics) == requested
+    assert metrics["volume_pct_per_day_avg_w"].item() == 0.0
+    for name in requested - {"volume_pct_per_day_avg_w"}:
+        assert metrics[name].item() == 1.0
+
+
+def test_weighted_daily_series_metrics_keep_one_sample_full_run_tenth():
+    requested = {
+        "equity_choppiness_w_usd",
+        "equity_jerkiness_w_usd",
+        "exponential_fit_error_w_usd",
+        "volume_pct_per_day_avg_w",
+    }
+
+    metrics = _weighted_daily_series_metrics(
+        torch.tensor([[100.0]], dtype=torch.float64),
+        torch.tensor([[0.5]], dtype=torch.float64),
+        torch.tensor([[True]]),
+        torch.tensor([[True]]),
+        torch.tensor([2.0]),
+        torch.tensor([0.0]),
+        torch.tensor([0.0]),
+        torch.tensor([0.0]),
+        0.0,
+        60_000,
+        requested,
+    )
+
+    assert metrics["equity_choppiness_w_usd"].item() == 0.0
+    assert metrics["equity_jerkiness_w_usd"].item() == 0.0
+    assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
+    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
+
+
+def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
+    metrics = _weighted_daily_series_metrics(
+        torch.tensor([[100.0]], dtype=torch.float64),
+        torch.tensor([[0.5]], dtype=torch.float64),
+        torch.tensor([[True]]),
+        torch.tensor([[True]]),
+        torch.tensor([2.0]),
+        torch.tensor([3_600_000.0]),
+        torch.tensor([0.0]),
+        torch.tensor([3_600_000.0]),
+        0.0,
+        60_000,
+        {"volume_pct_per_day_avg_w"},
+    )
+
+    # Every trailing cutoff is inside the same UTC day. The daily aggregate
+    # contains pre-cutoff volume, so only the unambiguous full-run tenth is
+    # admitted; exact Rust validation owns partial-day volume after a cutoff.
+    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
+
+
+def test_weighted_suffix_admission_uses_integer_candle_steps():
+    interval_ms = 60_000
+    sample_count = 17_898
+    first_step = 1
+    last_step = first_step + sample_count - 1
+    active = torch.ones((1, 13), dtype=torch.bool)
+
+    _, _, subset_start_steps, _, _ = _weighted_subset_context(
+        active,
+        torch.tensor([np.float32(first_step * interval_ms)]),
+        torch.tensor([np.float32(last_step * interval_ms)]),
+        0.0,
+        interval_ms,
+    )
+    last_fill_ts = torch.tensor(
+        [np.float32((first_step + sample_count // 2) * interval_ms)]
+    )
+    last_fill_step = torch.floor(
+        last_fill_ts / float(interval_ms) + 0.5
+    ).to(torch.long)
+
+    # The equivalent float32 timestamp expressions differ by 64 ms at this
+    # realistic span. Integer candle-step admission still includes Rust's
+    # exact half-window boundary fill.
+    assert np.float32(first_step * interval_ms) + np.float32(
+        (sample_count // 2) * interval_ms
+    ) != last_fill_ts.item()
+    assert subset_start_steps[1].item() == last_fill_step.item()
+
+    day_end = torch.arange(100.0, 113.0).unsqueeze(0)
+    day_has_fill = torch.zeros_like(day_end, dtype=torch.bool)
+    day_has_fill[:, 6] = True
+    metrics = _weighted_daily_series_metrics(
+        day_end,
+        torch.zeros_like(day_end),
+        day_has_fill,
+        active,
+        torch.tensor([2.0]),
+        last_fill_ts,
+        torch.tensor([np.float32(first_step * interval_ms)]),
+        torch.tensor([np.float32(last_step * interval_ms)]),
+        0.0,
+        interval_ms,
+        {"equity_choppiness_w_usd"},
+    )
+
+    # Linear full and half-window daily series both have choppiness 1.0;
+    # Rust admits both and stops at the next suffix, for a weighted 0.2.
+    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(0.2)
 
 
 def test_weighted_subsets_normalize_relative_timestamps_to_unix_origin():

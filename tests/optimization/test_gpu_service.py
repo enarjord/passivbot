@@ -403,6 +403,7 @@ def test_core_output_contract_retains_gross_pnl_aggregates():
         "sharpe_ratio_pnl_w",
         "sortino_ratio_pnl",
         "sortino_ratio_pnl_w",
+        "volume_pct_per_day_avg_w",
     ],
 )
 def test_dual_side_multicoin_intraday_cutoff_metrics_fail_closed(metric):

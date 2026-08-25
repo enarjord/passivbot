@@ -292,6 +292,7 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "sharpe_ratio_pnl_w",
     "sortino_ratio_pnl",
     "sortino_ratio_pnl_w",
+    "volume_pct_per_day_avg_w",
 }
 
 _ACCOUNT_EQUITY_RECOVERY_METRICS = {
