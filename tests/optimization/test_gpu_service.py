@@ -51,10 +51,29 @@ from optimization.gpu.service import (
     _require_no_internal_invalid_multicoin_hsl_candles,
     _require_no_internal_invalid_single_coin_recovery_candles,
     _refresh_hedged_multicoin_hsl_at_portfolio_cutoff,
+    _single_coin_candle_interval_minutes,
     _single_coin_exposure_params,
     _total_exposure_enforcer_params,
     _unstuck_params,
 )
+
+
+@pytest.mark.parametrize("raw_interval", [5, 5.0, "5"])
+def test_single_coin_candle_interval_accepts_positive_integers(raw_interval):
+    assert (
+        _single_coin_candle_interval_minutes(
+            {"candle_interval_minutes": raw_interval}
+        )
+        == 5
+    )
+
+
+@pytest.mark.parametrize("raw_interval", [0, -1, 1.5, float("nan"), None, "bad"])
+def test_single_coin_candle_interval_rejects_invalid_values(raw_interval):
+    with pytest.raises(ValueError, match="integer >= 1"):
+        _single_coin_candle_interval_minutes(
+            {"candle_interval_minutes": raw_interval}
+        )
 
 
 def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():

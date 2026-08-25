@@ -109,6 +109,46 @@ def _pack_tm_parameter_matrix(
     return matrix
 
 
+def _scale_single_coin_minute_parameters(
+    params: np.ndarray,
+    keys: tuple[str, ...],
+    *,
+    sides: int,
+    interval_minutes: float,
+) -> np.ndarray:
+    """Convert minute-denominated directional inputs to candle periods.
+
+    Exact Rust divides strategy EMA spans by the configured candle interval
+    before calculating their alphas. Entry and HSL cooldowns remain expressed
+    in elapsed minutes, so the single-coin Metal kernels consume their
+    equivalent fractional candle counts. Hour-denominated volatility spans and
+    HSL's sample-based drawdown EMA deliberately remain unchanged.
+    """
+
+    interval_minutes = float(interval_minutes)
+    if not np.isfinite(interval_minutes) or interval_minutes < 1.0:
+        raise ValueError(
+            "MPS single-coin candle interval must be finite and at least one minute"
+        )
+    scaled = np.array(params, dtype=np.float64, copy=True)
+    minute_keys = {
+        "ema_span_0",
+        "ema_span_1",
+        "entry_cooldown_minutes",
+        "hsl_cooldown_minutes_after_red",
+    }
+    if "offset_volatility_ema_span_1m" in keys:
+        minute_keys.add("offset_volatility_ema_span_1m")
+    if "volatility_ema_span_1m" in keys:
+        minute_keys.add("volatility_ema_span_1m")
+    side_width = len(keys)
+    for side_index in range(sides):
+        offset = side_index * side_width
+        for key in minute_keys:
+            scaled[:, offset + keys.index(key)] /= interval_minutes
+    return scaled
+
+
 def _scalar_column_or_zero(scalars, index: int):
     if scalars.shape[1] > index:
         return scalars[:, index]
@@ -559,6 +599,16 @@ class MpsEmaAnchorRunner:
     ):
         self.market = market
         self.run_config = run
+        self.interval_minutes = float(run.interval_ms) / 60_000.0
+        if (
+            not np.isfinite(self.interval_minutes)
+            or self.interval_minutes < 1.0
+            or not self.interval_minutes.is_integer()
+        ):
+            raise ValueError(
+                "MPS single-coin runner requires an integer candle interval "
+                "of at least one minute"
+            )
         self.long_enabled = bool(long_enabled)
         self.short_enabled = bool(short_enabled)
         self.hedge_mode = bool(hedge_mode)
@@ -695,7 +745,13 @@ class MpsEmaAnchorRunner:
             raise ValueError(
                 f"expected directional EMA parameter matrix with {expected} columns, got {got}"
             )
-        return np.ascontiguousarray(params, dtype=np.float32)
+        scaled = _scale_single_coin_minute_parameters(
+            params,
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+            sides=2,
+            interval_minutes=self.interval_minutes,
+        )
+        return np.ascontiguousarray(scaled, dtype=np.float32)
 
     def _output_buffers(self, batch_size: int):
         if batch_size not in self._buffers:
@@ -1651,8 +1707,14 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "expected directional trailing-martingale parameter matrix with "
                 f"{expected} columns, got {got}"
             )
+        scaled = _scale_single_coin_minute_parameters(
+            params,
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+            sides=2,
+            interval_minutes=self.interval_minutes,
+        )
         return _pack_tm_parameter_matrix(
-            params, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
+            scaled, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
         )
 
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:

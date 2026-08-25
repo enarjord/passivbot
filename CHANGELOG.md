@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports any positive
+  integer `backtest.candle_interval_minutes`. Minute-denominated strategy EMA spans and entry/HSL
+  cooldowns are converted to candle periods for Metal while timestamp-based metrics and exact Rust
+  validation retain elapsed-time semantics; multi-coin MPS runs remain one-minute-only.
+
 - Apple MPS multi-coin Trailing Martingale optimization now supports static per-coin
   `entry.ema_gate_mode` overrides. Initial entries and recursive reentries independently inherit
   or override their EMA gate for each coin and side, including fused long+short runs.

@@ -30,6 +30,7 @@ from optimization.gpu.mps_kernel import (
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
+    _scale_single_coin_minute_parameters,
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
@@ -3005,6 +3006,167 @@ _HSL_DISABLED_VALUES = {
 def _single_coin_param_row(values, keys):
     merged = {**_UNSTUCK_DISABLED_VALUES, **_HSL_DISABLED_VALUES, **values}
     return [merged[key] for key in keys]
+
+
+@pytest.mark.parametrize(
+    ("keys", "minute_span_key", "hour_span_key"),
+    [
+        (
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+            "offset_volatility_ema_span_1m",
+            "offset_volatility_ema_span_1h",
+        ),
+        (
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+            "volatility_ema_span_1m",
+            "volatility_ema_span_1h",
+        ),
+    ],
+)
+def test_single_coin_interval_packing_scales_only_elapsed_minute_inputs(
+    keys, minute_span_key, hour_span_key
+):
+    side = {key: float(index + 1) for index, key in enumerate(keys)}
+    side.update(
+        {
+            "ema_span_0": 30.0,
+            "ema_span_1": 90.0,
+            minute_span_key: 120.0,
+            hour_span_key: 24.0,
+            "entry_cooldown_minutes": 2.0,
+            "hsl_ema_span_minutes": 60.0,
+            "hsl_cooldown_minutes_after_red": 7.5,
+        }
+    )
+    original = np.asarray(
+        [[side[key] for key in keys] * 2], dtype=np.float64
+    )
+
+    scaled = _scale_single_coin_minute_parameters(
+        original, keys, sides=2, interval_minutes=5.0
+    )
+
+    assert np.array_equal(
+        original,
+        np.asarray([[side[key] for key in keys] * 2], dtype=np.float64),
+    )
+    for side_index in range(2):
+        offset = side_index * len(keys)
+        assert scaled[0, offset + keys.index("ema_span_0")] == 6.0
+        assert scaled[0, offset + keys.index("ema_span_1")] == 18.0
+        assert scaled[0, offset + keys.index(minute_span_key)] == 24.0
+        assert scaled[0, offset + keys.index("entry_cooldown_minutes")] == 0.4
+        assert (
+            scaled[
+                0,
+                offset + keys.index("hsl_cooldown_minutes_after_red"),
+            ]
+            == 1.5
+        )
+        assert scaled[0, offset + keys.index(hour_span_key)] == 24.0
+        assert scaled[0, offset + keys.index("hsl_ema_span_minutes")] == 60.0
+
+
+def test_single_coin_interval_packing_rejects_invalid_interval():
+    values = np.zeros(
+        (1, len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) * 2), dtype=np.float64
+    )
+
+    with pytest.raises(ValueError, match="at least one minute"):
+        _scale_single_coin_minute_parameters(
+            values,
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+            sides=2,
+            interval_minutes=0.0,
+        )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 32
+    interval_ms = 5 * 60_000
+    phase = np.linspace(0.0, 4.0 * np.pi, count)
+    close = 100.0 + np.sin(phase)
+    high = close * 1.01
+    low = close * 0.99
+    timestamps = (
+        1_700_000_000_000
+        + np.arange(count, dtype=np.int64) * interval_ms
+    )
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        2,
+        2,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        interval_ms,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "ema_anchor":
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 10.0,
+                "ema_span_1": 30.0,
+                "entry_double_down_factor": 1.5,
+                "offset": 0.01,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 60.0,
+                "offset_volatility_ema_span_1m": 60.0,
+                "entry_cooldown_minutes": 2.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+    else:
+        row = _tm_single_row(initial_ema_dist=0.01)
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("ema_span_0")] = 10.0
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("ema_span_1")] = 30.0
+        row[
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "entry_cooldown_minutes"
+            )
+        ] = 2.0
+        runner_cls = MpsTrailingMartingaleRunner
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+    params = np.asarray([row + row], dtype=np.float64)
+
+    runner = runner_cls(
+        market, run, data, long_enabled=True, short_enabled=False
+    )
+    packed = runner._pack_params(params)
+    output = runner.run(params)
+    torch.mps.synchronize()
+
+    assert runner.interval_minutes == 5.0
+    assert packed[0, keys.index("ema_span_0")] == pytest.approx(2.0)
+    assert packed[0, keys.index("entry_cooldown_minutes")] == pytest.approx(
+        0.4
+    )
+    assert output["balance"].device.type == "mps"
+    assert torch.isfinite(output["balance"]).all()
 
 
 def _multicoin_exposure_fixture(
