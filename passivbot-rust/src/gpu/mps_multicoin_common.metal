@@ -30,6 +30,70 @@ inline float min_entry_qty(
     return aligned ? fmax(nearest, raw_min) : ceil(raw_steps) * qty_step;
 }
 
+inline bool should_use_ordinary_market_execution(
+    int order_ticks,
+    bool buy_order,
+    float market_price,
+    float price_step,
+    bool market_orders_allowed,
+    float near_touch_threshold
+) {
+    if (!market_orders_allowed || order_ticks <= 0
+        || !(market_price > 0.0f) || !isfinite(market_price)) {
+        return false;
+    }
+    float order_price = float(order_ticks) * price_step;
+    if (buy_order ? order_price >= market_price : order_price <= market_price) {
+        return true;
+    }
+    return fabs(order_price / market_price - 1.0f)
+        <= fmax(near_touch_threshold, 0.0f);
+}
+
+inline float ordinary_market_fill_price(
+    float close,
+    bool buy_order,
+    float market_order_slippage_pct,
+    float price_step
+) {
+    float slipped = close * (
+        buy_order
+            ? 1.0f + market_order_slippage_pct
+            : 1.0f - market_order_slippage_pct
+    );
+    return fmax(
+        buy_order ? ceil_step(slipped, price_step)
+                  : floor_step(slipped, price_step),
+        price_step
+    );
+}
+
+inline float resize_market_close_qty(
+    float requested_qty,
+    float position_size,
+    float executable_touch,
+    float qty_step,
+    float min_qty,
+    float min_cost,
+    float c_mult
+) {
+    if (!(requested_qty > 0.0f) || position_size <= requested_qty) {
+        return requested_qty;
+    }
+    float minimum_qty = min_entry_qty(
+        executable_touch, qty_step, min_qty, min_cost, c_mult
+    );
+    float tolerance = 1.0e-12f
+        * fmax(requested_qty, minimum_qty) * 4.0f;
+    if (requested_qty + tolerance >= minimum_qty) return requested_qty;
+    float resized = fmin(minimum_qty, position_size);
+    float remainder = position_size - resized;
+    if (remainder > 0.0f && remainder + tolerance < minimum_qty) {
+        resized = position_size;
+    }
+    return resized;
+}
+
 inline bool finite_positive(float value) {
     return isfinite(value) && value > 0.0f;
 }

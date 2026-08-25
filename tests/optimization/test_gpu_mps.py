@@ -2660,15 +2660,17 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     long_side.selected[0] = true;
     short_side.selected[0] = true;
     JointPortfolioAccount account = init_joint_portfolio_account(1000.0f);
-    generate_ema_multicoin_side_orders(
-        long_side, long_config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f, -2, 0ul
-    );
-    generate_ema_multicoin_side_orders(
-        short_side, short_config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, true, 1, 1, 0, false, 1.0f, -2, 0ul
+        generate_ema_multicoin_side_orders(
+            long_side, long_config, account,
+            bars, touch_ticks, coin_settings, coin_overrides,
+            1, 1, false, 1, 1, 0, false, 1.0f,
+            false, 0.001f, -2, 0ul
+        );
+        generate_ema_multicoin_side_orders(
+            short_side, short_config, account,
+            bars, touch_ticks, coin_settings, coin_overrides,
+            1, 1, true, 1, 1, 0, false, 1.0f,
+            false, 0.001f, -2, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -2678,11 +2680,12 @@ kernel void passivbot_ema_multicoin_order_phase_probe(
     output[5] = short_side.close_qty[0];
     output[6] = account.balance;
     output[7] = account.realized_pnl_total;
-    generate_ema_multicoin_side_orders(
-        long_side, long_config, account,
-        bars, touch_ticks, coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f, -2, 1ul
-    );
+        generate_ema_multicoin_side_orders(
+            long_side, long_config, account,
+            bars, touch_ticks, coin_settings, coin_overrides,
+            1, 1, false, 1, 1, 0, false, 1.0f,
+            false, 0.001f, -2, 1ul
+        );
     output[8] = long_side.entry_qty[0];
     output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
     output[10] = long_side.contribution[0];
@@ -2823,6 +2826,8 @@ def _multicoin_exposure_fixture(
     liquidation_threshold=0.05,
     collect_coin_fill_counts=False,
     market_order_slippage_pct=0.0,
+    market_orders_allowed=False,
+    market_order_near_touch_threshold=0.001,
     hsl_panic_market=False,
     return_context=False,
 ):
@@ -2904,6 +2909,8 @@ def _multicoin_exposure_fixture(
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
         )
     else:
@@ -2962,6 +2969,8 @@ def _multicoin_exposure_fixture(
             max_realized_loss_pct=max_realized_loss_pct,
             collect_coin_fill_counts=collect_coin_fill_counts,
             market_order_slippage_pct=market_order_slippage_pct,
+            market_orders_allowed=market_orders_allowed,
+            market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
         )
     if return_context:
@@ -4741,11 +4750,15 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         side=side,
         forager_score_hysteresis_pct=0.02,
         max_realized_loss_pct=0.1,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.003,
         hsl_raw_drawdown_enabled=True,
         recovery_distribution_enabled=True,
     )
     assert runner.settings.cpu()[4].item() == pytest.approx(0.02)
     assert runner.settings.cpu()[5].item() <= 0.1
+    assert runner.settings.cpu()[9].item() == 1.0
+    assert runner.settings.cpu()[10].item() == pytest.approx(0.003)
     output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
@@ -4788,6 +4801,13 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
         MpsEmaAnchorMulticoinRunner(
             runs[0], data, side=side, max_realized_loss_pct=float("nan")
         )
+    with pytest.raises(ValueError, match="market_order_near_touch_threshold"):
+        MpsEmaAnchorMulticoinRunner(
+            runs[0],
+            data,
+            side=side,
+            market_order_near_touch_threshold=float("nan"),
+        )
 
     legacy_long = MpsEmaAnchorMulticoinLongRunner(runs[0], data)
     assert legacy_long.side == "long"
@@ -4827,6 +4847,301 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     assert torch.equal(
         exact_last_output["day_end_eq"][0], exact_last_output["day_end_eq"][1]
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_market_entry_uses_stored_next_close_intent(side):
+    count = 5
+    base = np.asarray([100.0, 120.0])
+    closes = np.tile(base, (count, 1))
+    closes[-1] *= 1.1 if side == "long" else 0.9
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    resting_runner, row = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+    )
+    market_runner, _ = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+    )
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
+    row[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
+    ] = 100.0
+    params = np.asarray([row], dtype=np.float64)
+
+    resting = resting_runner.run(params)
+    promoted = market_runner.run(params)
+    torch.mps.synchronize()
+
+    assert market_runner.settings[9].item() == 1.0
+    assert market_runner.settings[10].item() == pytest.approx(0.001)
+    assert resting["fill_count"].item() == 0.0
+    assert promoted["fill_count"].item() == 2.0
+    assert promoted["open_positions"].item() == 2.0
+    assert promoted["coin_fill_counts"].cpu().tolist() == [[1.0, 1.0]]
+    assert promoted["balance"].item() < 1_000.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_multicoin_short_market_entry_uses_executable_minimum():
+    count = 5
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 100.04, 1.0, 0.0),
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0),
+    ]
+    overrides = np.full((2, 29), np.nan, dtype=np.float32)
+    overrides[1, 11] = 0.0
+    runner, row = _multicoin_exposure_fixture(
+        "ema_anchor",
+        "short",
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+    )
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_pct")] = 0.0001
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
+    params = np.asarray([row], dtype=np.float64)
+
+    output = runner.run(params)
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() == 1.0
+    assert output["fill_count_entry"].item() == 1.0
+    assert output["coin_fill_counts"].cpu().tolist() == [[1.0, 0.0]]
+    assert output["short_psize"].item() == pytest.approx(1.001)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_market_entry_cap_uses_market_touch(side):
+    count = 5
+    closes = np.full((count, 2), 100.0)
+    highs = closes.copy()
+    lows = closes.copy()
+    if side == "long":
+        lows[-1] = 99.0
+    else:
+        highs[-1] = 101.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    market_runner, row = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        markets=markets,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.003,
+    )
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_pct")] = 1.0
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.002
+    row[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("total_wallet_exposure_limit")
+    ] = 0.2
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("n_positions")] = 2.0
+    params = np.asarray([row], dtype=np.float64)
+
+    promoted = market_runner.run(params)
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert promoted["fill_count"].item() == 2.0
+    expected_size = 1.998 if side == "long" else 1.996
+    assert promoted[size_key].item() == pytest.approx(expected_size)
+    assert promoted["total_wallet_exposure_max"].item() == pytest.approx(
+        expected_size * 100.0 / 1_000.0
+    )
+    assert promoted["total_wallet_exposure_max"].item() < 0.2
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_ema_multicoin_market_close_uses_stored_next_close_intent(side):
+    count = 6
+    base = np.asarray([100.0, 120.0])
+    closes = np.tile(base, (count, 1))
+    closes[-1] *= 0.9 if side == "long" else 1.1
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    resting_runner, row = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+    )
+    market_runner, _ = _multicoin_exposure_fixture(
+        "ema_anchor",
+        side,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+    )
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
+    row[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
+    ] = 100.0
+    params = np.asarray([row], dtype=np.float64)
+
+    resting = resting_runner.run(params)
+    promoted = market_runner.run(
+        np.asarray([row, row], dtype=np.float64),
+        end_steps=np.asarray([count - 2, count - 1], dtype=np.int32),
+    )
+    torch.mps.synchronize()
+
+    assert resting["fill_count"].item() == 0.0
+    assert promoted["fill_count"].cpu().tolist() == [2.0, 4.0]
+    assert promoted["fill_count_entry"].cpu().tolist() == [2.0, 2.0]
+    assert promoted["coin_fill_counts"].cpu().tolist() == [
+        [1.0, 1.0],
+        [2.0, 2.0],
+    ]
+    size_key = "psize" if side == "long" else "short_psize"
+    assert promoted[size_key][1].item() < promoted[size_key][0].item()
+    assert promoted["balance"][1].item() < promoted["balance"][0].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
+    count = 6
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    _, row, run, data = _multicoin_exposure_fixture(
+        "ema_anchor",
+        "long",
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        return_context=True,
+    )
+    row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("offset")] = 0.0005
+    row[
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("entry_cooldown_minutes")
+    ] = 100.0
+    params = np.asarray([row + row, row + row], dtype=np.float64)
+    overrides = np.full((2, 29), np.nan, dtype=np.float32)
+    resting_runner = MpsEmaAnchorMulticoinFusedRunner(
+        run,
+        data,
+        long_coin_overrides=overrides,
+        short_coin_overrides=overrides,
+        collect_coin_fill_counts=True,
+        hedge_mode=True,
+    )
+    market_runner = MpsEmaAnchorMulticoinFusedRunner(
+        run,
+        data,
+        long_coin_overrides=overrides,
+        short_coin_overrides=overrides,
+        collect_coin_fill_counts=True,
+        hedge_mode=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+    )
+
+    end_steps = np.asarray([count - 2, count - 1], dtype=np.int32)
+    resting = resting_runner.run(params, end_steps=end_steps)
+    promoted = market_runner.run(params, end_steps=end_steps)
+    torch.mps.synchronize()
+
+    assert market_runner.settings[11].item() == 1.0
+    assert market_runner.settings[12].item() == pytest.approx(0.001)
+    assert resting["fill_count"].cpu().tolist() == [0.0, 0.0]
+    assert promoted["fill_count"].cpu().tolist() == [4.0, 8.0]
+    assert promoted["fill_count_long"].cpu().tolist() == [2.0, 4.0]
+    assert promoted["coin_fill_counts"].cpu().tolist() == [
+        [2.0, 2.0],
+        [4.0, 4.0],
+    ]
+    assert promoted["psize"][1].item() < promoted["psize"][0].item()
+    assert (
+        promoted["short_psize"][1].item()
+        < promoted["short_psize"][0].item()
+    )
+    assert promoted["balance"][1].item() < promoted["balance"][0].item()
 
 
 @pytest.mark.skipif(
@@ -4931,7 +5246,21 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         (coin_count, 29), float("nan"), dtype=torch.float32, device="mps"
     )
     run_settings = torch.tensor(
-        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        [
+            1_000.0,
+            50.0,
+            60_000.0,
+            0.0,
+            0.02,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.001,
+        ],
         dtype=torch.float32,
         device="mps",
     )
