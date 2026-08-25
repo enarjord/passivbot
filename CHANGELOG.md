@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added asymmetric long/short coin universes to non-suite dual-side Apple MPS multi-coin EMA
+  Anchor and Trailing Martingale optimization. The proxy now preserves exact payload `entry_eligible`
+  decisions as side-specific zero-exposure coin overrides, so Forager selection, dynamic wallet
+  exposure, HSL, auto-unstuck, and one-way arbitration exclude the same side-ineligible coins as
+  exact Rust without requiring matching long and short approved or ignored lists.
+
 - Added baseline multi-coin Trailing Martingale ordinary market execution to Apple MPS
   optimization for long-only, short-only, fused long+short, hedge-mode, one-way, and compatible
   suite runs whose entry and close modes remain wholly trailing or wholly recursive. Metal retains

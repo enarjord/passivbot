@@ -966,10 +966,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         {
             "strategy_kind": strategy_kind,
             "approved_coins": {
-                "long": ["BTC", "ETH"],
-                "short": ["BTC", "ETH"],
+                "long": ["BTC"],
+                "short": ["ETH"],
             },
-            "ignored_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": ["ETH"], "short": ["BTC"]},
             "hedge_mode": False,
             "hsl_signal_mode": "coin",
         }
@@ -998,9 +998,12 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             {key: value for key, value in flat.items() if key.startswith("unstuck_")}
         )
 
-    def bot_payload(side):
+    def bot_payload(side, coin):
         flat = flatten_shared_bot_side(config["bot"][side])
+        entry_eligible = (side, coin) in {("long", "BTC"), ("short", "ETH")}
         return {
+            "entry_eligible": entry_eligible,
+            "wallet_exposure_limit": -1.0 if entry_eligible else 0.0,
             "entry_cooldown_minutes": flat["risk_entry_cooldown_minutes"],
             "filter_volume_ema_span_1m": flat[
                 "forager_volume_ema_span_1m"
@@ -1034,8 +1037,8 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
 
     payload = SimpleNamespace(
         bot_params_list=[
-            {side: bot_payload(side) for side in ("long", "short")}
-            for _ in range(2)
+            {side: bot_payload(side, coin) for side in ("long", "short")}
+            for coin in ("BTC", "ETH")
         ],
         strategy_params_list=[
             {
@@ -1119,6 +1122,13 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         2,
         override_cols,
     )
+    wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
+    long_overrides = constructed["kwargs"]["long_coin_overrides"]
+    short_overrides = constructed["kwargs"]["short_coin_overrides"]
+    assert np.isnan(long_overrides[0, wallet_exposure_column])
+    assert long_overrides[1, wallet_exposure_column] == 0.0
+    assert short_overrides[0, wallet_exposure_column] == 0.0
+    assert np.isnan(short_overrides[1, wallet_exposure_column])
     assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
     assert (
         constructed["kwargs"]["hsl_raw_drawdown_enabled"]
@@ -1953,6 +1963,59 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
     assert short_matrix[1, offset_index] == pytest.approx(0.5)
     assert short_matrix[1, 10] == pytest.approx(30.0)
     assert np.isnan(short_matrix[1, 11])
+
+
+@pytest.mark.parametrize(
+    ("builder", "wallet_exposure_column"),
+    [
+        (_build_multicoin_ema_coin_overrides, 11),
+        (_build_multicoin_tm_coin_overrides, 24),
+    ],
+)
+def test_multicoin_coin_overrides_preserve_side_entry_eligibility(
+    builder, wallet_exposure_column
+):
+    strategy = {
+        "entry": {},
+        "close": {},
+    }
+    payload = SimpleNamespace(
+        strategy_params_list=[
+            {"long": strategy},
+            {"long": strategy},
+        ],
+        bot_params_list=[
+            {
+                "long": {
+                    "entry_eligible": False,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": 0.0,
+                }
+            },
+            {
+                "long": {
+                    "entry_eligible": True,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": -1.0,
+                }
+            },
+        ],
+    )
+
+    matrix, contract = builder(
+        config={"coin_overrides": {}},
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=lambda *_args: {},
+    )
+
+    assert matrix[0, wallet_exposure_column] == 0.0
+    assert np.isnan(matrix[1, wallet_exposure_column])
+    assert contract["values"][0][wallet_exposure_column] == 0.0
+    assert contract["values"][1][wallet_exposure_column] is None
 
 
 def test_multicoin_coin_overrides_pack_complete_hsl_group():

@@ -991,7 +991,7 @@ def _validate_tm_multicoin_market_runtime_scope(
             "GPU multi-coin Trailing Martingale ordinary market execution "
             "currently supports wholly trailing or wholly recursive ordinary "
             "entries and closes plus position/TWEL/auto-unstuck reducers; "
-            "realized-loss gating remains unsupported; settings: "
+            "settings: "
             + ", ".join(unsupported)
         )
 
@@ -1088,17 +1088,6 @@ def _validate_scope_config(
             raise ValueError(
                 "GPU multicoin foundation requires one or two enabled sides"
             )
-        if len(enabled_sides) == 2:
-            approved = config.get("live", {}).get("approved_coins", {}) or {}
-            ignored = config.get("live", {}).get("ignored_coins", {}) or {}
-            for label, values in (("approved", approved), ("ignored", ignored)):
-                if set(values.get("long", []) or []) != set(
-                    values.get("short", []) or []
-                ):
-                    raise ValueError(
-                        "GPU dual-side multicoin optimization currently requires "
-                        f"matching long/short {label}_coins"
-                    )
         if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
             raise ValueError(
                 "GPU multicoin foundation requires "
