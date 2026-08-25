@@ -906,6 +906,125 @@ def _validate_resume_evidence_budget(
         )
 
 
+def _tm_market_trailing_value_supported(value) -> bool:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return False
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        packed = np.float32(value)
+    return (
+        math.isfinite(value)
+        and value > 0.0
+        and np.isfinite(packed)
+        and packed > 0.0
+    )
+
+
+def _validate_tm_multicoin_market_runtime_scope(
+    config: dict, enabled_sides
+) -> None:
+    """Reject multi-coin TM market features not modeled by this slice."""
+
+    unsupported = []
+    max_loss = float(config.get("live", {}).get("max_realized_loss_pct", 1.0))
+    if not math.isclose(max_loss, 1.0, abs_tol=1.0e-12):
+        unsupported.append(
+            f"live.max_realized_loss_pct={max_loss} (required 1.0)"
+        )
+    for side in sorted(set(enabled_sides or ())):
+        side_config = config.get("bot", {}).get(side, {}) or {}
+        risk = side_config.get("risk", {}) or {}
+        if bool(risk.get("position_exposure_enforcer_enabled", False)):
+            unsupported.append(
+                f"bot.{side}.risk.position_exposure_enforcer_enabled=true"
+            )
+        if bool(risk.get("total_exposure_enforcer_enabled", False)):
+            unsupported.append(
+                f"bot.{side}.risk.total_exposure_enforcer_enabled=true"
+            )
+        if bool((side_config.get("unstuck", {}) or {}).get("enabled", False)):
+            unsupported.append(f"bot.{side}.unstuck.enabled=true")
+        strategy = (
+            side_config.get("strategy", {}).get("trailing_martingale", {}) or {}
+        )
+        for branch in ("entry", "close"):
+            value = (strategy.get(branch, {}) or {}).get(
+                "retracement_base_pct", 0.0
+            )
+            if not _tm_market_trailing_value_supported(value):
+                unsupported.append(
+                    f"bot.{side}.strategy.trailing_martingale.{branch}."
+                    f"retracement_base_pct={value!r} (must remain trailing)"
+                )
+
+    overrides = config.get("coin_overrides", {}) or {}
+    if isinstance(overrides, dict):
+        for coin, patch in overrides.items():
+            if not isinstance(patch, dict):
+                continue
+            bot_patch = patch.get("bot", {}) or {}
+            if not isinstance(bot_patch, dict):
+                continue
+            for side in sorted(set(enabled_sides or ())):
+                side_patch = bot_patch.get(side, {}) or {}
+                if not isinstance(side_patch, dict):
+                    continue
+                risk_patch = side_patch.get("risk", {}) or {}
+                if not isinstance(risk_patch, dict):
+                    risk_patch = {}
+                if bool(
+                    risk_patch.get("position_exposure_enforcer_enabled", False)
+                ):
+                    unsupported.append(
+                        f"coin_overrides.{coin}.bot.{side}.risk."
+                        "position_exposure_enforcer_enabled=true"
+                    )
+                if bool(
+                    risk_patch.get("total_exposure_enforcer_enabled", False)
+                ):
+                    unsupported.append(
+                        f"coin_overrides.{coin}.bot.{side}.risk."
+                        "total_exposure_enforcer_enabled=true"
+                    )
+                unstuck_patch = side_patch.get("unstuck", {}) or {}
+                if not isinstance(unstuck_patch, dict):
+                    unstuck_patch = {}
+                if bool(unstuck_patch.get("enabled", False)):
+                    unsupported.append(
+                        f"coin_overrides.{coin}.bot.{side}.unstuck.enabled=true"
+                    )
+                strategy_root = side_patch.get("strategy", {}) or {}
+                strategy_patch = (
+                    strategy_root.get("trailing_martingale", {}) or {}
+                    if isinstance(strategy_root, dict)
+                    else {}
+                )
+                if not isinstance(strategy_patch, dict):
+                    strategy_patch = {}
+                for branch in ("entry", "close"):
+                    branch_patch = strategy_patch.get(branch, {}) or {}
+                    if not isinstance(branch_patch, dict):
+                        continue
+                    if "retracement_base_pct" not in branch_patch:
+                        continue
+                    value = branch_patch["retracement_base_pct"]
+                    if not _tm_market_trailing_value_supported(value):
+                        unsupported.append(
+                            f"coin_overrides.{coin}.bot.{side}.strategy."
+                            f"trailing_martingale.{branch}."
+                            f"retracement_base_pct={value!r} (must remain trailing)"
+                        )
+    if unsupported:
+        raise ValueError(
+            "GPU multi-coin Trailing Martingale ordinary market execution "
+            "currently supports wholly trailing ordinary entries and closes "
+            "without position/TWEL reducers, auto-unstuck, or realized-loss "
+            "gating; unsupported settings: "
+            + ", ".join(unsupported)
+        )
+
+
 def _validate_scope_config(
     config: dict,
     *,
@@ -967,10 +1086,9 @@ def _validate_scope_config(
                 "live.market_order_near_touch_threshold"
             )
         if coin_count > 1:
-            if strategy_kind != "ema_anchor":
-                raise ValueError(
-                    "GPU multicoin ordinary market execution currently supports "
-                    "EMA Anchor only"
+            if strategy_kind == "trailing_martingale":
+                _validate_tm_multicoin_market_runtime_scope(
+                    config, enabled_sides
                 )
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")) and len(
         enabled_sides
@@ -2711,7 +2829,7 @@ def _validate_pinned_scope_bounds(
 
 
 def _validate_tm_market_mode_bounds(
-    bound_by_key, base_by_key, enabled_sides, config
+    bound_by_key, base_by_key, enabled_sides, config, *, coin_count: int = 1
 ) -> None:
     if (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
@@ -2736,10 +2854,15 @@ def _validate_tm_market_mode_bounds(
             and np.isfinite(packed_entry_low)
             and packed_entry_low > np.float32(0.0)
         )
+        mode_supported = (
+            trailing_only
+            if coin_count > 1
+            else recursive_only or trailing_only
+        )
         if (
             not math.isfinite(entry_low)
             or not math.isfinite(entry_high)
-            or not (recursive_only or trailing_only)
+            or not mode_supported
         ):
             unsupported.append(
                 f"{entry_key} bounds=({entry_low}, {entry_high})"
@@ -2760,35 +2883,98 @@ def _validate_tm_market_mode_bounds(
             and np.isfinite(packed_close_low)
             and packed_close_low > np.float32(0.0)
         )
+        mode_supported = (
+            trailing_only
+            if coin_count > 1
+            else recursive_only or trailing_only
+        )
         if (
             not math.isfinite(close_low)
             or not math.isfinite(close_high)
-            or not (recursive_only or trailing_only)
+            or not mode_supported
         ):
             unsupported.append(
                 f"{close_key} bounds=({close_low}, {close_high})"
             )
     if unsupported:
+        supported_modes = (
+            "wholly trailing with a float32-positive lower bound"
+            if coin_count > 1
+            else "wholly recursive (high<=0) or wholly trailing with a "
+            "float32-positive lower bound"
+        )
         raise ValueError(
             "GPU Trailing Martingale ordinary market execution currently "
             "requires each enabled side's entry retracement range to remain "
-            "wholly recursive (high<=0) or wholly trailing with a float32-"
-            "positive lower bound for both entry and close retracement. Entry "
-            "or close mode-crossing bounds remain fail closed: "
+            f"{supported_modes} for both entry and close retracement. Entry "
+            "or close unsupported/mode-crossing bounds remain fail closed: "
             + ", ".join(unsupported)
         )
 
 
 def _validate_tm_market_template_bounds(
-    bound_by_key, base_by_key, enabled_sides, config, suite_inputs
+    bound_by_key,
+    base_by_key,
+    enabled_sides,
+    config,
+    suite_inputs,
+    *,
+    coin_count: int = 1,
 ) -> None:
     """Validate a directly executed config, not a suite's override template."""
 
     if suite_inputs:
         return
     _validate_tm_market_mode_bounds(
-        bound_by_key, base_by_key, enabled_sides, config
+        bound_by_key,
+        base_by_key,
+        enabled_sides,
+        config,
+        coin_count=coin_count,
     )
+
+
+def _validate_tm_multicoin_market_foundation_bounds(
+    bound_by_key,
+    base_by_key,
+    enabled_sides,
+    config,
+    *,
+    coin_count: int,
+) -> None:
+    if (
+        coin_count <= 1
+        or str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+        != "trailing_martingale"
+        or not bool(config.get("live", {}).get("market_orders_allowed"))
+    ):
+        return
+    unsupported = []
+    for side in sorted(set(enabled_sides or ())):
+        for suffix in (
+            "risk_position_exposure_enforcer_enabled",
+            "risk_total_exposure_enforcer_enabled",
+            "unstuck_enabled",
+        ):
+            key = f"{side}_{suffix}"
+            bound = bound_by_key.get(key)
+            values = (
+                (float(bound.low), float(bound.high))
+                if bound is not None
+                else (float(base_by_key.get(key, 0.0)),) * 2
+            )
+            if any(
+                not math.isclose(value, 0.0, abs_tol=1.0e-12)
+                for value in values
+            ):
+                unsupported.append(f"{key} bounds={values}")
+    if unsupported:
+        raise ValueError(
+            "GPU multi-coin Trailing Martingale ordinary market execution "
+            "currently requires protective reducer enablement bounds pinned "
+            "at 0.0: "
+            + ", ".join(unsupported)
+        )
 
 
 def _validate_directional_search_space(
@@ -3312,6 +3498,14 @@ def run_backend(
         enabled_sides,
         proxy_config,
         suite_inputs,
+        coin_count=max_coin_count,
+    )
+    _validate_tm_multicoin_market_foundation_bounds(
+        bound_by_key,
+        base_by_key,
+        enabled_sides,
+        proxy_config,
+        coin_count=max_coin_count,
     )
     _validate_hsl_bound_contracts(bound_by_key, proxy_config)
 
@@ -3356,6 +3550,14 @@ def run_backend(
             scenario_base_by_key,
             scenario_enabled_sides,
             item["config"],
+            coin_count=item["coin_count"],
+        )
+        _validate_tm_multicoin_market_foundation_bounds(
+            scenario_bound_by_key,
+            scenario_base_by_key,
+            scenario_enabled_sides,
+            item["config"],
+            coin_count=item["coin_count"],
         )
         _validate_directional_search_space(
             scenario_bound_by_key,

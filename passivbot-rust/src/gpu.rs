@@ -1024,7 +1024,13 @@ mod tests {
         );
         assert!(source.contains("coin_hsl_eligibility_changed"));
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
-        assert!(source.contains("market_panic ? taker_fee : maker_fee"));
+        assert!(source.contains("market_execution ? taker_fee : maker_fee"));
+        assert!(source.contains("bool entry_market[MAX_COINS]"));
+        assert!(source.contains("bool close_market[MAX_COINS]"));
+        assert!(source.contains("bool secondary_close_market[MAX_COINS]"));
+        assert!(source.contains("should_use_ordinary_market_execution("));
+        assert!(source.contains("ordinary_market_fill_price("));
+        assert!(source.contains("resize_market_close_qty("));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[scalar_offset + 19] = loss_sum"));
         assert!(source
@@ -1045,6 +1051,8 @@ mod tests {
         assert!(source.contains("if (effective_equity >= account_peak)"));
         assert!(source.contains("const bool collect_coin_fill_counts = run_settings[6] > 0.5f"));
         assert!(source.contains("const bool hedge_mode = run_settings[10] > 0.5f"));
+        assert!(source.contains("const bool market_orders_allowed = run_settings[9] > 0.5f"));
+        assert!(source.contains("const bool market_orders_allowed = run_settings[11] > 0.5f"));
         assert!(source.contains("compute_tm_multicoin_one_way_initial_blocks"));
         assert!(source.contains("device float* coin_fill_counts"));
         assert_eq!(
@@ -1073,7 +1081,7 @@ mod tests {
         ));
         assert!(source.contains("if (alive && !post_fill_balance_depleted)"));
         assert!(source.contains("market_price * 0.9995f / price_step"));
-        assert_eq!(source.matches("clamped_market_price(").count(), 3);
+        assert!(source.matches("clamped_market_price(").count() >= 4);
         assert!(source.contains("finalized_twel_reducer_qty = ordinary_can_accompany_reducer"));
         assert!(source.contains("finalized_reducer_qty_with_ordinary"));
         assert!(source.contains("finalized_wel_reducer_qty = finalized_reducer_qty"));

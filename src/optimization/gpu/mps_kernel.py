@@ -1510,6 +1510,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 float(bool(hsl_panic_market_long)),
                 float(bool(hsl_panic_market_short)),
                 float(bool(hedge_mode)),
+                float(bool(market_orders_allowed)),
+                float(market_order_near_touch_threshold),
             ],
             dtype=torch.float32,
             device="mps",

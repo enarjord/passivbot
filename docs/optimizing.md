@@ -321,8 +321,16 @@ The supported slice is intentionally narrow:
   cost while allocating the portfolio entry cap. Protective reducers participate in the same
   finalized-quantity ordering, shared loss budget, and per-position fallback used by exact Rust;
   their market slippage and taker fees are included in the projected loss. Static coin overrides
-  may enable or tune unstuck. Multi-coin Trailing Martingale ordinary market execution remains fail
-  closed
+  may enable or tune unstuck. Multi-coin Trailing Martingale supports ordinary market entries and
+  ordinary strategy closes for long-only, short-only, fused long+short, hedge-mode, one-way, and
+  compatible suite runs when every enabled entry and close retracement range remains wholly
+  trailing with a float32-positive lower bound. It uses the same retained generation-time intent,
+  next-valid-candle adverse fill, taker-fee, executable-touch minimum sizing for short entries and
+  all closes, and portfolio entry-cap accounting contract. HSL, static coin overrides, and forager
+  selection remain supported.
+  Recursive entry or close modes, position- and total-exposure repair, auto-unstuck, and
+  realized-loss gating remain fail closed for multi-coin Trailing Martingale market mode until
+  their market interactions are modeled
 - no invalid candle tail after the selected coin's final valid candle
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and

@@ -1754,14 +1754,16 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f, -2, 0ul
+        1, 1, false, 1, 1, 0, false, 1.0f,
+        false, 0.001f, -2, 0ul
     );
     generate_tm_multicoin_side_orders(
         short_side, short_config, account,
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, true, 1, 1, 0, false, 1.0f, -2, 0ul
+        1, 1, true, 1, 1, 0, false, 1.0f,
+        false, 0.001f, -2, 0ul
     );
     output[0] = long_side.entry_qty[0];
     output[1] = short_side.entry_qty[0];
@@ -1776,7 +1778,8 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
         bars, touch_ticks, touch_nearest_ticks,
         touch_min_qty_bits, touch_min_qty_relation,
         coin_settings, coin_overrides,
-        1, 1, false, 1, 1, 0, false, 1.0f, -2, 1ul
+        1, 1, false, 1, 1, 0, false, 1.0f,
+        false, 0.001f, -2, 1ul
     );
     output[8] = long_side.entry_qty[0];
     output[9] = long_side.entry_candidate[0] ? 1.0f : 0.0f;
@@ -5051,6 +5054,164 @@ def test_mps_ema_multicoin_market_entry_uses_stored_next_close_intent(side):
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_trailing_market_entry_uses_stored_next_close_intent(side):
+    count = 5
+    base = np.asarray([100.0, 120.0])
+    closes = np.tile(base, (count, 1))
+    closes[-1] *= 1.1 if side == "long" else 0.9
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    resting_runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+    )
+    market_runner, _ = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+    )
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_retracement_base_pct"
+        )
+    ] = 0.01
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "close_retracement_base_pct"
+        )
+    ] = 0.01
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_initial_ema_dist"
+        )
+    ] = 0.0005
+    row[
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+            "entry_cooldown_minutes"
+        )
+    ] = 100.0
+    params = np.asarray([row], dtype=np.float64)
+
+    resting = resting_runner.run(params)
+    promoted = market_runner.run(params)
+    torch.mps.synchronize()
+
+    assert market_runner.settings[9].item() == 1.0
+    assert market_runner.settings[10].item() == pytest.approx(0.001)
+    assert resting["fill_count"].item() == 0.0
+    assert promoted["fill_count"].item() == 2.0
+    assert promoted["open_positions"].item() == 2.0
+    assert promoted["coin_fill_counts"].cpu().tolist() == [[1.0, 1.0]]
+    assert promoted["balance"].item() < 1_000.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_trailing_market_close_uses_stored_next_close_intent(side):
+    count = 8
+    base = np.asarray([100.0, 120.0])
+    closes = np.tile(base, (count, 1))
+    highs = closes.copy()
+    lows = closes.copy()
+    if side == "long":
+        closes[5] = base * 1.08
+        highs[5] = base * 1.10
+        lows[5] = base * 1.08
+        closes[6] = base * 0.90
+        highs[6] = closes[6]
+        lows[6] = closes[6]
+    else:
+        closes[5] = base * 0.92
+        highs[5] = base * 0.92
+        lows[5] = base * 0.90
+        closes[6] = base * 1.10
+        highs[6] = closes[6]
+        lows[6] = closes[6]
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+    )
+    for key, value in {
+        "entry_initial_ema_dist": 0.0005,
+        "entry_threshold_base_pct": 10.0,
+        "entry_retracement_base_pct": 0.01,
+        "close_qty_pct": 1.0,
+        "close_threshold_base_pct": 0.02,
+        "close_retracement_base_pct": 0.01,
+        "entry_cooldown_minutes": 100.0,
+    }.items():
+        row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+    params = np.asarray([row, row], dtype=np.float64)
+
+    output = runner.run(
+        params,
+        end_steps=np.asarray([count - 2, count - 1], dtype=np.int32),
+    )
+    torch.mps.synchronize()
+
+    assert output["fill_count"].cpu().tolist() == [2.0, 4.0]
+    assert output["fill_count_entry"].cpu().tolist() == [2.0, 2.0]
+    assert output["coin_fill_counts"].cpu().tolist() == [
+        [1.0, 1.0],
+        [2.0, 2.0],
+    ]
+    size_key = "psize" if side == "long" else "short_psize"
+    assert output[size_key][0].item() > 0.0
+    assert output[size_key][1].item() == 0.0
+    assert output["balance"][1].item() < output["balance"][0].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 def test_mps_ema_multicoin_short_market_entry_uses_executable_minimum():
     count = 5
     closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
@@ -5078,6 +5239,48 @@ def test_mps_ema_multicoin_short_market_entry_uses_executable_minimum():
     params = np.asarray([row], dtype=np.float64)
 
     output = runner.run(params)
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() == 1.0
+    assert output["fill_count_entry"].item() == 1.0
+    assert output["coin_fill_counts"].cpu().tolist() == [[1.0, 0.0]]
+    assert output["short_psize"].item() == pytest.approx(1.001)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_multicoin_short_market_entry_uses_executable_minimum():
+    count = 5
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 100.04, 1.0, 0.0),
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0),
+    ]
+    overrides = np.full((2, 44), np.nan, dtype=np.float32)
+    overrides[1, 24] = 0.0
+    runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        "short",
+        coin_overrides=overrides,
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        collect_coin_fill_counts=True,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+    )
+    for key, value in {
+        "entry_initial_qty_pct": 0.0001,
+        "entry_initial_ema_dist": 0.0005,
+        "entry_retracement_base_pct": 0.01,
+        "close_retracement_base_pct": 0.01,
+    }.items():
+        row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+
+    output = runner.run(np.asarray([row], dtype=np.float64))
     torch.mps.synchronize()
 
     assert output["fill_count"].item() == 1.0
@@ -5129,6 +5332,59 @@ def test_mps_ema_multicoin_market_entry_cap_uses_market_touch(side):
     assert promoted["fill_count"].item() == 2.0
     expected_size = 1.998 if side == "long" else 1.996
     assert promoted[size_key].item() == pytest.approx(expected_size)
+    assert promoted["total_wallet_exposure_max"].item() == pytest.approx(
+        expected_size * 100.0 / 1_000.0
+    )
+    assert promoted["total_wallet_exposure_max"].item() < 0.2
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_multicoin_market_entry_cap_uses_market_touch(side):
+    count = 5
+    closes = np.full((count, 2), 100.0)
+    highs = closes.copy()
+    lows = closes.copy()
+    if side == "long":
+        lows[-1] = 99.0
+    else:
+        highs[-1] = 101.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+        for _ in range(2)
+    ]
+    market_runner, row = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        side,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        markets=markets,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.003,
+    )
+    for key, value in {
+        "entry_initial_qty_pct": 1.0,
+        "entry_initial_ema_dist": 0.002,
+        "entry_retracement_base_pct": 0.01,
+        "close_retracement_base_pct": 0.01,
+        "total_wallet_exposure_limit": 0.2,
+        "n_positions": 2.0,
+    }.items():
+        row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+
+    promoted = market_runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    size_key = "psize" if side == "long" else "short_psize"
+    assert promoted["fill_count"].item() == 2.0
+    expected_size = 1.999
+    assert promoted[size_key].item() == pytest.approx(expected_size)
+    passive_limit_size = 2.003 if side == "long" else 1.995
+    assert promoted[size_key].item() != pytest.approx(passive_limit_size)
     assert promoted["total_wallet_exposure_max"].item() == pytest.approx(
         expected_size * 100.0 / 1_000.0
     )
@@ -5278,6 +5534,90 @@ def test_mps_ema_multicoin_fused_market_execution_covers_both_sides():
         < promoted["short_psize"][0].item()
     )
     assert promoted["balance"][1].item() < promoted["balance"][0].item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("hedge_mode", [True, False])
+def test_mps_tm_multicoin_fused_trailing_market_entries_respect_position_mode(
+    hedge_mode,
+):
+    count = 5
+    closes = np.tile(np.asarray([100.0, 120.0]), (count, 1))
+    markets = [
+        ProxyMarket(
+            0.001,
+            0.01,
+            0.001,
+            0.0,
+            1.0,
+            maker_fee=0.0,
+            taker_fee=0.01,
+        )
+        for _ in range(2)
+    ]
+    _, row, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        "long",
+        count=count,
+        closes=closes,
+        highs=closes,
+        lows=closes,
+        markets=markets,
+        return_context=True,
+    )
+    for key, value in {
+        "entry_initial_ema_dist": 0.0005,
+        "entry_retracement_base_pct": 0.01,
+        "close_retracement_base_pct": 0.01,
+        "entry_cooldown_minutes": 100.0,
+    }.items():
+        row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+    params = np.asarray([row + row], dtype=np.float64)
+    overrides = np.full((2, 44), np.nan, dtype=np.float32)
+    resting_runner = MpsTrailingMartingaleMulticoinFusedRunner(
+        run,
+        data,
+        long_coin_overrides=overrides,
+        short_coin_overrides=overrides,
+        collect_coin_fill_counts=True,
+        hedge_mode=hedge_mode,
+    )
+    market_runner = MpsTrailingMartingaleMulticoinFusedRunner(
+        run,
+        data,
+        long_coin_overrides=overrides,
+        short_coin_overrides=overrides,
+        collect_coin_fill_counts=True,
+        hedge_mode=hedge_mode,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+    )
+
+    resting = resting_runner.run(params)
+    promoted = market_runner.run(params)
+    torch.mps.synchronize()
+
+    assert market_runner.settings[11].item() == 1.0
+    assert market_runner.settings[12].item() == pytest.approx(0.001)
+    assert resting["fill_count"].item() == 0.0
+    expected_fills = 4.0 if hedge_mode else 2.0
+    assert promoted["fill_count"].item() == expected_fills
+    assert promoted["fill_count_entry"].item() == expected_fills
+    expected_coin_fills = [2.0, 2.0] if hedge_mode else [1.0, 1.0]
+    assert promoted["coin_fill_counts"].cpu().tolist() == [expected_coin_fills]
+    if hedge_mode:
+        assert promoted["fill_count_long"].item() == 2.0
+        assert promoted["psize"].item() > 0.0
+        assert promoted["short_psize"].item() > 0.0
+    else:
+        assert promoted["fill_count_long"].item() in (0.0, 2.0)
+        assert (promoted["psize"].item() > 0.0) != (
+            promoted["short_psize"].item() > 0.0
+        )
+    assert promoted["balance"].item() < 1_000.0
 
 
 @pytest.mark.skipif(
@@ -5968,7 +6308,21 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         (coin_count, 44), float("nan"), dtype=torch.float32, device="mps"
     )
     run_settings = torch.tensor(
-        [1_000.0, 50.0, 60_000.0, 0.0, 0.02, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        [
+            1_000.0,
+            50.0,
+            60_000.0,
+            0.0,
+            0.02,
+            1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.001,
+        ],
         dtype=torch.float32,
         device="mps",
     )
