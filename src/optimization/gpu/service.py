@@ -1882,14 +1882,6 @@ class MpsMulticoinProxy:
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
-        if (
-            self.strategy_kind == "trailing_martingale"
-            and candle_interval_minutes != 1
-        ):
-            raise ValueError(
-                "MPS multicoin Trailing Martingale currently supports one-minute "
-                "candles only"
-            )
         if not bool(backtest_params.get("dynamic_wel_by_tradability")):
             raise ValueError(
                 "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
@@ -2180,7 +2172,7 @@ class MpsMulticoinProxy:
             timestamps,
             runs=runs,
             markets=markets,
-            include_hourly_ranges=self.strategy_kind == "ema_anchor",
+            include_hourly_ranges=True,
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
         self.runners = {}

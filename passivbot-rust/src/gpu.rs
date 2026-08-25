@@ -988,11 +988,14 @@ mod tests {
             "const TrailingMartingaleMulticoinSideConfig config ="
         ));
         assert!(source.contains(
-            "init_trailing_martingale_multicoin_side_state(\n        side, config, bars, coin_settings, coin_overrides, C"
+            "init_trailing_martingale_multicoin_side_state(\n        side, config, coin_settings, coin_overrides, C"
         ));
         assert!(source.contains(
-            "update_tm_multicoin_side_indicators(\n            side, config, bars, coin_settings, k, C, start_hour_minute"
+            "update_tm_multicoin_side_indicators(\n            side, config, bars, hour_log_ranges, coin_settings, k, C"
         ));
+        assert!(source.contains("multicoin_utc_day_index("));
+        assert!(source.contains("multicoin_active_fill_day("));
+        assert!(!MPS_TRAILING_MARTINGALE_MULTICOIN_BODY.contains("start_hour_minute"));
         assert!(source.contains(
             "bool any_fill = process_tm_multicoin_side_fills(\n            side, config, account, fills"
         ));

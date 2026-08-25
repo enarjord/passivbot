@@ -940,7 +940,6 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "override_cols",
         "proxy_mode",
         "interval_minutes",
-        "expected_interval_error",
     ),
     [
         (
@@ -949,7 +948,6 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
             29,
             "shared-account-fused-ema-v1",
             5,
-            False,
         ),
         (
             "trailing_martingale",
@@ -957,7 +955,6 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
             TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
             "shared-account-fused-tm-v1",
             1,
-            False,
         ),
         (
             "trailing_martingale",
@@ -965,7 +962,6 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
             TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
             "shared-account-fused-tm-v1",
             5,
-            True,
         ),
     ],
 )
@@ -990,7 +986,6 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     override_cols,
     proxy_mode,
     interval_minutes,
-    expected_interval_error,
     needed_metrics,
     tail_enabled,
     raw_drawdown_enabled,
@@ -1124,15 +1119,21 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         },
     )
     backtest.build_backtest_payload = lambda *args, **kwargs: payload
-    monkeypatch.setattr(
-        gpu_service,
-        "build_mps_multicoin_data",
-        lambda *args, **kwargs: {
+    built_data_kwargs = {}
+
+    def fake_build_mps_multicoin_data(*args, **kwargs):
+        built_data_kwargs.update(kwargs)
+        return {
             "n": 4,
             "n_coins": 2,
             "n_days": 1,
             "ts0": 0,
-        },
+        }
+
+    monkeypatch.setattr(
+        gpu_service,
+        "build_mps_multicoin_data",
+        fake_build_mps_multicoin_data,
     )
     constructed = {}
 
@@ -1143,24 +1144,6 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     monkeypatch.setattr(mps_kernel, runner_name, FakeFusedRunner)
     values = np.ones((4, 2, 4), dtype=np.float64)
     timestamps = np.arange(4, dtype=np.int64) * interval_minutes * 60_000
-
-    if expected_interval_error:
-        with pytest.raises(
-            ValueError,
-            match="Trailing Martingale currently supports one-minute candles only",
-        ):
-            MpsMulticoinEmaProxy(
-                config=config,
-                hlcvs=values,
-                mss={"BTC": {}, "ETH": {}},
-                btc=np.ones(4, dtype=np.float64),
-                timestamps=timestamps,
-                exchange="bybit",
-                batch_size=8,
-                needed_metrics=needed_metrics,
-            )
-        assert constructed == {}
-        return
 
     proxy = MpsMulticoinEmaProxy(
         config=config,
@@ -1174,6 +1157,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
 
     assert isinstance(proxy.fused_runner, FakeFusedRunner)
+    assert built_data_kwargs["include_hourly_ranges"] is True
     assert constructed["run"].interval_ms == interval_minutes * 60_000
     assert proxy.runners == {}
     assert proxy.coin_override_contract["proxy_mode"] == proxy_mode
