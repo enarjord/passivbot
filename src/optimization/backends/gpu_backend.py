@@ -928,7 +928,7 @@ def _validate_tm_multicoin_market_runtime_scope(
 
     unsupported = []
     max_loss = float(config.get("live", {}).get("max_realized_loss_pct", 1.0))
-    if not math.isclose(max_loss, 1.0, abs_tol=1.0e-12):
+    if max_loss != 1.0:
         unsupported.append(
             f"live.max_realized_loss_pct={max_loss} (required 1.0)"
         )

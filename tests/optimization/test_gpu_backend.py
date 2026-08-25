@@ -2954,6 +2954,25 @@ def test_gpu_multicoin_tm_market_execution_fails_closed_for_reducers(
         _validate_scope(config, _MulticoinEvaluator())
 
 
+@pytest.mark.parametrize(
+    "max_realized_loss_pct",
+    [np.nextafter(1.0, 0.0), 0.9999999995, 1.0000000005],
+)
+def test_gpu_multicoin_tm_market_execution_requires_exact_disabled_loss_gate(
+    max_realized_loss_pct,
+):
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
+    config["live"]["market_orders_allowed"] = True
+    config["live"]["max_realized_loss_pct"] = max_realized_loss_pct
+    strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
+    strategy["entry"]["retracement_base_pct"] = 0.01
+    strategy["close"]["retracement_base_pct"] = 0.01
+
+    with pytest.raises(ValueError, match="max_realized_loss_pct"):
+        _validate_scope(config, _MulticoinEvaluator())
+
+
 @pytest.mark.parametrize("branch", ["entry", "close"])
 def test_gpu_multicoin_tm_market_execution_fails_closed_for_recursive_mode(branch):
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
