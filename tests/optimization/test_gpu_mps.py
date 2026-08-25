@@ -3222,6 +3222,75 @@ def test_mps_multicoin_min_effective_cost_filters_each_flat_coin(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_min_cost_rejection_never_reuses_flat_cash_floor(
+    strategy_kind, side
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
+        for min_cost in (60.0, 5.0)
+    ]
+    filtered, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=10,
+        markets=markets,
+        first_valid_indices=(0, 5),
+        collect_coin_fill_counts=True,
+        filter_by_min_effective_cost=True,
+    )
+
+    output = filtered.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    # Coin zero is screened while the proxy is flat. Exact Rust may admit that
+    # false negative using its higher current cash balance, so Metal must not
+    # reuse the liquidation floor when coin one becomes tradable later.
+    assert output["coin_fill_counts"].cpu().tolist()[0] == [0.0, 0.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("hedge_mode", [False, True])
+def test_mps_fused_min_cost_rejection_never_reuses_flat_cash_floor(
+    strategy_kind, hedge_mode
+):
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, min_cost, 1.0, 0.0)
+        for min_cost in (60.0, 5.0)
+    ]
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=10,
+        markets=markets,
+        first_valid_indices=(0, 5),
+        return_context=True,
+    )
+    runner_cls = (
+        MpsEmaAnchorMulticoinFusedRunner
+        if strategy_kind == "ema_anchor"
+        else MpsTrailingMartingaleMulticoinFusedRunner
+    )
+    runner = runner_cls(
+        run,
+        data,
+        hedge_mode=hedge_mode,
+        filter_by_min_effective_cost=True,
+    )
+
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("override_kind", ["initial_qty", "wel_allowance"])
 def test_mps_multicoin_min_effective_cost_uses_per_coin_overrides(
     strategy_kind, override_kind

@@ -4619,6 +4619,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         init_trailing_martingale_multicoin_fill_state();
     bool alive = true;
     bool equity_started = false;
+    bool min_cost_exact_open_uncertain = false;
     float fills_active_days_count = 0.0f;
     int last_active_fill_day = -1;
     float run_peak = -INFINITY;
@@ -4784,12 +4785,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             tm_multicoin_side_has_position(long_side, C);
         const bool short_has_position =
             tm_multicoin_side_has_position(short_side, C);
-        // The liquidation floor bounds equity, but it bounds cash balance only
-        // while the whole portfolio is flat. With any open position, no
-        // positive exact-cash lower bound is proven, so flat candidates fail
-        // closed while held positions remain managed.
+        if (long_has_position || short_has_position) {
+            min_cost_exact_open_uncertain = true;
+        }
         const float min_cost_balance_lower =
-            long_has_position || short_has_position
+            min_cost_exact_open_uncertain
             ? 0.0f : liquidation_floor;
         int long_hsl_mode = long_config.coin_hsl_mode ? 0
             : hsl_mode(
@@ -4801,6 +4801,34 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_side.hsl,
                 short_has_position
             );
+        if (filter_by_min_effective_cost
+            && !min_cost_exact_open_uncertain
+            && (
+                (long_can_generate
+                    && multicoin_min_cost_rejection_possible(
+                        long_side.psize, long_side.coin_hsl,
+                        long_config.coin_hsl_mode, long_hsl_mode,
+                        long_config.twel, long_config.allowance_pct,
+                        long_config.legacy_raw_allowance,
+                        long_config.initial_qty_pct,
+                        bars, coin_settings, long_coin_overrides, 24, 25, 6,
+                        k, C, long_effective_n_positions,
+                        min_cost_balance_lower
+                    ))
+                || (short_can_generate
+                    && multicoin_min_cost_rejection_possible(
+                        short_side.psize, short_side.coin_hsl,
+                        short_config.coin_hsl_mode, short_hsl_mode,
+                        short_config.twel, short_config.allowance_pct,
+                        short_config.legacy_raw_allowance,
+                        short_config.initial_qty_pct,
+                        bars, coin_settings, short_coin_overrides, 24, 25, 6,
+                        k, C, short_effective_n_positions,
+                        min_cost_balance_lower
+                    ))
+            )) {
+            min_cost_exact_open_uncertain = true;
+        }
         ulong long_one_way_selection_blocked_mask = 0ul;
         ulong short_one_way_selection_blocked_mask = 0ul;
         ulong long_one_way_order_blocked_mask = 0ul;
@@ -4855,7 +4883,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         if (long_can_generate) {
             update_tm_multicoin_side_selection(
                 long_side, long_config, bars, coin_settings,
-                long_coin_overrides, k, C, false, any_fill,
+                long_coin_overrides, k, C, false,
+                any_fill || min_cost_exact_open_uncertain,
                 long_effective_n_positions, score_hysteresis,
                 long_one_way_selection_blocked_mask,
                 filter_by_min_effective_cost, min_cost_balance_lower
@@ -4877,7 +4906,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         if (short_can_generate) {
             update_tm_multicoin_side_selection(
                 short_side, short_config, bars, coin_settings,
-                short_coin_overrides, k, C, true, any_fill,
+                short_coin_overrides, k, C, true,
+                any_fill || min_cost_exact_open_uncertain,
                 short_effective_n_positions, score_hysteresis,
                 short_one_way_selection_blocked_mask,
                 filter_by_min_effective_cost, min_cost_balance_lower
@@ -5355,6 +5385,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     int last_active_fill_day = -1;
     bool alive = true;
     bool equity_started = false;
+    bool min_cost_exact_open_uncertain = false;
     thread int& max_tradable_seen = side.max_tradable_seen;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
@@ -5468,15 +5499,34 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             && k > max(global_warmup, 1) && k >= requested_start_k;
         equity_started = equity_started || can_generate;
         bool has_hsl_position = tm_multicoin_side_has_position(side, C);
-        const float min_cost_balance_lower = has_hsl_position
-            ? 0.0f : liquidation_floor;
         int current_hsl_mode = coin_hsl_mode
             ? 0 : hsl_mode(hsl, has_hsl_position);
+        // A proxy position or filter rejection can leave exact Rust in a
+        // different open/cash state. Once that can happen,
+        // never reuse the equity-derived liquidation floor as a cash bound,
+        // even if the proxy later looks flat.
+        if (has_hsl_position) min_cost_exact_open_uncertain = true;
+        const float min_cost_balance_lower = min_cost_exact_open_uncertain
+            ? 0.0f : liquidation_floor;
+        if (filter_by_min_effective_cost && can_generate
+            && !min_cost_exact_open_uncertain
+            && multicoin_min_cost_rejection_possible(
+                side.psize, side.coin_hsl, config.coin_hsl_mode,
+                current_hsl_mode, config.twel, config.allowance_pct,
+                config.legacy_raw_allowance, config.initial_qty_pct,
+                bars, coin_settings, coin_overrides, 24, 25, 6,
+                k, C, effective_n_positions,
+                min_cost_balance_lower
+            )) {
+            min_cost_exact_open_uncertain = true;
+        }
 
         if (can_generate) {
             update_tm_multicoin_side_selection(
                 side, config, bars, coin_settings, coin_overrides,
-                k, C, short_side, any_fill, effective_n_positions,
+                k, C, short_side,
+                any_fill || min_cost_exact_open_uncertain,
+                effective_n_positions,
                 score_hysteresis, 0ul,
                 filter_by_min_effective_cost, min_cost_balance_lower
             );
