@@ -462,6 +462,7 @@ struct TrailingMartingaleMulticoinSideState {
 #endif
     ulong coin_hsl_entry_blocked_mask;
     ulong one_way_initial_blocked_mask;
+    ulong candle_eligibility_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
@@ -797,6 +798,7 @@ inline bool recursive_entry_gate_candidate_preferred(
 inline void apply_tm_multicoin_recursive_entry_twel_gate(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* bars,
     constant int* fill_ticks,
     constant float* coin_settings,
     constant float* coin_overrides,
@@ -850,6 +852,16 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         if (!first_pending[c] || !side.entry_recursive_market_mode[c]) {
             continue;
         }
+        // Exact Rust retains the already generated next entry in the global
+        // TWEL gate, but NextCandle.tradable=false prevents recursively
+        // expanding its market-fill suffix outside this coin's valid window.
+        const int first_valid = int(coin_settings[coin_offset + 6]);
+        const int last_valid = int(coin_settings[coin_offset + 7]);
+        if (k < first_valid || k > last_valid) continue;
+        const int bar_offset = (k * C + c) * 4;
+        if (!finite_positive(bars[bar_offset + 0])
+            || !finite_positive(bars[bar_offset + 1])
+            || !finite_positive(bars[bar_offset + 2])) continue;
         int tick_offset = (k * C + c) * 2;
         bool first_passive_reachable = short_side
             ? first[c].ticks <= fill_ticks[tick_offset + 0]
@@ -1341,7 +1353,7 @@ inline bool process_tm_multicoin_side_fills(
     bool any_fill = false;
     for (int c = 0; c < C; ++c) filled_coin[c] = false;
     apply_tm_multicoin_recursive_entry_twel_gate(
-        side, config, fill_ticks, coin_settings, coin_overrides,
+        side, config, bars, fill_ticks, coin_settings, coin_overrides,
         k, C, short_side, market_order_near_touch_threshold
     );
     for (int c = 0; c < C; ++c) {
@@ -2118,6 +2130,7 @@ inline void init_trailing_martingale_multicoin_side_state(
 #endif
     side.coin_hsl_entry_blocked_mask = 0ul;
     side.one_way_initial_blocked_mask = 0ul;
+    side.candle_eligibility_mask = 0ul;
     side.entry_deferred_twel_gate = false;
     side.selection_initialized = false;
     side.max_tradable_seen = 0;
@@ -2249,7 +2262,10 @@ inline float accumulate_tm_multicoin_side_unrealized_pnl(
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         float close = bars[bar_offset + 2];
-        if (side.psize[c] > 0.0f && finite_positive(close)) {
+        bool valid = k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && isfinite(close);
+        if (side.psize[c] > 0.0f && valid) {
             accumulator += side.psize[c]
                 * coin_settings[coin_offset + 4]
                 * (short_side
@@ -2395,10 +2411,11 @@ inline bool tm_multicoin_side_held_marks_are_valid(
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
         if (!finite_positive(side.pprice[c])
-            || !finite_positive(bars[bar_offset + 2])
             || !finite_positive(coin_settings[coin_offset + 4])) {
             return false;
         }
+        if (k > int(coin_settings[coin_offset + 7])) continue;
+        if (!isfinite(bars[bar_offset + 2])) return false;
     }
     return true;
 }
@@ -2406,6 +2423,9 @@ inline bool tm_multicoin_side_held_marks_are_valid(
 inline bool tm_multicoin_side_has_blocking_orders(
     thread TrailingMartingaleMulticoinSideState& side,
     thread const TrailingMartingaleMulticoinSideConfig& config,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
     int coin_count
 ) {
     bool side_has_position = config.coin_hsl_mode
@@ -2413,6 +2433,12 @@ inline bool tm_multicoin_side_has_blocking_orders(
     int side_mode = config.coin_hsl_mode
         ? 0 : hsl_mode(side.hsl, side_has_position);
     for (int c = 0; c < coin_count; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        bool valid = k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(bars[bar_offset + 2]);
+        if (!valid) continue;
         int mode = config.coin_hsl_mode
             ? hsl_mode(side.coin_hsl[c], side.psize[c] > 0.0f)
             : side_mode;
@@ -2474,10 +2500,10 @@ inline bool update_tm_multicoin_dual_side_hsl(
         short_side, coin_count
     );
     bool long_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
-        long_side, long_config, coin_count
+        long_side, long_config, bars, coin_settings, k, coin_count
     );
     bool short_has_blocking_orders = tm_multicoin_side_has_blocking_orders(
-        short_side, short_config, coin_count
+        short_side, short_config, bars, coin_settings, k, coin_count
     );
 
     if (long_config.coin_hsl_mode) {
@@ -2497,13 +2523,16 @@ inline bool update_tm_multicoin_dual_side_hsl(
             int bar_offset = (k * coin_count + c) * 4;
             float close = bars[bar_offset + 2];
             float c_mult = coin_settings[coin_offset + 4];
+            bool valid = k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && finite_positive(close);
             float long_coin_unrealized = long_side.psize[c] > 0.0f
-                    && finite_positive(close)
+                    && valid
                 ? long_side.psize[c] * c_mult
                     * (close - long_side.pprice[c])
                 : 0.0f;
             float short_coin_unrealized = short_side.psize[c] > 0.0f
-                    && finite_positive(close)
+                    && valid
                 ? short_side.psize[c] * c_mult
                     * (short_side.pprice[c] - close)
                 : 0.0f;
@@ -2513,12 +2542,12 @@ inline bool update_tm_multicoin_dual_side_hsl(
             int short_mode = hsl_mode(
                 short_side.coin_hsl[c], short_side.psize[c] > 0.0f
             );
-            bool long_coin_has_blocking_orders = long_mode != 3 && (
+            bool long_coin_has_blocking_orders = valid && long_mode != 3 && (
                 long_side.entry_qty[c] > 0.0f
                     || long_side.close_qty[c] > 0.0f
                     || long_side.secondary_close_qty[c] > 0.0f
             );
-            bool short_coin_has_blocking_orders = short_mode != 3 && (
+            bool short_coin_has_blocking_orders = valid && short_mode != 3 && (
                 short_side.entry_qty[c] > 0.0f
                     || short_side.close_qty[c] > 0.0f
                     || short_side.secondary_close_qty[c] > 0.0f
@@ -2708,9 +2737,32 @@ inline void update_tm_multicoin_side_selection(
     bool one_way_eligibility_changed = one_way_initial_blocked_mask
         != side.one_way_initial_blocked_mask;
     side.one_way_initial_blocked_mask = one_way_initial_blocked_mask;
+    ulong candle_eligibility_mask = 0ul;
+    int current_tradable_count = 0;
+    bool flat_selected_became_ineligible = false;
+    for (int c = 0; c < coin_count; ++c) {
+        int coin_offset = c * COIN_COLS;
+        int bar_offset = (k * coin_count + c) * 4;
+        bool eligible_now = k >= int(coin_settings[coin_offset + 8])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(bars[bar_offset + 2]);
+        if (eligible_now) {
+            candle_eligibility_mask |= 1ul << ulong(c);
+            if (coin_override_or(coin_overrides, c, 24, -1.0f) != 0.0f) {
+                current_tradable_count += 1;
+            }
+        } else if (selected[c] && psize[c] <= 0.0f) {
+            flat_selected_became_ineligible = true;
+        }
+    }
+    bool candle_eligibility_changed = side.selection_initialized
+        && candle_eligibility_mask != side.candle_eligibility_mask;
+    side.candle_eligibility_mask = candle_eligibility_mask;
     bool reselect = !side.selection_initialized || any_fill
         || coin_hsl_eligibility_changed
         || one_way_eligibility_changed
+        || candle_eligibility_changed
+        || flat_selected_became_ineligible
         || effective_n_positions != side.previous_effective_n_positions;
     if (!reselect) return;
 
@@ -2721,7 +2773,10 @@ inline void update_tm_multicoin_side_selection(
         if (selected[c]) active_count += 1;
         survivor[c] = false;
     }
-    int slots = max(effective_n_positions - active_count, 0);
+    // Exact selection shrinks with the currently eligible universe, while
+    // dynamic WEL sizing deliberately keeps the grow-only denominator.
+    int selection_n_positions = min(config.n_positions, current_tradable_count);
+    int slots = max(selection_n_positions - active_count, 0);
     int enabled_count = 0;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
@@ -2920,6 +2975,11 @@ inline int select_tm_multicoin_unstuck_coin(
         const int bar_offset = (k * coin_count + c) * 4;
         const int tick_offset = (k * coin_count + c) * 2;
         const float price_now = bars[bar_offset + 2];
+        const bool managed_candidate =
+            k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(price_now);
+        if (!managed_candidate) continue;
         const float c_mult = coin_settings[coin_offset + 4];
         const float price_step = coin_settings[coin_offset + 1];
         const bool coin_unstuck_enabled = coin_override_or(
@@ -3332,6 +3392,11 @@ inline void generate_tm_multicoin_side_orders(
                 if (processed[c] || psize[c] <= 0.0f
                     || pprice[c] <= 0.0f) continue;
                 int coin_offset = c * COIN_COLS;
+                int bar_offset = (k * C + c) * 4;
+                bool managed_candidate =
+                    k >= int(coin_settings[coin_offset + 6])
+                    && k <= int(coin_settings[coin_offset + 7]);
+                if (!managed_candidate) continue;
                 float c_mult = coin_settings[coin_offset + 4];
                 float exposure = psize[c] * pprice[c] * c_mult
                     / balance;
@@ -3435,6 +3500,11 @@ inline void generate_tm_multicoin_side_orders(
         int bar_offset = (k * C + c) * 4;
         int tick_offset = (k * C + c) * 2;
         float price_now = bars[bar_offset + 2];
+        bool managed_candidate =
+            k >= int(coin_settings[coin_offset + 6])
+            && k <= int(coin_settings[coin_offset + 7])
+            && finite_positive(price_now);
+        if (!managed_candidate) continue;
         float c_mult = coin_settings[coin_offset + 4];
         float qty_step = coin_settings[coin_offset + 0];
         float price_step = coin_settings[coin_offset + 1];
@@ -4924,16 +4994,18 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
-            if (k >= int(coin_settings[coin_offset + 6])
+            bool valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close)) {
-                any_valid = true;
-            }
+                && finite_positive(close);
+            bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && isfinite(close);
+            any_valid = any_valid || valid;
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
                 net_position_cost += long_side.psize[c]
                     * long_side.pprice[c] * c_mult;
-                if (finite_positive(close)) {
+                if (mark_valid) {
                     long_unrealized += long_side.psize[c] * c_mult
                         * (close - long_side.pprice[c]);
                 }
@@ -4941,7 +5013,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             if (short_side.psize[c] > 0.0f) {
                 net_position_cost -= short_side.psize[c]
                     * short_side.pprice[c] * c_mult;
-                if (finite_positive(close)) {
+                if (mark_valid) {
                     short_unrealized += short_side.psize[c] * c_mult
                         * (short_side.pprice[c] - close);
                 }
@@ -5554,22 +5626,26 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
             float close = bars[bar_offset + 2];
-            if (k >= int(coin_settings[coin_offset + 6])
+            bool valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
-                && finite_positive(close)) {
-                any_valid = true;
-            }
+                && finite_positive(close);
+            bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                && k <= int(coin_settings[coin_offset + 7])
+                && isfinite(close);
+            any_valid = any_valid || valid;
             if (psize[c] > 0.0f) {
                 has_open_position = true;
                 position_cost += psize[c] * pprice[c]
                     * coin_settings[coin_offset + 4];
-                unrealized += psize[c] * coin_settings[coin_offset + 4]
-                    * (short_side ? pprice[c] - close : close - pprice[c]);
+                if (mark_valid) {
+                    unrealized += psize[c] * coin_settings[coin_offset + 4]
+                        * (short_side ? pprice[c] - close : close - pprice[c]);
+                }
             }
             int coin_mode = coin_hsl_mode
                 ? hsl_mode(coin_hsl[c], psize[c] > 0.0f)
                 : current_hsl_mode;
-            if (coin_mode != 3 && (
+            if (valid && coin_mode != 3 && (
                     entry_qty[c] > 0.0f || close_qty[c] > 0.0f
                         || secondary_close_qty[c] > 0.0f
                 )) {
@@ -5592,13 +5668,19 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     int coin_offset = c * COIN_COLS;
                     int bar_offset = (k * C + c) * 4;
                     float close = bars[bar_offset + 2];
+                    bool valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && finite_positive(close);
+                    bool mark_valid = k >= int(coin_settings[coin_offset + 6])
+                        && k <= int(coin_settings[coin_offset + 7])
+                        && isfinite(close);
                     float coin_unrealized = psize[c] > 0.0f
-                        && finite_positive(close)
+                        && mark_valid
                         ? psize[c] * coin_settings[coin_offset + 4]
                             * (short_side ? pprice[c] - close : close - pprice[c])
                         : 0.0f;
                     int coin_mode = hsl_mode(coin_hsl[c], psize[c] > 0.0f);
-                    bool coin_has_blocking_orders = coin_mode != 3 && (
+                    bool coin_has_blocking_orders = valid && coin_mode != 3 && (
                         entry_qty[c] > 0.0f || close_qty[c] > 0.0f
                             || secondary_close_qty[c] > 0.0f
                     );

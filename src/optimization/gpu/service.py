@@ -646,15 +646,6 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
     }
 
 
-def _require_complete_valid_tail(last_valid_idx: int, candle_count: int) -> None:
-    if int(last_valid_idx) != int(candle_count) - 1:
-        raise ValueError(
-            "GPU foundation requires the final prepared candle to be valid because "
-            "the exact Rust backtest force-realizes open positions at its valid tail; "
-            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
-        )
-
-
 def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> None:
     """Accept ordinary invalid tails but reject Rust's forced-delist boundary.
 
@@ -668,15 +659,110 @@ def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> No
     candle_count = int(candle_count)
     if last_valid_idx < 0 or last_valid_idx >= candle_count:
         raise ValueError(
-            "GPU single-coin proxy requires last_valid_idx within the prepared "
+            "GPU proxy requires last_valid_idx within the prepared "
             f"candle range; last_valid_idx={last_valid_idx}, "
             f"candle_count={candle_count}"
         )
     if last_valid_idx + 1400 < candle_count:
         raise ValueError(
-            "GPU single-coin proxy does not yet model Rust forced-delist closes "
+            "GPU proxy does not yet model Rust forced-delist closes "
             "when at least 1,400 prepared candles follow the final valid candle; "
             f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+        )
+
+
+def _require_supported_multicoin_valid_tails(
+    hlcvs, first_valid_indices, last_valid_indices
+) -> None:
+    """Accept staggered ordinary tails with continuous portfolio time coverage."""
+
+    values = np.asarray(hlcvs)
+    if values.ndim != 3 or values.shape[2] < 3:
+        raise ValueError(
+            "GPU multicoin proxy requires HLCVs shaped [time, coin, fields]"
+        )
+    candle_count = int(values.shape[0])
+    starts = [int(value) for value in first_valid_indices]
+    tails = [int(value) for value in last_valid_indices]
+    if not starts or not tails:
+        raise ValueError("GPU multicoin proxy requires at least one prepared coin")
+    if len(starts) != len(tails):
+        raise ValueError(
+            "GPU multicoin proxy requires matching first/last valid-index counts; "
+            f"first_valid_indices={starts}, last_valid_indices={tails}"
+        )
+    if len(starts) != int(values.shape[1]):
+        raise ValueError(
+            "GPU multicoin proxy valid-index counts must match the prepared "
+            f"coin count; indices={len(starts)}, coins={values.shape[1]}"
+        )
+    windows = []
+    for coin, (first_valid_idx, last_valid_idx) in enumerate(
+        zip(starts, tails)
+    ):
+        # The exact payload uses this sentinel for a prepared coin with no
+        # valid candles.  It contributes neither coverage nor a forced-delist
+        # surface, but it remains present in the coin-indexed tensors.
+        if (
+            first_valid_idx == candle_count
+            and last_valid_idx == candle_count - 1
+        ):
+            continue
+        _require_no_forced_delist_tail(last_valid_idx, candle_count)
+        if not 0 <= first_valid_idx <= last_valid_idx:
+            raise ValueError(
+                "GPU multicoin proxy requires each first_valid_idx within its "
+                "prepared valid range; "
+                f"coin={coin}, first_valid_idx={first_valid_idx}, "
+                f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
+            )
+        windows.append((first_valid_idx, last_valid_idx))
+    if not windows:
+        raise ValueError(
+            "GPU multicoin proxy requires at least one coin with a non-empty "
+            "prepared valid range"
+        )
+    if max(last for _, last in windows) != int(candle_count) - 1:
+        raise ValueError(
+            "GPU multicoin proxy requires at least one coin to remain valid through "
+            "the prepared endpoint while all-coins-ended tail accounting is not yet "
+            f"modeled; last_valid_indices={tails}, candle_count={candle_count}"
+        )
+    windows.sort()
+    covered_through = windows[0][1]
+    for first_valid_idx, last_valid_idx in windows[1:]:
+        if first_valid_idx > covered_through + 1:
+            raise ValueError(
+                "GPU multicoin proxy does not yet model an all-invalid gap after "
+                "portfolio equity tracking may begin; "
+                f"gap_start={covered_through + 1}, "
+                f"gap_end={first_valid_idx - 1}, "
+                f"valid_windows={windows}"
+            )
+        covered_through = max(covered_through, last_valid_idx)
+    candle_indices = np.arange(candle_count, dtype=np.int64)[:, None]
+    within_declared_window = (
+        (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
+        & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
+    )
+    # Validate the representation consumed by Metal. The data packer casts
+    # bars to float32 and replaces non-finite packed values with zero, so a
+    # finite-positive float64 value is insufficient if it overflows or
+    # underflows during that conversion.
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        packed_hlc = np.asarray(values[:, :, :3], dtype=np.float32)
+    actual_valid = np.all(
+        np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2
+    )
+    actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
+    coverage_start = min(first for first, _ in windows)
+    missing = np.flatnonzero(~actual_coverage[coverage_start:])
+    if missing.size:
+        missing_idx = coverage_start + int(missing[0])
+        raise ValueError(
+            "GPU multicoin proxy does not yet model an all-invalid candle after "
+            "portfolio equity tracking may begin; "
+            f"candle_index={missing_idx}, valid_windows={windows}"
         )
 
 
@@ -1921,8 +2007,11 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires a finite non-negative "
                 "live.forager_score_hysteresis_pct"
             )
-        for last_valid_idx in backtest_params["last_valid_indices"]:
-            _require_complete_valid_tail(int(last_valid_idx), len(values))
+        _require_supported_multicoin_valid_tails(
+            values,
+            backtest_params["first_valid_indices"],
+            backtest_params["last_valid_indices"],
+        )
 
         comparable_bot_keys = (
             "total_wallet_exposure_limit",
