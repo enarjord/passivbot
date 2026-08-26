@@ -134,6 +134,11 @@ mod tests {
         assert!(source.contains("h.drawdown_ema_max = fmax("));
         assert!(source.contains("output.drawdown_ema_max_long"));
         assert!(source.contains("output.drawdown_ema_max_short"));
+        let panic_loss_aggregation = source
+            .find("output.panic_close_loss_sum += h.panic_close_loss_sum")
+            .unwrap();
+        let enabled_gate = source.find("if (!h.enabled) return;").unwrap();
+        assert!(panic_loss_aggregation < enabled_gate);
         assert_eq!(source.matches("struct HslStrategyEquityStats").count(), 1);
         assert_eq!(source.matches("struct HslDrawdownEmaTailStats").count(), 1);
         assert_eq!(
@@ -343,9 +348,17 @@ mod tests {
 
     #[test]
     fn multicoin_kernels_route_every_fill_through_joint_account_state() {
-        for (body, expected_account_record_sites) in [
-            (MPS_EMA_ANCHOR_MULTICOIN_BODY, 2),
-            (MPS_TRAILING_MARTINGALE_MULTICOIN_BODY, 2),
+        for (body, expected_account_record_sites, helper_prefix) in [
+            (
+                MPS_EMA_ANCHOR_MULTICOIN_BODY,
+                2,
+                "force_close_ema_multicoin_delisted",
+            ),
+            (
+                MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
+                2,
+                "force_close_tm_multicoin_delisted",
+            ),
         ] {
             assert!(body.contains(
                 "JointPortfolioAccount account = init_joint_portfolio_account(starting_balance)"
@@ -363,6 +376,11 @@ mod tests {
             assert!(!body.contains("float balance = starting_balance"));
             assert!(!body.contains("balance += net_pnl"));
             assert!(!body.contains("balance -= fee"));
+            assert!(body.contains(&format!("{helper_prefix}_one_side(")));
+            assert!(body.contains(&format!("{helper_prefix}_fused(")));
+            assert!(body.contains("last_valid + 1400 >= timestep_count"));
+            assert!(body.contains("ordinary_market_fill_price("));
+            assert!(body.contains("record_hsl_panic_fill("));
         }
     }
 
@@ -612,7 +630,7 @@ mod tests {
             MPS_EMA_ANCHOR_MULTICOIN_BODY
                 .matches("advance_coin_hsl_equity_after_close_fill(")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             MPS_EMA_ANCHOR_MULTICOIN_BODY
@@ -662,7 +680,12 @@ mod tests {
         assert_eq!(
             source
                 .matches("coin_fill_counts[candidate_index * coin_count + c] += 1.0f")
-                .count(),
+                .count()
+                + source
+                    .matches(
+                        "coin_fill_counts[candidate_index * coin_count + coin] += 1.0f",
+                    )
+                    .count(),
             2
         );
         assert!(source.contains("close_tick[c] <= fill_ticks[tick_offset + 0]"));
@@ -1071,7 +1094,7 @@ mod tests {
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("record_tm_multicoin_close_fill(")
                 .count(),
-            4
+            5
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
@@ -1083,7 +1106,7 @@ mod tests {
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("finalize_tm_multicoin_close_position(")
                 .count(),
-            2
+            3
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
@@ -1097,7 +1120,7 @@ mod tests {
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("update_tm_multicoin_position_fill_timestamp(")
                 .count(),
-            2
+            3
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
@@ -1109,7 +1132,7 @@ mod tests {
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY
                 .matches("advance_coin_hsl_equity_after_close_fill(")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY

@@ -374,15 +374,17 @@ The supported slice is intentionally narrow:
   sampling, rolling-PnL expiry, tier accounting, and restart checks without treating stale orders
   as blocking
 - multi-coin runs may include staggered invalid tails while at least one prepared coin remains
-  valid through the endpoint, every tail stays below exact Rust's 1,400-candle forced-delist
-  threshold, and at least one candle whose packed float32 H/L/C values remain finite and positive
-  inside the coins' declared first-to-last-valid ranges covers every timestep after coverage
-  begins. Tailed coins are non-tradable, contribute no unrealized PnL, and cannot leave stale orders
-  blocking HSL; dynamic tradability, portfolio/coin HSL, equity, and elapsed-time accounting
+  valid through the endpoint and at least one candle whose packed float32 H/L/C values remain
+  finite and positive inside the coins' declared first-to-last-valid ranges covers every timestep
+  after coverage begins. Tailed coins are non-tradable, contribute no unrealized PnL, and cannot
+  leave stale orders blocking HSL. When a tail crosses exact Rust's 1,400-candle forced-delist
+  boundary, Metal closes that coin's long and then short with the same adverse market execution,
+  taker-fee, panic-loss, fill, duration, and realized-PnL accounting, then clears both sides' pending
+  orders for that coin. Dynamic tradability, portfolio/coin HSL, equity, and elapsed-time accounting
   continue on the surviving timeline
-- multi-coin forced-delist tails, multi-coin histories in which every coin ends before the prepared
-  endpoint, and histories with an all-invalid gap after coverage begins remain fail-closed until
-  their forced-close and all-invalid time-accounting semantics are modeled
+- multi-coin histories in which every coin ends before the prepared endpoint and histories with an
+  all-invalid gap after coverage begins remain fail-closed until their all-invalid time-accounting
+  semantics are modeled
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
 Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every

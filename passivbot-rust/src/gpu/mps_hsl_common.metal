@@ -945,6 +945,23 @@ inline void accumulate_hsl_output(
     bool short_side,
     float last_equity_k
 ) {
+    // Forced delist closes are panic fills even when HSL itself is disabled.
+    // Exact Rust reports their loss metrics independently of controller
+    // enablement, so retain those fields before filtering HSL-only telemetry.
+    output.panic_close_loss_sum += h.panic_close_loss_sum;
+    output.panic_close_loss_max = fmax(
+        output.panic_close_loss_max, h.panic_close_loss_max
+    );
+    if (h.panic_loss_drawdown_count > 0.0f) {
+        output.panic_loss_drawdown_min = output.panic_loss_drawdown_count > 0.0f
+            ? fmin(output.panic_loss_drawdown_min, h.panic_loss_drawdown_min)
+            : h.panic_loss_drawdown_min;
+    }
+    output.panic_loss_drawdown_sum += h.panic_loss_drawdown_sum;
+    output.panic_loss_drawdown_max = fmax(
+        output.panic_loss_drawdown_max, h.panic_loss_drawdown_max
+    );
+    output.panic_loss_drawdown_count += h.panic_loss_drawdown_count;
     if (!h.enabled) return;
     float terminal_count = h.halted
         && h.current_halt_start_k >= 0.0f && last_equity_k >= 0.0f
@@ -978,20 +995,6 @@ inline void accumulate_hsl_output(
     output.flatten_time_count += h.flatten_time_count;
     output.restart_retrigger_count += h.restart_retrigger_count;
     output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
-    output.panic_close_loss_sum += h.panic_close_loss_sum;
-    output.panic_close_loss_max = fmax(
-        output.panic_close_loss_max, h.panic_close_loss_max
-    );
-    if (h.panic_loss_drawdown_count > 0.0f) {
-        output.panic_loss_drawdown_min = output.panic_loss_drawdown_count > 0.0f
-            ? fmin(output.panic_loss_drawdown_min, h.panic_loss_drawdown_min)
-            : h.panic_loss_drawdown_min;
-    }
-    output.panic_loss_drawdown_sum += h.panic_loss_drawdown_sum;
-    output.panic_loss_drawdown_max = fmax(
-        output.panic_loss_drawdown_max, h.panic_loss_drawdown_max
-    );
-    output.panic_loss_drawdown_count += h.panic_loss_drawdown_count;
 }
 
 inline void write_hsl_output_aggregate(
