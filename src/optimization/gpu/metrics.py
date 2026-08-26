@@ -65,6 +65,20 @@ _BTC_ACCOUNT_METRICS = {
     "peak_recovery_hours_equity_btc",
 }
 
+BTC_INTRADAY_RISK_METRICS = frozenset(
+    {
+        "calmar_ratio_btc",
+        "drawdown_worst_btc",
+        "drawdown_worst_mean_1pct_btc",
+        "expected_shortfall_1pct_btc",
+        "sharpe_ratio_btc",
+        "sortino_ratio_btc",
+        "sterling_ratio_btc",
+    }
+)
+
+_BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
+
 _BTC_PER_EXPOSURE_METRICS = {
     f"{metric}_per_exposure_{side}_btc"
     for metric in ("adg", "adg_w", "gain", "mdg", "mdg_w")
@@ -1553,26 +1567,39 @@ def _daily_peak_recovery_ms(day_end_eq, active):
 def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
     """Reduce the compact USD strategy-equity surface into BTC account metrics.
 
-    Day-end conversion is exact for the prepared BTC series. Metrics requiring
-    synchronized intraday BTC equity remain outside this surface; exact Rust
-    validation stays authoritative for the daily screening approximations.
+    Close-only metrics convert the compact USD surface at prepared BTC day-end
+    prices. Intraday-risk metrics consume the synchronized BTC surface emitted
+    by the opt-in Metal feature. Exact Rust validation remains authoritative.
     """
 
     requested = set(requested) & BTC_ACCOUNT_METRICS
     if not requested:
         return {}
+    day_end_usd = out["day_end_eq"].to(torch.float64)
+    active = _daily_series_masks(out["day_min_eq"])
+    risk_requested = bool(requested & BTC_INTRADAY_RISK_METRICS)
+    if risk_requested:
+        missing = [
+            key
+            for key in ("btc_day_end_eq", "btc_day_min_eq", "btc_day_max_dd")
+            if key not in out
+        ]
+        if missing:
+            raise RuntimeError(
+                "MPS synchronized BTC-risk output is missing "
+                + ", ".join(missing)
+            )
+        risk_day_end_btc = out["btc_day_end_eq"].to(torch.float64)
+        risk_day_min_btc = out["btc_day_min_eq"].to(torch.float64)
+        risk_day_max_dd_btc = out["btc_day_max_dd"].to(torch.float64)
+
     missing = [
-        key
-        for key in ("btc_day_end_price", "btc_prices")
-        if key not in data
+        key for key in ("btc_day_end_price", "btc_prices") if key not in data
     ]
     if missing:
         raise RuntimeError(
             "MPS BTC account metric context is missing " + ", ".join(missing)
         )
-
-    day_end_usd = out["day_end_eq"].to(torch.float64)
-    active = _daily_series_masks(out["day_min_eq"])
     day_end_price = torch.as_tensor(
         data["btc_day_end_price"],
         dtype=torch.float64,
@@ -1582,10 +1609,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         raise RuntimeError(
             "MPS BTC account metric day grid disagrees with Metal output"
         )
-    # A liquidated candidate may stop before the prepared UTC day ends. Rust
-    # values its final equity with BTC at that exact sample, not the later
-    # dataset day close. Replace only that candidate's final active-day price;
-    # complete days keep the precomputed shared day-end series.
+    # A liquidated candidate may stop before the prepared UTC day ends.
     btc_prices = torch.as_tensor(
         data["btc_prices"],
         dtype=torch.float64,
@@ -1646,8 +1670,38 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "mdg_btc": mdg,
         "omega_ratio_btc": omega,
     }
+    if risk_requested:
+        _risk_gain, risk_adg = _smoothed_gain_adg(risk_day_end_btc, active)
+        min_changes, min_change_mask = _pct_change(risk_day_min_btc, active)
+        sharpe, sortino = _sharpe_sortino(
+            min_changes, min_change_mask, risk_adg
+        )
+        expected_shortfall = _mean_worst_one_pct_abs(
+            min_changes, min_change_mask
+        )
+        max_dd = risk_day_max_dd_btc.max(dim=1).values
+        worst_one_pct = _mean_worst_one_pct_largest(
+            risk_day_max_dd_btc, active
+        )
+        values.update(
+            {
+                "calmar_ratio_btc": risk_adg / max_dd.clamp(min=1e-12),
+                "drawdown_worst_btc": max_dd,
+                "drawdown_worst_mean_1pct_btc": worst_one_pct,
+                "expected_shortfall_1pct_btc": expected_shortfall,
+                "sharpe_ratio_btc": sharpe,
+                "sortino_ratio_btc": sortino,
+                "sterling_ratio_btc": risk_adg
+                / worst_one_pct.clamp(min=1e-12),
+            }
+        )
+    drawdown_defaults = {
+        "drawdown_worst_btc",
+        "drawdown_worst_mean_1pct_btc",
+    }
     for name in tuple(values):
-        values[name] = torch.where(has_fill, values[name], zeros)
+        default = torch.ones_like(adg) if name in drawdown_defaults else zeros
+        values[name] = torch.where(has_fill, values[name], default)
 
     shape_names = {
         "equity_choppiness_btc",
@@ -1666,26 +1720,29 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
                 has_fill, shape[source], torch.ones_like(adg)
             )
 
-    weighted_sources = {
+    safe_weighted_sources = {
         "adg_w_btc": "adg_strategy_eq_w",
         "mdg_w_btc": "mdg_strategy_eq_w",
         "omega_ratio_w_btc": "omega_ratio_strategy_eq_w",
     }
-    wanted_weighted_sources = {
-        source for name, source in weighted_sources.items() if name in requested
+    wanted_safe_weighted_sources = {
+        source
+        for name, source in safe_weighted_sources.items()
+        if name in requested
     }
     if requested & {
         "adg_w_per_exposure_long_btc",
         "adg_w_per_exposure_short_btc",
     }:
-        wanted_weighted_sources.add("adg_strategy_eq_w")
+        wanted_safe_weighted_sources.add("adg_strategy_eq_w")
     if requested & {
         "mdg_w_per_exposure_long_btc",
         "mdg_w_per_exposure_short_btc",
     }:
-        wanted_weighted_sources.add("mdg_strategy_eq_w")
-    if wanted_weighted_sources:
-        weighted = _weighted_strategy_eq_metrics(
+        wanted_safe_weighted_sources.add("mdg_strategy_eq_w")
+    enough_fills = out["fill_count"].to(torch.float64) > 1.0
+    if wanted_safe_weighted_sources:
+        safe_weighted = _weighted_strategy_eq_metrics(
             day_end_btc,
             day_end_btc,
             torch.zeros_like(day_end_btc),
@@ -1694,13 +1751,13 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
             out["last_eq_ts"],
             data["ts0"],
             run.interval_ms,
-            wanted_weighted_sources,
+            wanted_safe_weighted_sources,
         )
-        enough_fills = out["fill_count"].to(torch.float64) > 1.0
-        for name, source in weighted_sources.items():
-            if source in weighted:
-                values[name] = torch.where(enough_fills, weighted[source], zeros)
-
+        for name, source in safe_weighted_sources.items():
+            if source in safe_weighted:
+                values[name] = torch.where(
+                    enough_fills, safe_weighted[source], zeros
+                )
     weighted_shape_sources = {
         "equity_choppiness_w_btc": "equity_choppiness_w_usd",
         "equity_jerkiness_w_btc": "equity_jerkiness_w_usd",

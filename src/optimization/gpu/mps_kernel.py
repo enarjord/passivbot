@@ -54,6 +54,7 @@ _RECOVERY_DISTRIBUTION_DEFINE = (
 _FIXED_WEL_DENOMINATOR_DEFINE = (
     "#define PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY 0\n"
 )
+_BTC_RISK_DEFINE = "#define PASSIVBOT_BTC_RISK_ENABLED 1\n"
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -105,6 +106,14 @@ def _with_dynamic_wel_by_tradability(source: str, enabled: bool) -> str:
     return _FIXED_WEL_DENOMINATOR_DEFINE + source
 
 
+def _with_btc_risk(source: str, enabled: bool) -> str:
+    if not enabled:
+        return source
+    if "struct BtcRiskState" not in source:
+        raise RuntimeError("MPS source is missing the shared BTC-risk contract")
+    return _BTC_RISK_DEFINE + source
+
+
 def _encode_max_realized_loss_pct(value: float) -> float:
     """Encode a float64 loss fraction without loosening its Metal budget."""
 
@@ -114,6 +123,24 @@ def _encode_max_realized_loss_pct(value: float) -> float:
     if float(encoded) > value:
         encoded = np.nextafter(encoded, np.float32(-np.inf))
     return float(encoded)
+
+
+def _btc_risk_price_tensor(btc_prices, *, expected_count: int):
+    if btc_prices is None:
+        return None
+    values = np.ascontiguousarray(
+        np.asarray(btc_prices, dtype=np.float32).reshape(-1)
+    )
+    if len(values) != int(expected_count):
+        raise ValueError(
+            "MPS BTC-risk prices must match the prepared candle count: "
+            f"btc={len(values)}, candles={expected_count}"
+        )
+    if np.any(~np.isfinite(values)) or np.any(values <= 0.0):
+        raise ValueError(
+            "MPS BTC-risk prices must remain finite and positive after float32 packing"
+        )
+    return torch.as_tensor(values, dtype=torch.float32, device="mps")
 
 
 def _pack_tm_parameter_matrix(
@@ -334,138 +361,176 @@ def _scalar_column_or_zero(scalars, index: int):
     return torch.zeros_like(scalars[:, 0])
 
 
-@lru_cache(maxsize=8)
+def _decode_btc_risk_outputs(daily, active_days, first_column: int) -> dict:
+    if daily.shape[2] < first_column + 3:
+        return {}
+    return {
+        "btc_day_end_eq": daily[:, :, first_column],
+        "btc_day_min_eq": torch.where(
+            active_days,
+            daily[:, :, first_column + 1],
+            torch.full_like(daily[:, :, first_column + 1], float("inf")),
+        ),
+        "btc_day_max_dd": daily[:, :, first_column + 2],
+    }
+
+
+@lru_cache(maxsize=16)
 def _shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_recovery_distribution(
-            _with_hsl_features(
-                passivbot_rust.mps_ema_anchor_source_py(),
-                ema_tail_enabled=hsl_ema_tail_enabled,
-                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
-                raw_tail_enabled=hsl_raw_tail_enabled,
+        _with_btc_risk(
+            _with_recovery_distribution(
+                _with_hsl_features(
+                    passivbot_rust.mps_ema_anchor_source_py(),
+                    ema_tail_enabled=hsl_ema_tail_enabled,
+                    raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                    raw_tail_enabled=hsl_raw_tail_enabled,
+                ),
+                recovery_distribution_enabled,
             ),
-            recovery_distribution_enabled,
-        )
-    )
-
-
-@lru_cache(maxsize=8)
-def _trailing_martingale_shader_library(
-    hsl_ema_tail_enabled: bool = False,
-    hsl_raw_drawdown_enabled: bool = False,
-    hsl_raw_tail_enabled: bool = False,
-    recovery_distribution_enabled: bool = False,
-):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
-    import passivbot_rust
-
-    return torch.mps.compile_shader(
-        _with_recovery_distribution(
-            _with_hsl_features(
-                passivbot_rust.mps_trailing_martingale_source_py(),
-                ema_tail_enabled=hsl_ema_tail_enabled,
-                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
-                raw_tail_enabled=hsl_raw_tail_enabled,
-            ),
-            recovery_distribution_enabled,
-        )
-    )
-
-
-@lru_cache(maxsize=2)
-def _trailing_martingale_long_no_hsl_shader_library(
-    recovery_distribution_enabled: bool = False,
-):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
-    import passivbot_rust
-
-    return torch.mps.compile_shader(
-        _with_recovery_distribution(
-            passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py(),
-            recovery_distribution_enabled,
-        )
-    )
-
-
-@lru_cache(maxsize=2)
-def _trailing_martingale_short_no_hsl_shader_library(
-    recovery_distribution_enabled: bool = False,
-):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
-    import passivbot_rust
-
-    return torch.mps.compile_shader(
-        _with_recovery_distribution(
-            passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py(),
-            recovery_distribution_enabled,
+            btc_risk_enabled,
         )
     )
 
 
 @lru_cache(maxsize=16)
+def _trailing_martingale_shader_library(
+    hsl_ema_tail_enabled: bool = False,
+    hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        _with_btc_risk(
+            _with_recovery_distribution(
+                _with_hsl_features(
+                    passivbot_rust.mps_trailing_martingale_source_py(),
+                    ema_tail_enabled=hsl_ema_tail_enabled,
+                    raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                    raw_tail_enabled=hsl_raw_tail_enabled,
+                ),
+                recovery_distribution_enabled,
+            ),
+            btc_risk_enabled,
+        )
+    )
+
+
+@lru_cache(maxsize=4)
+def _trailing_martingale_long_no_hsl_shader_library(
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        _with_btc_risk(
+            _with_recovery_distribution(
+                passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py(),
+                recovery_distribution_enabled,
+            ),
+            btc_risk_enabled,
+        )
+    )
+
+
+@lru_cache(maxsize=4)
+def _trailing_martingale_short_no_hsl_shader_library(
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    return torch.mps.compile_shader(
+        _with_btc_risk(
+            _with_recovery_distribution(
+                passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py(),
+                recovery_distribution_enabled,
+            ),
+            btc_risk_enabled,
+        )
+    )
+
+
+@lru_cache(maxsize=32)
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
     dynamic_wel_by_tradability: bool = True,
+    btc_risk_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_dynamic_wel_by_tradability(
-            _with_recovery_distribution(
-                _with_hsl_features(
-                    passivbot_rust.mps_ema_anchor_multicoin_source_py(),
-                    ema_tail_enabled=hsl_ema_tail_enabled,
-                    raw_drawdown_enabled=hsl_raw_drawdown_enabled,
-                    raw_tail_enabled=hsl_raw_tail_enabled,
+        _with_btc_risk(
+            _with_dynamic_wel_by_tradability(
+                _with_recovery_distribution(
+                    _with_hsl_features(
+                        passivbot_rust.mps_ema_anchor_multicoin_source_py(),
+                        ema_tail_enabled=hsl_ema_tail_enabled,
+                        raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                        raw_tail_enabled=hsl_raw_tail_enabled,
+                    ),
+                    recovery_distribution_enabled,
                 ),
-                recovery_distribution_enabled,
+                dynamic_wel_by_tradability,
             ),
-            dynamic_wel_by_tradability,
+            btc_risk_enabled,
         )
     )
 
 
-@lru_cache(maxsize=16)
+@lru_cache(maxsize=32)
 def _trailing_martingale_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
     dynamic_wel_by_tradability: bool = True,
+    btc_risk_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_dynamic_wel_by_tradability(
-            _with_recovery_distribution(
-                _with_hsl_features(
-                    passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
-                    ema_tail_enabled=hsl_ema_tail_enabled,
-                    raw_drawdown_enabled=hsl_raw_drawdown_enabled,
-                    raw_tail_enabled=hsl_raw_tail_enabled,
+        _with_btc_risk(
+            _with_dynamic_wel_by_tradability(
+                _with_recovery_distribution(
+                    _with_hsl_features(
+                        passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
+                        ema_tail_enabled=hsl_ema_tail_enabled,
+                        raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                        raw_tail_enabled=hsl_raw_tail_enabled,
+                    ),
+                    recovery_distribution_enabled,
                 ),
-                recovery_distribution_enabled,
+                dynamic_wel_by_tradability,
             ),
-            dynamic_wel_by_tradability,
+            btc_risk_enabled,
         )
     )
 
@@ -553,7 +618,7 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
             values >= 0.0, values, torch.full_like(values, float("nan"))
         )
 
-    return {
+    output = {
         "day_end_eq": daily[:, :, 0],
         "day_min_eq": torch.where(
             active_days,
@@ -647,6 +712,8 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
             scalars, 66
         ),
     }
+    output.update(_decode_btc_risk_outputs(daily, active_days, 9))
+    return output
 
 
 def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
@@ -690,7 +757,7 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
             values >= 0.0, values, torch.full_like(values, float("nan"))
         )
 
-    return {
+    output = {
         "day_end_eq": daily[:, :, 0],
         "day_min_eq": torch.where(
             active_days,
@@ -783,6 +850,8 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
             scalars, 71
         ),
     }
+    output.update(_decode_btc_risk_outputs(daily, active_days, 8))
+    return output
 
 
 class MpsEmaAnchorRunner:
@@ -810,6 +879,7 @@ class MpsEmaAnchorRunner:
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        btc_prices: np.ndarray | None = None,
     ):
         self.market = market
         self.run_config = run
@@ -872,6 +942,11 @@ class MpsEmaAnchorRunner:
         )
         self.n = int(data["n"])
         self.n_days = int(data["n_days"])
+        self.btc_prices = _btc_risk_price_tensor(
+            btc_prices, expected_count=self.n
+        )
+        self.btc_risk_enabled = self.btc_prices is not None
+        self.daily_cols = MPS_DAILY_COLS + (3 if self.btc_risk_enabled else 0)
         self.recovery_stride = (
             max(1, int(np.ceil(3_600_000.0 / float(run.interval_ms))))
             if self.recovery_distribution_enabled
@@ -979,7 +1054,7 @@ class MpsEmaAnchorRunner:
             self._buffers = {
                 batch_size: (
                     torch.zeros(
-                        (batch_size, self.n_days, MPS_DAILY_COLS),
+                        (batch_size, self.n_days, self.daily_cols),
                         dtype=torch.float32,
                         device="mps",
                     ),
@@ -1089,6 +1164,7 @@ class MpsEmaAnchorRunner:
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
+            self.btc_risk_enabled,
         )
         compiled = time.perf_counter()
         if profile:
@@ -1102,6 +1178,10 @@ class MpsEmaAnchorRunner:
             params_mps,
             self.settings,
             self._sizes[sizes_key],
+        )
+        if self.btc_risk_enabled:
+            kernel_args += (self.btc_prices,)
+        kernel_args += (
             daily,
             scalars,
             gaps,
@@ -1160,6 +1240,7 @@ class MpsEmaAnchorMulticoinRunner:
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         dynamic_wel_by_tradability: bool = True,
+        btc_prices: np.ndarray | None = None,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -1211,6 +1292,13 @@ class MpsEmaAnchorMulticoinRunner:
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
+        self.btc_prices = _btc_risk_price_tensor(
+            btc_prices, expected_count=self.n
+        )
+        self.btc_risk_enabled = self.btc_prices is not None
+        self.daily_cols = MPS_MULTICOIN_DAILY_COLS + (
+            3 if self.btc_risk_enabled else 0
+        )
         self.recovery_stride = (
             max(1, int(np.ceil(3_600_000.0 / float(run.interval_ms))))
             if self.recovery_distribution_enabled
@@ -1342,7 +1430,7 @@ class MpsEmaAnchorMulticoinRunner:
             self._buffers = {
                 batch_size: (
                     torch.zeros(
-                        (batch_size, self.n_days, MPS_MULTICOIN_DAILY_COLS),
+                        (batch_size, self.n_days, self.daily_cols),
                         dtype=torch.float32,
                         device="mps",
                     ),
@@ -1412,6 +1500,10 @@ class MpsEmaAnchorMulticoinRunner:
             self.settings,
             sizes,
             end_steps,
+        )
+        if self.btc_risk_enabled:
+            kernel_args += (self.btc_prices,)
+        kernel_args += (
             daily,
             scalars,
             gaps,
@@ -1431,6 +1523,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
             self.dynamic_wel_by_tradability,
+            self.btc_risk_enabled,
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -1556,6 +1649,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         recovery_distribution_enabled: bool = False,
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
+        btc_prices: np.ndarray | None = None,
     ):
         super().__init__(
             run,
@@ -1575,6 +1669,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            btc_prices=btc_prices,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1668,6 +1763,10 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             self.settings,
             sizes,
             end_steps,
+        )
+        if self.btc_risk_enabled:
+            kernel_args += (self.btc_prices,)
+        kernel_args += (
             daily,
             scalars,
             gaps,
@@ -1693,12 +1792,14 @@ class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
         data: dict,
         *,
         dynamic_wel_by_tradability: bool = True,
+        btc_prices: np.ndarray | None = None,
     ):
         super().__init__(
             run,
             data,
             side="long",
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            btc_prices=btc_prices,
         )
 
 
@@ -1711,12 +1812,14 @@ class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
         data: dict,
         *,
         dynamic_wel_by_tradability: bool = True,
+        btc_prices: np.ndarray | None = None,
     ):
         super().__init__(
             run,
             data,
             side="short",
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            btc_prices=btc_prices,
         )
 
 
@@ -1750,6 +1853,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         dynamic_wel_by_tradability: bool = True,
+        btc_prices: np.ndarray | None = None,
     ):
         super().__init__(
             run,
@@ -1769,6 +1873,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            btc_prices=btc_prices,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -1796,6 +1901,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
             self.dynamic_wel_by_tradability,
+            self.btc_risk_enabled,
         )
 
     def _dispatch(
@@ -1826,6 +1932,10 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.settings,
             sizes,
             end_steps,
+        )
+        if self.btc_risk_enabled:
+            kernel_args += (self.btc_prices,)
+        kernel_args += (
             daily,
             scalars,
             gaps,
@@ -1871,6 +1981,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         recovery_distribution_enabled: bool = False,
         hedge_mode: bool = True,
         dynamic_wel_by_tradability: bool = True,
+        btc_prices: np.ndarray | None = None,
     ):
         super().__init__(
             run,
@@ -1890,6 +2001,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+            btc_prices=btc_prices,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1981,6 +2093,10 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             self.settings,
             sizes,
             end_steps,
+        )
+        if self.btc_risk_enabled:
+            kernel_args += (self.btc_prices,)
+        kernel_args += (
             daily,
             scalars,
             gaps,
@@ -2018,17 +2134,20 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     def _shader_library(self):
         if self.shader_topology == "long_no_hsl":
             return _trailing_martingale_long_no_hsl_shader_library(
-                self.recovery_distribution_enabled
+                self.recovery_distribution_enabled,
+                self.btc_risk_enabled,
             )
         if self.shader_topology == "short_no_hsl":
             return _trailing_martingale_short_no_hsl_shader_library(
-                self.recovery_distribution_enabled
+                self.recovery_distribution_enabled,
+                self.btc_risk_enabled,
             )
         return _trailing_martingale_shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
+            self.btc_risk_enabled,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2092,6 +2211,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             params_mps,
             self.settings,
             self._sizes[sizes_key],
+        )
+        if self.btc_risk_enabled:
+            kernel_args += (self.btc_prices,)
+        kernel_args += (
             daily,
             scalars,
             gaps,

@@ -3225,14 +3225,12 @@ def test_gpu_foundation_accepts_btc_account_metrics_without_collateral(
 @pytest.mark.parametrize(
     "metric",
     [
-        "drawdown_worst_btc",
-        "expected_shortfall_1pct_btc",
-        "sharpe_ratio_btc",
-        "sortino_ratio_w_btc",
-        "calmar_ratio_btc",
-        "sterling_ratio_w_btc",
         "exposure_ratio_w_btc",
         "exposure_mean_ratio_w_btc",
+        "calmar_ratio_w_btc",
+        "sharpe_ratio_w_btc",
+        "sortino_ratio_w_btc",
+        "sterling_ratio_w_btc",
     ],
 )
 def test_gpu_foundation_excludes_btc_metrics_without_safe_proxy_surface(metric):
@@ -3240,6 +3238,26 @@ def test_gpu_foundation_excludes_btc_metrics_without_safe_proxy_surface(metric):
     from optimization.gpu.metrics import SUPPORTED_METRICS
 
     assert canonicalize_metric_name(metric) not in SUPPORTED_METRICS
+
+
+@pytest.mark.parametrize(
+    ("metric", "goal"),
+    [
+        ("drawdown_worst_btc", "min"),
+        ("drawdown_worst_mean_1pct_btc", "min"),
+        ("expected_shortfall_1pct_btc", "min"),
+        ("sharpe_ratio_btc", "max"),
+        ("sortino_ratio_btc", "max"),
+        ("calmar_ratio_btc", "max"),
+        ("sterling_ratio_btc", "max"),
+    ],
+)
+def test_gpu_foundation_accepts_synchronized_btc_risk_metrics(metric, goal):
+    config = _long_only_ema_config()
+    config["backtest"]["btc_collateral_cap"] = 0.0
+    config["optimize"]["scoring"] = [{"goal": goal, "metric": metric}]
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
 @pytest.mark.parametrize(
