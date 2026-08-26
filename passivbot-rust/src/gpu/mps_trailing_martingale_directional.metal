@@ -1610,6 +1610,92 @@ inline bool recursive_strategy_close_would_expand(
     return false;
 }
 
+inline bool force_close_delisted_position(
+    thread float& psize,
+    thread float& pprice,
+    thread float& pos_open_k,
+    thread HslState& hsl,
+    bool is_long,
+    float close,
+    float other_unrealized,
+    float price_step,
+    float c_mult,
+    float taker_fee,
+    float market_order_slippage_pct,
+    float kf,
+    thread float& balance,
+    thread float& realized_pnl_cumsum_last,
+    thread float& realized_pnl_cumsum_max,
+    thread float& realized_pnl_cumsum_long,
+    thread float& realized_pnl_cumsum_short,
+    thread float& day_fill_count,
+    thread float& fill_count,
+    thread float& fill_count_entry,
+    thread float& fill_count_long,
+    thread float& pnl_recovery_peak,
+    thread float& pnl_recovery_peak_k,
+    thread float& pnl_recovery_max_min,
+    thread HslRollingPnlWindow& rolling_pnl,
+    device float2* rolling_pnl_values,
+    device int2* rolling_pnl_indices,
+    int rolling_base,
+    int rolling_capacity,
+    int pnl_lookback_bars,
+    bool coin_hsl_rolling,
+    thread float& profit_sum,
+    thread float& loss_sum,
+    thread float& side_profit_sum,
+    thread float& side_loss_sum,
+    thread float& held_max_min,
+    thread float& held_sum_min,
+    thread float& held_count,
+    thread float& day_volume
+) {
+    if (!(psize > 0.0f && pprice > 0.0f)) return false;
+    const float close_price = ordinary_market_fill_price(
+        close, !is_long, market_order_slippage_pct, price_step
+    );
+    const float close_qty = psize;
+    const float pnl = close_qty * c_mult * (
+        is_long ? close_price - pprice : pprice - close_price
+    );
+    const float fee = close_qty * close_price * c_mult * taker_fee;
+    const float net_pnl = pnl - fee;
+    const float own_unrealized = close_qty * c_mult * (
+        is_long ? close - pprice : pprice - close
+    );
+    record_hsl_panic_fill(
+        hsl, net_pnl, balance + own_unrealized + other_unrealized
+    );
+    record_directional_gross_pnl(
+        pnl, profit_sum, loss_sum, side_profit_sum, side_loss_sum
+    );
+    balance += net_pnl;
+    record_realized_net(
+        net_pnl, realized_pnl_cumsum_last, realized_pnl_cumsum_max,
+        realized_pnl_cumsum_long, realized_pnl_cumsum_short,
+        day_fill_count, fill_count, fill_count_entry, fill_count_long,
+        pnl_recovery_peak, pnl_recovery_peak_k, pnl_recovery_max_min, kf,
+        false, is_long
+    );
+    record_hsl_rolling_pnl(
+        rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+        rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+        coin_hsl_rolling, net_pnl
+    );
+    if (pos_open_k >= 0.0f) {
+        const float held_min = kf - pos_open_k;
+        held_max_min = fmax(held_max_min, held_min);
+        held_sum_min += held_min;
+        held_count += 1.0f;
+    }
+    day_volume += close_qty * close_price / balance;
+    psize = 0.0f;
+    pprice = 0.0f;
+    pos_open_k = -1.0f;
+    return true;
+}
+
 inline void passivbot_single_coin_impl(
     constant float* bars,
     constant int* flags,
@@ -3308,6 +3394,58 @@ inline void passivbot_single_coin_impl(
             short_side.entry_qty = 0.0f;
         }
 
+        // Exact Rust generates this candle's bundles first, then force-closes and
+        // clears both bundles.  Closing here and suppressing only that dead order
+        // generation is equivalent while retaining `gen` for equity/HSL sampling.
+        const bool forced_delist = valid && k == last_valid
+            && last_valid + 1400 < T;
+        bool forced_delist_closed_any = false;
+        if (forced_delist && alive && balance > 0.0f) {
+            float short_unrealized = short_side.psize > 0.0f
+                ? short_side.psize * c_mult * (short_side.pprice - close)
+                : 0.0f;
+            bool forced_long_close = force_close_delisted_position(
+                long_side.psize, long_side.pprice, long_side.pos_open_k,
+                long_hsl, true, close, short_unrealized, price_step,
+                c_mult, taker_fee, market_order_slippage_pct, kf, balance,
+                realized_pnl_cumsum_last, realized_pnl_cumsum_max,
+                realized_pnl_cumsum_long, realized_pnl_cumsum_short,
+                day_fill_count, fill_count, fill_count_entry, fill_count_long,
+                pnl_recovery_peak, pnl_recovery_peak_k, pnl_recovery_max_min,
+                long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                long_rolling_base, rolling_capacity, pnl_lookback_bars,
+                long_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_long,
+                loss_sum_long, held_max_min, held_sum_min, held_count, day_volume
+            );
+            float long_unrealized = long_side.psize > 0.0f
+                ? long_side.psize * c_mult * (close - long_side.pprice)
+                : 0.0f;
+            bool forced_short_close = force_close_delisted_position(
+                short_side.psize, short_side.pprice, short_side.pos_open_k,
+                short_hsl, false, close, long_unrealized, price_step,
+                c_mult, taker_fee, market_order_slippage_pct, kf, balance,
+                realized_pnl_cumsum_last, realized_pnl_cumsum_max,
+                realized_pnl_cumsum_long, realized_pnl_cumsum_short,
+                day_fill_count, fill_count, fill_count_entry, fill_count_long,
+                pnl_recovery_peak, pnl_recovery_peak_k, pnl_recovery_max_min,
+                short_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                short_rolling_base, rolling_capacity, pnl_lookback_bars,
+                short_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_short,
+                loss_sum_short, held_max_min, held_sum_min, held_count, day_volume
+            );
+            long_close_fill = long_close_fill || forced_long_close;
+            short_close_fill = short_close_fill || forced_short_close;
+            forced_delist_closed_any = forced_long_close || forced_short_close;
+            if (forced_delist_closed_any) {
+                long_side.entry_qty = 0.0f;
+                long_side.close_qty = 0.0f;
+                long_side.secondary_close_qty = 0.0f;
+                short_side.entry_qty = 0.0f;
+                short_side.close_qty = 0.0f;
+                short_side.secondary_close_qty = 0.0f;
+            }
+        }
+
         if (long_close_fill || long_entry_fill) {
             if (long_position_last_fill_k >= 0.0f) {
                 position_unchanged_max_min = fmax(
@@ -3365,7 +3503,7 @@ inline void passivbot_single_coin_impl(
         eq_started = eq_started || gen;
         int long_hsl_mode = hsl_mode(long_hsl, long_side.psize > 0.0f);
         int short_hsl_mode = hsl_mode(short_hsl, short_side.psize > 0.0f);
-        if (gen) {
+        if (gen && !forced_delist_closed_any) {
             long_side.close_is_panic = false;
             short_side.close_is_panic = false;
             if (long_side.psize > 0.0f || short_side.psize > 0.0f) {

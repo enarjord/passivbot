@@ -3633,16 +3633,17 @@ def test_mps_single_coin_five_minute_shader_smoke(strategy_kind):
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("hsl_enabled", [False, True])
-def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
-    strategy_kind, side, hsl_enabled
+@pytest.mark.parametrize("forced_delist", [False, True])
+def test_mps_single_coin_invalid_tail_matches_forced_delist_boundary(
+    strategy_kind, side, hsl_enabled, forced_delist
 ):
     from optimization.gpu.mps_kernel import (
         MpsEmaAnchorRunner,
         MpsTrailingMartingaleRunner,
     )
 
-    count = 10
     last_valid = 6
+    count = last_valid + 1401 if forced_delist else 10
     close = np.full(count, np.nan)
     high = np.full(count, np.nan)
     low = np.full(count, np.nan)
@@ -3740,7 +3741,12 @@ def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
     torch.mps.synchronize()
 
     size_key = "psize" if side == "long" else "short_psize"
-    assert output[size_key].item() > 0.0
+    if forced_delist:
+        assert output[size_key].item() == 0.0
+        assert output["fill_count"].item() >= 2.0
+        assert output["hsl_panic_close_loss_sum"].item() > 0.0
+    else:
+        assert output[size_key].item() > 0.0
     assert output["day_end_eq"][0, 0].item() == pytest.approx(
         output["balance"].item()
     )
@@ -3756,7 +3762,207 @@ def test_mps_single_coin_short_invalid_tail_uses_balance_only_equity(
             output["hsl_tier_samples_red"].item()
             < output["hsl_tier_samples_total"].item()
         )
-        assert output[f"hsl_triggers_{side}"].item() == 0.0
+        if not forced_delist:
+            assert output[f"hsl_triggers_{side}"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_forced_delist_closes_both_hedged_sides(strategy_kind):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    last_valid = 6
+    count = last_valid + 1401
+    close = np.full(count, np.nan)
+    high = np.full(count, np.nan)
+    low = np.full(count, np.nan)
+    close[: last_valid + 1] = 100.0
+    high[: last_valid + 1] = 100.0
+    low[: last_valid + 1] = 100.0
+    high[3] = 102.0
+    low[3] = 98.0
+    close[last_valid] = 90.0
+    high[last_valid] = 90.0
+    low[last_valid] = 90.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        last_valid,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "ema_anchor":
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 0.0,
+                "offset": 0.01,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 100.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+        runner_kwargs = {}
+    else:
+        row = _tm_single_row(initial_ema_dist=0.01)
+        row[
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "entry_cooldown_minutes"
+            )
+        ] = 100.0
+        runner_cls = MpsTrailingMartingaleRunner
+        runner_kwargs = {"hsl_enabled": False}
+
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=True,
+        hedge_mode=True,
+        **runner_kwargs,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["psize"].item() == 0.0
+    assert output["short_psize"].item() == 0.0
+    assert output["fill_count"].item() >= 4.0
+    assert output["fill_count_long"].item() >= 2.0
+    assert output["fill_count"].item() - output["fill_count_long"].item() >= 2.0
+    assert output["loss_sum_long"].item() > 0.0
+    assert output["profit_sum_short"].item() > 0.0
+    assert output["hsl_panic_close_loss_sum"].item() > 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
+    from backtest import run_backtest
+    from config.schema import get_template_config
+    from optimization.gpu.service import MpsSingleCoinProxy
+
+    last_valid = 6
+    count = last_valid + 1401
+    hlcvs = np.full((count, 1, 4), np.nan, dtype=np.float64)
+    hlcvs[: last_valid + 1, 0] = [100.0, 100.0, 100.0, 1.0]
+    hlcvs[3, 0, 1] = 98.0
+    hlcvs[last_valid, 0] = [80.0, 80.0, 80.0, 1.0]
+    timestamps = (
+        1_700_000_000_000
+        + np.arange(count, dtype=np.int64) * 60_000
+    )
+    market_settings = {
+        "BTC": {
+            "qty_step": 0.001,
+            "price_step": 0.01,
+            "min_qty": 0.001,
+            "min_cost": 5.0,
+            "c_mult": 1.0,
+            "maker": 0.0,
+            "taker": 0.001,
+            "exchange": "bybit",
+            "first_valid_index": 0,
+            "last_valid_index": last_valid,
+            "warmup_minutes": 1,
+        },
+        "__meta__": {
+            "requested_start_ts": int(timestamps[0]),
+            "requested_start_date": "2023-11-14",
+            "warmup_minutes_requested": 1,
+        },
+    }
+    config = get_template_config()
+    config["live"]["strategy_kind"] = strategy_kind
+    config["live"]["max_warmup_minutes"] = 1
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    config["backtest"]["coins"] = {"bybit": ["BTC"]}
+    config["backtest"]["exchanges"] = ["bybit"]
+    for side, enabled in (("long", True), ("short", False)):
+        risk = config["bot"][side]["risk"]
+        risk["total_wallet_exposure_limit"] = 1.0 if enabled else 0.0
+        risk["n_positions"] = 1 if enabled else 0
+        risk["we_excess_allowance_pct"] = 0.0
+        risk["position_exposure_enforcer_enabled"] = False
+        risk["total_exposure_enforcer_enabled"] = False
+        config["bot"][side]["hsl"]["enabled"] = False
+        config["bot"][side]["unstuck"]["enabled"] = False
+    if strategy_kind == "ema_anchor":
+        config["bot"]["long"]["strategy"]["ema_anchor"].update(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "offset": 0.01,
+                "offset_psize_weight": 0.0,
+            }
+        )
+    else:
+        strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
+        strategy["ema_span_0"] = 2.0
+        strategy["ema_span_1"] = 3.0
+        strategy["entry"]["initial_qty_pct"] = 0.1
+        strategy["entry"]["initial_ema_dist"] = 0.01
+
+    proxy = MpsSingleCoinProxy(
+        config=config,
+        hlcvs=hlcvs,
+        mss=market_settings,
+        btc=np.full(count, 50_000.0),
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=1,
+        needed_metrics={
+            "backtest_completion_ratio",
+            "fills_count",
+            "hard_stop_panic_close_loss_sum",
+        },
+    )
+    result = proxy.evaluate([{}])[0]
+    exact_fills, _, exact_analysis = run_backtest(
+        hlcvs,
+        market_settings,
+        config,
+        "bybit",
+        np.full(count, 50_000.0),
+        timestamps,
+    )
+
+    assert result["fills_count"] == 2.0
+    assert result["fills_count"] == exact_analysis["fills_count"]
+    assert len(exact_fills) == exact_analysis["fills_count"]
+    assert result["hard_stop_panic_close_loss_sum"] > 0.0
+    assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
+        exact_analysis["hard_stop_panic_close_loss_sum"], rel=1.0e-5
+    )
+    assert result["backtest_completion_ratio"] > 0.99
 
 
 @pytest.mark.skipif(

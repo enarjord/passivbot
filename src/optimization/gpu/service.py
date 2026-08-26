@@ -652,13 +652,15 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
     }
 
 
-def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> None:
-    """Accept ordinary invalid tails but reject Rust's forced-delist boundary.
+def _require_no_multicoin_forced_delist_tail(
+    last_valid_idx: int, candle_count: int
+) -> None:
+    """Keep multicoin forced-delists fail closed until that kernel models them.
 
     Exact Rust treats a coin as delisted, and force-closes its open positions,
     when at least 1,400 prepared candles follow its final valid candle.  The
-    single-coin kernels model shorter invalid tails as non-tradable balance-only
-    equity samples; forced delist fills are a separate parity surface.
+    single-coin kernels model that close, but multicoin forced-delist fills are
+    a separate parity surface.
     """
 
     last_valid_idx = int(last_valid_idx)
@@ -671,7 +673,7 @@ def _require_no_forced_delist_tail(last_valid_idx: int, candle_count: int) -> No
         )
     if last_valid_idx + 1400 < candle_count:
         raise ValueError(
-            "GPU proxy does not yet model Rust forced-delist closes "
+            "GPU multicoin proxy does not yet model Rust forced-delist closes "
             "when at least 1,400 prepared candles follow the final valid candle; "
             f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
         )
@@ -714,7 +716,7 @@ def _require_supported_multicoin_valid_tails(
             and last_valid_idx == candle_count - 1
         ):
             continue
-        _require_no_forced_delist_tail(last_valid_idx, candle_count)
+        _require_no_multicoin_forced_delist_tail(last_valid_idx, candle_count)
         if not 0 <= first_valid_idx <= last_valid_idx:
             raise ValueError(
                 "GPU multicoin proxy requires each first_valid_idx within its "
@@ -1337,10 +1339,6 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
-        _require_no_forced_delist_tail(
-            int(backtest_params["last_valid_indices"][0]),
-            len(hlcvs),
-        )
         any_configured_hsl = any(
             bool(bot.get("hsl_enabled")) for bot in (long_bot, short_bot)
         )
