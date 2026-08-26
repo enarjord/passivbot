@@ -674,7 +674,12 @@ fn analyze_backtest_basic(
 
     for (i, &equity) in equities.iter().enumerate() {
         while let Some(fill) = fill_iter.peek() {
-            if fill.index <= i {
+            let fill_precedes_sample = if use_timestamps {
+                fill_timestamp_ms(fill) <= timestamps_ms[i]
+            } else {
+                fill.index <= i
+            };
+            if fill_precedes_sample {
                 last_balance = fill.usd_total_balance;
                 fill_iter.next();
             } else {
@@ -2175,6 +2180,34 @@ mod tests {
         assert!((analysis.exposure_mean_ratio - expected_adg / 0.45).abs() < 1e-12);
         assert!((analysis.total_wallet_exposure_mean - 0.45).abs() < 1e-12);
         assert!((analysis.total_wallet_exposure_median - 0.4).abs() < 1e-12);
+    }
+
+    #[test]
+    fn equity_balance_differences_align_fills_by_timestamp_after_warmup() {
+        let start = 1_740_000_000_000_u64;
+        let fills = vec![
+            make_trade_fill(100, start, "BTC", 0.0, 0.1, 0.1, 100.0, true),
+            make_trade_fill(
+                102,
+                start + 2 * 60_000,
+                "BTC",
+                -10.0,
+                -0.1,
+                0.0,
+                90.0,
+                true,
+            ),
+        ];
+        let equities = vec![100.0, 90.0, 95.0];
+        let timestamps = vec![start, start + 60_000, start + 2 * 60_000];
+
+        let analysis = analyze_backtest_basic(&fills, &equities, &timestamps, &[]);
+
+        assert!((analysis.equity_balance_diff_neg_max - 0.1).abs() < 1e-12);
+        assert!((analysis.equity_balance_diff_neg_mean - 0.1).abs() < 1e-12);
+        let expected_positive = (95.0 - 90.0) / 90.0;
+        assert!((analysis.equity_balance_diff_pos_max - expected_positive).abs() < 1e-12);
+        assert!((analysis.equity_balance_diff_pos_mean - expected_positive).abs() < 1e-12);
     }
 
     #[test]
