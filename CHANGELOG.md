@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtest analysis now aligns realized balance changes with tracked equity samples by timestamp
+  when timestamp data is available. This fixes equity-vs-balance and paper-loss metrics after a
+  warmup period, where absolute fill candle indices were previously compared with equity-series
+  offsets and could leave a stale balance in the analysis.
+
 - Apple MPS single- and multi-coin EMA Anchor and Trailing Martingale optimization now accepts
   BTC-denominated account-equity scoring and limits while `backtest.btc_collateral_cap` is zero.
   The proxy converts its compact USD daily equity surface with the canonical prepared BTC/USD
