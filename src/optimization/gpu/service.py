@@ -133,6 +133,46 @@ DIRECTIONAL_HSL_OUTPUT_KEYS = {
 }
 
 
+def _metric_uses_btc_analysis(metric) -> bool:
+    name = str(metric or "").strip().lower()
+    return name.endswith("_btc") or "_btc_" in name
+
+
+def _btc_daily_price_context(
+    btc_prices, timestamps, *, expected_count: int, expected_days: int
+) -> dict[str, np.ndarray]:
+    """Reduce the canonical BTC/USD series onto the proxy's UTC-day grid."""
+
+    btc = np.asarray(btc_prices, dtype=np.float64).reshape(-1)
+    ts = np.asarray(timestamps, dtype=np.int64).reshape(-1)
+    if len(btc) != int(expected_count) or len(ts) != int(expected_count):
+        raise ValueError(
+            "MPS BTC analysis requires BTC prices and timestamps matching the "
+            f"prepared candles: btc={len(btc)}, timestamps={len(ts)}, "
+            f"candles={expected_count}"
+        )
+    if len(btc) == 0 or np.any(~np.isfinite(btc)) or np.any(btc <= 0.0):
+        raise ValueError(
+            "MPS BTC analysis requires finite positive BTC/USD prices for every candle"
+        )
+    day_idx = ((ts // 86_400_000) - (ts[0] // 86_400_000)).astype(np.int64)
+    if np.any(day_idx < 0) or int(day_idx[-1]) + 1 != int(expected_days):
+        raise ValueError(
+            "MPS BTC analysis day grid disagrees with the prepared proxy timeline"
+        )
+    day_end = np.full(int(expected_days), np.nan, dtype=np.float64)
+    for day in range(int(expected_days)):
+        values = btc[day_idx == day]
+        if len(values) == 0:
+            raise ValueError(
+                f"MPS BTC analysis is missing prepared prices for UTC day {day}"
+            )
+        day_end[day] = values[-1]
+    return {
+        "btc_day_end_price": day_end,
+    }
+
+
 # One MPS thread simulates one candidate across every candle stream. Long-running
 # command buffers can starve WindowServer because Apple silicon shares the GPU
 # with the desktop. Keep one dispatch below the bounded work envelope measured
@@ -151,6 +191,7 @@ def _gpu_proxy_execution_checkpoint_contract(
     backtest_params: dict,
     exchange_params,
     base_params,
+    btc_prices=None,
 ) -> dict:
     """Return the prepared execution inputs which make proxy state reusable."""
 
@@ -192,7 +233,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "maker_fee",
         "taker_fee",
     )
-    return {
+    contract = {
         "version": 1,
         "strategy_kind": str(strategy_kind),
         "exchange": str(exchange),
@@ -226,6 +267,21 @@ def _gpu_proxy_execution_checkpoint_contract(
             for side, params in sorted((base_params or {}).items())
         },
     }
+    if btc_prices is not None:
+        btc_values = np.ascontiguousarray(
+            np.asarray(btc_prices, dtype=np.float64).reshape(-1)
+        )
+        if len(btc_values) != int(hlcv_values.shape[0]):
+            raise ValueError(
+                "GPU proxy checkpoint BTC identity disagrees with prepared "
+                f"candles: btc={len(btc_values)}, candles={hlcv_values.shape[0]}"
+            )
+        contract["btc_analysis"] = {
+            "count": int(len(btc_values)),
+            "dtype": str(btc_values.dtype.str),
+            "sha256": hashlib.sha256(btc_values.tobytes()).hexdigest(),
+        }
+    return contract
 
 
 def _mps_dispatch_batch_size(
@@ -1279,6 +1335,12 @@ class MpsSingleCoinProxy:
         self._torch = torch
         self._compute_objectives = compute_objectives
         self.needed_metrics = set(needed_metrics)
+        self.btc_analysis_enabled = any(
+            _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
+        )
+        btc_values = np.ascontiguousarray(
+            np.asarray(btc, dtype=np.float64).reshape(-1)
+        )
         self.batch_size = max(1, int(batch_size))
         self.interrupt_check = interrupt_check or (lambda: None)
         self.profile_enabled = os.environ.get(
@@ -1304,10 +1366,10 @@ class MpsSingleCoinProxy:
             mss,
             copy.deepcopy(config),
             exchange,
-            np.ascontiguousarray(btc),
+            btc_values,
             timestamps,
             metrics_only=True,
-            skip_btc_analysis=True,
+            skip_btc_analysis=not self.btc_analysis_enabled,
         )
         if len(payload.bot_params_list) != 1:
             raise ValueError(
@@ -1454,6 +1516,7 @@ class MpsSingleCoinProxy:
             backtest_params=backtest_params,
             exchange_params=payload.exchange_params,
             base_params=self.base_params,
+            btc_prices=btc_values if self.btc_analysis_enabled else None,
         )
 
         self.base_total_wallet_exposure_limits = {
@@ -1520,6 +1583,16 @@ class MpsSingleCoinProxy:
             )
         self.data = build_mps_data(high, low, close, timestamps, self.run, self.market)
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
+        if self.btc_analysis_enabled:
+            self.metrics_data.update(
+                _btc_daily_price_context(
+                    btc_values,
+                    timestamps,
+                    expected_count=self.data["n"],
+                    expected_days=self.data["n_days"],
+                )
+            )
+            self.metrics_data["btc_prices"] = btc_values
         runner_cls = (
             MpsTrailingMartingaleRunner
             if self.strategy_kind == "trailing_martingale"
@@ -2082,6 +2155,12 @@ class MpsMulticoinProxy:
         self._torch = torch
         self._compute_objectives = compute_objectives
         self.needed_metrics = set(needed_metrics)
+        self.btc_analysis_enabled = any(
+            _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
+        )
+        btc_values = np.ascontiguousarray(
+            np.asarray(btc, dtype=np.float64).reshape(-1)
+        )
         self.batch_size = max(1, int(batch_size))
         self.interrupt_check = interrupt_check or (lambda: None)
         self.profile_enabled = os.environ.get(
@@ -2150,10 +2229,10 @@ class MpsMulticoinProxy:
             mss,
             copy.deepcopy(config),
             exchange,
-            np.ascontiguousarray(btc),
+            btc_values,
             timestamps,
             metrics_only=True,
-            skip_btc_analysis=True,
+            skip_btc_analysis=not self.btc_analysis_enabled,
         )
         if not (
             len(payload.bot_params_list)
@@ -2331,6 +2410,7 @@ class MpsMulticoinProxy:
             backtest_params=backtest_params,
             exchange_params=payload.exchange_params,
             base_params=self.base_params,
+            btc_prices=btc_values if self.btc_analysis_enabled else None,
         )
 
         coins = list(backtest_params.get("coins") or [])
@@ -2466,6 +2546,16 @@ class MpsMulticoinProxy:
             include_hourly_ranges=True,
         )
         self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
+        if self.btc_analysis_enabled:
+            self.metrics_data.update(
+                _btc_daily_price_context(
+                    btc_values,
+                    timestamps,
+                    expected_count=self.data["n"],
+                    expected_days=self.data["n_days"],
+                )
+            )
+            self.metrics_data["btc_prices"] = btc_values
         self.runners = {}
         self.fused_runner = None
         common_runner_kwargs = {

@@ -155,7 +155,8 @@ The supported slice is intentionally narrow:
 - one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with
   `coin`, `pside`, or `unified` signals and both resting-limit and market panic closes. Unified and
   pside multi-coin runs use one portfolio controller; coin mode uses an independent controller per
-  coin and scales its loss budget by the dynamic effective position-slot count. Market panic orders fill on
+  coin and scales its loss budget by the configured denominator mode's effective position-slot
+  count. Market panic orders fill on
   the next valid bar at its close shifted adversely by `backtest.market_order_slippage_pct`, rounded
   directionally to the exchange price step, and charged the resolved taker fee. The Metal proxy
   models tunable RED
@@ -489,7 +490,19 @@ drawdown, mean and median underwater percentage, maximum recovery and position-h
 position-unchanged duration, initial-entry balance percentage for each side, volume per active day,
 total-wallet-exposure maximum and mean, USD exposure ratios, backtest completion, and weighted
 variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and Sterling. With BTC collateral disabled,
-the corresponding canonical USD account-equity names share this strategy-equity surface.
+the corresponding canonical USD account-equity names share this strategy-equity surface. The GPU
+proxy also supports BTC-denominated gain, ADG, MDG, Omega, equity shape, unweighted exposure
+ratios, peak recovery, per-side exposure-normalized gain/ADG/MDG, and the existing weighted
+ADG/MDG/Omega and equity-shape variants. It converts the compact USD daily closing-equity surface
+with the canonical prepared BTC/USD price at each UTC day end, including a candidate-specific
+final endpoint after early liquidation. BTC peak recovery remains a compact daily approximation;
+mandatory exact Rust validation and rolling drift gates remain authoritative. BTC Sharpe, Sortino,
+expected shortfall, drawdown, Calmar, and Sterling require synchronized intraday BTC-equity minima,
+while weighted BTC exposure ratios require suffix-local exposure series. Those metrics remain
+fail-closed until the proxy retains those surfaces.
+The prepared BTC series must contain at least one sample in every covered UTC day; unusually coarse
+intervals which skip a whole UTC day fail closed for BTC scoring.
+Positive `backtest.btc_collateral_cap` remains unsupported and fails before GPU optimization.
 Daily USD equity choppiness, jerkiness, and exponential fit error are reduced from that same active
 daily closing-equity surface with Rust's no-fill defaults and short-series behavior.
 Collateral-agnostic `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio_pnl` are also

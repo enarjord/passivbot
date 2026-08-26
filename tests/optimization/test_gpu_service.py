@@ -33,6 +33,7 @@ from optimization.gpu.service import (
     MpsMulticoinEmaProxy,
     _build_multicoin_ema_coin_overrides,
     _build_multicoin_tm_coin_overrides,
+    _btc_daily_price_context,
     _candidate_wallet_exposure_limit_outputs,
     _candidate_position_slot_outputs,
     _combine_hedged_multicoin_hsl_outputs,
@@ -163,12 +164,74 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         exchange_params=[market],
         base_params={"long": {"offset": 0.02}},
     )
+    btc_prices = np.array([50_000.0, 51_000.0, 49_000.0])
+    with_btc = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
+        btc_prices=btc_prices,
+    )
+    changed_btc = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
+        btc_prices=btc_prices + np.array([0.0, 1.0, 0.0]),
+    )
 
     assert changed != original
     assert changed_timestamps != original
     assert changed_hlcvs != original
     assert changed_base_params != original
+    assert "btc_analysis" not in original
+    assert changed_btc != with_btc
     assert original["timestamps"]["count"] == 3
+
+
+def test_btc_daily_price_context_matches_proxy_utc_day_grid():
+    day_ms = 86_400_000
+    context = _btc_daily_price_context(
+        [10.0, 12.0, 11.0, 20.0],
+        [0, day_ms - 1, day_ms, 2 * day_ms - 1],
+        expected_count=4,
+        expected_days=2,
+    )
+
+    assert context["btc_day_end_price"].tolist() == [12.0, 20.0]
+
+
+@pytest.mark.parametrize(
+    "btc_prices",
+    ([10.0, float("nan")], [10.0, 0.0], [10.0]),
+)
+def test_btc_daily_price_context_rejects_unsafe_series(btc_prices):
+    with pytest.raises(ValueError, match="MPS BTC analysis"):
+        _btc_daily_price_context(
+            btc_prices,
+            [0, 60_000],
+            expected_count=2,
+            expected_days=1,
+        )
+
+
+def test_btc_daily_price_context_rejects_skipped_utc_days():
+    day_ms = 86_400_000
+    with pytest.raises(ValueError, match="missing prepared prices"):
+        _btc_daily_price_context(
+            [10.0, 20.0],
+            [0, 2 * day_ms],
+            expected_count=2,
+            expected_days=3,
+        )
 
 
 def test_gpu_proxy_execution_checkpoint_contract_rejects_timestamp_shape_mismatch():
