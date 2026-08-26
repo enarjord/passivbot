@@ -383,9 +383,14 @@ The supported slice is intentionally narrow:
   orders for that coin. Each such coin's final H/L/C must remain finite and positive after float32
   packing; an unrepresentable final candle fails before dispatch. Dynamic tradability,
   portfolio/coin HSL, equity, and elapsed-time accounting continue on the surviving timeline
-- multi-coin histories in which every coin ends before the prepared endpoint and histories with an
-  all-invalid gap after coverage begins remain fail-closed until their all-invalid time-accounting
-  semantics are modeled
+- multi-coin histories may also contain declared all-invalid gaps between disjoint coin histories or
+  a tail after every coin has ended. Once portfolio equity tracking starts, Metal continues exact
+  Rust's balance-only equity, HSL, exposure, restart, daily, recovery, and elapsed-time accounting
+  through those periods. Tradability observed only before the warmup/requested-start guard does not
+  activate tracking inside a later gap; the next eligible coin does. Per-coin validity still blocks
+  fills, order generation, and unrealized PnL. If one or more coins are declared valid for a timestep
+  but every corresponding packed float32 H/L/C candle is non-finite or non-positive, the input
+  remains fail-closed before dispatch
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
 Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every

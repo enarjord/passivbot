@@ -1205,14 +1205,13 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert constructed["kwargs"]["filter_by_min_effective_cost"] is True
 
 
-def test_gpu_multicoin_proxy_accepts_staggered_valid_and_forced_delist_tails():
+def test_gpu_multicoin_proxy_accepts_staggered_valid_gaps_and_ended_tails():
     hlcvs = np.ones((100, 2, 4), dtype=np.float64)
     _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [99, 98])
     _require_supported_multicoin_valid_tails(hlcvs, [0, 50], [49, 99])
     _require_supported_multicoin_valid_tails(hlcvs, [100, 0], [99, 99])
-
-    with pytest.raises(ValueError, match="at least one coin to remain valid"):
-        _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [98, 97])
+    _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [98, 97])
+    _require_supported_multicoin_valid_tails(hlcvs, [0, 60], [39, 99])
     _require_supported_multicoin_valid_tails(
         np.ones((1401, 2, 4), dtype=np.float64),
         [0, 0],
@@ -1232,15 +1231,6 @@ def test_gpu_multicoin_proxy_accepts_staggered_valid_and_forced_delist_tails():
         _require_supported_multicoin_valid_tails(hlcvs, [99, 0], [98, 99])
 
 
-def test_gpu_multicoin_proxy_rejects_all_invalid_gap_between_valid_windows():
-    with pytest.raises(ValueError, match=r"all-invalid gap.*gap_start=40"):
-        _require_supported_multicoin_valid_tails(
-            np.ones((100, 2, 4), dtype=np.float64),
-            [0, 60],
-            [39, 99],
-        )
-
-
 @pytest.mark.parametrize("invalid_value", [np.nan, 0.0, -1.0])
 def test_gpu_multicoin_proxy_rejects_actual_all_invalid_candle_in_windows(
     invalid_value,
@@ -1248,7 +1238,7 @@ def test_gpu_multicoin_proxy_rejects_actual_all_invalid_candle_in_windows(
     hlcvs = np.ones((100, 2, 4), dtype=np.float64)
     hlcvs[40, :, :3] = invalid_value
 
-    with pytest.raises(ValueError, match=r"all-invalid candle.*candle_index=40"):
+    with pytest.raises(ValueError, match=r"declared valid.*candle_index=40"):
         _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
 
     # One actual finite-positive candle is sufficient to advance portfolio
@@ -1270,7 +1260,7 @@ def test_gpu_multicoin_proxy_rejects_all_invalid_after_float32_packing(
     hlcvs = np.ones((100, 2, 4), dtype=np.float64)
     hlcvs[40, :, :3] = unpackable_value
 
-    with pytest.raises(ValueError, match=r"all-invalid candle.*candle_index=40"):
+    with pytest.raises(ValueError, match=r"declared valid.*candle_index=40"):
         _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
 
     hlcvs[40, 1, :3] = 1.0

@@ -655,7 +655,7 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
 def _require_supported_multicoin_valid_tails(
     hlcvs, first_valid_indices, last_valid_indices
 ) -> None:
-    """Accept staggered tails with continuous portfolio time coverage."""
+    """Validate declared multi-coin coverage and packed candle integrity."""
 
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
@@ -702,24 +702,6 @@ def _require_supported_multicoin_valid_tails(
             "GPU multicoin proxy requires at least one coin with a non-empty "
             "prepared valid range"
         )
-    if max(last for _, last in windows) != int(candle_count) - 1:
-        raise ValueError(
-            "GPU multicoin proxy requires at least one coin to remain valid through "
-            "the prepared endpoint while all-coins-ended tail accounting is not yet "
-            f"modeled; last_valid_indices={tails}, candle_count={candle_count}"
-        )
-    windows.sort()
-    covered_through = windows[0][1]
-    for first_valid_idx, last_valid_idx in windows[1:]:
-        if first_valid_idx > covered_through + 1:
-            raise ValueError(
-                "GPU multicoin proxy does not yet model an all-invalid gap after "
-                "portfolio equity tracking may begin; "
-                f"gap_start={covered_through + 1}, "
-                f"gap_end={first_valid_idx - 1}, "
-                f"valid_windows={windows}"
-            )
-        covered_through = max(covered_through, last_valid_idx)
     candle_indices = np.arange(candle_count, dtype=np.int64)[:, None]
     within_declared_window = (
         (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
@@ -746,14 +728,19 @@ def _require_supported_multicoin_valid_tails(
                 f"coin={coin}, last_valid_idx={last_valid_idx}, "
                 f"packed_hlc={packed_hlc[last_valid_idx, coin].tolist()}"
             )
+    declared_coverage = np.any(within_declared_window, axis=1)
     actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
-    coverage_start = min(first for first, _ in windows)
-    missing = np.flatnonzero(~actual_coverage[coverage_start:])
+    # Declared all-invalid gaps and tails are valid portfolio time: exact Rust
+    # keeps sampling balance-only equity, HSL, exposure, and elapsed-time
+    # metrics while no coin is tradeable.  A declared-valid minute whose every
+    # packed H/L/C is unusable remains a malformed required input and fails
+    # closed rather than being reclassified as an intentional gap.
+    missing = np.flatnonzero(declared_coverage & ~actual_coverage)
     if missing.size:
-        missing_idx = coverage_start + int(missing[0])
+        missing_idx = int(missing[0])
         raise ValueError(
-            "GPU multicoin proxy does not yet model an all-invalid candle after "
-            "portfolio equity tracking may begin; "
+            "GPU multicoin proxy requires at least one finite positive packed "
+            "H/L/C candle whenever a coin is declared valid; "
             f"candle_index={missing_idx}, valid_windows={windows}"
         )
 

@@ -554,7 +554,8 @@ mod tests {
         assert!(source.contains("candle_eligibility_changed"));
         assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
-        assert!(source.contains("any_valid = any_valid || valid;"));
+        assert!(!source.contains("any_valid"));
+        assert!(source.contains("declared all-invalid gaps and"));
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("if (long_side.hsl.signal_mode != short_side.hsl.signal_mode)"));
         assert!(source.contains("update_joint_pside_hsl("));
@@ -608,6 +609,13 @@ mod tests {
             "generate_ema_multicoin_side_orders(\n                side, config, account"
         ));
         assert!(source.contains("side.max_tradable_seen = max("));
+        assert_eq!(source.matches("const bool past_activation_guard").count(), 2);
+        assert_eq!(
+            source
+                .matches("!post_fill_balance_depleted && past_activation_guard")
+                .count(),
+            2
+        );
         assert!(source.contains(
             "side.previous_effective_n_positions = effective_n_positions"
         ));
@@ -695,7 +703,9 @@ mod tests {
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
         ));
-        assert!(source.contains("if (alive && !post_fill_balance_depleted)"));
+        assert!(source.contains(
+            "if (alive && !post_fill_balance_depleted && past_activation_guard)"
+        ));
         assert!(source.contains("const float score_hysteresis = fmax(run_settings[4], 0.0f)"));
         assert!(source.contains("incumbent[c] = selected[c] && psize[c] <= 0.0f"));
         assert!(source.contains("if (!selected[c] || incumbent[c] || !survivor[c]) continue"));
@@ -1034,7 +1044,8 @@ mod tests {
         assert!(source.contains("candle_eligibility_changed"));
         assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
-        assert!(source.contains("any_valid = any_valid || valid;"));
+        assert!(!source.contains("any_valid"));
+        assert!(source.contains("declared all-invalid gaps and"));
         assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));
@@ -1086,6 +1097,13 @@ mod tests {
         assert!(source.contains("thread int* entry_tick = side.entry_tick"));
         assert!(source.contains("thread bool* selected = side.selected"));
         assert!(source.contains("thread int& max_tradable_seen = side.max_tradable_seen"));
+        assert_eq!(source.matches("const bool past_activation_guard").count(), 2);
+        assert_eq!(
+            source
+                .matches("!post_fill_balance_depleted && past_activation_guard")
+                .count(),
+            2
+        );
         assert!(source.contains("side.previous_effective_n_positions"));
         assert!(source.contains("load_hsl(params, po, 48)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
@@ -1200,7 +1218,9 @@ mod tests {
         assert!(source.contains(
             "const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f"
         ));
-        assert!(source.contains("if (alive && !post_fill_balance_depleted)"));
+        assert!(source.contains(
+            "if (alive && !post_fill_balance_depleted && past_activation_guard)"
+        ));
         assert!(source.contains("market_price * 0.9995f / price_step"));
         assert!(source.matches("clamped_market_price(").count() >= 4);
         assert!(source.contains("finalized_twel_reducer_qty = ordinary_can_accompany_reducer"));
