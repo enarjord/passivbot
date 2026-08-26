@@ -176,9 +176,13 @@ The supported slice is intentionally narrow:
   `peak_recovery_hours_strategy_eq_{long,short}` and
   `peak_recovery_days_strategy_eq_{long,short}` retain the longest interval until strategy equity
   strictly exceeds its prior controller peak, including an unrecovered tail through the backtest
-  end. Raw per-side `drawdown_worst_strategy_eq_{long,short}` is also available through an opt-in
-  bounded peak-and-maximum accumulator, with exact Rust validation retaining authority over the
-  approximate fill path. Single-coin, one-sided multi-coin, and fused shared-account dual-side
+  end. Raw per-side `drawdown_worst_strategy_eq_{long,short}` and
+  `drawdown_worst_mean_1pct_strategy_eq_{long,short}` are also available through opt-in bounded
+  accumulators. The latter first retains each observed day's worst full-resolution controller
+  drawdown and then applies the same logarithmic tail approximation used by the EMA-smoothed
+  metric; only its partially selected cutoff bin is approximate. Exact Rust validation retains
+  authority over both the proxy fill path and tail reduction. Single-coin, one-sided multi-coin,
+  and fused shared-account dual-side
   multi-coin EMA Anchor and Trailing Martingale also support the global
   `strategy_eq_recovery_days_{mean,median,p95,p99,mean_worst_5pct,mean_worst_1pct}` metrics. The
   strategy kernels emit opt-in candidate-relative hourly strategy-equity samples plus mandatory
@@ -1290,6 +1294,7 @@ over all exchanges before scoring.
 | `drawdown_worst_strategy_eq` | Worst drawdown on collateral-agnostic strategy equity |
 | `drawdown_worst_ema_strategy_eq` | Worst EMA-smoothed strategy-equity drawdown, shared as `max(long, short)` |
 | `drawdown_worst_mean_1pct_strategy_eq` | Mean of worst 1% daily worst strategy-equity drawdowns, computed from full-resolution strategy-equity drawdowns before daily reduction |
+| `drawdown_worst_mean_1pct_strategy_eq_{long,short}` | Mean of worst 1% daily worst strategy-equity drawdowns for the long or short HSL controller |
 | `drawdown_worst_mean_1pct_ema_strategy_eq` | Mean of worst 1% EMA-smoothed strategy-equity drawdown samples, shared as `max(long, short)` |
 | `expected_shortfall_1pct` | Mean of worst 1% daily losses (CVaR) |
 | `equity_balance_diff_neg_max` / `pos_max` | Largest divergence between equity and account balance (negative side tracks only drawdowns below balance; positive side tracks only run-ups above balance) |

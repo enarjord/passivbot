@@ -696,6 +696,7 @@ pub struct Backtest<'a> {
     hard_stop_plot_events_pside: [Vec<HardStopPlotEvent>; 2],
     strategy_equity_series: Vec<f64>,
     strategy_equity_series_pside: [Vec<f64>; 2],
+    strategy_equity_timestamps_ms_pside: [Vec<u64>; 2],
     peak_strategy_equity_series: Vec<f64>,
     peak_strategy_equity_series_pside: [Vec<f64>; 2],
     hard_stop_no_restart_peak_strategy_equity: f64,
@@ -2255,6 +2256,7 @@ impl<'a> Backtest<'a> {
             hard_stop_plot_events_pside: [Vec::new(), Vec::new()],
             strategy_equity_series: Vec::new(),
             strategy_equity_series_pside: [Vec::new(), Vec::new()],
+            strategy_equity_timestamps_ms_pside: [Vec::new(), Vec::new()],
             peak_strategy_equity_series: Vec::new(),
             peak_strategy_equity_series_pside: [Vec::new(), Vec::new()],
             hard_stop_no_restart_peak_strategy_equity: 0.0,
@@ -3494,6 +3496,7 @@ impl<'a> Backtest<'a> {
         let strategy_equity = baseline_balance + strategy_pnl;
         let peak_strategy_equity = (baseline_balance + peak_strategy_pnl).max(strategy_equity);
         self.strategy_equity_series_pside[pside].push(strategy_equity);
+        self.strategy_equity_timestamps_ms_pside[pside].push(timestamp_ms);
         self.peak_strategy_equity_series_pside[pside].push(peak_strategy_equity);
         Ok(())
     }
@@ -3620,6 +3623,7 @@ impl<'a> Backtest<'a> {
             .map(|state| state.drawdown_ema)
             .unwrap_or(step.drawdown_raw);
         self.strategy_equity_series_pside[pside].push(strategy_equity);
+        self.strategy_equity_timestamps_ms_pside[pside].push(timestamp_ms);
         self.peak_strategy_equity_series_pside[pside].push(peak_strategy_equity);
         self.hard_stop_drawdown_timestamps_ms_pside[pside].push(timestamp_ms);
         self.hard_stop_drawdown_samples_pside[pside].push(step.drawdown_raw);
@@ -5568,6 +5572,7 @@ impl<'a> Backtest<'a> {
         &self,
         strategy_equity_series: &[f64],
         drawdown_ema_samples: Option<&[f64]>,
+        strategy_equity_timestamps_ms: Option<&[u64]>,
     ) -> StrategyEquityMetrics {
         let sample_count = strategy_equity_series
             .len()
@@ -5578,6 +5583,16 @@ impl<'a> Backtest<'a> {
         let timestamps_offset = self.equities.timestamps_ms.len() - sample_count;
         let series = &strategy_equity_series[strategy_equity_series.len() - sample_count..];
         let timestamps = &self.equities.timestamps_ms[timestamps_offset..];
+        let daily_metric_timestamps = strategy_equity_timestamps_ms
+            .map(|values| {
+                assert_eq!(
+                    values.len(),
+                    strategy_equity_series.len(),
+                    "per-side strategy-equity timestamps must align with samples"
+                );
+                &values[values.len() - sample_count..]
+            })
+            .unwrap_or(timestamps);
         let drawdowns = calc_strategy_equity_drawdowns(series);
         let drawdown_emas = drawdown_ema_samples.map(|samples| {
             let ema_sample_count = sample_count.min(samples.len());
@@ -5586,6 +5601,7 @@ impl<'a> Backtest<'a> {
 
         let compute_metrics = |series: &[f64],
                                timestamps_ms: &[u64],
+                               daily_metric_timestamps_ms: &[u64],
                                drawdowns: &[f64],
                                drawdown_emas: Option<&[f64]>| {
             let equity_metrics = analyze_equity_series(series, timestamps_ms);
@@ -5593,7 +5609,7 @@ impl<'a> Backtest<'a> {
                 .iter()
                 .fold(0.0_f64, |max_dd, &x| max_dd.max(x.abs()));
             let daily_worst_drawdowns =
-                daily_worst_positive_drawdowns(drawdowns, timestamps_ms, series.len());
+                daily_worst_positive_drawdowns(drawdowns, daily_metric_timestamps_ms, series.len());
             let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
             let strategy_eq_underwater_pct_mean = mean_abs(&daily_worst_drawdowns);
             let strategy_eq_underwater_pct_median = median_abs(&daily_worst_drawdowns);
@@ -5627,7 +5643,13 @@ impl<'a> Backtest<'a> {
             }
         };
 
-        let full = compute_metrics(series, timestamps, &drawdowns, drawdown_emas);
+        let full = compute_metrics(
+            series,
+            timestamps,
+            daily_metric_timestamps,
+            &drawdowns,
+            drawdown_emas,
+        );
         let recovery = calc_strategy_eq_recovery_days(series, timestamps);
         let peak_recovery_days_strategy_eq = recovery.max;
         let peak_recovery_hours_strategy_eq = peak_recovery_days_strategy_eq * 24.0;
@@ -5653,11 +5675,13 @@ impl<'a> Backtest<'a> {
                 break;
             }
             let subset_timestamps = &timestamps[start_idx..];
+            let subset_daily_metric_timestamps = &daily_metric_timestamps[start_idx..];
             let subset_drawdowns = &drawdowns[start_idx..];
             let subset_drawdown_emas = drawdown_emas.map(|values| &values[start_idx..]);
             let mut subset_metric = compute_metrics(
                 subset_series,
                 subset_timestamps,
+                subset_daily_metric_timestamps,
                 subset_drawdowns,
                 subset_drawdown_emas,
             );
@@ -5720,7 +5744,7 @@ impl<'a> Backtest<'a> {
     }
 
     fn strategy_equity_metrics(&self) -> StrategyEquityMetrics {
-        self.strategy_equity_metrics_from_series(&self.strategy_equity_series, None)
+        self.strategy_equity_metrics_from_series(&self.strategy_equity_series, None, None)
     }
 
     pub fn strategy_equity_metrics_for_analysis(&self) -> StrategyEquityMetricsBundle {
@@ -5737,6 +5761,7 @@ impl<'a> Backtest<'a> {
                 self.strategy_equity_metrics_from_series(
                     &self.strategy_equity_series_pside[LONG],
                     Some(&self.hard_stop_drawdown_ema_samples_pside[LONG]),
+                    Some(&self.strategy_equity_timestamps_ms_pside[LONG]),
                 )
             } else {
                 StrategyEquityMetrics::default()
@@ -5745,6 +5770,7 @@ impl<'a> Backtest<'a> {
                 self.strategy_equity_metrics_from_series(
                     &self.strategy_equity_series_pside[SHORT],
                     Some(&self.hard_stop_drawdown_ema_samples_pside[SHORT]),
+                    Some(&self.strategy_equity_timestamps_ms_pside[SHORT]),
                 )
             } else {
                 StrategyEquityMetrics::default()
@@ -8556,6 +8582,10 @@ mod tests {
         bt.update_hard_stop_state(1).unwrap();
 
         assert_eq!(bt.strategy_equity_series_pside[LONG].len(), 2);
+        assert_eq!(
+            bt.strategy_equity_timestamps_ms_pside[LONG],
+            vec![0, 60_000]
+        );
         assert_eq!(bt.peak_strategy_equity_series_pside[LONG].len(), 2);
         assert_eq!(
             bt.hard_stop_drawdown_timestamps_ms_pside[LONG],
@@ -9359,7 +9389,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_stop_ema_metrics_use_runtime_side_series_and_shared_max() {
+    fn hard_stop_side_metrics_use_runtime_series_shared_max_and_sample_timestamps() {
         let hlcvs = Array3::from_shape_vec((4, 1, 4), vec![1.0; 4 * 1 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0; 4]);
 
@@ -9426,10 +9456,12 @@ mod tests {
 
         bt.equities.timestamps_ms = vec![0, 60_000, 120_000, 180_000];
         bt.strategy_equity_series_pside[LONG] = vec![100.0, 90.0, 90.0, 90.0];
+        bt.strategy_equity_timestamps_ms_pside[LONG] = vec![0, 60_000, 120_000, 180_000];
         bt.peak_strategy_equity_series_pside[LONG] = vec![100.0, 100.0, 100.0, 100.0];
         bt.hard_stop_drawdown_samples_pside[LONG] = vec![0.0, 0.10, 0.10, 0.10];
         bt.hard_stop_drawdown_ema_samples_pside[LONG] = vec![0.0, 0.10, 0.10, 0.10];
         bt.strategy_equity_series_pside[SHORT] = vec![100.0, 90.0, 100.0, 90.0];
+        bt.strategy_equity_timestamps_ms_pside[SHORT] = vec![0, 60_000, 120_000, 180_000];
         bt.peak_strategy_equity_series_pside[SHORT] = vec![100.0, 100.0, 100.0, 100.0];
         bt.hard_stop_drawdown_samples_pside[SHORT] = vec![0.0, 0.10, 0.0, 0.10];
         bt.hard_stop_drawdown_ema_samples_pside[SHORT] = vec![0.0, 0.01, 0.005, 0.02];
@@ -9459,6 +9491,35 @@ mod tests {
                 .abs()
                 < 1e-12
         );
+
+        // Reproduce a halted-controller tail-alignment edge over 200 days.
+        // The raw stresses of 90% late on day 0 and 80% early on day 1 are
+        // separate daily worst samples with their true controller timestamps.
+        // Tail-aligning the shortened series to account timestamps merges both
+        // into one day and changes the worst-1% mean from 85% to 50%.
+        let day_ms = 86_400_000_u64;
+        let mut actual_timestamps = Vec::with_capacity(600);
+        let mut series = Vec::with_capacity(600);
+        for day in 0..200_u64 {
+            actual_timestamps.extend([day * day_ms, day * day_ms + 60_000, day * day_ms + 120_000]);
+            let peak = 100.0 + day as f64;
+            let first_drawdown = if day == 1 { 0.8 } else { 0.1 };
+            let second_drawdown = if day == 0 { 0.9 } else { 0.1 };
+            series.extend([
+                peak,
+                peak * (1.0 - first_drawdown),
+                peak * (1.0 - second_drawdown),
+            ]);
+        }
+        bt.equities.timestamps_ms = actual_timestamps.clone();
+        bt.equities.timestamps_ms.push(200 * day_ms);
+
+        let actual =
+            bt.strategy_equity_metrics_from_series(&series, None, Some(&actual_timestamps));
+        let legacy_tail_aligned = bt.strategy_equity_metrics_from_series(&series, None, None);
+
+        assert!((actual.drawdown_worst_mean_1pct_strategy_eq - 0.85).abs() < 1e-9);
+        assert!((legacy_tail_aligned.drawdown_worst_mean_1pct_strategy_eq - 0.50).abs() < 1e-9);
     }
 
     #[test]

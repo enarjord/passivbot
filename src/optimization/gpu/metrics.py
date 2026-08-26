@@ -57,6 +57,8 @@ SUPPORTED_METRICS = (
     "calmar_ratio_strategy_eq",
     "calmar_ratio_strategy_eq_w",
     "drawdown_worst_mean_1pct_strategy_eq",
+    "drawdown_worst_mean_1pct_strategy_eq_long",
+    "drawdown_worst_mean_1pct_strategy_eq_short",
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",
     "drawdown_worst_mean_1pct_ema_strategy_eq",
@@ -265,6 +267,8 @@ _HARD_STOP_EMA_DRAWDOWN_METRICS = {
 _HARD_STOP_RAW_DRAWDOWN_METRICS = {
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",
+    "drawdown_worst_mean_1pct_strategy_eq_long",
+    "drawdown_worst_mean_1pct_strategy_eq_short",
 }
 _HARD_STOP_EMA_TAIL_METRICS = {
     "drawdown_worst_mean_1pct_ema_strategy_eq",
@@ -1381,9 +1385,14 @@ def _hard_stop_ema_drawdown_metrics(out: dict) -> dict:
 
 
 def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
-    """Expose per-side worst raw HSL strategy-equity drawdown."""
+    """Expose per-side raw HSL strategy-equity drawdown summaries."""
 
-    required = {"hsl_drawdown_raw_max_long", "hsl_drawdown_raw_max_short"}
+    required = {
+        "hsl_drawdown_raw_max_long",
+        "hsl_drawdown_raw_max_short",
+        "hsl_drawdown_raw_mean_worst_1pct_long",
+        "hsl_drawdown_raw_mean_worst_1pct_short",
+    }
     if missing := required.difference(out):
         raise RuntimeError(
             "MPS directional HSL raw-drawdown outputs are missing from proxy "
@@ -1395,6 +1404,12 @@ def _hard_stop_raw_drawdown_metrics(out: dict) -> dict:
         ].to(torch.float64),
         "drawdown_worst_strategy_eq_short": out[
             "hsl_drawdown_raw_max_short"
+        ].to(torch.float64),
+        "drawdown_worst_mean_1pct_strategy_eq_long": out[
+            "hsl_drawdown_raw_mean_worst_1pct_long"
+        ].to(torch.float64),
+        "drawdown_worst_mean_1pct_strategy_eq_short": out[
+            "hsl_drawdown_raw_mean_worst_1pct_short"
         ].to(torch.float64),
     }
 
