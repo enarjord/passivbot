@@ -12,7 +12,7 @@ constant int SCALAR_COLS = 68;
 constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 34;
+constant int SIDE_PARAMS = 35;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -209,6 +209,7 @@ struct EmaSide {
     float w1m;
     float cooldown_min;
     float twel;
+    float base_wel;
     float allowed_wel;
     float entry_cap;
     float twel_enforcer_threshold;
@@ -287,9 +288,17 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.twel = params[po + 11];
     float allowance_pct = fmax(params[po + 12], 0.0f);
     bool legacy_raw_allowance = params[po + 13] > 0.5f;
-    side.allowed_wel = side.twel * (
-        1.0f + (legacy_raw_allowance ? allowance_pct : 0.0f)
-    );
+    float base_wel = params[po + 34];
+    if (!(isfinite(base_wel) && base_wel >= 0.0f)) base_wel = side.twel;
+    side.base_wel = base_wel;
+    float effective_allowance_pct = allowance_pct;
+    if (!legacy_raw_allowance) {
+        float max_effective = base_wel > 0.0f
+            ? fmax(side.twel / base_wel - 1.0f, 0.0f) : 0.0f;
+        effective_allowance_pct = fmin(allowance_pct, max_effective);
+    }
+    side.allowed_wel = base_wel > 0.0f
+        ? base_wel * (1.0f + effective_allowance_pct) : 0.0f;
     bool twel_entry_gate_enabled = params[po + 14] > 0.5f;
     float twel_threshold = params[po + 15];
     float gate_cap = side.twel;
@@ -823,7 +832,7 @@ inline void generate_long_orders(
     float current_cost_we = side.psize > 0.0f && balance > 0.0f
         ? side.psize * side.pprice * c_mult / balance : 0.0f;
     float swer = side.psize > 0.0f && balance > 0.0f
-        ? current_we / fmax(side.twel, 1.0e-12f) : 0.0f;
+        ? current_we / fmax(side.base_wel, 1.0e-12f) : 0.0f;
     float inv_shift = swer * side.psize_weight;
 
     int bid_ticks = min(
@@ -909,7 +918,8 @@ inline void generate_short_orders(
     float mult = fmax(1.0f + side.vol1h * side.w1h + side.vol1m * side.w1m, 1.0f);
     float eff_off = side.offset * mult;
     float swer = side.psize > 0.0f && balance > 0.0f
-        ? -side.psize * price_now * c_mult / balance / fmax(side.twel, 1.0e-12f)
+        ? -side.psize * price_now * c_mult / balance
+            / fmax(side.base_wel, 1.0e-12f)
         : 0.0f;
     float current_cost_we = side.psize > 0.0f && balance > 0.0f
         ? side.psize * side.pprice * c_mult / balance : 0.0f;

@@ -448,7 +448,10 @@ mod tests {
         assert!(source.contains("scalars[so + 68] = hsl_strategy_equity_drawdown_max("));
         assert!(source.contains("scalars[so + 69] = hsl_strategy_equity_drawdown_max("));
         assert!(source.contains("if (eqf >= account_peak)"));
-        assert!(source.contains("constant int SIDE_PARAMS = 34"));
+        assert!(source.contains("constant int SIDE_PARAMS = 35"));
+        assert!(source.contains("float base_wel = params[po + 34]"));
+        assert!(source.contains("side.base_wel = base_wel"));
+        assert!(source.contains("current_we / fmax(side.base_wel"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
@@ -750,7 +753,8 @@ mod tests {
         assert_directional_recovery_sampling_contract(source);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
-        assert!(source.contains("constant int SIDE_PARAMS = 51"));
+        assert!(source.contains("constant int SIDE_PARAMS = 52"));
+        assert!(source.contains("float base_wel = p[o + 51]"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));

@@ -12,7 +12,7 @@ constant int SCALAR_COLS = 68;
 constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 51;
+constant int SIDE_PARAMS = 52;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -422,9 +422,16 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.gate_reentry = p[o + 26] > 0.5f;
     float allowance_pct = fmax(p[o + 27], 0.0f);
     bool legacy_raw_allowance = p[o + 28] > 0.5f;
-    s.allowed_wel = s.twel * (
-        1.0f + (legacy_raw_allowance ? allowance_pct : 0.0f)
-    );
+    float base_wel = p[o + 51];
+    if (!(isfinite(base_wel) && base_wel >= 0.0f)) base_wel = s.twel;
+    float effective_allowance_pct = allowance_pct;
+    if (!legacy_raw_allowance) {
+        float max_effective = base_wel > 0.0f
+            ? fmax(s.twel / base_wel - 1.0f, 0.0f) : 0.0f;
+        effective_allowance_pct = fmin(allowance_pct, max_effective);
+    }
+    s.allowed_wel = base_wel > 0.0f
+        ? base_wel * (1.0f + effective_allowance_pct) : 0.0f;
     s.twel_entry_gate_enabled = p[o + 29] > 0.5f;
     float twel_threshold = p[o + 30];
     float gate_cap = s.twel;

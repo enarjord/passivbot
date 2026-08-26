@@ -127,6 +127,28 @@ def _pack_tm_parameter_matrix(
     return matrix
 
 
+def _upgrade_legacy_single_coin_wel_params(
+    params: np.ndarray, *, side_width: int
+) -> np.ndarray:
+    """Append the exact-default WEL sentinel to legacy two-side rows."""
+
+    if params.ndim != 2:
+        return params
+    legacy_width = side_width - 1
+    if params.shape[1] != legacy_width * 2:
+        return params
+    sentinel = np.full((params.shape[0], 1), -1.0, dtype=params.dtype)
+    return np.concatenate(
+        (
+            params[:, :legacy_width],
+            sentinel,
+            params[:, legacy_width:],
+            sentinel,
+        ),
+        axis=1,
+    )
+
+
 def _scale_directional_minute_parameters(
     params: np.ndarray,
     keys: tuple[str, ...],
@@ -911,6 +933,9 @@ class MpsEmaAnchorRunner:
         self.last_profile: dict[str, float] = {}
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        params = _upgrade_legacy_single_coin_wel_params(
+            params, side_width=len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+        )
         expected = len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) * 2
         if params.ndim != 2 or params.shape[1] != expected:
             got = params.shape[1] if params.ndim == 2 else params.shape
@@ -1954,6 +1979,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
+        params = _upgrade_legacy_single_coin_wel_params(
+            params,
+            side_width=len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS),
+        )
         expected = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS) * 2
         if params.ndim != 2 or params.shape[1] != expected:
             got = params.shape[1] if params.ndim == 2 else params.shape

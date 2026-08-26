@@ -37,6 +37,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN,
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
+    UNSTUCK_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
     encode_hsl_panic_order_type,
@@ -1356,6 +1357,10 @@ class MpsSingleCoinProxy:
             )
         hsl_panic_market = {}
         self.base_params = {}
+        configured_total_wallet_exposure_limits = {
+            side: float(bot["total_wallet_exposure_limit"])
+            for side, bot in (("long", long_bot), ("short", short_bot))
+        }
         for side, bot in (("long", long_bot), ("short", short_bot)):
             panic_close_order_type = str(
                 bot.get("hsl_panic_close_order_type", "limit")
@@ -1393,6 +1398,9 @@ class MpsSingleCoinProxy:
                 )
                 strategy.update(_unstuck_params(bot))
                 strategy.update(_hsl_params(bot, signal_mode=signal_mode))
+            strategy["wallet_exposure_limit"] = float(
+                bot.get("wallet_exposure_limit", -1.0)
+            )
             missing = [key for key in self.param_keys if key not in strategy]
             if missing:
                 raise ValueError(
@@ -1400,6 +1408,42 @@ class MpsSingleCoinProxy:
                     f"parameters: {missing}"
                 )
             self.base_params[side] = strategy
+
+        coins = list(backtest_params.get("coins") or [])
+        if len(coins) != 1:
+            raise ValueError(
+                "GPU single-coin payload coin identity disagrees with prepared "
+                f"data: coins={coins}"
+            )
+        self.static_coin_override_params = {}
+        per_side_override_contracts = {}
+        for side in ("long", "short"):
+            values, contract = _build_single_coin_override_params(
+                config=config,
+                mss=mss,
+                exchange=exchange,
+                coin=coins[0],
+                payload=payload,
+                side=side,
+                strategy_kind=self.strategy_kind,
+            )
+            self.static_coin_override_params[side] = values
+            self.base_params[side].update(values)
+            per_side_override_contracts[side] = contract
+        self.coin_override_contract = {
+            "exchange": exchange,
+            "coins": coins,
+            "sides": [side for side, enabled in self.enabled.items() if enabled],
+            "values_by_side": {
+                side: per_side_override_contracts[side]["values"]
+                for side in ("long", "short")
+            },
+            "exact_overrides_by_side": {
+                side: per_side_override_contracts[side]["exact_overrides"]
+                for side in ("long", "short")
+            },
+            "proxy_mode": "single-coin-exact-last-v1",
+        }
 
         self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
             strategy_kind=self.strategy_kind,
@@ -1413,7 +1457,7 @@ class MpsSingleCoinProxy:
         )
 
         self.base_total_wallet_exposure_limits = {
-            side: float(self.base_params[side]["total_wallet_exposure_limit"])
+            side: configured_total_wallet_exposure_limits[side]
             for side in ("long", "short")
         }
         self.base_n_positions = {
@@ -1547,6 +1591,9 @@ class MpsSingleCoinProxy:
                         if key.startswith(f"{side}_")
                     }
                 )
+                merged.update(
+                    getattr(self, "static_coin_override_params", {}).get(side, {})
+                )
                 row.extend(float(merged[key]) for key in self.param_keys)
             rows.append(row)
         return np.asarray(rows, dtype=np.float64)
@@ -1679,8 +1726,10 @@ def _build_multicoin_ema_coin_overrides(
         np.nan,
         dtype=np.float32,
     )
+    exact_overrides = []
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
+        exact_overrides.append(copy.deepcopy(patch))
         side_patch = patch.get("bot", {}).get(side, {})
         strategy_patch = side_patch.get("strategy", {}).get("ema_anchor", {}) or {}
         effective_strategy = payload.strategy_params_list[coin_index][side]
@@ -1691,7 +1740,7 @@ def _build_multicoin_ema_coin_overrides(
         risk_patch = side_patch.get("risk", {}) or {}
         if "entry_cooldown_minutes" in risk_patch:
             matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = float(
-                effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+                effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
             )
         # Exact payload construction keeps per-side universe eligibility in
         # entry_eligible and uses a zero WEL sentinel for an ineligible coin.
@@ -1736,6 +1785,7 @@ def _build_multicoin_ema_coin_overrides(
         "exchange": exchange,
         "coins": coins,
         "side": side,
+        "exact_overrides": exact_overrides,
         "values": [
             [None if not np.isfinite(value) else float(value) for value in row]
             for row in matrix
@@ -1766,9 +1816,11 @@ def _build_multicoin_tm_coin_overrides(
         np.nan,
         dtype=np.float32,
     )
+    exact_overrides = []
     missing = object()
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
+        exact_overrides.append(copy.deepcopy(patch))
         side_patch = patch.get("bot", {}).get(side, {})
         strategy_patch = (
             side_patch.get("strategy", {}).get("trailing_martingale", {}) or {}
@@ -1815,7 +1867,7 @@ def _build_multicoin_tm_coin_overrides(
                 coin_index,
                 TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
             ] = float(
-                effective_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+                effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
             )
         if not bool(effective_bot.get("entry_eligible", True)) or (
             "wallet_exposure_limit" in side_patch
@@ -1877,12 +1929,117 @@ def _build_multicoin_tm_coin_overrides(
         "exchange": exchange,
         "coins": coins,
         "side": side,
+        "exact_overrides": exact_overrides,
         "values": [
             [None if not np.isfinite(value) else float(value) for value in row]
             for row in matrix
         ],
     }
     return matrix, contract
+
+
+def _build_single_coin_override_params(
+    *,
+    config: dict,
+    mss: dict,
+    exchange: str,
+    coin: str,
+    payload,
+    side: str,
+    strategy_kind: str,
+) -> tuple[dict[str, float], dict]:
+    """Map the shared exact-last override ABI onto one directional row."""
+
+    if strategy_kind == "ema_anchor":
+        matrix, contract = _build_multicoin_ema_coin_overrides(
+            config=config,
+            mss=mss,
+            exchange=exchange,
+            coins=[coin],
+            payload=payload,
+            side=side,
+        )
+        columns = {
+            key: column
+            for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS)
+        }
+        columns.update(
+            {
+                "entry_cooldown_minutes": EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+                "wallet_exposure_limit": (
+                    EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+                ),
+                "we_excess_allowance_pct": (
+                    EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN
+                ),
+            }
+        )
+        unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+        hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
+    elif strategy_kind == "trailing_martingale":
+        matrix, contract = _build_multicoin_tm_coin_overrides(
+            config=config,
+            mss=mss,
+            exchange=exchange,
+            coins=[coin],
+            payload=payload,
+            side=side,
+        )
+        columns = {
+            key: column
+            for column, (key, _path) in enumerate(
+                TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
+            )
+        }
+        columns.update(
+            {
+                "entry_cooldown_minutes": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN
+                ),
+                "wallet_exposure_limit": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+                ),
+                "we_excess_allowance_pct": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN
+                ),
+                "wel_enforcer_enabled": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_ENABLED_COLUMN
+                ),
+                "wel_enforcer_threshold": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_WEL_ENFORCER_THRESHOLD_COLUMN
+                ),
+                "gate_initial": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN
+                ),
+                "gate_reentry": (
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN
+                ),
+            }
+        )
+        unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
+        hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
+    else:
+        raise ValueError(f"unsupported single-coin strategy {strategy_kind!r}")
+
+    columns.update(
+        {key: unstuck_start + offset for offset, key in enumerate(UNSTUCK_PARAM_KEYS)}
+    )
+    columns.update(
+        {
+            key: hsl_start + offset
+            for offset, (key, _path) in enumerate(HSL_COIN_OVERRIDE_PATHS)
+            if key != "hsl_panic_market"
+        }
+    )
+    row = matrix[0]
+    return (
+        {
+            key: float(row[column])
+            for key, column in columns.items()
+            if np.isfinite(row[column])
+        },
+        contract,
+    )
 
 
 class MpsMulticoinProxy:
@@ -2099,7 +2256,7 @@ class MpsMulticoinProxy:
             first_strategy.update(
                 {
                     "entry_cooldown_minutes": float(
-                        first_bot.get("entry_cooldown_minutes", 0.0) or 0.0
+                        first_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
                     ),
                     "total_wallet_exposure_limit": float(
                         first_bot["total_wallet_exposure_limit"]
@@ -2215,6 +2372,10 @@ class MpsMulticoinProxy:
                 "sides": list(self.sides),
                 "values_by_side": {
                     side: per_side_override_contracts[side]["values"]
+                    for side in self.sides
+                },
+                "exact_overrides_by_side": {
+                    side: per_side_override_contracts[side]["exact_overrides"]
                     for side in self.sides
                 },
                 "proxy_mode": (
