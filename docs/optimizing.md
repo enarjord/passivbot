@@ -132,9 +132,12 @@ The supported slice is intentionally narrow:
   canonical per-coin source assignments, while an individual-exchange scenario fails closed if
   an effective assignment for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of multi-coin EMA-anchor and trailing-martingale
-  runs: active-strategy parameters, `risk.entry_cooldown_minutes`, and explicit
+  runs: `live.forced_mode_<side>: normal`, active-strategy parameters,
+  `risk.entry_cooldown_minutes`, and explicit
   `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and all six `unstuck` leaves are
-  supported. Trailing Martingale also supports per-coin
+  supported. Eligible forced-normal symbols reserve active slots before Forager ranking and may
+  expand the active-set cap beyond `n_positions`; the dynamic WEL denominator remains unchanged,
+  matching exact Rust. Trailing Martingale also supports per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
   `risk.we_excess_allowance_mode`, disabled sides, and other override leaves fail closed. Trailing

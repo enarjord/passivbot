@@ -2528,6 +2528,33 @@ def test_gpu_multicoin_coin_overrides_reject_unmodeled_leaves(patch):
         )
 
 
+@pytest.mark.parametrize(
+    ("strategy_kind", "config_factory", "side"),
+    [
+        ("ema_anchor", _directional_ema_config, "long"),
+        ("ema_anchor", _directional_ema_config, "short"),
+        ("trailing_martingale", _directional_tm_config, "long"),
+        ("trailing_martingale", _directional_tm_config, "short"),
+    ],
+)
+def test_gpu_multicoin_accepts_enabled_side_forced_normal_override(
+    strategy_kind, config_factory, side
+):
+    config = config_factory(
+        long_enabled=side == "long", short_enabled=side == "short"
+    )
+    config["coin_overrides"] = {
+        "ETH": {"live": {f"forced_mode_{side}": "normal"}}
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind=strategy_kind,
+        enabled_sides=[side],
+        coin_count=3,
+    )
+
+
 def test_gpu_multicoin_accepts_complete_coin_hsl_override_group():
     config = _directional_ema_config(long_enabled=True, short_enabled=False)
     config["live"]["hsl_signal_mode"] = "coin"

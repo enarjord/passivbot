@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports
+  `coin_overrides.<coin>.live.forced_mode_<side>: normal` for every enabled side. Long-only,
+  short-only, and fused long+short kernels reserve eligible forced-normal symbols before Forager
+  ranking and expand the active-set cap when forced symbols outnumber configured positions, while
+  retaining exact Rust's separate dynamic wallet-exposure denominator, one-way initial-entry
+  exclusion, minimum-effective-cost gate, and per-coin HSL eligibility.
+
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now continues through
   declared periods where no prepared coin is valid, including gaps between disjoint coin histories
   and tails after every coin has ended. Long-only, short-only, and fused long+short kernels keep
