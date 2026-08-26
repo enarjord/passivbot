@@ -13,6 +13,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
+    EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS,
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN,
@@ -26,6 +27,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -1726,6 +1728,10 @@ def _build_multicoin_ema_coin_overrides(
             side_patch=side_patch,
             effective_bot=effective_bot,
         )
+        if bool(effective_bot.get("is_forced_active", False)):
+            matrix[
+                coin_index, EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN
+            ] = 1.0
     contract = {
         "exchange": exchange,
         "coins": coins,
@@ -1862,6 +1868,11 @@ def _build_multicoin_tm_coin_overrides(
             side_patch=side_patch,
             effective_bot=effective_bot,
         )
+        if bool(effective_bot.get("is_forced_active", False)):
+            matrix[
+                coin_index,
+                TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
+            ] = 1.0
     contract = {
         "exchange": exchange,
         "coins": coins,

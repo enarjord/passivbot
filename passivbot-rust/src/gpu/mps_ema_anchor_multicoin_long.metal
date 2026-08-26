@@ -4,8 +4,9 @@ using namespace metal;
 constant int MAX_COINS = 64;
 constant int PARAM_COLS = 42;
 constant int COIN_COLS = 13;
-constant int OVERRIDE_COLS = 29;
+constant int OVERRIDE_COLS = 30;
 constant int HSL_OVERRIDE_START = 19;
+constant int FORCED_ACTIVE_OVERRIDE_COL = 29;
 constant int DAILY_COLS = 9;
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
 constant int SCALAR_COLS = 67;
@@ -966,11 +967,8 @@ inline void update_ema_multicoin_side_selection(
         if (selected[c]) active_count += 1;
         survivor[c] = false;
     }
-    // Exact selection shrinks with the currently eligible universe, while
-    // dynamic WEL sizing deliberately keeps the grow-only denominator.
-    int selection_n_positions = min(config.n_positions, current_tradable_count);
-    int slots = max(selection_n_positions - active_count, 0);
     int enabled_count = 0;
+    int forced_normal_count = 0;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
@@ -991,18 +989,39 @@ inline void update_ema_multicoin_side_selection(
             filter_by_min_effective_cost, guaranteed_balance_lower,
             allowed_wel, initial_qty_pct, coin_settings[coin_offset + 12]
         );
-        bool enabled = !selected[c]
-            && k >= int(coin_settings[coin_offset + 8])
+        bool base_eligible = k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
             && finite_positive(bars[bar_offset + 2])
             && coin_wel != 0.0f
-            && min_cost_eligible
-            && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul
+            && (psize[c] > 0.0f || min_cost_eligible)
             && (!config.coin_hsl_mode || (
                 coin_hsl_entry_blocked_mask & (1ul << ulong(c))
             ) == 0ul);
+        bool forced_normal = coin_override_or(
+            coin_overrides, c, FORCED_ACTIVE_OVERRIDE_COL, 0.0f
+        ) > 0.5f;
+        if (base_eligible && forced_normal) forced_normal_count += 1;
+        bool enabled = !selected[c]
+            && base_eligible
+            && (one_way_initial_blocked_mask & (1ul << ulong(c))) == 0ul;
         survivor[c] = enabled;
         if (enabled) enabled_count += 1;
+    }
+    // Exact Rust expands the active-set cap to fit eligible forced-normal
+    // symbols but retains the separate dynamic-WEL denominator.
+    int selection_n_positions = max(
+        min(config.n_positions, current_tradable_count), forced_normal_count
+    );
+    int slots = max(selection_n_positions - active_count, 0);
+    for (int c = 0; c < coin_count && slots > 0; ++c) {
+        bool forced_normal = coin_override_or(
+            coin_overrides, c, FORCED_ACTIVE_OVERRIDE_COL, 0.0f
+        ) > 0.5f;
+        if (!survivor[c] || !forced_normal) continue;
+        selected[c] = true;
+        survivor[c] = false;
+        enabled_count -= 1;
+        slots -= 1;
     }
     int keep = int(floor(
         float(enabled_count) * (1.0f - config.volume_drop) + 0.5f

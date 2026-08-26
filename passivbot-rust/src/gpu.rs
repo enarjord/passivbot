@@ -517,8 +517,9 @@ mod tests {
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 42"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 29"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 30"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 19"));
+        assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 29"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("coin_override_or"));
         assert!(source.contains("constant int COIN_COLS = 13"));
@@ -558,9 +559,9 @@ mod tests {
         assert!(source.contains("bool long_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("bool short_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("if (mark_valid) {\n                    unrealized +="));
-        assert!(source.contains(
-            "int selection_n_positions = min(config.n_positions, current_tradable_count);"
-        ));
+        assert!(source.contains("forced_normal_count"));
+        assert!(source.contains("retains the separate dynamic-WEL denominator"));
+        assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
         assert!(source.contains("flat_selected_became_ineligible"));
         assert!(source.contains("candle_eligibility_changed"));
         assert!(source.contains("candle_eligibility_mask"));
@@ -978,10 +979,11 @@ mod tests {
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 59"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 46"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 47"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
         assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 44"));
         assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 45"));
+        assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 46"));
         assert!(source.contains("apply_coin_hsl_overrides("));
         assert!(source.contains("constant int COIN_COLS = 13"));
         assert!(source.contains("passes_multicoin_min_effective_cost"));
@@ -1048,9 +1050,9 @@ mod tests {
         assert!(source.contains("bool long_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("bool short_coin_has_blocking_orders = valid &&"));
         assert!(source.contains("if (mark_valid) {\n                    unrealized +="));
-        assert!(source.contains(
-            "int selection_n_positions = min(config.n_positions, current_tradable_count);"
-        ));
+        assert!(source.contains("forced_normal_count"));
+        assert!(source.contains("retains the separate dynamic-WEL denominator"));
+        assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
         assert!(source.contains("flat_selected_became_ineligible"));
         assert!(source.contains("candle_eligibility_changed"));
         assert!(source.contains("candle_eligibility_mask"));

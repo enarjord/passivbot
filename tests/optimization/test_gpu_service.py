@@ -7,9 +7,12 @@ import pytest
 from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
 from optimization.gpu.model import (
+    EMA_ANCHOR_COIN_OVERRIDE_COLS,
+    EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS,
@@ -956,7 +959,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         (
             "ema_anchor",
             "MpsEmaAnchorMulticoinFusedRunner",
-            29,
+            EMA_ANCHOR_COIN_OVERRIDE_COLS,
             "shared-account-fused-ema-v1",
             5,
         ),
@@ -2062,7 +2065,7 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 29)
+    assert matrix.shape == (2, EMA_ANCHOR_COIN_OVERRIDE_COLS)
     assert np.isnan(matrix[0]).all()
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("offset")] == pytest.approx(0.25)
     assert matrix[1, EMA_ANCHOR_PARAM_KEYS.index("ema_span_0")] == pytest.approx(90.0)
@@ -2074,7 +2077,70 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     )
     assert np.isnan(matrix[1, 19:]).all()
     assert contract["coins"] == ["BTC", "ETH"]
-    assert contract["values"][0] == [None] * 29
+    assert contract["values"][0] == [None] * EMA_ANCHOR_COIN_OVERRIDE_COLS
+
+
+@pytest.mark.parametrize(
+    ("builder", "strategy", "forced_column"),
+    [
+        (
+            _build_multicoin_ema_coin_overrides,
+            {},
+            EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
+        ),
+        (
+            _build_multicoin_tm_coin_overrides,
+            {"entry": {}, "close": {}},
+            TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
+        ),
+    ],
+)
+def test_multicoin_coin_overrides_pack_forced_normal_active_slot(
+    builder, strategy, forced_column
+):
+    payload = SimpleNamespace(
+        strategy_params_list=[{"long": strategy}, {"long": strategy}],
+        bot_params_list=[
+            {
+                "long": {
+                    "entry_eligible": True,
+                    "is_forced_active": False,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": -1.0,
+                }
+            },
+            {
+                "long": {
+                    "entry_eligible": True,
+                    "is_forced_active": True,
+                    "total_wallet_exposure_limit": 1.0,
+                    "wallet_exposure_limit": -1.0,
+                }
+            },
+        ],
+    )
+    config = {
+        "coin_overrides": {
+            "ETH": {"live": {"forced_mode_long": "normal"}}
+        }
+    }
+
+    matrix, contract = builder(
+        config=config,
+        mss={"BTC": {}, "ETH": {}},
+        exchange="bybit",
+        coins=["BTC", "ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=lambda config, _mss, _exchange, coin: config[
+            "coin_overrides"
+        ].get(coin, {}),
+    )
+
+    assert np.isnan(matrix[0, forced_column])
+    assert matrix[1, forced_column] == 1.0
+    assert contract["values"][0][forced_column] is None
+    assert contract["values"][1][forced_column] == 1.0
 
 
 def test_multicoin_coin_overrides_pack_dual_sides_independently():
@@ -2246,12 +2312,19 @@ def test_multicoin_coin_overrides_pack_complete_hsl_group():
         ].get(coin, {}),
     )
 
-    assert matrix.shape == (2, 29)
+    assert matrix.shape == (2, EMA_ANCHOR_COIN_OVERRIDE_COLS)
     assert np.isnan(matrix[0]).all()
-    assert matrix[1, 19:].tolist() == pytest.approx(
+    assert matrix[
+        1, 19:EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN
+    ].tolist() == pytest.approx(
         [0.0, 0.2, 5.5, 12.5, 0.8, 0.0, 0.4, 0.75, 1.0, 1.0]
     )
-    assert contract["values"][1][19:] == pytest.approx(matrix[1, 19:].tolist())
+    assert contract["values"][1][
+        19:EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN
+    ] == pytest.approx(
+        matrix[1, 19:EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN].tolist()
+    )
+    assert np.isnan(matrix[1, EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN])
 
 
 def test_multicoin_coin_overrides_reject_invalid_hsl_panic_order_type():
