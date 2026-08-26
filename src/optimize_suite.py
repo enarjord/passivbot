@@ -72,6 +72,7 @@ async def prepare_suite_contexts(
     suite_cfg: Dict[str, Any],
     *,
     shared_array_manager,
+    allow_internal_nan_gaps: bool = False,
 ) -> tuple[List[ScenarioEvalContext], Dict[str, Any]]:
     """Prepare datasets and configs for every optimizer suite scenario."""
 
@@ -164,6 +165,7 @@ async def prepare_suite_contexts(
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
         scenarios=scenarios,
+        allow_internal_nan_gaps=allow_internal_nan_gaps,
     )
     available_coins = set()
     for dataset in datasets.values():

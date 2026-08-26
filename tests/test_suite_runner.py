@@ -883,8 +883,16 @@ async def test_prepare_master_datasets_copies_materialized_arrays_directly_to_sh
     source_hlcvs = np.arange(24, dtype=np.float64).reshape(3, 2, 4)
     source_btc = np.array([10.0, 11.0, 12.0], dtype=np.float64)
     timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
+    prepare_kwargs = {}
 
-    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
+    async def fake_prepare_hlcvs_mss(
+        config,
+        exchange,
+        *,
+        force_refetch_gaps=False,
+        **kwargs,
+    ):
+        prepare_kwargs.update(kwargs)
         return (
             ["BTC", "ETH"],
             source_hlcvs,
@@ -936,11 +944,13 @@ async def test_prepare_master_datasets_copies_materialized_arrays_directly_to_sh
         base_config,
         ["binance"],
         shared_array_manager=manager,
+        allow_internal_nan_gaps=True,
     )
 
     assert len(manager.sources) == 2
     assert np.shares_memory(manager.sources[0], source_hlcvs)
     assert np.shares_memory(manager.sources[1], source_btc)
+    assert prepare_kwargs == {"allow_internal_nan_gaps": True}
     np.testing.assert_array_equal(datasets["binance"].hlcvs, source_hlcvs)
     np.testing.assert_array_equal(datasets["binance"].btc_usd_prices, source_btc)
 

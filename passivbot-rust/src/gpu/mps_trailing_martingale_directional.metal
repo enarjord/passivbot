@@ -301,6 +301,12 @@ struct TmSide {
     float min_since_open, max_since_min, max_since_open, min_since_max;
 };
 
+inline void clear_pending_tm_orders(thread TmSide& side) {
+    side.entry_qty = 0.0f;
+    side.close_qty = 0.0f;
+    side.secondary_close_qty = 0.0f;
+}
+
 struct CloseGroup {
     int ticks;
     float price;
@@ -1875,6 +1881,11 @@ inline void passivbot_single_coin_impl(
         const float touch_min_qty = as_type<float>(flags[fo + 9]);
         const int touch_min_qty_relation = flags[fo + 10];
         const float kf = float(k);
+
+        if (!valid) {
+            clear_pending_tm_orders(long_side);
+            clear_pending_tm_orders(short_side);
+        }
 
         if (di != cur_day) {
             if (day_touched && cur_day >= 0 && cur_day < D) {
@@ -3854,7 +3865,10 @@ inline void passivbot_single_coin_impl(
                 try_restart_hsl(short_hsl, kf, equity);
             }
         }
-        bool active = eq_started && alive && (valid || after_valid_tail);
+        // Exact Rust records an equity sample at every tracked timestamp.
+        // Invalid candles are non-tradable and contribute balance-only equity,
+        // just like the already-supported tail after last_valid.
+        bool active = eq_started && alive;
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;
             last_eq_k = kf;

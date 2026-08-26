@@ -885,7 +885,9 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         np.isfinite(close[first_valid : last_valid + 1])
         & (close[first_valid : last_valid + 1] > 0.0)
         & np.isfinite(high[first_valid : last_valid + 1])
+        & (high[first_valid : last_valid + 1] > 0.0)
         & np.isfinite(low[first_valid : last_valid + 1])
+        & (low[first_valid : last_valid + 1] > 0.0)
     )
     indices = np.arange(n, dtype=np.int64)
     can_generate = (
@@ -989,7 +991,12 @@ def build_mps_multicoin_data(
         raise ValueError("MPS multicoin proxy requires a continuous candle timeline")
 
     bars = np.ascontiguousarray(values[:, :, :4], dtype=np.float32)
-    bars[~np.isfinite(bars)] = 0.0
+    # Preserve a non-finite close so portfolio-equity accumulation can mirror
+    # exact Rust by omitting that coin's unrealized PnL. Other non-finite
+    # fields use zero sentinels and remain blocked by candle validity.
+    for field in (0, 1, 3):
+        field_values = bars[:, :, field]
+        field_values[~np.isfinite(field_values)] = 0.0
     fill_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
     touch_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)

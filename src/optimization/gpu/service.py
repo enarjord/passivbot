@@ -702,11 +702,6 @@ def _require_supported_multicoin_valid_tails(
             "GPU multicoin proxy requires at least one coin with a non-empty "
             "prepared valid range"
         )
-    candle_indices = np.arange(candle_count, dtype=np.int64)[:, None]
-    within_declared_window = (
-        (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
-        & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
-    )
     # Validate the representation consumed by Metal. The data packer casts
     # bars to float32 and replaces non-finite packed values with zero, so a
     # finite-positive float64 value is insufficient if it overflows or
@@ -728,20 +723,37 @@ def _require_supported_multicoin_valid_tails(
                 f"coin={coin}, last_valid_idx={last_valid_idx}, "
                 f"packed_hlc={packed_hlc[last_valid_idx, coin].tolist()}"
             )
-    declared_coverage = np.any(within_declared_window, axis=1)
+    for coin, first_valid_idx in enumerate(starts):
+        if (
+            first_valid_idx < candle_count
+            and tails[coin] >= first_valid_idx
+            and not actual_valid[first_valid_idx, coin]
+        ):
+            raise ValueError(
+                "GPU multicoin proxy requires each first-valid candle's packed "
+                "float32 H/L/C values to remain finite and positive; "
+                f"coin={coin}, first_valid_idx={first_valid_idx}, "
+                f"packed_hlc={packed_hlc[first_valid_idx, coin].tolist()}"
+            )
+    candle_indices = np.arange(candle_count, dtype=np.int64)[:, None]
+    within_declared_window = (
+        (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
+        & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
+    )
     actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
-    # Declared all-invalid gaps and tails are valid portfolio time: exact Rust
-    # keeps sampling balance-only equity, HSL, exposure, and elapsed-time
-    # metrics while no coin is tradeable.  A declared-valid minute whose every
-    # packed H/L/C is unusable remains a malformed required input and fails
-    # closed rather than being reclassified as an intentional gap.
-    missing = np.flatnonzero(declared_coverage & ~actual_coverage)
-    if missing.size:
-        missing_idx = int(missing[0])
+    missing = np.flatnonzero(
+        np.any(within_declared_window, axis=1) & ~actual_coverage
+    )
+    for candle_index in missing:
+        declared = within_declared_window[candle_index]
+        raw_hlc = np.asarray(values[candle_index, declared, :3], dtype=np.float64)
+        if bool(np.all(np.isnan(raw_hlc))):
+            continue
         raise ValueError(
-            "GPU multicoin proxy requires at least one finite positive packed "
-            "H/L/C candle whenever a coin is declared valid; "
-            f"candle_index={missing_idx}, valid_windows={windows}"
+            "GPU multicoin proxy only supports an all-invalid internal candle "
+            "when every declared coin's raw H/L/C is NaN; infinities, finite but "
+            "non-positive or float32-unrepresentable values remain fail-closed; "
+            f"candle_index={int(candle_index)}, valid_windows={windows}"
         )
 
 
@@ -794,70 +806,89 @@ def _require_no_internal_invalid_multicoin_hsl_candles(
         )
 
 
-def _require_no_internal_invalid_account_recovery_candles(
+def _require_exact_safe_proxy_candles(
     hlcvs,
     *,
     exposure_eligible_coins,
     first_valid_indices,
     last_valid_indices,
-    tracking_start_indices,
+    require_positive_high_low: bool,
 ) -> None:
-    """Keep completed account-equity recovery aligned with Rust's per-step series."""
+    """Allow exact balance-only gaps, but reject finite unmodeled prices."""
 
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
         raise ValueError(
-            "MPS account-equity recovery requires HLCVs shaped [time, coin, fields]"
+            "MPS proxy requires HLCVs shaped [time, coin, fields]"
         )
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        packed = np.asarray(values[:, :, :3], dtype=np.float32)
     for coin in range(values.shape[1]):
         if not bool(exposure_eligible_coins[coin]):
             continue
-        first = max(
-            0,
-            int(tracking_start_indices[coin]),
-            int(first_valid_indices[coin]),
-        )
+        first = max(0, int(first_valid_indices[coin]))
         last = min(int(last_valid_indices[coin]), values.shape[0] - 1)
         if first > last:
             continue
-        high = values[first : last + 1, coin, 0]
-        low = values[first : last + 1, coin, 1]
-        close = values[first : last + 1, coin, 2]
-        valid = (
-            np.isfinite(high)
-            & np.isfinite(low)
-            & np.isfinite(close)
-            & (close > 0.0)
+        raw_hlc = np.asarray(values[first : last + 1, coin, :3], dtype=np.float64)
+        packed_hlc = packed[first : last + 1, coin]
+        packed_valid = (
+            np.all(np.isfinite(packed_hlc), axis=1)
+            & (packed_hlc[:, 2] > 0.0)
         )
-        if not bool(np.all(valid)):
-            first_invalid = first + int(np.flatnonzero(~valid)[0])
+        if require_positive_high_low:
+            packed_valid &= (packed_hlc[:, 0] > 0.0) & (
+                packed_hlc[:, 1] > 0.0
+            )
+        exact_balance_only = np.all(np.isnan(raw_hlc), axis=1)
+        unsafe = np.flatnonzero(~(packed_valid | exact_balance_only))
+        if unsafe.size:
+            candle_index = first + int(unsafe[0])
             raise ValueError(
-                "MPS account/strategy-equity recovery metrics require contiguous "
-                "valid candles after equity tracking starts; "
-                f"coin index {coin}, invalid candle at {first_invalid}"
+                "MPS proxy only supports internal "
+                "invalid candles whose raw H/L/C values are all NaN; "
+                "infinite, finite but non-positive, partially invalid, or float32-"
+                "unrepresentable prices remain fail-closed; "
+                f"coin index {coin}, invalid candle at {candle_index}"
             )
 
 
-def _require_no_internal_invalid_single_coin_recovery_candles(
+def _require_no_unsafe_single_coin_candles(
     hlcvs,
     *,
-    needed_metrics,
     first_valid_idx: int,
     last_valid_idx: int,
-    tracking_start_idx: int,
 ) -> None:
-    recovery_metrics = (
-        _ACCOUNT_EQUITY_RECOVERY_METRICS
-        | _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
-    )
-    if not set(needed_metrics) & recovery_metrics:
-        return
-    _require_no_internal_invalid_account_recovery_candles(
-        hlcvs,
+    values = np.asarray(hlcvs)
+    if (
+        values.ndim == 3
+        and values.shape[1] > 0
+        and values.shape[2] >= 3
+        and 0 <= int(first_valid_idx) < values.shape[0]
+        and bool(np.all(np.isnan(values[int(first_valid_idx), 0, :3])))
+    ):
+        raise ValueError(
+            "MPS single-coin proxy requires the first-valid candle to have "
+            f"finite positive H/L/C; first_valid_idx={first_valid_idx}"
+        )
+    if (
+        values.ndim == 3
+        and values.shape[1] > 0
+        and values.shape[2] >= 3
+        and 0 <= int(last_valid_idx) < values.shape[0]
+        and int(last_valid_idx) + 1400 < values.shape[0]
+        and bool(np.all(np.isnan(values[int(last_valid_idx), 0, :3])))
+    ):
+        raise ValueError(
+            "MPS single-coin proxy requires the forced-delist final candle "
+            f"to have finite positive H/L/C; last_valid_idx={last_valid_idx}"
+        )
+    _require_exact_safe_proxy_candles(
+        values,
         exposure_eligible_coins=[True],
         first_valid_indices=[first_valid_idx],
         last_valid_indices=[last_valid_idx],
-        tracking_start_indices=[tracking_start_idx],
+        require_positive_high_low=True,
     )
 
 
@@ -1428,12 +1459,10 @@ class MpsSingleCoinProxy:
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
-        _require_no_internal_invalid_single_coin_recovery_candles(
+        _require_no_unsafe_single_coin_candles(
             hlcvs,
-            needed_metrics=self.needed_metrics,
             first_valid_idx=self.run.first_valid_idx,
             last_valid_idx=self.run.last_valid_idx,
-            tracking_start_idx=self.run.trade_start_idx,
         )
         if hsl_enabled_sides:
             _require_no_internal_invalid_hsl_candles(
@@ -2241,27 +2270,23 @@ class MpsMulticoinProxy:
             last_valid_idx=max(run.last_valid_idx for run in runs),
             trade_start_idx=min(run.trade_start_idx for run in runs),
         )
-        if self.needed_metrics & (
-            _ACCOUNT_EQUITY_RECOVERY_METRICS
-            | _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
-        ):
-            wallet_exposure_column = (
-                EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
-                if self.strategy_kind == "ema_anchor"
-                else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
-            )
-            exposure_eligible_coins = _multicoin_exposure_eligible_coins(
-                per_side_coin_overrides,
-                self.sides,
-                wallet_exposure_column,
-            )
-            _require_no_internal_invalid_account_recovery_candles(
-                values,
-                exposure_eligible_coins=exposure_eligible_coins,
-                first_valid_indices=backtest_params["first_valid_indices"],
-                last_valid_indices=backtest_params["last_valid_indices"],
-                tracking_start_indices=[run.trade_start_idx for run in runs],
-            )
+        wallet_exposure_column = (
+            EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN
+            if self.strategy_kind == "ema_anchor"
+            else len(TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS) + 1
+        )
+        exposure_eligible_coins = _multicoin_exposure_eligible_coins(
+            per_side_coin_overrides,
+            self.sides,
+            wallet_exposure_column,
+        )
+        _require_exact_safe_proxy_candles(
+            values,
+            exposure_eligible_coins=exposure_eligible_coins,
+            first_valid_indices=backtest_params["first_valid_indices"],
+            last_valid_indices=backtest_params["last_valid_indices"],
+            require_positive_high_low=True,
+        )
         self.data = build_mps_multicoin_data(
             values,
             timestamps,

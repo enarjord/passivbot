@@ -712,6 +712,8 @@ def _validate_hlcvs_valid_windows(
     *,
     coin_indices: list[int] | None = None,
     target_chunk_bytes: int = _HLCVS_VALIDATION_TARGET_CHUNK_BYTES,
+    allow_internal_nan_gaps: bool = False,
+    candle_interval_minutes: int = 1,
 ) -> None:
     hlcvs_arr = np.asarray(hlcvs)
     if hlcvs_arr.ndim != 3 or hlcvs_arr.shape[2] < 4:
@@ -749,6 +751,36 @@ def _validate_hlcvs_valid_windows(
         start = max(0, start)
         end = min(n_rows - 1, end)
         valid_windows.append((col, start, end))
+
+    if allow_internal_nan_gaps:
+        prepared_interval_float = float(candle_interval_minutes)
+        if not prepared_interval_float.is_integer() or prepared_interval_float < 1.0:
+            raise ValueError(
+                "candle_interval_minutes must be a positive integer before "
+                f"GPU gap validation, got {candle_interval_minutes!r}"
+            )
+        prepared_interval = int(prepared_interval_float)
+        for payload_idx, (col, start, end) in enumerate(valid_windows):
+            if (
+                start <= end
+                and bool(np.isnan(hlcvs_arr[start, col, :3]).all())
+            ):
+                raise ValueError(
+                    "all-NaN H/L/C is not allowed at a first-valid boundary: "
+                    f"coin={coins_order[payload_idx]} payload_index={payload_idx} "
+                    f"source_column={col} first_valid_index={start} rows={n_rows}"
+                )
+            if (
+                start <= end
+                and end + 1400 * prepared_interval < n_rows
+                and bool(np.isnan(hlcvs_arr[end, col, :3]).all())
+            ):
+                raise ValueError(
+                    "all-NaN H/L/C is not allowed at a forced-delist endpoint: "
+                    f"coin={coins_order[payload_idx]} payload_index={payload_idx} "
+                    f"source_column={col} last_valid_index={end} rows={n_rows} "
+                    f"candle_interval_minutes={prepared_interval}"
+                )
 
     column_events: dict[int, dict[int, int]] = {}
     for col, start, end in valid_windows:
@@ -817,7 +849,16 @@ def _validate_hlcvs_valid_windows(
                 chunk_values = hlcvs_arr[chunk_start:chunk_end, :, :4][
                     :, column_indices, :
                 ]
-            finite_by_row_coin = np.isfinite(chunk_values).all(axis=2)
+            finite_fields = np.isfinite(chunk_values)
+            finite_hlc = finite_fields[:, :, :3]
+            # Exact Rust treats a declared-range row whose complete H/L/C
+            # triple is NaN as non-tradable portfolio time. Preserve that
+            # intentional gap, while continuing to reject infinities,
+            # partially invalid prices, and non-finite volume on otherwise
+            # valid rows.
+            finite_by_row_coin = finite_hlc.all(axis=2) & finite_fields[:, :, 3]
+            if allow_internal_nan_gaps:
+                finite_by_row_coin |= np.isnan(chunk_values[:, :, :3]).all(axis=2)
             chunk_count += 1
             for payload_idx, (col, start, end) in enumerate(valid_windows):
                 if first_bad_rows[payload_idx] is not None or start > end:
@@ -870,7 +911,15 @@ def _validate_hlcvs_valid_windows(
     )
 
 
-def _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss) -> None:
+def _validate_hlcvs_valid_windows_from_mss(
+    hlcvs,
+    timestamps,
+    coins,
+    mss,
+    *,
+    allow_internal_nan_gaps: bool = False,
+    candle_interval_minutes: int = 1,
+) -> None:
     first_valid_indices = []
     last_valid_indices = []
     for coin in coins:
@@ -883,6 +932,8 @@ def _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss) -> Non
         coins,
         first_valid_indices,
         last_valid_indices,
+        allow_internal_nan_gaps=allow_internal_nan_gaps,
+        candle_interval_minutes=candle_interval_minutes,
     )
 
 
@@ -2121,12 +2172,21 @@ def assert_hlcv_has_tradable_coverage(coins, mss):
         raise ValueError("HLCV data has no tradable candles after warmup")
 
 
-async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = False):
+async def prepare_hlcvs_mss(
+    config,
+    exchange,
+    *,
+    force_refetch_gaps: bool = False,
+    allow_internal_nan_gaps: bool = False,
+):
     base_dir = require_config_value(config, "backtest.base_dir")
     results_path = oj(base_dir, exchange, "")
     warmup_map = compute_per_coin_warmup_minutes(config)
     default_warm = int(warmup_map.get("__default__", 0))
     backtest_warmup_minutes = compute_backtest_warmup_minutes(config)
+    candle_interval_minutes = config.get("backtest", {}).get(
+        "candle_interval_minutes", 1
+    ) or 1
     if exchange == "combined":
         backtest_cfg = config.setdefault("backtest", {})
         configured_exchanges = [
@@ -2159,7 +2219,14 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     if override_result is not None:
         cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = override_result
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
-        _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss)
+        _validate_hlcvs_valid_windows_from_mss(
+            hlcvs,
+            timestamps,
+            coins,
+            mss,
+            allow_internal_nan_gaps=allow_internal_nan_gaps,
+            candle_interval_minutes=candle_interval_minutes,
+        )
         warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
         assert_hlcv_has_tradable_coverage(coins, mss)
         return (
@@ -2185,7 +2252,14 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             )
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
-            _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss)
+            _validate_hlcvs_valid_windows_from_mss(
+                hlcvs,
+                timestamps,
+                coins,
+                mss,
+                allow_internal_nan_gaps=allow_internal_nan_gaps,
+                candle_interval_minutes=candle_interval_minutes,
+            )
             warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
             assert_hlcv_has_tradable_coverage(coins, mss)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
@@ -2240,7 +2314,14 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
-    _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss)
+    _validate_hlcvs_valid_windows_from_mss(
+        hlcvs,
+        timestamps,
+        coins,
+        mss,
+        allow_internal_nan_gaps=allow_internal_nan_gaps,
+        candle_interval_minutes=candle_interval_minutes,
+    )
     warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
     assert_hlcv_has_tradable_coverage(coins, mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")

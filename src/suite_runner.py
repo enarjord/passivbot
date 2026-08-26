@@ -877,11 +877,23 @@ def _determine_needed_individual_exchanges(
     return needed
 
 
-def _apply_candle_aggregation(hlcvs, timestamps, btc_usd_prices, mss, interval):
+def _apply_candle_aggregation(
+    hlcvs,
+    timestamps,
+    btc_usd_prices,
+    mss,
+    interval,
+    *,
+    preserve_internal_nan_gaps: bool = False,
+):
     """Aggregate candles and update mss metadata. Returns (hlcvs, timestamps, btc_usd_prices)."""
     n_before = hlcvs.shape[0]
     hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-        hlcvs, timestamps, btc_usd_prices, int(interval)
+        hlcvs,
+        timestamps,
+        btc_usd_prices,
+        int(interval),
+        preserve_internal_nan_gaps=preserve_internal_nan_gaps,
     )
     logging.debug(
         "[suite] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
@@ -904,10 +916,20 @@ async def prepare_master_datasets(
     needed_individual_exchanges: Optional[Set[str]] = None,
     candle_interval_minutes: int = 1,
     scenarios: Optional[Sequence[SuiteScenario]] = None,
+    allow_internal_nan_gaps: bool = False,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
     datasets: Dict[str, ExchangeDataset] = {}
+
+    async def _prepare_dataset(config, exchange):
+        kwargs = (
+            {"allow_internal_nan_gaps": True}
+            if allow_internal_nan_gaps
+            else {}
+        )
+        return await prepare_hlcvs_mss(config, exchange, **kwargs)
+
     dataset_windows = _derive_dataset_windows(
         base_config,
         exchanges,
@@ -1010,11 +1032,16 @@ async def prepare_master_datasets(
             cache_dir,
             btc_usd_prices,
             timestamps,
-        ) = await prepare_hlcvs_mss(combined_config, "combined")
+        ) = await _prepare_dataset(combined_config, "combined")
         prepared_hlcvs = hlcvs
         if candle_interval_minutes > 1:
             hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
-                hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
+                hlcvs,
+                timestamps,
+                btc_usd_prices,
+                mss,
+                candle_interval_minutes,
+                preserve_internal_nan_gaps=allow_internal_nan_gaps,
             )
             release_materialized_payload(prepared_hlcvs)
         datasets["combined"] = _build_dataset(
@@ -1061,11 +1088,16 @@ async def prepare_master_datasets(
                     ex_cache_dir,
                     ex_btc_usd_prices,
                     ex_timestamps,
-                ) = await prepare_hlcvs_mss(exchange_config, exchange)
+                ) = await _prepare_dataset(exchange_config, exchange)
                 prepared_ex_hlcvs = ex_hlcvs
                 if candle_interval_minutes > 1:
                     ex_hlcvs, ex_timestamps, ex_btc_usd_prices = _apply_candle_aggregation(
-                        ex_hlcvs, ex_timestamps, ex_btc_usd_prices, ex_mss, candle_interval_minutes
+                        ex_hlcvs,
+                        ex_timestamps,
+                        ex_btc_usd_prices,
+                        ex_mss,
+                        candle_interval_minutes,
+                        preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
                     release_materialized_payload(prepared_ex_hlcvs)
                 datasets[exchange] = _build_dataset(
@@ -1108,11 +1140,16 @@ async def prepare_master_datasets(
                 cache_dir,
                 btc_usd_prices,
                 timestamps,
-            ) = await prepare_hlcvs_mss(exchange_config, exchange)
+            ) = await _prepare_dataset(exchange_config, exchange)
             prepared_hlcvs = hlcvs
             if candle_interval_minutes > 1:
                 hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
-                    hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
+                    hlcvs,
+                    timestamps,
+                    btc_usd_prices,
+                    mss,
+                    candle_interval_minutes,
+                    preserve_internal_nan_gaps=allow_internal_nan_gaps,
                 )
                 release_materialized_payload(prepared_hlcvs)
             datasets[exchange] = _build_dataset(

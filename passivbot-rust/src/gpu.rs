@@ -200,10 +200,21 @@ mod tests {
         assert!(source.contains("const bool rolling_pnl_overflowed ="));
         assert!(source.contains("= RECOVERY_FAIL_CLOSED_SENTINEL;"));
         assert!(source.contains("const bool after_valid_tail = k > last_valid"));
-        assert!(source.contains("(valid || after_valid_tail)"));
+        assert!(source.contains("bool active = eq_started && alive"));
+        assert!(!source
+            .contains("eq_started && alive && (valid || after_valid_tail)"));
         assert!(source.contains("const bool hsl_step = gen || (eq_started && after_valid_tail)"));
         assert!(source.contains("bool long_blocking_orders = valid &&"));
         assert!(source.contains("bool short_blocking_orders = valid &&"));
+        assert!(source.contains("if (!valid) {"));
+        assert!(
+            source.contains("clear_pending_ema_orders(long_side);")
+                || source.contains("clear_pending_tm_orders(long_side);")
+        );
+        assert!(
+            source.contains("clear_pending_ema_orders(short_side);")
+                || source.contains("clear_pending_tm_orders(short_side);")
+        );
     }
 
     #[test]
