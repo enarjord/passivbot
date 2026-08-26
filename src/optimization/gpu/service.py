@@ -51,6 +51,9 @@ from optimization.gpu.model import (
 
 
 CORE_OUTPUT_KEYS = {
+    "btc_day_end_eq",
+    "btc_day_min_eq",
+    "btc_day_max_dd",
     "day_end_eq",
     "day_min_eq",
     "day_max_dd",
@@ -1326,7 +1329,10 @@ class MpsSingleCoinProxy:
             )
 
         from backtest import build_backtest_payload
-        from optimization.gpu.metrics import compute_objectives
+        from optimization.gpu.metrics import (
+            BTC_INTRADAY_RISK_METRICS,
+            compute_objectives,
+        )
         from optimization.gpu.mps_kernel import (
             MpsEmaAnchorRunner,
             MpsTrailingMartingaleRunner,
@@ -1337,6 +1343,9 @@ class MpsSingleCoinProxy:
         self.needed_metrics = set(needed_metrics)
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
+        )
+        self.btc_risk_enabled = bool(
+            self.needed_metrics & BTC_INTRADAY_RISK_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -1634,6 +1643,7 @@ class MpsSingleCoinProxy:
             recovery_distribution_enabled=bool(
                 self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
+            btc_prices=btc_values if self.btc_risk_enabled else None,
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -2144,7 +2154,10 @@ class MpsMulticoinProxy:
             )
 
         from backtest import build_backtest_payload
-        from optimization.gpu.metrics import compute_objectives
+        from optimization.gpu.metrics import (
+            BTC_INTRADAY_RISK_METRICS,
+            compute_objectives,
+        )
         from optimization.gpu.mps_kernel import (
             MpsEmaAnchorMulticoinFusedRunner,
             MpsEmaAnchorMulticoinRunner,
@@ -2157,6 +2170,9 @@ class MpsMulticoinProxy:
         self.needed_metrics = set(needed_metrics)
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
+        )
+        self.btc_risk_enabled = bool(
+            self.needed_metrics & BTC_INTRADAY_RISK_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -2594,6 +2610,7 @@ class MpsMulticoinProxy:
                 & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
+            "btc_prices": btc_values if self.btc_risk_enabled else None,
         }
         if self.shared_account_fused:
             fused_runner_cls = (

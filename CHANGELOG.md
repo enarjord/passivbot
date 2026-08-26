@@ -8,14 +8,16 @@ All notable user-facing changes will be documented in this file.
   BTC-denominated account-equity scoring and limits while `backtest.btc_collateral_cap` is zero.
   The proxy converts its compact USD daily equity surface with the canonical prepared BTC/USD
   series and supports gain, ADG, MDG, Omega, equity shape, unweighted exposure ratios, peak
-  recovery, per-exposure forms, and the corresponding safe weighted close-equity variants. UTC
+  recovery, per-exposure forms, Sharpe, Sortino, expected shortfall, worst and worst-1% drawdown,
+  Calmar, Sterling, and the corresponding safe weighted variants. UTC
   day-end conversion is exact for the compact surface, including candidate-specific liquidation
   endpoints; recovery remains a compact daily approximation under mandatory exact Rust validation
-  and rolling drift gates. Intraday-risk metrics and weighted exposure ratios remain fail-closed
-  until Metal retains their required synchronized surfaces. BTC inputs enter checkpoint identity
-  only when a BTC metric is requested, so USD-only
-  runs retain their previous dispatch and reduction cost. Positive BTC collateral remains
-  fail-closed pending its separate simulation slice.
+  and rolling drift gates. Metal conditionally retains synchronized BTC day-end equity, daily
+  minima, and full-curve daily worst drawdowns only when one of the intraday-risk metrics is
+  requested; USD-only and close-equity-only BTC runs retain their previous kernel ABI, output
+  width, and dispatch cost. Weighted BTC exposure ratios remain fail-closed until the proxy owns
+  suffix-local exposure series. BTC inputs enter checkpoint identity only when a BTC metric is
+  requested. Positive BTC collateral remains fail-closed pending its separate simulation slice.
 
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports both wallet-
   exposure denominator modes. With `backtest.dynamic_wel_by_tradability: false`, Metal divides

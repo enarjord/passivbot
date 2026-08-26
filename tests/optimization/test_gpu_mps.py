@@ -44,6 +44,7 @@ from optimization.gpu.mps_kernel import (
     _scale_tm_multicoin_coin_overrides,
     _scale_single_coin_minute_parameters,
     _upgrade_legacy_single_coin_wel_params,
+    _with_btc_risk,
     _with_dynamic_wel_by_tradability,
     _with_hsl_ema_tail,
     _with_hsl_features,
@@ -434,6 +435,17 @@ def test_fixed_wel_denominator_source_variant_is_opt_in_and_guarded():
     )
     with pytest.raises(RuntimeError, match="dynamic-WEL feature guard"):
         _with_dynamic_wel_by_tradability("body", False)
+
+
+def test_btc_risk_source_variant_is_opt_in_and_guarded():
+    source = "struct BtcRiskState { float peak; };\nbody"
+
+    assert _with_btc_risk(source, False) is source
+    assert _with_btc_risk(source, True) == (
+        "#define PASSIVBOT_BTC_RISK_ENABLED 1\n" + source
+    )
+    with pytest.raises(RuntimeError, match="shared BTC-risk contract"):
+        _with_btc_risk("body", True)
 
 
 @pytest.mark.skipif(
@@ -4366,6 +4378,8 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
             "backtest_completion_ratio",
             "fills_count",
             "adg_btc",
+            "drawdown_worst_btc",
+            "expected_shortfall_1pct_btc",
             "gain_btc",
             "hard_stop_panic_close_loss_sum",
         },
@@ -4393,6 +4407,13 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     assert result["adg_btc"] == pytest.approx(
         exact_analysis["adg_btc"], rel=2.0e-3
     )
+    assert result["drawdown_worst_btc"] == pytest.approx(
+        exact_analysis["drawdown_worst_btc"], rel=2.0e-3
+    )
+    assert result["expected_shortfall_1pct_btc"] == pytest.approx(
+        exact_analysis["expected_shortfall_1pct_btc"], rel=2.0e-3
+    )
+    assert proxy.btc_risk_enabled is True
     assert result["backtest_completion_ratio"] > 0.99
 
 
@@ -4713,6 +4734,8 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
             "backtest_completion_ratio",
             "fills_count",
             "adg_btc",
+            "drawdown_worst_btc",
+            "expected_shortfall_1pct_btc",
             "gain_btc",
             "hard_stop_panic_close_loss_sum",
         },
@@ -4746,6 +4769,13 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
     assert result["adg_btc"] == pytest.approx(
         exact_analysis["adg_btc"], rel=2.0e-3
     )
+    assert result["drawdown_worst_btc"] == pytest.approx(
+        exact_analysis["drawdown_worst_btc"], rel=2.0e-3
+    )
+    assert result["expected_shortfall_1pct_btc"] == pytest.approx(
+        exact_analysis["expected_shortfall_1pct_btc"], rel=2.0e-3
+    )
+    assert proxy.btc_risk_enabled is True
     assert result["backtest_completion_ratio"] > 0.99
 
 
@@ -5241,6 +5271,51 @@ def _multicoin_exposure_fixture(
     if return_context:
         return runner, row, runs[0], data
     return runner, row
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["single_side", "fused"])
+def test_mps_multicoin_retains_synchronized_btc_risk_surface(
+    strategy_kind, topology
+):
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind, "long", count=5, return_context=True
+    )
+    btc_prices = np.array([100.0, 100.0, 50.0, 200.0, 100.0])
+    if strategy_kind == "ema_anchor":
+        row[EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("base_qty_pct")] = 0.0
+        runner_cls = (
+            MpsEmaAnchorMulticoinFusedRunner
+            if topology == "fused"
+            else MpsEmaAnchorMulticoinRunner
+        )
+    else:
+        row[
+            TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(
+                "entry_initial_qty_pct"
+            )
+        ] = 0.0
+        runner_cls = (
+            MpsTrailingMartingaleMulticoinFusedRunner
+            if topology == "fused"
+            else MpsTrailingMartingaleMulticoinRunner
+        )
+    if topology == "fused":
+        runner = runner_cls(run, data, btc_prices=btc_prices)
+        candidates = np.asarray([row + row], dtype=np.float64)
+    else:
+        runner = runner_cls(run, data, side="long", btc_prices=btc_prices)
+        candidates = np.asarray([row], dtype=np.float64)
+
+    output = runner.run(candidates)
+    torch.mps.synchronize()
+
+    assert output["btc_day_end_eq"][0, 0].item() == pytest.approx(5.0)
+    assert output["btc_day_min_eq"][0, 0].item() == pytest.approx(5.0)
+    assert output["btc_day_max_dd"][0, 0].item() == pytest.approx(0.75)
 
 
 @pytest.mark.skipif(
@@ -11933,6 +12008,121 @@ def _tm_single_row(
         unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
         unstuck_threshold=unstuck_threshold,
     ) + [-1.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_retains_synchronized_btc_risk_surface(strategy_kind):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 5
+    prices = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(prices, prices, prices, timestamps, run, market)
+    btc_prices = np.array([100.0, 100.0, 50.0, 200.0, 100.0])
+    if strategy_kind == "trailing_martingale":
+        row = _tm_single_row()
+        row[6] = 0.0
+        runner_cls = MpsTrailingMartingaleRunner
+    else:
+        row = [0.0, 2.0, 3.0, 0.0, 0.01, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
+        row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
+        runner_cls = MpsEmaAnchorRunner
+
+    output = runner_cls(
+        market,
+        run,
+        data,
+        btc_prices=btc_prices,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["btc_day_end_eq"][0, 0].item() == pytest.approx(5.0)
+    assert output["btc_day_min_eq"][0, 0].item() == pytest.approx(5.0)
+    assert output["btc_day_max_dd"][0, 0].item() == pytest.approx(0.75)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_no_hsl_specializations_retain_synchronized_btc_risk_surface(
+    side,
+):
+    count = 5
+    prices = np.full(count, 100.0)
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(prices, prices, prices, timestamps, run, market)
+    row = _tm_single_row()
+    row[6] = 0.0
+    runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+        btc_prices=np.array([100.0, 100.0, 50.0, 200.0, 100.0]),
+    )
+
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert runner.shader_topology == f"{side}_no_hsl"
+    assert output["btc_day_end_eq"][0, 0].item() == pytest.approx(5.0)
+    assert output["btc_day_min_eq"][0, 0].item() == pytest.approx(5.0)
+    assert output["btc_day_max_dd"][0, 0].item() == pytest.approx(0.75)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize(
+    "btc_prices",
+    [
+        np.array([100.0, 101.0]),
+        np.array([100.0, 0.0, 102.0]),
+        np.array([100.0, np.nan, 102.0]),
+        np.array([100.0, np.inf, 102.0]),
+        np.array([100.0, 1.0e-50, 102.0]),
+    ],
+)
+def test_mps_btc_risk_prices_fail_closed_after_float32_packing(btc_prices):
+    from optimization.gpu.mps_kernel import _btc_risk_price_tensor
+
+    with pytest.raises(ValueError, match="MPS BTC-risk prices"):
+        _btc_risk_price_tensor(btc_prices, expected_count=3)
 
 
 @pytest.mark.skipif(

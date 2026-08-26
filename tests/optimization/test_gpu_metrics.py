@@ -10,6 +10,7 @@ torch = pytest.importorskip("torch")
 from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
+    _btc_account_metrics,
     _daily_peak_recovery_ms,
     _equity_shape_metrics,
     _directional_pnl_metrics,
@@ -1690,6 +1691,195 @@ def test_btc_account_metrics_fail_closed_without_price_context():
             {"ts0": 0.0, "n": 2},
             needed={"adg_btc"},
         )
+
+
+def test_btc_risk_metrics_use_synchronized_intraday_surface():
+    day_end_usd = torch.tensor(
+        [[1_000.0, 1_100.0, 900.0, 1_200.0]], dtype=torch.float64
+    )
+    day_end_btc = torch.tensor([[10.0, 8.0, 12.0, 9.0]], dtype=torch.float64)
+    day_min_btc = torch.tensor([[9.0, 7.0, 10.0, 6.0]], dtype=torch.float64)
+    day_max_dd_btc = torch.tensor(
+        [[0.10, 0.30, 0.20, 0.50]], dtype=torch.float64
+    )
+    out = {
+        "day_end_eq": day_end_usd,
+        # Deliberately incompatible USD minima prove the reducer does not
+        # derive BTC risk from independently sampled USD and BTC surfaces.
+        "day_min_eq": torch.tensor(
+            [[999.0, 998.0, 997.0, 996.0]], dtype=torch.float64
+        ),
+        "day_max_dd": torch.zeros_like(day_end_usd),
+        "day_volume": torch.zeros_like(day_end_usd),
+        "day_has_fill": torch.ones_like(day_end_usd, dtype=torch.bool),
+        "btc_day_end_eq": day_end_btc,
+        "btc_day_min_eq": day_min_btc,
+        "btc_day_max_dd": day_max_dd_btc,
+        "fill_count": torch.tensor([4.0]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([3 * 86_400_000.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([0.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([3 * 86_400_000.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+    requested = {
+        "calmar_ratio_btc",
+        "calmar_ratio_w_btc",
+        "drawdown_worst_btc",
+        "drawdown_worst_mean_1pct_btc",
+        "expected_shortfall_1pct_btc",
+        "gain_btc",
+        "sharpe_ratio_btc",
+        "sharpe_ratio_w_btc",
+        "sortino_ratio_btc",
+        "sortino_ratio_w_btc",
+        "sterling_ratio_btc",
+        "sterling_ratio_w_btc",
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=86_400_000,
+        ),
+        {
+            "ts0": 0.0,
+            "n": 4,
+            "btc_day_end_price": np.full(4, 100.0),
+            "btc_prices": np.full(4, 100.0),
+        },
+        needed=requested,
+    )
+
+    active = torch.ones_like(day_end_btc, dtype=torch.bool)
+    _gain, adg = _smoothed_gain_adg(day_end_btc, active)
+    min_changes, min_change_mask = _pct_change(day_min_btc, active)
+    sharpe, sortino = _sharpe_sortino(min_changes, min_change_mask, adg)
+    expected_shortfall = _mean_worst_one_pct_abs(
+        min_changes, min_change_mask
+    )
+    assert set(metrics) == requested
+    safe_day_end_btc = day_end_usd / 100.0
+    safe_gain, _safe_adg = _smoothed_gain_adg(safe_day_end_btc, active)
+    assert metrics["gain_btc"].item() == pytest.approx(safe_gain.item())
+    assert metrics["drawdown_worst_btc"].item() == pytest.approx(0.50)
+    assert metrics["drawdown_worst_mean_1pct_btc"].item() == pytest.approx(
+        0.50
+    )
+    assert metrics["expected_shortfall_1pct_btc"].item() == pytest.approx(
+        expected_shortfall.item()
+    )
+    assert metrics["sharpe_ratio_btc"].item() == pytest.approx(sharpe.item())
+    assert metrics["sortino_ratio_btc"].item() == pytest.approx(sortino.item())
+    assert metrics["calmar_ratio_btc"].item() == pytest.approx(
+        adg.item() / 0.50
+    )
+    assert metrics["sterling_ratio_btc"].item() == pytest.approx(
+        adg.item() / 0.50
+    )
+    expected_weighted = _weighted_strategy_eq_metrics(
+        day_end_btc,
+        day_min_btc,
+        day_max_dd_btc,
+        active,
+        out["first_eq_ts"],
+        out["last_eq_ts"],
+        0.0,
+        86_400_000,
+        {
+            "calmar_ratio_strategy_eq_w",
+            "sharpe_ratio_strategy_eq_w",
+            "sortino_ratio_strategy_eq_w",
+            "sterling_ratio_strategy_eq_w",
+        },
+    )
+    for btc_name, usd_source in {
+        "calmar_ratio_w_btc": "calmar_ratio_strategy_eq_w",
+        "sharpe_ratio_w_btc": "sharpe_ratio_strategy_eq_w",
+        "sortino_ratio_w_btc": "sortino_ratio_strategy_eq_w",
+        "sterling_ratio_w_btc": "sterling_ratio_strategy_eq_w",
+    }.items():
+        assert metrics[btc_name].item() == pytest.approx(
+            expected_weighted[usd_source].item()
+        )
+
+
+def test_btc_risk_metrics_fail_closed_without_synchronized_surface():
+    day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
+        "fill_count": torch.tensor([2.0]),
+        "max_dd": torch.zeros(1),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([86_400_000.0]),
+    }
+
+    with pytest.raises(RuntimeError, match="synchronized BTC-risk output"):
+        _btc_account_metrics(
+            out,
+            SimpleNamespace(interval_ms=86_400_000),
+            {"ts0": 0.0, "n": 2},
+            {"sharpe_ratio_btc"},
+        )
+
+
+def test_btc_risk_metrics_match_no_fill_defaults():
+    day_end = torch.tensor([[10.0, 8.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
+        "btc_day_end_eq": day_end,
+        "btc_day_min_eq": torch.tensor([[9.0, 7.0]], dtype=torch.float64),
+        "btc_day_max_dd": torch.tensor([[0.1, 0.3]], dtype=torch.float64),
+        "fill_count": torch.tensor([0.0]),
+        "max_dd": torch.zeros(1),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([86_400_000.0]),
+    }
+    requested = {
+        "calmar_ratio_btc",
+        "drawdown_worst_btc",
+        "drawdown_worst_mean_1pct_btc",
+        "expected_shortfall_1pct_btc",
+        "sharpe_ratio_btc",
+        "sortino_ratio_btc",
+        "sterling_ratio_btc",
+    }
+
+    metrics = _btc_account_metrics(
+        out,
+        SimpleNamespace(interval_ms=86_400_000),
+        {
+            "ts0": 0.0,
+            "n": 2,
+            "btc_day_end_price": np.ones(2),
+            "btc_prices": np.ones(2),
+        },
+        requested,
+    )
+
+    assert metrics["drawdown_worst_btc"].item() == 1.0
+    assert metrics["drawdown_worst_mean_1pct_btc"].item() == 1.0
+    for metric in requested - {
+        "drawdown_worst_btc",
+        "drawdown_worst_mean_1pct_btc",
+    }:
+        assert metrics[metric].item() == 0.0
 
 
 def test_btc_account_metrics_use_candidate_liquidation_endpoint_price():

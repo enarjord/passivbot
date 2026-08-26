@@ -7,7 +7,11 @@ constant int COIN_COLS = 13;
 constant int OVERRIDE_COLS = 30;
 constant int HSL_OVERRIDE_START = 19;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 29;
+#if PASSIVBOT_BTC_RISK_ENABLED
+constant int DAILY_COLS = 12;
+#else
 constant int DAILY_COLS = 9;
+#endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
 constant int SCALAR_COLS = 67;
 constant int FUSED_SCALAR_COLS = 72;
@@ -27,6 +31,8 @@ constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
 
 // PASSIVBOT_HSL_COMMON
+
+// PASSIVBOT_BTC_RISK_COMMON
 
 // PASSIVBOT_MULTICOIN_COMMON
 
@@ -2850,6 +2856,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -2956,6 +2965,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
+#if PASSIVBOT_BTC_RISK_ENABLED
+    BtcRiskState btc_risk = init_btc_risk_state();
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
 #endif
@@ -2992,6 +3004,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 daily[output + 6] = balance - day_start_balance;
                 daily[output + 7] = balance;
                 daily[output + 8] = day_fill_count;
+#if PASSIVBOT_BTC_RISK_ENABLED
+                write_btc_risk_day(btc_risk, daily, output, 9);
+#endif
             }
             current_day = day_index;
             day_touched = false;
@@ -3003,6 +3018,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_min_balance = INFINITY;
             day_start_balance = balance;
             day_fill_count = 0.0f;
+#if PASSIVBOT_BTC_RISK_ENABLED
+            reset_btc_risk_day(btc_risk);
+#endif
         }
 
         float hsl_equity_before_fills =
@@ -3306,6 +3324,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
             day_min = fmin(day_min, effective_equity);
             day_min_balance = fmin(day_min_balance, balance);
             day_dd = fmax(day_dd, drawdown);
+#if PASSIVBOT_BTC_RISK_ENABLED
+            update_btc_risk_state(
+                btc_risk, effective_equity, btc_prices[k]
+            );
+#endif
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = position_cost / balance;
@@ -3335,6 +3358,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
         daily[output + 6] = balance - day_start_balance;
         daily[output + 7] = balance;
         daily[output + 8] = day_fill_count;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        write_btc_risk_day(btc_risk, daily, output, 9);
+#endif
     }
 
     float total_size = 0.0f;
@@ -3647,6 +3673,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -3764,6 +3793,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float account_recovery_max_min = 0.0f;
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
+#if PASSIVBOT_BTC_RISK_ENABLED
+    BtcRiskState btc_risk = init_btc_risk_state();
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
 #endif
@@ -3798,6 +3830,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 daily[output + 6] = account.balance - day_start_balance;
                 daily[output + 7] = account.balance;
                 daily[output + 8] = fills.day_fill_count;
+#if PASSIVBOT_BTC_RISK_ENABLED
+                write_btc_risk_day(btc_risk, daily, output, 9);
+#endif
             }
             current_day = day_index;
             day_touched = false;
@@ -3809,6 +3844,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             day_min_balance = INFINITY;
             day_start_balance = account.balance;
             fills.day_fill_count = 0.0f;
+#if PASSIVBOT_BTC_RISK_ENABLED
+            reset_btc_risk_day(btc_risk);
+#endif
         }
 
         float long_hsl_equity_before_fills = account.balance;
@@ -4217,6 +4255,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             day_min = fmin(day_min, effective_equity);
             day_min_balance = fmin(day_min_balance, account.balance);
             day_dd = fmax(day_dd, drawdown);
+#if PASSIVBOT_BTC_RISK_ENABLED
+            update_btc_risk_state(
+                btc_risk, effective_equity, btc_prices[k]
+            );
+#endif
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = fabs(net_position_cost / account.balance);
@@ -4246,6 +4289,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         daily[output + 6] = account.balance - day_start_balance;
         daily[output + 7] = account.balance;
         daily[output + 8] = fills.day_fill_count;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        write_btc_risk_day(btc_risk, daily, output, 9);
+#endif
     }
 
     float long_total_size = 0.0f;
@@ -4428,6 +4474,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4441,6 +4490,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
         bars, fill_ticks, touch_ticks, hour_log_ranges, coin_settings,
         long_coin_overrides, short_coin_overrides,
         params, run_settings, sizes, end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_prices,
+#endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
@@ -4460,6 +4512,9 @@ kernel void passivbot_ema_anchor_multicoin(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4473,7 +4528,11 @@ kernel void passivbot_ema_anchor_multicoin(
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
         coin_settings, coin_overrides, params, run_settings,
-        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts,
+        sizes, end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_prices,
+#endif
+        daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
 #endif
@@ -4492,6 +4551,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4504,7 +4566,11 @@ kernel void passivbot_ema_anchor_multicoin_long(
     passivbot_ema_anchor_multicoin_impl(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
         coin_settings, coin_overrides, params, run_settings,
-        sizes, end_steps, daily, scalars, gap_hist, coin_fill_counts,
+        sizes, end_steps,
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_prices,
+#endif
+        daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
 #endif

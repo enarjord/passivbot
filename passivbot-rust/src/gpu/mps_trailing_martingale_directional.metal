@@ -1,7 +1,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#if PASSIVBOT_BTC_RISK_ENABLED
+constant int DAILY_COLS = 11;
+#else
 constant int DAILY_COLS = 8;
+#endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
 constant int SCALAR_COLS = 72;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
@@ -194,6 +198,8 @@ inline bool realized_loss_proxy_allows_reducer(
 }
 
 // PASSIVBOT_HSL_COMMON
+
+// PASSIVBOT_BTC_RISK_COMMON
 
 inline void record_realized_net(
     float net_pnl,
@@ -1715,6 +1721,9 @@ inline void passivbot_single_coin_impl(
     constant float* params,
     constant float* settings,
     constant int* sizes,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -1846,6 +1855,9 @@ inline void passivbot_single_coin_impl(
     float first_eq_k = -1.0f;
     float last_eq_k = -1.0f;
     bool eq_started = false;
+#if PASSIVBOT_BTC_RISK_ENABLED
+    BtcRiskState btc_risk = init_btc_risk_state();
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
 #endif
@@ -1905,6 +1917,9 @@ inline void passivbot_single_coin_impl(
                 daily[o + 5] = balance - day_start_balance;
                 daily[o + 6] = balance;
                 daily[o + 7] = day_fill_count;
+#if PASSIVBOT_BTC_RISK_ENABLED
+                write_btc_risk_day(btc_risk, daily, o, 8);
+#endif
             }
             cur_day = di;
             day_touched = false;
@@ -1915,6 +1930,9 @@ inline void passivbot_single_coin_impl(
             day_has_fill = 0.0f;
             day_start_balance = balance;
             day_fill_count = 0.0f;
+#if PASSIVBOT_BTC_RISK_ENABLED
+            reset_btc_risk_day(btc_risk);
+#endif
         }
 
         bool long_close_fill = false;
@@ -3933,6 +3951,9 @@ inline void passivbot_single_coin_impl(
             day_end = eqf;
             day_min = fmin(day_min, eqf);
             day_dd = fmax(day_dd, dd);
+#if PASSIVBOT_BTC_RISK_ENABLED
+            update_btc_risk_state(btc_risk, eqf, btc_prices[k]);
+#endif
             day_touched = true;
             if (!liq) {
                 float twe_net = (
@@ -3965,6 +3986,9 @@ inline void passivbot_single_coin_impl(
         daily[o + 5] = balance - day_start_balance;
         daily[o + 6] = balance;
         daily[o + 7] = day_fill_count;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        write_btc_risk_day(btc_risk, daily, o, 8);
+#endif
     }
 
     if (long_side.pos_open_k >= 0.0f && last_eq_k >= 0.0f) {
@@ -4131,6 +4155,9 @@ kernel void passivbot_trailing_martingale(
     constant float* params,
     constant float* settings,
     constant int* sizes,
+#if PASSIVBOT_BTC_RISK_ENABLED
+    constant float* btc_prices,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4142,7 +4169,11 @@ kernel void passivbot_trailing_martingale(
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_single_coin_impl(
-        bars, flags, params, settings, sizes, daily, scalars, gap_hist,
+        bars, flags, params, settings, sizes,
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_prices,
+#endif
+        daily, scalars, gap_hist,
         rolling_pnl_values, rolling_pnl_indices,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
