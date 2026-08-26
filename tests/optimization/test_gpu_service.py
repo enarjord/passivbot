@@ -45,7 +45,7 @@ from optimization.gpu.service import (
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
     _require_multicoin_metric_topology,
-    _require_no_forced_delist_tail,
+    _require_no_multicoin_forced_delist_tail,
     _require_no_internal_invalid_account_recovery_candles,
     _require_no_internal_invalid_hsl_candles,
     _require_no_internal_invalid_multicoin_hsl_candles,
@@ -1279,15 +1279,15 @@ def test_gpu_multicoin_proxy_rejects_all_invalid_after_float32_packing(
     _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
 
 
-def test_gpu_single_coin_proxy_accepts_short_invalid_tail_only():
-    _require_no_forced_delist_tail(99, 100)
-    _require_no_forced_delist_tail(98, 100)
-    _require_no_forced_delist_tail(0, 1400)
+def test_gpu_multicoin_forced_delist_tail_gate_preserves_rust_boundary():
+    _require_no_multicoin_forced_delist_tail(99, 100)
+    _require_no_multicoin_forced_delist_tail(98, 100)
+    _require_no_multicoin_forced_delist_tail(0, 1400)
 
     with pytest.raises(ValueError, match="forced-delist closes"):
-        _require_no_forced_delist_tail(0, 1401)
+        _require_no_multicoin_forced_delist_tail(0, 1401)
     with pytest.raises(ValueError, match="within the prepared candle range"):
-        _require_no_forced_delist_tail(100, 100)
+        _require_no_multicoin_forced_delist_tail(100, 100)
 
 
 def test_gpu_hsl_requires_contiguous_valid_candles():

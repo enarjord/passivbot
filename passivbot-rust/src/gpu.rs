@@ -290,6 +290,13 @@ mod tests {
         assert!(source.contains("const int pnl_lookback_bars"));
         assert!(source.contains("device float2* rolling_pnl_values"));
         assert!(source.contains("device int2* rolling_pnl_indices"));
+        assert_eq!(source.matches("force_close_delisted_position(").count(), 3);
+        assert!(source.contains("const bool forced_delist = valid && k == last_valid"));
+        assert!(source.contains("last_valid + 1400 < T"));
+        assert!(source.contains("close, !is_long, market_order_slippage_pct, price_step"));
+        assert!(source.contains("const float fee = close_qty * close_price * c_mult * taker_fee"));
+        assert!(source.contains("record_hsl_panic_fill("));
+        assert!(source.contains("if (gen && !forced_delist_closed_any)"));
     }
 
     #[test]

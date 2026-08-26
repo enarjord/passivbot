@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now mirrors exact Rust's
+  forced-delist close when at least 1,400 prepared candles follow a coin's final valid candle,
+  including adverse market slippage, directional price rounding, taker fees, panic-loss and fill
+  accounting, position-duration finalization, pending-order clearing, and balance-only tail
+  accounting. Multi-coin forced delists remain fail-closed.
+
 - Apple MPS HSL optimization now supports per-side
   `drawdown_worst_mean_1pct_strategy_eq_{long,short}` scoring and limits for EMA Anchor and
   Trailing Martingale across single-coin, one-sided multi-coin, and fused dual-side multi-coin
@@ -18,8 +24,8 @@ All notable user-facing changes will be documented in this file.
   float32 H/L/C values remain finite and positive inside the declared valid ranges covers every
   timestep after coverage begins. Tailed coins become non-tradable, contribute no unrealized PnL,
   and cannot leave stale orders blocking HSL, while portfolio and coin HSL controllers continue
-  through the surviving timeline. Forced-delist tails, all-coins-ended tails, and all-invalid gaps
-  remain fail-closed.
+  through the surviving timeline. Multi-coin forced-delist tails, all-coins-ended tails, and
+  all-invalid gaps remain fail-closed.
 
 - Fixed live bot startup on Windows without symlink privileges by writing a visible pointer to the
   timestamped run log instead of failing while creating the stable log alias. Built-in monitor
@@ -27,14 +33,14 @@ All notable user-facing changes will be documented in this file.
 
 - Apple MPS single-coin HSL optimization now continues hard-stop sampling, rolling-PnL expiry,
   tier accounting, and restart checks through supported invalid candle tails. Tail candles remain
-  non-tradable and cannot satisfy stale blocking orders. Forced-delist tails and multi-coin invalid
+  non-tradable and cannot satisfy stale blocking orders. Multi-coin forced-delist and all-coins-ended
   tails remain fail-closed.
 
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now accepts invalid
-  candles after the coin's final valid candle when HSL is disabled and the tail remains below
-  exact Rust's 1,400-candle forced-delist threshold. Metal keeps the tail non-tradable and records
-  balance-only account equity like exact Rust. HSL tails, forced-delist closes, and multi-coin
-  invalid tails continue to fail closed.
+  candles after the coin's final valid candle when HSL is disabled. Metal keeps shorter tails
+  non-tradable and records balance-only account equity like exact Rust; the forced-delist boundary
+  is covered by the expanded support above. Unsupported multi-coin invalid-tail combinations
+  continue to fail closed.
 
 - Apple MPS multi-coin EMA Anchor optimization now supports any positive integer
   `backtest.candle_interval_minutes` for long-only, short-only, and fused long+short runs. Global
