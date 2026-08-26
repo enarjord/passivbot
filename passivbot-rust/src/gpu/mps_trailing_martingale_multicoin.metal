@@ -4983,7 +4983,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         );
         const bool post_fill_balance_depleted =
             isfinite(account.balance) && account.balance <= 0.0f;
-        if (alive && !post_fill_balance_depleted) {
+        const bool past_activation_guard =
+            k > max(global_warmup, 1) && k >= requested_start_k;
+        if (alive && !post_fill_balance_depleted && past_activation_guard) {
             long_side.max_tradable_seen = max(
                 long_side.max_tradable_seen, long_tradable_count
             );
@@ -4997,12 +4999,10 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         const int short_effective_n_positions = min(
             short_config.n_positions, short_side.max_tradable_seen
         );
-        const bool past_warmup =
-            k > max(global_warmup, 1) && k >= requested_start_k;
         const bool long_can_generate = alive
-            && long_effective_n_positions > 0 && past_warmup;
+            && long_effective_n_positions > 0 && past_activation_guard;
         const bool short_can_generate = alive
-            && short_effective_n_positions > 0 && past_warmup;
+            && short_effective_n_positions > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
 
@@ -5196,7 +5196,6 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float long_unrealized = 0.0f;
         float short_unrealized = 0.0f;
         float net_position_cost = 0.0f;
-        bool any_valid = false;
         for (int c = 0; c < C; ++c) {
             int coin_offset = c * COIN_COLS;
             int bar_offset = (k * C + c) * 4;
@@ -5207,7 +5206,6 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             bool mark_valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
                 && isfinite(close);
-            any_valid = any_valid || valid;
             float c_mult = coin_settings[coin_offset + 4];
             if (long_side.psize[c] > 0.0f) {
                 net_position_cost += long_side.psize[c]
@@ -5229,8 +5227,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         float equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
+        // Exact Rust keeps advancing balance-only equity and HSL time once
+        // portfolio tracking starts, including declared all-invalid gaps and
+        // tails. Per-coin validity still blocks fills, orders, and unrealized
+        // PnL above.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
-            && any_valid && alive
+            && alive
             && joint_portfolio_can_generate(
                 account, equity, liquidation_floor
             );
@@ -5261,8 +5263,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             }
         }
 
-        bool active = equity_started && any_valid
-            && (alive || hsl_validation_failed);
+        bool active = equity_started && (alive || hsl_validation_failed);
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
@@ -5761,12 +5762,14 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             bars, coin_settings, coin_overrides, k, C
         );
         const bool post_fill_balance_depleted = isfinite(balance) && balance <= 0.0f;
-        if (alive && !post_fill_balance_depleted) {
+        const bool past_activation_guard =
+            k > max(global_warmup, 1) && k >= requested_start_k;
+        if (alive && !post_fill_balance_depleted && past_activation_guard) {
             max_tradable_seen = max(max_tradable_seen, tradable_count);
         }
         const int effective_n_positions = min(n_positions, max_tradable_seen);
         const bool can_generate = alive && effective_n_positions > 0
-            && k > max(global_warmup, 1) && k >= requested_start_k;
+            && past_activation_guard;
         equity_started = equity_started || can_generate;
         bool has_hsl_position = tm_multicoin_side_has_position(side, C);
         int current_hsl_mode = coin_hsl_mode
@@ -5850,7 +5853,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 
         float unrealized = 0.0f;
         float position_cost = 0.0f;
-        bool any_valid = false;
         bool has_open_position = false;
         bool has_blocking_orders = false;
         for (int c = 0; c < C; ++c) {
@@ -5863,7 +5865,6 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             bool mark_valid = k >= int(coin_settings[coin_offset + 6])
                 && k <= int(coin_settings[coin_offset + 7])
                 && isfinite(close);
-            any_valid = any_valid || valid;
             if (psize[c] > 0.0f) {
                 has_open_position = true;
                 position_cost += psize[c] * pprice[c]
@@ -5884,7 +5885,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             }
         }
         float equity = balance + unrealized;
-        if (can_generate && any_valid && alive
+        // Exact Rust keeps advancing balance-only equity and HSL time once
+        // portfolio tracking starts, including declared all-invalid gaps and
+        // tails. Per-coin validity still blocks fills, orders, and unrealized
+        // PnL above.
+        if (can_generate && alive
             && balance > 0.0f && equity > liquidation_floor) {
             int sampled_hsl_tier = 0;
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
@@ -5971,7 +5976,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                 try_restart_hsl(hsl, float(k), equity);
             }
         }
-        bool active = equity_started && alive && any_valid;
+        bool active = equity_started && alive;
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = float(k);
             last_eq_k = float(k);
