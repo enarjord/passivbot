@@ -1730,7 +1730,6 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
     }
     requested = {
         "calmar_ratio_btc",
-        "calmar_ratio_w_btc",
         "drawdown_worst_btc",
         "drawdown_worst_mean_1pct_btc",
         "expected_shortfall_1pct_btc",
@@ -1740,7 +1739,6 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
         "sortino_ratio_btc",
         "sortino_ratio_w_btc",
         "sterling_ratio_btc",
-        "sterling_ratio_w_btc",
     }
 
     metrics = compute_objectives(
@@ -1795,17 +1793,13 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
         0.0,
         86_400_000,
         {
-            "calmar_ratio_strategy_eq_w",
             "sharpe_ratio_strategy_eq_w",
             "sortino_ratio_strategy_eq_w",
-            "sterling_ratio_strategy_eq_w",
         },
     )
     for btc_name, usd_source in {
-        "calmar_ratio_w_btc": "calmar_ratio_strategy_eq_w",
         "sharpe_ratio_w_btc": "sharpe_ratio_strategy_eq_w",
         "sortino_ratio_w_btc": "sortino_ratio_strategy_eq_w",
-        "sterling_ratio_w_btc": "sterling_ratio_strategy_eq_w",
     }.items():
         assert metrics[btc_name].item() == pytest.approx(
             expected_weighted[usd_source].item()

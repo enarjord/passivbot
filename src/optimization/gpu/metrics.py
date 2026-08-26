@@ -68,7 +68,6 @@ _BTC_ACCOUNT_METRICS = {
 BTC_INTRADAY_RISK_METRICS = frozenset(
     {
         "calmar_ratio_btc",
-        "calmar_ratio_w_btc",
         "drawdown_worst_btc",
         "drawdown_worst_mean_1pct_btc",
         "expected_shortfall_1pct_btc",
@@ -77,7 +76,6 @@ BTC_INTRADAY_RISK_METRICS = frozenset(
         "sortino_ratio_btc",
         "sortino_ratio_w_btc",
         "sterling_ratio_btc",
-        "sterling_ratio_w_btc",
     }
 )
 
@@ -1730,10 +1728,8 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "omega_ratio_w_btc": "omega_ratio_strategy_eq_w",
     }
     risk_weighted_sources = {
-        "calmar_ratio_w_btc": "calmar_ratio_strategy_eq_w",
         "sharpe_ratio_w_btc": "sharpe_ratio_strategy_eq_w",
         "sortino_ratio_w_btc": "sortino_ratio_strategy_eq_w",
-        "sterling_ratio_w_btc": "sterling_ratio_strategy_eq_w",
     }
     wanted_safe_weighted_sources = {
         source
