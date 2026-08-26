@@ -100,7 +100,10 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     ):
         return None
 
-    async def fake_prepare_master_datasets(*_args, **_kwargs):
+    captured = {}
+
+    async def fake_prepare_master_datasets(*_args, **kwargs):
+        captured["allow_internal_nan_gaps"] = kwargs["allow_internal_nan_gaps"]
         return {
             "combined": _make_lazy_dataset(
                 coins=("HYPE",),
@@ -122,9 +125,11 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
         config,
         suite_cfg,
         shared_array_manager=_NoSharedArrayManager(),
+        allow_internal_nan_gaps=True,
     )
 
     assert [ctx.label for ctx in contexts] == ["base", "long_only", "short_only"]
+    assert captured["allow_internal_nan_gaps"] is True
 
 
 def test_suite_evaluator_close_releases_context_and_master_attachments():

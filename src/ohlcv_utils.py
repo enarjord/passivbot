@@ -227,7 +227,12 @@ def attempt_gap_fix_ohlcvs(
     return new_df.reset_index().rename(columns={"index": "timestamp"})
 
 
-def aggregate_hlcvs(candles_1m: np.ndarray, interval: int) -> np.ndarray:
+def aggregate_hlcvs(
+    candles_1m: np.ndarray,
+    interval: int,
+    *,
+    preserve_internal_nan_gaps: bool = False,
+) -> np.ndarray:
     """
     Aggregate 1m HLCV candles to coarser interval.
 
@@ -257,15 +262,71 @@ def aggregate_hlcvs(candles_1m: np.ndarray, interval: int) -> np.ndarray:
     truncated = candles[: n_out * interval]
     reshaped = truncated.reshape(n_out, interval, *candles.shape[1:])
     # HLCV indices: 0=high, 1=low, 2=close, 3=volume
-    aggregated = np.stack(
-        [
-            reshaped[:, :, :, 0].max(axis=1),  # high: max across interval
-            reshaped[:, :, :, 1].min(axis=1),  # low: min across interval
-            reshaped[:, -1, :, 2],  # close: last candle's close
-            reshaped[:, :, :, 3].sum(axis=1),  # volume: sum across interval
-        ],
-        axis=-1,
+    if not preserve_internal_nan_gaps:
+        aggregated = np.stack(
+            [
+                reshaped[:, :, :, 0].max(axis=1),  # high: max across interval
+                reshaped[:, :, :, 1].min(axis=1),  # low: min across interval
+                reshaped[:, -1, :, 2],  # close: last candle's close
+                reshaped[:, :, :, 3].sum(axis=1),  # volume: sum across interval
+            ],
+            axis=-1,
+        )
+        return aggregated
+
+    # A GPU optimizer may explicitly admit a minute whose H/L/C are all NaN
+    # as balance-only, non-tradable time. Ignore only those complete gaps when
+    # a coarser bucket also contains valid minutes; partial NaNs, infinities,
+    # and other malformed rows must keep propagating to downstream fail-closed
+    # validation. An all-gap bucket remains an all-NaN H/L/C gap.
+    raw_hlc = reshaped[:, :, :, :3]
+    gap_rows = np.isnan(raw_hlc).all(axis=3)
+    float32_max = float(np.finfo(np.float32).max)
+    float32_zero_rounding_boundary = float(
+        np.nextafter(np.float32(0.0), np.float32(1.0), dtype=np.float32)
+    ) / 2.0
+    malformed_rows = np.zeros_like(gap_rows)
+    for field in range(3):
+        field_values = raw_hlc[:, :, :, field]
+        malformed_rows |= (
+            ~np.isfinite(field_values)
+            | (field_values <= float32_zero_rounding_boundary)
+            | (field_values > float32_max)
+        )
+    malformed_rows &= ~gap_rows
+    malformed_buckets = malformed_rows.any(axis=1)
+    all_gap = gap_rows.all(axis=1)
+    usable_rows = ~gap_rows
+    high = np.max(
+        reshaped[:, :, :, 0],
+        axis=1,
+        where=usable_rows,
+        initial=-np.inf,
     )
+    low = np.min(
+        reshaped[:, :, :, 1],
+        axis=1,
+        where=usable_rows,
+        initial=np.inf,
+    )
+    close = np.full((n_out, candles.shape[1]), np.nan, dtype=candles.dtype)
+    for minute in range(interval):
+        usable = usable_rows[:, minute, :]
+        close[usable] = reshaped[:, minute, :, 2][usable]
+    volume = np.sum(
+        reshaped[:, :, :, 3],
+        axis=1,
+        where=usable_rows,
+        initial=0.0,
+    )
+    high[all_gap] = np.nan
+    low[all_gap] = np.nan
+    close[all_gap] = np.nan
+    # Do not let a later valid minute sanitize a malformed non-gap price.
+    # A partial-NaN aggregate is an intentional fail-closed sentinel for the
+    # post-aggregation GPU screening gate.
+    close[malformed_buckets] = np.nan
+    aggregated = np.stack([high, low, close, volume], axis=-1)
     return aggregated
 
 
@@ -274,6 +335,8 @@ def align_and_aggregate_hlcvs(
     timestamps: np.ndarray | None,
     btc_usd_prices: np.ndarray | None,
     interval: int,
+    *,
+    preserve_internal_nan_gaps: bool = False,
 ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, int]:
     """
     Align candles to interval boundaries (by trimming leading bars) and aggregate.
@@ -298,7 +361,11 @@ def align_and_aggregate_hlcvs(
             timestamps = timestamps[offset_bars:]
             if btc_usd_prices is not None and len(btc_usd_prices) >= offset_bars:
                 btc_usd_prices = btc_usd_prices[offset_bars:]
-    hlcvs_agg = aggregate_hlcvs(hlcvs, interval)
+    hlcvs_agg = aggregate_hlcvs(
+        hlcvs,
+        interval,
+        preserve_internal_nan_gaps=preserve_internal_nan_gaps,
+    )
     n_out = hlcvs_agg.shape[0]
     ts_agg = None
     btc_agg = None

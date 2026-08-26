@@ -1374,7 +1374,7 @@ impl<'a> Backtest<'a> {
                 } else {
                     None
                 };
-                let valid_now = self.coin_is_valid_at(idx, k);
+                let within_valid_range_now = self.coin_is_within_valid_range_at(idx, k);
 
                 let pos_long = self.positions.long[idx];
                 let pos_short = self.positions.short[idx];
@@ -1394,10 +1394,10 @@ impl<'a> Backtest<'a> {
                         }
                     }
                 } else {
-                    if !valid_now && pos_long.size != 0.0 {
+                    if !within_valid_range_now && pos_long.size != 0.0 {
                         mode_long = Some(orchestrator::TradingMode::Panic);
                     }
-                    if !valid_now && pos_short.size != 0.0 {
+                    if !within_valid_range_now && pos_short.size != 0.0 {
                         mode_short = Some(orchestrator::TradingMode::Panic);
                     }
                 }
@@ -1674,7 +1674,7 @@ impl<'a> Backtest<'a> {
             sym.long.runtime_budget = Some(self.runtime_budget[idx].long.clone());
             sym.short.runtime_budget = Some(self.runtime_budget[idx].short.clone());
 
-            let valid_now = self.coin_is_valid_at(idx, k);
+            let within_valid_range_now = self.coin_is_within_valid_range_at(idx, k);
             let mut mode_long: Option<orchestrator::TradingMode> = self.configured_mode(idx, LONG);
             let mut mode_short: Option<orchestrator::TradingMode> =
                 self.configured_mode(idx, SHORT);
@@ -1689,10 +1689,10 @@ impl<'a> Backtest<'a> {
                     }
                 }
             } else {
-                if !valid_now && pos_long.size != 0.0 {
+                if !within_valid_range_now && pos_long.size != 0.0 {
                     mode_long = Some(orchestrator::TradingMode::Panic);
                 }
-                if !valid_now && pos_short.size != 0.0 {
+                if !within_valid_range_now && pos_short.size != 0.0 {
                     mode_short = Some(orchestrator::TradingMode::Panic);
                 }
             }
@@ -2587,10 +2587,21 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline(always)]
-    fn coin_is_valid_at(&self, idx: usize, k: usize) -> bool {
+    fn coin_is_within_valid_range_at(&self, idx: usize, k: usize) -> bool {
         self.coin_valid_range(idx)
             .map(|(start, end)| k >= start && k <= end)
             .unwrap_or(false)
+    }
+
+    #[inline(always)]
+    fn coin_is_valid_at(&self, idx: usize, k: usize) -> bool {
+        if !self.coin_is_within_valid_range_at(idx, k) {
+            return false;
+        }
+        let high = self.hlcvs_value(k, idx, HIGH);
+        let low = self.hlcvs_value(k, idx, LOW);
+        let close = self.hlcvs_value(k, idx, CLOSE);
+        !(high.is_nan() && low.is_nan() && close.is_nan())
     }
 
     #[inline(always)]
@@ -6398,6 +6409,77 @@ mod tests {
             Some(orchestrator::TradingMode::Normal)
         );
         assert_eq!(input.symbols[0].short.mode, None);
+    }
+
+    #[test]
+    fn all_nan_hlc_gap_is_not_valid_or_tradeable() {
+        let mut values = vec![1.0; 3 * 4];
+        values[4] = f64::NAN;
+        values[5] = f64::NAN;
+        values[6] = f64::NAN;
+        values[7] = f64::NAN;
+        let hlcvs = Array3::from_shape_vec((3, 1, 4), values).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        assert!(bt.coin_is_valid_at(0, 0));
+        assert!(!bt.coin_is_valid_at(0, 1));
+        assert!(!bt.coin_is_tradeable_at(0, 1));
+        assert!(bt.coin_is_valid_at(0, 2));
+
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 1.0,
+        };
+        let input = bt.build_orchestrator_input_iter(1, None, None, 0..1);
+        assert!(!input.symbols[0].tradable);
+        assert_ne!(
+            input.symbols[0].long.mode,
+            Some(orchestrator::TradingMode::Panic),
+            "an internal data gap must not be mistaken for a delist"
+        );
     }
 
     #[test]

@@ -188,9 +188,20 @@ The supported slice is intentionally narrow:
   strategy kernels emit opt-in candidate-relative hourly strategy-equity samples plus mandatory
   initial and terminal/liquidation endpoints, and a bounded Metal postprocessor applies the same
   strict time-to-exceed and percentile/tail definitions as exact Rust. The hourly proxy is
-  approximate; exact Rust validation and rolling drift gates remain authoritative. Tracked
-  histories with internal invalid candles fail closed because exact Rust records balance-only
-  strategy equity at those steps. A bounded coin-HSL rolling-PnL overflow also fails closed with a
+  approximate; exact Rust validation and rolling drift gates remain authoritative. At an internal
+  gap whose raw H/L/C values are all NaN, Metal mirrors exact Rust by advancing the tracked
+  timeline with balance-only strategy equity while blocking fills, order generation, and unrealized
+  PnL. Exact Rust classifies the same row as non-tradable without treating the internal gap as a
+  delist during mandatory validation. Only the GPU optimizer operation explicitly requests this
+  input exception; a persisted GPU backend setting does not relax other commands. At coarser candle
+  intervals, complete NaN minutes are ignored inside a mixed aggregation bucket and an all-gap
+  bucket remains a non-tradable gap; malformed non-gap prices cannot be hidden by a later valid
+  minute in the same bucket. A gap must be strictly internal: first-valid candles and forced-delist
+  endpoints remain finite positive prices, and the raw endpoint guard scales with the configured
+  candle interval. Pending directional orders are cleared at a gap before the next valid candle.
+  Normal CPU input validation stays strict.
+  Finite non-positive, partially invalid, or float32-unrepresentable prices remain fail-closed
+  for GPU screening. A bounded coin-HSL rolling-PnL overflow still fails closed with a
   conservative full-horizon recovery penalty. Independent dual-side multi-coin summaries remain
   fail closed for these metrics because they cannot reconstruct one shared portfolio-equity curve.
   Compatible suites may use the supported topologies.
@@ -249,9 +260,8 @@ The supported slice is intentionally narrow:
 - canonical USD `peak_recovery_hours_equity` and `peak_recovery_days_equity` scoring and limits
   use Metal's full-resolution maximum completed peak-to-peak recovery interval. As in exact Rust,
   an unrecovered final tail is not included and a candidate without fills returns zero. Fused
-  dual-side multi-coin kernels maintain the shared portfolio equity path. These metrics also
-  require contiguous valid candles for every exposure-eligible coin on either side after that
-  coin's equity tracking starts because Rust records an equity sample on every tracked step
+  dual-side multi-coin kernels maintain the shared portfolio equity path. Internal all-NaN
+  H/L/C gaps advance this full-resolution clock with exact Rust's balance-only equity sample
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single-coin long, short, and dual-side runs,
   one- and dual-side multi-coin runs, and compatible suites. When current position exposure
@@ -383,14 +393,16 @@ The supported slice is intentionally narrow:
   orders for that coin. Each such coin's final H/L/C must remain finite and positive after float32
   packing; an unrepresentable final candle fails before dispatch. Dynamic tradability,
   portfolio/coin HSL, equity, and elapsed-time accounting continue on the surviving timeline
-- multi-coin histories may also contain declared all-invalid gaps between disjoint coin histories or
-  a tail after every coin has ended. Once portfolio equity tracking starts, Metal continues exact
-  Rust's balance-only equity, HSL, exposure, restart, daily, recovery, and elapsed-time accounting
-  through those periods. Tradability observed only before the warmup/requested-start guard does not
-  activate tracking inside a later gap; the next eligible coin does. Per-coin validity still blocks
-  fills, order generation, and unrealized PnL. If one or more coins are declared valid for a timestep
-  but every corresponding packed float32 H/L/C candle is non-finite or non-positive, the input
-  remains fail-closed before dispatch
+- multi-coin histories may also contain declared all-invalid gaps between disjoint coin histories, a
+  tail after every coin has ended, or internal timestamps where every declared coin's raw H/L/C is
+  NaN. Once portfolio equity tracking starts, Metal continues exact Rust's balance-only
+  equity, exposure, daily, recovery, and elapsed-time accounting through those periods. Tradability
+  observed only before the warmup/requested-start guard does not activate tracking inside a later
+  gap; the next eligible coin does. Per-coin candle validity still blocks fills, order generation,
+  and unrealized PnL. Finite but non-positive, partially invalid, or float32-unrepresentable H/L/C
+  values remain fail-closed for GPU screening. HSL-enabled coins retain the
+  stricter contiguous-candle requirement documented above, and a forced-delist endpoint must remain
+  finite and positive after float32 packing because it supplies an executable close
 
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
 Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every

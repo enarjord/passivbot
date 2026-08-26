@@ -269,13 +269,25 @@ def _normalize_optional_bool_flag(argv: list[str], flag: str) -> list[str]:
     return result
 
 
-def _maybe_aggregate_backtest_data(hlcvs, timestamps, btc_usd_prices, mss, config):
+def _maybe_aggregate_backtest_data(
+    hlcvs,
+    timestamps,
+    btc_usd_prices,
+    mss,
+    config,
+    *,
+    preserve_internal_nan_gaps: bool = False,
+):
     candle_interval = int(config.get("backtest", {}).get("candle_interval_minutes", 1) or 1)
     if candle_interval <= 1:
         return hlcvs, timestamps, btc_usd_prices
     n_before = hlcvs.shape[0]
     hlcvs, timestamps, btc_usd_prices, offset_bars = align_and_aggregate_hlcvs(
-        hlcvs, timestamps, btc_usd_prices, candle_interval
+        hlcvs,
+        timestamps,
+        btc_usd_prices,
+        candle_interval,
+        preserve_internal_nan_gaps=preserve_internal_nan_gaps,
     )
     logging.debug(
         "[optimize] aggregated %dm candles: %d bars -> %d bars (trimmed %d for alignment)",
@@ -381,6 +393,7 @@ def _register_exchange_data(
     btc_usd_specs: dict,
     timestamps_dict: dict,
     array_manager: SharedArrayManager,
+    preserve_internal_nan_gaps: bool = False,
 ) -> tuple[list[str], dict]:
     """
     Register one exchange's prepared data into the optimizer's shared-memory
@@ -390,7 +403,12 @@ def _register_exchange_data(
     _propagate_optimizer_dataset_override(config, exchange, coins, cache_dir, mss)
     prepared_hlcvs = hlcvs
     hlcvs, timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
-        hlcvs, timestamps, btc_usd_prices, mss, config
+        hlcvs,
+        timestamps,
+        btc_usd_prices,
+        mss,
+        config,
+        preserve_internal_nan_gaps=preserve_internal_nan_gaps,
     )
     _stamp_optimizer_warmup(config, mss, coins)
     timestamps_dict[exchange] = (
@@ -3353,6 +3371,10 @@ async def main():
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )
     data_config = build_optimizer_data_config(config)
+    allow_internal_nan_gaps = (
+        str(config.get("optimize", {}).get("backend", "")).strip().lower()
+        == "gpu"
+    )
     interrupted = False
     failed = False
     pool = None
@@ -3374,6 +3396,7 @@ async def main():
                 data_config,
                 suite_cfg,
                 shared_array_manager=array_manager,
+                allow_internal_nan_gaps=allow_internal_nan_gaps,
             )
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
@@ -3447,13 +3470,18 @@ async def main():
                 exchange = "combined"
                 coins, mss = _register_exchange_data(
                     exchange,
-                    await prepare_hlcvs_mss(data_config, exchange),
+                    await prepare_hlcvs_mss(
+                        data_config,
+                        exchange,
+                        allow_internal_nan_gaps=allow_internal_nan_gaps,
+                    ),
                     config,
                     msss=msss,
                     hlcvs_specs=hlcvs_specs,
                     btc_usd_specs=btc_usd_specs,
                     timestamps_dict=timestamps_dict,
                     array_manager=array_manager,
+                    preserve_internal_nan_gaps=allow_internal_nan_gaps,
                 )
                 exchange_preference = defaultdict(list)
                 for coin in coins:
@@ -3462,7 +3490,13 @@ async def main():
                     logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
             else:
                 tasks = {
-                    exchange: asyncio.create_task(prepare_hlcvs_mss(data_config, exchange))
+                    exchange: asyncio.create_task(
+                        prepare_hlcvs_mss(
+                            data_config,
+                            exchange,
+                            allow_internal_nan_gaps=allow_internal_nan_gaps,
+                        )
+                    )
                     for exchange in backtest_exchanges
                 }
                 for exchange, task in tasks.items():
@@ -3475,6 +3509,7 @@ async def main():
                         btc_usd_specs=btc_usd_specs,
                         timestamps_dict=timestamps_dict,
                         array_manager=array_manager,
+                        preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
         exchanges = backtest_exchanges
         exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)

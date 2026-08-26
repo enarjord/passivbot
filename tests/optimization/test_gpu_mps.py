@@ -3864,6 +3864,232 @@ def test_mps_single_coin_forced_delist_closes_both_hedged_sides(strategy_kind):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+def test_mps_single_coin_recovery_samples_internal_nan_candle(
+    strategy_kind, topology
+):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 123
+    invalid_index = 61
+    close = np.full(count, 100.0)
+    high = close.copy()
+    low = close.copy()
+    high[invalid_index] = np.nan
+    low[invalid_index] = np.nan
+    close[invalid_index] = np.nan
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "ema_anchor":
+        row = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 0.0,
+                "offset": 0.5,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+        runner_kwargs = {}
+    else:
+        row = _tm_single_row(initial_ema_dist=0.5)
+        runner_cls = MpsTrailingMartingaleRunner
+        runner_kwargs = {"hsl_enabled": False}
+
+    sides = ("long", "short") if topology == "fused" else (topology,)
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled="long" in sides,
+        short_enabled="short" in sides,
+        hedge_mode=topology == "fused",
+        recovery_distribution_enabled=True,
+        **runner_kwargs,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    samples = output["strategy_eq_recovery_samples"][0].cpu().numpy()
+    assert samples[:3].tolist() == pytest.approx([1_000.0, 1_000.0, 1_000.0])
+    assert np.isnan(samples[3:]).all()
+    assert output["last_eq_ts"].item() == pytest.approx(121 * run.interval_ms)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_single_coin_internal_nan_candle_clears_pending_entry(strategy_kind):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    count = 5
+    close = np.full(count, 100.0)
+    high = close.copy()
+    low = close.copy()
+    high[2] = np.nan
+    low[2] = np.nan
+    close[2] = np.nan
+    low[3] = 50.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    if strategy_kind == "ema_anchor":
+        side = _single_coin_param_row(
+            {
+                "base_qty_pct": 0.1,
+                "ema_span_0": 2.0,
+                "ema_span_1": 3.0,
+                "entry_double_down_factor": 0.0,
+                "offset": 0.1,
+                "offset_psize_weight": 0.0,
+                "offset_volatility_1h_weight": 0.0,
+                "offset_volatility_1m_weight": 0.0,
+                "offset_volatility_ema_span_1h": 2.0,
+                "offset_volatility_ema_span_1m": 2.0,
+                "entry_cooldown_minutes": 0.0,
+                "total_wallet_exposure_limit": 1.0,
+                "we_excess_allowance_pct": 0.0,
+                "we_excess_allowance_legacy_raw": 0.0,
+                "twel_entry_gate_enabled": 1.0,
+                "twel_enforcer_threshold": 1.0,
+                "twel_enforcer_enabled": 0.0,
+            },
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
+        )
+        runner_cls = MpsEmaAnchorRunner
+        runner_kwargs = {}
+    else:
+        side = _tm_single_row(initial_ema_dist=0.1)
+        runner_cls = MpsTrailingMartingaleRunner
+        runner_kwargs = {"hsl_enabled": False}
+
+    output = runner_cls(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        hedge_mode=False,
+        **runner_kwargs,
+    ).run(np.asarray([side + side], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() == 0.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+def test_mps_multicoin_recovery_samples_all_internal_nan_candle(
+    strategy_kind, topology
+):
+    count = 123
+    invalid_index = 61
+    closes = np.full((count, 2), 100.0)
+    highs = closes.copy()
+    lows = closes.copy()
+    if topology != "fused":
+        highs[3, :] = 101.0
+        lows[3, :] = 99.0
+    highs[invalid_index, :] = np.nan
+    lows[invalid_index, :] = np.nan
+    closes[invalid_index, :] = np.nan
+    fixture_side = topology if topology != "fused" else "long"
+    runner, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        fixture_side,
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        recovery_distribution_enabled=True,
+        return_context=True,
+    )
+    if topology == "fused":
+        runner_cls = (
+            MpsEmaAnchorMulticoinFusedRunner
+            if strategy_kind == "ema_anchor"
+            else MpsTrailingMartingaleMulticoinFusedRunner
+        )
+        runner = runner_cls(
+            run,
+            data,
+            recovery_distribution_enabled=True,
+        )
+        params = row + row
+    else:
+        params = row
+
+    assert torch.isnan(data["bars"][invalid_index, :, 2]).all().item()
+    output = runner.run(np.asarray([params], dtype=np.float64))
+    torch.mps.synchronize()
+
+    samples = output["strategy_eq_recovery_samples"][0].cpu().numpy()
+    if topology == "fused":
+        assert output["fill_count"].item() == 0.0
+    else:
+        assert output["fill_count"].item() > 0.0
+        assert (
+            output["psize"].item() > 0.0
+            or output.get("short_psize", torch.zeros(1)).item() > 0.0
+        )
+    assert np.isfinite(samples[:3]).all()
+    assert samples[1] == pytest.approx(output["balance"].item())
+    assert np.isnan(samples[3:]).all()
+    assert output["last_eq_ts"].item() == pytest.approx(121 * run.interval_ms)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     from backtest import run_backtest
     from config.schema import get_template_config
@@ -4423,6 +4649,7 @@ def _multicoin_exposure_fixture(
     market_orders_allowed=False,
     market_order_near_touch_threshold=0.001,
     hsl_panic_market=False,
+    recovery_distribution_enabled=False,
     requested_start_index=0,
     return_context=False,
     interval_minutes=1,
@@ -4521,6 +4748,7 @@ def _multicoin_exposure_fixture(
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
+            recovery_distribution_enabled=recovery_distribution_enabled,
         )
     else:
         values = {
@@ -4582,6 +4810,7 @@ def _multicoin_exposure_fixture(
             market_orders_allowed=market_orders_allowed,
             market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
+            recovery_distribution_enabled=recovery_distribution_enabled,
         )
     if return_context:
         return runner, row, runs[0], data

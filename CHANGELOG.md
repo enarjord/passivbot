@@ -10,8 +10,22 @@ All notable user-facing changes will be documented in this file.
   exact Rust's balance-only equity, HSL, exposure, restart, daily, recovery, and elapsed-time
   accounting after tracking begins, but do not activate tracking from tradability seen only before
   the requested-start guard. Validity still blocks fills, orders, and unrealized PnL. A timestep
-  covered by a declared valid range but lacking any finite positive packed float32 H/L/C remains
-  fail-closed.
+  covered by a declared valid range whose raw H/L/C values are all NaN is likewise treated
+  as non-tradable balance-only time. Single-coin kernels now apply the same rule to these internal
+  gaps, and exact Rust now classifies the same row as non-tradable without triggering delist panic
+  handling during mandatory validation. Only the GPU optimizer operation explicitly admits these
+  internal gaps; retaining `optimize.backend: gpu` in a config does not relax normal backtest,
+  suite, download, or reproduction validation. Coarser GPU candle intervals ignore complete NaN
+  minutes inside mixed buckets, preserve all-gap buckets as non-tradable gaps, and retain any
+  malformed non-gap price as a fail-closed aggregate. Gap rows must be strictly internal: the
+  first-valid candle and any forced-delist endpoint remain valid finite prices, with the endpoint
+  cutoff scaled to the prepared candle interval. Directional Metal kernels clear pending orders at
+  a supported gap so they cannot fill stale pre-gap intents afterward. This enables
+  account-equity and strategy-equity recovery
+  metrics on such histories. Finite
+  non-positive, partially invalid, or float32-unrepresentable prices remain fail-closed for GPU
+  screening; HSL-enabled coins still require contiguous candles, and a forced-delist endpoint must
+  remain representable because it supplies an executable close.
 
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now mirrors exact Rust's
   forced-delist close when at least 1,400 prepared candles follow a coin's final valid candle,
@@ -221,9 +235,10 @@ All notable user-facing changes will be documented in this file.
   Metal postprocessor applies Rust's strict
   time-to-exceed, percentile, and worst-tail definitions for
   `strategy_eq_recovery_days_{mean,median,p95,p99,mean_worst_5pct,mean_worst_1pct}`. Exact Rust
-  validation and rolling drift gates remain authoritative. Histories with internal invalid candles
-  remain fail closed, and a bounded single-coin coin-HSL rolling-PnL overflow emits a conservative
-  full-horizon recovery penalty. Independent dual-side multi-coin summaries remain fail closed
+  validation and rolling drift gates remain authoritative. Internal all-NaN H/L/C gaps
+  contribute balance-only samples, and a bounded single-coin coin-HSL rolling-PnL overflow emits a
+  conservative full-horizon recovery penalty. Independent dual-side multi-coin summaries remain
+  fail closed
   because they cannot reconstruct one shared portfolio-equity curve.
 
 - Added raw per-side HSL strategy-equity worst-drawdown scoring and limits to Apple MPS

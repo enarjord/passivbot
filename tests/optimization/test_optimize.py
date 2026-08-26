@@ -2186,6 +2186,46 @@ class TestValidateArray:
         assert manager.arrays[0] is hlcvs
         assert manager.arrays[1] is btc_usd_prices
 
+    def test_register_exchange_data_preserves_gpu_nan_gaps_through_aggregation(self):
+        class RecordingArrayManager:
+            def __init__(self):
+                self.arrays = []
+
+            def create_from(self, array):
+                self.arrays.append(array)
+                return object(), array
+
+        hlcvs = np.tile(
+            np.array([10.0, 8.0, 9.0, 1.0], dtype=np.float64),
+            (6, 1, 1),
+        )
+        hlcvs[0, 0] = np.nan
+        hlcvs[2:4, 0] = np.nan
+        btc_usd_prices = np.ones(6, dtype=np.float64)
+        timestamps = np.arange(6, dtype=np.int64) * 60_000
+        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 5}}
+        config = {"backtest": {"coins": {}, "candle_interval_minutes": 2}}
+        manager = RecordingArrayManager()
+
+        with patch("optimize._stamp_optimizer_warmup"):
+            _register_exchange_data(
+                "binance",
+                (["BTC"], hlcvs, mss, None, None, btc_usd_prices, timestamps),
+                config,
+                msss={},
+                hlcvs_specs={},
+                btc_usd_specs={},
+                timestamps_dict={},
+                array_manager=manager,
+                preserve_internal_nan_gaps=True,
+            )
+
+        aggregated = manager.arrays[0]
+        np.testing.assert_allclose(aggregated[0, 0], [10.0, 8.0, 9.0, 1.0])
+        assert np.isnan(aggregated[1, 0, :3]).all()
+        assert aggregated[1, 0, 3] == 0.0
+        np.testing.assert_allclose(aggregated[2, 0], [10.0, 8.0, 9.0, 2.0])
+
     def test_register_exchange_data_propagates_dataset_replay_policy_without_bot_gates(self):
         class RecordingArrayManager:
             def create_from(self, array):
