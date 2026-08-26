@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   Trailing Martingale across single-coin, one-sided multi-coin, and fused dual-side multi-coin
   topologies. The opt-in Metal proxy reduces full-resolution controller drawdowns to one worst
   sample per observed day, then applies a bounded logarithmic tail histogram; exact Rust
-  validation and rolling drift gates remain authoritative.
+  retains each controller sample's timestamp for matching daily reduction, while exact validation
+  and rolling drift gates remain authoritative.
 
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports staggered
   ordinary invalid candle tails when at least one prepared coin remains valid through the endpoint,
