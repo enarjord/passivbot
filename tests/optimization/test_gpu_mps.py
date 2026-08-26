@@ -44,6 +44,7 @@ from optimization.gpu.mps_kernel import (
     _scale_tm_multicoin_coin_overrides,
     _scale_single_coin_minute_parameters,
     _upgrade_legacy_single_coin_wel_params,
+    _with_dynamic_wel_by_tradability,
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
@@ -422,6 +423,17 @@ def test_recovery_distribution_source_variant_is_opt_in_and_guarded():
     )
     with pytest.raises(RuntimeError, match="recovery-distribution feature guard"):
         _with_recovery_distribution("body", True)
+
+
+def test_fixed_wel_denominator_source_variant_is_opt_in_and_guarded():
+    source = "#ifndef PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY\nbody"
+
+    assert _with_dynamic_wel_by_tradability(source, True) is source
+    assert _with_dynamic_wel_by_tradability(source, False) == (
+        "#define PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY 0\n" + source
+    )
+    with pytest.raises(RuntimeError, match="dynamic-WEL feature guard"):
+        _with_dynamic_wel_by_tradability("body", False)
 
 
 @pytest.mark.skipif(
@@ -4723,7 +4735,9 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+@pytest.mark.parametrize(
+    "topology", ["long", "short", "fused-hedge", "fused-one-way"]
+)
 @pytest.mark.parametrize(
     ("count", "first_valid_indices", "last_valid_indices"),
     [
@@ -4746,9 +4760,9 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
 
     hlcvs = np.full((count, 2, 4), 100.0, dtype=np.float64)
     hlcvs[:, :, 3] = 1.0
-    if topology in {"long", "fused"}:
+    if topology in {"long", "fused-hedge", "fused-one-way"}:
         hlcvs[3, 0, 1] = 80.0
-    if topology in {"short", "fused"}:
+    if topology in {"short", "fused-hedge", "fused-one-way"}:
         hlcvs[3, 0, 0] = 120.0
     timestamps = (
         1_700_000_000_000
@@ -4781,20 +4795,21 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
     config["live"]["strategy_kind"] = strategy_kind
     config["live"]["max_warmup_minutes"] = 1
     enabled_sides = (
-        ("long", "short") if topology == "fused" else (topology,)
+        ("long", "short") if topology.startswith("fused-") else (topology,)
     )
     config["live"]["approved_coins"] = {
         side: ["BTC"] if side in enabled_sides else []
         for side in ("long", "short")
     }
-    config["live"]["hedge_mode"] = topology == "fused"
+    config["live"]["hedge_mode"] = topology == "fused-hedge"
     config["backtest"]["coins"] = {"bybit": ["BTC", "ETH"]}
     config["backtest"]["exchanges"] = ["bybit"]
+    config["backtest"]["dynamic_wel_by_tradability"] = False
     for side in ("long", "short"):
         enabled = side in enabled_sides
         risk = config["bot"][side]["risk"]
         risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
-        risk["n_positions"] = 1 if enabled else 0
+        risk["n_positions"] = 2 if enabled else 0
         risk["entry_cooldown_minutes"] = 100.0
         risk["we_excess_allowance_pct"] = 0.0
         risk["position_exposure_enforcer_enabled"] = False
@@ -4835,6 +4850,8 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         batch_size=1,
         needed_metrics={
             "backtest_completion_ratio",
+            "entry_initial_balance_pct_long",
+            "entry_initial_balance_pct_short",
             "fills_count",
             "position_held_days_max",
         },
@@ -4851,6 +4868,9 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
 
     assert result["fills_count"] == exact_analysis["fills_count"]
     assert len(exact_fills) == exact_analysis["fills_count"]
+    for side in enabled_sides:
+        metric = f"entry_initial_balance_pct_{side}"
+        assert result[metric] == pytest.approx(exact_analysis[metric], rel=1.0e-5)
     # The synthetic exact helper retains the template's calendar date span,
     # whereas the proxy receives this prepared span directly. The
     # proxy must nevertheless cover the all-invalid tail through its endpoint.
@@ -5035,6 +5055,7 @@ def _multicoin_exposure_fixture(
     market_order_near_touch_threshold=0.001,
     hsl_panic_market=False,
     recovery_distribution_enabled=False,
+    dynamic_wel_by_tradability=True,
     requested_start_index=0,
     return_context=False,
     interval_minutes=1,
@@ -5134,6 +5155,7 @@ def _multicoin_exposure_fixture(
             market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
         )
     else:
         values = {
@@ -5196,6 +5218,7 @@ def _multicoin_exposure_fixture(
             market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
         )
     if return_context:
         return runner, row, runs[0], data
@@ -7184,6 +7207,89 @@ def test_mps_multicoin_tracks_position_unchanged_max(strategy_kind, side):
         assert torch.equal(output["fill_count_long"], output["fill_count"])
     else:
         assert (output["fill_count_long"] == 0.0).all()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_multicoin_fixed_wel_uses_configured_position_denominator(
+    strategy_kind, side
+):
+    override_cols = (
+        EMA_ANCHOR_COIN_OVERRIDE_COLS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+    )
+    wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[1, wallet_exposure_column] = 0.0
+    fixed_runner, row = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        coin_overrides=overrides,
+        dynamic_wel_by_tradability=False,
+    )
+    dynamic_runner, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        coin_overrides=overrides,
+        dynamic_wel_by_tradability=True,
+    )
+
+    parameters = np.asarray([row], dtype=np.float64)
+    fixed = fixed_runner.run(parameters)
+    dynamic = dynamic_runner.run(parameters)
+    torch.mps.synchronize()
+
+    # Fixed WEL allocates TWEL 1.0 across both configured slots even though
+    # the second prepared coin is explicitly ineligible for this side. Dynamic
+    # mode allocates the same TWEL to its one observed eligible slot.
+    assert fixed["entry_initial_balance_pct"].item() == pytest.approx(0.5)
+    assert dynamic["entry_initial_balance_pct"].item() == pytest.approx(1.0)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("hedge_mode", [True, False], ids=["hedge", "one-way"])
+def test_mps_fused_multicoin_fixed_wel_uses_each_configured_denominator(
+    strategy_kind, hedge_mode
+):
+    _, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        return_context=True,
+    )
+    runner_cls = (
+        MpsEmaAnchorMulticoinFusedRunner
+        if strategy_kind == "ema_anchor"
+        else MpsTrailingMartingaleMulticoinFusedRunner
+    )
+    override_cols = (
+        EMA_ANCHOR_COIN_OVERRIDE_COLS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+    )
+    wallet_exposure_column = 11 if strategy_kind == "ema_anchor" else 24
+    overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
+    overrides[1, wallet_exposure_column] = 0.0
+    runner = runner_cls(
+        run,
+        data,
+        long_coin_overrides=overrides,
+        short_coin_overrides=overrides,
+        hedge_mode=hedge_mode,
+        dynamic_wel_by_tradability=False,
+    )
+
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["entry_initial_balance_pct_long"].item() == pytest.approx(0.5)
+    assert output["entry_initial_balance_pct_short"].item() == pytest.approx(0.5)
 
 
 @pytest.mark.skipif(

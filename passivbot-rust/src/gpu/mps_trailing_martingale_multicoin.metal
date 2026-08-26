@@ -3576,11 +3576,12 @@ inline void generate_tm_multicoin_side_orders(
         && twel_repair_target > 0.0f && balance > 0.0f
         && current_twe > twel_repair_target + 1.0e-9f
         && open_position_count > 0) {
-        // TWEL reduce_overweight uses the current eligible count.
-        // Keep the grow-only maximum solely for dynamic WEL sizing.
-        int current_effective_n_positions = min(
-            n_positions, tradable_count
-        );
+        // TWEL reduce_overweight follows the configured denominator mode
+        // using the current eligible count as dynamic mode's observation.
+        int current_effective_n_positions =
+            wallet_exposure_denominator_n_positions(
+                n_positions, tradable_count
+            );
         int repair_n_positions = current_effective_n_positions > 0
             ? current_effective_n_positions : open_position_count;
         float overweight_target = twel_repair_target
@@ -5012,16 +5013,20 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                 short_side.max_tradable_seen, short_tradable_count
             );
         }
-        const int long_effective_n_positions = min(
-            long_config.n_positions, long_side.max_tradable_seen
-        );
-        const int short_effective_n_positions = min(
-            short_config.n_positions, short_side.max_tradable_seen
-        );
+        const int long_effective_n_positions =
+            wallet_exposure_denominator_n_positions(
+                long_config.n_positions, long_side.max_tradable_seen
+            );
+        const int short_effective_n_positions =
+            wallet_exposure_denominator_n_positions(
+                short_config.n_positions, short_side.max_tradable_seen
+            );
         const bool long_can_generate = alive
-            && long_effective_n_positions > 0 && past_activation_guard;
+            && long_effective_n_positions > 0
+            && long_side.max_tradable_seen > 0 && past_activation_guard;
         const bool short_can_generate = alive
-            && short_effective_n_positions > 0 && past_activation_guard;
+            && short_effective_n_positions > 0
+            && short_side.max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started
             || long_can_generate || short_can_generate;
 
@@ -5472,7 +5477,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fills.position_unchanged_max_min * interval_ms;
     scalars[scalar_offset + 21] = tm_multicoin_entry_initial_balance_pct(
         long_config, long_coin_overrides,
-        min(long_config.n_positions, long_side.max_tradable_seen)
+        wallet_exposure_denominator_n_positions(
+            long_config.n_positions, long_side.max_tradable_seen
+        )
     );
     scalars[scalar_offset + 22] = total_wallet_exposure_max;
     scalars[scalar_offset + 23] = total_wallet_exposure_mean;
@@ -5506,7 +5513,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     }
     scalars[scalar_offset + 59] = tm_multicoin_entry_initial_balance_pct(
         short_config, short_coin_overrides,
-        min(short_config.n_positions, short_side.max_tradable_seen)
+        wallet_exposure_denominator_n_positions(
+            short_config.n_positions, short_side.max_tradable_seen
+        )
     );
     scalars[scalar_offset + 60] = fills.profit_sum_long;
     scalars[scalar_offset + 61] = fills.loss_sum_long;
@@ -5786,9 +5795,12 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         if (alive && !post_fill_balance_depleted && past_activation_guard) {
             max_tradable_seen = max(max_tradable_seen, tradable_count);
         }
-        const int effective_n_positions = min(n_positions, max_tradable_seen);
+        const int effective_n_positions =
+            wallet_exposure_denominator_n_positions(
+                n_positions, max_tradable_seen
+            );
         const bool can_generate = alive && effective_n_positions > 0
-            && past_activation_guard;
+            && max_tradable_seen > 0 && past_activation_guard;
         equity_started = equity_started || can_generate;
         bool has_hsl_position = tm_multicoin_side_has_position(side, C);
         int current_hsl_mode = coin_hsl_mode
@@ -6142,7 +6154,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 18] = profit_sum;
     scalars[scalar_offset + 19] = loss_sum;
     scalars[scalar_offset + 20] = position_unchanged_max_min * interval_ms;
-    int entry_effective_n_positions = min(n_positions, max_tradable_seen);
+    int entry_effective_n_positions =
+        wallet_exposure_denominator_n_positions(
+            n_positions, max_tradable_seen
+        );
     float entry_base_limit = entry_effective_n_positions > 0
         ? twel / float(entry_effective_n_positions) : 0.0f;
     float entry_initial_qty_pct = coin_override_or(

@@ -297,6 +297,7 @@ GPU_SUPPORTED_OPTIMIZER_OVERRIDES = {
 # selection and unsupported execution/risk behavior must continue to fail
 # closed instead of being accepted merely because the config path exists.
 GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
+    ("backtest", "dynamic_wel_by_tradability"),
     ("backtest", "filter_by_min_effective_cost"),
     ("backtest", "liquidation_threshold"),
     ("backtest", "maker_fee_override"),
@@ -1069,11 +1070,6 @@ def _validate_scope_config(
         if len(enabled_sides) not in (1, 2):
             raise ValueError(
                 "GPU multicoin foundation requires one or two enabled sides"
-            )
-        if not bool(config.get("backtest", {}).get("dynamic_wel_by_tradability")):
-            raise ValueError(
-                "GPU multicoin foundation requires "
-                "backtest.dynamic_wel_by_tradability=true"
             )
     _validate_gpu_coin_overrides(
         config,

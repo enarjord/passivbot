@@ -202,6 +202,21 @@ inline void record_gross_pnl(
     else loss_sum += fabs(pnl);
 }
 
+// Backtest WEL denominator mode is fixed for a compiled proxy instance.
+#ifndef PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY
+#define PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY 1
+#endif
+
+inline int wallet_exposure_denominator_n_positions(
+    int configured_n_positions, int observed_tradable_count
+) {
+#if PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY
+    return min(configured_n_positions, observed_tradable_count);
+#else
+    return configured_n_positions;
+#endif
+}
+
 inline float coin_override_or(
     constant float* coin_overrides, int coin, int column, float fallback
 ) {
