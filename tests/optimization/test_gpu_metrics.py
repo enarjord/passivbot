@@ -1735,9 +1735,7 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
         "expected_shortfall_1pct_btc",
         "gain_btc",
         "sharpe_ratio_btc",
-        "sharpe_ratio_w_btc",
         "sortino_ratio_btc",
-        "sortino_ratio_w_btc",
         "sterling_ratio_btc",
     }
 
@@ -1783,29 +1781,6 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
     assert metrics["sterling_ratio_btc"].item() == pytest.approx(
         adg.item() / 0.50
     )
-    expected_weighted = _weighted_strategy_eq_metrics(
-        day_end_btc,
-        day_min_btc,
-        day_max_dd_btc,
-        active,
-        out["first_eq_ts"],
-        out["last_eq_ts"],
-        0.0,
-        86_400_000,
-        {
-            "sharpe_ratio_strategy_eq_w",
-            "sortino_ratio_strategy_eq_w",
-        },
-    )
-    for btc_name, usd_source in {
-        "sharpe_ratio_w_btc": "sharpe_ratio_strategy_eq_w",
-        "sortino_ratio_w_btc": "sortino_ratio_strategy_eq_w",
-    }.items():
-        assert metrics[btc_name].item() == pytest.approx(
-            expected_weighted[usd_source].item()
-        )
-
-
 def test_btc_risk_metrics_fail_closed_without_synchronized_surface():
     day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
     out = {

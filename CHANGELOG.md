@@ -9,14 +9,14 @@ All notable user-facing changes will be documented in this file.
   The proxy converts its compact USD daily equity surface with the canonical prepared BTC/USD
   series and supports gain, ADG, MDG, Omega, equity shape, unweighted exposure ratios, peak
   recovery, per-exposure forms, Sharpe, Sortino, expected shortfall, worst and worst-1% drawdown,
-  Calmar, Sterling, and weighted Sharpe and Sortino. UTC
+  Calmar, and Sterling. UTC
   day-end conversion is exact for the compact surface, including candidate-specific liquidation
   endpoints; recovery remains a compact daily approximation under mandatory exact Rust validation
   and rolling drift gates. Metal conditionally retains synchronized BTC day-end equity, daily
   minima, and full-curve daily worst drawdowns only when one of the intraday-risk metrics is
   requested; USD-only and close-equity-only BTC runs retain their previous kernel ABI, output
-  width, and dispatch cost. Weighted BTC Calmar/Sterling and exposure ratios remain fail-closed
-  until the proxy owns suffix-local drawdown and exposure series. BTC inputs enter checkpoint
+  width, and dispatch cost. Weighted BTC Sharpe/Sortino/Calmar/Sterling and exposure ratios remain
+  fail-closed until the proxy owns suffix-local intraday minima, drawdown, and exposure series. BTC inputs enter checkpoint
   identity only when a BTC metric is requested. Positive BTC collateral remains fail-closed
   pending its separate simulation slice.
 

@@ -496,10 +496,10 @@ ratios, peak recovery, per-side exposure-normalized gain/ADG/MDG, and the existi
 ADG/MDG/Omega and equity-shape variants. It converts the compact USD daily closing-equity surface
 with the canonical prepared BTC/USD price at each UTC day end, including a candidate-specific
 final endpoint after early liquidation. For BTC Sharpe, Sortino, expected shortfall, worst and
-worst-1% drawdown, Calmar, Sterling, plus weighted Sharpe and Sortino, Metal conditionally retains a
+worst-1% drawdown, Calmar, and Sterling, Metal conditionally retains a
 synchronized BTC-equity surface containing each UTC day's close, minimum, and worst full-curve
-drawdown. Weighted support in this intraday slice is limited to Sharpe and Sortino; weighted BTC
-Calmar and Sterling require suffix-local drawdown reconstruction and remain fail-closed. Runs that
+drawdown. Weighted BTC Sharpe, Sortino, Calmar, and Sterling require suffix-local intraday minima
+and drawdown reconstruction and remain fail-closed. Runs that
 do not request one of these intraday-risk metrics keep the smaller existing kernel ABI and output
 buffers. BTC peak recovery remains a compact daily approximation; mandatory exact Rust validation
 and rolling drift gates remain authoritative. Weighted BTC exposure ratios still require

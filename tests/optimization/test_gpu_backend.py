@@ -3228,6 +3228,8 @@ def test_gpu_foundation_accepts_btc_account_metrics_without_collateral(
         "exposure_ratio_w_btc",
         "exposure_mean_ratio_w_btc",
         "calmar_ratio_w_btc",
+        "sharpe_ratio_w_btc",
+        "sortino_ratio_w_btc",
         "sterling_ratio_w_btc",
     ],
 )
@@ -3245,9 +3247,7 @@ def test_gpu_foundation_excludes_btc_metrics_without_safe_proxy_surface(metric):
         ("drawdown_worst_mean_1pct_btc", "min"),
         ("expected_shortfall_1pct_btc", "min"),
         ("sharpe_ratio_btc", "max"),
-        ("sharpe_ratio_w_btc", "max"),
         ("sortino_ratio_btc", "max"),
-        ("sortino_ratio_w_btc", "max"),
         ("calmar_ratio_btc", "max"),
         ("sterling_ratio_btc", "max"),
     ],

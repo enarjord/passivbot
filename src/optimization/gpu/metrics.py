@@ -72,9 +72,7 @@ BTC_INTRADAY_RISK_METRICS = frozenset(
         "drawdown_worst_mean_1pct_btc",
         "expected_shortfall_1pct_btc",
         "sharpe_ratio_btc",
-        "sharpe_ratio_w_btc",
         "sortino_ratio_btc",
-        "sortino_ratio_w_btc",
         "sterling_ratio_btc",
     }
 )
@@ -1727,10 +1725,6 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "mdg_w_btc": "mdg_strategy_eq_w",
         "omega_ratio_w_btc": "omega_ratio_strategy_eq_w",
     }
-    risk_weighted_sources = {
-        "sharpe_ratio_w_btc": "sharpe_ratio_strategy_eq_w",
-        "sortino_ratio_w_btc": "sortino_ratio_strategy_eq_w",
-    }
     wanted_safe_weighted_sources = {
         source
         for name, source in safe_weighted_sources.items()
@@ -1764,29 +1758,6 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
                 values[name] = torch.where(
                     enough_fills, safe_weighted[source], zeros
                 )
-    wanted_risk_weighted_sources = {
-        source
-        for name, source in risk_weighted_sources.items()
-        if name in requested
-    }
-    if wanted_risk_weighted_sources:
-        risk_weighted = _weighted_strategy_eq_metrics(
-            risk_day_end_btc,
-            risk_day_min_btc,
-            risk_day_max_dd_btc,
-            active,
-            out["first_eq_ts"],
-            out["last_eq_ts"],
-            data["ts0"],
-            run.interval_ms,
-            wanted_risk_weighted_sources,
-        )
-        for name, source in risk_weighted_sources.items():
-            if source in risk_weighted:
-                values[name] = torch.where(
-                    enough_fills, risk_weighted[source], zeros
-                )
-
     weighted_shape_sources = {
         "equity_choppiness_w_btc": "equity_choppiness_w_usd",
         "equity_jerkiness_w_btc": "equity_jerkiness_w_usd",
