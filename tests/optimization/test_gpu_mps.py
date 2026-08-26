@@ -43,6 +43,7 @@ from optimization.gpu.mps_kernel import (
     _scale_ema_multicoin_coin_overrides,
     _scale_tm_multicoin_coin_overrides,
     _scale_single_coin_minute_parameters,
+    _upgrade_legacy_single_coin_wel_params,
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
@@ -123,6 +124,93 @@ def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
     assert packed[0, width + close_column] == np.finfo(np.float32).tiny
     assert packed[0, close_column] == 0.0
     assert packed[0, width + entry_column] == 0.0
+
+
+@pytest.mark.parametrize("side_width", [35, 52])
+def test_legacy_single_coin_rows_gain_per_side_wallet_exposure_sentinel(
+    side_width,
+):
+    legacy_width = side_width - 1
+    params = np.arange(legacy_width * 2, dtype=np.float64).reshape(1, -1)
+
+    upgraded = _upgrade_legacy_single_coin_wel_params(
+        params, side_width=side_width
+    )
+
+    assert upgraded.shape == (1, side_width * 2)
+    assert upgraded[0, :legacy_width].tolist() == params[
+        0, :legacy_width
+    ].tolist()
+    assert upgraded[0, legacy_width] == -1.0
+    assert upgraded[0, side_width:-1].tolist() == params[
+        0, legacy_width:
+    ].tolist()
+    assert upgraded[0, -1] == -1.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize(
+    ("base_wel", "allowance_pct", "legacy_raw", "expected_allowed_wel"),
+    [
+        (0.4, 0.25, False, 0.5),
+        (0.4, 2.0, False, 0.9),
+        (0.4, 2.0, True, 1.2),
+        (-1.0, 0.25, False, 0.9),
+    ],
+)
+def test_mps_single_coin_wallet_exposure_override_keeps_twel_separate(
+    strategy_kind,
+    base_wel,
+    allowance_pct,
+    legacy_raw,
+    expected_allowed_wel,
+):
+    import passivbot_rust
+
+    if strategy_kind == "ema_anchor":
+        keys = EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+        source = passivbot_rust.mps_ema_anchor_source_py()
+        side_type = "EmaSide"
+    else:
+        keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        source = passivbot_rust.mps_trailing_martingale_source_py()
+        side_type = "TmSide"
+    values = {key: float(index + 1) for index, key in enumerate(keys)}
+    values.update(
+        {
+            "total_wallet_exposure_limit": 0.9,
+            "wallet_exposure_limit": base_wel,
+            "we_excess_allowance_pct": allowance_pct,
+            "we_excess_allowance_legacy_raw": float(legacy_raw),
+        }
+    )
+    params = torch.tensor(
+        [values[key] for key in keys], dtype=torch.float32, device="mps"
+    )
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    probe_kernel = f"""
+kernel void passivbot_single_coin_wel_probe(
+    constant float* packed,
+    device float* result,
+    uint b [[thread_position_in_grid]]
+) {{
+    if (b > 0) return;
+    {side_type} side = load_side(packed, 0, 100.0f);
+    result[0] = side.twel;
+    result[1] = side.allowed_wel;
+}}
+"""
+    library = torch.mps.compile_shader(source + probe_kernel)
+    library.passivbot_single_coin_wel_probe(
+        params, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    assert output[0].item() == pytest.approx(0.9)
+    assert output[1].item() == pytest.approx(expected_allowed_wel)
 
 
 @pytest.mark.parametrize(
@@ -3172,7 +3260,12 @@ _HSL_DISABLED_VALUES = {
 
 
 def _single_coin_param_row(values, keys):
-    merged = {**_UNSTUCK_DISABLED_VALUES, **_HSL_DISABLED_VALUES, **values}
+    merged = {
+        **_UNSTUCK_DISABLED_VALUES,
+        **_HSL_DISABLED_VALUES,
+        "wallet_exposure_limit": -1.0,
+        **values,
+    }
     return [merged[key] for key in keys]
 
 
@@ -4209,6 +4302,207 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize(
+    ("topology", "hedge_mode"),
+    [
+        ("long", False),
+        ("short", False),
+        ("fused", True),
+        ("fused", False),
+    ],
+)
+def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
+    strategy_kind, topology, hedge_mode
+):
+    from backtest import run_backtest
+    from config.schema import get_template_config
+    from optimization.gpu.service import MpsSingleCoinProxy
+
+    count = 80
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    hlcvs = np.empty((count, 1, 4), dtype=np.float64)
+    hlcvs[:, 0] = [110.0, 90.0, 100.0, 1.0]
+    market_settings = {
+        "ETH": {
+            "qty_step": 0.001,
+            "price_step": 0.01,
+            "min_qty": 0.001,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0,
+            "taker": 0.0,
+            "exchange": "bybit",
+            "first_valid_index": 0,
+            "last_valid_index": count - 1,
+            "warmup_minutes": 1,
+        },
+        "__meta__": {
+            "requested_start_ts": int(timestamps[0]),
+            "requested_start_date": "2023-11-14",
+            "warmup_minutes_requested": 1,
+        },
+    }
+    enabled_sides = (
+        ("long", "short") if topology == "fused" else (topology,)
+    )
+    config = get_template_config()
+    config["live"]["strategy_kind"] = strategy_kind
+    config["live"]["max_warmup_minutes"] = 1
+    config["live"]["approved_coins"] = {
+        side: ["ETH"] if side in enabled_sides else []
+        for side in ("long", "short")
+    }
+    config["live"]["hedge_mode"] = hedge_mode
+    config["backtest"]["coins"] = {"bybit": ["ETH"]}
+    config["backtest"]["exchanges"] = ["bybit"]
+    for side in ("long", "short"):
+        enabled = side in enabled_sides
+        risk = config["bot"][side]["risk"]
+        risk["total_wallet_exposure_limit"] = 0.9 if enabled else 0.0
+        risk["n_positions"] = 1 if enabled else 0
+        risk["entry_cooldown_minutes"] = 0.0
+        risk["we_excess_allowance_pct"] = 0.0
+        risk["total_exposure_entry_gate_enabled"] = False
+        risk["position_exposure_enforcer_enabled"] = False
+        risk["total_exposure_enforcer_enabled"] = False
+        config["bot"][side]["hsl"]["enabled"] = False
+        config["bot"][side]["unstuck"]["enabled"] = False
+
+    side_overrides = {}
+    candidate = {}
+    for side in enabled_sides:
+        if strategy_kind == "ema_anchor":
+            strategy = config["bot"][side]["strategy"]["ema_anchor"]
+            strategy.update(
+                {
+                    "base_qty_pct": 0.1,
+                    "ema_span_0": 2.0,
+                    "ema_span_1": 3.0,
+                    "entry_double_down_factor": 0.0,
+                    "offset": 0.4,
+                    "offset_psize_weight": 0.0,
+                }
+            )
+            strategy_patch = {"offset": 0.01}
+            candidate[f"{side}_offset"] = 0.4
+            locked_key = "offset"
+            locked_value = 0.01
+        else:
+            strategy = config["bot"][side]["strategy"][
+                "trailing_martingale"
+            ]
+            strategy["ema_span_0"] = 2.0
+            strategy["ema_span_1"] = 3.0
+            strategy["entry"]["initial_qty_pct"] = 0.1
+            strategy["entry"]["initial_ema_dist"] = 0.4
+            strategy["entry"]["double_down_factor"] = 0.0
+            strategy["close"]["threshold_base_pct"] = 0.01
+            strategy_patch = {
+                "entry": {"initial_ema_dist": 0.01},
+            }
+            candidate[f"{side}_entry_initial_ema_dist"] = 0.4
+            locked_key = "entry_initial_ema_dist"
+            locked_value = 0.01
+        candidate[f"{side}_entry_cooldown_minutes"] = 0.0
+        candidate[f"{side}_total_wallet_exposure_limit"] = 0.9
+        candidate[f"{side}_we_excess_allowance_pct"] = 0.0
+        candidate[f"{side}_unstuck_close_pct"] = 0.9
+        candidate[f"{side}_hsl_red_threshold"] = 0.8
+        risk_patch = {
+            "entry_cooldown_minutes": 1_000.0,
+            "we_excess_allowance_pct": 0.25,
+        }
+        if strategy_kind == "trailing_martingale":
+            risk_patch.update(
+                {
+                    "position_exposure_enforcer_enabled": False,
+                    "position_exposure_enforcer_threshold": 0.7,
+                }
+            )
+            candidate[f"{side}_wel_enforcer_enabled"] = 1.0
+            candidate[f"{side}_wel_enforcer_threshold"] = 0.9
+        side_overrides[side] = {
+            "strategy": {strategy_kind: strategy_patch},
+            "risk": risk_patch,
+            "wallet_exposure_limit": 0.4,
+            "unstuck": {"close_pct": 0.2},
+            "hsl": {"red_threshold": 0.2},
+        }
+    config["coin_overrides"] = {"ETH": {"bot": side_overrides}}
+
+    proxy = MpsSingleCoinProxy(
+        config=config,
+        hlcvs=hlcvs,
+        mss=market_settings,
+        btc=np.full(count, 50_000.0),
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=1,
+        needed_metrics={"fills_count"},
+    )
+    parameter_matrix = proxy._parameter_matrix([candidate])
+    side_width = len(proxy.param_keys)
+    for side in enabled_sides:
+        side_offset = 0 if side == "long" else side_width
+        assert parameter_matrix[
+            0, side_offset + proxy.param_keys.index(locked_key)
+        ] == pytest.approx(locked_value)
+        assert parameter_matrix[
+            0, side_offset + proxy.param_keys.index("entry_cooldown_minutes")
+        ] == pytest.approx(1_000.0)
+        assert parameter_matrix[
+            0,
+            side_offset
+            + proxy.param_keys.index("total_wallet_exposure_limit"),
+        ] == pytest.approx(0.9)
+        assert parameter_matrix[
+            0,
+            side_offset
+            + proxy.param_keys.index("wallet_exposure_limit"),
+        ] == pytest.approx(0.4)
+        assert parameter_matrix[
+            0, side_offset + proxy.param_keys.index("we_excess_allowance_pct")
+        ] == pytest.approx(0.25)
+        assert parameter_matrix[
+            0, side_offset + proxy.param_keys.index("unstuck_close_pct")
+        ] == pytest.approx(0.2)
+        assert parameter_matrix[
+            0, side_offset + proxy.param_keys.index("hsl_red_threshold")
+        ] == pytest.approx(0.2)
+        if strategy_kind == "trailing_martingale":
+            assert parameter_matrix[
+                0, side_offset + proxy.param_keys.index("wel_enforcer_enabled")
+            ] == pytest.approx(0.0)
+            assert parameter_matrix[
+                0, side_offset + proxy.param_keys.index("wel_enforcer_threshold")
+            ] == pytest.approx(0.7)
+
+    result = proxy.evaluate([candidate])[0]
+    _, _, exact_analysis = run_backtest(
+        hlcvs,
+        market_settings,
+        config,
+        "bybit",
+        np.full(count, 50_000.0),
+        timestamps,
+    )
+
+    assert result["fills_count"] > 0.0
+    fill_count_drift = abs(
+        result["fills_count"] - exact_analysis["fills_count"]
+    )
+    # TM's float32 screening path may cross one recursive fill boundary that
+    # exact Rust's float64 path does not. The exact optimizer validation remains
+    # authoritative; this matrix is proving override dispatch and bounded drift.
+    assert fill_count_drift <= (
+        0.0 if strategy_kind == "ema_anchor" else 1.0
+    )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("topology", ["long", "short", "fused"])
 def test_mps_multicoin_service_dispatches_forced_delist_tail(
     strategy_kind, topology
@@ -5006,6 +5300,8 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
         batch_size=1,
         needed_metrics={"fills_active_symbols_count"},
     )
+    for side in enabled_sides:
+        assert proxy.base_params[side]["entry_cooldown_minutes"] == 100.0
     result = proxy.evaluate([{}])[0]
     _, _, exact_analysis = run_backtest(
         hlcvs,
@@ -7578,7 +7874,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 34" in source
+    assert "constant int SIDE_PARAMS = 35" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -11435,7 +11731,7 @@ def _tm_single_row(
         unstuck_ema_dist=unstuck_ema_dist,
         unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
         unstuck_threshold=unstuck_threshold,
-    )
+    ) + [-1.0]
 
 
 @pytest.mark.skipif(
@@ -18655,7 +18951,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 51" in source
+    assert "constant int SIDE_PARAMS = 52" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source

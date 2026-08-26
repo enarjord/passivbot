@@ -301,6 +301,7 @@ EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     *UNSTUCK_PARAM_KEYS,
     *HSL_PARAM_KEYS,
+    "wallet_exposure_limit",
 )
 
 EMA_ANCHOR_MULTICOIN_PARAM_KEYS = (
@@ -355,6 +356,7 @@ TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS = (
     *TOTAL_EXPOSURE_ENFORCER_PARAM_KEYS,
     *UNSTUCK_PARAM_KEYS,
     *HSL_PARAM_KEYS,
+    "wallet_exposure_limit",
 )
 
 TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
@@ -499,7 +501,11 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
         "volatility_ema_span_1h": strategy.get("volatility_ema_span_1h"),
         "volatility_ema_span_1m": strategy.get("volatility_ema_span_1m"),
         "entry_cooldown_minutes": float(
-            risk.get("entry_cooldown_minutes", 0.0) or 0.0
+            risk.get(
+                "risk_entry_cooldown_minutes",
+                risk.get("entry_cooldown_minutes", 0.0),
+            )
+            or 0.0
         ),
         "total_wallet_exposure_limit": float(
             risk["total_wallet_exposure_limit"]

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports the same
+  modeled static `coin_overrides` leaves as multi-coin runs. Static values retain exact Rust's
+  last-write precedence over optimizer candidates for long-only, short-only, hedge-mode, and
+  one-way runs. Multi-coin base rows and per-coin override rows now also read the canonical risk
+  entry-cooldown payload key, preserving configured and overridden cooldowns in GPU screening.
+
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports
   `coin_overrides.<coin>.live.forced_mode_<side>: normal` for every enabled side. Long-only,
   short-only, and fused long+short kernels reserve eligible forced-normal symbols before Forager

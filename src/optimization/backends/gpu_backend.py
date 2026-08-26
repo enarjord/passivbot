@@ -1242,13 +1242,13 @@ def _validate_gpu_coin_overrides(
     if not overrides:
         return
     if (
-        coin_count <= 1
+        coin_count < 1
         or strategy_kind not in {"ema_anchor", "trailing_martingale"}
         or not enabled_sides
     ):
         raise ValueError(
-            "GPU coin_overrides currently require a supported multi-coin strategy "
-            "with at least one enabled side"
+            "GPU coin_overrides require a prepared supported strategy with at "
+            "least one enabled side"
         )
     enabled_sides = set(enabled_sides)
     from optimization.gpu.model import (
@@ -1344,8 +1344,9 @@ def _validate_gpu_coin_overrides(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
         fused_dual_side = len(enabled_sides) == 2
-        if signal_mode != "coin" or not (
-            len(enabled_sides) == 1 or fused_dual_side
+        if coin_count > 1 and (
+            signal_mode != "coin"
+            or not (len(enabled_sides) == 1 or fused_dual_side)
         ):
             raise ValueError(
                 "GPU per-coin HSL overrides require live.hsl_signal_mode=coin "

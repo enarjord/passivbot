@@ -12,7 +12,7 @@ constant int SCALAR_COLS = 68;
 constant int SCALAR_COLS = 66;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 34;
+constant int SIDE_PARAMS = 35;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -287,9 +287,16 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.twel = params[po + 11];
     float allowance_pct = fmax(params[po + 12], 0.0f);
     bool legacy_raw_allowance = params[po + 13] > 0.5f;
-    side.allowed_wel = side.twel * (
-        1.0f + (legacy_raw_allowance ? allowance_pct : 0.0f)
-    );
+    float base_wel = params[po + 34];
+    if (!(isfinite(base_wel) && base_wel >= 0.0f)) base_wel = side.twel;
+    float effective_allowance_pct = allowance_pct;
+    if (!legacy_raw_allowance) {
+        float max_effective = base_wel > 0.0f
+            ? fmax(side.twel / base_wel - 1.0f, 0.0f) : 0.0f;
+        effective_allowance_pct = fmin(allowance_pct, max_effective);
+    }
+    side.allowed_wel = base_wel > 0.0f
+        ? base_wel * (1.0f + effective_allowance_pct) : 0.0f;
     bool twel_entry_gate_enabled = params[po + 14] > 0.5f;
     float twel_threshold = params[po + 15];
     float gate_cap = side.twel;

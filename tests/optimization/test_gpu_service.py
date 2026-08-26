@@ -1658,6 +1658,37 @@ def test_directional_parameter_matrix_keeps_side_values_separate():
     assert matrix[0, len(EMA_ANCHOR_PARAM_KEYS) + offset_index] == 0.25
 
 
+def test_single_coin_static_overrides_shadow_candidate_values_exact_last():
+    proxy = MpsEmaAnchorProxy.__new__(MpsEmaAnchorProxy)
+    proxy.base_params = {
+        "long": {key: 1.0 for key in EMA_ANCHOR_PARAM_KEYS},
+        "short": {key: 2.0 for key in EMA_ANCHOR_PARAM_KEYS},
+    }
+    proxy.param_keys = EMA_ANCHOR_PARAM_KEYS
+    proxy.static_coin_override_params = {
+        "long": {"offset": 0.125, "entry_cooldown_minutes": 37.0},
+        "short": {},
+    }
+
+    matrix = proxy._parameter_matrix(
+        [
+            {
+                "long_offset": 0.5,
+                "long_entry_cooldown_minutes": 5.0,
+                "short_offset": 0.25,
+            }
+        ]
+    )
+
+    offset_index = EMA_ANCHOR_PARAM_KEYS.index("offset")
+    cooldown_index = EMA_ANCHOR_PARAM_KEYS.index("entry_cooldown_minutes")
+    assert matrix[0, offset_index] == pytest.approx(0.125)
+    assert matrix[0, cooldown_index] == pytest.approx(37.0)
+    assert matrix[0, len(EMA_ANCHOR_PARAM_KEYS) + offset_index] == pytest.approx(
+        0.25
+    )
+
+
 @pytest.mark.parametrize(("side", "base"), [("long", 1.0), ("short", 2.0)])
 def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
@@ -2010,10 +2041,15 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
             {"long": strategy_override},
         ],
         bot_params_list=[
-            {"long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0}},
             {
                 "long": {
-                    "entry_cooldown_minutes": 15.0,
+                    "risk_entry_cooldown_minutes": 0.0,
+                    "wallet_exposure_limit": -1.0,
+                }
+            },
+            {
+                "long": {
+                    "risk_entry_cooldown_minutes": 15.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
                     "unstuck_enabled": True,
@@ -2155,12 +2191,24 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
         ],
         bot_params_list=[
             {
-                "long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0},
-                "short": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": -1.0},
+                "long": {
+                    "risk_entry_cooldown_minutes": 0.0,
+                    "wallet_exposure_limit": -1.0,
+                },
+                "short": {
+                    "risk_entry_cooldown_minutes": 0.0,
+                    "wallet_exposure_limit": -1.0,
+                },
             },
             {
-                "long": {"entry_cooldown_minutes": 0.0, "wallet_exposure_limit": 0.4},
-                "short": {"entry_cooldown_minutes": 30.0, "wallet_exposure_limit": -1.0},
+                "long": {
+                    "risk_entry_cooldown_minutes": 0.0,
+                    "wallet_exposure_limit": 0.4,
+                },
+                "short": {
+                    "risk_entry_cooldown_minutes": 30.0,
+                    "wallet_exposure_limit": -1.0,
+                },
             },
         ],
     )
@@ -2421,14 +2469,14 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         bot_params_list=[
             {
                 "long": {
-                    "entry_cooldown_minutes": 0.0,
+                    "risk_entry_cooldown_minutes": 0.0,
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": -1.0,
                 }
             },
             {
                 "long": {
-                    "entry_cooldown_minutes": 15.0,
+                    "risk_entry_cooldown_minutes": 15.0,
                     "total_wallet_exposure_limit": 1.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
@@ -2639,3 +2687,30 @@ def test_trailing_martingale_flattening_rejects_unknown_gate_mode():
             },
             {"total_wallet_exposure_limit": 1.0},
         )
+
+
+def test_trailing_martingale_flattening_reads_canonical_payload_cooldown():
+    strategy = {
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "volatility_ema_span_1h": 30.0,
+        "volatility_ema_span_1m": 40.0,
+        "entry": {"ema_gate_mode": "all"},
+        "close": {},
+    }
+    for key in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS:
+        _name, path = key
+        target = strategy
+        for part in path[:-1]:
+            target = target.setdefault(part, {})
+        target.setdefault(path[-1], 0.1)
+
+    flattened = flatten_trailing_martingale_params(
+        strategy,
+        {
+            "risk_entry_cooldown_minutes": 37.0,
+            "total_wallet_exposure_limit": 1.5,
+        },
+    )
+
+    assert flattened["entry_cooldown_minutes"] == 37.0

@@ -2696,14 +2696,31 @@ def test_gpu_multicoin_coin_hsl_overrides_accept_fused_dual_side(
     )
 
 
-def test_gpu_coin_overrides_reject_single_coin_scope():
+def test_gpu_coin_overrides_accept_single_coin_scope():
     config = _long_only_ema_config()
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"wallet_exposure_limit": 0.5}}}
     }
 
-    with pytest.raises(ValueError, match="require a supported multi-coin strategy"):
-        _validate_scope(config, _Evaluator())
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize("signal_mode", ["unified", "pside", "coin"])
+def test_gpu_single_coin_accepts_hsl_coin_override_for_every_signal_mode(
+    signal_mode,
+):
+    config = _long_only_ema_config()
+    config["live"]["hsl_signal_mode"] = signal_mode
+    config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"hsl": {"red_threshold": 0.2}}}}
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind="ema_anchor",
+        enabled_sides=["long"],
+        coin_count=1,
+    )
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
