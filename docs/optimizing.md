@@ -491,13 +491,15 @@ position-unchanged duration, initial-entry balance percentage for each side, vol
 total-wallet-exposure maximum and mean, USD exposure ratios, backtest completion, and weighted
 variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and Sterling. With BTC collateral disabled,
 the corresponding canonical USD account-equity names share this strategy-equity surface. The GPU
-proxy also supports the BTC-denominated equivalents of that existing account-equity surface:
-gain, ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
-drawdown, equity shape, exposure ratios, peak recovery, per-side exposure-normalized gain/ADG/MDG,
-and their existing weighted variants. It converts the compact USD daily closing-equity surface
-with the canonical prepared BTC/USD price at each UTC day end. Intraday daily minima use the day's
-maximum BTC price as a conservative screening envelope, and BTC drawdown and recovery are compact
-daily approximations. Mandatory exact Rust validation and rolling drift gates remain authoritative.
+proxy also supports BTC-denominated gain, ADG, MDG, Omega, equity shape, unweighted exposure
+ratios, peak recovery, per-side exposure-normalized gain/ADG/MDG, and the existing weighted
+ADG/MDG/Omega and equity-shape variants. It converts the compact USD daily closing-equity surface
+with the canonical prepared BTC/USD price at each UTC day end, including a candidate-specific
+final endpoint after early liquidation. BTC peak recovery remains a compact daily approximation;
+mandatory exact Rust validation and rolling drift gates remain authoritative. BTC Sharpe, Sortino,
+expected shortfall, drawdown, Calmar, and Sterling require synchronized intraday BTC-equity minima,
+while weighted BTC exposure ratios require suffix-local exposure series. Those metrics remain
+fail-closed until the proxy retains those surfaces.
 The prepared BTC series must contain at least one sample in every covered UTC day; unusually coarse
 intervals which skip a whole UTC day fail closed for BTC scoring.
 Positive `backtest.btc_collateral_cap` remains unsupported and fails before GPU optimization.

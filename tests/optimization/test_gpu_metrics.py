@@ -1621,13 +1621,11 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
     }
     requested = {
         "adg_btc",
-        "drawdown_worst_btc",
         "gain_btc",
         "gain_per_exposure_long_btc",
         "peak_recovery_days_equity_btc",
     }
     btc_day_end = np.array([10.0, 10.0, 20.0])
-    btc_day_max = np.array([10.0, 10.0, 20.0])
 
     metrics = compute_objectives(
         out,
@@ -1640,7 +1638,6 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
             "ts0": 0.0,
             "n": 3,
             "btc_day_end_price": btc_day_end,
-            "btc_day_max_price": btc_day_max,
             "btc_prices": btc_day_end,
         },
         needed=requested,
@@ -1654,9 +1651,6 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
     assert requested <= set(SUPPORTED_METRICS)
     assert metrics["gain_btc"].item() == pytest.approx(expected_gain.item())
     assert metrics["adg_btc"].item() == pytest.approx(expected_adg.item())
-    assert metrics["drawdown_worst_btc"].item() == pytest.approx(
-        (11.0 - 4.5) / 11.0
-    )
     assert metrics["gain_per_exposure_long_btc"].item() == pytest.approx(
         expected_gain.item() / 1.25
     )
@@ -1736,7 +1730,6 @@ def test_btc_account_metrics_use_candidate_liquidation_endpoint_price():
             "ts0": 0,
             "n": len(btc_prices),
             "btc_day_end_price": np.array([10.0, 40.0]),
-            "btc_day_max_price": np.array([10.0, 40.0]),
             "btc_prices": btc_prices,
         },
         needed={"gain_btc"},

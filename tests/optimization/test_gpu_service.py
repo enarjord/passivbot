@@ -207,7 +207,6 @@ def test_btc_daily_price_context_matches_proxy_utc_day_grid():
     )
 
     assert context["btc_day_end_price"].tolist() == [12.0, 20.0]
-    assert context["btc_day_max_price"].tolist() == [12.0, 20.0]
 
 
 @pytest.mark.parametrize(

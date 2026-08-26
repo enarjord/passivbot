@@ -161,7 +161,6 @@ def _btc_daily_price_context(
             "MPS BTC analysis day grid disagrees with the prepared proxy timeline"
         )
     day_end = np.full(int(expected_days), np.nan, dtype=np.float64)
-    day_max = np.full(int(expected_days), np.nan, dtype=np.float64)
     for day in range(int(expected_days)):
         values = btc[day_idx == day]
         if len(values) == 0:
@@ -169,10 +168,8 @@ def _btc_daily_price_context(
                 f"MPS BTC analysis is missing prepared prices for UTC day {day}"
             )
         day_end[day] = values[-1]
-        day_max[day] = values.max()
     return {
         "btc_day_end_price": day_end,
-        "btc_day_max_price": day_max,
     }
 
 

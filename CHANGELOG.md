@@ -7,11 +7,13 @@ All notable user-facing changes will be documented in this file.
 - Apple MPS single- and multi-coin EMA Anchor and Trailing Martingale optimization now accepts
   BTC-denominated account-equity scoring and limits while `backtest.btc_collateral_cap` is zero.
   The proxy converts its compact USD daily equity surface with the canonical prepared BTC/USD
-  series and supports the existing gain, return/risk, drawdown, equity-shape, exposure-ratio,
-  recovery, per-exposure, and weighted BTC metric surface. UTC day-end conversion is exact for the
-  compact surface; intraday minima use a conservative daily BTC-price envelope and drawdown and
-  recovery remain compact daily approximations under mandatory exact Rust validation and rolling
-  drift gates. BTC inputs enter checkpoint identity only when a BTC metric is requested, so USD-only
+  series and supports gain, ADG, MDG, Omega, equity shape, unweighted exposure ratios, peak
+  recovery, per-exposure forms, and the corresponding safe weighted close-equity variants. UTC
+  day-end conversion is exact for the compact surface, including candidate-specific liquidation
+  endpoints; recovery remains a compact daily approximation under mandatory exact Rust validation
+  and rolling drift gates. Intraday-risk metrics and weighted exposure ratios remain fail-closed
+  until Metal retains their required synchronized surfaces. BTC inputs enter checkpoint identity
+  only when a BTC metric is requested, so USD-only
   runs retain their previous dispatch and reduction cost. Positive BTC collateral remains
   fail-closed pending its separate simulation slice.
 

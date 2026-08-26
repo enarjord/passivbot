@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from config.metrics import canonicalize_metric_name
 from config.schema import get_template_config
 from optimizer_overrides import optimizer_overrides
 from optimization.bounds import Bound
@@ -84,6 +85,7 @@ from optimization.backends.gpu_backend import (
     TRAILING_MARTINGALE_BOUND_MAP,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
+from optimization.gpu.metrics import SUPPORTED_METRICS
 from optimization.warmup import build_optimizer_vector_config
 
 
@@ -3206,10 +3208,9 @@ def test_gpu_foundation_accepts_weighted_daily_series_metrics(metric, goal):
     ("metric", "goal"),
     [
         ("adg_btc", "max"),
-        ("drawdown_worst_btc", "min"),
         ("gain_per_exposure_long_btc", "max"),
         ("peak_recovery_days_equity_btc", "min"),
-        ("sortino_ratio_w_btc", "max"),
+        ("omega_ratio_w_btc", "max"),
     ],
 )
 def test_gpu_foundation_accepts_btc_account_metrics_without_collateral(
@@ -3220,6 +3221,23 @@ def test_gpu_foundation_accepts_btc_account_metrics_without_collateral(
     config["optimize"]["scoring"] = [{"goal": goal, "metric": metric}]
 
     assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
+        "drawdown_worst_btc",
+        "expected_shortfall_1pct_btc",
+        "sharpe_ratio_btc",
+        "sortino_ratio_w_btc",
+        "calmar_ratio_btc",
+        "sterling_ratio_w_btc",
+        "exposure_ratio_w_btc",
+        "exposure_mean_ratio_w_btc",
+    ],
+)
+def test_gpu_foundation_excludes_btc_metrics_without_safe_proxy_surface(metric):
+    assert canonicalize_metric_name(metric) not in SUPPORTED_METRICS
 
 
 @pytest.mark.parametrize(
