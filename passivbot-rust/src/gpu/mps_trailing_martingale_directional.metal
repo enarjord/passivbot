@@ -201,6 +201,8 @@ inline bool realized_loss_proxy_allows_reducer(
 
 // PASSIVBOT_BTC_RISK_COMMON
 
+// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON
+
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
@@ -1721,8 +1723,11 @@ inline void passivbot_single_coin_impl(
     constant float* params,
     constant float* settings,
     constant int* sizes,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -1857,6 +1862,10 @@ inline void passivbot_single_coin_impl(
     bool eq_started = false;
 #if PASSIVBOT_BTC_RISK_ENABLED
     BtcRiskState btc_risk = init_btc_risk_state();
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    EquityBalanceDiffState equity_balance_diff_state =
+        init_equity_balance_diff_state();
 #endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
@@ -3954,6 +3963,12 @@ inline void passivbot_single_coin_impl(
 #if PASSIVBOT_BTC_RISK_ENABLED
             update_btc_risk_state(btc_risk, eqf, btc_prices[k]);
 #endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+            update_equity_balance_diff_state(
+                equity_balance_diff_state, balance, eqf, btc_prices, k,
+                starting_balance, any_fill
+            );
+#endif
             day_touched = true;
             if (!liq) {
                 float twe_net = (
@@ -4147,6 +4162,11 @@ inline void passivbot_single_coin_impl(
         short_hsl_strategy_eq
     );
 #endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    write_equity_balance_diff_state(
+        equity_balance_diff_state, equity_balance_diff, b
+    );
+#endif
 }
 
 kernel void passivbot_trailing_martingale(
@@ -4155,8 +4175,11 @@ kernel void passivbot_trailing_martingale(
     constant float* params,
     constant float* settings,
     constant int* sizes,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -4170,8 +4193,11 @@ kernel void passivbot_trailing_martingale(
 ) {
     passivbot_single_coin_impl(
         bars, flags, params, settings, sizes,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff,
 #endif
         daily, scalars, gap_hist,
         rolling_pnl_values, rolling_pnl_indices,

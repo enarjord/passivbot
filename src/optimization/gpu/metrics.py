@@ -77,7 +77,24 @@ BTC_INTRADAY_RISK_METRICS = frozenset(
     }
 )
 
+EQUITY_BALANCE_DIFF_METRICS = frozenset(
+    {
+        f"equity_balance_diff_{sign}_{stat}_{currency}"
+        for sign in ("neg", "pos")
+        for stat in ("max", "mean")
+        for currency in ("btc", "usd")
+    }
+    | {
+        f"paper_loss{middle}_ratio_{currency}"
+        for middle in ("", "_mean")
+        for currency in ("btc", "usd")
+    }
+)
+
 _BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
+_BTC_ACCOUNT_METRICS.update(
+    metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_btc")
+)
 
 _BTC_PER_EXPOSURE_METRICS = {
     f"{metric}_per_exposure_{side}_btc"
@@ -226,6 +243,11 @@ SUPPORTED_METRICS = (
     *_USD_STRATEGY_EQ_ALIASES,
     *_USD_PER_EXPOSURE_METRICS,
     *sorted(BTC_ACCOUNT_METRICS),
+    *sorted(
+        metric
+        for metric in EQUITY_BALANCE_DIFF_METRICS
+        if metric.endswith("_usd")
+    ),
 )
 
 # Metrics backed by additional per-fill aggregates emitted by Metal.
@@ -1564,6 +1586,28 @@ def _daily_peak_recovery_ms(day_end_eq, active):
     )
 
 
+def _equity_balance_diff_values(out: dict, *, suffix: str = "") -> dict:
+    base_names = (
+        "equity_balance_diff_pos_max",
+        "equity_balance_diff_pos_mean",
+        "equity_balance_diff_neg_max",
+        "equity_balance_diff_neg_mean",
+    )
+    names = tuple(f"{name}{suffix}" for name in base_names)
+    missing = [name for name in names if name not in out]
+    if missing:
+        raise RuntimeError(
+            "MPS equity-balance-diff output is missing " + ", ".join(missing)
+        )
+    values = {
+        base_name: out[name].to(torch.float64)
+        for base_name, name in zip(base_names, names)
+    }
+    if any(not bool(torch.isfinite(value).all()) for value in values.values()):
+        raise RuntimeError("MPS equity-balance-diff output is non-finite")
+    return values
+
+
 def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
     """Reduce the compact USD strategy-equity surface into BTC account metrics.
 
@@ -1670,6 +1714,21 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "mdg_btc": mdg,
         "omega_ratio_btc": omega,
     }
+    btc_equity_balance_metrics = {
+        metric
+        for metric in EQUITY_BALANCE_DIFF_METRICS
+        if metric.endswith("_btc")
+    }
+    if requested & btc_equity_balance_metrics:
+        differences = _equity_balance_diff_values(out, suffix="_btc")
+        for name, value in differences.items():
+            values[f"{name}_btc"] = value
+        values["paper_loss_ratio_btc"] = adg / differences[
+            "equity_balance_diff_neg_max"
+        ].clamp(min=1e-12)
+        values["paper_loss_mean_ratio_btc"] = adg / differences[
+            "equity_balance_diff_neg_mean"
+        ].clamp(min=1e-12)
     if risk_requested:
         _risk_gain, risk_adg = _smoothed_gain_adg(risk_day_end_btc, active)
         min_changes, min_change_mask = _pct_change(risk_day_min_btc, active)
@@ -1699,8 +1758,17 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "drawdown_worst_btc",
         "drawdown_worst_mean_1pct_btc",
     }
+    equity_balance_diff_defaults = {
+        f"equity_balance_diff_{sign}_{stat}_btc"
+        for sign in ("neg", "pos")
+        for stat in ("max", "mean")
+    }
     for name in tuple(values):
-        default = torch.ones_like(adg) if name in drawdown_defaults else zeros
+        default = (
+            torch.ones_like(adg)
+            if name in drawdown_defaults | equity_balance_diff_defaults
+            else zeros
+        )
         values[name] = torch.where(has_fill, values[name], default)
 
     shape_names = {
@@ -2112,6 +2180,30 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "strategy_eq_underwater_pct_median": underwater_median,
         "volume_pct_per_day_avg": volume_pct,
     }
+    usd_equity_balance_metrics = {
+        metric
+        for metric in EQUITY_BALANCE_DIFF_METRICS
+        if metric.endswith("_usd")
+    }
+    if requested & usd_equity_balance_metrics:
+        differences = _equity_balance_diff_values(out)
+        has_fills = out["fill_count"].to(torch.float64) > 0.0
+        for name, value in differences.items():
+            objectives[f"{name}_usd"] = torch.where(
+                has_fills, value, torch.ones_like(value)
+            )
+        objectives["paper_loss_ratio_usd"] = torch.where(
+            has_fills,
+            adg
+            / differences["equity_balance_diff_neg_max"].clamp(min=1e-12),
+            torch.zeros_like(adg),
+        )
+        objectives["paper_loss_mean_ratio_usd"] = torch.where(
+            has_fills,
+            adg
+            / differences["equity_balance_diff_neg_mean"].clamp(min=1e-12),
+            torch.zeros_like(adg),
+        )
     objectives.update(hard_stop_ema_drawdown_metrics)
     objectives.update(hard_stop_raw_drawdown_metrics)
     objectives.update(hard_stop_ema_tail_metrics)

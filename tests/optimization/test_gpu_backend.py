@@ -3261,6 +3261,31 @@ def test_gpu_foundation_accepts_synchronized_btc_risk_metrics(metric, goal):
 
 
 @pytest.mark.parametrize(
+    ("metric", "goal"),
+    [
+        ("equity_balance_diff_neg_max_usd", "min"),
+        ("equity_balance_diff_neg_mean_usd", "min"),
+        ("equity_balance_diff_pos_max_usd", "max"),
+        ("equity_balance_diff_pos_mean_usd", "max"),
+        ("paper_loss_ratio_usd", "max"),
+        ("paper_loss_mean_ratio_usd", "max"),
+        ("equity_balance_diff_neg_max_btc", "min"),
+        ("equity_balance_diff_neg_mean_btc", "min"),
+        ("equity_balance_diff_pos_max_btc", "max"),
+        ("equity_balance_diff_pos_mean_btc", "max"),
+        ("paper_loss_ratio_btc", "max"),
+        ("paper_loss_mean_ratio_btc", "max"),
+    ],
+)
+def test_gpu_foundation_accepts_equity_balance_diff_metrics(metric, goal):
+    config = _long_only_ema_config()
+    config["backtest"]["btc_collateral_cap"] = 0.0
+    config["optimize"]["scoring"] = [{"goal": goal, "metric": metric}]
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
     "metric",
     [
         "entry_initial_balance_pct_long",

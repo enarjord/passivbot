@@ -111,6 +111,180 @@ def test_directional_pnl_metrics_match_rust_neutral_and_alias_contracts():
     assert set(metrics) <= set(SUPPORTED_METRICS)
 
 
+def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
+    day_end = torch.tensor([[100.0, 110.0, 121.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
+        "fill_count": torch.tensor([2.0]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([2 * 86_400_000.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([2 * 86_400_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([2 * 86_400_000.0]),
+        "liq_step": torch.tensor([-1]),
+        "equity_balance_diff_pos_max": torch.tensor([0.20]),
+        "equity_balance_diff_pos_mean": torch.tensor([0.10]),
+        "equity_balance_diff_neg_max": torch.tensor([0.30]),
+        "equity_balance_diff_neg_mean": torch.tensor([0.15]),
+        "equity_balance_diff_pos_max_btc": torch.tensor([0.25]),
+        "equity_balance_diff_pos_mean_btc": torch.tensor([0.125]),
+        "equity_balance_diff_neg_max_btc": torch.tensor([0.35]),
+        "equity_balance_diff_neg_mean_btc": torch.tensor([0.175]),
+    }
+    requested = {
+        f"equity_balance_diff_{sign}_{stat}_{currency}"
+        for sign in ("neg", "pos")
+        for stat in ("max", "mean")
+        for currency in ("btc", "usd")
+    } | {
+        f"paper_loss{middle}_ratio_{currency}"
+        for middle in ("", "_mean")
+        for currency in ("btc", "usd")
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=86_400_000,
+        ),
+        {
+            "ts0": 0.0,
+            "n": 3,
+            "btc_day_end_price": np.ones(3),
+            "btc_prices": np.ones(3),
+        },
+        needed=requested,
+    )
+
+    _gain, adg = _smoothed_gain_adg(
+        day_end, torch.ones_like(day_end, dtype=torch.bool)
+    )
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    expected_differences = {
+        "usd": (0.20, 0.10, 0.30, 0.15),
+        "btc": (0.25, 0.125, 0.35, 0.175),
+    }
+    for currency, (pos_max, pos_mean, neg_max, neg_mean) in expected_differences.items():
+        assert metrics[f"equity_balance_diff_pos_max_{currency}"].item() == pytest.approx(pos_max)
+        assert metrics[f"equity_balance_diff_pos_mean_{currency}"].item() == pytest.approx(pos_mean)
+        assert metrics[f"equity_balance_diff_neg_max_{currency}"].item() == pytest.approx(neg_max)
+        assert metrics[f"equity_balance_diff_neg_mean_{currency}"].item() == pytest.approx(neg_mean)
+        assert metrics[f"paper_loss_ratio_{currency}"].item() == pytest.approx(
+            adg.item() / neg_max
+        )
+        assert metrics[f"paper_loss_mean_ratio_{currency}"].item() == pytest.approx(
+            adg.item() / neg_mean
+        )
+
+
+def test_equity_balance_diff_metrics_fail_closed_without_metal_output():
+    day_end = torch.tensor([[100.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
+        "fill_count": torch.zeros(1),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.full((1,), float("nan")),
+        "last_fill_ts": torch.full((1,), float("nan")),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([0.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([0.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+
+    with pytest.raises(RuntimeError, match="equity-balance-diff output is missing"):
+        compute_objectives(
+            out,
+            SimpleNamespace(
+                requested_start_ts_ms=0,
+                guard_ts_ms=0,
+                interval_ms=60_000,
+            ),
+            {"ts0": 0.0, "n": 1},
+            needed={"paper_loss_ratio_usd"},
+        )
+
+
+def test_equity_balance_diff_metrics_use_rust_defaults_without_fills():
+    day_end = torch.tensor([[100.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
+        "fill_count": torch.zeros(1),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.full((1,), float("nan")),
+        "last_fill_ts": torch.full((1,), float("nan")),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([0.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([0.0]),
+        "liq_step": torch.tensor([-1]),
+        "equity_balance_diff_pos_max": torch.zeros(1),
+        "equity_balance_diff_pos_mean": torch.zeros(1),
+        "equity_balance_diff_neg_max": torch.zeros(1),
+        "equity_balance_diff_neg_mean": torch.zeros(1),
+        "equity_balance_diff_pos_max_btc": torch.zeros(1),
+        "equity_balance_diff_pos_mean_btc": torch.zeros(1),
+        "equity_balance_diff_neg_max_btc": torch.zeros(1),
+        "equity_balance_diff_neg_mean_btc": torch.zeros(1),
+    }
+    requested = {
+        f"equity_balance_diff_{sign}_{stat}_{currency}"
+        for sign in ("neg", "pos")
+        for stat in ("max", "mean")
+        for currency in ("btc", "usd")
+    } | {
+        f"paper_loss{middle}_ratio_{currency}"
+        for middle in ("", "_mean")
+        for currency in ("btc", "usd")
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=60_000,
+        ),
+        {
+            "ts0": 0.0,
+            "n": 1,
+            "btc_day_end_price": np.ones(1),
+            "btc_prices": np.ones(1),
+        },
+        needed=requested,
+    )
+
+    for name in requested:
+        expected = 0.0 if name.startswith("paper_loss") else 1.0
+        assert metrics[name].item() == expected
+
+
 def test_equity_shape_metrics_match_rust_daily_series_contract():
     day_eq = torch.tensor(
         [

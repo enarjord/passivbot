@@ -54,6 +54,14 @@ CORE_OUTPUT_KEYS = {
     "btc_day_end_eq",
     "btc_day_min_eq",
     "btc_day_max_dd",
+    "equity_balance_diff_neg_max",
+    "equity_balance_diff_neg_mean",
+    "equity_balance_diff_pos_max",
+    "equity_balance_diff_pos_mean",
+    "equity_balance_diff_neg_max_btc",
+    "equity_balance_diff_neg_mean_btc",
+    "equity_balance_diff_pos_max_btc",
+    "equity_balance_diff_pos_mean_btc",
     "day_end_eq",
     "day_min_eq",
     "day_max_dd",
@@ -1331,6 +1339,7 @@ class MpsSingleCoinProxy:
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
+            EQUITY_BALANCE_DIFF_METRICS,
             compute_objectives,
         )
         from optimization.gpu.mps_kernel import (
@@ -1346,6 +1355,9 @@ class MpsSingleCoinProxy:
         )
         self.btc_risk_enabled = bool(
             self.needed_metrics & BTC_INTRADAY_RISK_METRICS
+        )
+        self.equity_balance_diff_enabled = bool(
+            self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -1643,7 +1655,13 @@ class MpsSingleCoinProxy:
             recovery_distribution_enabled=bool(
                 self.needed_metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
-            btc_prices=btc_values if self.btc_risk_enabled else None,
+            btc_prices=(
+                btc_values
+                if self.btc_risk_enabled or self.equity_balance_diff_enabled
+                else None
+            ),
+            btc_risk_enabled=self.btc_risk_enabled,
+            equity_balance_diff_enabled=self.equity_balance_diff_enabled,
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -2156,6 +2174,7 @@ class MpsMulticoinProxy:
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
+            EQUITY_BALANCE_DIFF_METRICS,
             compute_objectives,
         )
         from optimization.gpu.mps_kernel import (
@@ -2173,6 +2192,9 @@ class MpsMulticoinProxy:
         )
         self.btc_risk_enabled = bool(
             self.needed_metrics & BTC_INTRADAY_RISK_METRICS
+        )
+        self.equity_balance_diff_enabled = bool(
+            self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -2610,7 +2632,13 @@ class MpsMulticoinProxy:
                 & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
             "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
-            "btc_prices": btc_values if self.btc_risk_enabled else None,
+            "btc_prices": (
+                btc_values
+                if self.btc_risk_enabled or self.equity_balance_diff_enabled
+                else None
+            ),
+            "btc_risk_enabled": self.btc_risk_enabled,
+            "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
         }
         if self.shared_account_fused:
             fused_runner_cls = (
