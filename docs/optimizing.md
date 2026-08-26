@@ -504,6 +504,11 @@ do not request one of these intraday-risk metrics keep the smaller existing kern
 buffers. BTC peak recovery remains a compact daily approximation; mandatory exact Rust validation
 and rolling drift gates remain authoritative. Weighted BTC exposure ratios still require
 suffix-local exposure series and remain fail-closed.
+Unweighted `equity_balance_diff_{neg,pos}_{max,mean}_{usd,btc}` and
+`paper_loss{,_mean}_ratio_{usd,btc}` are supported through an opt-in full-resolution accumulator.
+The BTC balance baseline is rebased at each proxy fill. Positive sign-filtered means may differ at
+the pre-fill/tracking boundary and remain proxy approximations under exact validation; negative
+maxima and means, which supply the paper-loss denominators, retain tight parity coverage.
 The prepared BTC series must contain at least one sample in every covered UTC day; unusually coarse
 intervals which skip a whole UTC day fail closed for BTC scoring.
 Positive `backtest.btc_collateral_cap` remains unsupported and fails before GPU optimization.

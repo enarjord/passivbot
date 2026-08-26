@@ -10,6 +10,10 @@ const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
 const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
+const MPS_EQUITY_BALANCE_DIFF_MARKER: &str =
+    "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
+const MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE: &str =
+    include_str!("gpu/mps_equity_balance_diff_common.metal");
 const MPS_MULTICOIN_MARKER: &str = "// PASSIVBOT_MULTICOIN_COMMON";
 const MPS_MULTICOIN_COMMON_SOURCE: &str = include_str!("gpu/mps_multicoin_common.metal");
 const MPS_EMA_ANCHOR_BODY: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
@@ -36,8 +40,18 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared BTC-risk marker"
     );
+    assert_eq!(
+        body.matches(MPS_EQUITY_BALANCE_DIFF_MARKER).count(),
+        1,
+        "MPS source must contain exactly one shared equity-balance-diff marker"
+    );
     body.replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
         .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
+        .replacen(
+            MPS_EQUITY_BALANCE_DIFF_MARKER,
+            MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
+            1,
+        )
 }
 
 fn compose_multicoin_source(body: &str) -> String {
@@ -209,6 +223,21 @@ mod tests {
         }
         assert!(source.contains("#if PASSIVBOT_BTC_RISK_ENABLED"));
         assert!(source.contains("float btc_equity = usd_equity / btc_price"));
+    }
+
+    fn assert_shared_equity_balance_diff_contract(source: &str) {
+        assert!(!source.contains(MPS_EQUITY_BALANCE_DIFF_MARKER));
+        assert!(source.contains(MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE));
+        for signature in [
+            "struct EquityBalanceDiffState",
+            "inline EquityBalanceDiffState init_equity_balance_diff_state()",
+            "inline void update_equity_balance_diff_state(",
+            "inline void write_equity_balance_diff_state(",
+        ] {
+            assert_eq!(source.matches(signature).count(), 1, "{signature}");
+        }
+        assert!(source.contains("#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED"));
+        assert!(source.contains("const float diff = (equity - balance) / balance"));
     }
 
     fn assert_directional_recovery_sampling_contract(source: &str) {
@@ -383,6 +412,31 @@ mod tests {
             assert!(source.contains("constant float* btc_prices"));
             assert!(source.contains("update_btc_risk_state("));
             assert!(source.contains("write_btc_risk_day("));
+        }
+    }
+
+    #[test]
+    fn all_strategy_sources_compose_one_shared_equity_balance_diff_controller() {
+        for body in [
+            MPS_EMA_ANCHOR_BODY,
+            MPS_EMA_ANCHOR_MULTICOIN_BODY,
+            MPS_TRAILING_MARTINGALE_BODY,
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
+        ] {
+            assert_eq!(body.matches(MPS_EQUITY_BALANCE_DIFF_MARKER).count(), 1);
+            assert!(!body.contains("struct EquityBalanceDiffState"));
+        }
+        for source in [
+            mps_ema_anchor_source(),
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_source(),
+            mps_trailing_martingale_long_no_hsl_source(),
+            mps_trailing_martingale_short_no_hsl_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            assert_shared_equity_balance_diff_contract(source);
+            assert!(source.contains("update_equity_balance_diff_state("));
+            assert!(source.contains("write_equity_balance_diff_state("));
         }
     }
 

@@ -34,6 +34,8 @@ constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 
 // PASSIVBOT_BTC_RISK_COMMON
 
+// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON
+
 // PASSIVBOT_MULTICOIN_COMMON
 
 inline float finalized_reducer_qty_with_ordinary(
@@ -2856,8 +2858,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -2967,6 +2972,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float last_eq_k = -1.0f;
 #if PASSIVBOT_BTC_RISK_ENABLED
     BtcRiskState btc_risk = init_btc_risk_state();
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    EquityBalanceDiffState equity_balance_diff_state =
+        init_equity_balance_diff_state();
 #endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
@@ -3329,6 +3338,15 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 btc_risk, effective_equity, btc_prices[k]
             );
 #endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+            update_equity_balance_diff_state(
+                equity_balance_diff_state,
+                balance,
+                effective_equity,
+                btc_prices[k],
+                any_fill
+            );
+#endif
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = position_cost / balance;
@@ -3486,6 +3504,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 66] = short_side
         ? hsl_strategy_equity_drawdown_mean_worst_1pct(side.hsl_strategy_eq)
         : 0.0f;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    write_equity_balance_diff_state(
+        equity_balance_diff_state, equity_balance_diff, b
+    );
 #endif
 }
 
@@ -3673,8 +3696,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -3795,6 +3821,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float last_eq_k = -1.0f;
 #if PASSIVBOT_BTC_RISK_ENABLED
     BtcRiskState btc_risk = init_btc_risk_state();
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    EquityBalanceDiffState equity_balance_diff_state =
+        init_equity_balance_diff_state();
 #endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
@@ -4260,6 +4290,15 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 btc_risk, effective_equity, btc_prices[k]
             );
 #endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+            update_equity_balance_diff_state(
+                equity_balance_diff_state,
+                account.balance,
+                effective_equity,
+                btc_prices[k],
+                any_fill
+            );
+#endif
             day_touched = true;
             if (!liquidated) {
                 float twe_abs = fabs(net_position_cost / account.balance);
@@ -4460,6 +4499,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             short_side.hsl_strategy_eq
         );
 #endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    write_equity_balance_diff_state(
+        equity_balance_diff_state, equity_balance_diff, b
+    );
+#endif
 }
 
 kernel void passivbot_ema_anchor_multicoin_fused(
@@ -4474,8 +4518,11 @@ kernel void passivbot_ema_anchor_multicoin_fused(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -4490,8 +4537,11 @@ kernel void passivbot_ema_anchor_multicoin_fused(
         bars, fill_ticks, touch_ticks, hour_log_ranges, coin_settings,
         long_coin_overrides, short_coin_overrides,
         params, run_settings, sizes, end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -4512,8 +4562,11 @@ kernel void passivbot_ema_anchor_multicoin(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -4529,8 +4582,11 @@ kernel void passivbot_ema_anchor_multicoin(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
         coin_settings, coin_overrides, params, run_settings,
         sizes, end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -4551,8 +4607,11 @@ kernel void passivbot_ema_anchor_multicoin_long(
     constant float* run_settings,
     constant int* sizes,
     constant int* end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
     constant float* btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    device float* equity_balance_diff,
 #endif
     device float* daily,
     device float* scalars,
@@ -4567,8 +4626,11 @@ kernel void passivbot_ema_anchor_multicoin_long(
         bars, fill_ticks, touch_ticks, hour_log_ranges,
         coin_settings, coin_overrides, params, run_settings,
         sizes, end_steps,
-#if PASSIVBOT_BTC_RISK_ENABLED
+#if PASSIVBOT_BTC_PRICES_ENABLED
         btc_prices,
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED

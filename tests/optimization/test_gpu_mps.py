@@ -4379,9 +4379,21 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
             "fills_count",
             "adg_btc",
             "drawdown_worst_btc",
+            "equity_balance_diff_neg_max_btc",
+            "equity_balance_diff_neg_max_usd",
+            "equity_balance_diff_neg_mean_btc",
+            "equity_balance_diff_neg_mean_usd",
+            "equity_balance_diff_pos_max_btc",
+            "equity_balance_diff_pos_max_usd",
+            "equity_balance_diff_pos_mean_btc",
+            "equity_balance_diff_pos_mean_usd",
             "expected_shortfall_1pct_btc",
             "gain_btc",
             "hard_stop_panic_close_loss_sum",
+            "paper_loss_mean_ratio_btc",
+            "paper_loss_mean_ratio_usd",
+            "paper_loss_ratio_btc",
+            "paper_loss_ratio_usd",
         },
     )
     result = proxy.evaluate([{}])[0]
@@ -4413,8 +4425,49 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     assert result["expected_shortfall_1pct_btc"] == pytest.approx(
         exact_analysis["expected_shortfall_1pct_btc"], rel=2.0e-3
     )
+    for metric in (
+        "equity_balance_diff_neg_max_btc",
+        "equity_balance_diff_neg_max_usd",
+        "equity_balance_diff_neg_mean_btc",
+        "equity_balance_diff_neg_mean_usd",
+        "equity_balance_diff_pos_max_btc",
+        "equity_balance_diff_pos_max_usd",
+        "equity_balance_diff_pos_mean_btc",
+        "equity_balance_diff_pos_mean_usd",
+        "paper_loss_mean_ratio_btc",
+        "paper_loss_mean_ratio_usd",
+        "paper_loss_ratio_btc",
+        "paper_loss_ratio_usd",
+    ):
+        # Exact Rust includes a slightly different pre-fill/tracking boundary
+        # in its sign-filtered mean; extrema and paper-loss denominators remain
+        # tightly matched, while positive means are proxy approximations.
+        relative_tolerance = (
+            0.4 if "equity_balance_diff_pos_mean" in metric else 3.0e-3
+        )
+        assert result[metric] == pytest.approx(
+            exact_analysis[metric], rel=relative_tolerance, abs=1.0e-8
+        ), metric
     assert proxy.btc_risk_enabled is True
+    assert proxy.equity_balance_diff_enabled is True
     assert result["backtest_completion_ratio"] > 0.99
+
+    ebd_only_proxy = MpsSingleCoinProxy(
+        config=config,
+        hlcvs=hlcvs,
+        mss=market_settings,
+        btc=btc_prices,
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=1,
+        needed_metrics={"paper_loss_ratio_btc"},
+    )
+    ebd_only_result = ebd_only_proxy.evaluate([{}])[0]
+    assert ebd_only_proxy.btc_risk_enabled is False
+    assert ebd_only_proxy.equity_balance_diff_enabled is True
+    assert ebd_only_result["paper_loss_ratio_btc"] == pytest.approx(
+        exact_analysis["paper_loss_ratio_btc"], rel=3.0e-3, abs=1.0e-8
+    )
 
 
 @pytest.mark.skipif(
@@ -4735,9 +4788,21 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
             "fills_count",
             "adg_btc",
             "drawdown_worst_btc",
+            "equity_balance_diff_neg_max_btc",
+            "equity_balance_diff_neg_max_usd",
+            "equity_balance_diff_neg_mean_btc",
+            "equity_balance_diff_neg_mean_usd",
+            "equity_balance_diff_pos_max_btc",
+            "equity_balance_diff_pos_max_usd",
+            "equity_balance_diff_pos_mean_btc",
+            "equity_balance_diff_pos_mean_usd",
             "expected_shortfall_1pct_btc",
             "gain_btc",
             "hard_stop_panic_close_loss_sum",
+            "paper_loss_mean_ratio_btc",
+            "paper_loss_mean_ratio_usd",
+            "paper_loss_ratio_btc",
+            "paper_loss_ratio_usd",
         },
     )
     result = proxy.evaluate([{}])[0]
@@ -4775,8 +4840,52 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
     assert result["expected_shortfall_1pct_btc"] == pytest.approx(
         exact_analysis["expected_shortfall_1pct_btc"], rel=2.0e-3
     )
+    for metric in (
+        "equity_balance_diff_neg_max_btc",
+        "equity_balance_diff_neg_max_usd",
+        "equity_balance_diff_neg_mean_btc",
+        "equity_balance_diff_neg_mean_usd",
+        "equity_balance_diff_pos_max_btc",
+        "equity_balance_diff_pos_max_usd",
+        "equity_balance_diff_pos_mean_btc",
+        "equity_balance_diff_pos_mean_usd",
+        "paper_loss_mean_ratio_btc",
+        "paper_loss_mean_ratio_usd",
+        "paper_loss_ratio_btc",
+        "paper_loss_ratio_usd",
+    ):
+        # Exact Rust includes a slightly different pre-fill/tracking boundary
+        # in its sign-filtered mean; extrema and paper-loss denominators remain
+        # tightly matched, while positive means are proxy approximations.
+        relative_tolerance = (
+            0.4 if "equity_balance_diff_pos_mean" in metric else 3.0e-3
+        )
+        assert result[metric] == pytest.approx(
+            exact_analysis[metric], rel=relative_tolerance, abs=1.0e-8
+        ), metric
     assert proxy.btc_risk_enabled is True
+    assert proxy.equity_balance_diff_enabled is True
     assert result["backtest_completion_ratio"] > 0.99
+
+    if topology == "long":
+        ebd_only_proxy = MpsMulticoinProxy(
+            config=config,
+            hlcvs=hlcvs,
+            mss=market_settings,
+            btc=btc_prices,
+            timestamps=timestamps,
+            exchange="bybit",
+            batch_size=1,
+            needed_metrics={"paper_loss_ratio_btc"},
+        )
+        ebd_only_result = ebd_only_proxy.evaluate([{}])[0]
+        assert ebd_only_proxy.btc_risk_enabled is False
+        assert ebd_only_proxy.equity_balance_diff_enabled is True
+        assert ebd_only_result["paper_loss_ratio_btc"] == pytest.approx(
+            exact_analysis["paper_loss_ratio_btc"],
+            rel=3.0e-3,
+            abs=1.0e-8,
+        )
 
 
 @pytest.mark.skipif(
