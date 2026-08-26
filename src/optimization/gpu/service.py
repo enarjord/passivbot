@@ -1438,6 +1438,10 @@ class MpsSingleCoinProxy:
                 side: per_side_override_contracts[side]["values"]
                 for side in ("long", "short")
             },
+            "exact_overrides_by_side": {
+                side: per_side_override_contracts[side]["exact_overrides"]
+                for side in ("long", "short")
+            },
             "proxy_mode": "single-coin-exact-last-v1",
         }
 
@@ -1722,8 +1726,10 @@ def _build_multicoin_ema_coin_overrides(
         np.nan,
         dtype=np.float32,
     )
+    exact_overrides = []
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
+        exact_overrides.append(copy.deepcopy(patch))
         side_patch = patch.get("bot", {}).get(side, {})
         strategy_patch = side_patch.get("strategy", {}).get("ema_anchor", {}) or {}
         effective_strategy = payload.strategy_params_list[coin_index][side]
@@ -1779,6 +1785,7 @@ def _build_multicoin_ema_coin_overrides(
         "exchange": exchange,
         "coins": coins,
         "side": side,
+        "exact_overrides": exact_overrides,
         "values": [
             [None if not np.isfinite(value) else float(value) for value in row]
             for row in matrix
@@ -1809,9 +1816,11 @@ def _build_multicoin_tm_coin_overrides(
         np.nan,
         dtype=np.float32,
     )
+    exact_overrides = []
     missing = object()
     for coin_index, coin in enumerate(coins):
         patch = resolve_override(config, mss, exchange, coin) or {}
+        exact_overrides.append(copy.deepcopy(patch))
         side_patch = patch.get("bot", {}).get(side, {})
         strategy_patch = (
             side_patch.get("strategy", {}).get("trailing_martingale", {}) or {}
@@ -1920,6 +1929,7 @@ def _build_multicoin_tm_coin_overrides(
         "exchange": exchange,
         "coins": coins,
         "side": side,
+        "exact_overrides": exact_overrides,
         "values": [
             [None if not np.isfinite(value) else float(value) for value in row]
             for row in matrix
@@ -2362,6 +2372,10 @@ class MpsMulticoinProxy:
                 "sides": list(self.sides),
                 "values_by_side": {
                     side: per_side_override_contracts[side]["values"]
+                    for side in self.sides
+                },
+                "exact_overrides_by_side": {
+                    side: per_side_override_contracts[side]["exact_overrides"]
                     for side in self.sides
                 },
                 "proxy_mode": (

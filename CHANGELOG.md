@@ -9,6 +9,7 @@ All notable user-facing changes will be documented in this file.
   last-write precedence over optimizer candidates for long-only, short-only, hedge-mode, and
   one-way runs. Multi-coin base rows and per-coin override rows now also read the canonical risk
   entry-cooldown payload key, preserving configured and overridden cooldowns in GPU screening.
+  GPU checkpoint identity retains the resolved float64 override values before Metal packing.
 
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports
   `coin_overrides.<coin>.live.forced_mode_<side>: normal` for every enabled side. Long-only,

@@ -5040,6 +5040,41 @@ def test_gpu_checkpoint_signature_tracks_realized_loss_gate_contract():
     )
 
 
+def test_gpu_checkpoint_signature_tracks_exact_coin_override_precision():
+    active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
+    scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
+    config = _long_only_ema_config()
+    first = 0.4
+    second = float(np.nextafter(first, 1.0))
+    packed = float(np.float32(first))
+    assert packed == float(np.float32(second))
+
+    def signature(exact_value):
+        proxy = SimpleNamespace(
+            coin_override_contract={
+                "values": [[packed]],
+                "exact_overrides": [
+                    {
+                        "bot": {
+                            "long": {
+                                "strategy": {
+                                    "ema_anchor": {"offset": exact_value}
+                                }
+                            }
+                        }
+                    }
+                ],
+            }
+        )
+        return _checkpoint_signature(
+            active,
+            scoring,
+            runtime_contract=_gpu_runtime_checkpoint_contract(config, proxy),
+        )
+
+    assert signature(first) != signature(second)
+
+
 def test_gpu_checkpoint_signature_tracks_hedge_mode_contract():
     active = [("long_offset", 0, Bound(0.01, 0.1, 0.01))]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]

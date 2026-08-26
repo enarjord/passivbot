@@ -2114,6 +2114,61 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     assert np.isnan(matrix[1, 19:]).all()
     assert contract["coins"] == ["BTC", "ETH"]
     assert contract["values"][0] == [None] * EMA_ANCHOR_COIN_OVERRIDE_COLS
+    assert contract["exact_overrides"] == [
+        {},
+        config["coin_overrides"]["ETH"],
+    ]
+
+
+def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
+    first = 0.4
+    second = float(np.nextafter(first, 1.0))
+
+    def build(value):
+        config = {
+            "coin_overrides": {
+                "ETH": {
+                    "bot": {
+                        "long": {
+                            "strategy": {"ema_anchor": {"offset": value}}
+                        }
+                    }
+                }
+            }
+        }
+        payload = SimpleNamespace(
+            strategy_params_list=[{"long": {"offset": value}}],
+            bot_params_list=[
+                {
+                    "long": {
+                        "entry_eligible": True,
+                        "wallet_exposure_limit": -1.0,
+                    }
+                }
+            ],
+        )
+        return _build_multicoin_ema_coin_overrides(
+            config=config,
+            mss={"ETH": {}},
+            exchange="bybit",
+            coins=["ETH"],
+            payload=payload,
+            side="long",
+            resolve_override=lambda config, _mss, _exchange, coin: config[
+                "coin_overrides"
+            ].get(coin, {}),
+        )
+
+    first_matrix, first_contract = build(first)
+    second_matrix, second_contract = build(second)
+
+    assert np.array_equal(first_matrix, second_matrix, equal_nan=True)
+    assert first_contract["values"] == second_contract["values"]
+    assert first_contract["exact_overrides"] != second_contract["exact_overrides"]
+    first_exact = first_contract["exact_overrides"][0]["bot"]["long"]
+    second_exact = second_contract["exact_overrides"][0]["bot"]["long"]
+    assert first_exact["strategy"]["ema_anchor"]["offset"] == first
+    assert second_exact["strategy"]["ema_anchor"]["offset"] == second
 
 
 @pytest.mark.parametrize(

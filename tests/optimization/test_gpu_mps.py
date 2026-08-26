@@ -213,6 +213,83 @@ kernel void passivbot_single_coin_wel_probe(
     assert output[1].item() == pytest.approx(expected_allowed_wel)
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize(
+    ("side", "expected_entry_ticks"),
+    [("long", 97.0), ("short", 103.0)],
+)
+def test_mps_ema_inventory_ratio_uses_single_coin_base_wel(
+    side, expected_entry_ticks
+):
+    import passivbot_rust
+
+    values = {key: 0.0 for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS}
+    values.update(
+        {
+            "base_qty_pct": 0.1,
+            "ema_span_0": 2.0,
+            "ema_span_1": 3.0,
+            "offset_psize_weight": 0.1,
+            "total_wallet_exposure_limit": 0.9,
+            "twel_enforcer_threshold": 1.0,
+            "wallet_exposure_limit": 0.4,
+        }
+    )
+    params = torch.tensor(
+        [values[key] for key in EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS],
+        dtype=torch.float32,
+        device="mps",
+    )
+    output = torch.zeros(2, dtype=torch.float32, device="mps")
+    generator = (
+        "generate_long_orders" if side == "long" else "generate_short_orders"
+    )
+    probe_kernel = f"""
+kernel void passivbot_ema_base_wel_inventory_probe(
+    constant float* packed,
+    device float* result,
+    uint b [[thread_position_in_grid]]
+) {{
+    if (b > 0) return;
+    EmaSide state = load_side(packed, 0, 100.0f);
+    state.psize = 1.0f;
+    state.pprice = 100.0f;
+    {generator}(
+        state,
+        1000.0f,
+        100.0f,
+        100,
+        100,
+        0.001f,
+        1.0f,
+        0.001f,
+        0.0f,
+        1.0f,
+        0.0f,
+        false,
+        false,
+        0.0f
+    );
+    result[0] = float(state.entry_ticks);
+    result[1] = state.base_wel;
+}}
+"""
+    library = torch.mps.compile_shader(
+        passivbot_rust.mps_ema_anchor_source_py() + probe_kernel
+    )
+    library.passivbot_ema_base_wel_inventory_probe(
+        params, output, threads=(1, 1, 1)
+    )
+    torch.mps.synchronize()
+
+    # With current WE=0.1, exact Rust's base-WEL ratio is 0.1 / 0.4 = 0.25.
+    # Dividing by TWEL=0.9 instead would produce ticks 98/102.
+    assert output[0].item() == expected_entry_ticks
+    assert output[1].item() == pytest.approx(0.4)
+
+
 @pytest.mark.parametrize(
     "value", [0.0, 0.05, 0.999999999, float(np.nextafter(1.0, 0.0))]
 )

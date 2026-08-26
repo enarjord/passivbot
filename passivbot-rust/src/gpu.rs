@@ -450,6 +450,8 @@ mod tests {
         assert!(source.contains("if (eqf >= account_peak)"));
         assert!(source.contains("constant int SIDE_PARAMS = 35"));
         assert!(source.contains("float base_wel = params[po + 34]"));
+        assert!(source.contains("side.base_wel = base_wel"));
+        assert!(source.contains("current_we / fmax(side.base_wel"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));

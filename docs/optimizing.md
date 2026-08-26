@@ -136,7 +136,8 @@ The supported slice is intentionally narrow:
   `risk.entry_cooldown_minutes`, and explicit
   `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and all six `unstuck` leaves are
   supported. Static single-coin values are applied after each optimizer candidate, preserving
-  exact Rust's override precedence. Eligible forced-normal symbols in multi-coin runs reserve
+  exact Rust's override precedence. Checkpoint identity records the resolved exact override values
+  before float32 Metal packing. Eligible forced-normal symbols in multi-coin runs reserve
   active slots before Forager ranking and may expand the active-set cap beyond `n_positions`; the
   dynamic WEL denominator remains unchanged, matching exact Rust. Trailing Martingale also supports
   per-coin
