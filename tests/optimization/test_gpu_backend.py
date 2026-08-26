@@ -85,7 +85,6 @@ from optimization.backends.gpu_backend import (
     TRAILING_MARTINGALE_BOUND_MAP,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
-from optimization.gpu.metrics import SUPPORTED_METRICS
 from optimization.warmup import build_optimizer_vector_config
 
 
@@ -3237,6 +3236,9 @@ def test_gpu_foundation_accepts_btc_account_metrics_without_collateral(
     ],
 )
 def test_gpu_foundation_excludes_btc_metrics_without_safe_proxy_surface(metric):
+    pytest.importorskip("torch")
+    from optimization.gpu.metrics import SUPPORTED_METRICS
+
     assert canonicalize_metric_name(metric) not in SUPPORTED_METRICS
 
 
