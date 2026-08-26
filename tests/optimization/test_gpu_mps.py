@@ -3969,6 +3969,149 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+def test_mps_multicoin_service_dispatches_forced_delist_tail(
+    strategy_kind, topology
+):
+    from backtest import run_backtest
+    from config.schema import get_template_config
+    from optimization.gpu.service import MpsMulticoinProxy
+
+    last_valid = 6
+    count = last_valid + 1401
+    hlcvs = np.full((count, 2, 4), np.nan, dtype=np.float64)
+    hlcvs[: last_valid + 1, 0] = [100.0, 100.0, 100.0, 1.0]
+    hlcvs[:, 1] = [200.0, 200.0, 200.0, 1.0]
+    if topology in {"long", "fused"}:
+        hlcvs[3, 0, 1] = 80.0
+    if topology in {"short", "fused"}:
+        hlcvs[3, 0, 0] = 120.0
+    delist_close = {
+        "long": 50.0,
+        "short": 150.0,
+        "fused": 100.0,
+    }[topology]
+    hlcvs[last_valid, 0] = [
+        delist_close,
+        delist_close,
+        delist_close,
+        1.0,
+    ]
+    timestamps = (
+        1_700_000_000_000
+        + np.arange(count, dtype=np.int64) * 60_000
+    )
+    market_settings = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 0.01,
+            "min_qty": 0.001,
+            "min_cost": 5.0,
+            "c_mult": 1.0,
+            "maker": 0.0,
+            "taker": 0.001,
+            "exchange": "bybit",
+            "first_valid_index": 0,
+            "last_valid_index": last,
+            "warmup_minutes": 1,
+        }
+        for coin, last in (("BTC", last_valid), ("ETH", count - 1))
+    }
+    market_settings["__meta__"] = {
+        "requested_start_ts": int(timestamps[0]),
+        "requested_start_date": "2023-11-14",
+        "warmup_minutes_requested": 1,
+    }
+    config = get_template_config()
+    config["live"]["strategy_kind"] = strategy_kind
+    config["live"]["max_warmup_minutes"] = 1
+    enabled_sides = (
+        ("long", "short") if topology == "fused" else (topology,)
+    )
+    config["live"]["approved_coins"] = {
+        side: ["BTC"] if side in enabled_sides else []
+        for side in ("long", "short")
+    }
+    config["live"]["hedge_mode"] = topology == "fused"
+    config["backtest"]["coins"] = {"bybit": ["BTC", "ETH"]}
+    config["backtest"]["exchanges"] = ["bybit"]
+    for side in ("long", "short"):
+        enabled = side in enabled_sides
+        risk = config["bot"][side]["risk"]
+        risk["total_wallet_exposure_limit"] = 0.1 if enabled else 0.0
+        risk["n_positions"] = 1 if enabled else 0
+        risk["entry_cooldown_minutes"] = 100.0
+        risk["we_excess_allowance_pct"] = 0.0
+        risk["position_exposure_enforcer_enabled"] = False
+        risk["total_exposure_enforcer_enabled"] = False
+        config["bot"][side]["hsl"]["enabled"] = False
+        config["bot"][side]["unstuck"]["enabled"] = False
+    for side in enabled_sides:
+        if strategy_kind == "ema_anchor":
+            config["bot"][side]["strategy"]["ema_anchor"].update(
+                {
+                    "base_qty_pct": 1.0,
+                    "ema_span_0": 2.0,
+                    "ema_span_1": 3.0,
+                    "offset": 0.1,
+                    "offset_psize_weight": 0.0,
+                }
+            )
+        else:
+            strategy = config["bot"][side]["strategy"][
+                "trailing_martingale"
+            ]
+            strategy["ema_span_0"] = 2.0
+            strategy["ema_span_1"] = 3.0
+            strategy["entry"]["initial_qty_pct"] = 1.0
+            strategy["entry"]["initial_ema_dist"] = 0.1
+            strategy["entry"]["double_down_factor"] = 0.0
+            strategy["close"]["threshold_base_pct"] = 0.5
+
+    proxy = MpsMulticoinProxy(
+        config=config,
+        hlcvs=hlcvs,
+        mss=market_settings,
+        btc=np.full(count, 50_000.0),
+        timestamps=timestamps,
+        exchange="bybit",
+        batch_size=1,
+        needed_metrics={
+            "backtest_completion_ratio",
+            "fills_count",
+            "hard_stop_panic_close_loss_sum",
+        },
+    )
+    result = proxy.evaluate([{}])[0]
+    exact_fills, _, exact_analysis = run_backtest(
+        hlcvs,
+        market_settings,
+        config,
+        "bybit",
+        np.full(count, 50_000.0),
+        timestamps,
+    )
+    expected_fills = 4.0 if topology == "fused" else 2.0
+    assert result["fills_count"] == expected_fills
+    assert result["fills_count"] == exact_analysis["fills_count"]
+    assert len(exact_fills) == exact_analysis["fills_count"]
+    exact_order_types = {row[13] for row in exact_fills}
+    expected_panic_types = {
+        f"close_panic_{side}" for side in enabled_sides
+    }
+    assert expected_panic_types <= exact_order_types
+    if topology != "fused":
+        assert exact_analysis["hard_stop_panic_close_loss_sum"] > 0.0
+        assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
+            exact_analysis["hard_stop_panic_close_loss_sum"], rel=5.0e-4
+        )
+    assert result["backtest_completion_ratio"] > 0.99
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_mps_single_coin_hsl_can_restart_during_invalid_tail(
     strategy_kind, side
@@ -4398,11 +4541,12 @@ def test_mps_tm_multicoin_aggregated_interval_fused_smoke(interval_minutes):
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 @pytest.mark.parametrize("topology", ["long", "short", "fused"])
+@pytest.mark.parametrize("forced_delist", [False, True])
 def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
-    strategy_kind, topology
+    strategy_kind, topology, forced_delist
 ):
-    count = 12
     last_valid = 6
+    count = last_valid + 1401 if forced_delist else 12
     closes = np.full((count, 2), 100.0)
     # Keep a positive packed mark after the explicit validity window so this
     # exercises the index boundary rather than relying on NaNs becoming zero.
@@ -4423,12 +4567,17 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
         fused_runner_cls = MpsTrailingMartingaleMulticoinFusedRunner
     overrides = np.full((2, override_cols), np.nan, dtype=np.float32)
     overrides[1, wallet_exposure_column] = 0.0
+    markets = [
+        ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0, 0.02)
+        for _ in range(2)
+    ]
     fixture_side = topology if topology != "fused" else "long"
     runner, row, run, data = _multicoin_exposure_fixture(
         strategy_kind,
         fixture_side,
         coin_overrides=overrides,
         count=count,
+        markets=markets,
         closes=closes,
         highs=highs,
         lows=lows,
@@ -4472,9 +4621,15 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
 
     assert output["balance"].item() > 0.0
     if topology in {"long", "fused"}:
-        assert output["psize"].item() > 0.0
+        assert (output["psize"].item() == 0.0) is forced_delist
     if topology in {"short", "fused"}:
-        assert output["short_psize"].item() > 0.0
+        assert (output["short_psize"].item() == 0.0) is forced_delist
+    expected_min_fills = 4.0 if topology == "fused" else 2.0
+    if forced_delist:
+        assert output["fill_count"].item() >= expected_min_fills
+        assert output["hsl_panic_close_loss_sum"].item() > 0.0
+    else:
+        assert output["hsl_panic_close_loss_sum"].item() == 0.0
     assert output["day_end_eq"][0, 0].item() == pytest.approx(
         output["balance"].item()
     )

@@ -652,37 +652,10 @@ def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
     }
 
 
-def _require_no_multicoin_forced_delist_tail(
-    last_valid_idx: int, candle_count: int
-) -> None:
-    """Keep multicoin forced-delists fail closed until that kernel models them.
-
-    Exact Rust treats a coin as delisted, and force-closes its open positions,
-    when at least 1,400 prepared candles follow its final valid candle.  The
-    single-coin kernels model that close, but multicoin forced-delist fills are
-    a separate parity surface.
-    """
-
-    last_valid_idx = int(last_valid_idx)
-    candle_count = int(candle_count)
-    if last_valid_idx < 0 or last_valid_idx >= candle_count:
-        raise ValueError(
-            "GPU proxy requires last_valid_idx within the prepared "
-            f"candle range; last_valid_idx={last_valid_idx}, "
-            f"candle_count={candle_count}"
-        )
-    if last_valid_idx + 1400 < candle_count:
-        raise ValueError(
-            "GPU multicoin proxy does not yet model Rust forced-delist closes "
-            "when at least 1,400 prepared candles follow the final valid candle; "
-            f"last_valid_idx={last_valid_idx}, candle_count={candle_count}"
-        )
-
-
 def _require_supported_multicoin_valid_tails(
     hlcvs, first_valid_indices, last_valid_indices
 ) -> None:
-    """Accept staggered ordinary tails with continuous portfolio time coverage."""
+    """Accept staggered tails with continuous portfolio time coverage."""
 
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
@@ -716,8 +689,7 @@ def _require_supported_multicoin_valid_tails(
             and last_valid_idx == candle_count - 1
         ):
             continue
-        _require_no_multicoin_forced_delist_tail(last_valid_idx, candle_count)
-        if not 0 <= first_valid_idx <= last_valid_idx:
+        if not 0 <= first_valid_idx <= last_valid_idx < candle_count:
             raise ValueError(
                 "GPU multicoin proxy requires each first_valid_idx within its "
                 "prepared valid range; "
@@ -762,6 +734,18 @@ def _require_supported_multicoin_valid_tails(
     actual_valid = np.all(
         np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2
     )
+    for coin, last_valid_idx in enumerate(tails):
+        if (
+            last_valid_idx + 1400 < candle_count
+            and not actual_valid[last_valid_idx, coin]
+        ):
+            raise ValueError(
+                "GPU multicoin proxy requires each forced-delist final "
+                "candle's packed float32 H/L/C values to remain finite and "
+                "positive; "
+                f"coin={coin}, last_valid_idx={last_valid_idx}, "
+                f"packed_hlc={packed_hlc[last_valid_idx, coin].tolist()}"
+            )
     actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
     coverage_start = min(first for first, _ in windows)
     missing = np.flatnonzero(~actual_coverage[coverage_start:])
@@ -2131,8 +2115,8 @@ class MpsMulticoinProxy:
                         config["bot"][side].get("risk", {}), side=side
                     )
                 )
-            first_strategy.update(_unstuck_params(config["bot"][side]))
             base_bot = flatten_shared_bot_side(config["bot"][side])
+            first_strategy.update(_unstuck_params(base_bot))
             first_strategy.update(_hsl_params(base_bot, signal_mode=signal_mode))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
