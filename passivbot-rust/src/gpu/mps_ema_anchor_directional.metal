@@ -2134,7 +2134,8 @@ inline void passivbot_single_coin_impl(
 #endif
 #if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
             update_equity_balance_diff_state(
-                equity_balance_diff_state, balance, eqf, btc_prices[k], any_fill
+                equity_balance_diff_state, balance, eqf, btc_prices, k,
+                starting_balance, any_fill
             );
 #endif
             day_touched = true;

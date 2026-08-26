@@ -4303,11 +4303,12 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     from config.schema import get_template_config
     from optimization.gpu.service import MpsSingleCoinProxy
 
-    last_valid = 6
+    entry_k = 7
+    last_valid = 10
     count = last_valid + 1401
     hlcvs = np.full((count, 1, 4), np.nan, dtype=np.float64)
     hlcvs[: last_valid + 1, 0] = [100.0, 100.0, 100.0, 1.0]
-    hlcvs[3, 0, 1] = 98.0
+    hlcvs[entry_k, 0, 1] = 98.0
     hlcvs[last_valid, 0] = [80.0, 80.0, 80.0, 1.0]
     timestamps = (
         1_700_000_000_000
@@ -4365,7 +4366,11 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         strategy["entry"]["initial_qty_pct"] = 0.1
         strategy["entry"]["initial_ema_dist"] = 0.01
 
-    btc_prices = np.linspace(50_000.0, 55_000.0, count)
+    # The first tracked no-position sample sees the higher BTC price, then the
+    # first entry fills after the drop. Exact Rust seeds its BTC balance from
+    # that first fill and applies it to the earlier sample too.
+    btc_prices = np.full(count, 40_000.0)
+    btc_prices[:entry_k] = 60_000.0
     proxy = MpsSingleCoinProxy(
         config=config,
         hlcvs=hlcvs,
@@ -4683,15 +4688,16 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
     from config.schema import get_template_config
     from optimization.gpu.service import MpsMulticoinProxy
 
-    last_valid = 6
+    entry_k = 7
+    last_valid = 10
     count = last_valid + 1401
     hlcvs = np.full((count, 2, 4), np.nan, dtype=np.float64)
     hlcvs[: last_valid + 1, 0] = [100.0, 100.0, 100.0, 1.0]
     hlcvs[:, 1] = [200.0, 200.0, 200.0, 1.0]
     if topology in {"long", "fused"}:
-        hlcvs[3, 0, 1] = 80.0
+        hlcvs[entry_k, 0, 1] = 80.0
     if topology in {"short", "fused"}:
-        hlcvs[3, 0, 0] = 120.0
+        hlcvs[entry_k, 0, 0] = 120.0
     delist_close = {
         "long": 50.0,
         "short": 150.0,
@@ -4774,7 +4780,9 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
             strategy["entry"]["double_down_factor"] = 0.0
             strategy["close"]["threshold_base_pct"] = 0.5
 
-    btc_prices = np.linspace(50_000.0, 55_000.0, count)
+    # Exercise the canonical pre-fill BTC replay before the delayed entry.
+    btc_prices = np.full(count, 40_000.0)
+    btc_prices[:entry_k] = 60_000.0
     proxy = MpsMulticoinProxy(
         config=config,
         hlcvs=hlcvs,
@@ -11825,20 +11833,45 @@ def test_mps_recovery_captures_early_post_fill_liquidation_endpoint():
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = [1.0, 2.0, 3.0, 0.0, 0.0001, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 1.0]
     row += _single_coin_exposure_fields() + _tm_twel_enforcer_fields()
+    safe_row = list(row)
+    safe_row[0] = 0.0
     parameters = np.array(
-        [row + row],
+        [row + row, safe_row + safe_row],
         dtype=np.float64,
     )
+    btc_prices = np.full(count, 50_000.0)
 
     runner = MpsEmaAnchorRunner(
-        market, run, data, recovery_distribution_enabled=True
+        market,
+        run,
+        data,
+        recovery_distribution_enabled=True,
+        btc_prices=btc_prices,
+        btc_risk_enabled=False,
+        equity_balance_diff_enabled=True,
     )
     output = runner.run(parameters)
     torch.mps.synchronize()
 
     assert output["day_has_fill"].sum().item() > 0
-    assert output["day_volume"].sum().item() < 0.0
-    assert not output["alive"].item()
+    assert output["day_volume"][0].sum().item() < 0.0
+    assert not output["alive"][0].item()
+    assert output["alive"][1].item()
+    for name in (
+        "equity_balance_diff_neg_max",
+        "equity_balance_diff_neg_mean",
+        "equity_balance_diff_pos_max",
+        "equity_balance_diff_pos_mean",
+        "equity_balance_diff_neg_max_btc",
+        "equity_balance_diff_neg_mean_btc",
+        "equity_balance_diff_pos_max_btc",
+        "equity_balance_diff_pos_mean_btc",
+    ):
+        assert torch.isfinite(output[name]).all().item(), name
+    assert output["equity_balance_diff_neg_max"][0].item() > 1.9
+    assert output["equity_balance_diff_neg_max_btc"][0].item() == pytest.approx(
+        output["equity_balance_diff_neg_max"][0].item(), rel=1.0e-6
+    )
     samples = output["strategy_eq_recovery_samples"][0]
     finite_samples = samples[torch.isfinite(samples)]
     assert finite_samples.numel() >= 2

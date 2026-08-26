@@ -13,8 +13,9 @@ All notable user-facing changes will be documented in this file.
   unweighted positive and negative equity-vs-balance maximum and mean metrics, plus paper-loss
   maximum and mean ratios, in USD and BTC. Metal enables a separate compact accumulator only when
   one of these metrics is requested, so ordinary GPU runs retain their existing kernel ABI and
-  dispatch cost. BTC balance is rebased at each proxy fill; positive sign-filtered means remain an
-  online approximation under mandatory exact Rust validation and rolling drift gates.
+  dispatch cost. BTC balance is rebased at each proxy fill, with tracked pre-fill samples replayed
+  against the first-fill baseline; positive sign-filtered means remain an online approximation
+  under mandatory exact Rust validation and rolling drift gates.
 
 - Apple MPS single- and multi-coin EMA Anchor and Trailing Martingale optimization now accepts
   BTC-denominated account-equity scoring and limits while `backtest.btc_collateral_cap` is zero.

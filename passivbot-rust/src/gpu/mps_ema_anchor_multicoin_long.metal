@@ -3343,7 +3343,9 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 equity_balance_diff_state,
                 balance,
                 effective_equity,
-                btc_prices[k],
+                btc_prices,
+                k,
+                starting_balance,
                 any_fill
             );
 #endif
@@ -4295,7 +4297,9 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 equity_balance_diff_state,
                 account.balance,
                 effective_equity,
-                btc_prices[k],
+                btc_prices,
+                k,
+                starting_balance,
                 any_fill
             );
 #endif

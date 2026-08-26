@@ -506,8 +506,9 @@ and rolling drift gates remain authoritative. Weighted BTC exposure ratios still
 suffix-local exposure series and remain fail-closed.
 Unweighted `equity_balance_diff_{neg,pos}_{max,mean}_{usd,btc}` and
 `paper_loss{,_mean}_ratio_{usd,btc}` are supported through an opt-in full-resolution accumulator.
-The BTC balance baseline is rebased at each proxy fill. Positive sign-filtered means may differ at
-the pre-fill/tracking boundary and remain proxy approximations under exact validation; negative
+The BTC balance baseline is rebased at each proxy fill; when the first fill establishes that
+baseline, the kernel replays earlier tracked BTC prices without repeating the strategy simulation.
+Positive sign-filtered means may remain proxy approximations under exact validation; negative
 maxima and means, which supply the paper-loss denominators, retain tight parity coverage.
 The prepared BTC series must contain at least one sample in every covered UTC day; unusually coarse
 intervals which skip a whole UTC day fail closed for BTC scoring.
