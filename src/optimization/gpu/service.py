@@ -2171,10 +2171,9 @@ class MpsMulticoinProxy:
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
-        if not bool(backtest_params.get("dynamic_wel_by_tradability")):
-            raise ValueError(
-                "MPS multicoin proxy requires backtest.dynamic_wel_by_tradability=true"
-            )
+        self.dynamic_wel_by_tradability = bool(
+            backtest_params.get("dynamic_wel_by_tradability", True)
+        )
         self.forager_score_hysteresis_pct = float(
             backtest_params.get("forager_score_hysteresis_pct", 0.0) or 0.0
         )
@@ -2504,6 +2503,7 @@ class MpsMulticoinProxy:
                 self.needed_metrics
                 & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
             ),
+            "dynamic_wel_by_tradability": self.dynamic_wel_by_tradability,
         }
         if self.shared_account_fused:
             fused_runner_cls = (

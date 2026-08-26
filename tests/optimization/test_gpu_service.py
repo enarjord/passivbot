@@ -995,6 +995,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
     ],
 )
+@pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
 def test_multicoin_proxy_constructs_fused_shared_account_runner(
     monkeypatch,
     strategy_kind,
@@ -1007,6 +1008,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     raw_drawdown_enabled,
     raw_tail_enabled,
     recovery_distribution_enabled,
+    dynamic_wel_by_tradability,
 ):
     torch = pytest.importorskip("torch")
 
@@ -1030,7 +1032,9 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
             "hsl_signal_mode": "coin",
         }
     )
-    config["backtest"]["dynamic_wel_by_tradability"] = True
+    config["backtest"]["dynamic_wel_by_tradability"] = (
+        dynamic_wel_by_tradability
+    )
     for side in ("long", "short"):
         config["bot"][side]["risk"].update(
             {
@@ -1117,7 +1121,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         ],
         backtest_params={
             "candle_interval_minutes": interval_minutes,
-            "dynamic_wel_by_tradability": True,
+            "dynamic_wel_by_tradability": dynamic_wel_by_tradability,
             "forager_score_hysteresis_pct": 0.0,
             "last_valid_indices": [2, 3],
             "first_valid_indices": [0, 0],
@@ -1206,6 +1210,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     )
     assert constructed["kwargs"]["hedge_mode"] is False
     assert constructed["kwargs"]["filter_by_min_effective_cost"] is True
+    assert (
+        constructed["kwargs"]["dynamic_wel_by_tradability"]
+        is dynamic_wel_by_tradability
+    )
 
 
 def test_gpu_multicoin_proxy_accepts_staggered_valid_gaps_and_ended_tails():

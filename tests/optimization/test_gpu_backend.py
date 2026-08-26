@@ -668,6 +668,11 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
 @pytest.mark.parametrize(
     ("dotted_path", "value", "resolved_path"),
     [
+        (
+            "backtest.dynamic_wel_by_tradability",
+            False,
+            ("backtest", "dynamic_wel_by_tradability"),
+        ),
         ("backtest.starting_balance", 12_345.0, ("backtest", "starting_balance")),
         ("backtest.maker_fee_override", 0.0002, ("backtest", "maker_fee_override")),
         ("backtest.taker_fee_override", 0.0007, ("backtest", "taker_fee_override")),
@@ -2809,28 +2814,13 @@ def test_gpu_multicoin_tm_coin_overrides_accept_entry_ema_gate_mode(mode):
     )
 
 
-@pytest.mark.parametrize(
-    ("mutate", "message"),
-    [
-        (
-            lambda config: config["backtest"].__setitem__(
-                "dynamic_wel_by_tradability", False
-            ),
-            "dynamic_wel_by_tradability",
-        ),
-    ],
-)
-def test_gpu_multicoin_foundation_fails_closed_for_unsupported_scope(
-    mutate, message
-):
+def test_gpu_multicoin_foundation_accepts_fixed_wel_denominator():
     config = _long_only_ema_config()
     config["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL"]
     config["live"]["forager_score_hysteresis_pct"] = 0.0
-    config["backtest"]["dynamic_wel_by_tradability"] = True
-    mutate(config)
+    config["backtest"]["dynamic_wel_by_tradability"] = False
 
-    with pytest.raises(ValueError, match=message):
-        _validate_scope(config, _MulticoinEvaluator())
+    _validate_scope(config, _MulticoinEvaluator())
 
 
 @pytest.mark.parametrize("side", ["long", "short"])

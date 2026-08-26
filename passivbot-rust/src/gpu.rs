@@ -242,6 +242,7 @@ mod tests {
             "inline float float32_floor_nonnegative(",
             "inline void record_realized_net(",
             "inline void record_gross_pnl(",
+            "inline int wallet_exposure_denominator_n_positions(",
             "inline float coin_override_or(",
             "inline float allowed_wallet_exposure_limit(",
             "inline float clamped_market_price(",
@@ -258,6 +259,11 @@ mod tests {
             assert_eq!(source.matches(signature).count(), 1, "{signature}");
         }
         assert_eq!(source.matches("struct JointPortfolioAccount").count(), 1);
+        assert!(source.contains("#ifndef PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY"));
+        assert!(source.contains("#define PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY 1"));
+        assert!(source.contains("#if PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY"));
+        assert!(source.contains("return min(configured_n_positions, observed_tradable_count)"));
+        assert!(source.contains("return configured_n_positions"));
         assert!(source.contains("if (is_long) account.realized_pnl_long += net_pnl"));
         assert!(source.contains("else account.realized_pnl_short += net_pnl"));
         assert!(source.contains("long_hsl.signal_mode != short_hsl.signal_mode"));
@@ -738,6 +744,10 @@ mod tests {
         assert!(source.contains("close_is_protective_reducer[MAX_COINS]"));
         assert!(!source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("current_effective_n_positions"));
+        assert!(source.contains("wallet_exposure_denominator_n_positions("));
+        assert!(source.contains(
+            "coin_hsl[c].slot_count = float(effective_n_positions)"
+        ));
         assert!(source.contains("distance == best_distance && c > best"));
         assert!(source.contains("= fma("));
         assert!(source.contains("one global auto-unstuck intent"));
@@ -1067,6 +1077,10 @@ mod tests {
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));
         assert!(source.contains("tm_multicoin_entry_initial_balance_pct("));
+        assert!(source.contains("wallet_exposure_denominator_n_positions("));
+        assert!(source.contains(
+            "coin_hsl[c].slot_count = float(effective_n_positions)"
+        ));
         assert!(source.contains(
             "passivbot_trailing_martingale_multicoin_fused_impl("
         ));

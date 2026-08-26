@@ -51,6 +51,9 @@ _HSL_RAW_TAIL_DEFINE = "#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 1\n"
 _RECOVERY_DISTRIBUTION_DEFINE = (
     "#define PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED 1\n"
 )
+_FIXED_WEL_DENOMINATOR_DEFINE = (
+    "#define PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY 0\n"
+)
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -90,6 +93,16 @@ def _with_recovery_distribution(source: str, enabled: bool) -> str:
             "MPS source is missing the strategy-equity recovery-distribution feature guard"
         )
     return _RECOVERY_DISTRIBUTION_DEFINE + source
+
+
+def _with_dynamic_wel_by_tradability(source: str, enabled: bool) -> str:
+    if enabled:
+        return source
+    if "#ifndef PASSIVBOT_DYNAMIC_WEL_BY_TRADABILITY" not in source:
+        raise RuntimeError(
+            "MPS multicoin source is missing the dynamic-WEL feature guard"
+        )
+    return _FIXED_WEL_DENOMINATOR_DEFINE + source
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -401,50 +414,58 @@ def _trailing_martingale_short_no_hsl_shader_library(
     )
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def _ema_anchor_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
+    dynamic_wel_by_tradability: bool = True,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_recovery_distribution(
-            _with_hsl_features(
-                passivbot_rust.mps_ema_anchor_multicoin_source_py(),
-                ema_tail_enabled=hsl_ema_tail_enabled,
-                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
-                raw_tail_enabled=hsl_raw_tail_enabled,
+        _with_dynamic_wel_by_tradability(
+            _with_recovery_distribution(
+                _with_hsl_features(
+                    passivbot_rust.mps_ema_anchor_multicoin_source_py(),
+                    ema_tail_enabled=hsl_ema_tail_enabled,
+                    raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                    raw_tail_enabled=hsl_raw_tail_enabled,
+                ),
+                recovery_distribution_enabled,
             ),
-            recovery_distribution_enabled,
+            dynamic_wel_by_tradability,
         )
     )
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=16)
 def _trailing_martingale_multicoin_shader_library(
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
     recovery_distribution_enabled: bool = False,
+    dynamic_wel_by_tradability: bool = True,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
     return torch.mps.compile_shader(
-        _with_recovery_distribution(
-            _with_hsl_features(
-                passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
-                ema_tail_enabled=hsl_ema_tail_enabled,
-                raw_drawdown_enabled=hsl_raw_drawdown_enabled,
-                raw_tail_enabled=hsl_raw_tail_enabled,
+        _with_dynamic_wel_by_tradability(
+            _with_recovery_distribution(
+                _with_hsl_features(
+                    passivbot_rust.mps_trailing_martingale_multicoin_source_py(),
+                    ema_tail_enabled=hsl_ema_tail_enabled,
+                    raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+                    raw_tail_enabled=hsl_raw_tail_enabled,
+                ),
+                recovery_distribution_enabled,
             ),
-            recovery_distribution_enabled,
+            dynamic_wel_by_tradability,
         )
     )
 
@@ -1138,6 +1159,7 @@ class MpsEmaAnchorMulticoinRunner:
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        dynamic_wel_by_tradability: bool = True,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -1149,6 +1171,7 @@ class MpsEmaAnchorMulticoinRunner:
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
         self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
+        self.dynamic_wel_by_tradability = bool(dynamic_wel_by_tradability)
         fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
         if self.hsl_raw_tail_enabled:
             self.scalar_cols = (
@@ -1407,6 +1430,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
+            self.dynamic_wel_by_tradability,
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -1531,6 +1555,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         hedge_mode: bool = True,
+        dynamic_wel_by_tradability: bool = True,
     ):
         super().__init__(
             run,
@@ -1549,6 +1574,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1661,15 +1687,37 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
 class MpsEmaAnchorMulticoinLongRunner(MpsEmaAnchorMulticoinRunner):
     """Compatibility wrapper for the original long-only multicoin runner."""
 
-    def __init__(self, run: ProxyRun, data: dict):
-        super().__init__(run, data, side="long")
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        dynamic_wel_by_tradability: bool = True,
+    ):
+        super().__init__(
+            run,
+            data,
+            side="long",
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+        )
 
 
 class MpsEmaAnchorMulticoinShortRunner(MpsEmaAnchorMulticoinRunner):
     """Short-only multicoin EMA Anchor screening runner."""
 
-    def __init__(self, run: ProxyRun, data: dict):
-        super().__init__(run, data, side="short")
+    def __init__(
+        self,
+        run: ProxyRun,
+        data: dict,
+        *,
+        dynamic_wel_by_tradability: bool = True,
+    ):
+        super().__init__(
+            run,
+            data,
+            side="short",
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
+        )
 
 
 class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
@@ -1701,6 +1749,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         hsl_raw_drawdown_enabled: bool = False,
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
+        dynamic_wel_by_tradability: bool = True,
     ):
         super().__init__(
             run,
@@ -1719,6 +1768,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -1745,6 +1795,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
             self.recovery_distribution_enabled,
+            self.dynamic_wel_by_tradability,
         )
 
     def _dispatch(
@@ -1819,6 +1870,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         hsl_raw_tail_enabled: bool = False,
         recovery_distribution_enabled: bool = False,
         hedge_mode: bool = True,
+        dynamic_wel_by_tradability: bool = True,
     ):
         super().__init__(
             run,
@@ -1837,6 +1889,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             hsl_raw_drawdown_enabled=hsl_raw_drawdown_enabled,
             hsl_raw_tail_enabled=hsl_raw_tail_enabled,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            dynamic_wel_by_tradability=dynamic_wel_by_tradability,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(

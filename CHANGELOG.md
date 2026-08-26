@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now supports both wallet-
+  exposure denominator modes. With `backtest.dynamic_wel_by_tradability: false`, Metal divides
+  total wallet exposure by each side's configured `n_positions`, matching exact Rust across
+  long-only, short-only, hedge-mode, one-way, HSL, exposure repair, coin overrides, and compatible
+  suite scenarios. The existing dynamic mode continues to use its grow-only observed-tradability
+  denominator, while current Forager selection remains based on currently tradable coins in both
+  modes.
+
 - Apple MPS single-coin EMA Anchor and Trailing Martingale optimization now supports the same
   modeled static `coin_overrides` leaves as multi-coin runs. Static values retain exact Rust's
   last-write precedence over optimizer candidates for long-only, short-only, hedge-mode, and
@@ -15,7 +23,7 @@ All notable user-facing changes will be documented in this file.
   `coin_overrides.<coin>.live.forced_mode_<side>: normal` for every enabled side. Long-only,
   short-only, and fused long+short kernels reserve eligible forced-normal symbols before Forager
   ranking and expand the active-set cap when forced symbols outnumber configured positions, while
-  retaining exact Rust's separate dynamic wallet-exposure denominator, one-way initial-entry
+  retaining exact Rust's separately configured wallet-exposure denominator, one-way initial-entry
   exclusion, minimum-effective-cost gate, and per-coin HSL eligibility.
 
 - Apple MPS multi-coin EMA Anchor and Trailing Martingale optimization now continues through

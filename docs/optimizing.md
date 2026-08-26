@@ -108,9 +108,12 @@ The supported slice is intentionally narrow:
   long+short enabled for one coin
 - long-only, short-only, or dual-side hedge-mode and one-way multi-coin EMA-anchor and
   trailing-martingale runs
-  for up to 64 coins, with dynamic wallet-exposure allocation and independent per-side Forager
-  selection; non-suite dual-side runs may use different effective long and short coin universes,
-  and all multi-coin runs require `backtest.dynamic_wel_by_tradability: true`;
+  for up to 64 coins, with fixed or dynamic wallet-exposure allocation and independent per-side
+  Forager selection; non-suite dual-side runs may use different effective long and short coin
+  universes. With `backtest.dynamic_wel_by_tradability: true`, each side's WEL denominator grows
+  with the maximum observed eligible coin count up to `n_positions`; with `false`, it remains the
+  configured `n_positions`. Current Forager selection still uses the current tradable set in both
+  modes;
   `live.forager_score_hysteresis_pct` preserves flat incumbent candidates when a challenger's
   normalized Forager-score lead is within the configured gap
 - each enabled side's `n_positions` pinned to `1` and wallet-exposure limit kept positive
@@ -126,9 +129,10 @@ The supported slice is intentionally narrow:
   config overrides are supported; scenario-local `coin_overrides` for supported multi-coin
   EMA-anchor and trailing-martingale runs, starting balance, maker fee, liquidation threshold,
   taker fee, market-order slippage, minimum-effective-cost filtering, finite or all-history PnL
-  lookback, Forager hysteresis, hedge mode, HSL signal mode, ordinary-market enablement, and its
-  near-touch threshold are also supported when the resulting scenario remains within the scope
-  below, while other non-bot override paths remain unsupported; combined scenarios may use
+  lookback, Forager hysteresis, hedge mode, HSL signal mode, dynamic-WEL denominator mode,
+  ordinary-market enablement, and its near-touch threshold are also supported when the resulting
+  scenario remains within the scope below, while other non-bot override paths remain unsupported;
+  combined scenarios may use
   canonical per-coin source assignments, while an individual-exchange scenario fails closed if
   an effective assignment for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of single- and multi-coin EMA-anchor and
@@ -139,7 +143,7 @@ The supported slice is intentionally narrow:
   exact Rust's override precedence. Checkpoint identity records the resolved exact override values
   before float32 Metal packing. Eligible forced-normal symbols in multi-coin runs reserve
   active slots before Forager ranking and may expand the active-set cap beyond `n_positions`; the
-  dynamic WEL denominator remains unchanged, matching exact Rust. Trailing Martingale also supports
+  configured WEL denominator mode remains unchanged, matching exact Rust. Trailing Martingale also supports
   per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
