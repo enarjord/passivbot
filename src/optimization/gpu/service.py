@@ -734,6 +734,18 @@ def _require_supported_multicoin_valid_tails(
     actual_valid = np.all(
         np.isfinite(packed_hlc) & (packed_hlc > 0.0), axis=2
     )
+    for coin, last_valid_idx in enumerate(tails):
+        if (
+            last_valid_idx + 1400 < candle_count
+            and not actual_valid[last_valid_idx, coin]
+        ):
+            raise ValueError(
+                "GPU multicoin proxy requires each forced-delist final "
+                "candle's packed float32 H/L/C values to remain finite and "
+                "positive; "
+                f"coin={coin}, last_valid_idx={last_valid_idx}, "
+                f"packed_hlc={packed_hlc[last_valid_idx, coin].tolist()}"
+            )
     actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
     coverage_start = min(first for first, _ in windows)
     missing = np.flatnonzero(~actual_coverage[coverage_start:])

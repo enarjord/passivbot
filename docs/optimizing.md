@@ -380,8 +380,9 @@ The supported slice is intentionally narrow:
   leave stale orders blocking HSL. When a tail crosses exact Rust's 1,400-candle forced-delist
   boundary, Metal closes that coin's long and then short with the same adverse market execution,
   taker-fee, panic-loss, fill, duration, and realized-PnL accounting, then clears both sides' pending
-  orders for that coin. Dynamic tradability, portfolio/coin HSL, equity, and elapsed-time accounting
-  continue on the surviving timeline
+  orders for that coin. Each such coin's final H/L/C must remain finite and positive after float32
+  packing; an unrepresentable final candle fails before dispatch. Dynamic tradability,
+  portfolio/coin HSL, equity, and elapsed-time accounting continue on the surviving timeline
 - multi-coin histories in which every coin ends before the prepared endpoint and histories with an
   all-invalid gap after coverage begins remain fail-closed until their all-invalid time-accounting
   semantics are modeled

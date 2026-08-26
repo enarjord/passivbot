@@ -1286,6 +1286,24 @@ def test_gpu_multicoin_valid_tail_gate_rejects_out_of_range_last_index():
         )
 
 
+@pytest.mark.parametrize(
+    "unrepresentable_close",
+    [np.nextafter(0.0, 1.0), np.finfo(np.float64).max],
+)
+def test_gpu_multicoin_forced_delist_requires_representable_final_candle(
+    unrepresentable_close,
+):
+    hlcvs = np.ones((1401, 2, 4), dtype=np.float64)
+    hlcvs[0, 0, 2] = unrepresentable_close
+
+    with pytest.raises(ValueError, match="forced-delist final candle"):
+        _require_supported_multicoin_valid_tails(
+            hlcvs,
+            [0, 0],
+            [0, 1400],
+        )
+
+
 def test_gpu_hsl_requires_contiguous_valid_candles():
     high = np.array([100.0, np.nan, 100.0])
     low = np.array([99.0, np.nan, 99.0])

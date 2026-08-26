@@ -15,8 +15,9 @@ All notable user-facing changes will be documented in this file.
   the prepared timeline alive. Metal preserves ordinary-fill and order-generation chronology,
   closes long before short using adverse market slippage, directional price rounding, and taker
   fees, records panic-loss, realized-PnL, fill, duration, and HSL equity effects, and clears both
-  sides' pending orders for the delisted coin. Exact Rust remains authoritative. All-coins-ended
-  tails and all-invalid gaps remain fail-closed.
+  sides' pending orders for the delisted coin. Forced-delist final candles that cannot be represented
+  as finite positive float32 H/L/C fail before dispatch. Exact Rust remains authoritative.
+  All-coins-ended tails and all-invalid gaps remain fail-closed.
 
 - Apple MPS HSL optimization now supports per-side
   `drawdown_worst_mean_1pct_strategy_eq_{long,short}` scoring and limits for EMA Anchor and
