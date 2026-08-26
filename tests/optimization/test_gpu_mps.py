@@ -4353,17 +4353,20 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         strategy["entry"]["initial_qty_pct"] = 0.1
         strategy["entry"]["initial_ema_dist"] = 0.01
 
+    btc_prices = np.linspace(50_000.0, 55_000.0, count)
     proxy = MpsSingleCoinProxy(
         config=config,
         hlcvs=hlcvs,
         mss=market_settings,
-        btc=np.full(count, 50_000.0),
+        btc=btc_prices,
         timestamps=timestamps,
         exchange="bybit",
         batch_size=1,
         needed_metrics={
             "backtest_completion_ratio",
             "fills_count",
+            "adg_btc",
+            "gain_btc",
             "hard_stop_panic_close_loss_sum",
         },
     )
@@ -4373,7 +4376,7 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         market_settings,
         config,
         "bybit",
-        np.full(count, 50_000.0),
+        btc_prices,
         timestamps,
     )
 
@@ -4383,6 +4386,12 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     assert result["hard_stop_panic_close_loss_sum"] > 0.0
     assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
         exact_analysis["hard_stop_panic_close_loss_sum"], rel=1.0e-5
+    )
+    assert result["gain_btc"] == pytest.approx(
+        exact_analysis["gain_btc"], rel=2.0e-3
+    )
+    assert result["adg_btc"] == pytest.approx(
+        exact_analysis["adg_btc"], rel=2.0e-3
     )
     assert result["backtest_completion_ratio"] > 0.99
 
@@ -4691,17 +4700,20 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
             strategy["entry"]["double_down_factor"] = 0.0
             strategy["close"]["threshold_base_pct"] = 0.5
 
+    btc_prices = np.linspace(50_000.0, 55_000.0, count)
     proxy = MpsMulticoinProxy(
         config=config,
         hlcvs=hlcvs,
         mss=market_settings,
-        btc=np.full(count, 50_000.0),
+        btc=btc_prices,
         timestamps=timestamps,
         exchange="bybit",
         batch_size=1,
         needed_metrics={
             "backtest_completion_ratio",
             "fills_count",
+            "adg_btc",
+            "gain_btc",
             "hard_stop_panic_close_loss_sum",
         },
     )
@@ -4711,7 +4723,7 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         market_settings,
         config,
         "bybit",
-        np.full(count, 50_000.0),
+        btc_prices,
         timestamps,
     )
     expected_fills = 4.0 if topology == "fused" else 2.0
@@ -4728,6 +4740,12 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
             exact_analysis["hard_stop_panic_close_loss_sum"], rel=5.0e-4
         )
+    assert result["gain_btc"] == pytest.approx(
+        exact_analysis["gain_btc"], rel=2.0e-3
+    )
+    assert result["adg_btc"] == pytest.approx(
+        exact_analysis["adg_btc"], rel=2.0e-3
+    )
     assert result["backtest_completion_ratio"] > 0.99
 
 

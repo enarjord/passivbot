@@ -10,6 +10,7 @@ torch = pytest.importorskip("torch")
 from optimization.gpu.metrics import (
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
+    _daily_peak_recovery_ms,
     _equity_shape_metrics,
     _directional_pnl_metrics,
     _fill_activity_metrics,
@@ -32,6 +33,21 @@ from optimization.gpu.metrics import (
     _weighted_strategy_eq_metrics,
     compute_objectives,
 )
+
+
+def test_btc_daily_peak_recovery_matches_non_strict_rust_contract():
+    day_end = torch.tensor(
+        [
+            [10.0, 9.0, 10.0, 8.0],
+            [10.0, 9.0, 8.0, 7.0],
+        ],
+        dtype=torch.float64,
+    )
+    active = torch.ones_like(day_end, dtype=torch.bool)
+
+    recovery = _daily_peak_recovery_ms(day_end, active) / 86_400_000.0
+
+    assert recovery.tolist() == [2.0, 0.0]
 
 
 def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
@@ -1576,6 +1592,157 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
         needed={"gain_per_exposure_short_usd"},
     )
     assert zero_exposure["gain_per_exposure_short_usd"].item() == 0.0
+
+
+def test_btc_account_metrics_use_prepared_daily_price_context():
+    day_end = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
+        "fill_count": torch.tensor([3.0]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([2 * 86_400_000.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([86_400_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([2 * 86_400_000.0]),
+        "liq_step": torch.tensor([-1]),
+        "total_wallet_exposure_max": torch.tensor([2.0]),
+        "total_wallet_exposure_mean": torch.tensor([1.0]),
+        "candidate_total_wallet_exposure_limit_long": torch.tensor([1.25]),
+        "candidate_total_wallet_exposure_limit_short": torch.tensor([0.5]),
+    }
+    requested = {
+        "adg_btc",
+        "drawdown_worst_btc",
+        "gain_btc",
+        "gain_per_exposure_long_btc",
+        "peak_recovery_days_equity_btc",
+    }
+    btc_day_end = np.array([10.0, 10.0, 20.0])
+    btc_day_max = np.array([10.0, 10.0, 20.0])
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=86_400_000,
+        ),
+        {
+            "ts0": 0.0,
+            "n": 3,
+            "btc_day_end_price": btc_day_end,
+            "btc_day_max_price": btc_day_max,
+            "btc_prices": btc_day_end,
+        },
+        needed=requested,
+    )
+
+    btc_equity = torch.tensor([[10.0, 11.0, 4.5]], dtype=torch.float64)
+    expected_gain, expected_adg = _smoothed_gain_adg(
+        btc_equity, torch.ones_like(btc_equity, dtype=torch.bool)
+    )
+    assert set(metrics) == requested
+    assert requested <= set(SUPPORTED_METRICS)
+    assert metrics["gain_btc"].item() == pytest.approx(expected_gain.item())
+    assert metrics["adg_btc"].item() == pytest.approx(expected_adg.item())
+    assert metrics["drawdown_worst_btc"].item() == pytest.approx(
+        (11.0 - 4.5) / 11.0
+    )
+    assert metrics["gain_per_exposure_long_btc"].item() == pytest.approx(
+        expected_gain.item() / 1.25
+    )
+    assert metrics["peak_recovery_days_equity_btc"].item() == 1.0
+
+
+def test_btc_account_metrics_fail_closed_without_price_context():
+    day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
+        "fill_count": torch.tensor([1.0]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([86_400_000.0]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([86_400_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([86_400_000.0]),
+        "liq_step": torch.tensor([-1]),
+    }
+
+    with pytest.raises(RuntimeError, match="BTC account metric context"):
+        compute_objectives(
+            out,
+            SimpleNamespace(
+                requested_start_ts_ms=0,
+                guard_ts_ms=0,
+                interval_ms=86_400_000,
+            ),
+            {"ts0": 0.0, "n": 2},
+            needed={"adg_btc"},
+        )
+
+
+def test_btc_account_metrics_use_candidate_liquidation_endpoint_price():
+    day_ms = 86_400_000
+    minute_ms = 60_000
+    btc_prices = np.full(1442, 10.0)
+    btc_prices[1440] = 20.0
+    btc_prices[1441] = 40.0
+    day_end = torch.tensor([[100.0, 100.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_end,
+        "day_min_eq": day_end.clone(),
+        "day_max_dd": torch.zeros_like(day_end),
+        "day_volume": torch.zeros_like(day_end),
+        "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
+        "fill_count": torch.tensor([2.0]),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([float(day_ms)]),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.tensor([0.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([float(day_ms)]),
+        "liq_step": torch.tensor([1440]),
+    }
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=minute_ms,
+        ),
+        {
+            "ts0": 0,
+            "n": len(btc_prices),
+            "btc_day_end_price": np.array([10.0, 40.0]),
+            "btc_day_max_price": np.array([10.0, 40.0]),
+            "btc_prices": btc_prices,
+        },
+        needed={"gain_btc"},
+    )
+
+    assert metrics["gain_btc"].item() == pytest.approx(0.75)
 
 
 def test_objectives_include_final_active_calendar_day():

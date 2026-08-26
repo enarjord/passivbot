@@ -3203,6 +3203,26 @@ def test_gpu_foundation_accepts_weighted_daily_series_metrics(metric, goal):
 
 
 @pytest.mark.parametrize(
+    ("metric", "goal"),
+    [
+        ("adg_btc", "max"),
+        ("drawdown_worst_btc", "min"),
+        ("gain_per_exposure_long_btc", "max"),
+        ("peak_recovery_days_equity_btc", "min"),
+        ("sortino_ratio_w_btc", "max"),
+    ],
+)
+def test_gpu_foundation_accepts_btc_account_metrics_without_collateral(
+    metric, goal
+):
+    config = _long_only_ema_config()
+    config["backtest"]["btc_collateral_cap"] = 0.0
+    config["optimize"]["scoring"] = [{"goal": goal, "metric": metric}]
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
     "metric",
     [
         "entry_initial_balance_pct_long",
