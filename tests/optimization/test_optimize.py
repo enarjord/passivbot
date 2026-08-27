@@ -865,7 +865,21 @@ def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
 def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
-    suite_cfg = {"enabled": True, "scenarios": [{"label": "stress"}]}
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "backtest.btc_collateral_cap": 0.5,
+    }
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [
+            {
+                "label": "stress",
+                "overrides": {
+                    "backtest": {"starting_balance": 2_000.0},
+                    "bot": {"long": {"risk": {"n_positions": 1}}},
+                },
+            }
+        ],
+    }
     calls = []
 
     monkeypatch.setattr(
@@ -877,8 +891,35 @@ def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
 
     optimize._run_gpu_preparation_preflight(config, suite_cfg)
 
-    assert calls == [(config, suite_cfg)]
-    assert calls[0][1] is not suite_cfg
+    assert len(calls) == 1
+    effective_config, effective_suite = calls[0]
+    assert effective_config is not config
+    assert effective_config["backtest"]["btc_collateral_cap"] == 0.5
+    assert config["backtest"]["btc_collateral_cap"] == 0.0
+    assert effective_suite is not suite_cfg
+    assert effective_suite["scenarios"] == [
+        {
+            "label": "stress",
+            "overrides": {
+                "backtest.starting_balance": 2_000.0,
+                "bot.long.risk.n_positions": 1,
+            },
+        }
+    ]
+
+
+def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "backtest.btc_collateral_cap": 0.5,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"btc_collateral_cap=0\.0.*got 0\.5.*pymoo",
+    ):
+        optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
 
 def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():

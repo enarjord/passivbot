@@ -195,6 +195,7 @@ from optimization.config_adapter import (
 )
 from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
 from optimization.warmup import (
+    _finalize_optimizer_vector_config,
     build_optimizer_data_config,
     build_optimizer_vector_config,
     compute_optimizer_per_coin_warmup_minutes,
@@ -2997,7 +2998,24 @@ def _run_gpu_preparation_preflight(
         return
     from optimization.backends.gpu_backend import validate_gpu_preparation_scope
 
-    validate_gpu_preparation_scope(config, dict(suite_cfg))
+    effective_config = _finalize_optimizer_vector_config(
+        deepcopy(config),
+        overrides_list=config.get("optimize", {}).get("enable_overrides", []),
+    )
+    normalized_suite_cfg = dict(suite_cfg)
+    if bool(normalized_suite_cfg.get("enabled")):
+        scenarios, _reducer_cfg = build_scenarios(
+            normalized_suite_cfg,
+            base_exchanges=effective_config.get("backtest", {}).get("exchanges"),
+        )
+        normalized_suite_cfg["scenarios"] = [
+            {
+                "label": scenario.label,
+                "overrides": dict(scenario.overrides or {}),
+            }
+            for scenario in scenarios
+        ]
+    validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
 
 
 def _materialize_resolved_gpu_suite_dates(
