@@ -1899,6 +1899,26 @@ def test_gpu_preparation_preflight_rejects_btc_collateral_before_runtime_probe()
     runtime.backends.mps.is_available.assert_not_called()
 
 
+def test_gpu_preparation_preflight_rejects_exact_only_metric_before_runtime_probe():
+    config = _long_only_ema_config()
+    config["_raw_effective"] = {
+        "optimize": {
+            "scoring": [
+                {
+                    "goal": "min",
+                    "metric": "peak_recovery_days_strategy_eq",
+                }
+            ]
+        }
+    }
+    runtime = MagicMock()
+
+    with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
+        validate_gpu_preparation_scope(config, torch_module=runtime)
+
+    runtime.backends.mps.is_available.assert_not_called()
+
+
 def test_gpu_preparation_preflight_explains_trailing_grid_cpu_fallback():
     config = _long_only_ema_config()
     config["live"]["strategy_kind"] = "trailing_grid_v7"
