@@ -840,7 +840,7 @@ def test_ticker_endpoint_probe_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["prog_env"] == "passivbot tool ticker-endpoint-probe"
 
 
-def test_gpu_proxy_benchmark_dispatch_forwards_module_and_prog(monkeypatch):
+def test_gpu_proxy_benchmark_owns_its_gpu_dependency_gate(monkeypatch):
     captured = {}
 
     def fake_invoke_module_main(module_name):
@@ -850,7 +850,9 @@ def test_gpu_proxy_benchmark_dispatch_forwards_module_and_prog(monkeypatch):
         return True, 0
 
     monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
-    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+    monkeypatch.setattr(
+        cli_main, "_missing_full_install_markers", lambda: ["aiohttp"]
+    )
 
     assert (
         cli_main.main(

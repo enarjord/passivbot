@@ -147,7 +147,6 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     "gpu-proxy-benchmark": CommandSpec(
         "tools.gpu_proxy_benchmark",
         "benchmark deterministic Apple MPS proxy workloads",
-        requires_full=True,
     ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",

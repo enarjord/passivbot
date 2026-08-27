@@ -134,6 +134,10 @@ def _log_gpu_profile(event: str, **payload) -> None:
     )
 
 
+def _gpu_profile_elapsed(started: float) -> float:
+    return max(0.0, time.perf_counter() - float(started))
+
+
 def _checkpoint_gpu_interrupt(
     *,
     generation_in_progress: bool,
@@ -3995,6 +3999,7 @@ def run_backend(
     pending = {}
     submitted_hashes: set[str] = set()
     start_time = time.time()
+    profile_started = time.perf_counter() if profile_enabled else 0.0
     proxy_evaluations = 0
     novelty_stall_generations = 0
     last_warning = None
@@ -4382,7 +4387,7 @@ def run_backend(
                 generations=generation,
                 proxy_evaluations=proxy_evaluations,
                 exact_completed=exact_done,
-                wall_seconds=time.time() - start_time,
+                wall_seconds=_gpu_profile_elapsed(profile_started),
                 exact_validation_cumulative_seconds=dict(profile_totals),
             )
         logging.info(

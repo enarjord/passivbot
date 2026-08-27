@@ -40,6 +40,7 @@ from optimization.backends.gpu_backend import (
     _gpu_hsl_parameter_active,
     _gpu_nsga2_checkpoint_contract,
     _gpu_pinned_hsl_bound_contract,
+    _gpu_profile_elapsed,
     _validate_hsl_bound_contracts,
     _validate_hsl_metric_topology,
     _gpu_suite_enabled,
@@ -181,6 +182,20 @@ def test_gpu_profile_log_is_structured_json(caplog):
         "generation": 3,
         "timings_seconds": {"wall": 1.25},
     }
+
+
+def test_gpu_profile_elapsed_uses_monotonic_clock(monkeypatch):
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.perf_counter", lambda: 15.5
+    )
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.time",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("profile duration used the wall clock")
+        ),
+    )
+
+    assert _gpu_profile_elapsed(10.0) == pytest.approx(5.5)
 
 
 def test_gpu_interrupt_discards_incomplete_ask_tell_without_checkpointing():
