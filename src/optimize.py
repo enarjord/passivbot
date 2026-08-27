@@ -2988,6 +2988,18 @@ def _materialize_gpu_suite_run_contract(
             backtest[key] = deepcopy(suite_cfg[key])
 
 
+def _run_gpu_preparation_preflight(
+    config: Dict[str, Any], suite_cfg: Mapping[str, Any]
+) -> None:
+    """Validate immutable Apple MPS requirements before loading historical data."""
+
+    if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
+        return
+    from optimization.backends.gpu_backend import validate_gpu_preparation_scope
+
+    validate_gpu_preparation_scope(config, dict(suite_cfg))
+
+
 def _materialize_resolved_gpu_suite_dates(
     config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
 ) -> None:
@@ -3381,6 +3393,7 @@ async def main():
     manager = None
     pool_terminated = False
     try:
+        _run_gpu_preparation_preflight(config, suite_cfg)
         array_manager = SharedArrayManager()
         hlcvs_specs = {}
         btc_usd_specs = {}

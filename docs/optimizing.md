@@ -420,6 +420,29 @@ The supported slice is intentionally narrow:
   stricter contiguous-candle requirement documented above, and a forced-delist endpoint must remain
   finite and positive after float32 packing because it supplies an executable close
 
+#### Deliberate current limitations
+
+The following boundaries are intentional rather than silent fallbacks:
+
+- `trailing_grid_v7` is outside the Apple MPS implementation. Use `optimize.backend: "pymoo"` or
+  `"deap"` for it; GPU optimization never substitutes EMA Anchor or Trailing Martingale behavior.
+- `backtest.btc_collateral_cap` must be zero. Positive BTC collateral changes the simulated
+  account state and is not approximated by the screening proxy; use a CPU optimizer when it is
+  required. BTC-denominated scoring with a zero collateral cap remains supported as described
+  below.
+- Each prepared single run or suite scenario is capped at 64 coins. Split the scenario universe or
+  use a CPU optimizer for a larger portfolio.
+- Only metrics and limits represented by the MPS screening surface are accepted. An unsupported
+  metric is named in the startup error and must be removed or run on a CPU backend. Exact Rust
+  validation does not turn an unmodeled proxy objective into a safe evolutionary search.
+- Suite scenario override paths require explicit proxy shadow semantics. Unmodeled paths fail
+  before historical-data preparation rather than being applied only to exact validations.
+
+GPU startup checks the strategy, zero-collateral contract, suite override paths, optional PyTorch
+installation, and MPS availability before historical-data preparation. The prepared-data stage
+then enforces the 64-coin ceiling and topology-specific requirements. CPU optimizers, backtesting,
+and live operation do not import or probe the optional GPU runtime.
+
 Unsupported combinations fail before optimization begins. Dual-side multi-coin EMA Anchor and
 Trailing Martingale use fused shared-account Metal kernels in hedge and one-way modes. Every
 accepted metric still comes from the unchanged exact Rust portfolio backtest, and classification,

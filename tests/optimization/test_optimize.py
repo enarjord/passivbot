@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import argparse
+import builtins
 import json
 import logging
 from multiprocessing.reduction import ForkingPickler
@@ -837,6 +838,47 @@ def test_materialize_gpu_suite_run_contract_does_not_change_cpu_config():
     )
 
     assert config["backtest"] == before
+
+
+def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "pymoo"
+    config["live"]["strategy_kind"] = "trailing_grid_v7"
+    config["backtest"]["btc_collateral_cap"] = 1.0
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "optimization.backends.gpu_backend":
+            raise AssertionError("CPU optimizer must not import or probe the GPU backend")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(
+        builtins,
+        "__import__",
+        guarded_import,
+    )
+
+    optimize._run_gpu_preparation_preflight(config, {"enabled": False})
+
+
+def test_gpu_preparation_preflight_delegates_effective_suite(monkeypatch):
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    suite_cfg = {"enabled": True, "scenarios": [{"label": "stress"}]}
+    calls = []
+
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.validate_gpu_preparation_scope",
+        lambda actual_config, actual_suite: calls.append(
+            (actual_config, actual_suite)
+        ),
+    )
+
+    optimize._run_gpu_preparation_preflight(config, suite_cfg)
+
+    assert calls == [(config, suite_cfg)]
+    assert calls[0][1] is not suite_cfg
 
 
 def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():

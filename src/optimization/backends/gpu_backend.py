@@ -28,6 +28,7 @@ from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.model import (
     HSL_COIN_OVERRIDE_PATHS,
+    MPS_MULTICOIN_MAX_COINS,
     TRAILING_MARTINGALE_GATE_MODE_OVERRIDE_PATH,
     gpu_side_enabled,
     validate_hsl_override_patch,
@@ -287,6 +288,9 @@ GPU_STRATEGY_BOUND_MAPS = {
     "trailing_martingale": TRAILING_MARTINGALE_BOUND_MAP,
 }
 
+GPU_CAPABILITIES_DOC = "docs/optimizing.md#deliberate-current-limitations"
+GPU_SUPPORTED_STRATEGY_KINDS = frozenset(GPU_STRATEGY_BOUND_MAPS)
+
 GPU_SUPPORTED_OPTIMIZER_OVERRIDES = {
     "lossless_close_trailing",
     "mirror_short_from_long",
@@ -313,6 +317,114 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
     ("live", "max_realized_loss_pct"),
     ("live", "pnls_max_lookback_days"),
 }
+
+
+def _validate_gpu_static_scope(config: dict) -> str:
+    """Reject immutable GPU limitations without touching data or optional runtime state."""
+
+    strategy_kind = (
+        str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+    )
+    if strategy_kind not in GPU_SUPPORTED_STRATEGY_KINDS:
+        detail = (
+            "trailing_grid_v7 is deliberately outside the Apple MPS scope"
+            if strategy_kind == "trailing_grid_v7"
+            else f"strategy_kind={strategy_kind!r} is not implemented by Apple MPS"
+        )
+        raise ValueError(
+            "Apple MPS GPU optimization supports live.strategy_kind=ema_anchor or "
+            f"trailing_martingale only; {detail}. Use optimize.backend='pymoo' or "
+            f"'deap' for this configuration. See {GPU_CAPABILITIES_DOC}."
+        )
+
+    btc_collateral_cap = float(
+        config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0
+    )
+    if not math.isfinite(btc_collateral_cap) or btc_collateral_cap != 0.0:
+        raise ValueError(
+            "Apple MPS GPU optimization does not model "
+            "backtest.btc_collateral_cap; the GPU screening proxy requires "
+            f"backtest.btc_collateral_cap=0.0, got {btc_collateral_cap!r}. "
+            "Set it to zero or use optimize.backend='pymoo' or 'deap'; exact Rust "
+            "validation cannot make an unmodeled proxy search safe. "
+            f"See {GPU_CAPABILITIES_DOC}."
+        )
+    return strategy_kind
+
+
+def _validate_gpu_suite_override_paths(
+    proxy_config: dict,
+    *,
+    label: str,
+    overrides: dict,
+) -> None:
+    """Reject suite override paths which have no modeled MPS shadow semantics."""
+
+    from config.param_paths import require_existing_config_path
+
+    for dotted_path in overrides:
+        resolved = require_existing_config_path(proxy_config, dotted_path)
+        bot_side_override = (
+            len(resolved) >= 3
+            and resolved[0] == "bot"
+            and resolved[1] in {"long", "short"}
+        )
+        if (
+            not bot_side_override
+            and resolved not in GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS
+        ):
+            raise ValueError(
+                f"Apple MPS GPU suite scenario {label!r} override "
+                f"{dotted_path!r} is outside the supported modeled scenario scope "
+                "and has no screening semantics. Remove the override or use "
+                "optimize.backend='pymoo' or 'deap'. "
+                f"See {GPU_CAPABILITIES_DOC}."
+            )
+
+
+def validate_gpu_preparation_scope(
+    config: dict,
+    suite_cfg: dict | None = None,
+    *,
+    torch_module=None,
+) -> None:
+    """Fail before historical-data preparation when immutable MPS scope is invalid."""
+
+    strategy_kind = _validate_gpu_static_scope(config)
+    suite_cfg = suite_cfg or {}
+    if bool(suite_cfg.get("enabled")):
+        for index, scenario in enumerate(suite_cfg.get("scenarios") or []):
+            label = str(scenario.get("label") or f"scenario_{index + 1:02d}")
+            _validate_gpu_suite_override_paths(
+                config,
+                label=label,
+                overrides=scenario.get("overrides") or {},
+            )
+
+    if torch_module is None:
+        try:
+            import torch as torch_module
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+            raise ModuleNotFoundError(
+                "Apple MPS GPU optimization requires the optional 'gpu-mps' "
+                "dependencies; install Passivbot with "
+                "`pip install -e '.[full,gpu-mps]'`. "
+                f"See {GPU_CAPABILITIES_DOC}."
+            ) from exc
+    if not torch_module.backends.mps.is_available():
+        raise RuntimeError(
+            "Apple MPS GPU optimization was requested, but MPS is unavailable in "
+            "this process. Run on Apple Silicon with an MPS-enabled PyTorch build, "
+            "or use optimize.backend='pymoo' or 'deap'. "
+            f"See {GPU_CAPABILITIES_DOC}."
+        )
+
+    logging.info(
+        "GPU capability preflight passed | runtime=apple_mps | strategy=%s | "
+        "btc_collateral_cap=0 | max_coins_per_scenario=%d",
+        strategy_kind,
+        MPS_MULTICOIN_MAX_COINS,
+    )
 
 
 def _validate_gpu_optimizer_overrides(overrides_list, strategy_kind: str) -> set[str]:
@@ -1007,8 +1119,9 @@ def _validate_scope_config(
     coin_count: int,
     allow_suite: bool = False,
 ) -> str:
+    strategy_kind = _validate_gpu_static_scope(config)
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
-        raise ValueError("GPU foundation does not support suite mode")
+        raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
         liquidation_threshold = float(
             config.get("backtest", {}).get("liquidation_threshold", 0.0)
@@ -1019,8 +1132,6 @@ def _validate_scope_config(
                 "backtest.liquidation_threshold so the proxy has a proven lower "
                 "balance bound"
             )
-    if float(config.get("backtest", {}).get("btc_collateral_cap", 0.0) or 0.0) > 0.0:
-        raise ValueError("GPU foundation does not support backtest.btc_collateral_cap")
     max_realized_loss_pct = float(
         config.get("live", {}).get("max_realized_loss_pct", 1.0)
     )
@@ -1038,15 +1149,6 @@ def _validate_scope_config(
     coin_count = int(coin_count)
     if coin_count < 1:
         raise ValueError("GPU foundation requires at least one prepared coin")
-    strategy_kind = (
-        str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
-    )
-    if strategy_kind not in GPU_STRATEGY_BOUND_MAPS:
-        raise ValueError(
-            "GPU foundation supports strategy_kind=ema_anchor or "
-            "trailing_martingale only; "
-            f"got {strategy_kind!r}"
-        )
     enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
     if not enabled_sides:
         raise ValueError("GPU foundation requires at least one enabled side")
@@ -1066,12 +1168,12 @@ def _validate_scope_config(
                     config, enabled_sides
                 )
     if coin_count > 1:
-        from optimization.gpu.model import MPS_MULTICOIN_MAX_COINS
-
         if coin_count > MPS_MULTICOIN_MAX_COINS:
             raise ValueError(
-                "GPU multicoin foundation supports at most "
-                f"{MPS_MULTICOIN_MAX_COINS} coins; prepared {coin_count}"
+                "Apple MPS GPU optimization supports at most "
+                f"{MPS_MULTICOIN_MAX_COINS} prepared coins per scenario; got "
+                f"{coin_count}. Reduce the scenario coin universe or use "
+                "optimize.backend='pymoo' or 'deap'."
             )
         if len(enabled_sides) not in (1, 2):
             raise ValueError(
@@ -1447,8 +1549,6 @@ def _validate_scope(
 def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict]:
     """Materialize fail-closed suite inputs for MPS screening."""
 
-    from config.param_paths import require_existing_config_path
-
     contexts = getattr(suite_evaluator, "contexts", None)
     get_data = getattr(suite_evaluator, "get_prepared_context_data", None)
     build_config = getattr(suite_evaluator, "build_scenario_candidate_config", None)
@@ -1460,21 +1560,11 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
     prepared = []
     for ctx in contexts:
         overrides = getattr(ctx, "overrides", {}) or {}
-        for dotted_path in overrides:
-            resolved = require_existing_config_path(proxy_config, dotted_path)
-            bot_side_override = (
-                len(resolved) >= 3
-                and resolved[0] == "bot"
-                and resolved[1] in {"long", "short"}
-            )
-            if (
-                not bot_side_override
-                and resolved not in GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS
-            ):
-                raise ValueError(
-                    f"GPU suite scenario {ctx.label!r} override {dotted_path!r} is "
-                    "outside the supported modeled scenario scope"
-                )
+        _validate_gpu_suite_override_paths(
+            proxy_config,
+            label=str(ctx.label),
+            overrides=overrides,
+        )
         exchanges = list(ctx.exchanges)
         if not exchanges:
             raise ValueError(

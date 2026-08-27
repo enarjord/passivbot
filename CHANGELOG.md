@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- GPU optimization now runs an Apple MPS capability preflight before loading historical data.
+  Missing MPS support, unsupported strategies, positive `backtest.btc_collateral_cap`, and
+  unmodeled suite override paths fail immediately with the unsupported setting, the CPU-backend
+  fallback, and a documentation pointer. Successful starts log the strategy, zero-collateral
+  contract, and 64-coin-per-scenario ceiling. CPU optimization and backtesting do not import or
+  probe the optional GPU runtime.
+
 - Apple MPS optimization now supports the eight unweighted high-exposure duration metrics for
   EMA Anchor and Trailing Martingale across single-coin, multi-coin, long-only, short-only, and
   fused long+short runs. When one of these metrics is scored or limited, Metal performs an opt-in
