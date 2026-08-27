@@ -62,6 +62,26 @@ from optimization.gpu.service import (
 )
 
 
+@pytest.mark.parametrize("proxy_cls", [MpsSingleCoinProxy, MpsMulticoinEmaProxy])
+def test_proxy_constructors_reject_exact_only_metrics_before_setup(
+    monkeypatch, proxy_cls
+):
+    torch = pytest.importorskip("torch")
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
+        proxy_cls(
+            config={},
+            hlcvs=None,
+            mss={},
+            btc=None,
+            timestamps=None,
+            exchange="bybit",
+            batch_size=1,
+            needed_metrics={"fills_count"},
+        )
+
+
 @pytest.mark.parametrize("raw_interval", [5, 5.0, "5"])
 def test_single_coin_candle_interval_accepts_positive_integers(raw_interval):
     assert (
@@ -1091,16 +1111,14 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "raw_drawdown_enabled",
         "raw_tail_enabled",
         "recovery_distribution_enabled",
-        "high_exposure_enabled",
     ),
     [
-        ({"hard_stop_time_in_red_pct"}, False, False, False, False, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False, False),
-        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False, False),
-        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False, False),
-        ({"strategy_eq_recovery_days_p99"}, False, False, False, True, False),
-        ({"entry_interval_hours_p95"}, False, False, False, False, False),
-        ({"high_exposure_days_max_long"}, False, False, False, False, True),
+        ({"hard_stop_time_in_red_pct"}, False, False, False, False),
+        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
+        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
+        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
+        ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
+        ({"entry_interval_hours_p95"}, False, False, False, False),
     ],
 )
 @pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
@@ -1116,7 +1134,6 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     raw_drawdown_enabled,
     raw_tail_enabled,
     recovery_distribution_enabled,
-    high_exposure_enabled,
     dynamic_wel_by_tradability,
 ):
     torch = pytest.importorskip("torch")
@@ -1317,10 +1334,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         constructed["kwargs"]["recovery_distribution_enabled"]
         is recovery_distribution_enabled
     )
-    assert (
-        constructed["kwargs"]["high_exposure_enabled"]
-        is high_exposure_enabled
-    )
+    assert "high_exposure_enabled" not in constructed["kwargs"]
     assert constructed["kwargs"]["hedge_mode"] is False
     assert constructed["kwargs"]["filter_by_min_effective_cost"] is True
     assert (

@@ -107,14 +107,6 @@ CORE_OUTPUT_KEYS = {
     "entry_interval_hist",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
-    "high_exposure_hours_mean_long",
-    "high_exposure_hours_max_long",
-    "high_exposure_days_mean_long",
-    "high_exposure_days_max_long",
-    "high_exposure_hours_mean_short",
-    "high_exposure_hours_max_short",
-    "high_exposure_days_mean_short",
-    "high_exposure_days_max_short",
 }
 
 DIRECTIONAL_HSL_OUTPUT_KEYS = {
@@ -1348,14 +1340,16 @@ class MpsSingleCoinProxy:
                 "GPU optimization requested but Apple MPS is unavailable in this process"
             )
 
-        from backtest import build_backtest_payload
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
             ENTRY_INTERVAL_METRICS,
             EQUITY_BALANCE_DIFF_METRICS,
-            HIGH_EXPOSURE_METRICS,
             compute_objectives,
+            validate_gpu_metric_names,
         )
+        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+
+        from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
             MpsEmaAnchorRunner,
             MpsTrailingMartingaleRunner,
@@ -1363,7 +1357,6 @@ class MpsSingleCoinProxy:
 
         self._torch = torch
         self._compute_objectives = compute_objectives
-        self.needed_metrics = set(needed_metrics)
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
         )
@@ -1372,9 +1365,6 @@ class MpsSingleCoinProxy:
         )
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
-        )
-        self.high_exposure_enabled = bool(
-            self.needed_metrics & HIGH_EXPOSURE_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -1688,7 +1678,6 @@ class MpsSingleCoinProxy:
             btc_risk_enabled=self.btc_risk_enabled,
             equity_balance_diff_enabled=self.equity_balance_diff_enabled,
             entry_interval_enabled=self.entry_interval_enabled,
-            high_exposure_enabled=self.high_exposure_enabled,
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -2198,14 +2187,16 @@ class MpsMulticoinProxy:
                 "GPU optimization requested but Apple MPS is unavailable in this process"
             )
 
-        from backtest import build_backtest_payload
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
             ENTRY_INTERVAL_METRICS,
             EQUITY_BALANCE_DIFF_METRICS,
-            HIGH_EXPOSURE_METRICS,
             compute_objectives,
+            validate_gpu_metric_names,
         )
+        self.needed_metrics = set(validate_gpu_metric_names(needed_metrics))
+
+        from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
             MpsEmaAnchorMulticoinFusedRunner,
             MpsEmaAnchorMulticoinRunner,
@@ -2215,7 +2206,6 @@ class MpsMulticoinProxy:
 
         self._torch = torch
         self._compute_objectives = compute_objectives
-        self.needed_metrics = set(needed_metrics)
         self.btc_analysis_enabled = any(
             _metric_uses_btc_analysis(metric) for metric in self.needed_metrics
         )
@@ -2224,9 +2214,6 @@ class MpsMulticoinProxy:
         )
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
-        )
-        self.high_exposure_enabled = bool(
-            self.needed_metrics & HIGH_EXPOSURE_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -2680,7 +2667,6 @@ class MpsMulticoinProxy:
             "btc_risk_enabled": self.btc_risk_enabled,
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
-            "high_exposure_enabled": self.high_exposure_enabled,
         }
         if self.shared_account_fused:
             fused_runner_cls = (

@@ -176,11 +176,11 @@ The supported slice is intentionally narrow:
   ages out, but cannot suppress a drawdown for that reason. The selected history must have no
   internal invalid candles between its first and last valid samples. Thresholds in the
   float32-unrepresentable interval immediately below `1.0` fail closed. Exact validation and
-  drift gates remain authoritative. The non-loss HSL lifecycle
-  metrics (trigger/restart counts and
-  yearly rates, time in each warning tier, halt and flatten durations, trigger drawdown, and
-  post-restart retriggers) and panic-loss metrics (loss sum/max, per-episode loss
-  drawdown min/mean/max, and halt-to-restart equity loss) may be used for scoring and limits.
+  drift gates remain authoritative. Optimization may use normalized HSL lifecycle and risk
+  signals: yearly trigger/restart rates, time in RED, halt-duration summaries, trigger drawdown,
+  post-restart retriggers, panic-loss drawdown mean/max, and halt-to-restart equity loss. Raw event
+  counts, yellow/orange occupancy, absolute panic-loss totals/maxima, minimum panic-loss drawdown,
+  and mean flatten time remain exact-analysis diagnostics.
   One-sided coin-mode multi-coin runs may resolve all canonical HSL settings independently per
   coin, including HSL enablement and limit/market panic execution. Dual-side multi-coin EMA Anchor
   and Trailing Martingale use fused shared-account kernels for unified, pside, and coin signals,
@@ -256,14 +256,14 @@ The supported slice is intentionally narrow:
   reduces it with bounded maximum and online-mean accumulators. Fused dual-side multi-coin kernels
   maintain the shared minute-level net exposure series
 - canonical USD account-equity metrics may use the same MPS surface as their strategy-equity
-  counterparts while BTC collateral is disabled: `gain_usd`, `adg_usd`, `mdg_usd`,
+  counterparts while BTC collateral is disabled: `adg_usd`, `mdg_usd`,
   `sharpe_ratio_usd`, `sortino_ratio_usd`, `omega_ratio_usd`,
   `expected_shortfall_1pct_usd`, `calmar_ratio_usd`, `sterling_ratio_usd`,
   `drawdown_worst_usd`, and `drawdown_worst_mean_1pct_usd`, plus the available `_w_usd` weighted
   variants. `exposure_ratio_usd` and `exposure_mean_ratio_usd` combine proxy ADG with the maximum
   and mean total-wallet-exposure accumulators. The exposure ratios support single-coin and
   multi-coin runs, including fused dual-side kernels
-- canonical USD gain, ADG, MDG, weighted ADG, and weighted MDG per-configured-exposure metrics are
+- canonical USD ADG, MDG, weighted ADG, and weighted MDG per-configured-exposure metrics are
   supported for both long and short sides. The proxy divides the matching validated equity metric
   by each candidate's effective side `total_wallet_exposure_limit`, after applying any exact-last
   suite override, and returns zero for a zero-exposure side as the CPU analysis does
@@ -273,11 +273,6 @@ The supported slice is intentionally narrow:
   and `volume_pct_per_day_avg_w` apply the same ten trailing slices as exact Rust to the compact
   daily proxy series. Weighted volume excludes an ambiguous partial UTC cutoff day instead of
   admitting pre-cutoff fills; exact validation and rolling drift gates remain authoritative
-- canonical USD `peak_recovery_hours_equity` and `peak_recovery_days_equity` scoring and limits
-  use Metal's full-resolution maximum completed peak-to-peak recovery interval. As in exact Rust,
-  an unrecovered final tail is not included and a candidate without fills returns zero. Fused
-  dual-side multi-coin kernels maintain the shared portfolio equity path. Internal all-NaN
-  H/L/C gaps advance this full-resolution clock with exact Rust's balance-only equity sample
 - Trailing Martingale supports `risk.position_exposure_enforcer_enabled` and a tunable
   `risk.position_exposure_enforcer_threshold` for single-coin long, short, and dual-side runs,
   one- and dual-side multi-coin runs, and compatible suites. When current position exposure
@@ -515,14 +510,14 @@ fixed value disables dependent trailing-martingale parameters, the Metal search 
 hash-canonicalizes those dead genes using the same rule as exact candidate materialization.
 
 Proxy scoring and limits are likewise fail-closed. The supported strategy-equity surface includes
-gain, ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
-drawdown, mean and median underwater percentage, maximum recovery and position-held duration,
+ADG, MDG, Sharpe, Sortino, Omega, Calmar, Sterling, expected shortfall, worst and worst-1%
+drawdown, mean underwater percentage, recovery distributions and position-held duration,
 position-unchanged duration, initial-entry balance percentage for each side, volume per active day,
 total-wallet-exposure maximum and mean, USD exposure ratios, backtest completion, and weighted
 variants of ADG, MDG, Sharpe, Sortino, Omega, Calmar, and Sterling. With BTC collateral disabled,
 the corresponding canonical USD account-equity names share this strategy-equity surface. The GPU
-proxy also supports BTC-denominated gain, ADG, MDG, Omega, equity shape, unweighted exposure
-ratios, peak recovery, per-side exposure-normalized gain/ADG/MDG, and the existing weighted
+proxy also supports BTC-denominated ADG, MDG, Omega, equity shape, unweighted exposure
+ratios, per-side exposure-normalized ADG/MDG, and the existing weighted
 ADG/MDG/Omega and equity-shape variants. It converts the compact USD daily closing-equity surface
 with the canonical prepared BTC/USD price at each UTC day end, including a candidate-specific
 final endpoint after early liquidation. For BTC Sharpe, Sortino, expected shortfall, worst and
@@ -531,52 +526,32 @@ synchronized BTC-equity surface containing each UTC day's close, minimum, and wo
 drawdown. Weighted BTC Sharpe, Sortino, Calmar, and Sterling require suffix-local intraday minima
 and drawdown reconstruction and remain fail-closed. Runs that
 do not request one of these intraday-risk metrics keep the smaller existing kernel ABI and output
-buffers. BTC peak recovery remains a compact daily approximation; mandatory exact Rust validation
-and rolling drift gates remain authoritative. Weighted BTC exposure ratios still require
+buffers. Weighted BTC exposure ratios still require
 suffix-local exposure series and remain fail-closed.
-Unweighted `equity_balance_diff_{neg,pos}_{max,mean}_{usd,btc}` and
+Unweighted `equity_balance_diff_neg_{max,mean}_{usd,btc}` and
 `paper_loss{,_mean}_ratio_{usd,btc}` are supported through an opt-in full-resolution accumulator.
 The BTC balance baseline is rebased at each proxy fill; when the first fill establishes that
 baseline, the kernel replays earlier tracked BTC prices without repeating the strategy simulation.
-Positive sign-filtered means may remain proxy approximations under exact validation; negative
-maxima and means, which supply the paper-loss denominators, retain tight parity coverage.
+The retained negative maxima and means supply the paper-loss denominators and retain tight parity
+coverage.
 The prepared BTC series must contain at least one sample in every covered UTC day; unusually coarse
 intervals which skip a whole UTC day fail closed for BTC scoring.
 Positive `backtest.btc_collateral_cap` remains unsupported and fails before GPU optimization.
 Daily USD equity choppiness, jerkiness, and exponential fit error are reduced from that same active
 daily closing-equity surface with Rust's no-fill defaults and short-series behavior.
-Collateral-agnostic `adg_pnl`, `mdg_pnl`, `sharpe_ratio_pnl`, and `sortino_ratio_pnl` are also
-supported for single-coin and multi-coin runs. Metal groups realized balance changes by
-UTC fill day and divides by that day's last fill balance, matching exact Rust's unweighted daily
-PnL ratio contract. Fused dual-side multi-coin kernels retain the shared intraday-liquidation
-cutoff. The corresponding weighted PnL variants are supported in the same safe topologies. Metal
-counts each actual proxy fill, including multiple same-candle ladder fills, and applies Rust's
-full-run minimum fill count and empty-suffix rules across the same ten minute-position suffix
-boundaries. The compact daily surface includes the complete UTC day containing each suffix
-boundary, so exact Rust validation and drift gates remain authoritative for that screening
-approximation.
 Gross close-fill loss/profit ratios are supported both in aggregate and separately for long and
-short. `pnl_ratio_long_short` and its `long_short_profit_ratio` alias use each side's signed
-realized PnL and Rust's neutral `0.5` result when combined signed PnL is zero. Directional kernels
+short. `pnl_ratio_long_short` uses each side's signed realized PnL and Rust's neutral `0.5` result
+when combined signed PnL is zero. Directional kernels
 retain the four gross side sums, while one-sided and dual-side multi-coin dispatches preserve the
 same side partition before reduction.
-Full-run fill activity is supported for single-coin and multi-coin topologies: analysis
-duration; total, entry, close, long, and short counts; their daily rates; entry-to-close ratio; and
-combined or side-specific per-configured-position-slot daily rates. Active fill-day count and ratio
-use distinct 24-hour buckets anchored to the analyzed equity start, matching Rust rather than the
-UTC buckets used by the compact daily equity surface. Active-symbol count and top-symbol fill share
-use per-coin counters emitted only when either metric is requested. Metal classifies every actual
-proxy fill by role, position side, and—when needed—coin, then Python applies each candidate's
-configured active slot counts and Rust's mean-of-enabled-sides contract. All rates use the same
-first-to-last analyzed-equity timestamp span as Rust. Fused dual-side kernels retain the shared
-intraday-liquidation cutoff.
-Peak strategy-equity recovery is available in both hours and days; peak realized-PnL recovery
-tracks the strict cumulative net-PnL peak at every proxy fill and includes the final analyzed tail.
-These metrics support single-coin and multi-coin topologies. Fused dual-side kernels retain the
-shared fill sequence and liquidation cutoff.
+Full-run fill activity is supported for single-coin and multi-coin topologies through combined
+fills per day, entry-to-close ratio, combined per-configured-position-slot rate, active-day ratio,
+active-symbol count, and top-symbol fill share. Metal classifies every actual proxy fill by role,
+position side, and—when needed—coin. All rates use the same first-to-last analyzed-equity timestamp
+span as Rust. Fused dual-side kernels retain the shared intraday-liquidation cutoff.
 Initial-entry allocation uses the candidate's effective position count and the same
-first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, mean, median,
-p95, and p99 metrics are also supported. Metal coalesces multiple fills in the same candle and
+first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest and p95 metrics
+are also supported. Metal coalesces multiple fills in the same candle and
 records positive inter-candle gaps
 in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
 edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
@@ -590,18 +565,14 @@ conservative upper edges from a bounded logarithmic histogram. EMA Anchor emits 
 so these metrics retain exact Rust's canonical zero values without allocating the optional output
 surface. Runs that do not request an entry-interval metric keep their existing kernel ABI and
 dispatch cost.
-The eight `high_exposure_{hours,days}_{mean,max}_{long,short}` metrics are supported for both
-strategies and every single-coin and multi-coin side topology. Exact Rust defines the threshold as
-the mean of per-fill TWE averages resampled by UTC day, including zero-valued gaps between the
-first and last fill day. Because that threshold is only known after the fill sequence completes,
-Metal enables an opt-in two-pass replay: the first pass derives the candidate's per-side threshold
-and the second measures continuous above-threshold fill-to-fill durations. Runs that do not request
-this family retain the normal one-pass dispatch. Metal cannot retain the exact ordering of several
-fills produced within one candle, so it weights that candle's final TWE by its fill count; exact
-Rust validation and rolling rank/constraint drift gates remain authoritative for this bounded
-screening approximation.
-Exact Rust metrics remain authoritative. Other metrics that require unmodeled per-fill, trade, or
-position aggregates are rejected before a run starts.
+
+Exact Rust metrics remain authoritative. Metrics intentionally kept for exact analysis rather than
+proxy optimization include raw gain, realized-PnL growth/risk, positive equity-balance divergence,
+completed-only account-equity recovery, raw or split fill counts/rates, raw HSL event counts and
+absolute loss totals, the self-relative high-exposure duration family, and the legacy global
+recovery/profit aliases. Requests for these metrics as GPU objectives or proxy-side limits fail
+before MPS setup. They remain
+available in normal Rust backtests, exact optimizer validation output, and CPU optimization.
 
 The backend is hybrid rather than a replacement backtester:
 

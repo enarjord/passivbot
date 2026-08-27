@@ -9,7 +9,7 @@ torch = pytest.importorskip("torch")
 
 from optimization.gpu.metrics import (
     ENTRY_INTERVAL_METRICS,
-    HIGH_EXPOSURE_METRICS,
+    GPU_EXACT_ONLY_METRICS,
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
     _btc_account_metrics,
@@ -36,64 +36,31 @@ from optimization.gpu.metrics import (
     _weighted_subsets,
     _weighted_strategy_eq_metrics,
     compute_objectives,
+    validate_gpu_metric_names,
 )
 
 
-def test_high_exposure_metrics_pass_through_opt_in_kernel_outputs():
-    day_eq = torch.tensor([[100.0]], dtype=torch.float64)
-    out = {
-        "day_end_eq": day_eq,
-        "day_min_eq": day_eq,
-        "day_max_dd": torch.zeros_like(day_eq),
-        "day_volume": torch.zeros_like(day_eq),
-        "day_has_fill": torch.zeros_like(day_eq, dtype=torch.bool),
-        "max_dd": torch.zeros(1),
-        "held_max_ms": torch.zeros(1),
-        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
-        "gap_max_ms": torch.zeros(1),
-        "first_fill_ts": torch.full((1,), float("nan")),
-        "last_fill_ts": torch.full((1,), float("nan")),
-        "recovery_max_ms": torch.zeros(1),
-        "last_high_ts": torch.zeros(1),
-        "first_eq_ts": torch.zeros(1),
-        "last_eq_ts": torch.zeros(1),
-        "liq_step": torch.full((1,), -1),
+def test_exact_only_metrics_are_disjoint_and_fail_closed_for_proxy_scoring():
+    assert not GPU_EXACT_ONLY_METRICS & set(SUPPORTED_METRICS)
+    assert "strategy_eq_recovery_days_max" in SUPPORTED_METRICS
+    assert "peak_recovery_days_strategy_eq" in GPU_EXACT_ONLY_METRICS
+
+    for name in GPU_EXACT_ONLY_METRICS:
+        with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
+            validate_gpu_metric_names([name])
+
+
+def test_proxy_metric_validation_canonicalizes_retained_cpu_shorthand():
+    assert validate_gpu_metric_names(["adg", "drawdown_worst"]) == {
+        "adg_usd",
+        "drawdown_worst_usd",
     }
-    expected = {}
-    for index, name in enumerate(sorted(HIGH_EXPOSURE_METRICS), start=1):
-        value = index / 10.0
-        out[name] = torch.tensor([value], dtype=torch.float32)
-        expected[name] = value
 
-    metrics = compute_objectives(
-        out,
-        SimpleNamespace(
-            requested_start_ts_ms=0,
-            guard_ts_ms=0,
-            interval_ms=60_000,
-        ),
-        {"ts0": 0.0, "n": 1},
-        needed=HIGH_EXPOSURE_METRICS,
-    )
 
-    assert HIGH_EXPOSURE_METRICS <= set(SUPPORTED_METRICS)
-    assert set(metrics) == set(HIGH_EXPOSURE_METRICS)
-    for name, value in expected.items():
-        assert metrics[name].item() == pytest.approx(value)
-
-    missing = sorted(HIGH_EXPOSURE_METRICS)[0]
-    del out[missing]
-    with pytest.raises(RuntimeError, match="high-exposure output is missing"):
-        compute_objectives(
-            out,
-            SimpleNamespace(
-                requested_start_ts_ms=0,
-                guard_ts_ms=0,
-                interval_ms=60_000,
-            ),
-            {"ts0": 0.0, "n": 1},
-            needed=HIGH_EXPOSURE_METRICS,
-        )
+def _assert_proxy_surface_partition(metric_names):
+    names = set(metric_names)
+    assert names - GPU_EXACT_ONLY_METRICS <= set(SUPPORTED_METRICS)
+    assert not set(SUPPORTED_METRICS) & GPU_EXACT_ONLY_METRICS
 
 
 def test_btc_daily_peak_recovery_matches_non_strict_rust_contract():
@@ -165,9 +132,6 @@ def test_directional_pnl_metrics_match_rust_neutral_and_alias_contracts():
     assert metrics["loss_profit_ratio_long"].tolist() == [0.25, 1_000.0, 1.0]
     assert metrics["loss_profit_ratio_short"].tolist() == [1.5, 1.0, 1.0]
     assert metrics["pnl_ratio_long_short"].tolist() == [1.5, 1.0, 0.5]
-    assert torch.equal(
-        metrics["long_short_profit_ratio"], metrics["pnl_ratio_long_short"]
-    )
     assert set(metrics) <= set(SUPPORTED_METRICS)
 
 
@@ -231,7 +195,7 @@ def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
         day_end, torch.ones_like(day_end, dtype=torch.bool)
     )
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     expected_differences = {
         "usd": (0.20, 0.10, 0.30, 0.15),
         "btc": (0.25, 0.125, 0.35, 0.175),
@@ -425,7 +389,7 @@ def test_equity_curve_metrics_use_rust_defaults_without_fills():
     )
 
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     assert {name: value.item() for name, value in metrics.items()} == {
         "equity_choppiness_usd": 1.0,
         "equity_jerkiness_usd": 1.0,
@@ -500,7 +464,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
     )
 
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     assert metrics["fills_analysis_duration_days"].tolist() == pytest.approx(
         [2.5, 4.0 / 24.0]
     )
@@ -669,7 +633,7 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     adg = metrics["adg_strategy_eq"].item()
     assert metrics["exposure_ratio_usd"].item() == pytest.approx(adg / 1.25)
     assert metrics["exposure_mean_ratio_usd"].item() == pytest.approx(adg / 0.625)
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
 
 
 def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
@@ -728,7 +692,7 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
     std = torch.sqrt(((ratios - mean) ** 2).mean())
     downside = torch.sqrt((ratios[ratios < 0.0] ** 2).mean())
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     assert metrics["adg_pnl"].item() == pytest.approx(mean.item())
     assert metrics["mdg_pnl"].item() == 0.0
     assert metrics["sharpe_ratio_pnl"].item() == pytest.approx(
@@ -817,7 +781,7 @@ def test_weighted_daily_pnl_metrics_match_rust_suffix_contract():
             0.0 if downside.item() == 0.0 else (mean / downside).item() / 10.0
         )
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     for name, value in expected.items():
         assert metrics[name].item() == pytest.approx(value)
 
@@ -877,7 +841,7 @@ def test_weighted_daily_series_metrics_match_rust_suffix_contract():
     )
 
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(
         expected_shape[0]
     )
@@ -1134,12 +1098,14 @@ def test_weighted_adg_slices_minutes_before_daily_reduction():
 
 
 def test_fill_gap_summary_metric_surface_is_supported():
-    assert {
+    metrics = {
         "fills_gap_mean_hours",
         "fills_gap_median_hours",
         "fills_gap_p95_hours",
         "fills_gap_p99_hours",
-    } <= set(SUPPORTED_METRICS)
+    }
+    _assert_proxy_surface_partition(metrics)
+    assert metrics & set(SUPPORTED_METRICS) == {"fills_gap_p95_hours"}
 
 
 def test_fill_gap_summary_without_fills_uses_whole_active_span():
@@ -1311,15 +1277,16 @@ def test_entry_interval_metrics_fail_closed_for_missing_or_inconsistent_output()
 
 
 def test_strategy_equity_summary_metric_surface_is_supported():
-    assert {
+    strategy_metrics = {
         "gain_strategy_eq",
         "omega_ratio_strategy_eq",
         "expected_shortfall_1pct_strategy_eq",
         "calmar_ratio_strategy_eq",
         "sterling_ratio_strategy_eq",
         "strategy_eq_underwater_pct_median",
-    } <= set(SUPPORTED_METRICS)
-    assert {
+    }
+    _assert_proxy_surface_partition(strategy_metrics)
+    usd_metrics = {
         "adg_usd",
         "calmar_ratio_usd",
         "drawdown_worst_mean_1pct_usd",
@@ -1333,11 +1300,12 @@ def test_strategy_equity_summary_metric_surface_is_supported():
         "sterling_ratio_usd",
         "exposure_ratio_usd",
         "exposure_mean_ratio_usd",
-    } <= set(SUPPORTED_METRICS)
+    }
+    _assert_proxy_surface_partition(usd_metrics)
 
 
 def test_hard_stop_lifecycle_metric_surface_is_supported():
-    assert {
+    lifecycle_metrics = {
         "hard_stop_triggers",
         "hard_stop_triggers_per_year",
         "hard_stop_triggers_long",
@@ -1356,7 +1324,8 @@ def test_hard_stop_lifecycle_metric_surface_is_supported():
         "hard_stop_trigger_drawdown_mean",
         "hard_stop_flatten_time_minutes_mean",
         "hard_stop_post_restart_retrigger_pct",
-    } <= set(SUPPORTED_METRICS)
+    }
+    _assert_proxy_surface_partition(lifecycle_metrics)
     assert {
         "drawdown_worst_ema_strategy_eq",
         "drawdown_worst_ema_strategy_eq_long",
@@ -1869,7 +1838,7 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
         "mdg_w_per_exposure_short_usd": ("mdg_strategy_eq_w", 0.5),
     }
     requested.update(per_exposure_sources)
-    assert set(per_exposure_sources) <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(per_exposure_sources)
 
     metrics = compute_objectives(out, run, {"ts0": 0.0, "n": 4}, needed=requested)
 
@@ -1963,7 +1932,7 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         btc_equity, torch.ones_like(btc_equity, dtype=torch.bool)
     )
     assert set(metrics) == requested
-    assert requested <= set(SUPPORTED_METRICS)
+    _assert_proxy_surface_partition(requested)
     assert metrics["gain_btc"].item() == pytest.approx(expected_gain.item())
     assert metrics["adg_btc"].item() == pytest.approx(expected_adg.item())
     assert metrics["gain_per_exposure_long_btc"].item() == pytest.approx(

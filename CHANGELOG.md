@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS optimization now keeps exact-analysis diagnostics separate from proxy objectives and
+  proxy-side limits. Raw gain/PnL, positive equity-balance divergence, completed-only account
+  recovery, raw or split fill activity, raw HSL event/absolute-loss metrics, legacy recovery/profit
+  aliases, and the self-relative high-exposure duration family remain available from exact Rust
+  backtests but fail closed when requested as GPU optimization signals. Removing high-exposure proxy scoring
+  also removes its second complete Metal strategy replay, so every valid EMA Anchor and Trailing
+  Martingale proxy evaluation dispatches its strategy kernel once. CPU optimizers, backtesting, and
+  live operation are unchanged.
+
 - GPU optimization now runs an Apple MPS capability preflight before loading historical data.
   Missing MPS support, unsupported strategies, positive `backtest.btc_collateral_cap`, and
   unmodeled suite override paths fail immediately with the unsupported setting, the CPU-backend

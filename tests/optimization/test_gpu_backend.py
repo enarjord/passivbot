@@ -449,10 +449,13 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
     }
 
 
-def test_cpu_backend_registry_import_does_not_import_torch():
+def test_cpu_runtime_imports_do_not_import_torch_or_mps_kernel():
     script = (
-        "import json, sys; import optimization.backends; "
-        "print(json.dumps('torch' in sys.modules))"
+        "import json, sys; import backtest, passivbot, optimization.backends; "
+        "print(json.dumps({"
+        "'torch': 'torch' in sys.modules, "
+        "'mps_kernel': 'optimization.gpu.mps_kernel' in sys.modules"
+        "}))"
     )
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
@@ -464,7 +467,10 @@ def test_cpu_backend_registry_import_does_not_import_torch():
         text=True,
     )
 
-    assert json.loads(result.stdout.strip()) is False
+    assert json.loads(result.stdout.strip()) == {
+        "torch": False,
+        "mps_kernel": False,
+    }
 
 
 def test_gpu_result_preserves_explicit_nulls_and_bounds_for_resume():
@@ -3646,8 +3652,6 @@ def test_gpu_foundation_accepts_weighted_daily_series_metrics(metric, goal):
     ("metric", "goal"),
     [
         ("adg_btc", "max"),
-        ("gain_per_exposure_long_btc", "max"),
-        ("peak_recovery_days_equity_btc", "min"),
         ("omega_ratio_w_btc", "max"),
     ],
 )
@@ -3704,14 +3708,10 @@ def test_gpu_foundation_accepts_synchronized_btc_risk_metrics(metric, goal):
     [
         ("equity_balance_diff_neg_max_usd", "min"),
         ("equity_balance_diff_neg_mean_usd", "min"),
-        ("equity_balance_diff_pos_max_usd", "max"),
-        ("equity_balance_diff_pos_mean_usd", "max"),
         ("paper_loss_ratio_usd", "max"),
         ("paper_loss_mean_ratio_usd", "max"),
         ("equity_balance_diff_neg_max_btc", "min"),
         ("equity_balance_diff_neg_mean_btc", "min"),
-        ("equity_balance_diff_pos_max_btc", "max"),
-        ("equity_balance_diff_pos_mean_btc", "max"),
         ("paper_loss_ratio_btc", "max"),
         ("paper_loss_mean_ratio_btc", "max"),
     ],
@@ -3735,22 +3735,6 @@ def test_gpu_foundation_accepts_equity_balance_diff_metrics(metric, goal):
     ],
 )
 def test_gpu_foundation_accepts_entry_interval_metrics(metric):
-    config = _long_only_ema_config()
-    config["optimize"]["scoring"] = [{"goal": "min", "metric": metric}]
-
-    assert _validate_scope(config, _Evaluator()) == "bybit"
-
-
-@pytest.mark.parametrize(
-    "metric",
-    [
-        f"high_exposure_{unit}_{stat}_{side}"
-        for unit in ("hours", "days")
-        for stat in ("mean", "max")
-        for side in ("long", "short")
-    ],
-)
-def test_gpu_foundation_accepts_high_exposure_metrics(metric):
     config = _long_only_ema_config()
     config["optimize"]["scoring"] = [{"goal": "min", "metric": metric}]
 

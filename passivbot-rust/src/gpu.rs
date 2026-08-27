@@ -15,8 +15,6 @@ const MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE: &str =
     include_str!("gpu/mps_equity_balance_diff_common.metal");
 const MPS_ENTRY_INTERVAL_MARKER: &str = "// PASSIVBOT_ENTRY_INTERVAL_COMMON";
 const MPS_ENTRY_INTERVAL_COMMON_SOURCE: &str = include_str!("gpu/mps_entry_interval_common.metal");
-const MPS_HIGH_EXPOSURE_MARKER: &str = "// PASSIVBOT_HIGH_EXPOSURE_COMMON";
-const MPS_HIGH_EXPOSURE_COMMON_SOURCE: &str = include_str!("gpu/mps_high_exposure_common.metal");
 const MPS_MULTICOIN_MARKER: &str = "// PASSIVBOT_MULTICOIN_COMMON";
 const MPS_MULTICOIN_COMMON_SOURCE: &str = include_str!("gpu/mps_multicoin_common.metal");
 const MPS_EMA_ANCHOR_BODY: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
@@ -53,11 +51,6 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared entry-interval marker"
     );
-    assert_eq!(
-        body.matches(MPS_HIGH_EXPOSURE_MARKER).count(),
-        1,
-        "MPS source must contain exactly one shared high-exposure marker"
-    );
     body.replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
         .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
         .replacen(
@@ -70,7 +63,6 @@ fn compose_hsl_source(body: &str) -> String {
             MPS_ENTRY_INTERVAL_COMMON_SOURCE,
             1,
         )
-        .replacen(MPS_HIGH_EXPOSURE_MARKER, MPS_HIGH_EXPOSURE_COMMON_SOURCE, 1)
 }
 
 fn compose_multicoin_source(body: &str) -> String {
@@ -273,21 +265,6 @@ mod tests {
         assert!(source.contains("constant int ENTRY_INTERVAL_STAT_COLS = 2"));
         assert!(source.contains("constant int ENTRY_INTERVAL_COUNT_COLS = 129"));
         assert!(source.contains("device int* counts"));
-    }
-
-    fn assert_shared_high_exposure_contract(source: &str) {
-        assert!(!source.contains(MPS_HIGH_EXPOSURE_MARKER));
-        assert!(source.contains(MPS_HIGH_EXPOSURE_COMMON_SOURCE));
-        for signature in [
-            "struct HighExposureState",
-            "inline HighExposureState init_high_exposure_state(",
-            "inline void record_high_exposure_fill(",
-            "inline void write_high_exposure_output(",
-        ] {
-            assert_eq!(source.matches(signature).count(), 1, "{signature}");
-        }
-        assert!(source.contains("#if PASSIVBOT_HIGH_EXPOSURE_ENABLED"));
-        assert!(source.contains("constant int HIGH_EXPOSURE_COLS = 8"));
     }
 
     fn assert_directional_recovery_sampling_contract(source: &str) {
@@ -514,17 +491,12 @@ mod tests {
     }
 
     #[test]
-    fn all_strategy_sources_compose_one_shared_high_exposure_accumulator() {
-        for body in [
+    fn strategy_sources_do_not_include_high_exposure_replay() {
+        for source in [
             MPS_EMA_ANCHOR_BODY,
             MPS_EMA_ANCHOR_MULTICOIN_BODY,
             MPS_TRAILING_MARTINGALE_BODY,
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
-        ] {
-            assert_eq!(body.matches(MPS_HIGH_EXPOSURE_MARKER).count(), 1);
-            assert!(!body.contains("struct HighExposureState"));
-        }
-        for source in [
             mps_ema_anchor_source(),
             mps_ema_anchor_multicoin_source(),
             mps_trailing_martingale_source(),
@@ -532,7 +504,9 @@ mod tests {
             mps_trailing_martingale_short_no_hsl_source(),
             mps_trailing_martingale_multicoin_source(),
         ] {
-            assert_shared_high_exposure_contract(source);
+            assert!(!source.contains("PASSIVBOT_HIGH_EXPOSURE"));
+            assert!(!source.contains("HighExposureState"));
+            assert!(!source.contains("high_exposure_output"));
         }
     }
 
