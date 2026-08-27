@@ -2289,6 +2289,44 @@ def test_coin_override_contract_keeps_exact_values_beyond_float32_precision():
     assert second_exact["strategy"]["ema_anchor"]["offset"] == second
 
 
+def test_coin_override_contract_keeps_backtest_inert_live_values():
+    exact_patch = {
+        "live": {
+            "forced_mode_long": "graceful_stop",
+            "leverage": 3,
+        }
+    }
+    config = {"coin_overrides": {"ETH": exact_patch}}
+    payload = SimpleNamespace(
+        strategy_params_list=[{"long": {}}],
+        bot_params_list=[
+            {
+                "long": {
+                    "entry_eligible": True,
+                    "is_forced_active": False,
+                    "wallet_exposure_limit": -1.0,
+                }
+            }
+        ],
+    )
+
+    matrix, contract = _build_multicoin_ema_coin_overrides(
+        config=config,
+        mss={"ETH": {}},
+        exchange="bybit",
+        coins=["ETH"],
+        payload=payload,
+        side="long",
+        resolve_override=lambda config, _mss, _exchange, coin: config[
+            "coin_overrides"
+        ].get(coin, {}),
+    )
+
+    assert np.isnan(matrix).all()
+    assert contract["values"] == [[None] * EMA_ANCHOR_COIN_OVERRIDE_COLS]
+    assert contract["exact_overrides"] == [exact_patch]
+
+
 @pytest.mark.parametrize(
     ("builder", "strategy", "forced_column"),
     [

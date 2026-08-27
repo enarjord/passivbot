@@ -11,7 +11,9 @@ import numpy as np
 import pytest
 
 from config.metrics import canonicalize_metric_name
+from config.overrides import OVERRIDABLE_SHARED_BOT_PATHS
 from config.schema import get_template_config
+from config.strategy import get_strategy_param_keys
 from optimizer_overrides import optimizer_overrides
 from optimization.bounds import Bound
 from optimization.backends.gpu_backend import (
@@ -2598,10 +2600,156 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
     assert _validate_scope(config, _MulticoinEvaluator()) == "bybit"
 
 
+def _nested_patch(path, value):
+    result = value
+    for key in reversed(tuple(path)):
+        result = {key: result}
+    return result
+
+
+def _nested_value(value, path):
+    for key in path:
+        value = value[key]
+    return value
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "config_factory"),
+    [
+        ("ema_anchor", _directional_ema_config),
+        ("trailing_martingale", _directional_tm_config),
+    ],
+)
+def test_gpu_coin_override_policy_covers_cpu_backtest_effective_allowlist(
+    strategy_kind, config_factory
+):
+    config = config_factory(long_enabled=True, short_enabled=False)
+    config["live"]["hsl_signal_mode"] = "coin"
+    side_config = config["bot"]["long"]
+    exact_inapplicable = {
+        "risk.position_exposure_enforcer_enabled",
+        "risk.position_exposure_enforcer_threshold",
+    }
+
+    for dotted_path in sorted(OVERRIDABLE_SHARED_BOT_PATHS):
+        if strategy_kind == "ema_anchor" and dotted_path in exact_inapplicable:
+            continue
+        path = tuple(dotted_path.split("."))
+        config["coin_overrides"] = {
+            "ETH": {
+                "bot": {
+                    "long": _nested_patch(path, _nested_value(side_config, path))
+                }
+            }
+        }
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind=strategy_kind,
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+    strategy = side_config["strategy"][strategy_kind]
+    for dotted_path in get_strategy_param_keys(strategy_kind):
+        path = tuple(dotted_path.split("."))
+        config["coin_overrides"] = {
+            "ETH": {
+                "bot": {
+                    "long": {
+                        "strategy": {
+                            strategy_kind: _nested_patch(
+                                path, _nested_value(strategy, path)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind=strategy_kind,
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+    for patch in (
+        {"bot": {"long": {"wallet_exposure_limit": 0.4}}},
+        {"live": {"forced_mode_long": "normal"}},
+    ):
+        config["coin_overrides"] = {"ETH": patch}
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind=strategy_kind,
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "config_factory"),
+    [
+        ("ema_anchor", _directional_ema_config),
+        ("trailing_martingale", _directional_tm_config),
+    ],
+)
+def test_gpu_coin_overrides_accept_cpu_compatible_live_only_values_with_warning(
+    strategy_kind, config_factory, caplog
+):
+    config = config_factory(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {
+        "ETH": {
+            "live": {
+                "forced_mode_long": "graceful_stop",
+                "leverage": 3,
+            }
+        }
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind=strategy_kind,
+        enabled_sides=["long"],
+        coin_count=3,
+    )
+
+    assert "CPU-compatible live-only values with no backtest effect" in caplog.text
+    assert "coin_overrides.ETH.live.forced_mode_long" in caplog.text
+    assert "coin_overrides.ETH.live.leverage" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "risk_key",
+    [
+        "position_exposure_enforcer_enabled",
+        "position_exposure_enforcer_threshold",
+    ],
+)
+def test_gpu_ema_coin_overrides_reject_exact_inapplicable_position_enforcer(
+    risk_key,
+):
+    config = _directional_ema_config(long_enabled=True, short_enabled=False)
+    config["coin_overrides"] = {
+        "ETH": {
+            "bot": {
+                "long": {
+                    "risk": {risk_key: config["bot"]["long"]["risk"][risk_key]}
+                }
+            }
+        }
+    }
+
+    with pytest.raises(ValueError, match="do not model these paths yet"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=["long"],
+            coin_count=3,
+        )
+
+
 @pytest.mark.parametrize(
     "patch",
     [
-        {"live": {"leverage": 3}},
         {"bot": {"long": {"risk": {"n_positions": 2}}}},
         {
             "bot": {
@@ -2872,7 +3020,6 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
 @pytest.mark.parametrize(
     "patch",
     [
-        {"live": {"leverage": 3}},
         {"bot": {"long": {"risk": {"n_positions": 2}}}},
     ],
 )
