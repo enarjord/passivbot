@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS suite optimization now supports scenarios spanning a strict subset of multiple
+  exchanges. Metal evaluates each prepared exchange dataset independently, combines their proxy
+  metrics with the canonical CPU per-scenario mean/minimum/maximum/standard-deviation/median
+  contract, and only then applies suite reducers, named-scenario objectives, and limits. Exact Rust
+  suite validation remains authoritative, and every prepared exchange dataset remains part of
+  checkpoint identity.
+
 - Apple MPS Trailing Martingale optimization now supports normal-initial-entry interval mean,
   median, p95, p99, and maximum metrics across single-coin, multi-coin, long-only, short-only,
   and fused long+short runs. Metal tracks intervals independently per coin and position side;
