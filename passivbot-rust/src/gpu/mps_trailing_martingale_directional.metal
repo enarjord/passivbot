@@ -205,6 +205,8 @@ inline bool realized_loss_proxy_allows_reducer(
 
 // PASSIVBOT_ENTRY_INTERVAL_COMMON
 
+// PASSIVBOT_HIGH_EXPOSURE_COMMON
+
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
@@ -1735,6 +1737,9 @@ inline void passivbot_single_coin_impl(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -1756,6 +1761,11 @@ inline void passivbot_single_coin_impl(
     const int recovery_sample_count = sizes[9];
 #endif
     if (b >= uint(B)) return;
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    HighExposureState high_exposure = init_high_exposure_state(
+        high_exposure_output, b
+    );
+#endif
 
     const float qty_step = settings[0];
     const float price_step = settings[1];
@@ -3544,6 +3554,18 @@ inline void passivbot_single_coin_impl(
         if (any_fill) {
             day_has_fill = 1.0f;
             day_touched = true;
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+            const bool positive_exposure_balance = balance > 0.0f;
+            record_high_exposure_fill(
+                high_exposure, kf, di, fill_count,
+                positive_exposure_balance
+                    ? long_side.psize * long_side.pprice * c_mult / balance
+                    : 0.0f,
+                positive_exposure_balance
+                    ? short_side.psize * short_side.pprice * c_mult / balance
+                    : 0.0f
+            );
+#endif
             if (last_fill_k >= 0.0f) {
                 float gap = kf - last_fill_k;
                 int bin = clamp(
@@ -4064,6 +4086,11 @@ inline void passivbot_single_coin_impl(
             pnl_recovery_max_min, last_eq_k - pnl_recovery_peak_k
         );
     }
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    write_high_exposure_output(
+        high_exposure, last_fill_k, high_exposure_output, b
+    );
+#endif
     int so = int(b) * SCALAR_COLS;
     scalars[so + 0] = max_dd;
     scalars[so + 1] = held_max_min * interval_ms;
@@ -4216,6 +4243,9 @@ kernel void passivbot_trailing_martingale(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4236,6 +4266,9 @@ kernel void passivbot_trailing_martingale(
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
         entry_interval_stats, entry_interval_counts,
+#endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+        high_exposure_output,
 #endif
         daily, scalars, gap_hist,
         rolling_pnl_values, rolling_pnl_indices,

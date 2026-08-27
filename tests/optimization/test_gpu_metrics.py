@@ -9,6 +9,7 @@ torch = pytest.importorskip("torch")
 
 from optimization.gpu.metrics import (
     ENTRY_INTERVAL_METRICS,
+    HIGH_EXPOSURE_METRICS,
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
     _btc_account_metrics,
@@ -36,6 +37,63 @@ from optimization.gpu.metrics import (
     _weighted_strategy_eq_metrics,
     compute_objectives,
 )
+
+
+def test_high_exposure_metrics_pass_through_opt_in_kernel_outputs():
+    day_eq = torch.tensor([[100.0]], dtype=torch.float64)
+    out = {
+        "day_end_eq": day_eq,
+        "day_min_eq": day_eq,
+        "day_max_dd": torch.zeros_like(day_eq),
+        "day_volume": torch.zeros_like(day_eq),
+        "day_has_fill": torch.zeros_like(day_eq, dtype=torch.bool),
+        "max_dd": torch.zeros(1),
+        "held_max_ms": torch.zeros(1),
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "gap_max_ms": torch.zeros(1),
+        "first_fill_ts": torch.full((1,), float("nan")),
+        "last_fill_ts": torch.full((1,), float("nan")),
+        "recovery_max_ms": torch.zeros(1),
+        "last_high_ts": torch.zeros(1),
+        "first_eq_ts": torch.zeros(1),
+        "last_eq_ts": torch.zeros(1),
+        "liq_step": torch.full((1,), -1),
+    }
+    expected = {}
+    for index, name in enumerate(sorted(HIGH_EXPOSURE_METRICS), start=1):
+        value = index / 10.0
+        out[name] = torch.tensor([value], dtype=torch.float32)
+        expected[name] = value
+
+    metrics = compute_objectives(
+        out,
+        SimpleNamespace(
+            requested_start_ts_ms=0,
+            guard_ts_ms=0,
+            interval_ms=60_000,
+        ),
+        {"ts0": 0.0, "n": 1},
+        needed=HIGH_EXPOSURE_METRICS,
+    )
+
+    assert HIGH_EXPOSURE_METRICS <= set(SUPPORTED_METRICS)
+    assert set(metrics) == set(HIGH_EXPOSURE_METRICS)
+    for name, value in expected.items():
+        assert metrics[name].item() == pytest.approx(value)
+
+    missing = sorted(HIGH_EXPOSURE_METRICS)[0]
+    del out[missing]
+    with pytest.raises(RuntimeError, match="high-exposure output is missing"):
+        compute_objectives(
+            out,
+            SimpleNamespace(
+                requested_start_ts_ms=0,
+                guard_ts_ms=0,
+                interval_ms=60_000,
+            ),
+            {"ts0": 0.0, "n": 1},
+            needed=HIGH_EXPOSURE_METRICS,
+        )
 
 
 def test_btc_daily_peak_recovery_matches_non_strict_rust_contract():

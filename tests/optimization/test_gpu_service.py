@@ -1091,14 +1091,16 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         "raw_drawdown_enabled",
         "raw_tail_enabled",
         "recovery_distribution_enabled",
+        "high_exposure_enabled",
     ),
     [
-        ({"hard_stop_time_in_red_pct"}, False, False, False, False),
-        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False),
-        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
-        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
-        ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
-        ({"entry_interval_hours_p95"}, False, False, False, False),
+        ({"hard_stop_time_in_red_pct"}, False, False, False, False, False),
+        ({"drawdown_worst_mean_1pct_ema_strategy_eq"}, True, False, False, False, False),
+        ({"drawdown_worst_strategy_eq_long"}, False, True, False, False, False),
+        ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False, False),
+        ({"strategy_eq_recovery_days_p99"}, False, False, False, True, False),
+        ({"entry_interval_hours_p95"}, False, False, False, False, False),
+        ({"high_exposure_days_max_long"}, False, False, False, False, True),
     ],
 )
 @pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
@@ -1114,6 +1116,7 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     raw_drawdown_enabled,
     raw_tail_enabled,
     recovery_distribution_enabled,
+    high_exposure_enabled,
     dynamic_wel_by_tradability,
 ):
     torch = pytest.importorskip("torch")
@@ -1313,6 +1316,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert (
         constructed["kwargs"]["recovery_distribution_enabled"]
         is recovery_distribution_enabled
+    )
+    assert (
+        constructed["kwargs"]["high_exposure_enabled"]
+        is high_exposure_enabled
     )
     assert constructed["kwargs"]["hedge_mode"] is False
     assert constructed["kwargs"]["filter_by_min_effective_cost"] is True

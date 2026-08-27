@@ -107,6 +107,14 @@ CORE_OUTPUT_KEYS = {
     "entry_interval_hist",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
+    "high_exposure_hours_mean_long",
+    "high_exposure_hours_max_long",
+    "high_exposure_days_mean_long",
+    "high_exposure_days_max_long",
+    "high_exposure_hours_mean_short",
+    "high_exposure_hours_max_short",
+    "high_exposure_days_mean_short",
+    "high_exposure_days_max_short",
 }
 
 DIRECTIONAL_HSL_OUTPUT_KEYS = {
@@ -1345,6 +1353,7 @@ class MpsSingleCoinProxy:
             BTC_INTRADAY_RISK_METRICS,
             ENTRY_INTERVAL_METRICS,
             EQUITY_BALANCE_DIFF_METRICS,
+            HIGH_EXPOSURE_METRICS,
             compute_objectives,
         )
         from optimization.gpu.mps_kernel import (
@@ -1363,6 +1372,9 @@ class MpsSingleCoinProxy:
         )
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
+        )
+        self.high_exposure_enabled = bool(
+            self.needed_metrics & HIGH_EXPOSURE_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -1676,6 +1688,7 @@ class MpsSingleCoinProxy:
             btc_risk_enabled=self.btc_risk_enabled,
             equity_balance_diff_enabled=self.equity_balance_diff_enabled,
             entry_interval_enabled=self.entry_interval_enabled,
+            high_exposure_enabled=self.high_exposure_enabled,
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -2190,6 +2203,7 @@ class MpsMulticoinProxy:
             BTC_INTRADAY_RISK_METRICS,
             ENTRY_INTERVAL_METRICS,
             EQUITY_BALANCE_DIFF_METRICS,
+            HIGH_EXPOSURE_METRICS,
             compute_objectives,
         )
         from optimization.gpu.mps_kernel import (
@@ -2210,6 +2224,9 @@ class MpsMulticoinProxy:
         )
         self.equity_balance_diff_enabled = bool(
             self.needed_metrics & EQUITY_BALANCE_DIFF_METRICS
+        )
+        self.high_exposure_enabled = bool(
+            self.needed_metrics & HIGH_EXPOSURE_METRICS
         )
         btc_values = np.ascontiguousarray(
             np.asarray(btc, dtype=np.float64).reshape(-1)
@@ -2663,6 +2680,7 @@ class MpsMulticoinProxy:
             "btc_risk_enabled": self.btc_risk_enabled,
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
+            "high_exposure_enabled": self.high_exposure_enabled,
         }
         if self.shared_account_fused:
             fused_runner_cls = (
