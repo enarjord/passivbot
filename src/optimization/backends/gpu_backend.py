@@ -26,6 +26,9 @@ from optimization.backend_shared import (
 from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
+from optimization.gpu.metric_registry import (
+    reject_configured_exact_only_gpu_metrics,
+)
 from optimization.gpu.model import (
     HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
@@ -463,6 +466,7 @@ def validate_gpu_preparation_scope(
 ) -> None:
     """Fail before historical-data preparation when immutable MPS scope is invalid."""
 
+    reject_configured_exact_only_gpu_metrics(config)
     suite_cfg = suite_cfg or {}
     suite_enabled = bool(suite_cfg.get("enabled"))
     strategy_kind, _enabled_sides, _hsl_enabled_sides = (
@@ -3253,7 +3257,10 @@ def run_backend(
 
     from config.metrics import canonicalize_metric_name
     from config.scoring import extract_objective_specs
-    from optimization.gpu.metrics import HARD_STOP_PROXY_METRICS, SUPPORTED_METRICS
+    from optimization.gpu.metrics import (
+        HARD_STOP_PROXY_METRICS,
+        validate_gpu_metric_names,
+    )
     from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
     from optimization.warmup import (
         _finalize_optimizer_vector_config,
@@ -3262,6 +3269,7 @@ def run_backend(
 
     interrupt_check = interrupt_check or no_interrupt_requested
     interrupt_check()
+    reject_configured_exact_only_gpu_metrics(config)
     options = _resolve_options(config)
     logging.info("GPU optimizer options: %s", options)
     validate_optimizer_effective_configs(config)
@@ -3604,18 +3612,11 @@ def run_backend(
             )
 
     specs = extract_objective_specs(config)
-    metric_names = [canonicalize_metric_name(spec.metric) for spec in specs]
-    limit_metrics = {
-        canonicalize_metric_name(check["metric"])
-        for check in getattr(evaluator, "limit_checks", [])
-    }
+    metric_names = validate_gpu_metric_names(spec.metric for spec in specs)
+    limit_metrics = validate_gpu_metric_names(
+        check["metric"] for check in getattr(evaluator, "limit_checks", [])
+    )
     needed_metrics = set(metric_names) | limit_metrics | {"backtest_completion_ratio"}
-    unsupported = sorted(needed_metrics - set(SUPPORTED_METRICS))
-    if unsupported:
-        raise ValueError(
-            f"GPU foundation does not implement optimizer metrics {unsupported}; "
-            "use supported metrics or the CPU optimizer"
-        )
     _validate_hsl_metric_topology(
         needed_metrics,
         coin_count=max_coin_count,

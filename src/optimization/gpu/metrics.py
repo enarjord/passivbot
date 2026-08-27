@@ -11,6 +11,11 @@ import math
 
 import torch
 
+from optimization.gpu.metric_registry import (
+    GPU_EXACT_ONLY_METRICS,
+    reject_exact_only_gpu_metric_names,
+)
+
 _USD_STRATEGY_EQ_ALIASES = {
     "adg_usd": "adg_strategy_eq",
     "adg_w_usd": "adg_strategy_eq_w",
@@ -101,15 +106,6 @@ ENTRY_INTERVAL_METRICS = frozenset(
     }
 )
 
-HIGH_EXPOSURE_METRICS = frozenset(
-    {
-        f"high_exposure_{unit}_{stat}_{side}"
-        for unit in ("hours", "days")
-        for stat in ("mean", "max")
-        for side in ("long", "short")
-    }
-)
-
 _BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
 _BTC_ACCOUNT_METRICS.update(
     metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_btc")
@@ -128,9 +124,7 @@ BTC_ACCOUNT_METRICS = frozenset(
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
-SUPPORTED_METRICS = (
-    "adg_pnl",
-    "adg_pnl_w",
+_GPU_PROXY_METRIC_CANDIDATES = (
     "adg_strategy_eq",
     "adg_strategy_eq_w",
     "backtest_completion_ratio",
@@ -160,64 +154,31 @@ SUPPORTED_METRICS = (
     "exponential_fit_error_w_usd",
     "exposure_mean_ratio_usd",
     "exposure_ratio_usd",
-    "fills_analysis_duration_days",
-    "fills_active_days_count",
     "fills_active_days_ratio",
     "fills_active_symbols_count",
-    "fills_count",
-    "fills_count_close",
-    "fills_count_entry",
-    "fills_count_long",
-    "fills_count_short",
     "fills_entry_per_close",
     "fills_gap_longest_days",
-    "fills_gap_mean_hours",
-    "fills_gap_median_hours",
     "fills_gap_p95_hours",
-    "fills_gap_p99_hours",
     "fills_per_day",
-    "fills_per_day_close",
-    "fills_per_day_entry",
-    "fills_per_day_long",
     "fills_per_day_per_position_slot",
-    "fills_per_day_per_position_slot_long",
-    "fills_per_day_per_position_slot_short",
-    "fills_per_day_short",
     "fills_top_symbol_share",
-    "gain_strategy_eq",
     "hard_stop_duration_minutes_max",
     "hard_stop_duration_minutes_mean",
-    "hard_stop_flatten_time_minutes_mean",
     "hard_stop_halt_to_restart_equity_loss_pct",
     "hard_stop_panic_close_loss_drawdown_pct_max",
     "hard_stop_panic_close_loss_drawdown_pct_mean",
-    "hard_stop_panic_close_loss_drawdown_pct_min",
-    "hard_stop_panic_close_loss_max",
-    "hard_stop_panic_close_loss_sum",
     "hard_stop_post_restart_retrigger_pct",
-    "hard_stop_restarts",
-    "hard_stop_restarts_long",
     "hard_stop_restarts_per_year",
     "hard_stop_restarts_per_year_long",
     "hard_stop_restarts_per_year_short",
-    "hard_stop_restarts_short",
-    "hard_stop_time_in_orange_pct",
     "hard_stop_time_in_red_pct",
-    "hard_stop_time_in_yellow_pct",
     "hard_stop_trigger_drawdown_mean",
-    "hard_stop_triggers",
-    "hard_stop_triggers_long",
     "hard_stop_triggers_per_year",
-    "hard_stop_triggers_short",
-    *sorted(HIGH_EXPOSURE_METRICS),
     "loss_profit_ratio",
     "loss_profit_ratio_long",
     "loss_profit_ratio_short",
-    "long_short_profit_ratio",
     "mdg_strategy_eq",
     "mdg_strategy_eq_w",
-    "mdg_pnl",
-    "mdg_pnl_w",
     "omega_ratio_strategy_eq",
     "omega_ratio_strategy_eq_w",
     "pnl_ratio_long_short",
@@ -228,24 +189,14 @@ SUPPORTED_METRICS = (
     "positions_held_per_day",
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
-    "peak_recovery_hours_strategy_eq",
     "peak_recovery_hours_strategy_eq_long",
     "peak_recovery_hours_strategy_eq_short",
-    "peak_recovery_days_equity_usd",
-    "peak_recovery_hours_equity_usd",
-    "peak_recovery_days_pnl",
-    "peak_recovery_days_strategy_eq",
     "peak_recovery_days_strategy_eq_long",
     "peak_recovery_days_strategy_eq_short",
-    "peak_recovery_hours_pnl",
     "sharpe_ratio_strategy_eq",
     "sharpe_ratio_strategy_eq_w",
-    "sharpe_ratio_pnl",
-    "sharpe_ratio_pnl_w",
     "sortino_ratio_strategy_eq",
     "sortino_ratio_strategy_eq_w",
-    "sortino_ratio_pnl",
-    "sortino_ratio_pnl_w",
     "sterling_ratio_strategy_eq",
     "sterling_ratio_strategy_eq_w",
     "strategy_eq_recovery_days_mean",
@@ -256,7 +207,6 @@ SUPPORTED_METRICS = (
     "strategy_eq_recovery_days_mean_worst_1pct",
     "strategy_eq_recovery_days_max",
     "strategy_eq_underwater_pct_mean",
-    "strategy_eq_underwater_pct_median",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
     "volume_pct_per_day_avg",
@@ -270,6 +220,30 @@ SUPPORTED_METRICS = (
         if metric.endswith("_usd")
     ),
 )
+
+SUPPORTED_METRICS = tuple(
+    metric
+    for metric in _GPU_PROXY_METRIC_CANDIDATES
+    if metric not in GPU_EXACT_ONLY_METRICS
+)
+
+assert not set(SUPPORTED_METRICS) & GPU_EXACT_ONLY_METRICS
+
+
+def validate_gpu_metric_names(metric_names) -> frozenset[str]:
+    """Return canonical proxy metrics, rejecting exact-only names before aliases."""
+
+    from config.metrics import canonicalize_metric_name
+
+    raw = reject_exact_only_gpu_metric_names(metric_names)
+    canonical = frozenset(canonicalize_metric_name(name) for name in raw)
+    unsupported = sorted(canonical - set(SUPPORTED_METRICS))
+    if unsupported:
+        raise ValueError(
+            f"GPU foundation does not implement optimizer metrics {unsupported}; "
+            "use supported metrics or the CPU optimizer"
+        )
+    return canonical
 
 # Metrics backed by additional per-fill aggregates emitted by Metal.
 EXTRA_KERNEL_METRICS = ("loss_profit_ratio",)
@@ -378,7 +352,10 @@ _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
     "strategy_eq_recovery_days_mean_worst_1pct",
 }
 HARD_STOP_PROXY_METRICS = tuple(
-    sorted(_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
+    sorted(
+        (_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
+        - GPU_EXACT_ONLY_METRICS
+    )
 )
 
 
@@ -423,7 +400,6 @@ def _directional_pnl_metrics(out: dict) -> dict:
         torch.full_like(pnl_sum, 0.5),
     )
     values["pnl_ratio_long_short"] = long_short_ratio
-    values["long_short_profit_ratio"] = long_short_ratio
     return values
 # Metal classifies gaps with float32 logarithms. Expand the decoded boundary
 # by 1024 unit roundoffs so a value rounded into the preceding bin cannot make
@@ -2379,15 +2355,6 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(fill_gap_metrics)
     objectives.update(fill_activity_metrics)
     objectives.update(entry_interval_metrics)
-    requested_high_exposure = requested & HIGH_EXPOSURE_METRICS
-    missing_high_exposure = requested_high_exposure - out.keys()
-    if missing_high_exposure:
-        raise RuntimeError(
-            "MPS high-exposure output is missing from proxy results: "
-            + ", ".join(sorted(missing_high_exposure))
-        )
-    for name in requested_high_exposure:
-        objectives[name] = out[name].to(torch.float64)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)

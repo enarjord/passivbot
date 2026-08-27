@@ -1,3 +1,7 @@
+import ast
+import inspect
+import textwrap
+
 import numpy as np
 import pytest
 
@@ -34,10 +38,12 @@ from optimization.gpu.model import (
     build_mps_multicoin_data,
 )
 from optimization.gpu.mps_kernel import (
+    MpsEmaAnchorMulticoinRunner,
+    MpsEmaAnchorRunner,
     MpsEmaAnchorMulticoinFusedRunner,
+    MpsTrailingMartingaleRunner,
     MpsTrailingMartingaleMulticoinFusedRunner,
     _decode_entry_interval_outputs,
-    _decode_high_exposure_outputs,
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
@@ -51,7 +57,6 @@ from optimization.gpu.mps_kernel import (
     _with_entry_interval,
     _with_hsl_ema_tail,
     _with_hsl_features,
-    _with_high_exposure,
     _with_recovery_distribution,
     strategy_eq_recovery_distribution_from_samples,
 )
@@ -63,12 +68,37 @@ from optimization.gpu.metrics import (
 from optimization.gpu.service import MpsMulticoinEmaProxy
 
 
-_HIGH_EXPOSURE_METRICS = {
-    f"high_exposure_{unit}_{stat}_{side}"
-    for unit in ("hours", "days")
-    for stat in ("mean", "max")
-    for side in ("long", "short")
-}
+@pytest.mark.parametrize(
+    ("runner_cls", "dispatch_name"),
+    [
+        (MpsEmaAnchorRunner, "dispatch_once"),
+        (MpsTrailingMartingaleRunner, "dispatch_once"),
+        (MpsEmaAnchorMulticoinRunner, "_dispatch"),
+    ],
+)
+def test_strategy_runner_valid_evaluation_has_one_kernel_dispatch(
+    runner_cls, dispatch_name
+):
+    source = inspect.getsource(runner_cls.run)
+    tree = ast.parse(textwrap.dedent(source))
+    dispatch_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (
+                isinstance(node.func, ast.Name)
+                and node.func.id == dispatch_name
+            )
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == dispatch_name
+            )
+        )
+    ]
+
+    assert len(dispatch_calls) == 1
+    assert "high_exposure" not in source
 
 
 def _assert_fill_scalar_contract(output):
@@ -589,44 +619,6 @@ def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
     assert actual == [5, 17, 2, 13, 3, 9, 7, 11] + (
         [60, 4] if recovery_enabled else []
     )
-
-
-def test_high_exposure_decoder_converts_steps_to_mean_and_max_durations():
-    raw = torch.tensor(
-        [
-            [0.25, 0.50, 12.0, 9.0, 3.0, 8.0, 5.0, 2.0],
-            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        ]
-    )
-
-    decoded = _decode_high_exposure_outputs(raw, 5 * 60_000)
-
-    assert decoded["high_exposure_hours_mean_long"].tolist() == pytest.approx(
-        [1.0 / 3.0, 0.0]
-    )
-    assert decoded["high_exposure_hours_max_long"].tolist() == pytest.approx(
-        [0.75, 0.0]
-    )
-    assert decoded["high_exposure_hours_mean_short"].tolist() == pytest.approx(
-        [1.0 / 3.0, 0.0]
-    )
-    assert decoded["high_exposure_hours_max_short"].tolist() == pytest.approx(
-        [5.0 / 12.0, 0.0]
-    )
-    assert decoded["high_exposure_days_max_long"].tolist() == pytest.approx(
-        [0.75 / 24.0, 0.0]
-    )
-
-
-def test_high_exposure_feature_guard_is_opt_in_and_fail_closed():
-    source = "#ifndef PASSIVBOT_HIGH_EXPOSURE_ENABLED\ninline void record_high_exposure_fill() {}\n"
-
-    assert _with_high_exposure(source, False) == source
-    assert _with_high_exposure(source, True).startswith(
-        "#define PASSIVBOT_HIGH_EXPOSURE_ENABLED 1\n"
-    )
-    with pytest.raises(RuntimeError, match="shared high-exposure contract"):
-        _with_high_exposure("kernel void unrelated() {}", True)
 
 
 def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):
@@ -4469,28 +4461,21 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         batch_size=1,
         needed_metrics={
             "backtest_completion_ratio",
-            "fills_count",
+            "fills_per_day",
             "adg_btc",
             "drawdown_worst_btc",
             "equity_balance_diff_neg_max_btc",
             "equity_balance_diff_neg_max_usd",
             "equity_balance_diff_neg_mean_btc",
             "equity_balance_diff_neg_mean_usd",
-            "equity_balance_diff_pos_max_btc",
-            "equity_balance_diff_pos_max_usd",
-            "equity_balance_diff_pos_mean_btc",
-            "equity_balance_diff_pos_mean_usd",
-                "expected_shortfall_1pct_btc",
-                "entry_interval_hours_max",
-                "gain_btc",
-            "hard_stop_panic_close_loss_sum",
+            "expected_shortfall_1pct_btc",
+            "entry_interval_hours_max",
             "paper_loss_mean_ratio_btc",
             "paper_loss_mean_ratio_usd",
             "paper_loss_ratio_btc",
-                "paper_loss_ratio_usd",
-                "strategy_eq_recovery_days_p99",
-        }
-        | _HIGH_EXPOSURE_METRICS,
+            "paper_loss_ratio_usd",
+            "strategy_eq_recovery_days_p99",
+        },
     )
     result = proxy.evaluate([{}])[0]
     exact_fills, _, exact_analysis = run_backtest(
@@ -4502,22 +4487,12 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         timestamps,
     )
 
-    assert result["fills_count"] == 2.0
-    assert result["fills_count"] == exact_analysis["fills_count"]
     assert len(exact_fills) == exact_analysis["fills_count"]
-    for metric in _HIGH_EXPOSURE_METRICS:
-        assert result[metric] == pytest.approx(
-            exact_analysis[metric], rel=2.0e-3, abs=1.0e-8
-        ), metric
+    assert result["fills_per_day"] == pytest.approx(
+        exact_analysis["fills_per_day"], rel=1.0e-5
+    )
     assert np.isfinite(result["entry_interval_hours_max"])
     assert np.isfinite(result["strategy_eq_recovery_days_p99"])
-    assert result["hard_stop_panic_close_loss_sum"] > 0.0
-    assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
-        exact_analysis["hard_stop_panic_close_loss_sum"], rel=1.0e-5
-    )
-    assert result["gain_btc"] == pytest.approx(
-        exact_analysis["gain_btc"], rel=2.0e-3
-    )
     assert result["adg_btc"] == pytest.approx(
         exact_analysis["adg_btc"], rel=2.0e-3
     )
@@ -4532,23 +4507,13 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         "equity_balance_diff_neg_max_usd",
         "equity_balance_diff_neg_mean_btc",
         "equity_balance_diff_neg_mean_usd",
-        "equity_balance_diff_pos_max_btc",
-        "equity_balance_diff_pos_max_usd",
-        "equity_balance_diff_pos_mean_btc",
-        "equity_balance_diff_pos_mean_usd",
         "paper_loss_mean_ratio_btc",
         "paper_loss_mean_ratio_usd",
         "paper_loss_ratio_btc",
         "paper_loss_ratio_usd",
     ):
-        # Exact Rust includes a slightly different pre-fill/tracking boundary
-        # in its sign-filtered mean; extrema and paper-loss denominators remain
-        # tightly matched, while positive means are proxy approximations.
-        relative_tolerance = (
-            0.4 if "equity_balance_diff_pos_mean" in metric else 3.0e-3
-        )
         assert result[metric] == pytest.approx(
-            exact_analysis[metric], rel=relative_tolerance, abs=1.0e-8
+            exact_analysis[metric], rel=3.0e-3, abs=1.0e-8
         ), metric
     assert proxy.btc_risk_enabled is True
     assert proxy.equity_balance_diff_enabled is True
@@ -4712,7 +4677,7 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
         timestamps=timestamps,
         exchange="bybit",
         batch_size=1,
-        needed_metrics={"fills_count"},
+        needed_metrics={"fills_per_day"},
     )
     parameter_matrix = proxy._parameter_matrix([candidate])
     side_width = len(proxy.param_keys)
@@ -4761,16 +4726,18 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
         timestamps,
     )
 
-    assert result["fills_count"] > 0.0
-    fill_count_drift = abs(
-        result["fills_count"] - exact_analysis["fills_count"]
+    assert result["fills_per_day"] > 0.0
+    fill_rate_drift = abs(
+        result["fills_per_day"] - exact_analysis["fills_per_day"]
     )
     # TM's float32 screening path may cross one recursive fill boundary that
     # exact Rust's float64 path does not. The exact optimizer validation remains
     # authoritative; this matrix is proving override dispatch and bounded drift.
-    assert fill_count_drift <= (
-        0.0 if strategy_kind == "ema_anchor" else 1.0
+    fill_count_equivalent_drift = (
+        fill_rate_drift * exact_analysis["fills_analysis_duration_days"]
     )
+    allowed_fill_drift = 0.0 if strategy_kind == "ema_anchor" else 1.0
+    assert fill_count_equivalent_drift <= allowed_fill_drift + 1.0e-9
 
 
 @pytest.mark.skipif(
@@ -4890,28 +4857,21 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         batch_size=1,
         needed_metrics={
             "backtest_completion_ratio",
-            "fills_count",
+            "fills_per_day",
             "adg_btc",
             "drawdown_worst_btc",
             "equity_balance_diff_neg_max_btc",
             "equity_balance_diff_neg_max_usd",
             "equity_balance_diff_neg_mean_btc",
             "equity_balance_diff_neg_mean_usd",
-            "equity_balance_diff_pos_max_btc",
-            "equity_balance_diff_pos_max_usd",
-            "equity_balance_diff_pos_mean_btc",
-            "equity_balance_diff_pos_mean_usd",
-                "expected_shortfall_1pct_btc",
-                "entry_interval_hours_max",
-                "gain_btc",
-            "hard_stop_panic_close_loss_sum",
+            "expected_shortfall_1pct_btc",
+            "entry_interval_hours_max",
             "paper_loss_mean_ratio_btc",
             "paper_loss_mean_ratio_usd",
             "paper_loss_ratio_btc",
-                "paper_loss_ratio_usd",
-                "strategy_eq_recovery_days_p99",
-        }
-        | _HIGH_EXPOSURE_METRICS,
+            "paper_loss_ratio_usd",
+            "strategy_eq_recovery_days_p99",
+        },
     )
     result = proxy.evaluate([{}])[0]
     exact_fills, _, exact_analysis = run_backtest(
@@ -4923,13 +4883,11 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         timestamps,
     )
     expected_fills = 4.0 if topology == "fused" else 2.0
-    assert result["fills_count"] == expected_fills
-    assert result["fills_count"] == exact_analysis["fills_count"]
+    assert exact_analysis["fills_count"] == expected_fills
     assert len(exact_fills) == exact_analysis["fills_count"]
-    for metric in _HIGH_EXPOSURE_METRICS:
-        assert result[metric] == pytest.approx(
-            exact_analysis[metric], rel=2.0e-3, abs=1.0e-8
-        ), metric
+    assert result["fills_per_day"] == pytest.approx(
+        exact_analysis["fills_per_day"], rel=1.0e-5
+    )
     assert np.isfinite(result["entry_interval_hours_max"])
     assert np.isfinite(result["strategy_eq_recovery_days_p99"])
     exact_order_types = {row[13] for row in exact_fills}
@@ -4937,14 +4895,6 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         f"close_panic_{side}" for side in enabled_sides
     }
     assert expected_panic_types <= exact_order_types
-    if topology != "fused":
-        assert exact_analysis["hard_stop_panic_close_loss_sum"] > 0.0
-        assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
-            exact_analysis["hard_stop_panic_close_loss_sum"], rel=5.0e-4
-        )
-    assert result["gain_btc"] == pytest.approx(
-        exact_analysis["gain_btc"], rel=2.0e-3
-    )
     assert result["adg_btc"] == pytest.approx(
         exact_analysis["adg_btc"], rel=2.0e-3
     )
@@ -4959,23 +4909,13 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
         "equity_balance_diff_neg_max_usd",
         "equity_balance_diff_neg_mean_btc",
         "equity_balance_diff_neg_mean_usd",
-        "equity_balance_diff_pos_max_btc",
-        "equity_balance_diff_pos_max_usd",
-        "equity_balance_diff_pos_mean_btc",
-        "equity_balance_diff_pos_mean_usd",
         "paper_loss_mean_ratio_btc",
         "paper_loss_mean_ratio_usd",
         "paper_loss_ratio_btc",
         "paper_loss_ratio_usd",
     ):
-        # Exact Rust includes a slightly different pre-fill/tracking boundary
-        # in its sign-filtered mean; extrema and paper-loss denominators remain
-        # tightly matched, while positive means are proxy approximations.
-        relative_tolerance = (
-            0.4 if "equity_balance_diff_pos_mean" in metric else 3.0e-3
-        )
         assert result[metric] == pytest.approx(
-            exact_analysis[metric], rel=relative_tolerance, abs=1.0e-8
+            exact_analysis[metric], rel=3.0e-3, abs=1.0e-8
         ), metric
     assert proxy.btc_risk_enabled is True
     assert proxy.equity_balance_diff_enabled is True
@@ -5123,7 +5063,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             "backtest_completion_ratio",
             "entry_initial_balance_pct_long",
             "entry_initial_balance_pct_short",
-            "fills_count",
+            "fills_per_day",
             "position_held_days_max",
         },
     )
@@ -5137,8 +5077,10 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
         timestamps,
     )
 
-    assert result["fills_count"] == exact_analysis["fills_count"]
     assert len(exact_fills) == exact_analysis["fills_count"]
+    assert result["fills_per_day"] == pytest.approx(
+        exact_analysis["fills_per_day"], rel=1.0e-5
+    )
     for side in enabled_sides:
         metric = f"entry_initial_balance_pct_{side}"
         assert result[metric] == pytest.approx(exact_analysis[metric], rel=1.0e-5)
@@ -11393,10 +11335,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     proxy.needed_metrics = {
         "hard_stop_panic_close_loss_drawdown_pct_mean",
         "hard_stop_time_in_red_pct",
-        "hard_stop_triggers",
-        "hard_stop_triggers_long",
-        "hard_stop_triggers_short",
-        "fills_count",
+        "hard_stop_triggers_per_year",
+        "fills_per_day",
         "drawdown_worst_ema_strategy_eq",
         "drawdown_worst_ema_strategy_eq_long",
         "drawdown_worst_ema_strategy_eq_short",
@@ -11460,12 +11400,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     assert (seen_hsl_triggers["samples"] > 0.0).all()
     assert (seen_hsl_triggers["long"] >= 0.0).all()
     assert (seen_hsl_triggers["short"] >= 0.0).all()
-    assert all(item["fills_count"] > 0.0 for item in service_results)
-    assert all(
-        item["hard_stop_triggers"]
-        == item["hard_stop_triggers_long"] + item["hard_stop_triggers_short"]
-        for item in service_results
-    )
+    assert all(item["fills_per_day"] > 0.0 for item in service_results)
+    assert all(item["hard_stop_triggers_per_year"] >= 0.0 for item in service_results)
     assert all(item["hard_stop_time_in_red_pct"] >= 0.0 for item in service_results)
     assert all(
         item["hard_stop_panic_close_loss_drawdown_pct_mean"] >= 0.0

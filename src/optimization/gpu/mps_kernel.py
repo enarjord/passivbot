@@ -47,7 +47,6 @@ MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 MPS_EQUITY_BALANCE_DIFF_COLS = 12
 MPS_ENTRY_INTERVAL_STAT_COLS = 2
 MPS_ENTRY_INTERVAL_COUNT_COLS = 129
-MPS_HIGH_EXPOSURE_COLS = 8
 
 _HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
 _HSL_RAW_DRAWDOWN_DEFINE = "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
@@ -63,7 +62,6 @@ _EQUITY_BALANCE_DIFF_DEFINE = (
     "#define PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED 1\n"
 )
 _ENTRY_INTERVAL_DEFINE = "#define PASSIVBOT_ENTRY_INTERVAL_ENABLED 1\n"
-_HIGH_EXPOSURE_DEFINE = "#define PASSIVBOT_HIGH_EXPOSURE_ENABLED 1\n"
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -141,16 +139,6 @@ def _with_entry_interval(source: str, enabled: bool) -> str:
             "MPS source is missing the shared entry-interval contract"
         )
     return _ENTRY_INTERVAL_DEFINE + source
-
-
-def _with_high_exposure(source: str, enabled: bool) -> str:
-    if not enabled:
-        return source
-    if "inline void record_high_exposure_fill(" not in source:
-        raise RuntimeError(
-            "MPS source is missing the shared high-exposure contract"
-        )
-    return _HIGH_EXPOSURE_DEFINE + source
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -465,33 +453,6 @@ def _decode_entry_interval_outputs(stats, counts) -> dict:
     }
 
 
-def _decode_high_exposure_outputs(output, interval_ms: float) -> dict:
-    if output is None:
-        return {}
-    if output.ndim != 2 or output.shape[1] != MPS_HIGH_EXPOSURE_COLS:
-        raise RuntimeError(
-            "MPS high-exposure output has an invalid shape: "
-            f"{tuple(output.shape)}"
-        )
-    hours_per_step = float(interval_ms) / 3_600_000.0
-    decoded = {}
-    for side, start in (("long", 2), ("short", 5)):
-        duration_count = output[:, start + 2]
-        duration_sum = output[:, start]
-        duration_max = output[:, start + 1]
-        mean_hours = torch.where(
-            duration_count > 0.0,
-            duration_sum / duration_count.clamp(min=1.0) * hours_per_step,
-            torch.zeros_like(duration_count),
-        )
-        max_hours = duration_max * hours_per_step
-        decoded[f"high_exposure_hours_mean_{side}"] = mean_hours
-        decoded[f"high_exposure_hours_max_{side}"] = max_hours
-        decoded[f"high_exposure_days_mean_{side}"] = mean_hours / 24.0
-        decoded[f"high_exposure_days_max_{side}"] = max_hours / 24.0
-    return decoded
-
-
 @lru_cache(maxsize=16)
 def _shader_library(
     hsl_ema_tail_enabled: bool = False,
@@ -500,7 +461,6 @@ def _shader_library(
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
-    high_exposure_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -515,7 +475,6 @@ def _shader_library(
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    source = _with_high_exposure(source, high_exposure_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -528,7 +487,6 @@ def _trailing_martingale_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
-    high_exposure_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -544,7 +502,6 @@ def _trailing_martingale_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    source = _with_high_exposure(source, high_exposure_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -554,7 +511,6 @@ def _trailing_martingale_long_no_hsl_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
-    high_exposure_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -567,7 +523,6 @@ def _trailing_martingale_long_no_hsl_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    source = _with_high_exposure(source, high_exposure_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -577,7 +532,6 @@ def _trailing_martingale_short_no_hsl_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
-    high_exposure_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -590,7 +544,6 @@ def _trailing_martingale_short_no_hsl_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    source = _with_high_exposure(source, high_exposure_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -603,7 +556,6 @@ def _ema_anchor_multicoin_shader_library(
     dynamic_wel_by_tradability: bool = True,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
-    high_exposure_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -621,7 +573,6 @@ def _ema_anchor_multicoin_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    source = _with_high_exposure(source, high_exposure_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -635,7 +586,6 @@ def _trailing_martingale_multicoin_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
-    high_exposure_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -654,7 +604,6 @@ def _trailing_martingale_multicoin_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    source = _with_high_exposure(source, high_exposure_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -1006,7 +955,6 @@ class MpsEmaAnchorRunner:
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
-        high_exposure_enabled: bool = False,
     ):
         self.market = market
         if entry_interval_enabled:
@@ -1077,7 +1025,6 @@ class MpsEmaAnchorRunner:
             btc_prices, expected_count=self.n
         )
         self.equity_balance_diff_enabled = bool(equity_balance_diff_enabled)
-        self.high_exposure_enabled = bool(high_exposure_enabled)
         self.btc_risk_enabled = (
             self.btc_prices is not None
             if btc_risk_enabled is None
@@ -1170,7 +1117,6 @@ class MpsEmaAnchorRunner:
         self._rolling_buffers: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
-        self._high_exposure_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
 
@@ -1277,20 +1223,6 @@ class MpsEmaAnchorRunner:
             self._equity_balance_diff_buffers[batch_size].zero_()
         return self._equity_balance_diff_buffers[batch_size]
 
-    def _high_exposure_buffer(self, batch_size: int):
-        if not self.high_exposure_enabled:
-            return None
-        if batch_size not in self._high_exposure_buffers:
-            self._high_exposure_buffers[batch_size] = torch.full(
-                (batch_size, MPS_HIGH_EXPOSURE_COLS),
-                float("nan"),
-                dtype=torch.float32,
-                device="mps",
-            )
-        else:
-            self._high_exposure_buffers[batch_size].fill_(float("nan"))
-        return self._high_exposure_buffers[batch_size]
-
     def _single_coin_size_values(
         self, batch_size: int, parameter_count: int
     ) -> list[int]:
@@ -1324,7 +1256,6 @@ class MpsEmaAnchorRunner:
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-        high_exposure_output = self._high_exposure_buffer(batch_size)
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             size_values = self._single_coin_size_values(
@@ -1343,7 +1274,6 @@ class MpsEmaAnchorRunner:
             self.recovery_distribution_enabled,
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
-            self.high_exposure_enabled,
         )
         compiled = time.perf_counter()
         if profile:
@@ -1363,8 +1293,6 @@ class MpsEmaAnchorRunner:
                 kernel_args += (self.btc_prices,)
             if self.equity_balance_diff_enabled:
                 kernel_args += (equity_balance_diff,)
-            if self.high_exposure_enabled:
-                kernel_args += (high_exposure_output,)
             kernel_args += (
                 daily,
                 scalars,
@@ -1380,18 +1308,6 @@ class MpsEmaAnchorRunner:
             )
 
         dispatch_once()
-        if self.high_exposure_enabled:
-            daily, scalars, gaps = self._output_buffers(batch_size)
-            rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
-                batch_size
-            )
-            recovery_samples = (
-                self._recovery_sample_buffer(batch_size)
-                if self.recovery_distribution_enabled
-                else None
-            )
-            equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-            dispatch_once()
         if profile:
             torch.mps.synchronize()
         finished = time.perf_counter()
@@ -1404,11 +1320,6 @@ class MpsEmaAnchorRunner:
         }
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
-        output.update(
-            _decode_high_exposure_outputs(
-                high_exposure_output, self.run_config.interval_ms
-            )
-        )
         if self.recovery_distribution_enabled:
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (
@@ -1448,7 +1359,6 @@ class MpsEmaAnchorMulticoinRunner:
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
-        high_exposure_enabled: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -1504,7 +1414,6 @@ class MpsEmaAnchorMulticoinRunner:
             btc_prices, expected_count=self.n
         )
         self.equity_balance_diff_enabled = bool(equity_balance_diff_enabled)
-        self.high_exposure_enabled = bool(high_exposure_enabled)
         self.entry_interval_enabled = bool(entry_interval_enabled)
         if self.entry_interval_enabled and self.coin_override_label != "Trailing Martingale":
             raise ValueError(
@@ -1617,7 +1526,6 @@ class MpsEmaAnchorMulticoinRunner:
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
-        self._high_exposure_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
@@ -1718,7 +1626,6 @@ class MpsEmaAnchorMulticoinRunner:
         equity_balance_diff,
         entry_interval_stats,
         entry_interval_counts,
-        high_exposure_output,
         recovery_samples,
         *,
         batch_size: int,
@@ -1741,8 +1648,6 @@ class MpsEmaAnchorMulticoinRunner:
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
             kernel_args += (entry_interval_stats, entry_interval_counts)
-        if self.high_exposure_enabled:
-            kernel_args += (high_exposure_output,)
         kernel_args += (
             daily,
             scalars,
@@ -1765,7 +1670,6 @@ class MpsEmaAnchorMulticoinRunner:
             self.dynamic_wel_by_tradability,
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
-            self.high_exposure_enabled,
         )
 
     def _decode(self, daily, scalars, gaps) -> dict:
@@ -1824,20 +1728,6 @@ class MpsEmaAnchorMulticoinRunner:
             self._entry_interval_count_buffers[batch_size],
         )
 
-    def _high_exposure_buffer(self, batch_size: int):
-        if not self.high_exposure_enabled:
-            return None
-        if batch_size not in self._high_exposure_buffers:
-            self._high_exposure_buffers[batch_size] = torch.full(
-                (batch_size, MPS_HIGH_EXPOSURE_COLS),
-                float("nan"),
-                dtype=torch.float32,
-                device="mps",
-            )
-        else:
-            self._high_exposure_buffers[batch_size].fill_(float("nan"))
-        return self._high_exposure_buffers[batch_size]
-
     def run(
         self,
         params: np.ndarray,
@@ -1861,7 +1751,6 @@ class MpsEmaAnchorMulticoinRunner:
         entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
             batch_size
         )
-        high_exposure_output = self._high_exposure_buffer(batch_size)
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             size_values = [
@@ -1903,37 +1792,9 @@ class MpsEmaAnchorMulticoinRunner:
             equity_balance_diff,
             entry_interval_stats,
             entry_interval_counts,
-            high_exposure_output,
             recovery_samples,
             batch_size=batch_size,
         )
-        if self.high_exposure_enabled:
-            daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
-            recovery_samples = (
-                self._recovery_sample_buffer(batch_size)
-                if self.recovery_distribution_enabled
-                else None
-            )
-            equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-            entry_interval_stats, entry_interval_counts = (
-                self._entry_interval_buffers(batch_size)
-            )
-            self._dispatch(
-                library,
-                params_mps,
-                self._sizes[sizes_key],
-                end_steps_mps,
-                daily,
-                scalars,
-                gaps,
-                coin_fill_counts,
-                equity_balance_diff,
-                entry_interval_stats,
-                entry_interval_counts,
-                high_exposure_output,
-                recovery_samples,
-                batch_size=batch_size,
-            )
         if profile:
             torch.mps.synchronize()
         finished = time.perf_counter()
@@ -1949,11 +1810,6 @@ class MpsEmaAnchorMulticoinRunner:
         output.update(
             _decode_entry_interval_outputs(
                 entry_interval_stats, entry_interval_counts
-            )
-        )
-        output.update(
-            _decode_high_exposure_outputs(
-                high_exposure_output, self.run_config.interval_ms
             )
         )
         if self.recovery_distribution_enabled:
@@ -1997,7 +1853,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
-        high_exposure_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -2021,7 +1876,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
-            high_exposure_enabled=high_exposure_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -2102,7 +1956,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         equity_balance_diff,
         entry_interval_stats,
         entry_interval_counts,
-        high_exposure_output,
         recovery_samples,
         *,
         batch_size: int,
@@ -2126,8 +1979,6 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
             kernel_args += (entry_interval_stats, entry_interval_counts)
-        if self.high_exposure_enabled:
-            kernel_args += (high_exposure_output,)
         kernel_args += (
             daily,
             scalars,
@@ -2227,7 +2078,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
-        high_exposure_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -2251,7 +2101,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
-            high_exposure_enabled=high_exposure_enabled,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2282,7 +2131,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
-            self.high_exposure_enabled,
         )
 
     def _dispatch(
@@ -2298,7 +2146,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         equity_balance_diff,
         entry_interval_stats,
         entry_interval_counts,
-        high_exposure_output,
         recovery_samples,
         *,
         batch_size: int,
@@ -2324,8 +2171,6 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
             kernel_args += (entry_interval_stats, entry_interval_counts)
-        if self.high_exposure_enabled:
-            kernel_args += (high_exposure_output,)
         kernel_args += (
             daily,
             scalars,
@@ -2376,7 +2221,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
-        high_exposure_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -2400,7 +2244,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
-            high_exposure_enabled=high_exposure_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -2476,7 +2319,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         equity_balance_diff,
         entry_interval_stats,
         entry_interval_counts,
-        high_exposure_output,
         recovery_samples,
         *,
         batch_size: int,
@@ -2503,8 +2345,6 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
             kernel_args += (entry_interval_stats, entry_interval_counts)
-        if self.high_exposure_enabled:
-            kernel_args += (high_exposure_output,)
         kernel_args += (
             daily,
             scalars,
@@ -2556,7 +2396,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
-                self.high_exposure_enabled,
             )
         if self.shader_topology == "short_no_hsl":
             return _trailing_martingale_short_no_hsl_shader_library(
@@ -2564,7 +2403,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
-                self.high_exposure_enabled,
             )
         return _trailing_martingale_shader_library(
             self.hsl_ema_tail_enabled,
@@ -2574,7 +2412,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
-            self.high_exposure_enabled,
         )
 
     def _entry_interval_buffers(self, batch_size: int):
@@ -2641,7 +2478,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-        high_exposure_output = self._high_exposure_buffer(batch_size)
         entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
             batch_size
         )
@@ -2677,8 +2513,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 kernel_args += (equity_balance_diff,)
             if self.entry_interval_enabled:
                 kernel_args += (entry_interval_stats, entry_interval_counts)
-            if self.high_exposure_enabled:
-                kernel_args += (high_exposure_output,)
             kernel_args += (
                 daily,
                 scalars,
@@ -2694,21 +2528,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
 
         dispatch_once()
-        if self.high_exposure_enabled:
-            daily, scalars, gaps = self._output_buffers(batch_size)
-            rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
-                batch_size
-            )
-            recovery_samples = (
-                self._recovery_sample_buffer(batch_size)
-                if self.recovery_distribution_enabled
-                else None
-            )
-            equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-            entry_interval_stats, entry_interval_counts = (
-                self._entry_interval_buffers(batch_size)
-            )
-            dispatch_once()
         if profile:
             torch.mps.synchronize()
         finished = time.perf_counter()
@@ -2721,11 +2540,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         }
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
-        output.update(
-            _decode_high_exposure_outputs(
-                high_exposure_output, self.run_config.interval_ms
-            )
-        )
         output.update(
             _decode_entry_interval_outputs(
                 entry_interval_stats, entry_interval_counts

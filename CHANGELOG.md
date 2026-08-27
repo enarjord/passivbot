@@ -4,19 +4,21 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS optimization now keeps exact-analysis diagnostics separate from proxy objectives and
+  proxy-side limits. Raw gain/PnL, positive equity-balance divergence, completed-only account
+  recovery, raw or split fill activity, raw HSL event/absolute-loss metrics, legacy recovery/profit
+  aliases, and the self-relative high-exposure duration family remain available from exact Rust
+  backtests but fail closed when requested as GPU optimization signals. Removing high-exposure proxy scoring
+  also removes its second complete Metal strategy replay, so every valid EMA Anchor and Trailing
+  Martingale proxy evaluation dispatches its strategy kernel once. CPU optimizers, backtesting, and
+  live operation are unchanged.
+
 - GPU optimization now runs an Apple MPS capability preflight before loading historical data.
   Missing MPS support, unsupported strategies, positive `backtest.btc_collateral_cap`, and
   unmodeled suite override paths fail immediately with the unsupported setting, the CPU-backend
   fallback, and a documentation pointer. Successful starts log the strategy, zero-collateral
   contract, and 64-coin-per-scenario ceiling. CPU optimization and backtesting do not import or
   probe the optional GPU runtime.
-
-- Apple MPS optimization now supports the eight unweighted high-exposure duration metrics for
-  EMA Anchor and Trailing Martingale across single-coin, multi-coin, long-only, short-only, and
-  fused long+short runs. When one of these metrics is scored or limited, Metal performs an opt-in
-  threshold pass followed by a duration pass; ordinary GPU runs keep their existing single
-  dispatch. Exact Rust validation and rolling drift gates remain authoritative when multiple
-  proxy fills share a candle.
 
 - Apple MPS optimization now accepts the same per-coin live-only `leverage` and non-`normal`
   `forced_mode_<side>` values on either enabled or disabled sides as CPU optimization. These values
