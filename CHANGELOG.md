@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS optimization now accepts the same per-coin live-only `leverage` and non-`normal`
+  `forced_mode_<side>` values on either enabled or disabled sides as CPU optimization. These values
+  do not affect CPU backtests, so the MPS proxy also leaves them inert, emits an explicit warning
+  instead of silently ignoring them, and retains their exact values in checkpoint identity. This
+  lets composed live configs move between CPU and GPU optimization without deleting valid live-only
+  coin settings.
+
 - Apple MPS suite optimization now supports scenarios spanning a strict subset of multiple
   exchanges. Metal evaluates each prepared exchange dataset independently, combines their proxy
   metrics with the canonical CPU per-scenario mean/minimum/maximum/standard-deviation/median

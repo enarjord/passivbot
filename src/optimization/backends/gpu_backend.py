@@ -1238,7 +1238,13 @@ def _validate_gpu_coin_overrides(
     enabled_sides,
     coin_count: int,
 ) -> None:
-    """Accept only the static per-coin leaves modeled by the MPS proxy."""
+    """Accept modeled leaves plus explicit CPU-compatible backtest no-ops.
+
+    ``live.leverage`` and forced modes other than ``normal`` affect live
+    exchange operation, but the exact Rust backtester does not consume them.
+    Keep composed live configs usable while making that no-op status visible.
+    Exact override documents remain part of checkpoint identity downstream.
+    """
 
     overrides = config.get("coin_overrides") or {}
     if not overrides:
@@ -1277,7 +1283,16 @@ def _validate_gpu_coin_overrides(
         else:
             yield prefix
 
-    allowed = set()
+    def value_at(value, path):
+        for key in path:
+            value = value[key]
+        return value
+
+    forced_mode_paths = {
+        ("live", "forced_mode_long"),
+        ("live", "forced_mode_short"),
+    }
+    allowed = {("live", "leverage")}
     for enabled_side in enabled_sides:
         allowed.update(
             {
@@ -1330,6 +1345,7 @@ def _validate_gpu_coin_overrides(
             for _key, path in HSL_COIN_OVERRIDE_PATHS
         )
     unsupported = []
+    backtest_inert = []
     hsl_override_paths = []
     for coin, patch in overrides.items():
         if not isinstance(patch, dict):
@@ -1337,9 +1353,14 @@ def _validate_gpu_coin_overrides(
             continue
         for path in leaves(patch):
             rendered = ".".join(("coin_overrides", str(coin), *path))
+            inert_forced_mode = (
+                path in forced_mode_paths and value_at(patch, path) != "normal"
+            )
+            if path == ("live", "leverage") or inert_forced_mode:
+                backtest_inert.append(rendered)
             if len(path) >= 3 and path[0] == "bot" and path[2] == "hsl":
                 hsl_override_paths.append(rendered)
-            if path not in allowed:
+            if path not in allowed and not inert_forced_mode:
                 unsupported.append(rendered)
     if hsl_override_paths:
         signal_mode = str(
@@ -1389,6 +1410,13 @@ def _validate_gpu_coin_overrides(
             f"forced_mode_<side>, {strategy_kind} parameters, {supported_risk}, "
             "unstuck parameters, HSL parameters in coin signal mode, and "
             "wallet_exposure_limit"
+        )
+    if backtest_inert:
+        logging.warning(
+            "GPU coin_overrides contain CPU-compatible live-only values with "
+            "no backtest effect; exact Rust and the MPS proxy both leave these "
+            "values inert, and checkpoint identity still records them: %s",
+            sorted(backtest_inert),
         )
 
 
