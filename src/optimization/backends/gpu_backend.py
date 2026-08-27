@@ -1288,12 +1288,15 @@ def _validate_gpu_coin_overrides(
             value = value[key]
         return value
 
-    allowed = set()
+    forced_mode_paths = {
+        ("live", "forced_mode_long"),
+        ("live", "forced_mode_short"),
+    }
+    allowed = {("live", "leverage")}
     for enabled_side in enabled_sides:
         allowed.update(
             {
                 ("live", f"forced_mode_{enabled_side}"),
-                ("live", "leverage"),
                 ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
                 ("bot", enabled_side, "risk", "we_excess_allowance_pct"),
                 ("bot", enabled_side, "wallet_exposure_limit"),
@@ -1350,18 +1353,14 @@ def _validate_gpu_coin_overrides(
             continue
         for path in leaves(patch):
             rendered = ".".join(("coin_overrides", str(coin), *path))
-            if path == ("live", "leverage") or (
-                len(path) == 2
-                and path[0] == "live"
-                and path[1] in {
-                    f"forced_mode_{side}" for side in enabled_sides
-                }
-                and value_at(patch, path) != "normal"
-            ):
+            inert_forced_mode = (
+                path in forced_mode_paths and value_at(patch, path) != "normal"
+            )
+            if path == ("live", "leverage") or inert_forced_mode:
                 backtest_inert.append(rendered)
             if len(path) >= 3 and path[0] == "bot" and path[2] == "hsl":
                 hsl_override_paths.append(rendered)
-            if path not in allowed:
+            if path not in allowed and not inert_forced_mode:
                 unsupported.append(rendered)
     if hsl_override_paths:
         signal_mode = str(

@@ -2293,6 +2293,7 @@ def test_coin_override_contract_keeps_backtest_inert_live_values():
     exact_patch = {
         "live": {
             "forced_mode_long": "graceful_stop",
+            "forced_mode_short": "panic",
             "leverage": 3,
         }
     }

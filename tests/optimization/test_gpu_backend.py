@@ -2700,6 +2700,7 @@ def test_gpu_coin_overrides_accept_cpu_compatible_live_only_values_with_warning(
         "ETH": {
             "live": {
                 "forced_mode_long": "graceful_stop",
+                "forced_mode_short": "panic",
                 "leverage": 3,
             }
         }
@@ -2714,7 +2715,66 @@ def test_gpu_coin_overrides_accept_cpu_compatible_live_only_values_with_warning(
 
     assert "CPU-compatible live-only values with no backtest effect" in caplog.text
     assert "coin_overrides.ETH.live.forced_mode_long" in caplog.text
+    assert "coin_overrides.ETH.live.forced_mode_short" in caplog.text
     assert "coin_overrides.ETH.live.leverage" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("strategy_kind", "config_factory"),
+    [
+        ("ema_anchor", _directional_ema_config),
+        ("trailing_martingale", _directional_tm_config),
+    ],
+)
+@pytest.mark.parametrize(
+    ("enabled_side", "disabled_side"),
+    [("long", "short"), ("short", "long")],
+)
+def test_gpu_coin_overrides_accept_disabled_side_inert_forced_mode(
+    strategy_kind, config_factory, enabled_side, disabled_side, caplog
+):
+    config = config_factory(
+        long_enabled=enabled_side == "long",
+        short_enabled=enabled_side == "short",
+    )
+    config["coin_overrides"] = {
+        "ETH": {"live": {f"forced_mode_{disabled_side}": "graceful_stop"}}
+    }
+
+    _validate_gpu_coin_overrides(
+        config,
+        strategy_kind=strategy_kind,
+        enabled_sides=[enabled_side],
+        coin_count=3,
+    )
+
+    assert (
+        f"coin_overrides.ETH.live.forced_mode_{disabled_side}" in caplog.text
+    )
+
+
+@pytest.mark.parametrize(
+    ("enabled_side", "disabled_side"),
+    [("long", "short"), ("short", "long")],
+)
+def test_gpu_coin_overrides_reject_disabled_side_forced_normal(
+    enabled_side, disabled_side
+):
+    config = _directional_ema_config(
+        long_enabled=enabled_side == "long",
+        short_enabled=enabled_side == "short",
+    )
+    config["coin_overrides"] = {
+        "ETH": {"live": {f"forced_mode_{disabled_side}": "normal"}}
+    }
+
+    with pytest.raises(ValueError, match="do not model these paths yet"):
+        _validate_gpu_coin_overrides(
+            config,
+            strategy_kind="ema_anchor",
+            enabled_sides=[enabled_side],
+            coin_count=3,
+        )
 
 
 @pytest.mark.parametrize(

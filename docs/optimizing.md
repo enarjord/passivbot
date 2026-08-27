@@ -147,14 +147,16 @@ The supported slice is intentionally narrow:
   per-coin
   `risk.position_exposure_enforcer_enabled` and
   `risk.position_exposure_enforcer_threshold`; per-coin
-  `risk.we_excess_allowance_mode`, disabled sides, and other override leaves fail closed. Trailing
+  `risk.we_excess_allowance_mode`, modeled leaves for disabled sides, and other override leaves
+  fail closed. Non-`normal` forced modes remain accepted for either side because they are
+  backtest-inert. Trailing
   Martingale also resolves all four `entry.ema_gate_mode` values per coin and side. In one-sided
   `live.hsl_signal_mode: coin` runs, all ten HSL
   leaves documented in `coin_overrides.md` are also supported. Fused dual-side EMA Anchor and
   Trailing Martingale coin mode resolve the same HSL leaves independently for long and short.
-  CPU-compatible per-coin `live.leverage` and non-`normal` forced modes are accepted for composed
-  live-config portability, but neither affects an exact CPU backtest; GPU optimization therefore
-  warns that they are backtest-inert and records them in checkpoint identity.
+  CPU-compatible per-coin `live.leverage` and non-`normal` forced modes on either side are accepted
+  for composed live-config portability, but neither affects an exact CPU backtest; GPU optimization
+  therefore warns that they are backtest-inert and records them in checkpoint identity.
 - one-sided single-coin and multi-coin EMA Anchor and Trailing Martingale runs support HSL with
   `coin`, `pside`, or `unified` signals and both resting-limit and market panic closes. Unified and
   pside multi-coin runs use one portfolio controller; coin mode uses an independent controller per
