@@ -352,6 +352,79 @@ def _validate_gpu_static_scope(config: dict) -> str:
     return strategy_kind
 
 
+def _validate_gpu_data_independent_scope(
+    config: dict,
+    *,
+    allow_suite: bool = False,
+) -> tuple[str, list[str], list[str]]:
+    """Validate GPU behavior which does not depend on prepared candles or coin count."""
+
+    strategy_kind = _validate_gpu_static_scope(config)
+    if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
+        raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
+    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
+        liquidation_threshold = float(
+            config.get("backtest", {}).get("liquidation_threshold", 0.0)
+        )
+        if not math.isfinite(liquidation_threshold) or liquidation_threshold <= 0.0:
+            raise ValueError(
+                "GPU min-effective-cost filtering requires a finite positive "
+                "backtest.liquidation_threshold so the proxy has a proven lower "
+                "balance bound"
+            )
+    max_realized_loss_pct = float(
+        config.get("live", {}).get("max_realized_loss_pct", 1.0)
+    )
+    if not math.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
+        raise ValueError(
+            "GPU foundation requires a finite non-negative "
+            "live.max_realized_loss_pct"
+        )
+    enabled_sides = [
+        side for side in ("long", "short") if gpu_side_enabled(config, side)
+    ]
+    if not enabled_sides:
+        raise ValueError("GPU foundation requires at least one enabled side")
+    if bool(config.get("live", {}).get("market_orders_allowed")):
+        threshold = float(
+            config.get("live", {}).get("market_order_near_touch_threshold", 0.001)
+            or 0.0
+        )
+        if not math.isfinite(threshold) or threshold < 0.0:
+            raise ValueError(
+                "GPU market execution requires a finite non-negative "
+                "live.market_order_near_touch_threshold"
+            )
+    hsl_enabled_sides = [
+        side for side in enabled_sides if _gpu_hsl_side_enabled(config, side)
+    ]
+    if hsl_enabled_sides:
+        parse_pnls_max_lookback_days(
+            config.get("live", {}).get("pnls_max_lookback_days", 30.0),
+            field_name="live.pnls_max_lookback_days",
+        )
+        for side in hsl_enabled_sides:
+            hsl = config["bot"][side].get("hsl", {})
+            panic_order_type = str(
+                hsl.get("panic_close_order_type", "limit")
+            ).strip().lower()
+            if panic_order_type not in {"limit", "market"}:
+                raise ValueError(
+                    f"GPU HSL requires bot.{side}.hsl.panic_close_order_type "
+                    f"to be limit or market, got {panic_order_type!r}"
+                )
+    for side in enabled_sides:
+        risk = config["bot"][side].get("risk", {})
+        if strategy_kind != "trailing_martingale" and bool(
+            risk.get("position_exposure_enforcer_enabled", False)
+        ):
+            raise ValueError(
+                "GPU foundation requires "
+                f"bot.{side}.risk.position_exposure_enforcer_enabled=false"
+            )
+    return strategy_kind, enabled_sides, hsl_enabled_sides
+
+
 def _validate_gpu_suite_override_paths(
     proxy_config: dict,
     *,
@@ -390,15 +463,30 @@ def validate_gpu_preparation_scope(
 ) -> None:
     """Fail before historical-data preparation when immutable MPS scope is invalid."""
 
-    strategy_kind = _validate_gpu_static_scope(config)
     suite_cfg = suite_cfg or {}
+    suite_enabled = bool(suite_cfg.get("enabled"))
+    strategy_kind, _enabled_sides, _hsl_enabled_sides = (
+        _validate_gpu_data_independent_scope(
+            config,
+            allow_suite=suite_enabled,
+        )
+    )
     if bool(suite_cfg.get("enabled")):
+        from optimization.warmup import _apply_config_overrides
+
         for index, scenario in enumerate(suite_cfg.get("scenarios") or []):
             label = str(scenario.get("label") or f"scenario_{index + 1:02d}")
+            overrides = scenario.get("overrides") or {}
             _validate_gpu_suite_override_paths(
                 config,
                 label=label,
-                overrides=scenario.get("overrides") or {},
+                overrides=overrides,
+            )
+            scenario_config = deepcopy(config)
+            _apply_config_overrides(scenario_config, overrides)
+            _validate_gpu_data_independent_scope(
+                scenario_config,
+                allow_suite=True,
             )
 
     if torch_module is None:
@@ -1128,27 +1216,12 @@ def _validate_scope_config(
     coin_count: int,
     allow_suite: bool = False,
 ) -> str:
-    strategy_kind = _validate_gpu_static_scope(config)
-    if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
-        raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
-    if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
-        liquidation_threshold = float(
-            config.get("backtest", {}).get("liquidation_threshold", 0.0)
+    strategy_kind, enabled_sides, hsl_enabled_sides = (
+        _validate_gpu_data_independent_scope(
+            config,
+            allow_suite=allow_suite,
         )
-        if not math.isfinite(liquidation_threshold) or liquidation_threshold <= 0.0:
-            raise ValueError(
-                "GPU min-effective-cost filtering requires a finite positive "
-                "backtest.liquidation_threshold so the proxy has a proven lower "
-                "balance bound"
-            )
-    max_realized_loss_pct = float(
-        config.get("live", {}).get("max_realized_loss_pct", 1.0)
     )
-    if not math.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 0.0:
-        raise ValueError(
-            "GPU foundation requires a finite non-negative "
-            "live.max_realized_loss_pct"
-        )
     exchanges = list(exchanges)
     if len(exchanges) != 1:
         raise ValueError(
@@ -1158,19 +1231,7 @@ def _validate_scope_config(
     coin_count = int(coin_count)
     if coin_count < 1:
         raise ValueError("GPU foundation requires at least one prepared coin")
-    enabled_sides = [side for side in ("long", "short") if gpu_side_enabled(config, side)]
-    if not enabled_sides:
-        raise ValueError("GPU foundation requires at least one enabled side")
     if bool(config.get("live", {}).get("market_orders_allowed")):
-        threshold = float(
-            config.get("live", {}).get("market_order_near_touch_threshold", 0.001)
-            or 0.0
-        )
-        if not math.isfinite(threshold) or threshold < 0.0:
-            raise ValueError(
-                "GPU market execution requires a finite non-negative "
-                "live.market_order_near_touch_threshold"
-            )
         if coin_count > 1:
             if strategy_kind == "trailing_martingale":
                 _validate_tm_multicoin_market_runtime_scope(
@@ -1194,17 +1255,10 @@ def _validate_scope_config(
         enabled_sides=enabled_sides,
         coin_count=coin_count,
     )
-    hsl_enabled_sides = [
-        side for side in enabled_sides if _gpu_hsl_side_enabled(config, side)
-    ]
     if hsl_enabled_sides:
         # Directional single-coin coin mode mirrors Rust's finite fill-event
         # PnL window. Other HSL topologies retain the conservative all-history
         # screening envelope; exact Rust validation remains authoritative.
-        parse_pnls_max_lookback_days(
-            config.get("live", {}).get("pnls_max_lookback_days", 30.0),
-            field_name="live.pnls_max_lookback_days",
-        )
         signal_mode = str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         ).strip().lower()
@@ -1216,29 +1270,6 @@ def _validate_scope_config(
                 coin_count > 1 and len(enabled_sides) == 2
             ),
         )
-        for side in hsl_enabled_sides:
-            hsl = config["bot"][side].get("hsl", {})
-            panic_order_type = str(
-                hsl.get("panic_close_order_type", "limit")
-            ).strip().lower()
-            if panic_order_type not in {"limit", "market"}:
-                raise ValueError(
-                    f"GPU HSL requires bot.{side}.hsl.panic_close_order_type "
-                    f"to be limit or market, got {panic_order_type!r}"
-                )
-    for side in enabled_sides:
-        side_config = config["bot"][side]
-        risk = side_config.get("risk", {})
-        required_disabled = []
-        if strategy_kind != "trailing_martingale":
-            required_disabled.append(
-                ("position_exposure_enforcer_enabled", False)
-            )
-        for key, expected in required_disabled:
-            if bool(risk.get(key, expected)) != expected:
-                raise ValueError(
-                    f"GPU foundation requires bot.{side}.risk.{key}={str(expected).lower()}"
-                )
     return exchange
 
 

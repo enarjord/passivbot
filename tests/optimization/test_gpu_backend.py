@@ -1778,6 +1778,57 @@ def test_gpu_preparation_preflight_rejects_unmodeled_suite_override_early():
         )
 
 
+def test_gpu_preparation_preflight_validates_effective_bot_suite_values():
+    config = _long_only_ema_config()
+    runtime = MagicMock()
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [
+            {
+                "label": "unsupported_ema_repair",
+                "overrides": {
+                    "bot.long.risk.position_exposure_enforcer_enabled": True,
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"bot\.long\.risk\.position_exposure_enforcer_enabled=false"
+        ),
+    ):
+        validate_gpu_preparation_scope(
+            config,
+            suite_cfg,
+            torch_module=runtime,
+        )
+
+    runtime.backends.mps.is_available.assert_not_called()
+
+
+def test_gpu_preparation_preflight_accepts_modeled_tm_exposure_repair_override():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [
+            {
+                "label": "tm_repair",
+                "overrides": {
+                    "bot.long.risk.position_exposure_enforcer_enabled": True,
+                },
+            }
+        ],
+    }
+
+    validate_gpu_preparation_scope(
+        config,
+        suite_cfg,
+        torch_module=_fake_torch_with_mps(),
+    )
+
+
 def test_gpu_preparation_preflight_requires_available_mps():
     with pytest.raises(RuntimeError, match=r"MPS is unavailable.*pymoo"):
         validate_gpu_preparation_scope(
