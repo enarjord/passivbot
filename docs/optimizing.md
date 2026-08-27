@@ -567,6 +567,16 @@ conservative upper edges from a bounded logarithmic histogram. EMA Anchor emits 
 so these metrics retain exact Rust's canonical zero values without allocating the optional output
 surface. Runs that do not request an entry-interval metric keep their existing kernel ABI and
 dispatch cost.
+The eight `high_exposure_{hours,days}_{mean,max}_{long,short}` metrics are supported for both
+strategies and every single-coin and multi-coin side topology. Exact Rust defines the threshold as
+the mean of per-fill TWE averages resampled by UTC day, including zero-valued gaps between the
+first and last fill day. Because that threshold is only known after the fill sequence completes,
+Metal enables an opt-in two-pass replay: the first pass derives the candidate's per-side threshold
+and the second measures continuous above-threshold fill-to-fill durations. Runs that do not request
+this family retain the normal one-pass dispatch. Metal cannot retain the exact ordering of several
+fills produced within one candle, so it weights that candle's final TWE by its fill count; exact
+Rust validation and rolling rank/constraint drift gates remain authoritative for this bounded
+screening approximation.
 Exact Rust metrics remain authoritative. Other metrics that require unmodeled per-fill, trade, or
 position aggregates are rejected before a run starts.
 

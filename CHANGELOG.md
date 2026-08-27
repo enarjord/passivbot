@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS optimization now supports the eight unweighted high-exposure duration metrics for
+  EMA Anchor and Trailing Martingale across single-coin, multi-coin, long-only, short-only, and
+  fused long+short runs. When one of these metrics is scored or limited, Metal performs an opt-in
+  threshold pass followed by a duration pass; ordinary GPU runs keep their existing single
+  dispatch. Exact Rust validation and rolling drift gates remain authoritative when multiple
+  proxy fills share a candle.
+
 - Apple MPS optimization now accepts the same per-coin live-only `leverage` and non-`normal`
   `forced_mode_<side>` values on either enabled or disabled sides as CPU optimization. These values
   do not affect CPU backtests, so the MPS proxy also leaves them inert, emits an explicit warning

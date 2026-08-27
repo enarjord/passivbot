@@ -40,6 +40,8 @@ constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 
 // PASSIVBOT_ENTRY_INTERVAL_COMMON
 
+// PASSIVBOT_HIGH_EXPOSURE_COMMON
+
 // PASSIVBOT_MULTICOIN_COMMON
 
 inline bool realized_loss_proxy_allows_close(
@@ -4831,6 +4833,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4852,6 +4857,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     const int recovery_sample_count = sizes[9];
 #endif
     if (b >= uint(B)) return;
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    HighExposureState high_exposure = init_high_exposure_state(
+        high_exposure_output, b
+    );
+#endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
@@ -4871,6 +4881,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples[int(b) * recovery_sample_count]
             = RECOVERY_FAIL_CLOSED_SENTINEL;
+#endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+        write_high_exposure_output(
+            high_exposure, -1.0f, high_exposure_output, b
+        );
 #endif
         return;
     }
@@ -4900,6 +4915,11 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples[int(b) * recovery_sample_count]
             = RECOVERY_FAIL_CLOSED_SENTINEL;
+#endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+        write_high_exposure_output(
+            high_exposure, -1.0f, high_exposure_output, b
+        );
 #endif
         return;
     }
@@ -5287,6 +5307,29 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         any_fill = any_fill || forced_delist_fill;
         if (any_fill) {
             day_has_fill = 1.0f;
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+            float long_position_cost = 0.0f;
+            float short_position_cost = 0.0f;
+            for (int c = 0; c < C; ++c) {
+                const float c_mult = coin_settings[c * COIN_COLS + 4];
+                if (long_side.psize[c] > 0.0f) {
+                    long_position_cost += long_side.psize[c]
+                        * long_side.pprice[c] * c_mult;
+                }
+                if (short_side.psize[c] > 0.0f) {
+                    short_position_cost += short_side.psize[c]
+                        * short_side.pprice[c] * c_mult;
+                }
+            }
+            const float exposure_balance = fmax(
+                fabs(account.balance), 1.0e-12f
+            );
+            record_high_exposure_fill(
+                high_exposure, float(k), day_index, fills.fill_count,
+                long_position_cost / exposure_balance,
+                short_position_cost / exposure_balance
+            );
+#endif
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
                 int bin = clamp(
@@ -5546,6 +5589,12 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         );
     }
 
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    write_high_exposure_output(
+        high_exposure, last_fill_k, high_exposure_output, b
+    );
+#endif
+
     scalars[scalar_offset + 0] = max_dd;
     scalars[scalar_offset + 1] = fills.held_max_min * interval_ms;
     scalars[scalar_offset + 2] = gap_max_min * interval_ms;
@@ -5687,6 +5736,9 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -5710,6 +5762,9 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
         entry_interval_stats, entry_interval_counts,
+#endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+        high_exposure_output,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -5743,6 +5798,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -5765,6 +5823,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     const int recovery_sample_count = sizes[9];
 #endif
     if (b >= uint(B)) return;
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    HighExposureState high_exposure = init_high_exposure_state(
+        high_exposure_output, b
+    );
+#endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
@@ -6027,6 +6090,22 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         any_fill = any_fill || forced_delist_fill;
         if (any_fill) {
             day_has_fill = 1.0f;
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+            float side_position_cost = 0.0f;
+            for (int c = 0; c < C; ++c) {
+                if (psize[c] > 0.0f) {
+                    side_position_cost += psize[c] * pprice[c]
+                        * coin_settings[c * COIN_COLS + 4];
+                }
+            }
+            const float side_twe = side_position_cost
+                / fmax(fabs(balance), 1.0e-12f);
+            record_high_exposure_fill(
+                high_exposure, float(k), day_index, fill_count,
+                short_side ? 0.0f : side_twe,
+                short_side ? side_twe : 0.0f
+            );
+#endif
             if (last_fill_k >= 0.0f) {
                 float gap = float(k) - last_fill_k;
                 int bin = clamp(
@@ -6304,6 +6383,11 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             pnl_recovery_max_min, last_eq_k - pnl_recovery_peak_k
         );
     }
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    write_high_exposure_output(
+        high_exposure, last_fill_k, high_exposure_output, b
+    );
+#endif
     int scalar_offset = int(b) * SCALAR_COLS;
     scalars[scalar_offset + 0] = max_dd;
     scalars[scalar_offset + 1] = held_max_min * interval_ms;
@@ -6433,6 +6517,9 @@ kernel void passivbot_trailing_martingale_multicoin(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -6457,6 +6544,9 @@ kernel void passivbot_trailing_martingale_multicoin(
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
         entry_interval_stats, entry_interval_counts,
+#endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+        high_exposure_output,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -6490,6 +6580,9 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     device float* entry_interval_stats,
     device int* entry_interval_counts,
 #endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+    device float* high_exposure_output,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -6513,6 +6606,9 @@ kernel void passivbot_trailing_martingale_multicoin_long(
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
         entry_interval_stats, entry_interval_counts,
+#endif
+#if PASSIVBOT_HIGH_EXPOSURE_ENABLED
+        high_exposure_output,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED

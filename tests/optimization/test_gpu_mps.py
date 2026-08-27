@@ -37,6 +37,7 @@ from optimization.gpu.mps_kernel import (
     MpsEmaAnchorMulticoinFusedRunner,
     MpsTrailingMartingaleMulticoinFusedRunner,
     _decode_entry_interval_outputs,
+    _decode_high_exposure_outputs,
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
@@ -50,6 +51,7 @@ from optimization.gpu.mps_kernel import (
     _with_entry_interval,
     _with_hsl_ema_tail,
     _with_hsl_features,
+    _with_high_exposure,
     _with_recovery_distribution,
     strategy_eq_recovery_distribution_from_samples,
 )
@@ -59,6 +61,14 @@ from optimization.gpu.metrics import (
     compute_objectives,
 )
 from optimization.gpu.service import MpsMulticoinEmaProxy
+
+
+_HIGH_EXPOSURE_METRICS = {
+    f"high_exposure_{unit}_{stat}_{side}"
+    for unit in ("hours", "days")
+    for stat in ("mean", "max")
+    for side in ("long", "short")
+}
 
 
 def _assert_fill_scalar_contract(output):
@@ -579,6 +589,44 @@ def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
     assert actual == [5, 17, 2, 13, 3, 9, 7, 11] + (
         [60, 4] if recovery_enabled else []
     )
+
+
+def test_high_exposure_decoder_converts_steps_to_mean_and_max_durations():
+    raw = torch.tensor(
+        [
+            [0.25, 0.50, 12.0, 9.0, 3.0, 8.0, 5.0, 2.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ]
+    )
+
+    decoded = _decode_high_exposure_outputs(raw, 5 * 60_000)
+
+    assert decoded["high_exposure_hours_mean_long"].tolist() == pytest.approx(
+        [1.0 / 3.0, 0.0]
+    )
+    assert decoded["high_exposure_hours_max_long"].tolist() == pytest.approx(
+        [0.75, 0.0]
+    )
+    assert decoded["high_exposure_hours_mean_short"].tolist() == pytest.approx(
+        [1.0 / 3.0, 0.0]
+    )
+    assert decoded["high_exposure_hours_max_short"].tolist() == pytest.approx(
+        [5.0 / 12.0, 0.0]
+    )
+    assert decoded["high_exposure_days_max_long"].tolist() == pytest.approx(
+        [0.75 / 24.0, 0.0]
+    )
+
+
+def test_high_exposure_feature_guard_is_opt_in_and_fail_closed():
+    source = "#ifndef PASSIVBOT_HIGH_EXPOSURE_ENABLED\ninline void record_high_exposure_fill() {}\n"
+
+    assert _with_high_exposure(source, False) == source
+    assert _with_high_exposure(source, True).startswith(
+        "#define PASSIVBOT_HIGH_EXPOSURE_ENABLED 1\n"
+    )
+    with pytest.raises(RuntimeError, match="shared high-exposure contract"):
+        _with_high_exposure("kernel void unrelated() {}", True)
 
 
 def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):
@@ -4432,14 +4480,17 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
             "equity_balance_diff_pos_max_usd",
             "equity_balance_diff_pos_mean_btc",
             "equity_balance_diff_pos_mean_usd",
-            "expected_shortfall_1pct_btc",
-            "gain_btc",
+                "expected_shortfall_1pct_btc",
+                "entry_interval_hours_max",
+                "gain_btc",
             "hard_stop_panic_close_loss_sum",
             "paper_loss_mean_ratio_btc",
             "paper_loss_mean_ratio_usd",
             "paper_loss_ratio_btc",
-            "paper_loss_ratio_usd",
-        },
+                "paper_loss_ratio_usd",
+                "strategy_eq_recovery_days_p99",
+        }
+        | _HIGH_EXPOSURE_METRICS,
     )
     result = proxy.evaluate([{}])[0]
     exact_fills, _, exact_analysis = run_backtest(
@@ -4454,6 +4505,12 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
     assert result["fills_count"] == 2.0
     assert result["fills_count"] == exact_analysis["fills_count"]
     assert len(exact_fills) == exact_analysis["fills_count"]
+    for metric in _HIGH_EXPOSURE_METRICS:
+        assert result[metric] == pytest.approx(
+            exact_analysis[metric], rel=2.0e-3, abs=1.0e-8
+        ), metric
+    assert np.isfinite(result["entry_interval_hours_max"])
+    assert np.isfinite(result["strategy_eq_recovery_days_p99"])
     assert result["hard_stop_panic_close_loss_sum"] > 0.0
     assert result["hard_stop_panic_close_loss_sum"] == pytest.approx(
         exact_analysis["hard_stop_panic_close_loss_sum"], rel=1.0e-5
@@ -4844,14 +4901,17 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
             "equity_balance_diff_pos_max_usd",
             "equity_balance_diff_pos_mean_btc",
             "equity_balance_diff_pos_mean_usd",
-            "expected_shortfall_1pct_btc",
-            "gain_btc",
+                "expected_shortfall_1pct_btc",
+                "entry_interval_hours_max",
+                "gain_btc",
             "hard_stop_panic_close_loss_sum",
             "paper_loss_mean_ratio_btc",
             "paper_loss_mean_ratio_usd",
             "paper_loss_ratio_btc",
-            "paper_loss_ratio_usd",
-        },
+                "paper_loss_ratio_usd",
+                "strategy_eq_recovery_days_p99",
+        }
+        | _HIGH_EXPOSURE_METRICS,
     )
     result = proxy.evaluate([{}])[0]
     exact_fills, _, exact_analysis = run_backtest(
@@ -4866,6 +4926,12 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
     assert result["fills_count"] == expected_fills
     assert result["fills_count"] == exact_analysis["fills_count"]
     assert len(exact_fills) == exact_analysis["fills_count"]
+    for metric in _HIGH_EXPOSURE_METRICS:
+        assert result[metric] == pytest.approx(
+            exact_analysis[metric], rel=2.0e-3, abs=1.0e-8
+        ), metric
+    assert np.isfinite(result["entry_interval_hours_max"])
+    assert np.isfinite(result["strategy_eq_recovery_days_p99"])
     exact_order_types = {row[13] for row in exact_fills}
     expected_panic_types = {
         f"close_panic_{side}" for side in enabled_sides

@@ -101,6 +101,15 @@ ENTRY_INTERVAL_METRICS = frozenset(
     }
 )
 
+HIGH_EXPOSURE_METRICS = frozenset(
+    {
+        f"high_exposure_{unit}_{stat}_{side}"
+        for unit in ("hours", "days")
+        for stat in ("mean", "max")
+        for side in ("long", "short")
+    }
+)
+
 _BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
 _BTC_ACCOUNT_METRICS.update(
     metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_btc")
@@ -200,6 +209,7 @@ SUPPORTED_METRICS = (
     "hard_stop_triggers_long",
     "hard_stop_triggers_per_year",
     "hard_stop_triggers_short",
+    *sorted(HIGH_EXPOSURE_METRICS),
     "loss_profit_ratio",
     "loss_profit_ratio_long",
     "loss_profit_ratio_short",
@@ -2369,6 +2379,15 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(fill_gap_metrics)
     objectives.update(fill_activity_metrics)
     objectives.update(entry_interval_metrics)
+    requested_high_exposure = requested & HIGH_EXPOSURE_METRICS
+    missing_high_exposure = requested_high_exposure - out.keys()
+    if missing_high_exposure:
+        raise RuntimeError(
+            "MPS high-exposure output is missing from proxy results: "
+            + ", ".join(sorted(missing_high_exposure))
+        )
+    for name in requested_high_exposure:
+        objectives[name] = out[name].to(torch.float64)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
