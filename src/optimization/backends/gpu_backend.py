@@ -95,11 +95,47 @@ def _submit_gpu_exact_validation(
     pool,
     vector,
     interrupt_check: InterruptCheck,
+    *,
+    profile: bool = False,
 ):
     """Refuse new exact CPU work once the GPU interrupt latch is set."""
 
     interrupt_check()
+    if profile:
+        submitted_at = time.perf_counter()
+        return pool.apply_async(
+            _profiled_gpu_exact_worker, (vector, submitted_at)
+        )
     return pool.apply_async(_evaluate_pymoo_worker_from_globals, (vector,))
+
+
+def _profiled_gpu_exact_worker(vector, submitted_at):
+    """Attach opt-in worker time without changing persisted exact evidence."""
+
+    started = time.perf_counter()
+    payload = _evaluate_pymoo_worker_from_globals(vector)
+    if isinstance(payload, dict):
+        payload = dict(payload)
+        payload["__gpu_profile_queue_wait_seconds__"] = max(
+            0.0, started - float(submitted_at)
+        )
+        payload["__gpu_profile_worker_seconds__"] = time.perf_counter() - started
+    return payload
+
+
+def _log_gpu_profile(event: str, **payload) -> None:
+    logging.info(
+        "[gpu-profile] %s",
+        json.dumps(
+            {"schema_version": 1, "event": event, **payload},
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+
+
+def _gpu_profile_elapsed(started: float) -> float:
+    return max(0.0, time.perf_counter() - float(started))
 
 
 def _checkpoint_gpu_interrupt(
@@ -3673,6 +3709,11 @@ def run_backend(
             (ctx, tuple(exchange_proxies), parameter_overrides)
             for ctx, exchange_proxies, parameter_overrides in scenario_proxy_groups.values()
         ]
+        profile_proxies = [
+            proxy
+            for _ctx, exchange_proxies, _parameter_overrides in scenario_proxies
+            for _exchange, proxy in exchange_proxies
+        ]
 
         def evaluate_proxy(candidates):
             return _evaluate_gpu_suite_proxies(
@@ -3694,6 +3735,7 @@ def run_backend(
             needed_metrics=needed_metrics,
             interrupt_check=interrupt_check,
         )
+        profile_proxies = [proxy]
 
         def evaluate_proxy(candidates):
             return proxy.evaluate(candidates)
@@ -3925,6 +3967,16 @@ def run_backend(
         )
 
     adapter = PymooEvaluatorAdapter(evaluator_for_pool, overrides_list=overrides_list)
+    profile_enabled = any(
+        bool(getattr(item, "profile_enabled", False)) for item in profile_proxies
+    )
+    profile_totals = {
+        "exact_queue_wait": 0.0,
+        "exact_work": 0.0,
+        "exact_result_processing": 0.0,
+        "persistence": 0.0,
+        "checkpointing": 0.0,
+    }
     workers = int(options["exact_workers"]) or int(config["optimize"]["n_cpus"])
     max_pending = int(options["max_pending_exact"]) or workers * 2
     if workers <= 0:
@@ -3947,6 +3999,7 @@ def run_backend(
     pending = {}
     submitted_hashes: set[str] = set()
     start_time = time.time()
+    profile_started = time.perf_counter() if profile_enabled else 0.0
     proxy_evaluations = 0
     novelty_stall_generations = 0
     last_warning = None
@@ -3975,7 +4028,12 @@ def run_backend(
         due = now - last_checkpoint_at >= float(options["checkpoint_interval_seconds"])
         if not force and (exact_done == last_checkpoint_exact or not due):
             return
+        profile_started = time.perf_counter() if profile_enabled else 0.0
         _save_checkpoint(checkpoint_path, checkpoint_state())
+        if profile_enabled:
+            profile_totals["checkpointing"] += (
+                time.perf_counter() - profile_started
+            )
         last_checkpoint_at = now
         last_checkpoint_exact = exact_done
 
@@ -4051,6 +4109,20 @@ def run_backend(
                 digest,
             ) = pending.pop(result)
             payload = result.get()
+            worker_seconds = (
+                float(payload.pop("__gpu_profile_worker_seconds__", 0.0))
+                if profile_enabled and isinstance(payload, dict)
+                else 0.0
+            )
+            queue_wait_seconds = (
+                float(payload.pop("__gpu_profile_queue_wait_seconds__", 0.0))
+                if profile_enabled and isinstance(payload, dict)
+                else 0.0
+            )
+            if profile_enabled:
+                profile_totals["exact_work"] += worker_seconds
+                profile_totals["exact_queue_wait"] += queue_wait_seconds
+                result_processing_started = time.perf_counter()
             PymooAsyncRecordingRunner._raise_if_worker_failure(payload, exact_done)
             exact_score = float(
                 objective_scale.score(np.asarray(payload["F"]).reshape(1, -1))[0]
@@ -4060,6 +4132,9 @@ def run_backend(
             )
             constraint_diagnostics = _constraint_diagnostics(
                 evaluator, proxy_metrics, payload
+            )
+            persistence_started = (
+                time.perf_counter() if profile_enabled else 0.0
             )
             record_exact(
                 vector,
@@ -4074,6 +4149,15 @@ def run_backend(
                     "constraint_diagnostics": constraint_diagnostics,
                 },
             )
+            if profile_enabled:
+                persistence_seconds = time.perf_counter() - persistence_started
+                profile_totals["persistence"] += persistence_seconds
+                profile_totals["exact_result_processing"] += max(
+                    0.0,
+                    time.perf_counter()
+                    - result_processing_started
+                    - persistence_seconds,
+                )
             exact_done += 1
             completed_hashes.add(digest)
             submitted_hashes.discard(digest)
@@ -4123,10 +4207,30 @@ def run_backend(
             # An MPS proxy may poll the latch between bounded Metal dispatches.
             # If interrupted there, the outer handler discards this incomplete
             # ask/tell transaction and retains the preceding safe checkpoint.
+            generation_profile_started = (
+                time.perf_counter() if profile_enabled else 0.0
+            )
+            ask_started = time.perf_counter() if profile_enabled else 0.0
             population = _ask_gpu_population(algorithm, interrupt_check)
+            ask_seconds = (
+                time.perf_counter() - ask_started if profile_enabled else 0.0
+            )
             generation_in_progress = True
             rows = np.asarray(population.get("X"), dtype=np.float64)
-            metric_rows = evaluate_proxy(parameter_dicts(rows))
+            materialization_started = (
+                time.perf_counter() if profile_enabled else 0.0
+            )
+            proxy_candidates = parameter_dicts(rows)
+            candidate_materialization_seconds = (
+                time.perf_counter() - materialization_started
+                if profile_enabled
+                else 0.0
+            )
+            proxy_started = time.perf_counter() if profile_enabled else 0.0
+            metric_rows = evaluate_proxy(proxy_candidates)
+            proxy_seconds = (
+                time.perf_counter() - proxy_started if profile_enabled else 0.0
+            )
             proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
             proxy_evaluations += len(rows)
             if objective_scale.median is None:
@@ -4141,7 +4245,11 @@ def run_backend(
                     1.0e18,
                 ).reshape(-1, 1),
             )
+            tell_started = time.perf_counter() if profile_enabled else 0.0
             algorithm.tell(infills=population)
+            tell_seconds = (
+                time.perf_counter() - tell_started if profile_enabled else 0.0
+            )
             generation_in_progress = False
             generation += 1
             # PyTorch MPS may consume KeyboardInterrupt while waiting for a
@@ -4195,6 +4303,7 @@ def run_backend(
                     pool,
                     vector,
                     interrupt_check,
+                    profile=profile_enabled,
                 )
                 pending[result] = (
                     vector,
@@ -4214,6 +4323,49 @@ def run_backend(
                 pending=len(pending),
             )
 
+            if profile_enabled:
+                generation_wall_seconds = (
+                    time.perf_counter() - generation_profile_started
+                )
+                proxy_profile_records = [
+                    deepcopy(getattr(item, "last_profile", {}))
+                    for item in profile_proxies
+                ]
+                proxy_profile_wall = sum(
+                    float(item.get("wall_seconds", 0.0))
+                    for item in proxy_profile_records
+                )
+                accounted_seconds = (
+                    ask_seconds
+                    + candidate_materialization_seconds
+                    + proxy_seconds
+                    + tell_seconds
+                )
+                _log_gpu_profile(
+                    "generation",
+                    generation=generation,
+                    population_size=len(rows),
+                    proxy_profiles=proxy_profile_records,
+                    timings_seconds={
+                        "nsga_ask": ask_seconds,
+                        "candidate_materialization": (
+                            candidate_materialization_seconds
+                        ),
+                        "proxy_evaluation": proxy_seconds,
+                        "suite_or_proxy_reduction": max(
+                            0.0, proxy_seconds - proxy_profile_wall
+                        ),
+                        "nsga_tell": tell_seconds,
+                        "orchestration": max(
+                            0.0, generation_wall_seconds - accounted_seconds
+                        ),
+                        "wall": generation_wall_seconds,
+                    },
+                    exact_validation_cumulative_seconds=dict(profile_totals),
+                    exact_completed=exact_done,
+                    exact_inflight=len(pending),
+                )
+
             if generation == 1 or generation % 10 == 0:
                 elapsed = time.time() - start_time
                 logging.info(
@@ -4229,6 +4381,15 @@ def run_backend(
         while pending and exact_done < budget:
             consume_ready(wait_for_one=True)
         maybe_save_checkpoint(force=True)
+        if profile_enabled:
+            _log_gpu_profile(
+                "complete",
+                generations=generation,
+                proxy_evaluations=proxy_evaluations,
+                exact_completed=exact_done,
+                wall_seconds=_gpu_profile_elapsed(profile_started),
+                exact_validation_cumulative_seconds=dict(profile_totals),
+            )
         logging.info(
             "GPU optimization complete | generations=%d proxy=%d exact=%d wall=%.1fs",
             generation,

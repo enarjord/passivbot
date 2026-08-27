@@ -40,6 +40,7 @@ from optimization.backends.gpu_backend import (
     _gpu_hsl_parameter_active,
     _gpu_nsga2_checkpoint_contract,
     _gpu_pinned_hsl_bound_contract,
+    _gpu_profile_elapsed,
     _validate_hsl_bound_contracts,
     _validate_hsl_metric_topology,
     _gpu_suite_enabled,
@@ -51,6 +52,8 @@ from optimization.backends.gpu_backend import (
     _gpu_suite_scenario_inputs,
     _gpu_suite_search_context,
     _materialize_gpu_override_template,
+    _log_gpu_profile,
+    _profiled_gpu_exact_worker,
     _DriftMonitor,
     _ObjectiveScale,
     _recover_durable_validations,
@@ -122,6 +125,77 @@ def test_gpu_exact_submission_checks_interrupt_before_apply_async():
 
     interrupt_check.assert_called_once_with()
     pool.apply_async.assert_not_called()
+
+
+def test_gpu_exact_submission_uses_profiled_worker_only_when_enabled(
+    monkeypatch,
+):
+    pool = MagicMock()
+    interrupt_check = MagicMock()
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.perf_counter", lambda: 12.5
+    )
+
+    _submit_gpu_exact_validation(
+        pool, [1.0], interrupt_check, profile=True
+    )
+
+    assert pool.apply_async.call_args.args == (
+        _profiled_gpu_exact_worker,
+        ([1.0], 12.5),
+    )
+
+
+def test_gpu_profiled_exact_worker_records_actual_queue_wait(monkeypatch):
+    ticks = iter((10.0, 14.0))
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.perf_counter",
+        lambda: next(ticks),
+    )
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend._evaluate_pymoo_worker_from_globals",
+        lambda vector: {"F": vector},
+    )
+
+    payload = _profiled_gpu_exact_worker([1.0], 7.0)
+
+    assert payload["F"] == [1.0]
+    assert payload["__gpu_profile_queue_wait_seconds__"] == pytest.approx(3.0)
+    assert payload["__gpu_profile_worker_seconds__"] == pytest.approx(4.0)
+
+
+def test_gpu_profile_log_is_structured_json(caplog):
+    with caplog.at_level("INFO"):
+        _log_gpu_profile(
+            "generation", generation=3, timings_seconds={"wall": 1.25}
+        )
+
+    line = next(
+        message
+        for message in caplog.messages
+        if message.startswith("[gpu-profile] ")
+    )
+    payload = json.loads(line.removeprefix("[gpu-profile] "))
+    assert payload == {
+        "schema_version": 1,
+        "event": "generation",
+        "generation": 3,
+        "timings_seconds": {"wall": 1.25},
+    }
+
+
+def test_gpu_profile_elapsed_uses_monotonic_clock(monkeypatch):
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.perf_counter", lambda: 15.5
+    )
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.time",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("profile duration used the wall clock")
+        ),
+    )
+
+    assert _gpu_profile_elapsed(10.0) == pytest.approx(5.5)
 
 
 def test_gpu_interrupt_discards_incomplete_ask_tell_without_checkpointing():
@@ -452,7 +526,8 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
 
 def test_cpu_runtime_imports_do_not_import_torch_or_mps_kernel():
     script = (
-        "import json, sys; import backtest, passivbot, optimization.backends; "
+        "import json, sys; import backtest, passivbot, optimization.backends, "
+        "tools.gpu_proxy_benchmark; "
         "print(json.dumps({"
         "'torch': 'torch' in sys.modules, "
         "'mps_kernel': 'optimization.gpu.mps_kernel' in sys.modules"

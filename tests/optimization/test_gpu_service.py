@@ -43,8 +43,11 @@ from optimization.gpu.service import (
     _directional_gross_pnl_outputs,
     _hsl_params,
     _gpu_proxy_execution_checkpoint_contract,
+    _gpu_profile_unattributed_seconds,
     _mps_dispatch_batch_size,
     _mps_strategy_eq_recovery_distribution,
+    _new_gpu_proxy_profile,
+    _add_gpu_runner_profile,
     _multicoin_exposure_eligible_coins,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
@@ -303,7 +306,9 @@ def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypat
 
     samples = object()
     expected = SimpleNamespace()
-    expected.cpu = lambda: expected
+    expected.cpu = lambda: (_ for _ in ()).throw(
+        AssertionError("recovery distribution left MPS during reduction")
+    )
     called = {}
 
     def fake_postprocessor(values, *, sample_interval_days):
@@ -418,6 +423,148 @@ def test_single_coin_proxy_preserves_order_across_bounded_dispatches():
         {"score": float(index)} for index in range(5)
     ]
     assert calls == [[0.0, 1.0], [2.0, 3.0], [4.0]]
+
+
+def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatch):
+    torch = pytest.importorskip("torch")
+    proxy, calls = _minimal_single_coin_proxy()
+    proxy.profile_enabled = True
+    proxy.strategy_kind = "ema_anchor"
+    proxy.runner.n = 100
+    proxy.runner.long_enabled = True
+    proxy.runner.short_enabled = False
+    original_run = proxy.runner.run
+
+    def profiled_run(parameters, **kwargs):
+        output = original_run(parameters, **kwargs)
+        proxy.runner.last_profile = {
+            "cpu_pack_seconds": 0.001,
+            "upload_and_zero_seconds": 0.002,
+            "compile_seconds": 0.003,
+            "pre_dispatch_sync_seconds": 0.004,
+            "kernel_seconds": 0.005,
+            "metric_decode_seconds": 0.006,
+            "batch_size": len(parameters),
+            "dispatch_count": 1,
+            "cold": len(calls) == 1,
+        }
+        return output
+
+    proxy.runner.run = profiled_run
+    monkeypatch.setattr(torch.mps, "synchronize", lambda: None)
+
+    proxy.evaluate([{"value": float(index)} for index in range(5)])
+
+    profile = proxy.last_profile
+    assert profile["candidate_count"] == 5
+    assert profile["dispatch_batch_size"] == 2
+    assert profile["dispatch_chunk_count"] == 3
+    assert profile["actual_dispatch_batch_sizes"] == [2, 2, 1]
+    assert profile["dispatch_count"] == 3
+    assert profile["cold_dispatch_count"] == 1
+    assert profile["warm_dispatch_count"] == 2
+    assert profile["candidate_bars"] == 500
+    assert profile["kernel_candidate_bars"] == 500
+    assert profile["coin_count"] == 1
+    assert profile["side_count"] == 1
+    assert profile["timings_seconds"]["kernel_execution"] == pytest.approx(
+        0.015
+    )
+    assert profile["timings_seconds"]["cold_compilation"] == pytest.approx(
+        0.003
+    )
+    assert profile["timings_seconds"]["warm_library_lookup"] == pytest.approx(
+        0.006
+    )
+    assert profile["wall_seconds"] >= 0.0
+
+
+def test_single_coin_proxy_profile_is_empty_when_disabled(monkeypatch):
+    proxy, _calls = _minimal_single_coin_proxy()
+    monkeypatch.setattr(
+        "optimization.gpu.service.time.perf_counter",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("disabled proxy profiling read the clock")
+        ),
+    )
+
+    proxy.evaluate([{"value": 1.0}])
+
+    assert proxy.last_profile == {}
+
+
+def test_gpu_profile_candidate_bars_include_coin_and_side_topology():
+    proxy = SimpleNamespace(
+        batch_size=4,
+        dispatch_batch_size=4,
+        strategy_kind="ema_anchor",
+    )
+    runner = SimpleNamespace(
+        n=100,
+        n_coins=8,
+        last_profile={
+            "batch_size": 1,
+            "dispatch_count": 1,
+            "cold": False,
+        },
+    )
+    profile = _new_gpu_proxy_profile(
+        proxy, [{}], (runner,), coin_count=8, side_count=2
+    )
+
+    _add_gpu_runner_profile(profile, runner, side_count=2)
+
+    assert profile["candidate_bars"] == 1_600
+    assert profile["kernel_candidate_bars"] == 1_600
+
+
+def test_gpu_profile_candidate_bars_use_truncated_effective_steps():
+    proxy = SimpleNamespace(
+        batch_size=4,
+        dispatch_batch_size=4,
+        strategy_kind="ema_anchor",
+    )
+    runner = SimpleNamespace(
+        n=100,
+        n_coins=8,
+        last_profile={
+            "batch_size": 2,
+            "dispatch_count": 1,
+            "cold": False,
+        },
+    )
+    profile = _new_gpu_proxy_profile(
+        proxy, [{}, {}], (runner,), coin_count=8, side_count=2
+    )
+
+    _add_gpu_runner_profile(
+        profile,
+        runner,
+        side_count=2,
+        effective_candidate_steps=np.asarray([10, 20]),
+    )
+
+    assert profile["candidate_bars"] == 3_200
+    assert profile["kernel_candidate_bars"] == 480
+
+
+def test_gpu_profile_unattributed_seconds_excludes_nested_runner_and_transfer():
+    timings = {
+        "device_to_host": 3.0,
+        "candidate_packing": 1.0,
+        "upload_and_buffer_clear": 1.0,
+        "cold_compilation": 1.0,
+        "warm_library_lookup": 0.0,
+        "kernel_execution": 2.0,
+        "metric_reduction": 2.0,
+    }
+
+    assert _gpu_profile_unattributed_seconds(
+        timings,
+        12.0,
+        device_to_host_before=1.0,
+        runner_seconds_before=2.0,
+    ) == pytest.approx(5.0)
 
 
 def test_single_coin_proxy_honors_interrupt_between_mps_dispatches():
@@ -802,12 +949,18 @@ def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
         "short": np.asarray([[3.0], [4.0]]),
     }
 
+    profiled_steps = []
     refreshed = _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
         side_outputs=side_outputs,
         runners=runners,
         parameter_matrices=matrices,
         combined_output={"liq_step": torch.tensor([-1.0, 2.0])},
         start_minute_of_day=60,
+        runner_profile_callback=(
+            lambda _runner, *, effective_candidate_steps: profiled_steps.append(
+                effective_candidate_steps.copy()
+            )
+        ),
     )
 
     assert refreshed
@@ -815,6 +968,7 @@ def test_refresh_hedged_multicoin_hsl_replays_only_cutoff_candidates():
     assert runners["short"].calls[0][0].tolist() == [[4.0]]
     assert runners["long"].calls[0][1].tolist() == [2820]
     assert runners["short"].calls[0][1].tolist() == [2820]
+    assert [steps.tolist() for steps in profiled_steps] == [[2820], [2820]]
     assert side_outputs["long"]["hsl_triggers_long"].tolist() == [10.0, 3.0]
     assert side_outputs["short"]["hsl_triggers_short"].tolist() == [10.0, 4.0]
 

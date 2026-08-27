@@ -1,4 +1,5 @@
 import ast
+from functools import lru_cache
 import inspect
 import textwrap
 
@@ -44,6 +45,7 @@ from optimization.gpu.mps_kernel import (
     MpsTrailingMartingaleRunner,
     MpsTrailingMartingaleMulticoinFusedRunner,
     _decode_entry_interval_outputs,
+    _cached_library_with_miss,
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
@@ -99,6 +101,19 @@ def test_strategy_runner_valid_evaluation_has_one_kernel_dispatch(
 
     assert len(dispatch_calls) == 1
     assert "high_exposure" not in source
+
+
+def test_profiled_library_classifies_shared_cache_miss_not_runner_age():
+    @lru_cache(maxsize=1)
+    def loader(value):
+        return object()
+
+    first, first_missed = _cached_library_with_miss(loader, 1)
+    second, second_missed = _cached_library_with_miss(loader, 1)
+
+    assert first is second
+    assert first_missed is True
+    assert second_missed is False
 
 
 def _assert_fill_scalar_contract(output):
@@ -5438,6 +5453,40 @@ def _multicoin_exposure_fixture(
     if return_context:
         return runner, row, runs[0], data
     return runner, row
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_runner_profile_distinguishes_cold_warm_and_disabled(strategy_kind):
+    runner, row = _multicoin_exposure_fixture(strategy_kind, "long")
+    second_runner, _row = _multicoin_exposure_fixture(strategy_kind, "long")
+    matrix = np.asarray([row], dtype=np.float64)
+    loader, _args = runner._library_cache_call()
+    loader.cache_clear()
+
+    runner.run(matrix, profile=True)
+    cold = dict(runner.last_profile)
+    second_runner.run(matrix, profile=True)
+    warm = dict(second_runner.last_profile)
+    second_runner.run(matrix)
+
+    assert cold["cold"] is True
+    assert warm["cold"] is False
+    assert cold["batch_size"] == 1
+    assert cold["dispatch_count"] == 1
+    for key in (
+        "cpu_pack_seconds",
+        "upload_and_zero_seconds",
+        "compile_seconds",
+        "pre_dispatch_sync_seconds",
+        "kernel_seconds",
+        "metric_decode_seconds",
+    ):
+        assert cold[key] >= 0.0
+        assert warm[key] >= 0.0
+    assert second_runner.last_profile == {}
 
 
 @pytest.mark.skipif(

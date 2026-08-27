@@ -144,6 +144,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.hsl_replay_benchmark",
         "benchmark the offline coin-HSL replay hot path",
     ),
+    "gpu-proxy-benchmark": CommandSpec(
+        "tools.gpu_proxy_benchmark",
+        "benchmark deterministic Apple MPS proxy workloads",
+    ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",

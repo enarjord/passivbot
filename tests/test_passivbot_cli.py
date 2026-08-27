@@ -840,6 +840,38 @@ def test_ticker_endpoint_probe_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["prog_env"] == "passivbot tool ticker-endpoint-probe"
 
 
+def test_gpu_proxy_benchmark_owns_its_gpu_dependency_gate(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(
+        cli_main, "_missing_full_install_markers", lambda: ["aiohttp"]
+    )
+
+    assert (
+        cli_main.main(
+            ["tool", "gpu-proxy-benchmark", "--case", "ema-single-long"]
+        )
+        == 0
+    )
+
+    assert captured == {
+        "module_name": "tools.gpu_proxy_benchmark",
+        "argv": [
+            "passivbot tool gpu-proxy-benchmark",
+            "--case",
+            "ema-single-long",
+        ],
+        "prog_env": "passivbot tool gpu-proxy-benchmark",
+    }
+
+
 def test_unknown_command_exits_with_error():
     with pytest.raises(SystemExit) as exc:
         cli_main.main(["unknown"])

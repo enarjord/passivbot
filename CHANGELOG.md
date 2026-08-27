@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS optimization now provides disabled-by-default structured profiling for candidate
+  materialization and packing, buffer upload/clearing, cold and warm shader-library work, kernel
+  execution, device transfer, metric reduction, NSGA orchestration, exact-validation queue/work,
+  result persistence, and checkpointing. Profile records include actual dispatch shape,
+  candidate-bars, topology, optional metric features, and cold/warm state. A deterministic offline
+  `passivbot tool gpu-proxy-benchmark` harness covers long-history EMA Anchor and Trailing
+  Martingale, short-history multicoin, and coin-override workloads with fixed seeds, cold timing,
+  and warm p50 throughput. Profiling remains opt-in and exact Rust results remain authoritative.
+
 - Apple MPS optimization now keeps exact-analysis diagnostics separate from proxy objectives and
   proxy-side limits. Raw gain/PnL, positive equity-balance divergence, completed-only account
   recovery, raw or split fill activity, raw HSL event/absolute-loss metrics, legacy recovery/profit
