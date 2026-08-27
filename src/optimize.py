@@ -2988,6 +2988,35 @@ def _materialize_gpu_suite_run_contract(
             backtest[key] = deepcopy(suite_cfg[key])
 
 
+def _run_gpu_preparation_preflight(
+    config: Dict[str, Any], suite_cfg: Mapping[str, Any]
+) -> None:
+    """Validate immutable Apple MPS requirements before loading historical data."""
+
+    if str(config.get("optimize", {}).get("backend", "")).strip().lower() != "gpu":
+        return
+    from optimization.backends.gpu_backend import (
+        materialize_gpu_preparation_config,
+        validate_gpu_preparation_scope,
+    )
+
+    effective_config = materialize_gpu_preparation_config(config)
+    normalized_suite_cfg = dict(suite_cfg)
+    if bool(normalized_suite_cfg.get("enabled")):
+        scenarios, _reducer_cfg = build_scenarios(
+            normalized_suite_cfg,
+            base_exchanges=effective_config.get("backtest", {}).get("exchanges"),
+        )
+        normalized_suite_cfg["scenarios"] = [
+            {
+                "label": scenario.label,
+                "overrides": dict(scenario.overrides or {}),
+            }
+            for scenario in scenarios
+        ]
+    validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
+
+
 def _materialize_resolved_gpu_suite_dates(
     config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
 ) -> None:
@@ -3381,6 +3410,7 @@ async def main():
     manager = None
     pool_terminated = False
     try:
+        _run_gpu_preparation_preflight(config, suite_cfg)
         array_manager = SharedArrayManager()
         hlcvs_specs = {}
         btc_usd_specs = {}

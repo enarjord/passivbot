@@ -79,6 +79,7 @@ from optimization.backends.gpu_backend import (
     _validate_scope,
     _validate_tm_market_mode_bounds,
     _validate_tm_market_template_bounds,
+    validate_gpu_preparation_scope,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
     _GPU_SUITE_VIOLATION_KEY,
@@ -1716,6 +1717,138 @@ def test_gpu_foundation_fails_closed_for_unsupported_scope(mutate, message):
 
     with pytest.raises(ValueError, match=message):
         _validate_scope(config, _Evaluator())
+
+
+def _fake_torch_with_mps(available=True):
+    return SimpleNamespace(
+        backends=SimpleNamespace(
+            mps=SimpleNamespace(is_available=lambda: available),
+        )
+    )
+
+
+def test_gpu_preparation_preflight_rejects_btc_collateral_before_runtime_probe():
+    config = _long_only_ema_config()
+    config["backtest"]["btc_collateral_cap"] = 0.5
+    runtime = MagicMock()
+
+    with pytest.raises(
+        ValueError,
+        match=r"btc_collateral_cap=0\.0.*pymoo.*exact Rust validation",
+    ):
+        validate_gpu_preparation_scope(config, torch_module=runtime)
+
+    runtime.backends.mps.is_available.assert_not_called()
+
+
+def test_gpu_preparation_preflight_explains_trailing_grid_cpu_fallback():
+    config = _long_only_ema_config()
+    config["live"]["strategy_kind"] = "trailing_grid_v7"
+
+    with pytest.raises(
+        ValueError,
+        match=r"trailing_grid_v7 is deliberately outside.*pymoo",
+    ):
+        validate_gpu_preparation_scope(
+            config,
+            torch_module=_fake_torch_with_mps(),
+        )
+
+
+def test_gpu_preparation_preflight_rejects_unmodeled_suite_override_early():
+    config = _long_only_ema_config()
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [
+            {
+                "label": "unsupported_collateral",
+                "overrides": {"backtest.btc_collateral_cap": 0.5},
+            }
+        ],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"unsupported_collateral.*btc_collateral_cap.*outside the supported modeled",
+    ):
+        validate_gpu_preparation_scope(
+            config,
+            suite_cfg,
+            torch_module=_fake_torch_with_mps(),
+        )
+
+
+def test_gpu_preparation_preflight_validates_effective_bot_suite_values():
+    config = _long_only_ema_config()
+    runtime = MagicMock()
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [
+            {
+                "label": "unsupported_ema_repair",
+                "overrides": {
+                    "bot.long.risk.position_exposure_enforcer_enabled": True,
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"bot\.long\.risk\.position_exposure_enforcer_enabled=false"
+        ),
+    ):
+        validate_gpu_preparation_scope(
+            config,
+            suite_cfg,
+            torch_module=runtime,
+        )
+
+    runtime.backends.mps.is_available.assert_not_called()
+
+
+def test_gpu_preparation_preflight_accepts_modeled_tm_exposure_repair_override():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [
+            {
+                "label": "tm_repair",
+                "overrides": {
+                    "bot.long.risk.position_exposure_enforcer_enabled": True,
+                },
+            }
+        ],
+    }
+
+    validate_gpu_preparation_scope(
+        config,
+        suite_cfg,
+        torch_module=_fake_torch_with_mps(),
+    )
+
+
+def test_gpu_preparation_preflight_requires_available_mps():
+    with pytest.raises(RuntimeError, match=r"MPS is unavailable.*pymoo"):
+        validate_gpu_preparation_scope(
+            _long_only_ema_config(),
+            torch_module=_fake_torch_with_mps(False),
+        )
+
+
+def test_gpu_preparation_preflight_logs_capability_contract(caplog):
+    with caplog.at_level("INFO"):
+        validate_gpu_preparation_scope(
+            _long_only_ema_config(),
+            torch_module=_fake_torch_with_mps(),
+        )
+
+    assert (
+        "GPU capability preflight passed | runtime=apple_mps | "
+        "strategy=ema_anchor | btc_collateral_cap=0 | max_coins_per_scenario=64"
+        in caplog.text
+    )
 
 
 def test_gpu_foundation_accepts_ema_long_single():
