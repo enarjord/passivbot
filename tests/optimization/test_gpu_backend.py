@@ -497,6 +497,16 @@ def test_cpu_runtime_imports_do_not_import_torch_or_mps_kernel():
             }
         },
         {
+            "limits": {
+                "lower_bound_peak_recovery_days_strategy_eq": 30.0
+            }
+        },
+        {
+            "limits": {
+                "upper_bound_peak_recovery_days_strategy_eq": 30.0
+            }
+        },
+        {
             "limits": (
                 "--penalize_if_greater_than_peak_recovery_days_strategy_eq 30"
             )
@@ -569,6 +579,35 @@ def test_gpu_metric_provenance_ignores_scenario_labels_that_look_like_metrics():
                 }
             ],
         }
+    }
+
+    assert not configured_exact_only_gpu_metrics(config)
+
+
+def test_gpu_metric_provenance_prefers_effective_over_superseded_raw_config():
+    config = {
+        "optimize": {
+            "scoring": [{"goal": "max", "metric": "adg_strategy_eq"}],
+            "limits": [],
+        },
+        "_raw": {
+            "optimize": {
+                "scoring": [
+                    {
+                        "goal": "min",
+                        "metric": "peak_recovery_days_strategy_eq",
+                    }
+                ]
+            }
+        },
+        "_raw_effective": {
+            "optimize": {
+                "scoring": [
+                    {"goal": "max", "metric": "adg_strategy_eq"}
+                ],
+                "limits": [],
+            }
+        },
     }
 
     assert not configured_exact_only_gpu_metrics(config)

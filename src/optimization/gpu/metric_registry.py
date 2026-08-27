@@ -91,11 +91,9 @@ def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
     """Recover exact-only spellings from current and preserved raw config."""
 
     configured_surfaces: list[tuple[object, str]] = []
-    for source in (
-        config,
-        config.get("_raw"),
-        config.get("_raw_effective"),
-    ):
+    effective = config.get("_raw_effective")
+    provenance = effective if isinstance(effective, dict) else config.get("_raw")
+    for source in (config, provenance):
         if not isinstance(source, dict):
             continue
         payload = source.get("config", source)
@@ -121,6 +119,8 @@ def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
     def add_legacy_limit_name(value) -> None:
         token = str(value or "").strip().lstrip("-")
         for prefix in (
+            "lower_bound_",
+            "upper_bound_",
             "penalize_if_greater_than_",
             "penalize_if_lower_than_",
         ):
