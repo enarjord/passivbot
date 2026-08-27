@@ -5443,6 +5443,37 @@ def _multicoin_exposure_fixture(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_mps_runner_profile_distinguishes_cold_warm_and_disabled(strategy_kind):
+    runner, row = _multicoin_exposure_fixture(strategy_kind, "long")
+    matrix = np.asarray([row], dtype=np.float64)
+
+    runner.run(matrix, profile=True)
+    cold = dict(runner.last_profile)
+    runner.run(matrix, profile=True)
+    warm = dict(runner.last_profile)
+    runner.run(matrix)
+
+    assert cold["cold"] is True
+    assert warm["cold"] is False
+    assert cold["batch_size"] == 1
+    assert cold["dispatch_count"] == 1
+    for key in (
+        "cpu_pack_seconds",
+        "upload_and_zero_seconds",
+        "compile_seconds",
+        "pre_dispatch_sync_seconds",
+        "kernel_seconds",
+        "metric_decode_seconds",
+    ):
+        assert cold[key] >= 0.0
+        assert warm[key] >= 0.0
+    assert runner.last_profile == {}
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("topology", ["long", "short", "fused"])
 def test_mps_tm_multicoin_entry_intervals_remain_coin_and_side_local(topology):
     count = 45

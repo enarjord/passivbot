@@ -5,6 +5,7 @@ from dataclasses import replace
 import hashlib
 import logging
 import os
+import time
 
 import numpy as np
 
@@ -108,6 +109,131 @@ CORE_OUTPUT_KEYS = {
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
 }
+
+
+_GPU_PROFILE_TIMING_KEYS = (
+    "candidate_materialization",
+    "candidate_packing",
+    "upload_and_buffer_clear",
+    "cold_compilation",
+    "warm_library_lookup",
+    "kernel_execution",
+    "device_to_host",
+    "metric_reduction",
+    "result_materialization",
+    "host_overhead",
+)
+
+
+def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
+    runners = tuple(runners)
+    return {
+        "btc_analysis": bool(getattr(proxy, "btc_analysis_enabled", False)),
+        "btc_intraday_risk": bool(getattr(proxy, "btc_risk_enabled", False)),
+        "equity_balance_diff": bool(
+            getattr(proxy, "equity_balance_diff_enabled", False)
+        ),
+        "entry_interval": bool(getattr(proxy, "entry_interval_enabled", False)),
+        "strategy_eq_recovery_distribution": any(
+            bool(getattr(runner, "recovery_distribution_enabled", False))
+            for runner in runners
+        ),
+        "hsl_ema_tail": any(
+            bool(getattr(runner, "hsl_ema_tail_enabled", False))
+            for runner in runners
+        ),
+        "hsl_raw_drawdown": any(
+            bool(getattr(runner, "hsl_raw_drawdown_enabled", False))
+            for runner in runners
+        ),
+        "hsl_raw_tail": any(
+            bool(getattr(runner, "hsl_raw_tail_enabled", False))
+            for runner in runners
+        ),
+        "coin_fill_counts": any(
+            bool(getattr(runner, "collect_coin_fill_counts", False))
+            for runner in runners
+        ),
+    }
+
+
+def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count):
+    candle_count = max(
+        (int(getattr(runner, "n", 0)) for runner in runners), default=0
+    )
+    dispatch_batch_size = int(
+        getattr(proxy, "dispatch_batch_size", getattr(proxy, "batch_size", 0))
+    )
+    return {
+        "schema_version": 1,
+        "scope": "proxy_evaluation",
+        "strategy": str(getattr(proxy, "strategy_kind", "unknown")),
+        "candidate_count": len(candidates),
+        "configured_batch_size": int(getattr(proxy, "batch_size", 0)),
+        "dispatch_batch_size": dispatch_batch_size,
+        "dispatch_chunk_count": (
+            (len(candidates) + dispatch_batch_size - 1) // dispatch_batch_size
+            if dispatch_batch_size > 0
+            else 0
+        ),
+        "actual_dispatch_batch_sizes": [],
+        "dispatch_count": 0,
+        "cold_dispatch_count": 0,
+        "warm_dispatch_count": 0,
+        "candidate_bars": len(candidates) * candle_count,
+        "kernel_candidate_bars": 0,
+        "candle_count": candle_count,
+        "coin_count": int(coin_count),
+        "side_count": int(side_count),
+        "requested_metric_features": _gpu_profile_features(proxy, runners),
+        "timings_seconds": {key: 0.0 for key in _GPU_PROFILE_TIMING_KEYS},
+    }
+
+
+def _add_gpu_runner_profile(profile: dict, runner) -> None:
+    runner_profile = getattr(runner, "last_profile", {}) or {}
+    if not runner_profile:
+        return
+    batch_size = int(runner_profile.get("batch_size", 0))
+    dispatch_count = int(runner_profile.get("dispatch_count", 1))
+    cold = bool(runner_profile.get("cold", False))
+    profile["actual_dispatch_batch_sizes"].append(batch_size)
+    profile["dispatch_count"] += dispatch_count
+    profile["cold_dispatch_count"] += dispatch_count if cold else 0
+    profile["warm_dispatch_count"] += 0 if cold else dispatch_count
+    profile["kernel_candidate_bars"] += (
+        batch_size * int(getattr(runner, "n", 0)) * dispatch_count
+    )
+    timings = profile["timings_seconds"]
+    timings["candidate_packing"] += float(
+        runner_profile.get("cpu_pack_seconds", 0.0)
+    )
+    timings["upload_and_buffer_clear"] += float(
+        runner_profile.get("upload_and_zero_seconds", 0.0)
+    ) + float(runner_profile.get("pre_dispatch_sync_seconds", 0.0))
+    compile_seconds = float(runner_profile.get("compile_seconds", 0.0))
+    timings["cold_compilation" if cold else "warm_library_lookup"] += (
+        compile_seconds
+    )
+    timings["kernel_execution"] += float(
+        runner_profile.get("kernel_seconds", 0.0)
+    )
+    timings["metric_reduction"] += float(
+        runner_profile.get("metric_decode_seconds", 0.0)
+    )
+
+
+def _finish_gpu_proxy_profile(profile: dict, started: float) -> dict:
+    profile["actual_dispatch_batch_sizes"] = list(
+        profile["actual_dispatch_batch_sizes"]
+    )
+    profile["wall_seconds"] = time.perf_counter() - started
+    accounted = sum(profile["timings_seconds"].values())
+    profile["timings_seconds"]["host_overhead"] = max(
+        0.0,
+        profile["wall_seconds"] - accounted,
+    )
+    return profile
 
 DIRECTIONAL_HSL_OUTPUT_KEYS = {
     "hsl_long_enabled",
@@ -1124,6 +1250,9 @@ def _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
     combined_output: dict,
     start_minute_of_day: int,
     interrupt_check=None,
+    profile: bool = False,
+    runner_profile_callback=None,
+    profile_timings: dict | None = None,
 ) -> bool:
     """Replace full-run directional HSL summaries at a portfolio cutoff.
 
@@ -1146,12 +1275,22 @@ def _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
     interrupt_check = interrupt_check or (lambda: None)
     for side in ("long", "short"):
         interrupt_check()
+        run_kwargs = {"end_steps": end_steps}
+        if profile:
+            run_kwargs["profile"] = True
         truncated = runners[side].run(
-            parameter_matrices[side][indices], end_steps=end_steps
+            parameter_matrices[side][indices], **run_kwargs
         )
+        if runner_profile_callback is not None:
+            runner_profile_callback(runners[side])
         interrupt_check()
+        transfer_started = time.perf_counter() if profile else 0.0
         for key in DIRECTIONAL_HSL_OUTPUT_KEYS:
             side_outputs[side][key][cutoff_mask] = truncated[key].cpu()
+        if profile_timings is not None:
+            profile_timings["device_to_host"] += (
+                time.perf_counter() - transfer_started
+            )
     return True
 
 
@@ -1379,6 +1518,7 @@ class MpsSingleCoinProxy:
             "yes",
             "y",
         }
+        self.last_profile: dict = {}
         self.strategy_kind = str(
             config.get("live", {}).get("strategy_kind", "")
         ).strip().lower()
@@ -1718,6 +1858,20 @@ class MpsSingleCoinProxy:
     def evaluate(self, candidates: list[dict]) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
+        profile_started = time.perf_counter() if self.profile_enabled else 0.0
+        profile = (
+            _new_gpu_proxy_profile(
+                self,
+                candidates,
+                (self.runner,),
+                coin_count=1,
+                side_count=int(bool(getattr(self.runner, "long_enabled", True)))
+                + int(bool(getattr(self.runner, "short_enabled", False))),
+            )
+            if self.profile_enabled
+            else None
+        )
+        self.last_profile = {}
         dispatch_batch_size = getattr(
             self, "dispatch_batch_size", self.batch_size
         )
@@ -1725,22 +1879,47 @@ class MpsSingleCoinProxy:
         for start in range(0, len(candidates), dispatch_batch_size):
             interrupt_check()
             chunk = candidates[start : start + dispatch_batch_size]
+            stage_started = (
+                time.perf_counter() if self.profile_enabled else 0.0
+            )
             parameter_matrix = self._parameter_matrix(chunk)
+            if profile is not None:
+                profile["timings_seconds"]["candidate_materialization"] += (
+                    time.perf_counter() - stage_started
+                )
             output = self.runner.run(
                 parameter_matrix,
                 profile=self.profile_enabled,
             )
+            if profile is not None:
+                _add_gpu_runner_profile(profile, self.runner)
             interrupt_check()
+            stage_started = (
+                time.perf_counter() if self.profile_enabled else 0.0
+            )
             recovery_distribution = _mps_strategy_eq_recovery_distribution(
                 output, self.needed_metrics
             )
+            if profile is not None:
+                torch.mps.synchronize()
+                profile["timings_seconds"]["metric_reduction"] += (
+                    time.perf_counter() - stage_started
+                )
+                stage_started = time.perf_counter()
             output = {
                 key: value.cpu()
                 for key, value in output.items()
                 if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
             }
             if recovery_distribution is not None:
-                output["strategy_eq_recovery_distribution"] = recovery_distribution
+                output["strategy_eq_recovery_distribution"] = (
+                    recovery_distribution.cpu()
+                )
+            if profile is not None:
+                profile["timings_seconds"]["device_to_host"] += (
+                    time.perf_counter() - stage_started
+                )
+                stage_started = time.perf_counter()
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",
@@ -1776,12 +1955,25 @@ class MpsSingleCoinProxy:
                 self.metrics_data,
                 needed=self.needed_metrics,
             )
+            if profile is not None:
+                profile["timings_seconds"]["metric_reduction"] += (
+                    time.perf_counter() - stage_started
+                )
+                stage_started = time.perf_counter()
             arrays = {
                 name: value.detach().cpu().numpy() for name, value in objectives.items()
             }
             results.extend(
                 {name: float(values[index]) for name, values in arrays.items()}
                 for index in range(len(chunk))
+            )
+            if profile is not None:
+                profile["timings_seconds"]["result_materialization"] += (
+                    time.perf_counter() - stage_started
+                )
+        if profile is not None:
+            self.last_profile = _finish_gpu_proxy_profile(
+                profile, profile_started
             )
         return results
 
@@ -2223,6 +2415,7 @@ class MpsMulticoinProxy:
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
         ).strip().lower() in {"1", "true", "yes", "y"}
+        self.last_profile: dict = {}
 
         values = np.asarray(hlcvs)
         if values.ndim != 3:
@@ -2743,6 +2936,30 @@ class MpsMulticoinProxy:
         results: list[dict] = []
         torch = self._torch
         fused_runner = getattr(self, "fused_runner", None)
+        profile_runners = (
+            (fused_runner,)
+            if fused_runner is not None
+            else tuple(self.runners[side] for side in self.sides)
+        )
+        profile_started = time.perf_counter() if self.profile_enabled else 0.0
+        profile = (
+            _new_gpu_proxy_profile(
+                self,
+                candidates,
+                profile_runners,
+                coin_count=max(
+                    (
+                        int(getattr(runner, "n_coins", 1))
+                        for runner in profile_runners
+                    ),
+                    default=1,
+                ),
+                side_count=len(self.sides),
+            )
+            if self.profile_enabled
+            else None
+        )
+        self.last_profile = {}
         dispatch_batch_size = getattr(
             self, "dispatch_batch_size", self.batch_size
         )
@@ -2750,9 +2967,16 @@ class MpsMulticoinProxy:
         for start in range(0, len(candidates), dispatch_batch_size):
             interrupt_check()
             chunk = candidates[start : start + dispatch_batch_size]
+            stage_started = (
+                time.perf_counter() if self.profile_enabled else 0.0
+            )
             parameter_matrices = {
                 side: self._parameter_matrix(chunk, side) for side in self.sides
             }
+            if profile is not None:
+                profile["timings_seconds"]["candidate_materialization"] += (
+                    time.perf_counter() - stage_started
+                )
             if fused_runner is not None:
                 fused_parameters = np.concatenate(
                     (parameter_matrices["long"], parameter_matrices["short"]),
@@ -2762,15 +2986,32 @@ class MpsMulticoinProxy:
                     fused_parameters,
                     profile=self.profile_enabled,
                 )
+                if profile is not None:
+                    _add_gpu_runner_profile(profile, fused_runner)
                 interrupt_check()
+                stage_started = (
+                    time.perf_counter() if self.profile_enabled else 0.0
+                )
                 recovery_distribution = _mps_strategy_eq_recovery_distribution(
                     raw_output, self.needed_metrics
                 )
+                if profile is not None:
+                    torch.mps.synchronize()
+                    profile["timings_seconds"]["metric_reduction"] += (
+                        time.perf_counter() - stage_started
+                    )
+                    stage_started = time.perf_counter()
                 output = {
                     key: value.cpu()
                     for key, value in raw_output.items()
                     if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
                 }
+                if recovery_distribution is not None:
+                    recovery_distribution = recovery_distribution.cpu()
+                if profile is not None:
+                    profile["timings_seconds"]["device_to_host"] += (
+                        time.perf_counter() - stage_started
+                    )
             else:
                 raw_side_outputs = {}
                 for side in self.sides:
@@ -2778,7 +3019,12 @@ class MpsMulticoinProxy:
                         parameter_matrices[side],
                         profile=self.profile_enabled,
                     )
+                    if profile is not None:
+                        _add_gpu_runner_profile(profile, self.runners[side])
                     interrupt_check()
+                stage_started = (
+                    time.perf_counter() if self.profile_enabled else 0.0
+                )
                 recovery_distribution = (
                     _mps_strategy_eq_recovery_distribution(
                         raw_side_outputs[self.sides[0]], self.needed_metrics
@@ -2786,6 +3032,12 @@ class MpsMulticoinProxy:
                     if len(self.sides) == 1
                     else None
                 )
+                if profile is not None:
+                    torch.mps.synchronize()
+                    profile["timings_seconds"]["metric_reduction"] += (
+                        time.perf_counter() - stage_started
+                    )
+                    stage_started = time.perf_counter()
                 side_outputs = {
                     side: {
                         key: value.cpu()
@@ -2794,6 +3046,20 @@ class MpsMulticoinProxy:
                     }
                     for side in self.sides
                 }
+                if recovery_distribution is not None:
+                    recovery_distribution = recovery_distribution.cpu()
+                if profile is not None:
+                    profile["timings_seconds"]["device_to_host"] += (
+                        time.perf_counter() - stage_started
+                    )
+            stage_started = (
+                time.perf_counter() if self.profile_enabled else 0.0
+            )
+            stage_device_to_host_before = (
+                profile["timings_seconds"]["device_to_host"]
+                if profile is not None
+                else 0.0
+            )
             if fused_runner is None and len(self.sides) == 1:
                 side = self.sides[0]
                 output = side_outputs[side]
@@ -2827,6 +3093,15 @@ class MpsMulticoinProxy:
                         "long"
                     ].start_minute_of_day,
                     interrupt_check=interrupt_check,
+                    profile=self.profile_enabled,
+                    runner_profile_callback=(
+                        lambda runner: _add_gpu_runner_profile(profile, runner)
+                        if profile is not None
+                        else None
+                    ),
+                    profile_timings=(
+                        profile["timings_seconds"] if profile is not None else None
+                    ),
                 ):
                     output = _combine_hedged_multicoin_outputs(
                         side_outputs["long"],
@@ -2876,6 +3151,20 @@ class MpsMulticoinProxy:
             objectives = self._compute_objectives(
                 output, self.run, self.metrics_data, needed=self.needed_metrics
             )
+            if profile is not None:
+                extra_device_to_host = (
+                    profile["timings_seconds"]["device_to_host"]
+                    - stage_device_to_host_before
+                )
+                profile["timings_seconds"]["metric_reduction"] += (
+                    max(
+                        0.0,
+                        time.perf_counter()
+                        - stage_started
+                        - extra_device_to_host,
+                    )
+                )
+                stage_started = time.perf_counter()
             arrays = {
                 name: value.detach().cpu().numpy()
                 for name, value in objectives.items()
@@ -2883,6 +3172,14 @@ class MpsMulticoinProxy:
             results.extend(
                 {name: float(values[index]) for name, values in arrays.items()}
                 for index in range(len(chunk))
+            )
+            if profile is not None:
+                profile["timings_seconds"]["result_materialization"] += (
+                    time.perf_counter() - stage_started
+                )
+        if profile is not None:
+            self.last_profile = _finish_gpu_proxy_profile(
+                profile, profile_started
             )
         return results
 

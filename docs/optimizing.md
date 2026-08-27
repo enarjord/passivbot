@@ -711,6 +711,46 @@ Rust extension; it does not replace or modify the exact Rust backtester. Credit:
 metric-reduction work was adapted from RustyCZ's Passivbot GPU branch at commit `7c529bc73`; the
 MPS Metal integration and hybrid validation gates are specific to this implementation.
 
+#### Profiling Apple MPS optimization
+
+Set `PASSIVBOT_GPU_PROFILE=1` to emit structured `[gpu-profile]` JSON records. Profiling is disabled
+by default because its synchronization points deliberately trade throughput for trustworthy phase
+boundaries.
+
+```bash
+PASSIVBOT_GPU_PROFILE=1 passivbot optimize path/to/public-or-local-config.json
+```
+
+Each generation record separates NSGA ask/tell and orchestration from proxy work, exact-validation
+queue/wait and worker time, result persistence, and checkpoint writes. Each prepared proxy also
+reports candidate materialization and Metal parameter packing, upload/buffer clearing, runner-local
+cold compilation versus warm library lookup, kernel execution, device-to-host transfer, metric
+reduction, and remaining host overhead. Shape metadata includes requested and actual dispatch batch
+sizes, dispatch chunk and strategy-kernel counts, candidate-bars, candle/coin/side counts, requested
+optional metric features, and cold/warm dispatch counts. Exact Rust evaluation remains
+authoritative; profiling fields are diagnostic log output and are not added to retained optimization
+results.
+
+For comparable local MPS measurements, first confirm another optimizer is not using the device,
+then run each case in a fresh process. The harness uses only fixed-seed, in-memory synthetic candles
+and candidate matrices; it never reads exchange credentials, local cache data, configs, or prior
+optimization results.
+
+```bash
+passivbot tool gpu-proxy-benchmark --case ema-single-long
+passivbot tool gpu-proxy-benchmark --case tm-single-long
+passivbot tool gpu-proxy-benchmark --case ema-multicoin-short
+passivbot tool gpu-proxy-benchmark --case ema-multicoin-overrides
+```
+
+The single-coin cases default to 60,000 one-minute candles; the overhead-sensitive multicoin cases
+default to 4,320 candles and eight coins. Every report records the seed and workload shape, cold
+compile/run timing, a fixture hash, and warm p50 across five repeated runs, including
+candidates/second, kernel time, dispatch count, device transfer, and host overhead. Use identical
+arguments and immutable commits for before/after comparisons. Run one `--case` per process when
+comparing cold compilation; `--case all` is convenient for smoke checks but later cases may reuse
+process-local shader caches.
+
 ### Pymoo Configuration
 
 Pymoo-specific settings live under `optimize.pymoo`:

@@ -1118,7 +1118,8 @@ class MpsEmaAnchorRunner:
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
-        self.last_profile: dict[str, float] = {}
+        self.last_profile: dict[str, float | int | bool] = {}
+        self._profile_dispatches = 0
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         params = _upgrade_legacy_single_coin_wel_params(
@@ -1241,9 +1242,9 @@ class MpsEmaAnchorRunner:
         return values
 
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
-        started = time.perf_counter()
+        started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
-        packed = time.perf_counter()
+        packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
         daily, scalars, gaps = self._output_buffers(batch_size)
@@ -1266,7 +1267,8 @@ class MpsEmaAnchorRunner:
                 dtype=torch.int32,
                 device="mps",
             )
-        prepared = time.perf_counter()
+        prepared = time.perf_counter() if profile else 0.0
+        cold = self._profile_dispatches == 0
         library = _shader_library(
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
@@ -1275,7 +1277,7 @@ class MpsEmaAnchorRunner:
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
         )
-        compiled = time.perf_counter()
+        compiled = time.perf_counter() if profile else 0.0
         if profile:
             torch.mps.synchronize()
             dispatched = time.perf_counter()
@@ -1310,20 +1312,31 @@ class MpsEmaAnchorRunner:
         dispatch_once()
         if profile:
             torch.mps.synchronize()
-        finished = time.perf_counter()
-        self.last_profile = {
-            "cpu_pack_seconds": packed - started,
-            "upload_and_zero_seconds": prepared - packed,
-            "compile_seconds": compiled - prepared,
-            "pre_dispatch_sync_seconds": dispatched - compiled,
-            "kernel_seconds": finished - dispatched,
-        }
+            finished = time.perf_counter()
+            self.last_profile = {
+                "cpu_pack_seconds": packed - started,
+                "upload_and_zero_seconds": prepared - packed,
+                "compile_seconds": compiled - prepared,
+                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "kernel_seconds": finished - dispatched,
+                "batch_size": batch_size,
+                "dispatch_count": 1,
+                "cold": cold,
+            }
+        else:
+            self.last_profile = {}
+        self._profile_dispatches += 1
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         if self.recovery_distribution_enabled:
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (
                 self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            )
+        if profile:
+            torch.mps.synchronize()
+            self.last_profile["metric_decode_seconds"] = (
+                time.perf_counter() - finished
             )
         return output
 
@@ -1530,7 +1543,8 @@ class MpsEmaAnchorMulticoinRunner:
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self._full_end_steps: dict[int, torch.Tensor] = {}
-        self.last_profile: dict[str, float] = {}
+        self.last_profile: dict[str, float | int | bool] = {}
+        self._profile_dispatches = 0
         self.start_minute_of_day = int(data["start_minute_of_day"])
         self.start_minute_of_hour = int(data["start_minute_of_hour"])
         self.requested_start_idx = max(
@@ -1735,9 +1749,9 @@ class MpsEmaAnchorMulticoinRunner:
         profile: bool = False,
         end_steps: np.ndarray | None = None,
     ) -> dict:
-        started = time.perf_counter()
+        started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
-        packed = time.perf_counter()
+        packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
         end_steps_mps = self._end_steps(end_steps, batch_size)
@@ -1772,9 +1786,10 @@ class MpsEmaAnchorMulticoinRunner:
                 dtype=torch.int32,
                 device="mps",
             )
-        prepared = time.perf_counter()
+        prepared = time.perf_counter() if profile else 0.0
+        cold = self._profile_dispatches == 0
         library = self._library()
-        compiled = time.perf_counter()
+        compiled = time.perf_counter() if profile else 0.0
         if profile:
             torch.mps.synchronize()
             dispatched = time.perf_counter()
@@ -1797,14 +1812,20 @@ class MpsEmaAnchorMulticoinRunner:
         )
         if profile:
             torch.mps.synchronize()
-        finished = time.perf_counter()
-        self.last_profile = {
-            "cpu_pack_seconds": packed - started,
-            "upload_and_zero_seconds": prepared - packed,
-            "compile_seconds": compiled - prepared,
-            "pre_dispatch_sync_seconds": dispatched - compiled,
-            "kernel_seconds": finished - dispatched,
-        }
+            finished = time.perf_counter()
+            self.last_profile = {
+                "cpu_pack_seconds": packed - started,
+                "upload_and_zero_seconds": prepared - packed,
+                "compile_seconds": compiled - prepared,
+                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "kernel_seconds": finished - dispatched,
+                "batch_size": batch_size,
+                "dispatch_count": 1,
+                "cold": cold,
+            }
+        else:
+            self.last_profile = {}
+        self._profile_dispatches += 1
         output = self._decode(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
@@ -1819,6 +1840,11 @@ class MpsEmaAnchorMulticoinRunner:
             )
         if self.collect_coin_fill_counts:
             output["coin_fill_counts"] = coin_fill_counts
+        if profile:
+            torch.mps.synchronize()
+            self.last_profile["metric_decode_seconds"] = (
+                time.perf_counter() - finished
+            )
         return output
 
 
@@ -2463,9 +2489,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         )
 
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
-        started = time.perf_counter()
+        started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
-        packed = time.perf_counter()
+        packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
         daily, scalars, gaps = self._output_buffers(batch_size)
@@ -2491,9 +2517,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 dtype=torch.int32,
                 device="mps",
             )
-        prepared = time.perf_counter()
+        prepared = time.perf_counter() if profile else 0.0
+        cold = self._profile_dispatches == 0
         library = self._shader_library()
-        compiled = time.perf_counter()
+        compiled = time.perf_counter() if profile else 0.0
         if profile:
             torch.mps.synchronize()
             dispatched = time.perf_counter()
@@ -2530,14 +2557,20 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         dispatch_once()
         if profile:
             torch.mps.synchronize()
-        finished = time.perf_counter()
-        self.last_profile = {
-            "cpu_pack_seconds": packed - started,
-            "upload_and_zero_seconds": prepared - packed,
-            "compile_seconds": compiled - prepared,
-            "pre_dispatch_sync_seconds": dispatched - compiled,
-            "kernel_seconds": finished - dispatched,
-        }
+            finished = time.perf_counter()
+            self.last_profile = {
+                "cpu_pack_seconds": packed - started,
+                "upload_and_zero_seconds": prepared - packed,
+                "compile_seconds": compiled - prepared,
+                "pre_dispatch_sync_seconds": dispatched - compiled,
+                "kernel_seconds": finished - dispatched,
+                "batch_size": batch_size,
+                "dispatch_count": 1,
+                "cold": cold,
+            }
+        else:
+            self.last_profile = {}
+        self._profile_dispatches += 1
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
@@ -2549,5 +2582,10 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (
                 self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
+            )
+        if profile:
+            torch.mps.synchronize()
+            self.last_profile["metric_decode_seconds"] = (
+                time.perf_counter() - finished
             )
         return output

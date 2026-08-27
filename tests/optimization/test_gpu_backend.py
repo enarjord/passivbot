@@ -51,6 +51,8 @@ from optimization.backends.gpu_backend import (
     _gpu_suite_scenario_inputs,
     _gpu_suite_search_context,
     _materialize_gpu_override_template,
+    _log_gpu_profile,
+    _profiled_gpu_exact_worker,
     _DriftMonitor,
     _ObjectiveScale,
     _recover_durable_validations,
@@ -122,6 +124,40 @@ def test_gpu_exact_submission_checks_interrupt_before_apply_async():
 
     interrupt_check.assert_called_once_with()
     pool.apply_async.assert_not_called()
+
+
+def test_gpu_exact_submission_uses_profiled_worker_only_when_enabled():
+    pool = MagicMock()
+    interrupt_check = MagicMock()
+
+    _submit_gpu_exact_validation(
+        pool, [1.0], interrupt_check, profile=True
+    )
+
+    assert pool.apply_async.call_args.args == (
+        _profiled_gpu_exact_worker,
+        ([1.0],),
+    )
+
+
+def test_gpu_profile_log_is_structured_json(caplog):
+    with caplog.at_level("INFO"):
+        _log_gpu_profile(
+            "generation", generation=3, timings_seconds={"wall": 1.25}
+        )
+
+    line = next(
+        message
+        for message in caplog.messages
+        if message.startswith("[gpu-profile] ")
+    )
+    payload = json.loads(line.removeprefix("[gpu-profile] "))
+    assert payload == {
+        "schema_version": 1,
+        "event": "generation",
+        "generation": 3,
+        "timings_seconds": {"wall": 1.25},
+    }
 
 
 def test_gpu_interrupt_discards_incomplete_ask_tell_without_checkpointing():

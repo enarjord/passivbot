@@ -420,6 +420,74 @@ def test_single_coin_proxy_preserves_order_across_bounded_dispatches():
     assert calls == [[0.0, 1.0], [2.0, 3.0], [4.0]]
 
 
+def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatch):
+    torch = pytest.importorskip("torch")
+    proxy, calls = _minimal_single_coin_proxy()
+    proxy.profile_enabled = True
+    proxy.strategy_kind = "ema_anchor"
+    proxy.runner.n = 100
+    proxy.runner.long_enabled = True
+    proxy.runner.short_enabled = False
+    original_run = proxy.runner.run
+
+    def profiled_run(parameters, **kwargs):
+        output = original_run(parameters, **kwargs)
+        proxy.runner.last_profile = {
+            "cpu_pack_seconds": 0.001,
+            "upload_and_zero_seconds": 0.002,
+            "compile_seconds": 0.003,
+            "pre_dispatch_sync_seconds": 0.004,
+            "kernel_seconds": 0.005,
+            "metric_decode_seconds": 0.006,
+            "batch_size": len(parameters),
+            "dispatch_count": 1,
+            "cold": len(calls) == 1,
+        }
+        return output
+
+    proxy.runner.run = profiled_run
+    monkeypatch.setattr(torch.mps, "synchronize", lambda: None)
+
+    proxy.evaluate([{"value": float(index)} for index in range(5)])
+
+    profile = proxy.last_profile
+    assert profile["candidate_count"] == 5
+    assert profile["dispatch_batch_size"] == 2
+    assert profile["dispatch_chunk_count"] == 3
+    assert profile["actual_dispatch_batch_sizes"] == [2, 2, 1]
+    assert profile["dispatch_count"] == 3
+    assert profile["cold_dispatch_count"] == 1
+    assert profile["warm_dispatch_count"] == 2
+    assert profile["candidate_bars"] == 500
+    assert profile["kernel_candidate_bars"] == 500
+    assert profile["coin_count"] == 1
+    assert profile["side_count"] == 1
+    assert profile["timings_seconds"]["kernel_execution"] == pytest.approx(
+        0.015
+    )
+    assert profile["timings_seconds"]["cold_compilation"] == pytest.approx(
+        0.003
+    )
+    assert profile["timings_seconds"]["warm_library_lookup"] == pytest.approx(
+        0.006
+    )
+    assert profile["wall_seconds"] >= 0.0
+
+
+def test_single_coin_proxy_profile_is_empty_when_disabled(monkeypatch):
+    proxy, _calls = _minimal_single_coin_proxy()
+    monkeypatch.setattr(
+        "optimization.gpu.service.time.perf_counter",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("disabled proxy profiling read the clock")
+        ),
+    )
+
+    proxy.evaluate([{"value": 1.0}])
+
+    assert proxy.last_profile == {}
+
+
 def test_single_coin_proxy_honors_interrupt_between_mps_dispatches():
     checks = 0
 
