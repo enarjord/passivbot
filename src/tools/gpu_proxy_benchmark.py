@@ -479,6 +479,21 @@ def _bounded_positive(parser, name: str, value: int, maximum: int) -> int:
     return value
 
 
+def _require_mps_torch(parser):
+    try:
+        import torch
+    except ModuleNotFoundError as exc:
+        if exc.name == "torch" or str(exc.name).startswith("torch."):
+            parser.error(
+                "Apple MPS benchmarking requires the optional GPU dependencies; "
+                'install with python3 -m pip install -e ".[full,gpu-mps]"'
+            )
+        raise
+    if not torch.backends.mps.is_available():
+        parser.error("Apple MPS is unavailable in this process")
+    return torch
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -506,10 +521,7 @@ def main(argv: list[str] | None = None) -> int:
         if candidates * multicoin_bars * coins > MAX_DISPATCH_CANDIDATE_BARS:
             parser.error("multicoin candidate-bars exceed the safe benchmark limit")
 
-    import torch
-
-    if not torch.backends.mps.is_available():
-        parser.error("Apple MPS is unavailable in this process")
+    torch = _require_mps_torch(parser)
     report = {
         "schema_version": 1,
         "environment": {

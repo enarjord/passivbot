@@ -126,9 +126,14 @@ def test_gpu_exact_submission_checks_interrupt_before_apply_async():
     pool.apply_async.assert_not_called()
 
 
-def test_gpu_exact_submission_uses_profiled_worker_only_when_enabled():
+def test_gpu_exact_submission_uses_profiled_worker_only_when_enabled(
+    monkeypatch,
+):
     pool = MagicMock()
     interrupt_check = MagicMock()
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.perf_counter", lambda: 12.5
+    )
 
     _submit_gpu_exact_validation(
         pool, [1.0], interrupt_check, profile=True
@@ -136,8 +141,26 @@ def test_gpu_exact_submission_uses_profiled_worker_only_when_enabled():
 
     assert pool.apply_async.call_args.args == (
         _profiled_gpu_exact_worker,
-        ([1.0],),
+        ([1.0], 12.5),
     )
+
+
+def test_gpu_profiled_exact_worker_records_actual_queue_wait(monkeypatch):
+    ticks = iter((10.0, 14.0))
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend.time.perf_counter",
+        lambda: next(ticks),
+    )
+    monkeypatch.setattr(
+        "optimization.backends.gpu_backend._evaluate_pymoo_worker_from_globals",
+        lambda vector: {"F": vector},
+    )
+
+    payload = _profiled_gpu_exact_worker([1.0], 7.0)
+
+    assert payload["F"] == [1.0]
+    assert payload["__gpu_profile_queue_wait_seconds__"] == pytest.approx(3.0)
+    assert payload["__gpu_profile_worker_seconds__"] == pytest.approx(4.0)
 
 
 def test_gpu_profile_log_is_structured_json(caplog):

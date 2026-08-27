@@ -1,3 +1,5 @@
+import sys
+
 import numpy as np
 import pytest
 
@@ -10,6 +12,7 @@ from tools.gpu_proxy_benchmark import (
     _bounded_positive,
     _fixture_sha256,
     _parameter_matrix,
+    _require_mps_torch,
     build_parser,
 )
 
@@ -40,6 +43,19 @@ def test_gpu_proxy_benchmark_rejects_non_positive_sizes():
         _bounded_positive(parser, "--candidates", 0, 10)
     with pytest.raises(SystemExit):
         _bounded_positive(parser, "--candidates", 11, 10)
+
+
+def test_gpu_proxy_benchmark_reports_missing_optional_gpu_dependencies(
+    monkeypatch, capsys
+):
+    parser = build_parser()
+    monkeypatch.setitem(sys.modules, "torch", None)
+
+    with pytest.raises(SystemExit) as exc:
+        _require_mps_torch(parser)
+
+    assert exc.value.code == 2
+    assert ".[full,gpu-mps]" in capsys.readouterr().err
 
 
 def test_gpu_proxy_benchmark_fixture_hash_covers_shape_dtype_and_values():

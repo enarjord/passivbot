@@ -101,21 +101,24 @@ def _submit_gpu_exact_validation(
     """Refuse new exact CPU work once the GPU interrupt latch is set."""
 
     interrupt_check()
-    worker = (
-        _profiled_gpu_exact_worker
-        if profile
-        else _evaluate_pymoo_worker_from_globals
-    )
-    return pool.apply_async(worker, (vector,))
+    if profile:
+        submitted_at = time.perf_counter()
+        return pool.apply_async(
+            _profiled_gpu_exact_worker, (vector, submitted_at)
+        )
+    return pool.apply_async(_evaluate_pymoo_worker_from_globals, (vector,))
 
 
-def _profiled_gpu_exact_worker(vector):
+def _profiled_gpu_exact_worker(vector, submitted_at):
     """Attach opt-in worker time without changing persisted exact evidence."""
 
     started = time.perf_counter()
     payload = _evaluate_pymoo_worker_from_globals(vector)
     if isinstance(payload, dict):
         payload = dict(payload)
+        payload["__gpu_profile_queue_wait_seconds__"] = max(
+            0.0, started - float(submitted_at)
+        )
         payload["__gpu_profile_worker_seconds__"] = time.perf_counter() - started
     return payload
 
@@ -4099,21 +4102,21 @@ def run_backend(
                 is_probe,
                 is_proxy_front,
                 digest,
-                submitted_at,
             ) = pending.pop(result)
             payload = result.get()
-            result_ready_at = time.perf_counter() if profile_enabled else 0.0
             worker_seconds = (
                 float(payload.pop("__gpu_profile_worker_seconds__", 0.0))
                 if profile_enabled and isinstance(payload, dict)
                 else 0.0
             )
+            queue_wait_seconds = (
+                float(payload.pop("__gpu_profile_queue_wait_seconds__", 0.0))
+                if profile_enabled and isinstance(payload, dict)
+                else 0.0
+            )
             if profile_enabled:
                 profile_totals["exact_work"] += worker_seconds
-                profile_totals["exact_queue_wait"] += max(
-                    0.0,
-                    result_ready_at - submitted_at - worker_seconds,
-                )
+                profile_totals["exact_queue_wait"] += queue_wait_seconds
                 result_processing_started = time.perf_counter()
             PymooAsyncRecordingRunner._raise_if_worker_failure(payload, exact_done)
             exact_score = float(
@@ -4291,7 +4294,6 @@ def run_backend(
             )
             submitted_this_generation = 0
             for index, is_probe, is_proxy_front, vector, digest in exact_selections:
-                submitted_at = time.perf_counter() if profile_enabled else 0.0
                 result = _submit_gpu_exact_validation(
                     pool,
                     vector,
@@ -4306,7 +4308,6 @@ def run_backend(
                     bool(is_probe),
                     bool(is_proxy_front),
                     digest,
-                    submitted_at,
                 )
                 submitted_hashes.add(digest)
                 submitted_this_generation += 1
