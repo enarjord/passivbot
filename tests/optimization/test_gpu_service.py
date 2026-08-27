@@ -45,6 +45,8 @@ from optimization.gpu.service import (
     _gpu_proxy_execution_checkpoint_contract,
     _mps_dispatch_batch_size,
     _mps_strategy_eq_recovery_distribution,
+    _new_gpu_proxy_profile,
+    _add_gpu_runner_profile,
     _multicoin_exposure_eligible_coins,
     _position_exposure_enforcer_params,
     _prepared_single_coin_side_enabled,
@@ -486,6 +488,31 @@ def test_single_coin_proxy_profile_is_empty_when_disabled(monkeypatch):
     proxy.evaluate([{"value": 1.0}])
 
     assert proxy.last_profile == {}
+
+
+def test_gpu_profile_candidate_bars_include_coin_and_side_topology():
+    proxy = SimpleNamespace(
+        batch_size=4,
+        dispatch_batch_size=4,
+        strategy_kind="ema_anchor",
+    )
+    runner = SimpleNamespace(
+        n=100,
+        n_coins=8,
+        last_profile={
+            "batch_size": 1,
+            "dispatch_count": 1,
+            "cold": False,
+        },
+    )
+    profile = _new_gpu_proxy_profile(
+        proxy, [{}], (runner,), coin_count=8, side_count=2
+    )
+
+    _add_gpu_runner_profile(profile, runner, side_count=2)
+
+    assert profile["candidate_bars"] == 1_600
+    assert profile["kernel_candidate_bars"] == 1_600
 
 
 def test_single_coin_proxy_honors_interrupt_between_mps_dispatches():

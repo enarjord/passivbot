@@ -24,7 +24,7 @@ from optimization.gpu.model import (
 CASES = (
     "ema-single-long",
     "tm-single-long",
-    "ema-multicoin-short",
+    "ema-multicoin-overhead",
     "ema-multicoin-overrides",
 )
 DEFAULT_SEED = 7
@@ -193,6 +193,15 @@ def _build_case(
         MpsEmaAnchorRunner,
         MpsTrailingMartingaleRunner,
     )
+    from optimization.gpu.metrics import compute_objectives
+    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+
+    needed_metrics = {
+        "adg_strategy_eq",
+        "drawdown_worst_strategy_eq",
+        "fills_per_day",
+    }
+    base_values = _base_parameter_values()
 
     if name in {"ema-single-long", "tm-single-long"}:
         hlcvs, timestamps = _synthetic_hlcvs(single_bars, 1, seed)
@@ -226,14 +235,51 @@ def _build_case(
                 candidates,
                 seed,
             )
-        matrix = np.concatenate((side_matrix, side_matrix), axis=1)
+        proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
+        proxy.batch_size = candidates
+        proxy.dispatch_batch_size = candidates
+        proxy.interrupt_check = lambda: None
+        proxy._torch = __import__("torch")
+        proxy.profile_enabled = True
+        proxy.last_profile = {}
+        proxy.metrics_data = data
+        proxy.run = run
+        proxy.needed_metrics = needed_metrics
+        proxy.strategy_kind = (
+            "ema_anchor" if name == "ema-single-long" else "trailing_martingale"
+        )
+        proxy.entry_interval_enabled = False
+        proxy.btc_analysis_enabled = False
+        proxy.btc_risk_enabled = False
+        proxy.equity_balance_diff_enabled = False
+        proxy.param_keys = (
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+            if name == "ema-single-long"
+            else TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        )
+        proxy.base_params = {
+            side: {key: base_values[key] for key in proxy.param_keys}
+            for side in ("long", "short")
+        }
+        proxy.static_coin_override_params = {}
+        proxy.base_total_wallet_exposure_limits = {"long": 1.0, "short": 0.0}
+        proxy.base_n_positions = {"long": 1.0, "short": 0.0}
+        proxy.runner = runner
+        proxy._compute_objectives = compute_objectives
+        candidate_dicts = [
+            {
+                f"long_{key}": float(row[index])
+                for index, key in enumerate(proxy.param_keys)
+            }
+            for row in side_matrix
+        ]
         return (
-            runner,
-            matrix,
+            proxy,
+            candidate_dicts,
             single_bars,
             1,
             1,
-            _fixture_sha256(hlcvs, timestamps, matrix),
+            _fixture_sha256(hlcvs, timestamps, side_matrix),
         )
 
     hlcvs, timestamps = _synthetic_hlcvs(multicoin_bars, coins, seed)
@@ -266,9 +312,36 @@ def _build_case(
         coin_overrides=overrides,
     )
     matrix = _parameter_matrix(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidates, seed)
+    proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
+    proxy.batch_size = candidates
+    proxy.dispatch_batch_size = candidates
+    proxy.interrupt_check = lambda: None
+    proxy._torch = __import__("torch")
+    proxy.profile_enabled = True
+    proxy.last_profile = {}
+    proxy.metrics_data = data
+    proxy.run = runs[0]
+    proxy.sides = ["long"]
+    proxy.needed_metrics = needed_metrics
+    proxy.strategy_kind = "ema_anchor"
+    proxy.entry_interval_enabled = False
+    proxy.btc_analysis_enabled = False
+    proxy.btc_risk_enabled = False
+    proxy.equity_balance_diff_enabled = False
+    proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    proxy.base_params = {"long": {key: base_values[key] for key in proxy.param_keys}}
+    proxy.base_total_wallet_exposure_limits = {"long": 1.0, "short": 0.0}
+    proxy.base_n_positions = {"long": 4.0, "short": 0.0}
+    proxy.fused_runner = None
+    proxy.runners = {"long": runner}
+    proxy._compute_objectives = compute_objectives
+    candidate_dicts = [
+        {f"long_{key}": float(row[index]) for index, key in enumerate(proxy.param_keys)}
+        for row in matrix
+    ]
     return (
-        runner,
-        matrix,
+        proxy,
+        candidate_dicts,
         multicoin_bars,
         coins,
         1,
@@ -281,33 +354,54 @@ def _build_case(
     )
 
 
-def _run_once(runner, matrix) -> dict:
-    import torch
-
+def _run_once(proxy, candidates) -> dict:
     started = time.perf_counter()
-    output = runner.run(matrix, profile=True)
-    transfer_started = time.perf_counter()
-    for key in ("balance", "max_dd", "fill_count"):
-        value = output.get(key)
-        if value is not None:
-            value.detach().cpu()
-    device_to_host_seconds = time.perf_counter() - transfer_started
+    proxy.evaluate(candidates)
     wall_seconds = time.perf_counter() - started
-    profile = dict(runner.last_profile)
-    timed = sum(
-        float(value) for key, value in profile.items() if key.endswith("_seconds")
-    )
-    profile.update(
-        {
-            "device_to_host_seconds": device_to_host_seconds,
-            "host_overhead_seconds": max(
-                0.0, wall_seconds - timed - device_to_host_seconds
-            ),
-            "wall_seconds": wall_seconds,
-            "candidates_per_second": len(matrix) / max(wall_seconds, 1.0e-12),
-        }
-    )
-    return profile
+    profile = dict(getattr(proxy, "last_profile", {}) or {})
+    if profile:
+        timings = profile["timings_seconds"]
+        compile_seconds = float(timings["cold_compilation"]) + float(
+            timings["warm_library_lookup"]
+        )
+        kernel_seconds = float(timings["kernel_execution"])
+        device_to_host_seconds = float(timings["device_to_host"])
+        host_overhead_seconds = float(timings["host_overhead"])
+        cold = bool(profile["cold_dispatch_count"])
+        batch_size = max(profile["actual_dispatch_batch_sizes"], default=0)
+        dispatch_count = int(profile["dispatch_count"])
+    else:
+        runners = tuple(getattr(proxy, "runners", {}).values()) or (proxy.runner,)
+        runner_profiles = [dict(runner.last_profile) for runner in runners]
+        compile_seconds = sum(
+            float(item.get("compile_seconds", 0.0)) for item in runner_profiles
+        )
+        kernel_seconds = sum(
+            float(item.get("kernel_seconds", 0.0)) for item in runner_profiles
+        )
+        device_to_host_seconds = 0.0
+        timed = sum(
+            float(value)
+            for item in runner_profiles
+            for key, value in item.items()
+            if key.endswith("_seconds")
+        )
+        host_overhead_seconds = max(0.0, wall_seconds - timed)
+        cold = False
+        batch_size = len(candidates)
+        dispatch_count = len(runner_profiles)
+    return {
+        "batch_size": batch_size,
+        "candidates_per_second": len(candidates) / max(wall_seconds, 1.0e-12),
+        "cold": cold,
+        "compile_seconds": compile_seconds,
+        "device_to_host_seconds": device_to_host_seconds,
+        "dispatch_count": dispatch_count,
+        "host_overhead_seconds": host_overhead_seconds,
+        "kernel_seconds": kernel_seconds,
+        "proxy_profile": profile,
+        "wall_seconds": wall_seconds,
+    }
 
 
 def run_benchmark_case(
@@ -320,7 +414,7 @@ def run_benchmark_case(
     coins: int,
     seed: int,
 ) -> dict:
-    runner, matrix, bars, coin_count, side_count, fixture_sha256 = _build_case(
+    proxy, candidate_dicts, bars, coin_count, side_count, fixture_sha256 = _build_case(
         name,
         candidates=candidates,
         single_bars=single_bars,
@@ -328,8 +422,8 @@ def run_benchmark_case(
         coins=coins,
         seed=seed,
     )
-    cold = _run_once(runner, matrix)
-    warm = [_run_once(runner, matrix) for _ in range(warm_runs)]
+    cold = _run_once(proxy, candidate_dicts)
+    warm = [_run_once(proxy, candidate_dicts) for _ in range(warm_runs)]
 
     def median(key):
         return statistics.median(float(item[key]) for item in warm)
@@ -342,9 +436,9 @@ def run_benchmark_case(
         "candle_count": bars,
         "coin_count": coin_count,
         "side_count": side_count,
-        "candidate_bars": candidates * bars,
-        "kernel_candidate_bars": candidates * bars,
-        "actual_dispatch_batch_size": int(cold.get("batch_size", len(matrix))),
+        "candidate_bars": candidates * bars * coin_count * side_count,
+        "kernel_candidate_bars": candidates * bars * coin_count * side_count,
+        "actual_dispatch_batch_size": int(cold["batch_size"]),
         "dispatch_chunk_count": 1,
         "dispatch_count_per_run": 1,
         "cold": cold,

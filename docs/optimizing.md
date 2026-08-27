@@ -739,7 +739,7 @@ optimization results.
 ```bash
 passivbot tool gpu-proxy-benchmark --case ema-single-long
 passivbot tool gpu-proxy-benchmark --case tm-single-long
-passivbot tool gpu-proxy-benchmark --case ema-multicoin-short
+passivbot tool gpu-proxy-benchmark --case ema-multicoin-overhead
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overrides
 ```
 
@@ -747,9 +747,11 @@ The single-coin cases default to 60,000 one-minute candles; the overhead-sensiti
 default to 4,320 candles and eight coins. Every report records the seed and workload shape, cold
 compile/run timing, a fixture hash, and warm p50 across five repeated runs, including
 candidates/second, kernel time, dispatch count, device transfer, and host overhead. Use identical
-arguments and immutable commits for before/after comparisons. Run one `--case` per process when
-comparing cold compilation; `--case all` is convenient for smoke checks but later cases may reuse
-process-local shader caches.
+arguments and immutable commits for before/after comparisons. The harness calls the production
+proxy evaluation path, including its full output transfer, metric reduction, and result
+materialization. Run one `--case` per process when comparing cold compilation; `--case all` is
+convenient for smoke checks, and shared-cache hit/miss state still keeps later cold/warm labels
+accurate.
 
 ### Pymoo Configuration
 

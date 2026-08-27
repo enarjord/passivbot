@@ -453,6 +453,12 @@ def _decode_entry_interval_outputs(stats, counts) -> dict:
     }
 
 
+def _cached_library_with_miss(loader, *args):
+    misses_before = loader.cache_info().misses
+    library = loader(*args)
+    return library, loader.cache_info().misses > misses_before
+
+
 @lru_cache(maxsize=16)
 def _shader_library(
     hsl_ema_tail_enabled: bool = False,
@@ -1119,7 +1125,6 @@ class MpsEmaAnchorRunner:
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float | int | bool] = {}
-        self._profile_dispatches = 0
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         params = _upgrade_legacy_single_coin_wel_params(
@@ -1268,8 +1273,8 @@ class MpsEmaAnchorRunner:
                 device="mps",
             )
         prepared = time.perf_counter() if profile else 0.0
-        cold = self._profile_dispatches == 0
-        library = _shader_library(
+        library, cold = _cached_library_with_miss(
+            _shader_library,
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -1325,7 +1330,6 @@ class MpsEmaAnchorRunner:
             }
         else:
             self.last_profile = {}
-        self._profile_dispatches += 1
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         if self.recovery_distribution_enabled:
@@ -1544,7 +1548,6 @@ class MpsEmaAnchorMulticoinRunner:
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self._full_end_steps: dict[int, torch.Tensor] = {}
         self.last_profile: dict[str, float | int | bool] = {}
-        self._profile_dispatches = 0
         self.start_minute_of_day = int(data["start_minute_of_day"])
         self.start_minute_of_hour = int(data["start_minute_of_hour"])
         self.requested_start_idx = max(
@@ -1676,7 +1679,11 @@ class MpsEmaAnchorMulticoinRunner:
         )
 
     def _library(self):
-        return _ema_anchor_multicoin_shader_library(
+        loader, args = self._library_cache_call()
+        return loader(*args)
+
+    def _library_cache_call(self):
+        return _ema_anchor_multicoin_shader_library, (
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -1787,8 +1794,8 @@ class MpsEmaAnchorMulticoinRunner:
                 device="mps",
             )
         prepared = time.perf_counter() if profile else 0.0
-        cold = self._profile_dispatches == 0
-        library = self._library()
+        loader, library_args = self._library_cache_call()
+        library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
             torch.mps.synchronize()
@@ -1825,7 +1832,6 @@ class MpsEmaAnchorMulticoinRunner:
             }
         else:
             self.last_profile = {}
-        self._profile_dispatches += 1
         output = self._decode(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
@@ -2148,7 +2154,11 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         )
 
     def _library(self):
-        return _trailing_martingale_multicoin_shader_library(
+        loader, args = self._library_cache_call()
+        return loader(*args)
+
+    def _library_cache_call(self):
+        return _trailing_martingale_multicoin_shader_library, (
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -2416,21 +2426,25 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.hsl_raw_tail_enabled = False
 
     def _shader_library(self):
+        loader, args = self._shader_library_cache_call()
+        return loader(*args)
+
+    def _shader_library_cache_call(self):
         if self.shader_topology == "long_no_hsl":
-            return _trailing_martingale_long_no_hsl_shader_library(
+            return _trailing_martingale_long_no_hsl_shader_library, (
                 self.recovery_distribution_enabled,
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
             )
         if self.shader_topology == "short_no_hsl":
-            return _trailing_martingale_short_no_hsl_shader_library(
+            return _trailing_martingale_short_no_hsl_shader_library, (
                 self.recovery_distribution_enabled,
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
             )
-        return _trailing_martingale_shader_library(
+        return _trailing_martingale_shader_library, (
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -2518,8 +2532,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 device="mps",
             )
         prepared = time.perf_counter() if profile else 0.0
-        cold = self._profile_dispatches == 0
-        library = self._shader_library()
+        loader, library_args = self._shader_library_cache_call()
+        library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
             torch.mps.synchronize()
@@ -2570,7 +2584,6 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             }
         else:
             self.last_profile = {}
-        self._profile_dispatches += 1
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(

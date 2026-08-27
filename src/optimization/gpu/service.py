@@ -180,7 +180,9 @@ def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count
         "dispatch_count": 0,
         "cold_dispatch_count": 0,
         "warm_dispatch_count": 0,
-        "candidate_bars": len(candidates) * candle_count,
+        "candidate_bars": (
+            len(candidates) * candle_count * int(coin_count) * int(side_count)
+        ),
         "kernel_candidate_bars": 0,
         "candle_count": candle_count,
         "coin_count": int(coin_count),
@@ -190,7 +192,7 @@ def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count
     }
 
 
-def _add_gpu_runner_profile(profile: dict, runner) -> None:
+def _add_gpu_runner_profile(profile: dict, runner, *, side_count: int = 1) -> None:
     runner_profile = getattr(runner, "last_profile", {}) or {}
     if not runner_profile:
         return
@@ -202,7 +204,11 @@ def _add_gpu_runner_profile(profile: dict, runner) -> None:
     profile["cold_dispatch_count"] += dispatch_count if cold else 0
     profile["warm_dispatch_count"] += 0 if cold else dispatch_count
     profile["kernel_candidate_bars"] += (
-        batch_size * int(getattr(runner, "n", 0)) * dispatch_count
+        batch_size
+        * int(getattr(runner, "n", 0))
+        * int(getattr(runner, "n_coins", 1))
+        * int(side_count)
+        * dispatch_count
     )
     timings = profile["timings_seconds"]
     timings["candidate_packing"] += float(
@@ -1892,7 +1898,11 @@ class MpsSingleCoinProxy:
                 profile=self.profile_enabled,
             )
             if profile is not None:
-                _add_gpu_runner_profile(profile, self.runner)
+                _add_gpu_runner_profile(
+                    profile,
+                    self.runner,
+                    side_count=profile["side_count"],
+                )
             interrupt_check()
             stage_started = (
                 time.perf_counter() if self.profile_enabled else 0.0
@@ -2987,7 +2997,11 @@ class MpsMulticoinProxy:
                     profile=self.profile_enabled,
                 )
                 if profile is not None:
-                    _add_gpu_runner_profile(profile, fused_runner)
+                    _add_gpu_runner_profile(
+                        profile,
+                        fused_runner,
+                        side_count=len(self.sides),
+                    )
                 interrupt_check()
                 stage_started = (
                     time.perf_counter() if self.profile_enabled else 0.0
