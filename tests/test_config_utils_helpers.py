@@ -16,6 +16,9 @@ from config.runtime_compile import compile_runtime_config
 from config.strategy_spec import get_strategy_defaults
 from config.validate import validate_config
 from config_transform import ConfigTransformTracker, record_transform
+from optimization.gpu.metric_registry import (
+    reject_configured_exact_only_gpu_metrics,
+)
 from utils import normalize_coins_source
 from config_utils import (
     _apply_backward_compatibility_renames,
@@ -831,7 +834,7 @@ def test_load_config_malformed_optimize_limits_raises(tmp_path):
 
 
 @pytest.mark.parametrize("surface", ["scoring", "limits"])
-def test_format_gpu_config_rejects_exact_only_alias_before_canonicalization(
+def test_prepare_gpu_config_preserves_exact_only_alias_provenance(
     surface,
 ):
     cfg = get_template_config()
@@ -853,8 +856,32 @@ def test_format_gpu_config_rejects_exact_only_alias_before_canonicalization(
             }
         ]
 
+    prepared = prepare_config(cfg, verbose=False)
+
+    assert prepared["optimize"]["scoring"] == (
+        [{"goal": "min", "metric": "strategy_eq_recovery_days_max"}]
+        if surface == "scoring"
+        else [{"goal": "max", "metric": "adg_strategy_eq"}]
+    )
+    assert prepared["_raw"]["optimize"][surface]
+
     with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
-        format_config(cfg, verbose=False)
+        reject_configured_exact_only_gpu_metrics(prepared)
+
+
+def test_live_config_loading_does_not_enforce_gpu_optimizer_metric_eligibility():
+    cfg = get_template_config()
+    cfg["optimize"]["backend"] = "gpu"
+    cfg["optimize"]["scoring"] = [
+        {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+    ]
+
+    prepared = prepare_config(cfg, live_only=True, verbose=False, target="live")
+
+    assert "optimize" not in prepared
+    assert prepared["_raw"]["optimize"]["scoring"][0]["metric"] == (
+        "peak_recovery_days_strategy_eq"
+    )
 
 
 def test_format_cpu_config_keeps_legacy_recovery_alias_compatibility():

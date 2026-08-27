@@ -550,6 +550,30 @@ def test_gpu_metric_provenance_ignores_disabled_exact_only_limit():
     assert not configured_exact_only_gpu_metrics(config)
 
 
+def test_gpu_metric_provenance_ignores_scenario_labels_that_look_like_metrics():
+    config = {
+        "optimize": {
+            "scoring": [
+                {
+                    "goal": "max",
+                    "metric": "adg_strategy_eq",
+                    "scenario": "fills_count",
+                }
+            ],
+            "limits": [
+                {
+                    "metric": "drawdown_worst_strategy_eq",
+                    "penalize_if": "greater_than",
+                    "scenario": "gain_btc",
+                    "value": 0.3,
+                }
+            ],
+        }
+    }
+
+    assert not configured_exact_only_gpu_metrics(config)
+
+
 def test_gpu_result_preserves_explicit_nulls_and_bounds_for_resume():
     config = _long_only_ema_config()
     config["backtest"]["taker_fee_override"] = None

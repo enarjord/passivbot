@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import re
-
-
 # These metrics remain available from exact Rust backtests and analysis, but are
 # intentionally ineligible for Metal proxy objectives and proxy-side limits.
-# The registry is Torch-free so config normalization can reject raw aliases
-# before shared metric canonicalization erases their provenance.
+# The registry is Torch-free so GPU backend preflight can inspect preserved raw
+# config without coupling shared config loading to the optional GPU runtime.
 GPU_EXACT_ONLY_METRICS = frozenset(
     {
         "adg_pnl",
@@ -93,7 +90,7 @@ def reject_exact_only_gpu_metric_names(metric_names) -> frozenset[str]:
 def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
     """Recover exact-only spellings from current and preserved raw config."""
 
-    configured_surfaces: list[tuple[object, bool]] = []
+    configured_surfaces: list[tuple[object, str]] = []
     for source in (
         config,
         config.get("_raw"),
@@ -109,43 +106,70 @@ def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
             continue
         configured_surfaces.extend(
             (
-                (optimize.get("scoring"), False),
-                (optimize.get("limits"), True),
+                (optimize.get("scoring"), "scoring"),
+                (optimize.get("limits"), "limits"),
             )
         )
 
-    exact_only = tuple(sorted(GPU_EXACT_ONLY_METRICS, key=len, reverse=True))
     found: set[str] = set()
 
-    def visit(value, *, skip_disabled: bool) -> None:
-        if isinstance(value, dict):
-            if skip_disabled and not bool(value.get("enabled", True)):
-                return
-            for key, item in value.items():
-                visit(key, skip_disabled=skip_disabled)
-                visit(item, skip_disabled=skip_disabled)
+    def add_metric(value) -> None:
+        token = str(value or "").strip()
+        if token in GPU_EXACT_ONLY_METRICS:
+            found.add(token)
+
+    def add_legacy_limit_name(value) -> None:
+        token = str(value or "").strip().lstrip("-")
+        for prefix in (
+            "penalize_if_greater_than_",
+            "penalize_if_lower_than_",
+        ):
+            if token.startswith(prefix):
+                token = token[len(prefix) :]
+                break
+        add_metric(token)
+
+    def visit_scoring(value) -> None:
+        if not isinstance(value, (list, tuple)):
             return
-        if isinstance(value, (list, tuple, set)):
-            for item in value:
-                visit(item, skip_disabled=skip_disabled)
+        for entry in value:
+            if isinstance(entry, dict):
+                add_metric(entry.get("metric"))
+            elif isinstance(entry, str):
+                add_metric(entry)
+
+    def visit_limits(value) -> None:
+        if isinstance(value, dict):
+            if "metric" in value or "name" in value:
+                if bool(value.get("enabled", True)):
+                    add_metric(value.get("metric") or value.get("name"))
+                return
+            for key in value:
+                add_legacy_limit_name(key)
+            return
+        if isinstance(value, (list, tuple)):
+            for entry in value:
+                visit_limits(entry)
             return
         if not isinstance(value, str):
             return
-        token = value.strip()
-        for metric in exact_only:
-            if (
-                token == metric
-                or token.endswith(f"_{metric}")
-                or re.search(
-                    rf"(?:^|[^A-Za-z0-9]|_){re.escape(metric)}"
-                    r"(?![A-Za-z0-9_])",
-                    token,
-                )
+        for segment in value.split("--"):
+            tokens = segment.strip().split()
+            if not tokens:
+                continue
+            if any(
+                token.lower()
+                in {"enabled=false", "enabled=0", "enabled=no", "enabled=off"}
+                for token in tokens[1:]
             ):
-                found.add(metric)
+                continue
+            add_legacy_limit_name(tokens[0])
 
-    for surface, skip_disabled in configured_surfaces:
-        visit(surface, skip_disabled=skip_disabled)
+    for surface, surface_kind in configured_surfaces:
+        if surface_kind == "scoring":
+            visit_scoring(surface)
+        else:
+            visit_limits(surface)
     return frozenset(found)
 
 
