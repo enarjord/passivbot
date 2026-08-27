@@ -10,35 +10,43 @@
 
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
 constant int ENTRY_INTERVAL_BINS = 128;
-constant int ENTRY_INTERVAL_COLS = 131;
+constant int ENTRY_INTERVAL_STAT_COLS = 2;
+constant int ENTRY_INTERVAL_COUNT_COLS = 129;
 
 inline void init_entry_interval_output(
-    device float* output,
+    device float* stats,
+    device int* counts,
     uint candidate
 ) {
-    const int offset = int(candidate) * ENTRY_INTERVAL_COLS;
-    for (int column = 0; column < ENTRY_INTERVAL_COLS; ++column) {
-        output[offset + column] = 0.0f;
+    const int stat_offset = int(candidate) * ENTRY_INTERVAL_STAT_COLS;
+    for (int column = 0; column < ENTRY_INTERVAL_STAT_COLS; ++column) {
+        stats[stat_offset + column] = 0.0f;
+    }
+    const int count_offset = int(candidate) * ENTRY_INTERVAL_COUNT_COLS;
+    for (int column = 0; column < ENTRY_INTERVAL_COUNT_COLS; ++column) {
+        counts[count_offset + column] = 0;
     }
 }
 
 inline void record_initial_entry_interval(
-    device float* output,
+    device float* stats,
+    device int* counts,
     uint candidate,
     thread float& last_initial_entry_k,
     float current_k
 ) {
     if (last_initial_entry_k >= 0.0f) {
         const float gap = fmax(current_k - last_initial_entry_k, 0.0f);
-        const int offset = int(candidate) * ENTRY_INTERVAL_COLS;
-        output[offset + 0] += gap;
-        output[offset + 1] += 1.0f;
-        output[offset + 2] = fmax(output[offset + 2], gap);
+        const int stat_offset = int(candidate) * ENTRY_INTERVAL_STAT_COLS;
+        stats[stat_offset + 0] += gap;
+        stats[stat_offset + 1] = fmax(stats[stat_offset + 1], gap);
+        const int count_offset = int(candidate) * ENTRY_INTERVAL_COUNT_COLS;
+        counts[count_offset + 0] += 1;
         const float log_bin_scale = 127.0f / log(4000001.0f);
         const int bin = clamp(
             int(log(gap + 1.0f) * log_bin_scale), 0, 127
         );
-        output[offset + 3 + bin] += 1.0f;
+        counts[count_offset + 1 + bin] += 1;
     }
     last_initial_entry_k = current_k;
 }

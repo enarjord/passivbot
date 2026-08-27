@@ -1732,7 +1732,8 @@ inline void passivbot_single_coin_impl(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -1898,7 +1899,9 @@ inline void passivbot_single_coin_impl(
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    init_entry_interval_output(entry_interval_output, b);
+    init_entry_interval_output(
+        entry_interval_stats, entry_interval_counts, b
+    );
 #endif
 
     for (int k = 1; k < T - 1; ++k) {
@@ -2646,9 +2649,9 @@ inline void passivbot_single_coin_impl(
                     );
                     bool was_flat = long_side.psize <= 0.0f;
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-                    if (rung == 0 && was_flat) {
+                    if (rung == 0 && long_side.entry_gen_psize <= 0.0f) {
                         record_initial_entry_interval(
-                            entry_interval_output, b,
+                            entry_interval_stats, entry_interval_counts, b,
                             long_last_initial_entry_k, kf
                         );
                     }
@@ -3403,9 +3406,9 @@ inline void passivbot_single_coin_impl(
                     );
                     bool was_flat = short_side.psize <= 0.0f;
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-                    if (rung == 0 && was_flat) {
+                    if (rung == 0 && short_side.entry_gen_psize <= 0.0f) {
                         record_initial_entry_interval(
-                            entry_interval_output, b,
+                            entry_interval_stats, entry_interval_counts, b,
                             short_last_initial_entry_k, kf
                         );
                     }
@@ -4210,7 +4213,8 @@ kernel void passivbot_trailing_martingale(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -4231,7 +4235,7 @@ kernel void passivbot_trailing_martingale(
         equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-        entry_interval_output,
+        entry_interval_stats, entry_interval_counts,
 #endif
         daily, scalars, gap_hist,
         rolling_pnl_values, rolling_pnl_indices,

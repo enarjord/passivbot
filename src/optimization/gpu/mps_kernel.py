@@ -45,7 +45,8 @@ MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
 MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 MPS_EQUITY_BALANCE_DIFF_COLS = 12
-MPS_ENTRY_INTERVAL_COLS = 131
+MPS_ENTRY_INTERVAL_STAT_COLS = 2
+MPS_ENTRY_INTERVAL_COUNT_COLS = 129
 
 _HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
 _HSL_RAW_DRAWDOWN_DEFINE = "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
@@ -429,19 +430,26 @@ def _decode_equity_balance_diff_outputs(values) -> dict:
     return output
 
 
-def _decode_entry_interval_outputs(values) -> dict:
-    if values is None:
+def _decode_entry_interval_outputs(stats, counts) -> dict:
+    if stats is None and counts is None:
         return {}
-    if values.ndim != 2 or values.shape[1] != MPS_ENTRY_INTERVAL_COLS:
+    if stats is None or counts is None:
+        raise RuntimeError("MPS entry-interval output is only partially present")
+    if stats.ndim != 2 or stats.shape[1] != MPS_ENTRY_INTERVAL_STAT_COLS:
         raise RuntimeError(
-            "MPS entry-interval output has an invalid shape: "
-            f"{tuple(values.shape)}"
+            "MPS entry-interval stats have an invalid shape: "
+            f"{tuple(stats.shape)}"
+        )
+    if counts.ndim != 2 or counts.shape[1] != MPS_ENTRY_INTERVAL_COUNT_COLS:
+        raise RuntimeError(
+            "MPS entry-interval counts have an invalid shape: "
+            f"{tuple(counts.shape)}"
         )
     return {
-        "entry_interval_sum_steps": values[:, 0],
-        "entry_interval_count": values[:, 1],
-        "entry_interval_max_steps": values[:, 2],
-        "entry_interval_hist": values[:, 3:],
+        "entry_interval_sum_steps": stats[:, 0],
+        "entry_interval_count": counts[:, 0],
+        "entry_interval_max_steps": stats[:, 1],
+        "entry_interval_hist": counts[:, 1:],
     }
 
 
@@ -1515,7 +1523,8 @@ class MpsEmaAnchorMulticoinRunner:
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
-        self._entry_interval_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self._full_end_steps: dict[int, torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
@@ -1612,7 +1621,8 @@ class MpsEmaAnchorMulticoinRunner:
         gaps,
         coin_fill_counts,
         equity_balance_diff,
-        entry_interval,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -1634,7 +1644,7 @@ class MpsEmaAnchorMulticoinRunner:
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
-            kernel_args += (entry_interval,)
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -1689,20 +1699,31 @@ class MpsEmaAnchorMulticoinRunner:
             self._equity_balance_diff_buffers[batch_size].zero_()
         return self._equity_balance_diff_buffers[batch_size]
 
-    def _entry_interval_buffer(self, batch_size: int):
+    def _entry_interval_buffers(self, batch_size: int):
         if not self.entry_interval_enabled:
-            return None
-        if batch_size not in self._entry_interval_buffers:
-            self._entry_interval_buffers = {
+            return None, None
+        if batch_size not in self._entry_interval_stat_buffers:
+            self._entry_interval_stat_buffers = {
                 batch_size: torch.zeros(
-                    (batch_size, MPS_ENTRY_INTERVAL_COLS),
+                    (batch_size, MPS_ENTRY_INTERVAL_STAT_COLS),
                     dtype=torch.float32,
                     device="mps",
                 )
             }
+            self._entry_interval_count_buffers = {
+                batch_size: torch.zeros(
+                    (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
+                    dtype=torch.int32,
+                    device="mps",
+                )
+            }
         else:
-            self._entry_interval_buffers[batch_size].zero_()
-        return self._entry_interval_buffers[batch_size]
+            self._entry_interval_stat_buffers[batch_size].zero_()
+            self._entry_interval_count_buffers[batch_size].zero_()
+        return (
+            self._entry_interval_stat_buffers[batch_size],
+            self._entry_interval_count_buffers[batch_size],
+        )
 
     def run(
         self,
@@ -1724,7 +1745,9 @@ class MpsEmaAnchorMulticoinRunner:
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-        entry_interval = self._entry_interval_buffer(batch_size)
+        entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
+            batch_size
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             size_values = [
@@ -1764,7 +1787,8 @@ class MpsEmaAnchorMulticoinRunner:
             gaps,
             coin_fill_counts,
             equity_balance_diff,
-            entry_interval,
+            entry_interval_stats,
+            entry_interval_counts,
             recovery_samples,
             batch_size=batch_size,
         )
@@ -1780,7 +1804,11 @@ class MpsEmaAnchorMulticoinRunner:
         }
         output = self._decode(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
-        output.update(_decode_entry_interval_outputs(entry_interval))
+        output.update(
+            _decode_entry_interval_outputs(
+                entry_interval_stats, entry_interval_counts
+            )
+        )
         if self.recovery_distribution_enabled:
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (
@@ -1923,7 +1951,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         gaps,
         coin_fill_counts,
         equity_balance_diff,
-        entry_interval,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -1946,7 +1975,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
-            kernel_args += (entry_interval,)
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2112,7 +2141,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         gaps,
         coin_fill_counts,
         equity_balance_diff,
-        entry_interval,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -2137,7 +2167,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
-            kernel_args += (entry_interval,)
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2284,7 +2314,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         gaps,
         coin_fill_counts,
         equity_balance_diff,
-        entry_interval,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -2310,7 +2341,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
-            kernel_args += (entry_interval,)
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2340,7 +2371,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     ):
         super().__init__(*args, **kwargs)
         self.entry_interval_enabled = bool(entry_interval_enabled)
-        self._entry_interval_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self.shader_topology = trailing_martingale_shader_topology(
             long_enabled=self.long_enabled,
             short_enabled=self.short_enabled,
@@ -2379,20 +2411,31 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.entry_interval_enabled,
         )
 
-    def _entry_interval_buffer(self, batch_size: int):
+    def _entry_interval_buffers(self, batch_size: int):
         if not self.entry_interval_enabled:
-            return None
-        if batch_size not in self._entry_interval_buffers:
-            self._entry_interval_buffers = {
+            return None, None
+        if batch_size not in self._entry_interval_stat_buffers:
+            self._entry_interval_stat_buffers = {
                 batch_size: torch.zeros(
-                    (batch_size, MPS_ENTRY_INTERVAL_COLS),
+                    (batch_size, MPS_ENTRY_INTERVAL_STAT_COLS),
                     dtype=torch.float32,
                     device="mps",
                 )
             }
+            self._entry_interval_count_buffers = {
+                batch_size: torch.zeros(
+                    (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
+                    dtype=torch.int32,
+                    device="mps",
+                )
+            }
         else:
-            self._entry_interval_buffers[batch_size].zero_()
-        return self._entry_interval_buffers[batch_size]
+            self._entry_interval_stat_buffers[batch_size].zero_()
+            self._entry_interval_count_buffers[batch_size].zero_()
+        return (
+            self._entry_interval_stat_buffers[batch_size],
+            self._entry_interval_count_buffers[batch_size],
+        )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         params = _upgrade_legacy_single_coin_wel_params(
@@ -2432,7 +2475,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-        entry_interval = self._entry_interval_buffer(batch_size)
+        entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
+            batch_size
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             size_values = self._single_coin_size_values(
@@ -2463,7 +2508,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
         if self.entry_interval_enabled:
-            kernel_args += (entry_interval,)
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2489,7 +2534,11 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         }
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
-        output.update(_decode_entry_interval_outputs(entry_interval))
+        output.update(
+            _decode_entry_interval_outputs(
+                entry_interval_stats, entry_interval_counts
+            )
+        )
         if self.recovery_distribution_enabled:
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (

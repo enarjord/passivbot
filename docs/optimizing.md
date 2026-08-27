@@ -554,8 +554,9 @@ fill-gap summaries when exact Rust has same-candle zero gaps or a value inside a
 Trailing Martingale also supports `entry_interval_hours_{mean,median,p95,p99,max}` for single-coin
 and multi-coin, long-only, short-only, and fused long+short runs. Metal records gaps between
 normal initial entries independently for each coin and position side. The proxy mean and maximum
-are exact for the Metal fill stream; median, p95, and p99 use conservative upper edges from the
-same bounded logarithmic histogram design. EMA Anchor emits no `EntryInitialNormal` order types,
+come from direct Metal accumulators with integer-safe event counts; median, p95, and p99 use
+conservative upper edges from a bounded logarithmic histogram. EMA Anchor emits no
+`EntryInitialNormal` order types,
 so these metrics retain exact Rust's canonical zero values without allocating the optional output
 surface. Runs that do not request an entry-interval metric keep their existing kernel ABI and
 dispatch cost.

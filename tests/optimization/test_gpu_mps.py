@@ -444,17 +444,26 @@ def test_entry_interval_source_variant_is_opt_in_and_guarded():
 
 
 def test_decode_entry_interval_outputs_preserves_accumulator_columns():
-    values = torch.arange(262, dtype=torch.float32).reshape(2, 131)
+    stats = torch.arange(4, dtype=torch.float32).reshape(2, 2)
+    counts = torch.arange(258, dtype=torch.int32).reshape(2, 129)
+    counts[0, 0] = 16_777_217
+    counts[0, 1] = 16_777_217
 
-    output = _decode_entry_interval_outputs(values)
+    output = _decode_entry_interval_outputs(stats, counts)
 
-    assert torch.equal(output["entry_interval_sum_steps"], values[:, 0])
-    assert torch.equal(output["entry_interval_count"], values[:, 1])
-    assert torch.equal(output["entry_interval_max_steps"], values[:, 2])
-    assert torch.equal(output["entry_interval_hist"], values[:, 3:])
+    assert torch.equal(output["entry_interval_sum_steps"], stats[:, 0])
+    assert torch.equal(output["entry_interval_count"], counts[:, 0])
+    assert torch.equal(output["entry_interval_max_steps"], stats[:, 1])
+    assert torch.equal(output["entry_interval_hist"], counts[:, 1:])
+    assert output["entry_interval_count"][0].item() == 16_777_217
+    assert output["entry_interval_hist"][0, 0].item() == 16_777_217
 
-    with pytest.raises(RuntimeError, match="invalid shape"):
-        _decode_entry_interval_outputs(torch.zeros((2, 130)))
+    with pytest.raises(RuntimeError, match="partially present"):
+        _decode_entry_interval_outputs(stats, None)
+    with pytest.raises(RuntimeError, match="stats have an invalid shape"):
+        _decode_entry_interval_outputs(torch.zeros((2, 1)), counts)
+    with pytest.raises(RuntimeError, match="counts have an invalid shape"):
+        _decode_entry_interval_outputs(stats, torch.zeros((2, 128)))
 
 
 def test_fixed_wel_denominator_source_variant_is_opt_in_and_guarded():
@@ -12309,6 +12318,58 @@ def test_mps_tm_single_coin_entry_intervals_track_only_fresh_positions(topology)
     assert metrics["entry_interval_hours_mean"].item() == pytest.approx(0.25)
     assert metrics["entry_interval_hours_max"].item() == pytest.approx(1.0 / 3.0)
     assert metrics["entry_interval_hours_median"].item() >= 0.25
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_same_candle_close_then_reentry_is_not_an_initial_entry(side):
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 7
+    close = np.full(count, 100.0)
+    high = close.copy()
+    low = close.copy()
+    if side == "long":
+        low[2] = 98.0
+        high[3], low[3] = 102.0, 97.0
+    else:
+        high[2] = 102.0
+        high[3], low[3] = 103.0, 98.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.01)
+    row[11] = 0.0
+    row[20] = 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+        entry_interval_enabled=True,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() >= 3.0
+    assert output["entry_interval_count"].item() == 0
+    assert output["entry_interval_hist"].sum().item() == 0
 
 
 @pytest.mark.skipif(

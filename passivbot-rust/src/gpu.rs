@@ -262,7 +262,9 @@ mod tests {
         }
         assert!(source.contains("#if PASSIVBOT_ENTRY_INTERVAL_ENABLED"));
         assert!(source.contains("constant int ENTRY_INTERVAL_BINS = 128"));
-        assert!(source.contains("constant int ENTRY_INTERVAL_COLS = 131"));
+        assert!(source.contains("constant int ENTRY_INTERVAL_STAT_COLS = 2"));
+        assert!(source.contains("constant int ENTRY_INTERVAL_COUNT_COLS = 129"));
+        assert!(source.contains("device int* counts"));
     }
 
     fn assert_directional_recovery_sampling_contract(source: &str) {
@@ -919,6 +921,8 @@ mod tests {
         assert_eq!(source.matches("record_initial_entry_interval(").count(), 3);
         assert!(source.contains("long_last_initial_entry_k"));
         assert!(source.contains("short_last_initial_entry_k"));
+        assert!(source.contains("long_side.entry_gen_psize <= 0.0f"));
+        assert!(source.contains("short_side.entry_gen_psize <= 0.0f"));
         assert!(source.contains("constant int SIDE_PARAMS = 52"));
         assert!(source.contains("float base_wel = p[o + 51]"));
         assert!(source.contains("struct HslState"));

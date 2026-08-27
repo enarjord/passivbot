@@ -1482,7 +1482,8 @@ inline bool process_tm_multicoin_side_fills(
     constant float* coin_overrides,
     device float* coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     int b,
     int k,
@@ -2100,7 +2101,7 @@ inline bool process_tm_multicoin_side_fills(
                     if (candidate.order_type == 0
                         || candidate.order_type == 11) {
                         record_initial_entry_interval(
-                            entry_interval_output, b,
+                            entry_interval_stats, entry_interval_counts, b,
                             side.last_initial_entry_k[c], float(k)
                         );
                     }
@@ -2186,7 +2187,7 @@ inline bool process_tm_multicoin_side_fills(
                 if (candidate.order_type == 0
                     || candidate.order_type == 11) {
                     record_initial_entry_interval(
-                        entry_interval_output, b,
+                        entry_interval_stats, entry_interval_counts, b,
                         side.last_initial_entry_k[c], float(k)
                     );
                 }
@@ -2239,7 +2240,7 @@ inline bool process_tm_multicoin_side_fills(
             if (side.entry_order_type[c] == 0
                 || side.entry_order_type[c] == 11) {
                 record_initial_entry_interval(
-                    entry_interval_output, b,
+                    entry_interval_stats, entry_interval_counts, b,
                     side.last_initial_entry_k[c], float(k)
                 );
             }
@@ -4827,7 +4828,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -4851,7 +4853,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
 #endif
     if (b >= uint(B)) return;
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    init_entry_interval_output(entry_interval_output, b);
+    init_entry_interval_output(
+        entry_interval_stats, entry_interval_counts, b
+    );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
     const int scalar_offset = int(b) * FUSED_SCALAR_COLS;
@@ -5030,7 +5034,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_settings, long_coin_overrides,
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-            entry_interval_output,
+            entry_interval_stats, entry_interval_counts,
 #endif
             int(b), k, C, false, alive,
             collect_coin_fill_counts, loss_gate_enabled,
@@ -5056,7 +5060,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
             coin_settings, short_coin_overrides,
             coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-            entry_interval_output,
+            entry_interval_stats, entry_interval_counts,
 #endif
             int(b), k, C, true, alive,
             collect_coin_fill_counts, loss_gate_enabled,
@@ -5680,7 +5684,8 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -5704,7 +5709,7 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
         equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-        entry_interval_output,
+        entry_interval_stats, entry_interval_counts,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -5735,7 +5740,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -5760,7 +5766,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
     if (b >= uint(B)) return;
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    init_entry_interval_output(entry_interval_output, b);
+    init_entry_interval_output(
+        entry_interval_stats, entry_interval_counts, b
+    );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
     const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
@@ -5923,7 +5931,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
             touch_min_qty_bits, touch_min_qty_relation,
             coin_settings, coin_overrides, coin_fill_counts,
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-            entry_interval_output,
+            entry_interval_stats, entry_interval_counts,
 #endif
             int(b), k, C, short_side, alive,
             collect_coin_fill_counts, loss_gate_enabled,
@@ -6422,7 +6430,8 @@ kernel void passivbot_trailing_martingale_multicoin(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -6447,7 +6456,7 @@ kernel void passivbot_trailing_martingale_multicoin(
         equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-        entry_interval_output,
+        entry_interval_stats, entry_interval_counts,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -6478,7 +6487,8 @@ kernel void passivbot_trailing_martingale_multicoin_long(
     device float* equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-    device float* entry_interval_output,
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
 #endif
     device float* daily,
     device float* scalars,
@@ -6502,7 +6512,7 @@ kernel void passivbot_trailing_martingale_multicoin_long(
         equity_balance_diff,
 #endif
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
-        entry_interval_output,
+        entry_interval_stats, entry_interval_counts,
 #endif
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
