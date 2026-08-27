@@ -5321,13 +5321,13 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                         * short_side.pprice[c] * c_mult;
                 }
             }
-            const float exposure_balance = fmax(
-                fabs(account.balance), 1.0e-12f
-            );
+            const bool positive_exposure_balance = account.balance > 0.0f;
             record_high_exposure_fill(
                 high_exposure, float(k), day_index, fills.fill_count,
-                long_position_cost / exposure_balance,
-                short_position_cost / exposure_balance
+                positive_exposure_balance
+                    ? long_position_cost / account.balance : 0.0f,
+                positive_exposure_balance
+                    ? short_position_cost / account.balance : 0.0f
             );
 #endif
             if (last_fill_k >= 0.0f) {
@@ -6098,8 +6098,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                         * coin_settings[c * COIN_COLS + 4];
                 }
             }
-            const float side_twe = side_position_cost
-                / fmax(fabs(balance), 1.0e-12f);
+            const float side_twe = balance > 0.0f
+                ? side_position_cost / balance : 0.0f;
             record_high_exposure_fill(
                 high_exposure, float(k), day_index, fill_count,
                 short_side ? 0.0f : side_twe,

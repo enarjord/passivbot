@@ -1663,11 +1663,15 @@ inline void passivbot_single_coin_impl(
             day_has_fill = 1.0f;
             day_touched = true;
 #if PASSIVBOT_HIGH_EXPOSURE_ENABLED
-            const float exposure_balance = fmax(fabs(balance), 1.0e-12f);
+            const bool positive_exposure_balance = balance > 0.0f;
             record_high_exposure_fill(
                 high_exposure, kf, di, fill_count,
-                long_side.psize * long_side.pprice * c_mult / exposure_balance,
-                short_side.psize * short_side.pprice * c_mult / exposure_balance
+                positive_exposure_balance
+                    ? long_side.psize * long_side.pprice * c_mult / balance
+                    : 0.0f,
+                positive_exposure_balance
+                    ? short_side.psize * short_side.pprice * c_mult / balance
+                    : 0.0f
             );
 #endif
             if (last_fill_k >= 0.0f) {
