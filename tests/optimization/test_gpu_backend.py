@@ -511,6 +511,18 @@ def test_cpu_runtime_imports_do_not_import_torch_or_mps_kernel():
                 "--penalize_if_greater_than_peak_recovery_days_strategy_eq 30"
             )
         },
+        {
+            "limits": (
+                '[{"metric": "peak_recovery_days_strategy_eq", '
+                '"penalize_if": "greater_than", "value": 30}]'
+            )
+        },
+        {
+            "limits": (
+                "[\n {metric: peak_recovery_days_strategy_eq\n"
+                "  penalize_if: greater_than\n  value: 30}\n]"
+            )
+        },
     ],
 )
 def test_gpu_metric_provenance_recovers_exact_only_alias_before_canonicalization(

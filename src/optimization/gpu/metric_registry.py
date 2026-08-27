@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
+import hjson
+
 # These metrics remain available from exact Rust backtests and analysis, but are
 # intentionally ineligible for Metal proxy objectives and proxy-side limits.
 # The registry is Torch-free so GPU backend preflight can inspect preserved raw
@@ -153,6 +157,18 @@ def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
             return
         if not isinstance(value, str):
             return
+        stripped = value.strip()
+        if stripped[:1] in {"[", "{"}:
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                try:
+                    parsed = hjson.loads(stripped)
+                except Exception:
+                    parsed = None
+            if isinstance(parsed, (dict, list, tuple)):
+                visit_limits(parsed)
+                return
         for segment in value.split("--"):
             tokens = segment.strip().split()
             if not tokens:
