@@ -475,6 +475,15 @@ def _materialize_gpu_override_template(
     return proxy_config
 
 
+def materialize_gpu_preparation_config(config: dict) -> dict:
+    """Finalize the immutable GPU template while preserving its strategy-shape guard."""
+
+    return _materialize_gpu_override_template(
+        config,
+        config.get("optimize", {}).get("enable_overrides", []),
+    )
+
+
 def _gpu_fixed_bound_context(
     config: dict,
     effective_config: dict,

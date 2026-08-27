@@ -922,6 +922,26 @@ def test_gpu_preparation_preflight_rejects_effective_fixed_runtime_limitation():
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
 
+def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
+    config = optimize.get_template_config()
+    config["optimize"]["backend"] = "gpu"
+    source_strategy = config["live"]["strategy_kind"]
+    target_strategy = (
+        "trailing_martingale"
+        if source_strategy == "ema_anchor"
+        else "ema_anchor"
+    )
+    config["optimize"]["fixed_runtime_overrides"] = {
+        "live.strategy_kind": target_strategy,
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"fixed_runtime_overrides may not change live\.strategy_kind",
+    ):
+        optimize._run_gpu_preparation_preflight(config, {"enabled": False})
+
+
 def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
