@@ -20,12 +20,6 @@ from optimization.gpu.model import (
     build_mps_data,
     build_mps_multicoin_data,
 )
-from optimization.gpu.mps_kernel import (
-    MpsEmaAnchorMulticoinRunner,
-    MpsEmaAnchorRunner,
-    MpsTrailingMartingaleRunner,
-)
-
 
 CASES = (
     "ema-single-long",
@@ -194,6 +188,12 @@ def _build_case(
     coins: int,
     seed: int,
 ):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorMulticoinRunner,
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
     if name in {"ema-single-long", "tm-single-long"}:
         hlcvs, timestamps = _synthetic_hlcvs(single_bars, 1, seed)
         market, run = _market_and_run(timestamps, single_bars)

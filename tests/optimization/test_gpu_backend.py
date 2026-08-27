@@ -488,7 +488,8 @@ def test_trailing_martingale_bound_map_covers_both_directional_shapes():
 
 def test_cpu_runtime_imports_do_not_import_torch_or_mps_kernel():
     script = (
-        "import json, sys; import backtest, passivbot, optimization.backends; "
+        "import json, sys; import backtest, passivbot, optimization.backends, "
+        "tools.gpu_proxy_benchmark; "
         "print(json.dumps({"
         "'torch': 'torch' in sys.modules, "
         "'mps_kernel': 'optimization.gpu.mps_kernel' in sys.modules"
