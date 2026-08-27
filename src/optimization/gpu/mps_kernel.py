@@ -45,6 +45,8 @@ MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
 MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 MPS_EQUITY_BALANCE_DIFF_COLS = 12
+MPS_ENTRY_INTERVAL_STAT_COLS = 2
+MPS_ENTRY_INTERVAL_COUNT_COLS = 129
 
 _HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
 _HSL_RAW_DRAWDOWN_DEFINE = "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
@@ -59,6 +61,7 @@ _BTC_RISK_DEFINE = "#define PASSIVBOT_BTC_RISK_ENABLED 1\n"
 _EQUITY_BALANCE_DIFF_DEFINE = (
     "#define PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED 1\n"
 )
+_ENTRY_INTERVAL_DEFINE = "#define PASSIVBOT_ENTRY_INTERVAL_ENABLED 1\n"
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -126,6 +129,16 @@ def _with_equity_balance_diff(source: str, enabled: bool) -> str:
             "MPS source is missing the shared equity-balance-diff contract"
         )
     return _EQUITY_BALANCE_DIFF_DEFINE + source
+
+
+def _with_entry_interval(source: str, enabled: bool) -> str:
+    if not enabled:
+        return source
+    if "inline void record_initial_entry_interval(" not in source:
+        raise RuntimeError(
+            "MPS source is missing the shared entry-interval contract"
+        )
+    return _ENTRY_INTERVAL_DEFINE + source
 
 
 def _encode_max_realized_loss_pct(value: float) -> float:
@@ -417,6 +430,29 @@ def _decode_equity_balance_diff_outputs(values) -> dict:
     return output
 
 
+def _decode_entry_interval_outputs(stats, counts) -> dict:
+    if stats is None and counts is None:
+        return {}
+    if stats is None or counts is None:
+        raise RuntimeError("MPS entry-interval output is only partially present")
+    if stats.ndim != 2 or stats.shape[1] != MPS_ENTRY_INTERVAL_STAT_COLS:
+        raise RuntimeError(
+            "MPS entry-interval stats have an invalid shape: "
+            f"{tuple(stats.shape)}"
+        )
+    if counts.ndim != 2 or counts.shape[1] != MPS_ENTRY_INTERVAL_COUNT_COLS:
+        raise RuntimeError(
+            "MPS entry-interval counts have an invalid shape: "
+            f"{tuple(counts.shape)}"
+        )
+    return {
+        "entry_interval_sum_steps": stats[:, 0],
+        "entry_interval_count": counts[:, 0],
+        "entry_interval_max_steps": stats[:, 1],
+        "entry_interval_hist": counts[:, 1:],
+    }
+
+
 @lru_cache(maxsize=16)
 def _shader_library(
     hsl_ema_tail_enabled: bool = False,
@@ -450,6 +486,7 @@ def _trailing_martingale_shader_library(
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    entry_interval_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -464,6 +501,7 @@ def _trailing_martingale_shader_library(
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    source = _with_entry_interval(source, entry_interval_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -472,6 +510,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    entry_interval_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -483,6 +522,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    source = _with_entry_interval(source, entry_interval_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -491,6 +531,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    entry_interval_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -502,6 +543,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    source = _with_entry_interval(source, entry_interval_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -543,6 +585,7 @@ def _trailing_martingale_multicoin_shader_library(
     dynamic_wel_by_tradability: bool = True,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    entry_interval_enabled: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -560,6 +603,7 @@ def _trailing_martingale_multicoin_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    source = _with_entry_interval(source, entry_interval_enabled)
     return torch.mps.compile_shader(source)
 
 
@@ -910,8 +954,13 @@ class MpsEmaAnchorRunner:
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
+        entry_interval_enabled: bool = False,
     ):
         self.market = market
+        if entry_interval_enabled:
+            raise ValueError(
+                "MPS entry-interval output is only defined for Trailing Martingale"
+            )
         self.run_config = run
         self.interval_minutes = float(run.interval_ms) / 60_000.0
         if (
@@ -1306,6 +1355,7 @@ class MpsEmaAnchorMulticoinRunner:
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
+        entry_interval_enabled: bool = False,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -1361,6 +1411,11 @@ class MpsEmaAnchorMulticoinRunner:
             btc_prices, expected_count=self.n
         )
         self.equity_balance_diff_enabled = bool(equity_balance_diff_enabled)
+        self.entry_interval_enabled = bool(entry_interval_enabled)
+        if self.entry_interval_enabled and self.coin_override_label != "Trailing Martingale":
+            raise ValueError(
+                "MPS entry-interval output is only defined for Trailing Martingale"
+            )
         self.btc_risk_enabled = (
             self.btc_prices is not None
             if btc_risk_enabled is None
@@ -1468,6 +1523,8 @@ class MpsEmaAnchorMulticoinRunner:
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self._full_end_steps: dict[int, torch.Tensor] = {}
         self.last_profile: dict[str, float] = {}
@@ -1564,6 +1621,8 @@ class MpsEmaAnchorMulticoinRunner:
         gaps,
         coin_fill_counts,
         equity_balance_diff,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -1584,6 +1643,8 @@ class MpsEmaAnchorMulticoinRunner:
             kernel_args += (self.btc_prices,)
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
+        if self.entry_interval_enabled:
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -1638,6 +1699,32 @@ class MpsEmaAnchorMulticoinRunner:
             self._equity_balance_diff_buffers[batch_size].zero_()
         return self._equity_balance_diff_buffers[batch_size]
 
+    def _entry_interval_buffers(self, batch_size: int):
+        if not self.entry_interval_enabled:
+            return None, None
+        if batch_size not in self._entry_interval_stat_buffers:
+            self._entry_interval_stat_buffers = {
+                batch_size: torch.zeros(
+                    (batch_size, MPS_ENTRY_INTERVAL_STAT_COLS),
+                    dtype=torch.float32,
+                    device="mps",
+                )
+            }
+            self._entry_interval_count_buffers = {
+                batch_size: torch.zeros(
+                    (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
+                    dtype=torch.int32,
+                    device="mps",
+                )
+            }
+        else:
+            self._entry_interval_stat_buffers[batch_size].zero_()
+            self._entry_interval_count_buffers[batch_size].zero_()
+        return (
+            self._entry_interval_stat_buffers[batch_size],
+            self._entry_interval_count_buffers[batch_size],
+        )
+
     def run(
         self,
         params: np.ndarray,
@@ -1658,6 +1745,9 @@ class MpsEmaAnchorMulticoinRunner:
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
+        entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
+            batch_size
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             size_values = [
@@ -1697,6 +1787,8 @@ class MpsEmaAnchorMulticoinRunner:
             gaps,
             coin_fill_counts,
             equity_balance_diff,
+            entry_interval_stats,
+            entry_interval_counts,
             recovery_samples,
             batch_size=batch_size,
         )
@@ -1712,6 +1804,11 @@ class MpsEmaAnchorMulticoinRunner:
         }
         output = self._decode(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
+        output.update(
+            _decode_entry_interval_outputs(
+                entry_interval_stats, entry_interval_counts
+            )
+        )
         if self.recovery_distribution_enabled:
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (
@@ -1752,6 +1849,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
+        entry_interval_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -1774,6 +1872,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
+            entry_interval_enabled=entry_interval_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -1852,6 +1951,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         gaps,
         coin_fill_counts,
         equity_balance_diff,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -1873,6 +1974,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (self.btc_prices,)
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
+        if self.entry_interval_enabled:
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -1971,6 +2074,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
+        entry_interval_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -1993,6 +2097,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
+            entry_interval_enabled=entry_interval_enabled,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2022,6 +2127,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.dynamic_wel_by_tradability,
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
+            self.entry_interval_enabled,
         )
 
     def _dispatch(
@@ -2035,6 +2141,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         gaps,
         coin_fill_counts,
         equity_balance_diff,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -2058,6 +2166,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (self.btc_prices,)
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
+        if self.entry_interval_enabled:
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2107,6 +2217,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         btc_prices: np.ndarray | None = None,
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
+        entry_interval_enabled: bool = False,
     ):
         super().__init__(
             run,
@@ -2129,6 +2240,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             btc_prices=btc_prices,
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
+            entry_interval_enabled=entry_interval_enabled,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -2202,6 +2314,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         gaps,
         coin_fill_counts,
         equity_balance_diff,
+        entry_interval_stats,
+        entry_interval_counts,
         recovery_samples,
         *,
         batch_size: int,
@@ -2226,6 +2340,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             kernel_args += (self.btc_prices,)
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
+        if self.entry_interval_enabled:
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2246,8 +2362,17 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
 class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     """Persistent single-coin trailing-martingale runner on Apple MPS."""
 
-    def __init__(self, *args, hsl_enabled: bool = True, **kwargs):
+    def __init__(
+        self,
+        *args,
+        hsl_enabled: bool = True,
+        entry_interval_enabled: bool = False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
+        self.entry_interval_enabled = bool(entry_interval_enabled)
+        self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
+        self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
         self.shader_topology = trailing_martingale_shader_topology(
             long_enabled=self.long_enabled,
             short_enabled=self.short_enabled,
@@ -2267,12 +2392,14 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.recovery_distribution_enabled,
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
+                self.entry_interval_enabled,
             )
         if self.shader_topology == "short_no_hsl":
             return _trailing_martingale_short_no_hsl_shader_library(
                 self.recovery_distribution_enabled,
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
+                self.entry_interval_enabled,
             )
         return _trailing_martingale_shader_library(
             self.hsl_ema_tail_enabled,
@@ -2281,6 +2408,33 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.recovery_distribution_enabled,
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
+            self.entry_interval_enabled,
+        )
+
+    def _entry_interval_buffers(self, batch_size: int):
+        if not self.entry_interval_enabled:
+            return None, None
+        if batch_size not in self._entry_interval_stat_buffers:
+            self._entry_interval_stat_buffers = {
+                batch_size: torch.zeros(
+                    (batch_size, MPS_ENTRY_INTERVAL_STAT_COLS),
+                    dtype=torch.float32,
+                    device="mps",
+                )
+            }
+            self._entry_interval_count_buffers = {
+                batch_size: torch.zeros(
+                    (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
+                    dtype=torch.int32,
+                    device="mps",
+                )
+            }
+        else:
+            self._entry_interval_stat_buffers[batch_size].zero_()
+            self._entry_interval_count_buffers[batch_size].zero_()
+        return (
+            self._entry_interval_stat_buffers[batch_size],
+            self._entry_interval_count_buffers[batch_size],
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2321,6 +2475,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
+        entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
+            batch_size
+        )
         sizes_key = (batch_size, int(matrix.shape[1]))
         if sizes_key not in self._sizes:
             size_values = self._single_coin_size_values(
@@ -2350,6 +2507,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             kernel_args += (self.btc_prices,)
         if self.equity_balance_diff_enabled:
             kernel_args += (equity_balance_diff,)
+        if self.entry_interval_enabled:
+            kernel_args += (entry_interval_stats, entry_interval_counts)
         kernel_args += (
             daily,
             scalars,
@@ -2375,6 +2534,11 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         }
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
+        output.update(
+            _decode_entry_interval_outputs(
+                entry_interval_stats, entry_interval_counts
+            )
+        )
         if self.recovery_distribution_enabled:
             output["strategy_eq_recovery_samples"] = recovery_samples
             output["strategy_eq_recovery_sample_interval_days"] = (

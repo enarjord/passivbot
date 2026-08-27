@@ -3288,6 +3288,23 @@ def test_gpu_foundation_accepts_equity_balance_diff_metrics(metric, goal):
 @pytest.mark.parametrize(
     "metric",
     [
+        "entry_interval_hours_mean",
+        "entry_interval_hours_median",
+        "entry_interval_hours_p95",
+        "entry_interval_hours_p99",
+        "entry_interval_hours_max",
+    ],
+)
+def test_gpu_foundation_accepts_entry_interval_metrics(metric):
+    config = _long_only_ema_config()
+    config["optimize"]["scoring"] = [{"goal": "min", "metric": metric}]
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
         "exposure_mean_ratio_usd",

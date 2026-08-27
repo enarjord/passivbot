@@ -10,10 +10,11 @@ const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
 const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
-const MPS_EQUITY_BALANCE_DIFF_MARKER: &str =
-    "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
+const MPS_EQUITY_BALANCE_DIFF_MARKER: &str = "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
 const MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE: &str =
     include_str!("gpu/mps_equity_balance_diff_common.metal");
+const MPS_ENTRY_INTERVAL_MARKER: &str = "// PASSIVBOT_ENTRY_INTERVAL_COMMON";
+const MPS_ENTRY_INTERVAL_COMMON_SOURCE: &str = include_str!("gpu/mps_entry_interval_common.metal");
 const MPS_MULTICOIN_MARKER: &str = "// PASSIVBOT_MULTICOIN_COMMON";
 const MPS_MULTICOIN_COMMON_SOURCE: &str = include_str!("gpu/mps_multicoin_common.metal");
 const MPS_EMA_ANCHOR_BODY: &str = include_str!("gpu/mps_ema_anchor_directional.metal");
@@ -45,11 +46,21 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared equity-balance-diff marker"
     );
+    assert_eq!(
+        body.matches(MPS_ENTRY_INTERVAL_MARKER).count(),
+        1,
+        "MPS source must contain exactly one shared entry-interval marker"
+    );
     body.replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
         .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
         .replacen(
             MPS_EQUITY_BALANCE_DIFF_MARKER,
             MPS_EQUITY_BALANCE_DIFF_COMMON_SOURCE,
+            1,
+        )
+        .replacen(
+            MPS_ENTRY_INTERVAL_MARKER,
+            MPS_ENTRY_INTERVAL_COMMON_SOURCE,
             1,
         )
 }
@@ -238,6 +249,22 @@ mod tests {
         }
         assert!(source.contains("#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED"));
         assert!(source.contains("const float diff = (equity - balance) / balance"));
+    }
+
+    fn assert_shared_entry_interval_contract(source: &str) {
+        assert!(!source.contains(MPS_ENTRY_INTERVAL_MARKER));
+        assert!(source.contains(MPS_ENTRY_INTERVAL_COMMON_SOURCE));
+        for signature in [
+            "inline void init_entry_interval_output(",
+            "inline void record_initial_entry_interval(",
+        ] {
+            assert_eq!(source.matches(signature).count(), 1, "{signature}");
+        }
+        assert!(source.contains("#if PASSIVBOT_ENTRY_INTERVAL_ENABLED"));
+        assert!(source.contains("constant int ENTRY_INTERVAL_BINS = 128"));
+        assert!(source.contains("constant int ENTRY_INTERVAL_STAT_COLS = 2"));
+        assert!(source.contains("constant int ENTRY_INTERVAL_COUNT_COLS = 129"));
+        assert!(source.contains("device int* counts"));
     }
 
     fn assert_directional_recovery_sampling_contract(source: &str) {
@@ -437,6 +464,29 @@ mod tests {
             assert_shared_equity_balance_diff_contract(source);
             assert!(source.contains("update_equity_balance_diff_state("));
             assert!(source.contains("write_equity_balance_diff_state("));
+        }
+    }
+
+    #[test]
+    fn all_strategy_sources_compose_one_shared_entry_interval_accumulator() {
+        for body in [
+            MPS_EMA_ANCHOR_BODY,
+            MPS_EMA_ANCHOR_MULTICOIN_BODY,
+            MPS_TRAILING_MARTINGALE_BODY,
+            MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
+        ] {
+            assert_eq!(body.matches(MPS_ENTRY_INTERVAL_MARKER).count(), 1);
+            assert!(!body.contains("inline void record_initial_entry_interval("));
+        }
+        for source in [
+            mps_ema_anchor_source(),
+            mps_ema_anchor_multicoin_source(),
+            mps_trailing_martingale_source(),
+            mps_trailing_martingale_long_no_hsl_source(),
+            mps_trailing_martingale_short_no_hsl_source(),
+            mps_trailing_martingale_multicoin_source(),
+        ] {
+            assert_shared_entry_interval_contract(source);
         }
     }
 
@@ -864,9 +914,15 @@ mod tests {
     fn trailing_martingale_mps_source_exposes_expected_kernel_contract() {
         let source = mps_trailing_martingale_source();
         assert_shared_hsl_contract(source);
+        assert_shared_entry_interval_contract(source);
         assert_directional_recovery_sampling_contract(source);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
+        assert_eq!(source.matches("record_initial_entry_interval(").count(), 3);
+        assert!(source.contains("long_last_initial_entry_k"));
+        assert!(source.contains("short_last_initial_entry_k"));
+        assert!(source.contains("long_side.entry_gen_psize <= 0.0f"));
+        assert!(source.contains("short_side.entry_gen_psize <= 0.0f"));
         assert!(source.contains("constant int SIDE_PARAMS = 52"));
         assert!(source.contains("float base_wel = p[o + 51]"));
         assert!(source.contains("struct HslState"));
@@ -1094,6 +1150,7 @@ mod tests {
         let source = mps_trailing_martingale_multicoin_source();
         assert_shared_hsl_contract(source);
         assert_shared_multicoin_contract(source);
+        assert_shared_entry_interval_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
         assert!(source.contains("constant int PARAM_COLS = 59"));
@@ -1147,6 +1204,10 @@ mod tests {
         assert!(source.contains("apply_tm_multicoin_entry_position("));
         assert!(source.contains("update_tm_multicoin_position_fill_timestamp("));
         assert!(source.contains("process_tm_multicoin_side_fills("));
+        assert_eq!(source.matches("record_initial_entry_interval(").count(), 4);
+        assert!(source.contains("float last_initial_entry_k[MAX_COINS]"));
+        assert!(source.contains("candidate.order_type == 0"));
+        assert!(source.contains("candidate.order_type == 11"));
         assert!(source.contains(
             "apply_tm_multicoin_recursive_entry_twel_gate("
         ));

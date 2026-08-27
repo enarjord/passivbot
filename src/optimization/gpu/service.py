@@ -101,6 +101,10 @@ CORE_OUTPUT_KEYS = {
     "entry_initial_balance_pct",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
+    "entry_interval_sum_steps",
+    "entry_interval_count",
+    "entry_interval_max_steps",
+    "entry_interval_hist",
     "total_wallet_exposure_max",
     "total_wallet_exposure_mean",
 }
@@ -1339,6 +1343,7 @@ class MpsSingleCoinProxy:
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
+            ENTRY_INTERVAL_METRICS,
             EQUITY_BALANCE_DIFF_METRICS,
             compute_objectives,
         )
@@ -1375,6 +1380,10 @@ class MpsSingleCoinProxy:
         self.strategy_kind = str(
             config.get("live", {}).get("strategy_kind", "")
         ).strip().lower()
+        self.entry_interval_enabled = bool(
+            self.strategy_kind == "trailing_martingale"
+            and self.needed_metrics & ENTRY_INTERVAL_METRICS
+        )
         if self.strategy_kind not in GPU_STRATEGY_PARAM_KEYS:
             raise ValueError(
                 "MPS single-coin proxy supports ema_anchor or "
@@ -1603,7 +1612,11 @@ class MpsSingleCoinProxy:
                 last_valid_idx=self.run.last_valid_idx,
             )
         self.data = build_mps_data(high, low, close, timestamps, self.run, self.market)
-        self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
+        self.metrics_data = {
+            "ts0": self.data["ts0"],
+            "n": self.data["n"],
+            "strategy_kind": self.strategy_kind,
+        }
         if self.btc_analysis_enabled:
             self.metrics_data.update(
                 _btc_daily_price_context(
@@ -1662,6 +1675,7 @@ class MpsSingleCoinProxy:
             ),
             btc_risk_enabled=self.btc_risk_enabled,
             equity_balance_diff_enabled=self.equity_balance_diff_enabled,
+            entry_interval_enabled=self.entry_interval_enabled,
         )
         if self.strategy_kind == "trailing_martingale":
             runner_kwargs["hsl_enabled"] = any_configured_hsl
@@ -2174,6 +2188,7 @@ class MpsMulticoinProxy:
         from backtest import build_backtest_payload
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
+            ENTRY_INTERVAL_METRICS,
             EQUITY_BALANCE_DIFF_METRICS,
             compute_objectives,
         )
@@ -2225,6 +2240,10 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy supports ema_anchor or "
                 f"trailing_martingale, got {self.strategy_kind!r}"
             )
+        self.entry_interval_enabled = bool(
+            self.strategy_kind == "trailing_martingale"
+            and self.needed_metrics & ENTRY_INTERVAL_METRICS
+        )
         self.param_keys = (
             TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
             if self.strategy_kind == "trailing_martingale"
@@ -2583,7 +2602,11 @@ class MpsMulticoinProxy:
             markets=markets,
             include_hourly_ranges=True,
         )
-        self.metrics_data = {"ts0": self.data["ts0"], "n": self.data["n"]}
+        self.metrics_data = {
+            "ts0": self.data["ts0"],
+            "n": self.data["n"],
+            "strategy_kind": self.strategy_kind,
+        }
         if self.btc_analysis_enabled:
             self.metrics_data.update(
                 _btc_daily_price_context(
@@ -2639,6 +2662,7 @@ class MpsMulticoinProxy:
             ),
             "btc_risk_enabled": self.btc_risk_enabled,
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
+            "entry_interval_enabled": self.entry_interval_enabled,
         }
         if self.shared_account_fused:
             fused_runner_cls = (

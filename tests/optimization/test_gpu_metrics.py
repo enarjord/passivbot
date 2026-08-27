@@ -8,6 +8,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from optimization.gpu.metrics import (
+    ENTRY_INTERVAL_METRICS,
     SUPPORTED_METRICS,
     _GAP_HIST_UPPER_STEPS,
     _btc_account_metrics,
@@ -15,6 +16,7 @@ from optimization.gpu.metrics import (
     _equity_shape_metrics,
     _directional_pnl_metrics,
     _fill_activity_metrics,
+    _entry_interval_metrics,
     _fill_gap_metrics,
     _hard_stop_lifecycle_metrics,
     _hard_stop_panic_loss_metrics,
@@ -1168,6 +1170,86 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
     assert metrics["fills_gap_median_hours"].item() == pytest.approx(1.0 / 60.0)
     assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.0 / 60.0)
     assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.0 / 60.0)
+
+
+def _entry_interval_output(gaps):
+    histogram = torch.zeros((1, 128), dtype=torch.float32)
+    for gap in gaps:
+        bin_index = int(
+            np.float32(
+                np.log(np.float32(gap) + np.float32(1.0))
+                * np.float32(127.0)
+                / np.log(np.float32(4_000_001.0))
+            )
+        )
+        histogram[0, min(max(bin_index, 0), 127)] += 1.0
+    return {
+        "fill_count": torch.tensor([4.0]),
+        "entry_interval_sum_steps": torch.tensor([sum(gaps)], dtype=torch.float32),
+        "entry_interval_count": torch.tensor([len(gaps)], dtype=torch.float32),
+        "entry_interval_max_steps": torch.tensor([max(gaps, default=0)], dtype=torch.float32),
+        "entry_interval_hist": histogram,
+    }
+
+
+def test_entry_interval_metrics_keep_exact_mean_and_max_with_conservative_percentiles():
+    metrics = _entry_interval_metrics(
+        _entry_interval_output([60, 180]),
+        SimpleNamespace(interval_ms=60_000),
+        "trailing_martingale",
+    )
+
+    assert ENTRY_INTERVAL_METRICS <= set(SUPPORTED_METRICS)
+    assert metrics["entry_interval_hours_mean"].item() == pytest.approx(2.0)
+    assert metrics["entry_interval_hours_max"].item() == pytest.approx(3.0)
+    assert metrics["entry_interval_hours_median"].item() >= 2.0
+    assert metrics["entry_interval_hours_p95"].item() >= 2.9
+    assert metrics["entry_interval_hours_p99"].item() >= 2.98
+
+
+def test_entry_interval_metrics_keep_ema_anchor_canonical_zero_without_kernel_output():
+    metrics = _entry_interval_metrics(
+        {"fill_count": torch.tensor([3.0])},
+        SimpleNamespace(interval_ms=60_000),
+        "ema_anchor",
+    )
+
+    assert set(metrics) == set(ENTRY_INTERVAL_METRICS)
+    assert all(value.item() == 0.0 for value in metrics.values())
+
+
+def test_entry_interval_metrics_fail_closed_for_missing_or_inconsistent_output():
+    with pytest.raises(RuntimeError, match="recognized strategy kind"):
+        _entry_interval_metrics(
+            {"fill_count": torch.tensor([1.0])},
+            SimpleNamespace(interval_ms=60_000),
+            "",
+        )
+
+    with pytest.raises(RuntimeError, match="entry-interval output is missing"):
+        _entry_interval_metrics(
+            {"fill_count": torch.tensor([1.0])},
+            SimpleNamespace(interval_ms=60_000),
+            "trailing_martingale",
+        )
+
+    output = _entry_interval_output([60])
+    output["entry_interval_count"] = torch.tensor([1.25])
+    with pytest.raises(RuntimeError, match="fractional counts"):
+        _entry_interval_metrics(
+            output,
+            SimpleNamespace(interval_ms=60_000),
+            "trailing_martingale",
+        )
+
+    output = _entry_interval_output([60])
+    output["entry_interval_count"] = torch.tensor([2.0])
+    with pytest.raises(RuntimeError, match="histogram count disagrees"):
+        _entry_interval_metrics(
+            output,
+            SimpleNamespace(interval_ms=60_000),
+            "trailing_martingale",
+        )
 
 
 def test_strategy_equity_summary_metric_surface_is_supported():

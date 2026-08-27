@@ -886,6 +886,48 @@ def test_single_coin_proxy_preserves_directional_hsl_outputs_for_reduction():
     assert proxy.evaluate([{}]) == [{"hard_stop_panic_close_loss_sum": 37.5}]
 
 
+def test_single_coin_proxy_preserves_entry_interval_outputs_for_reduction():
+    torch = pytest.importorskip("torch")
+    proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
+    proxy.batch_size = 1
+    proxy._torch = torch
+    proxy.profile_enabled = False
+    proxy.metrics_data = {"ts0": 0.0}
+    proxy.run = SimpleNamespace()
+    proxy.needed_metrics = {"entry_interval_hours_mean"}
+    proxy._parameter_matrix = lambda candidates: np.zeros((len(candidates), 0))
+    raw = {
+        key: torch.zeros(1)
+        for key in (
+            "first_fill_ts",
+            "last_fill_ts",
+            "last_high_ts",
+            "first_eq_ts",
+            "last_eq_ts",
+        )
+    }
+    raw.update(
+        {
+            "entry_interval_sum_steps": torch.tensor([30.0]),
+            "entry_interval_count": torch.tensor([2.0]),
+            "entry_interval_max_steps": torch.tensor([20.0]),
+            "entry_interval_hist": torch.ones((1, 128)),
+        }
+    )
+    proxy.runner = SimpleNamespace(run=lambda *args, **kwargs: raw)
+
+    def reduce(output, *args, **kwargs):
+        assert output["entry_interval_sum_steps"].item() == 30.0
+        assert output["entry_interval_count"].item() == 2.0
+        assert output["entry_interval_max_steps"].item() == 20.0
+        assert output["entry_interval_hist"].shape == (1, 128)
+        return {"entry_interval_hours_mean": torch.tensor([0.25])}
+
+    proxy._compute_objectives = reduce
+
+    assert proxy.evaluate([{}]) == [{"entry_interval_hours_mean": 0.25}]
+
+
 def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     torch = pytest.importorskip("torch")
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
@@ -1056,6 +1098,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         ({"drawdown_worst_strategy_eq_long"}, False, True, False, False),
         ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
         ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
+        ({"entry_interval_hours_p95"}, False, False, False, False),
     ],
 )
 @pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
@@ -1276,6 +1319,10 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert (
         constructed["kwargs"]["dynamic_wel_by_tradability"]
         is dynamic_wel_by_tradability
+    )
+    assert constructed["kwargs"]["entry_interval_enabled"] is (
+        strategy_kind == "trailing_martingale"
+        and "entry_interval_hours_p95" in needed_metrics
     )
 
 

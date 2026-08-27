@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS Trailing Martingale optimization now supports normal-initial-entry interval mean,
+  median, p95, p99, and maximum metrics across single-coin, multi-coin, long-only, short-only,
+  and fused long+short runs. Metal tracks intervals independently per coin and position side;
+  aggregate and per-bin event counts use integer-safe buffers, while percentile screening uses
+  conservative logarithmic histogram bounds under mandatory exact Rust validation and rolling
+  drift gates. EMA Anchor retains exact Rust's canonical zero values for this metric family.
+  Runs that do not request an entry-interval metric keep their existing kernel ABI and dispatch
+  cost.
+
 - Backtest analysis now aligns realized balance changes with tracked equity samples by timestamp
   when timestamp data is available. This fixes equity-vs-balance and paper-loss metrics after a
   warmup period, where absolute fill candle indices were previously compared with equity-series

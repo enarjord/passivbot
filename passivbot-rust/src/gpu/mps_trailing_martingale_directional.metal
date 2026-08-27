@@ -203,6 +203,8 @@ inline bool realized_loss_proxy_allows_reducer(
 
 // PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON
 
+// PASSIVBOT_ENTRY_INTERVAL_COMMON
+
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,
@@ -1729,6 +1731,10 @@ inline void passivbot_single_coin_impl(
 #if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
     device float* equity_balance_diff,
 #endif
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -1846,6 +1852,10 @@ inline void passivbot_single_coin_impl(
     float short_position_last_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float first_fill_k = -1.0f;
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+    float long_last_initial_entry_k = -1.0f;
+    float short_last_initial_entry_k = -1.0f;
+#endif
     float gap_max_min = 0.0f;
     float run_peak = -INFINITY;
     float max_dd = 0.0f;
@@ -1888,6 +1898,11 @@ inline void passivbot_single_coin_impl(
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+    init_entry_interval_output(
+        entry_interval_stats, entry_interval_counts, b
+    );
+#endif
 
     for (int k = 1; k < T - 1; ++k) {
         const int bo = k * 5;
@@ -2633,6 +2648,14 @@ inline void passivbot_single_coin_impl(
                         long_coin_hsl_rolling, -fee
                     );
                     bool was_flat = long_side.psize <= 0.0f;
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+                    if (rung == 0 && long_side.entry_gen_psize <= 0.0f) {
+                        record_initial_entry_interval(
+                            entry_interval_stats, entry_interval_counts, b,
+                            long_last_initial_entry_k, kf
+                        );
+                    }
+#endif
                     float new_psize = round_step(
                         long_side.psize + eq, qty_step
                     );
@@ -3382,6 +3405,14 @@ inline void passivbot_single_coin_impl(
                         short_coin_hsl_rolling, -fee
                     );
                     bool was_flat = short_side.psize <= 0.0f;
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+                    if (rung == 0 && short_side.entry_gen_psize <= 0.0f) {
+                        record_initial_entry_interval(
+                            entry_interval_stats, entry_interval_counts, b,
+                            short_last_initial_entry_k, kf
+                        );
+                    }
+#endif
                     float new_psize = round_step(
                         short_side.psize + eq, qty_step
                     );
@@ -4181,6 +4212,10 @@ kernel void passivbot_trailing_martingale(
 #if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
     device float* equity_balance_diff,
 #endif
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+    device float* entry_interval_stats,
+    device int* entry_interval_counts,
+#endif
     device float* daily,
     device float* scalars,
     device int* gap_hist,
@@ -4198,6 +4233,9 @@ kernel void passivbot_trailing_martingale(
 #endif
 #if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
         equity_balance_diff,
+#endif
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+        entry_interval_stats, entry_interval_counts,
 #endif
         daily, scalars, gap_hist,
         rolling_pnl_values, rolling_pnl_indices,
