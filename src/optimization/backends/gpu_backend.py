@@ -26,6 +26,7 @@ from optimization.backend_shared import (
 from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
+from optimization.gpu.metric_registry import configured_exact_only_gpu_metrics
 from optimization.gpu.model import (
     HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
@@ -3606,6 +3607,7 @@ def run_backend(
                 f"{bound_key!r}; pin it or use the CPU optimizer"
             )
 
+    validate_gpu_metric_names(configured_exact_only_gpu_metrics(config))
     specs = extract_objective_specs(config)
     metric_names = validate_gpu_metric_names(spec.metric for spec in specs)
     limit_metrics = validate_gpu_metric_names(

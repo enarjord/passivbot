@@ -87,6 +87,7 @@ from optimization.backends.gpu_backend import (
     EMA_MULTICOIN_SHORT_BOUND_MAP,
     TRAILING_MARTINGALE_BOUND_MAP,
 )
+from optimization.gpu.metric_registry import configured_exact_only_gpu_metrics
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
 from optimization.warmup import build_optimizer_vector_config
 
@@ -471,6 +472,66 @@ def test_cpu_runtime_imports_do_not_import_torch_or_mps_kernel():
         "torch": False,
         "mps_kernel": False,
     }
+
+
+@pytest.mark.parametrize(
+    "raw_optimize",
+    [
+        {
+            "scoring": [
+                {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+            ]
+        },
+        {
+            "limits": [
+                {
+                    "metric": "peak_recovery_days_strategy_eq",
+                    "penalize_if": "greater_than",
+                    "value": 30.0,
+                }
+            ]
+        },
+        {
+            "limits": {
+                "penalize_if_greater_than_peak_recovery_days_strategy_eq": 30.0
+            }
+        },
+        {
+            "limits": (
+                "--penalize_if_greater_than_peak_recovery_days_strategy_eq 30"
+            )
+        },
+    ],
+)
+def test_gpu_metric_provenance_recovers_exact_only_alias_before_canonicalization(
+    raw_optimize,
+):
+    config = {
+        "optimize": {
+            "scoring": [
+                {"goal": "min", "metric": "strategy_eq_recovery_days_max"}
+            ],
+            "limits": [],
+        },
+        "_raw_effective": {"optimize": raw_optimize},
+    }
+
+    assert configured_exact_only_gpu_metrics(config) == {
+        "peak_recovery_days_strategy_eq"
+    }
+
+
+def test_gpu_metric_provenance_does_not_match_retained_side_recovery_metrics():
+    config = {
+        "optimize": {
+            "scoring": [
+                {"goal": "min", "metric": "peak_recovery_days_strategy_eq_long"}
+            ],
+            "limits": [],
+        }
+    }
+
+    assert not configured_exact_only_gpu_metrics(config)
 
 
 def test_gpu_result_preserves_explicit_nulls_and_bounds_for_resume():

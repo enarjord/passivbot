@@ -11,6 +11,11 @@ import math
 
 import torch
 
+from optimization.gpu.metric_registry import (
+    GPU_EXACT_ONLY_METRICS,
+    reject_exact_only_gpu_metric_names,
+)
+
 _USD_STRATEGY_EQ_ALIASES = {
     "adg_usd": "adg_strategy_eq",
     "adg_w_usd": "adg_strategy_eq_w",
@@ -114,78 +119,6 @@ _BTC_PER_EXPOSURE_METRICS = {
 
 BTC_ACCOUNT_METRICS = frozenset(
     _BTC_ACCOUNT_METRICS | _BTC_PER_EXPOSURE_METRICS
-)
-
-# These metrics remain available from exact Rust backtests and analysis, but are
-# intentionally ineligible for Metal proxy objectives and proxy-side limits.
-# This set is explicit because global metric canonicalization must remain
-# compatible with CPU optimizer and analysis inputs.
-GPU_EXACT_ONLY_METRICS = frozenset(
-    {
-        "adg_pnl",
-        "adg_pnl_w",
-        "equity_balance_diff_pos_max_btc",
-        "equity_balance_diff_pos_max_usd",
-        "equity_balance_diff_pos_mean_btc",
-        "equity_balance_diff_pos_mean_usd",
-        "fills_active_days_count",
-        "fills_analysis_duration_days",
-        "fills_count",
-        "fills_count_close",
-        "fills_count_entry",
-        "fills_count_long",
-        "fills_count_short",
-        "fills_gap_mean_hours",
-        "fills_gap_median_hours",
-        "fills_gap_p99_hours",
-        "fills_per_day_close",
-        "fills_per_day_entry",
-        "fills_per_day_long",
-        "fills_per_day_per_position_slot_long",
-        "fills_per_day_per_position_slot_short",
-        "fills_per_day_short",
-        "gain_btc",
-        "gain_per_exposure_long_btc",
-        "gain_per_exposure_long_usd",
-        "gain_per_exposure_short_btc",
-        "gain_per_exposure_short_usd",
-        "gain_strategy_eq",
-        "gain_usd",
-        "hard_stop_flatten_time_minutes_mean",
-        "hard_stop_panic_close_loss_drawdown_pct_min",
-        "hard_stop_panic_close_loss_max",
-        "hard_stop_panic_close_loss_sum",
-        "hard_stop_restarts",
-        "hard_stop_restarts_long",
-        "hard_stop_restarts_short",
-        "hard_stop_time_in_orange_pct",
-        "hard_stop_time_in_yellow_pct",
-        "hard_stop_triggers",
-        "hard_stop_triggers_long",
-        "hard_stop_triggers_short",
-        "long_short_profit_ratio",
-        "mdg_pnl",
-        "mdg_pnl_w",
-        "peak_recovery_days_equity_btc",
-        "peak_recovery_days_equity_usd",
-        "peak_recovery_days_pnl",
-        "peak_recovery_days_strategy_eq",
-        "peak_recovery_hours_equity_btc",
-        "peak_recovery_hours_equity_usd",
-        "peak_recovery_hours_pnl",
-        "peak_recovery_hours_strategy_eq",
-        "sharpe_ratio_pnl",
-        "sharpe_ratio_pnl_w",
-        "sortino_ratio_pnl",
-        "sortino_ratio_pnl_w",
-        "strategy_eq_underwater_pct_median",
-        *{
-            f"high_exposure_{unit}_{stat}_{side}"
-            for unit in ("hours", "days")
-            for stat in ("mean", "max")
-            for side in ("long", "short")
-        },
-    }
 )
 
 # Keep the public proxy surface deliberately narrow. Exact Rust evaluations
@@ -302,14 +235,7 @@ def validate_gpu_metric_names(metric_names) -> frozenset[str]:
 
     from config.metrics import canonicalize_metric_name
 
-    raw = {str(name).strip() for name in metric_names}
-    exact_only = sorted(raw & GPU_EXACT_ONLY_METRICS)
-    if exact_only:
-        raise ValueError(
-            f"GPU foundation reserves optimizer metrics {exact_only} for exact "
-            "Rust backtests and analysis; use proxy-eligible metrics or the CPU "
-            "optimizer"
-        )
+    raw = reject_exact_only_gpu_metric_names(metric_names)
     canonical = frozenset(canonicalize_metric_name(name) for name in raw)
     unsupported = sorted(canonical - set(SUPPORTED_METRICS))
     if unsupported:

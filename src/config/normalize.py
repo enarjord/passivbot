@@ -120,6 +120,17 @@ def normalize_config(
     sync_canonical_strategy_config(result, tracker=tracker)
     prune_inactive_strategy_subtrees(result, tracker=tracker)
     prune_inactive_optimize_strategy_bounds(result, tracker=tracker)
+    if str(result["optimize"].get("backend", "")).strip().lower() == "gpu":
+        from optimization.gpu.metric_registry import (
+            reject_configured_exact_only_gpu_metrics,
+        )
+
+        for metric_source in (
+            config,
+            result,
+            {"optimize": raw_optimize_snapshot},
+        ):
+            reject_configured_exact_only_gpu_metrics(metric_source)
     normalize_validation_fields(result, raw_optimize=raw_optimize_snapshot)
     normalize_scoring_config(result, verbose=verbose, tracker=tracker)
     validate_config(

@@ -830,6 +830,47 @@ def test_load_config_malformed_optimize_limits_raises(tmp_path):
         load_config(str(path), verbose=False)
 
 
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
+def test_format_gpu_config_rejects_exact_only_alias_before_canonicalization(
+    surface,
+):
+    cfg = get_template_config()
+    cfg["optimize"]["backend"] = "gpu"
+    cfg["optimize"]["scoring"] = [
+        {"goal": "max", "metric": "adg_strategy_eq"}
+    ]
+    cfg["optimize"]["limits"] = []
+    if surface == "scoring":
+        cfg["optimize"]["scoring"] = [
+            {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+        ]
+    else:
+        cfg["optimize"]["limits"] = [
+            {
+                "metric": "peak_recovery_days_strategy_eq",
+                "penalize_if": "greater_than",
+                "value": 30.0,
+            }
+        ]
+
+    with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
+        format_config(cfg, verbose=False)
+
+
+def test_format_cpu_config_keeps_legacy_recovery_alias_compatibility():
+    cfg = get_template_config()
+    cfg["optimize"]["backend"] = "pymoo"
+    cfg["optimize"]["scoring"] = [
+        {"goal": "min", "metric": "peak_recovery_days_strategy_eq"}
+    ]
+
+    formatted = format_config(cfg, verbose=False)
+
+    assert formatted["optimize"]["scoring"] == [
+        {"goal": "min", "metric": "strategy_eq_recovery_days_max"}
+    ]
+
+
 def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [
