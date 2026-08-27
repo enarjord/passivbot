@@ -147,6 +147,8 @@ inline float float32_floor_nonnegative(float value) {
 
 // PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON
 
+// PASSIVBOT_ENTRY_INTERVAL_COMMON
+
 inline void record_realized_net(
     float net_pnl,
     thread float& realized_pnl_cumsum_last,

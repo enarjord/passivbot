@@ -36,6 +36,7 @@ from optimization.gpu.model import (
 from optimization.gpu.mps_kernel import (
     MpsEmaAnchorMulticoinFusedRunner,
     MpsTrailingMartingaleMulticoinFusedRunner,
+    _decode_entry_interval_outputs,
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
@@ -46,12 +47,17 @@ from optimization.gpu.mps_kernel import (
     _upgrade_legacy_single_coin_wel_params,
     _with_btc_risk,
     _with_dynamic_wel_by_tradability,
+    _with_entry_interval,
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
     strategy_eq_recovery_distribution_from_samples,
 )
-from optimization.gpu.metrics import _fill_gap_metrics, compute_objectives
+from optimization.gpu.metrics import (
+    _entry_interval_metrics,
+    _fill_gap_metrics,
+    compute_objectives,
+)
 from optimization.gpu.service import MpsMulticoinEmaProxy
 
 
@@ -424,6 +430,31 @@ def test_recovery_distribution_source_variant_is_opt_in_and_guarded():
     )
     with pytest.raises(RuntimeError, match="recovery-distribution feature guard"):
         _with_recovery_distribution("body", True)
+
+
+def test_entry_interval_source_variant_is_opt_in_and_guarded():
+    source = "inline void record_initial_entry_interval(\nbody"
+
+    assert _with_entry_interval(source, False) is source
+    assert _with_entry_interval(source, True) == (
+        "#define PASSIVBOT_ENTRY_INTERVAL_ENABLED 1\n" + source
+    )
+    with pytest.raises(RuntimeError, match="entry-interval contract"):
+        _with_entry_interval("body", True)
+
+
+def test_decode_entry_interval_outputs_preserves_accumulator_columns():
+    values = torch.arange(262, dtype=torch.float32).reshape(2, 131)
+
+    output = _decode_entry_interval_outputs(values)
+
+    assert torch.equal(output["entry_interval_sum_steps"], values[:, 0])
+    assert torch.equal(output["entry_interval_count"], values[:, 1])
+    assert torch.equal(output["entry_interval_max_steps"], values[:, 2])
+    assert torch.equal(output["entry_interval_hist"], values[:, 3:])
+
+    with pytest.raises(RuntimeError, match="invalid shape"):
+        _decode_entry_interval_outputs(torch.zeros((2, 130)))
 
 
 def test_fixed_wel_denominator_source_variant_is_opt_in_and_guarded():
@@ -5220,6 +5251,7 @@ def _multicoin_exposure_fixture(
     market_order_near_touch_threshold=0.001,
     hsl_panic_market=False,
     recovery_distribution_enabled=False,
+    entry_interval_enabled=False,
     dynamic_wel_by_tradability=True,
     requested_start_index=0,
     return_context=False,
@@ -5383,11 +5415,79 @@ def _multicoin_exposure_fixture(
             market_order_near_touch_threshold=market_order_near_touch_threshold,
             hsl_panic_market=hsl_panic_market,
             recovery_distribution_enabled=recovery_distribution_enabled,
+            entry_interval_enabled=entry_interval_enabled,
             dynamic_wel_by_tradability=dynamic_wel_by_tradability,
         )
     if return_context:
         return runner, row, runs[0], data
     return runner, row
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+def test_mps_tm_multicoin_entry_intervals_remain_coin_and_side_local(topology):
+    count = 45
+    closes = np.full((count, 2), 100.0)
+    highs = closes.copy()
+    lows = closes.copy()
+    entry_steps_by_coin = ((5, 15, 35), (7, 27))
+    close_steps_by_coin = ((6, 16, 36), (8, 28))
+    for coin in range(2):
+        entries = list(entry_steps_by_coin[coin])
+        closes_for_coin = list(close_steps_by_coin[coin])
+        if topology in {"long", "fused"}:
+            lows[entries, coin] = 98.0
+            highs[closes_for_coin, coin] = 102.0
+        else:
+            highs[entries, coin] = 102.0
+            lows[closes_for_coin, coin] = 98.0
+
+    runner, row, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale",
+        "short" if topology == "short" else "long",
+        count=count,
+        closes=closes,
+        highs=highs,
+        lows=lows,
+        entry_interval_enabled=True,
+        return_context=True,
+    )
+    values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
+    values.update(
+        {
+            "entry_initial_ema_dist": 0.01,
+            "entry_initial_qty_pct": 0.1,
+            "entry_retracement_base_pct": 0.0,
+            "close_threshold_base_pct": 0.01,
+            "close_retracement_base_pct": 0.0,
+            "gate_initial": 1.0,
+            "n_positions": 2.0,
+        }
+    )
+    row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
+    candidates = np.asarray([row], dtype=np.float64)
+    if topology == "fused":
+        runner = MpsTrailingMartingaleMulticoinFusedRunner(
+            run,
+            data,
+            entry_interval_enabled=True,
+        )
+        candidates = np.asarray([row + row], dtype=np.float64)
+
+    output = runner.run(candidates)
+    torch.mps.synchronize()
+    output = {key: value.cpu() for key, value in output.items()}
+    metrics = _entry_interval_metrics(output, run, "trailing_martingale")
+
+    expected_count = 6.0 if topology == "fused" else 3.0
+    assert output["entry_interval_count"].item() == expected_count
+    assert output["entry_interval_hist"].sum().item() == expected_count
+    assert metrics["entry_interval_hours_mean"].item() == pytest.approx(
+        50.0 / 3.0 / 60.0
+    )
+    assert metrics["entry_interval_hours_max"].item() == pytest.approx(1.0 / 3.0)
 
 
 @pytest.mark.skipif(
@@ -12150,6 +12250,65 @@ def _tm_single_row(
         unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
         unstuck_threshold=unstuck_threshold,
     ) + [-1.0]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("topology", ["long", "short", "fused"])
+def test_mps_tm_single_coin_entry_intervals_track_only_fresh_positions(topology):
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
+
+    count = 45
+    close = np.full(count, 100.0)
+    high = close.copy()
+    low = close.copy()
+    entry_steps = (5, 15, 35)
+    close_steps = (6, 16, 36)
+    if topology in {"long", "fused"}:
+        low[list(entry_steps)] = 98.0
+        high[list(close_steps)] = 102.0
+    else:
+        high[list(entry_steps)] = 102.0
+        low[list(close_steps)] = 98.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.01)
+    row[11] = 0.0
+    row[20] = 0.0
+
+    output = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=topology in {"long", "fused"},
+        short_enabled=topology in {"short", "fused"},
+        hsl_enabled=False,
+        entry_interval_enabled=True,
+    ).run(np.asarray([row + row], dtype=np.float64))
+    torch.mps.synchronize()
+    output = {key: value.cpu() for key, value in output.items()}
+    metrics = _entry_interval_metrics(output, run, "trailing_martingale")
+
+    expected_count = 4.0 if topology == "fused" else 2.0
+    assert output["entry_interval_count"].item() == expected_count
+    assert output["entry_interval_hist"].sum().item() == expected_count
+    assert metrics["entry_interval_hours_mean"].item() == pytest.approx(0.25)
+    assert metrics["entry_interval_hours_max"].item() == pytest.approx(1.0 / 3.0)
+    assert metrics["entry_interval_hours_median"].item() >= 0.25
 
 
 @pytest.mark.skipif(

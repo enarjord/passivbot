@@ -91,6 +91,16 @@ EQUITY_BALANCE_DIFF_METRICS = frozenset(
     }
 )
 
+ENTRY_INTERVAL_METRICS = frozenset(
+    {
+        "entry_interval_hours_mean",
+        "entry_interval_hours_median",
+        "entry_interval_hours_p95",
+        "entry_interval_hours_p99",
+        "entry_interval_hours_max",
+    }
+)
+
 _BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
 _BTC_ACCOUNT_METRICS.update(
     metric for metric in EQUITY_BALANCE_DIFF_METRICS if metric.endswith("_btc")
@@ -136,6 +146,7 @@ SUPPORTED_METRICS = (
     "expected_shortfall_1pct_strategy_eq",
     "entry_initial_balance_pct_long",
     "entry_initial_balance_pct_short",
+    *sorted(ENTRY_INTERVAL_METRICS),
     "exponential_fit_error_usd",
     "exponential_fit_error_w_usd",
     "exposure_mean_ratio_usd",
@@ -780,6 +791,103 @@ def _fill_gap_metrics(out, run):
         "fills_gap_median_hours": _weighted_percentile(values, counts, 0.50),
         "fills_gap_p95_hours": _weighted_percentile(values, counts, 0.95),
         "fills_gap_p99_hours": _weighted_percentile(values, counts, 0.99),
+    }
+
+
+def _entry_interval_metrics(out, run, strategy_kind: str):
+    """Reduce per-coin/side normal-initial-entry intervals.
+
+    Exact Rust only classifies Trailing Martingale's ``EntryInitialNormal``
+    fills for this metric family. EMA Anchor therefore retains the canonical
+    all-zero result without enabling an extra Metal output surface.
+    """
+
+    zeros = torch.zeros_like(out["fill_count"].to(torch.float64))
+    if strategy_kind not in {"ema_anchor", "trailing_martingale"}:
+        raise RuntimeError(
+            "MPS entry-interval reduction requires a recognized strategy kind"
+        )
+    if strategy_kind != "trailing_martingale":
+        return {name: zeros for name in ENTRY_INTERVAL_METRICS}
+
+    required = (
+        "entry_interval_sum_steps",
+        "entry_interval_count",
+        "entry_interval_max_steps",
+        "entry_interval_hist",
+    )
+    missing = [name for name in required if name not in out]
+    if missing:
+        raise RuntimeError(
+            "MPS entry-interval output is missing " + ", ".join(missing)
+        )
+    total_steps = out["entry_interval_sum_steps"].to(torch.float64)
+    counts_float = out["entry_interval_count"].to(torch.float64)
+    max_steps = out["entry_interval_max_steps"].to(torch.float64)
+    histogram_float = out["entry_interval_hist"].to(torch.float64)
+    if any(
+        not bool(torch.isfinite(value).all())
+        for value in (total_steps, counts_float, max_steps, histogram_float)
+    ):
+        raise RuntimeError("MPS entry-interval output is non-finite")
+    if bool(
+        (
+            (total_steps < 0.0)
+            | (counts_float < 0.0)
+            | (max_steps < 0.0)
+            | (histogram_float < 0.0).any(dim=1)
+        ).any()
+    ):
+        raise RuntimeError("MPS entry-interval output is negative")
+    rounded_counts = torch.round(counts_float)
+    rounded_histogram = torch.round(histogram_float)
+    if bool(
+        (
+            (torch.abs(counts_float - rounded_counts) > 1.0e-4)
+            | (torch.abs(histogram_float - rounded_histogram) > 1.0e-4).any(
+                dim=1
+            )
+        ).any()
+    ):
+        raise RuntimeError("MPS entry-interval output contains fractional counts")
+    counts = rounded_counts.to(torch.long)
+    histogram = rounded_histogram.to(torch.long)
+    if bool((histogram.sum(dim=1) != counts).any()):
+        raise RuntimeError("MPS entry-interval histogram count disagrees with totals")
+    if bool(
+        (
+            (max_steps > total_steps + 1.0)
+            | ((counts == 0) & ((total_steps != 0.0) | (max_steps != 0.0)))
+        ).any()
+    ):
+        raise RuntimeError("MPS entry-interval totals are inconsistent")
+
+    interval_hours = max(float(run.interval_ms), 1.0) / 3_600_000.0
+    upper_steps = torch.tensor(
+        _GAP_HIST_UPPER_STEPS,
+        dtype=torch.float64,
+        device=total_steps.device,
+    ).unsqueeze(0)
+    values = torch.minimum(upper_steps, max_steps.unsqueeze(1)) * interval_hours
+    count_denominator = counts_float.clamp(min=1.0)
+    mean = torch.where(
+        counts > 0,
+        total_steps / count_denominator * interval_hours,
+        zeros,
+    )
+    maximum = torch.where(counts > 0, max_steps * interval_hours, zeros)
+    return {
+        "entry_interval_hours_mean": mean,
+        "entry_interval_hours_median": _weighted_percentile(
+            values, histogram, 0.50
+        ),
+        "entry_interval_hours_p95": _weighted_percentile(
+            values, histogram, 0.95
+        ),
+        "entry_interval_hours_p99": _weighted_percentile(
+            values, histogram, 0.99
+        ),
+        "entry_interval_hours_max": maximum,
     }
 
 
@@ -2095,6 +2203,15 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         if requested & _FILL_ACTIVITY_METRICS
         else {}
     )
+    entry_interval_metrics = (
+        _entry_interval_metrics(
+            out,
+            run,
+            str(data.get("strategy_kind", "")).strip().lower(),
+        )
+        if requested & ENTRY_INTERVAL_METRICS
+        else {}
+    )
     hard_stop_metrics = (
         _hard_stop_lifecycle_metrics(out, run)
         if requested & _HARD_STOP_LIFECYCLE_METRICS
@@ -2251,6 +2368,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             objectives[name] = out[name].to(torch.float64)
     objectives.update(fill_gap_metrics)
     objectives.update(fill_activity_metrics)
+    objectives.update(entry_interval_metrics)
     objectives.update(hard_stop_metrics)
     objectives.update(hard_stop_panic_loss_metrics)
     objectives.update(weighted_metrics)
