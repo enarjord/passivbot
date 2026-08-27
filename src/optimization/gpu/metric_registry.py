@@ -93,7 +93,7 @@ def reject_exact_only_gpu_metric_names(metric_names) -> frozenset[str]:
 def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
     """Recover exact-only spellings from current and preserved raw config."""
 
-    configured_surfaces = []
+    configured_surfaces: list[tuple[object, bool]] = []
     for source in (
         config,
         config.get("_raw"),
@@ -108,21 +108,26 @@ def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
         if not isinstance(optimize, dict):
             continue
         configured_surfaces.extend(
-            (optimize.get("scoring"), optimize.get("limits"))
+            (
+                (optimize.get("scoring"), False),
+                (optimize.get("limits"), True),
+            )
         )
 
     exact_only = tuple(sorted(GPU_EXACT_ONLY_METRICS, key=len, reverse=True))
     found: set[str] = set()
 
-    def visit(value) -> None:
+    def visit(value, *, skip_disabled: bool) -> None:
         if isinstance(value, dict):
+            if skip_disabled and not bool(value.get("enabled", True)):
+                return
             for key, item in value.items():
-                visit(key)
-                visit(item)
+                visit(key, skip_disabled=skip_disabled)
+                visit(item, skip_disabled=skip_disabled)
             return
         if isinstance(value, (list, tuple, set)):
             for item in value:
-                visit(item)
+                visit(item, skip_disabled=skip_disabled)
             return
         if not isinstance(value, str):
             return
@@ -139,8 +144,8 @@ def configured_exact_only_gpu_metrics(config: dict) -> frozenset[str]:
             ):
                 found.add(metric)
 
-    for surface in configured_surfaces:
-        visit(surface)
+    for surface, skip_disabled in configured_surfaces:
+        visit(surface, skip_disabled=skip_disabled)
     return frozenset(found)
 
 

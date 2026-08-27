@@ -534,6 +534,22 @@ def test_gpu_metric_provenance_does_not_match_retained_side_recovery_metrics():
     assert not configured_exact_only_gpu_metrics(config)
 
 
+def test_gpu_metric_provenance_ignores_disabled_exact_only_limit():
+    config = {
+        "optimize": {
+            "scoring": [{"goal": "max", "metric": "adg_strategy_eq"}],
+            "limits": [
+                {
+                    "enabled": False,
+                    "metric": "peak_recovery_days_strategy_eq",
+                }
+            ],
+        }
+    }
+
+    assert not configured_exact_only_gpu_metrics(config)
+
+
 def test_gpu_result_preserves_explicit_nulls_and_bounds_for_resume():
     config = _long_only_ema_config()
     config["backtest"]["taker_fee_override"] = None

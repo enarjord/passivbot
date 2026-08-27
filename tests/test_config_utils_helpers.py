@@ -871,6 +871,28 @@ def test_format_cpu_config_keeps_legacy_recovery_alias_compatibility():
     ]
 
 
+def test_format_gpu_config_allows_disabled_exact_only_limit():
+    cfg = get_template_config()
+    cfg["optimize"]["backend"] = "gpu"
+    cfg["optimize"]["limits"] = [
+        {
+            "enabled": False,
+            "metric": "peak_recovery_days_strategy_eq",
+        }
+    ]
+
+    formatted = format_config(cfg, verbose=False)
+
+    assert formatted["optimize"]["limits"] == [
+        {
+            "enabled": False,
+            "metric": "strategy_eq_recovery_days_max",
+            "penalize_if": "greater_than",
+            "value": 0,
+        }
+    ]
+
+
 def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [
