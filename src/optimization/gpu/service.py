@@ -124,6 +124,15 @@ _GPU_PROFILE_TIMING_KEYS = (
     "host_overhead",
 )
 
+_GPU_PROFILE_RUNNER_TIMING_KEYS = (
+    "candidate_packing",
+    "upload_and_buffer_clear",
+    "cold_compilation",
+    "warm_library_lookup",
+    "kernel_execution",
+    "metric_reduction",
+)
+
 
 def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
     runners = tuple(runners)
@@ -192,7 +201,39 @@ def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count
     }
 
 
-def _add_gpu_runner_profile(profile: dict, runner, *, side_count: int = 1) -> None:
+def _gpu_profile_runner_seconds(timings: dict) -> float:
+    return sum(
+        float(timings.get(key, 0.0))
+        for key in _GPU_PROFILE_RUNNER_TIMING_KEYS
+    )
+
+
+def _gpu_profile_unattributed_seconds(
+    timings: dict,
+    elapsed_seconds: float,
+    *,
+    device_to_host_before: float,
+    runner_seconds_before: float,
+) -> float:
+    extra_device_to_host = (
+        float(timings["device_to_host"]) - float(device_to_host_before)
+    )
+    extra_runner_seconds = (
+        _gpu_profile_runner_seconds(timings) - float(runner_seconds_before)
+    )
+    return max(
+        0.0,
+        float(elapsed_seconds) - extra_device_to_host - extra_runner_seconds,
+    )
+
+
+def _add_gpu_runner_profile(
+    profile: dict,
+    runner,
+    *,
+    side_count: int = 1,
+    effective_candidate_steps=None,
+) -> None:
     runner_profile = getattr(runner, "last_profile", {}) or {}
     if not runner_profile:
         return
@@ -203,9 +244,22 @@ def _add_gpu_runner_profile(profile: dict, runner, *, side_count: int = 1) -> No
     profile["dispatch_count"] += dispatch_count
     profile["cold_dispatch_count"] += dispatch_count if cold else 0
     profile["warm_dispatch_count"] += 0 if cold else dispatch_count
+    runner_steps = int(getattr(runner, "n", 0))
+    if effective_candidate_steps is None:
+        candidate_steps = batch_size * runner_steps
+    else:
+        candidate_steps_array = np.asarray(
+            effective_candidate_steps, dtype=np.int64
+        ).reshape(-1)
+        if len(candidate_steps_array) != batch_size:
+            raise RuntimeError(
+                "profiled effective candidate steps do not match the dispatch batch"
+            )
+        candidate_steps = int(
+            np.clip(candidate_steps_array, 0, runner_steps).sum()
+        )
     profile["kernel_candidate_bars"] += (
-        batch_size
-        * int(getattr(runner, "n", 0))
+        candidate_steps
         * int(getattr(runner, "n_coins", 1))
         * int(side_count)
         * dispatch_count
@@ -586,7 +640,7 @@ def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
     return strategy_eq_recovery_distribution_from_samples(
         output["strategy_eq_recovery_samples"],
         sample_interval_days=output["strategy_eq_recovery_sample_interval_days"],
-    ).cpu()
+    )
 
 
 def _directional_coin_hsl_lookback_bars(
@@ -1288,7 +1342,9 @@ def _refresh_hedged_multicoin_hsl_at_portfolio_cutoff(
             parameter_matrices[side][indices], **run_kwargs
         )
         if runner_profile_callback is not None:
-            runner_profile_callback(runners[side])
+            runner_profile_callback(
+                runners[side], effective_candidate_steps=end_steps
+            )
         interrupt_check()
         transfer_started = time.perf_counter() if profile else 0.0
         for key in DIRECTIONAL_HSL_OUTPUT_KEYS:
@@ -3074,6 +3130,11 @@ class MpsMulticoinProxy:
                 if profile is not None
                 else 0.0
             )
+            stage_runner_seconds_before = (
+                _gpu_profile_runner_seconds(profile["timings_seconds"])
+                if profile is not None
+                else 0.0
+            )
             if fused_runner is None and len(self.sides) == 1:
                 side = self.sides[0]
                 output = side_outputs[side]
@@ -3109,7 +3170,9 @@ class MpsMulticoinProxy:
                     interrupt_check=interrupt_check,
                     profile=self.profile_enabled,
                     runner_profile_callback=(
-                        lambda runner: _add_gpu_runner_profile(profile, runner)
+                        lambda runner, **kwargs: _add_gpu_runner_profile(
+                            profile, runner, **kwargs
+                        )
                         if profile is not None
                         else None
                     ),
@@ -3166,16 +3229,12 @@ class MpsMulticoinProxy:
                 output, self.run, self.metrics_data, needed=self.needed_metrics
             )
             if profile is not None:
-                extra_device_to_host = (
-                    profile["timings_seconds"]["device_to_host"]
-                    - stage_device_to_host_before
-                )
                 profile["timings_seconds"]["metric_reduction"] += (
-                    max(
-                        0.0,
-                        time.perf_counter()
-                        - stage_started
-                        - extra_device_to_host,
+                    _gpu_profile_unattributed_seconds(
+                        profile["timings_seconds"],
+                        time.perf_counter() - stage_started,
+                        device_to_host_before=stage_device_to_host_before,
+                        runner_seconds_before=stage_runner_seconds_before,
                     )
                 )
                 stage_started = time.perf_counter()
