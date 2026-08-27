@@ -654,50 +654,56 @@ _GPU_SUITE_VIOLATION_KEY = "__gpu_suite_constraint_violation__"
 _GPU_SUITE_METRICS_KEY = "__gpu_suite_metrics__"
 
 
-def _scalar_metric_stats(metrics: dict) -> dict:
-    return {
-        key: {
-            "mean": float(value),
-            "min": float(value),
-            "max": float(value),
-            "std": 0.0,
-            "median": float(value),
-        }
-        for key, value in metrics.items()
-    }
-
-
 def _evaluate_gpu_suite_proxies(suite_evaluator, scenario_proxies, candidates) -> list[dict]:
     """Screen one candidate batch across suite scenarios with canonical reducers."""
 
+    from metrics_schema import build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
 
     scenario_rows = []
-    for ctx, proxy, parameter_overrides in scenario_proxies:
+    for ctx, exchange_proxies, parameter_overrides in scenario_proxies:
         scenario_candidates = (
             [dict(candidate, **parameter_overrides) for candidate in candidates]
             if parameter_overrides
             else candidates
         )
-        scenario_rows.append((ctx, proxy.evaluate(scenario_candidates)))
+        exchange_rows = []
+        for exchange, proxy in exchange_proxies:
+            rows = proxy.evaluate(scenario_candidates)
+            if len(rows) != len(candidates):
+                raise RuntimeError(
+                    f"GPU suite scenario {ctx.label!r} exchange {exchange!r} "
+                    "returned an unexpected proxy row count: "
+                    f"expected {len(candidates)}, got {len(rows)}"
+                )
+            exchange_rows.append((exchange, rows))
+        if not exchange_rows:
+            raise ValueError(
+                f"GPU suite scenario {ctx.label!r} has no prepared proxy datasets"
+            )
+        scenario_rows.append((ctx, exchange_rows))
     results = []
     for index in range(len(candidates)):
-        scenario_results = [
-            ScenarioResult(
-                scenario=SuiteScenario(
-                    label=ctx.label,
-                    start_date=None,
-                    end_date=None,
-                    coins=None,
-                    ignored_coins=None,
-                ),
-                per_exchange={},
-                metrics={"stats": _scalar_metric_stats(rows[index])},
-                elapsed_seconds=0.0,
-                output_path=None,
+        scenario_results = []
+        for ctx, exchange_rows in scenario_rows:
+            per_exchange = {
+                exchange: rows[index] for exchange, rows in exchange_rows
+            }
+            scenario_results.append(
+                ScenarioResult(
+                    scenario=SuiteScenario(
+                        label=ctx.label,
+                        start_date=None,
+                        end_date=None,
+                        coins=None,
+                        ignored_coins=None,
+                    ),
+                    per_exchange=per_exchange,
+                    metrics=build_scenario_metrics(per_exchange),
+                    elapsed_seconds=0.0,
+                    output_path=None,
+                )
             )
-            for ctx, rows in scenario_rows
-        ]
         scored = suite_evaluator.score_scenario_results(scenario_results)
         results.append(
             {
@@ -1442,68 +1448,67 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
                     "outside the supported modeled scenario scope"
                 )
         exchanges = list(ctx.exchanges)
-        if len(exchanges) != 1:
+        if not exchanges:
             raise ValueError(
-                f"GPU suite scenario {ctx.label!r} requires exactly one prepared "
-                "dataset, "
-                f"got {exchanges}"
+                f"GPU suite scenario {ctx.label!r} has no prepared datasets"
             )
-        exchange = exchanges[0]
-        scenario_mss = ctx.msss[exchange]
-        effective_coins = [
-            str(coin) for coin in scenario_mss if coin != "__meta__"
-        ]
-        effective_coin_set = set(effective_coins)
+        scenario_config = build_config(proxy_config, ctx)
         effective_coin_sources = (
             getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources")
             or {}
         )
-        if exchange != "combined":
-            prepared_exchange = to_standard_exchange_name(exchange)
-            conflicting_sources = {
-                str(coin): str(source)
-                for coin, source in effective_coin_sources.items()
-                if str(coin) in effective_coin_set
-                and to_standard_exchange_name(str(source)) != prepared_exchange
-            }
-            if conflicting_sources:
-                raise ValueError(
-                    f"GPU suite scenario {ctx.label!r} assigns coin_sources "
-                    f"outside prepared dataset {prepared_exchange!r}: "
-                    f"{conflicting_sources}"
-                )
-        hlcvs, btc, coin_indices = get_data(ctx, exchange)
-        values = np.asarray(hlcvs)
-        if coin_indices is not None:
-            values = np.take(values, list(coin_indices), axis=1)
-        values = np.ascontiguousarray(values)
-        coin_count = int(values.shape[1])
-        scenario_config = build_config(proxy_config, ctx)
-        _validate_scope_config(
-            scenario_config,
-            exchanges=exchanges,
-            coin_count=coin_count,
-            allow_suite=True,
-        )
-        if len(effective_coins) != coin_count:
-            raise ValueError(
-                f"GPU suite scenario {ctx.label!r} prepared coin identity "
-                f"mismatch: hlcvs={coin_count}, market_settings={effective_coins}"
+        for exchange in exchanges:
+            scenario_mss = ctx.msss[exchange]
+            effective_coins = [
+                str(coin) for coin in scenario_mss if coin != "__meta__"
+            ]
+            effective_coin_set = set(effective_coins)
+            if exchange != "combined":
+                prepared_exchange = to_standard_exchange_name(exchange)
+                conflicting_sources = {
+                    str(coin): str(source)
+                    for coin, source in effective_coin_sources.items()
+                    if str(coin) in effective_coin_set
+                    and to_standard_exchange_name(str(source)) != prepared_exchange
+                }
+                if conflicting_sources:
+                    raise ValueError(
+                        f"GPU suite scenario {ctx.label!r} assigns coin_sources "
+                        f"outside prepared dataset {prepared_exchange!r}: "
+                        f"{conflicting_sources}"
+                    )
+            hlcvs, btc, coin_indices = get_data(ctx, exchange)
+            values = np.asarray(hlcvs)
+            if coin_indices is not None:
+                values = np.take(values, list(coin_indices), axis=1)
+            values = np.ascontiguousarray(values)
+            coin_count = int(values.shape[1])
+            _validate_scope_config(
+                scenario_config,
+                exchanges=[exchange],
+                coin_count=coin_count,
+                allow_suite=True,
             )
-        prepared.append(
-            {
-                "ctx": ctx,
-                "config": scenario_config,
-                "overrides": deepcopy(overrides),
-                "exchange": exchange,
-                "coin_count": coin_count,
-                "coins": effective_coins,
-                "hlcvs": values,
-                "mss": scenario_mss,
-                "btc": btc,
-                "timestamps": ctx.timestamps.get(exchange),
-            }
-        )
+            if len(effective_coins) != coin_count:
+                raise ValueError(
+                    f"GPU suite scenario {ctx.label!r} prepared coin identity "
+                    f"mismatch on {exchange!r}: hlcvs={coin_count}, "
+                    f"market_settings={effective_coins}"
+                )
+            prepared.append(
+                {
+                    "ctx": ctx,
+                    "config": deepcopy(scenario_config),
+                    "overrides": deepcopy(overrides),
+                    "exchange": exchange,
+                    "coin_count": coin_count,
+                    "coins": effective_coins,
+                    "hlcvs": values,
+                    "mss": scenario_mss,
+                    "btc": btc,
+                    "timestamps": ctx.timestamps.get(exchange),
+                }
+            )
     return prepared
 
 
@@ -3142,8 +3147,11 @@ def run_backend(
         min_coin_count, max_coin_count, suite_multicoin_sides = (
             _gpu_suite_search_context(suite_inputs)
         )
+        scenario_count = len({id(item["ctx"]) for item in suite_inputs})
         logging.info(
-            "GPU suite prepared %d scenarios | coins=%d..%d | multicoin_sides=%s",
+            "GPU suite prepared %d scenarios across %d datasets | "
+            "coins=%d..%d | multicoin_sides=%s",
+            scenario_count,
             len(suite_inputs),
             min_coin_count,
             max_coin_count,
@@ -3469,7 +3477,7 @@ def run_backend(
     )
 
     if suite_enabled:
-        scenario_proxies = []
+        scenario_proxy_groups = {}
         for item in suite_inputs:
             scenario_proxy = (
                 MpsMulticoinProxy
@@ -3492,9 +3500,20 @@ def run_backend(
             item["proxy_checkpoint_contract"] = getattr(
                 scenario_proxy, "checkpoint_contract", {}
             )
-            scenario_proxies.append(
-                (item["ctx"], scenario_proxy, item["parameter_overrides"])
+            group = scenario_proxy_groups.setdefault(
+                id(item["ctx"]),
+                [item["ctx"], [], item["parameter_overrides"]],
             )
+            if group[2] != item["parameter_overrides"]:
+                raise RuntimeError(
+                    f"GPU suite scenario {item['ctx'].label!r} prepared datasets "
+                    "disagree on candidate parameter overrides"
+                )
+            group[1].append((item["exchange"], scenario_proxy))
+        scenario_proxies = [
+            (ctx, tuple(exchange_proxies), parameter_overrides)
+            for ctx, exchange_proxies, parameter_overrides in scenario_proxy_groups.values()
+        ]
 
         def evaluate_proxy(candidates):
             return _evaluate_gpu_suite_proxies(

@@ -635,7 +635,6 @@ def test_gpu_suite_inputs_accept_dual_side_multicoin_hedge_scenario():
     ("overrides", "exchanges", "coin_indices", "message"),
     [
         ({"live.strategy_kind": "trailing_martingale"}, ["bybit"], [0], "outside the supported"),
-        ({}, ["bybit", "binance"], [0], "exactly one prepared dataset"),
     ],
 )
 def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
@@ -664,6 +663,52 @@ def test_gpu_suite_inputs_reject_unsupported_scenario_scope(
 
     with pytest.raises(ValueError, match=message):
         _gpu_suite_scenario_inputs(config, Suite())
+
+
+def test_gpu_suite_inputs_materialize_each_exchange_in_one_scenario():
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    exchanges = ["bybit", "binance"]
+    ctx = SimpleNamespace(
+        label="two_venues",
+        config={"backtest": {"coin_sources": {}}},
+        overrides={},
+        exchanges=exchanges,
+        msss={
+            exchange: {
+                f"{exchange}_coin": {},
+                "__meta__": {},
+            }
+            for exchange in exchanges
+        },
+        timestamps={
+            exchange: np.arange(10, dtype=np.int64) for exchange in exchanges
+        },
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, exchange):
+            width = 1 if exchange == "bybit" else 2
+            return np.zeros((10, width, 4)), np.ones(10), [width - 1]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            return copy.deepcopy(proxy_config)
+
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+
+    assert [item["ctx"] for item in prepared] == [ctx, ctx]
+    assert [item["exchange"] for item in prepared] == exchanges
+    assert [item["coins"] for item in prepared] == [
+        ["bybit_coin"],
+        ["binance_coin"],
+    ]
+    assert all(item["coin_count"] == 1 for item in prepared)
+    assert prepared[0]["config"] == prepared[1]["config"]
+    assert prepared[0]["config"] is not prepared[1]["config"]
 
 
 @pytest.mark.parametrize(
@@ -1490,8 +1535,8 @@ def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
     rows = _evaluate_gpu_suite_proxies(
         Suite(),
         [
-            (contexts[0], Proxy([0.10, 0.20]), {}),
-            (contexts[1], Proxy([0.01, 0.02]), {}),
+            (contexts[0], (("bybit", Proxy([0.10, 0.20])),), {}),
+            (contexts[1], (("bybit", Proxy([0.01, 0.02])),), {}),
         ],
         [{"x": 1}, {"x": 2}],
     )
@@ -1508,6 +1553,60 @@ def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
             _GPU_SUITE_METRICS_KEY: {"values": [0.20, 0.02]},
         },
     ]
+
+
+def test_gpu_suite_proxy_combines_exchange_metrics_before_suite_reduction():
+    context = SimpleNamespace(label="regional_subset")
+
+    class Proxy:
+        def __init__(self, values):
+            self.values = values
+
+        def evaluate(self, candidates):
+            assert len(candidates) == 2
+            return [{"adg_strategy_eq": value} for value in self.values]
+
+    class Suite:
+        @staticmethod
+        def score_scenario_results(results):
+            assert len(results) == 1
+            result = results[0]
+            stats = result.metrics["stats"]["adg_strategy_eq"]
+            assert sorted(result.per_exchange) == ["binance", "bybit"]
+            return {
+                "objectives": (-stats["mean"],),
+                "constraint_violation": stats["max"],
+                "suite_metrics": {"stats": stats},
+            }
+
+    rows = _evaluate_gpu_suite_proxies(
+        Suite(),
+        [
+            (
+                context,
+                (
+                    ("bybit", Proxy([0.10, 0.40])),
+                    ("binance", Proxy([0.30, 0.20])),
+                ),
+                {},
+            )
+        ],
+        [{"x": 1}, {"x": 2}],
+    )
+
+    assert rows[0][_GPU_SUITE_OBJECTIVES_KEY] == pytest.approx((-0.20,))
+    assert rows[0][_GPU_SUITE_VIOLATION_KEY] == pytest.approx(0.30)
+    assert rows[0][_GPU_SUITE_METRICS_KEY]["stats"] == pytest.approx(
+        {
+            "mean": 0.20,
+            "min": 0.10,
+            "max": 0.30,
+            "std": 0.10,
+            "median": 0.20,
+        }
+    )
+    assert rows[1][_GPU_SUITE_OBJECTIVES_KEY] == pytest.approx((-0.30,))
+    assert rows[1][_GPU_SUITE_VIOLATION_KEY] == pytest.approx(0.40)
 
 
 def test_gpu_suite_proxy_applies_scenario_parameter_overrides_without_mutating_candidates():
@@ -1536,10 +1635,10 @@ def test_gpu_suite_proxy_applies_scenario_parameter_overrides_without_mutating_c
         [
             (
                 SimpleNamespace(label="fixed"),
-                Proxy(),
+                (("bybit", Proxy()),),
                 {"long_base_qty_pct": 0.025},
             ),
-            (SimpleNamespace(label="candidate"), Proxy(), {}),
+            (SimpleNamespace(label="candidate"), (("bybit", Proxy()),), {}),
         ],
         candidates,
     )
@@ -5486,6 +5585,28 @@ def test_gpu_suite_checkpoint_contract_tracks_prepared_scenario_identity():
             "coin_overrides": {},
         }
     ]
+
+    second_exchange = copy.deepcopy(item)
+    second_exchange["exchange"] = "binance"
+    second_exchange["mss"]["BTC"] = {"exchange": "binance"}
+    second_exchange["mss"]["ETH"] = {"exchange": "binance"}
+    multi_exchange = _gpu_suite_checkpoint_contract(
+        config, [item, second_exchange]
+    )
+    assert [
+        (entry["label"], entry["exchange"])
+        for entry in multi_exchange["prepared_scenarios"]
+    ] == [("stress", "bybit"), ("stress", "binance")]
+    assert multi_exchange != original
+
+    changed_second_exchange = copy.deepcopy(second_exchange)
+    changed_second_exchange["timestamps"] = np.array([1000, 2500, 3500])
+    assert (
+        _gpu_suite_checkpoint_contract(
+            config, [item, changed_second_exchange]
+        )
+        != multi_exchange
+    )
 
     changed_loss_gate = copy.deepcopy(item)
     changed_loss_gate["config"]["live"]["max_realized_loss_pct"] = 0.05

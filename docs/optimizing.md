@@ -426,9 +426,11 @@ path then calls the same canonical suite reducer and scenario-selection logic as
 for aggregate reducers, named-scenario objectives, and named-scenario or suite-reduced limits.
 Every exact validation still runs the unchanged Rust backtest for every scenario; only those exact
 suite metrics enter `all_results.bin` and the Pareto front. A scenario may select a different coin
-subset, date window, individual exchange, or canonical combined multi-exchange dataset, but each
-scenario must resolve to exactly one prepared dataset. Scenario
-`overrides` require
+subset, date window, individual exchange, canonical combined multi-exchange dataset, or a strict
+multi-exchange subset represented by one prepared dataset per exchange. In the last case, Metal
+evaluates each prepared exchange independently and the GPU path combines those proxy analyses with
+the same canonical per-scenario metric statistics as the CPU suite before applying suite reducers.
+Scenario `overrides` require
 explicit candidate-shadowing behavior in the proxy. This slice models `bot.long` and `bot.short`
 overrides: the canonical exact
 suite evaluator still applies them last, after candidate materialization, while each scenario's
