@@ -24,8 +24,12 @@ from optimization.gpu.model import (
 CASES = (
     "ema-single-long",
     "tm-single-long",
+    "tm-single-long-hsl",
     "ema-multicoin-overhead",
     "ema-multicoin-overrides",
+)
+SINGLE_COIN_CASES = frozenset(
+    {"ema-single-long", "tm-single-long", "tm-single-long-hsl"}
 )
 DEFAULT_SEED = 7
 MAX_CANDIDATES = 4096
@@ -108,8 +112,15 @@ def _base_parameter_values() -> dict[str, float]:
     }
 
 
-def _parameter_matrix(keys, candidates: int, seed: int) -> np.ndarray:
+def _parameter_matrix(
+    keys,
+    candidates: int,
+    seed: int,
+    *,
+    value_overrides: dict[str, float] | None = None,
+) -> np.ndarray:
     values = _base_parameter_values()
+    values.update(value_overrides or {})
     base = np.asarray([values[key] for key in keys], dtype=np.float64)
     matrix = np.repeat(base[None, :], candidates, axis=0)
     rng = np.random.default_rng(seed)
@@ -204,7 +215,7 @@ def _build_case(
     }
     base_values = _base_parameter_values()
 
-    if name in {"ema-single-long", "tm-single-long"}:
+    if name in SINGLE_COIN_CASES:
         hlcvs, timestamps = _synthetic_hlcvs(single_bars, 1, seed)
         market, run = _market_and_run(timestamps, single_bars)
         data = build_mps_data(
@@ -214,6 +225,20 @@ def _build_case(
             timestamps,
             run,
             market,
+        )
+        hsl_enabled = name == "tm-single-long-hsl"
+        hsl_value_overrides = (
+            {
+                "hsl_enabled": 1.0,
+                "hsl_red_threshold": 0.02,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_cooldown_minutes_after_red": 1_440.0,
+                "hsl_restart_policy": 1.0,
+                "entry_double_down_factor": 2.0,
+                "total_wallet_exposure_limit": 5.0,
+            }
+            if hsl_enabled
+            else {}
         )
         if name == "ema-single-long":
             runner = MpsEmaAnchorRunner(
@@ -234,12 +259,13 @@ def _build_case(
                 data,
                 long_enabled=True,
                 short_enabled=False,
-                hsl_enabled=False,
+                hsl_enabled=hsl_enabled,
             )
             side_matrix = _parameter_matrix(
                 TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
                 candidates,
                 seed,
+                value_overrides=hsl_value_overrides,
             )
         proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
         proxy.batch_size = candidates
@@ -264,7 +290,10 @@ def _build_case(
             else TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
         )
         proxy.base_params = {
-            side: {key: base_values[key] for key in proxy.param_keys}
+            side: {
+                key: hsl_value_overrides.get(key, base_values[key])
+                for key in proxy.param_keys
+            }
             for side in ("long", "short")
         }
         proxy.static_coin_override_params = {}
@@ -376,6 +405,13 @@ def _run_once(proxy, candidates) -> dict:
         cold = bool(profile["cold_dispatch_count"])
         batch_size = max(profile["actual_dispatch_batch_sizes"], default=0)
         dispatch_count = int(profile["dispatch_count"])
+        dispatch_chunk_wall_seconds_max = max(
+            (
+                float(value)
+                for value in profile.get("dispatch_chunk_wall_seconds", ())
+            ),
+            default=0.0,
+        )
     else:
         runners = tuple(getattr(proxy, "runners", {}).values()) or (proxy.runner,)
         runner_profiles = [dict(runner.last_profile) for runner in runners]
@@ -396,6 +432,7 @@ def _run_once(proxy, candidates) -> dict:
         cold = False
         batch_size = len(candidates)
         dispatch_count = len(runner_profiles)
+        dispatch_chunk_wall_seconds_max = wall_seconds
     return {
         "batch_size": batch_size,
         "candidates_per_second": len(candidates) / max(wall_seconds, 1.0e-12),
@@ -403,6 +440,7 @@ def _run_once(proxy, candidates) -> dict:
         "compile_seconds": compile_seconds,
         "device_to_host_seconds": device_to_host_seconds,
         "dispatch_count": dispatch_count,
+        "dispatch_chunk_wall_seconds_max": dispatch_chunk_wall_seconds_max,
         "host_overhead_seconds": host_overhead_seconds,
         "kernel_seconds": kernel_seconds,
         "proxy_profile": profile,
@@ -457,6 +495,9 @@ def run_benchmark_case(
             cold_profile.get("dispatch_chunk_count", cold["dispatch_count"])
         ),
         "dispatch_count_per_run": int(cold["dispatch_count"]),
+        "dispatch_chunk_wall_seconds_max": float(
+            cold["dispatch_chunk_wall_seconds_max"]
+        ),
         "cold": cold,
         "warm": {
             "runs": warm_runs,
@@ -464,6 +505,9 @@ def run_benchmark_case(
             "kernel_seconds_p50": median("kernel_seconds"),
             "device_to_host_seconds_p50": median("device_to_host_seconds"),
             "host_overhead_seconds_p50": median("host_overhead_seconds"),
+            "dispatch_chunk_wall_seconds_max_p50": median(
+                "dispatch_chunk_wall_seconds_max"
+            ),
             "candidates_per_second_p50": median("candidates_per_second"),
         },
     }
@@ -545,7 +589,7 @@ def main(argv: list[str] | None = None) -> int:
     if coins < 2:
         parser.error("--coins must be at least two")
     selected = CASES if args.case == "all" else (args.case,)
-    if any(name.endswith("single-long") for name in selected):
+    if any(name in SINGLE_COIN_CASES for name in selected):
         if dispatch_batch_size * single_bars > MAX_DISPATCH_CANDIDATE_BARS:
             parser.error("single-coin candidate-bars exceed the safe benchmark limit")
     if any(name.startswith("ema-multicoin") for name in selected):

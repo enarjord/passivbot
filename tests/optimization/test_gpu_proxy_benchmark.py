@@ -56,6 +56,31 @@ def test_gpu_proxy_benchmark_accepts_independent_dispatch_batch_size():
     assert args.dispatch_batch_size == 512
 
 
+def test_gpu_proxy_benchmark_exposes_single_side_tm_hsl_case():
+    args = build_parser().parse_args(["--case", "tm-single-long-hsl"])
+    matrix = _parameter_matrix(
+        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+        2,
+        7,
+        value_overrides={"hsl_enabled": 1.0, "hsl_red_threshold": 0.03},
+    )
+
+    assert args.case == "tm-single-long-hsl"
+    assert np.all(
+        matrix[:, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("hsl_enabled")]
+        == 1.0
+    )
+    assert np.all(
+        matrix[
+            :,
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "hsl_red_threshold"
+            ),
+        ]
+        == 0.03
+    )
+
+
 @pytest.mark.parametrize(
     "case, extra_args",
     (
@@ -135,6 +160,7 @@ def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
                 "cold_dispatch_count": 0,
                 "dispatch_chunk_count": 4,
                 "dispatch_count": 4,
+                "dispatch_chunk_wall_seconds": [0.4, 0.3, 0.2, 0.1],
                 "kernel_candidate_bars": 80,
                 "timings_seconds": {
                     "cold_compilation": 0.0,
@@ -164,6 +190,10 @@ def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
     assert report["actual_dispatch_batch_size"] == 2
     assert report["dispatch_chunk_count"] == 4
     assert report["dispatch_count_per_run"] == 4
+    assert report["dispatch_chunk_wall_seconds_max"] == pytest.approx(0.4)
+    assert report["warm"]["dispatch_chunk_wall_seconds_max_p50"] == pytest.approx(
+        0.4
+    )
     assert report["kernel_candidate_bars"] == 80
 
 

@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Long-running Apple MPS proxy generations now emit rate-limited dispatch progress with elapsed
+  time and ETA after 30 seconds, while opt-in profiles record each dispatch chunk's wall time. The
+  deterministic offline benchmark adds a single-side Trailing Martingale case with HSL enabled so
+  HSL-heavy dispatch sizing and kernel changes can be measured directly.
+
 - Apple MPS EMA Anchor optimization now compiles a one-side kernel when HSL is disabled, allowing
   Metal to eliminate the inactive side and HSL state from the hot candle loop. Dual-side and HSL
   runs keep the generic kernel, and exact Rust validation remains authoritative. The offline GPU

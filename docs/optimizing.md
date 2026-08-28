@@ -729,7 +729,9 @@ reduction, and remaining host overhead. Shape metadata includes requested and ac
 sizes, dispatch chunk and strategy-kernel counts, candidate-bars, candle/coin/side counts, requested
 optional metric features, and cold/warm dispatch counts. Exact Rust evaluation remains
 authoritative; profiling fields are diagnostic log output and are not added to retained optimization
-results.
+results. Chunked proxy generations that run for at least 30 seconds also emit rate-limited ordinary
+progress with completed chunks and candidates, elapsed time, and ETA. This progress remains
+available without enabling profiling or adding synchronization points.
 
 For comparable local MPS measurements, first confirm another optimizer is not using the device,
 then run each case in a fresh process. The harness uses only fixed-seed, in-memory synthetic candles
@@ -739,6 +741,7 @@ optimization results.
 ```bash
 passivbot tool gpu-proxy-benchmark --case ema-single-long
 passivbot tool gpu-proxy-benchmark --case tm-single-long
+passivbot tool gpu-proxy-benchmark --case tm-single-long-hsl
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overhead
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overrides
 # Hold one candidate matrix constant while measuring dispatch chunking:
@@ -749,13 +752,15 @@ passivbot tool gpu-proxy-benchmark --case ema-single-long \
 The single-coin cases default to 60,000 one-minute candles; the overhead-sensitive multicoin cases
 default to 4,320 candles and eight coins. Every report records the seed and workload shape, cold
 compile/run timing, a fixture hash, and warm p50 across five repeated runs, including
-candidates/second, kernel time, dispatch count, device transfer, and host overhead. Use identical
-arguments and immutable commits for before/after comparisons. The harness calls the production
-proxy evaluation path, including its full output transfer, metric reduction, and result
-materialization. Run one `--case` per process when comparing cold compilation; `--case all` is
-convenient for smoke checks, and shared-cache hit/miss state still keeps later cold/warm labels
-accurate. `--dispatch-batch-size` defaults to `--candidates`; setting it lower preserves the fixed
-candidate matrix and reports the actual chunk and strategy-dispatch counts, which isolates dispatch
+candidates/second, kernel time, maximum chunk wall time, dispatch count, device transfer, and host
+overhead. The HSL case uses the same fixed candles and candidate generation as ordinary Trailing
+Martingale while enabling a deterministic long-side HSL lifecycle. Use identical arguments and
+immutable commits for before/after comparisons. The harness calls the production proxy evaluation
+path, including its full output transfer, metric reduction, and result materialization. Run one
+`--case` per process when comparing cold compilation; `--case all` is convenient for smoke checks,
+and shared-cache hit/miss state still keeps later cold/warm labels accurate.
+`--dispatch-batch-size` defaults to `--candidates`; setting it lower preserves the fixed candidate
+matrix and reports the actual chunk and strategy-dispatch counts, which isolates dispatch
 saturation from population-size changes.
 
 ### Pymoo Configuration
