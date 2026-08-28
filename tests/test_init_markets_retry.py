@@ -371,3 +371,47 @@ async def test_init_markets_uses_staged_refresh_for_bybit(monkeypatch):
     assert bot.positions_balance_calls == 0
     assert bot.open_orders_calls == 0
     assert bot.min_cost_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_init_markets_waits_for_initial_balance_confirmation(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+
+    async def _update_exchange_config(_attempt):
+        return None
+
+    bot = _FakeBot(_update_exchange_config)
+    bot.exchange = "bitunix"
+    bot.stop_signal_received = False
+    bot._last_authoritative_block_reason = "balance_transition_confirmation"
+    refresh_results = iter([False, False, True])
+    sleeps = []
+
+    async def _refresh_authoritative_state():
+        bot.refresh_authoritative_state_calls += 1
+        return next(refresh_results)
+
+    async def _sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
+
+    bot.refresh_authoritative_state = _refresh_authoritative_state
+    bot._sleep_unless_shutdown = _sleep_unless_shutdown
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.refresh_authoritative_state_calls == 3
+    assert sleeps == [
+        (5.0, "initial_balance_transition_confirmation"),
+        (5.0, "initial_balance_transition_confirmation"),
+    ]
+    assert bot.min_cost_calls == 1

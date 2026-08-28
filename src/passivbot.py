@@ -3824,7 +3824,20 @@ class Passivbot:
         self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
-        await self.refresh_authoritative_state()
+        authoritative_ready = await self.refresh_authoritative_state()
+        while (
+            authoritative_ready is False
+            and getattr(self, "_last_authoritative_block_reason", None)
+            == "balance_transition_confirmation"
+            and not self.stop_signal_received
+        ):
+            await self._sleep_unless_shutdown(
+                5.0,
+                stage="initial_balance_transition_confirmation",
+            )
+            if self.stop_signal_received:
+                return
+            authoritative_ready = await self.refresh_authoritative_state()
         self._assert_supported_live_state()
         self.set_market_specific_settings()
         await self.update_effective_min_cost()

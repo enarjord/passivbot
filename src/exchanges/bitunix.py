@@ -235,6 +235,47 @@ class BitunixClient:
             )
         )
 
+    def _clear_pending_balance_confirmation(self) -> None:
+        self._pending_balance_components = None
+        self._pending_balance_started_monotonic = None
+        self._pending_balance_observation_count = 0
+
+    def _confirm_balance_candidate(
+        self,
+        current: tuple[float, float, float],
+        *,
+        defer_message: str,
+    ) -> None:
+        now = time.monotonic()
+        if not self._balance_components_close(
+            self._pending_balance_components, current
+        ):
+            self._pending_balance_components = current
+            self._pending_balance_started_monotonic = now
+            self._pending_balance_observation_count = 1
+            logging.warning(defer_message)
+        else:
+            self._pending_balance_observation_count += 1
+        pending_started = self._pending_balance_started_monotonic
+        pending_seconds = max(
+            0.0,
+            now - float(now if pending_started is None else pending_started),
+        )
+        if (
+            self._pending_balance_observation_count >= 2
+            and pending_seconds >= self.BALANCE_TRANSITION_CONFIRMATION_SECONDS
+        ):
+            logging.warning(
+                "[balance] Bitunix balance state remained stable through "
+                "confirmation; action=resume_authoritative_state"
+            )
+            self._accepted_balance_components = current
+            self._clear_pending_balance_confirmation()
+            return
+        raise AuthoritativeSurfaceUnavailable(
+            "balance", self.BALANCE_TRANSITION_REASON
+        )
+
     def _validate_balance_transition(
         self,
         *,
@@ -246,13 +287,46 @@ class BitunixClient:
 
         The known inconsistent response moves ``available`` by exactly the
         unchanged locked amount while continuing to report that amount as locked.
-        Keep the last accepted components unchanged until the response either
-        reverts or remains stable across a bounded confirmation window.
+        Confirm an initial nonzero locked-funds state as well, so a restart during
+        the inconsistency cannot establish the duplicated response as trusted
+        truth. Keep the last accepted components unchanged until the response
+        either reverts or remains stable across a bounded confirmation window.
         """
         current = (available, frozen, margin)
         previous = self._accepted_balance_components
         if previous is None:
-            self._accepted_balance_components = current
+            current_used = frozen + margin
+            if current_used <= 0.0:
+                self._accepted_balance_components = current
+                self._clear_pending_balance_confirmation()
+                return
+            pending = self._pending_balance_components
+            if pending is not None:
+                pending_available, pending_frozen, pending_margin = pending
+                pending_used = pending_frozen + pending_margin
+                recovered_from_initial_duplication = bool(
+                    pending_used > 0.0
+                    and self._balance_values_close(frozen, pending_frozen)
+                    and self._balance_values_close(margin, pending_margin)
+                    and self._balance_values_close(
+                        pending_available - available, pending_used
+                    )
+                )
+                if recovered_from_initial_duplication:
+                    logging.info(
+                        "[balance] Bitunix initial balance returned to a consistent "
+                        "state; action=resume_authoritative_state"
+                    )
+                    self._accepted_balance_components = current
+                    self._clear_pending_balance_confirmation()
+                    return
+            self._confirm_balance_candidate(
+                current,
+                defer_message=(
+                    "[balance] Bitunix initial balance has nonzero locked funds; "
+                    "action=defer_authoritative_state_until_confirmed"
+                ),
+            )
             return
 
         previous_available, previous_frozen, previous_margin = previous
@@ -266,49 +340,21 @@ class BitunixClient:
         )
 
         if duplicates_locked_funds:
-            now = time.monotonic()
-            if not self._balance_components_close(
-                self._pending_balance_components, current
-            ):
-                self._pending_balance_components = current
-                self._pending_balance_started_monotonic = now
-                self._pending_balance_observation_count = 1
-                logging.warning(
+            self._confirm_balance_candidate(
+                current,
+                defer_message=(
                     "[balance] Bitunix reported locked funds in both available and used; "
                     "action=defer_authoritative_state"
-                )
-            else:
-                self._pending_balance_observation_count += 1
-            pending_started = self._pending_balance_started_monotonic
-            pending_seconds = max(
-                0.0,
-                now - float(now if pending_started is None else pending_started),
+                ),
             )
-            if (
-                self._pending_balance_observation_count >= 2
-                and pending_seconds >= self.BALANCE_TRANSITION_CONFIRMATION_SECONDS
-            ):
-                logging.warning(
-                    "[balance] Bitunix balance transition remained stable through "
-                    "confirmation; action=resume_authoritative_state"
-                )
-                self._accepted_balance_components = current
-                self._pending_balance_components = None
-                self._pending_balance_started_monotonic = None
-                self._pending_balance_observation_count = 0
-                return
-            raise AuthoritativeSurfaceUnavailable(
-                "balance", self.BALANCE_TRANSITION_REASON
-            )
+            return
 
         if self._pending_balance_components is not None:
             logging.info(
                 "[balance] Bitunix balance transition returned to a consistent state; "
                 "action=resume_authoritative_state"
             )
-            self._pending_balance_components = None
-            self._pending_balance_started_monotonic = None
-            self._pending_balance_observation_count = 0
+            self._clear_pending_balance_confirmation()
         self._accepted_balance_components = current
 
     def milliseconds(self) -> int:

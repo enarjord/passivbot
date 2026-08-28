@@ -324,7 +324,7 @@ async def test_load_markets_retries_observed_network_error(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("as_list", [False, True])
-async def test_balance_sums_disjoint_components_and_accepts_both_account_shapes(as_list):
+async def test_balance_sums_disjoint_components_after_initial_confirmation(as_list):
     client = _prepared_client()
     raw = {
         "marginCoin": "USDT",
@@ -335,8 +335,14 @@ async def test_balance_sums_disjoint_components_and_accepts_both_account_shapes(
         "crossUnrealizedPNL": "2",
         "isolationUnrealizedPNL": "-1",
     }
-    client._request = AsyncMock(return_value=[raw] if as_list else raw)
+    response = [raw] if as_list else raw
+    client._request = AsyncMock(side_effect=[response, response])
 
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    client._pending_balance_started_monotonic -= (
+        client.BALANCE_TRANSITION_CONFIRMATION_SECONDS + 1.0
+    )
     balance = await client.fetch_balance()
 
     assert balance["free"]["USDT"] == 1000.0
@@ -348,6 +354,7 @@ async def test_balance_sums_disjoint_components_and_accepts_both_account_shapes(
 @pytest.mark.asyncio
 async def test_balance_wallet_is_invariant_to_unrealized_pnl():
     client = _prepared_client()
+    client._accepted_balance_components = (90.0, 4.0, 6.0)
     responses = []
     for upnl in ("-25", "0", "25"):
         raw = {
@@ -368,6 +375,7 @@ async def test_balance_wallet_is_invariant_to_unrealized_pnl():
 @pytest.mark.asyncio
 async def test_balance_defers_duplicated_locked_funds_until_response_recovers():
     client = _prepared_client()
+    client._accepted_balance_components = (85.3, 0.4, 1.2)
 
     def account(*, available, transfer):
         return {
@@ -407,6 +415,7 @@ async def test_balance_defers_duplicated_locked_funds_until_response_recovers():
 @pytest.mark.asyncio
 async def test_balance_accepts_stable_exact_increase_after_bounded_confirmation():
     client = _prepared_client()
+    client._accepted_balance_components = (90.0, 4.0, 6.0)
     client._request = AsyncMock(
         side_effect=[
             {
@@ -452,6 +461,85 @@ async def test_balance_accepts_stable_exact_increase_after_bounded_confirmation(
 
     assert before["total"]["USDT"] == 100.0
     assert after["total"]["USDT"] == 110.0
+
+
+@pytest.mark.asyncio
+async def test_balance_restart_during_duplication_waits_for_consistent_recovery():
+    client = _prepared_client()
+
+    def account(available):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": "0.4",
+            "margin": "1.2",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-0.2",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    client._request = AsyncMock(
+        side_effect=[account(86.9), account(86.9), account(85.3)]
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    recovered = await client.fetch_balance()
+
+    assert recovered["free"]["USDT"] == pytest.approx(85.3)
+    assert recovered["used"]["USDT"] == pytest.approx(1.6)
+    assert recovered["total"]["USDT"] == pytest.approx(86.9)
+    assert client._accepted_balance_components == pytest.approx((85.3, 0.4, 1.2))
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_initial_locked_funds_require_bounded_confirmation():
+    client = _prepared_client()
+    raw = {
+        "marginCoin": "USDT",
+        "available": "90",
+        "frozen": "4",
+        "margin": "6",
+        "positionMode": "HEDGE",
+        "crossUnrealizedPNL": "0",
+        "isolationUnrealizedPNL": "0",
+    }
+    client._request = AsyncMock(side_effect=[raw, raw])
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    client._pending_balance_started_monotonic -= (
+        client.BALANCE_TRANSITION_CONFIRMATION_SECONDS + 1.0
+    )
+    confirmed = await client.fetch_balance()
+
+    assert confirmed["total"]["USDT"] == 100.0
+    assert client._accepted_balance_components == (90.0, 4.0, 6.0)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_initial_state_without_locked_funds_is_immediately_usable():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={
+            "marginCoin": "USDT",
+            "available": "100",
+            "frozen": "0",
+            "margin": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "0",
+            "isolationUnrealizedPNL": "0",
+        }
+    )
+
+    balance = await client.fetch_balance()
+
+    assert balance["total"]["USDT"] == 100.0
+    assert client._accepted_balance_components == (100.0, 0.0, 0.0)
 
 
 def test_hedge_order_normalization_preserves_position_and_action_side():
