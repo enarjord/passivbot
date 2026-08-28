@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin Trailing Martingale optimization now compiles dedicated long-only and
+  short-only kernels while HSL is enabled, allowing Metal to eliminate the inactive strategy side
+  without removing HSL lifecycle or opt-in metric features. The existing dispatch safety envelope
+  remains unchanged. Dual-side, EMA Anchor, multi-coin, HSL-disabled, and CPU paths retain their
+  existing kernel and dispatch contracts, and exact Rust validation remains authoritative.
+
 - Long-running Apple MPS proxy generations now emit rate-limited dispatch progress with elapsed
   time and ETA after 30 seconds, while opt-in profiles record each dispatch chunk's wall time. The
   deterministic offline benchmark adds a single-side Trailing Martingale case with HSL enabled so

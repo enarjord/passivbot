@@ -29,6 +29,8 @@ const MPS_TRAILING_LONG_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_TRAILING_LONG_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
 const MPS_TRAILING_SHORT_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_TRAILING_SHORT_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
+const MPS_TRAILING_LONG_HSL_PREAMBLE: &str = "#define PASSIVBOT_TRAILING_LONG_ONLY 1\n";
+const MPS_TRAILING_SHORT_HSL_PREAMBLE: &str = "#define PASSIVBOT_TRAILING_SHORT_ONLY 1\n";
 const MPS_EMA_LONG_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_EMA_LONG_ONLY 1\n#define PASSIVBOT_EMA_HSL_DISABLED 1\n";
 const MPS_EMA_SHORT_NO_HSL_PREAMBLE: &str =
@@ -99,6 +101,10 @@ pub static MPS_EMA_ANCHOR_MULTICOIN_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_multicoin_source(MPS_EMA_ANCHOR_MULTICOIN_BODY));
 pub static MPS_TRAILING_MARTINGALE_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_hsl_source(MPS_TRAILING_MARTINGALE_BODY));
+pub static MPS_TRAILING_MARTINGALE_LONG_HSL_SOURCE: LazyLock<String> =
+    LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_LONG_HSL_PREAMBLE));
+pub static MPS_TRAILING_MARTINGALE_SHORT_HSL_SOURCE: LazyLock<String> =
+    LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_SHORT_HSL_PREAMBLE));
 pub static MPS_TRAILING_MARTINGALE_LONG_NO_HSL_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_trailing_topology_source(MPS_TRAILING_LONG_NO_HSL_PREAMBLE));
 pub static MPS_TRAILING_MARTINGALE_SHORT_NO_HSL_SOURCE: LazyLock<String> =
@@ -128,6 +134,14 @@ pub fn mps_ema_anchor_multicoin_long_source() -> &'static str {
 
 pub fn mps_trailing_martingale_source() -> &'static str {
     MPS_TRAILING_MARTINGALE_SOURCE.as_str()
+}
+
+pub fn mps_trailing_martingale_long_hsl_source() -> &'static str {
+    MPS_TRAILING_MARTINGALE_LONG_HSL_SOURCE.as_str()
+}
+
+pub fn mps_trailing_martingale_short_hsl_source() -> &'static str {
+    MPS_TRAILING_MARTINGALE_SHORT_HSL_SOURCE.as_str()
 }
 
 pub fn mps_trailing_martingale_long_no_hsl_source() -> &'static str {
@@ -453,6 +467,8 @@ mod tests {
             mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
             mps_trailing_martingale_source(),
+            mps_trailing_martingale_long_hsl_source(),
+            mps_trailing_martingale_short_hsl_source(),
             mps_trailing_martingale_long_no_hsl_source(),
             mps_trailing_martingale_short_no_hsl_source(),
             mps_trailing_martingale_multicoin_source(),
@@ -539,20 +555,35 @@ mod tests {
     }
 
     #[test]
-    fn trailing_martingale_specialized_sources_pin_one_side_without_hsl() {
+    fn trailing_martingale_specialized_sources_pin_one_side() {
         let variants = [
+            (
+                mps_trailing_martingale_long_hsl_source(),
+                "#define PASSIVBOT_TRAILING_LONG_ONLY 1",
+                false,
+            ),
+            (
+                mps_trailing_martingale_short_hsl_source(),
+                "#define PASSIVBOT_TRAILING_SHORT_ONLY 1",
+                false,
+            ),
             (
                 mps_trailing_martingale_long_no_hsl_source(),
                 "#define PASSIVBOT_TRAILING_LONG_ONLY 1",
+                true,
             ),
             (
                 mps_trailing_martingale_short_no_hsl_source(),
                 "#define PASSIVBOT_TRAILING_SHORT_ONLY 1",
+                true,
             ),
         ];
-        for (source, side_define) in variants {
+        for (source, side_define, hsl_disabled) in variants {
             assert!(source.starts_with(side_define));
-            assert!(source.contains("#define PASSIVBOT_TRAILING_HSL_DISABLED 1"));
+            assert_eq!(
+                source.contains("#define PASSIVBOT_TRAILING_HSL_DISABLED 1"),
+                hsl_disabled
+            );
             assert!(source.contains("#if defined(PASSIVBOT_TRAILING_LONG_ONLY)"));
             assert!(source.contains("#elif defined(PASSIVBOT_TRAILING_SHORT_ONLY)"));
             assert!(source.contains("#if defined(PASSIVBOT_TRAILING_HSL_DISABLED)"));

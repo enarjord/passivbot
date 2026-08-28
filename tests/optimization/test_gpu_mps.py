@@ -602,6 +602,40 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
     assert runner.hsl_raw_tail_enabled is False
 
 
+def test_trailing_martingale_hsl_specialization_keeps_requested_features(
+    monkeypatch,
+):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    def fake_base_init(self, *args, **kwargs):
+        self.long_enabled = False
+        self.short_enabled = True
+        self.hsl_ema_tail_enabled = bool(kwargs["hsl_ema_tail_enabled"])
+        self.hsl_raw_drawdown_enabled = bool(
+            kwargs["hsl_raw_drawdown_enabled"]
+        )
+        self.hsl_raw_tail_enabled = bool(kwargs["hsl_raw_tail_enabled"])
+
+    monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    runner = MpsTrailingMartingaleRunner(
+        None,
+        None,
+        None,
+        hsl_enabled=True,
+        hsl_ema_tail_enabled=True,
+        hsl_raw_drawdown_enabled=True,
+        hsl_raw_tail_enabled=True,
+    )
+
+    assert runner.shader_topology == "short_hsl"
+    assert runner.hsl_ema_tail_enabled is True
+    assert runner.hsl_raw_drawdown_enabled is True
+    assert runner.hsl_raw_tail_enabled is True
+
+
 @pytest.mark.parametrize("recovery_enabled", [False, True])
 @pytest.mark.parametrize("runner_name", ["ema_anchor", "trailing_martingale"])
 def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
@@ -14459,7 +14493,7 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
             inactive + recursive_close_hsl,
         ]
     )
-    output = runner_cls(
+    runner = runner_cls(
         market,
         run,
         data,
@@ -14469,7 +14503,24 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         hsl_ema_tail_enabled=True,
         hsl_raw_drawdown_enabled=True,
         hsl_raw_tail_enabled=True,
-    ).run(np.asarray(rows, dtype=np.float64))
+    )
+    output = runner.run(np.asarray(rows, dtype=np.float64))
+    generic_output = None
+    if strategy_kind == "trailing_martingale":
+        assert runner.shader_topology == f"{side}_hsl"
+        generic_runner = runner_cls(
+            market,
+            run,
+            data,
+            long_enabled=side == "long",
+            short_enabled=side == "short",
+            pnl_lookback_bars=5,
+            hsl_ema_tail_enabled=True,
+            hsl_raw_drawdown_enabled=True,
+            hsl_raw_tail_enabled=True,
+        )
+        generic_runner.shader_topology = "generic"
+        generic_output = generic_runner.run(np.asarray(rows, dtype=np.float64))
     market_runner = runner_cls(
         market,
         run,
@@ -14509,6 +14560,17 @@ def test_mps_single_coin_hsl_panics_and_permanently_halts(strategy_kind, side):
         max_realized_loss_pct=0.0,
     ).run(np.asarray([rows[9]], dtype=np.float64))
     torch.mps.synchronize()
+
+    if generic_output is not None:
+        assert output.keys() == generic_output.keys()
+        for key in output:
+            torch.testing.assert_close(
+                output[key].cpu(),
+                generic_output[key].cpu(),
+                rtol=1.0e-6,
+                atol=1.0e-6,
+                equal_nan=True,
+            )
 
     size_key = "psize" if side == "long" else "short_psize"
     assert output[size_key][0].item() > 0.0

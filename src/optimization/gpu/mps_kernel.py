@@ -549,6 +549,60 @@ def _trailing_martingale_shader_library(
     return torch.mps.compile_shader(source)
 
 
+@lru_cache(maxsize=16)
+def _trailing_martingale_long_hsl_shader_library(
+    hsl_ema_tail_enabled: bool = False,
+    hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+    equity_balance_diff_enabled: bool = False,
+    entry_interval_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    source = _with_hsl_features(
+        passivbot_rust.mps_trailing_martingale_long_hsl_source_py(),
+        ema_tail_enabled=hsl_ema_tail_enabled,
+        raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+        raw_tail_enabled=hsl_raw_tail_enabled,
+    )
+    source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    source = _with_btc_risk(source, btc_risk_enabled)
+    source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    source = _with_entry_interval(source, entry_interval_enabled)
+    return torch.mps.compile_shader(source)
+
+
+@lru_cache(maxsize=16)
+def _trailing_martingale_short_hsl_shader_library(
+    hsl_ema_tail_enabled: bool = False,
+    hsl_raw_drawdown_enabled: bool = False,
+    hsl_raw_tail_enabled: bool = False,
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+    equity_balance_diff_enabled: bool = False,
+    entry_interval_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    source = _with_hsl_features(
+        passivbot_rust.mps_trailing_martingale_short_hsl_source_py(),
+        ema_tail_enabled=hsl_ema_tail_enabled,
+        raw_drawdown_enabled=hsl_raw_drawdown_enabled,
+        raw_tail_enabled=hsl_raw_tail_enabled,
+    )
+    source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    source = _with_btc_risk(source, btc_risk_enabled)
+    source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    source = _with_entry_interval(source, entry_interval_enabled)
+    return torch.mps.compile_shader(source)
+
+
 @lru_cache(maxsize=4)
 def _trailing_martingale_long_no_hsl_shader_library(
     recovery_distribution_enabled: bool = False,
@@ -2479,11 +2533,12 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             long_enabled=self.long_enabled,
             short_enabled=self.short_enabled,
             hsl_enabled=bool(hsl_enabled),
+            hsl_one_side_enabled=True,
         )
         # The specialized no-HSL kernels retain the original 66-column ABI.
         # Every EMA-tail metric is identically zero when HSL is disabled, so
         # keep that faster topology and let the decoder synthesize zeroes.
-        if self.shader_topology != "generic":
+        if self.shader_topology.endswith("_no_hsl"):
             self.hsl_ema_tail_enabled = False
             self.hsl_raw_drawdown_enabled = False
             self.hsl_raw_tail_enabled = False
@@ -2493,6 +2548,26 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         return loader(*args)
 
     def _shader_library_cache_call(self):
+        if self.shader_topology == "long_hsl":
+            return _trailing_martingale_long_hsl_shader_library, (
+                self.hsl_ema_tail_enabled,
+                self.hsl_raw_drawdown_enabled,
+                self.hsl_raw_tail_enabled,
+                self.recovery_distribution_enabled,
+                self.btc_risk_enabled,
+                self.equity_balance_diff_enabled,
+                self.entry_interval_enabled,
+            )
+        if self.shader_topology == "short_hsl":
+            return _trailing_martingale_short_hsl_shader_library, (
+                self.hsl_ema_tail_enabled,
+                self.hsl_raw_drawdown_enabled,
+                self.hsl_raw_tail_enabled,
+                self.recovery_distribution_enabled,
+                self.btc_risk_enabled,
+                self.equity_balance_diff_enabled,
+                self.entry_interval_enabled,
+            )
         if self.shader_topology == "long_no_hsl":
             return _trailing_martingale_long_no_hsl_shader_library, (
                 self.recovery_distribution_enabled,
