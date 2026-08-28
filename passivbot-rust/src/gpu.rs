@@ -423,6 +423,8 @@ mod tests {
         assert!(source.contains("short_coin_hsl_rolling && short_rolling_pnl.overflowed"));
         assert!(source.contains("prepare_coin_hsl_rolling_signal("));
         assert!(source.contains("reset_hsl_rolling_pnl_window("));
+        assert!(source.contains("indices[base + slot].x == k"));
+        assert!(source.contains("values[base + slot].y = fmax("));
         assert!(source.contains("const int pnl_lookback_bars"));
         assert!(source.contains("device float2* rolling_pnl_values"));
         assert!(source.contains("device int2* rolling_pnl_indices"));

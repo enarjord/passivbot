@@ -4,10 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Apple MPS single-coin `coin`-mode HSL screening now retains up to 8,192 realized-PnL events in
-  the finite lookback window. High-cadence candidates with more than 2,048 valid close events no
-  longer receive an artificial early-stop penalty after their separate entry-fee and close-PnL
-  records cross the old capacity, which could poison proxy/exact drift evidence;
+- Apple MPS single-coin `coin`-mode HSL screening now retains up to 8,192 realized-PnL event
+  candles in the finite lookback window and coalesces all same-candle entry fees and close PnL.
+  High-cadence candidates with more than 2,048 valid close events no longer receive an artificial
+  early-stop penalty from fill multiplicity crossing the old capacity, which could poison
+  proxy/exact drift evidence;
   overflow remains bounded and fail closed. The effective ring capacity is part of checkpoint
   identity, so finite-lookback coin-HSL checkpoints from the old capacity cannot mix stale proxy
   evidence with new evaluations. Exact Rust validation, CPU optimization, backtests, and live

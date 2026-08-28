@@ -43,10 +43,10 @@ MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 68
 MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 70
 MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
 # A 30-day coin-HSL lookback can legitimately contain slightly more than
-# 2,048 completed round trips for high-cadence single-coin candidates. Each
-# trip records its entry fee and close PnL separately. Keep this bounded, but
-# leave enough headroom that ordinary dense strategies do not fail closed
-# solely because their valid rolling window crossed the old capacity.
+# 2,048 completed round trips for high-cadence single-coin candidates. Metal
+# coalesces every realized-PnL component from one candle into one ring event,
+# so ladder fill multiplicity does not consume extra slots. Keep this bounded,
+# but leave enough headroom for dense valid event-candle windows.
 MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 8192
 MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 MPS_EQUITY_BALANCE_DIFF_COLS = 12

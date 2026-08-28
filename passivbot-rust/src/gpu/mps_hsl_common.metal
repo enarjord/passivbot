@@ -28,7 +28,10 @@ constant int HSL_SIGNAL_COIN = 2;
 // Finite coin-HSL PnL windows are candidate-local.  Their fill events live in
 // device buffers owned by the directional runner; this small thread-local
 // structure keeps only ring/deque cursors and the absolute realized cumsum.
-// The two packed buffers use float2(base_before, cumulative_after) and
+// Multiple realized-PnL components may occur on one candle (for example,
+// several martingale entry fees followed by a close).  They are coalesced into
+// one event-candle without changing the rolling current or peak.  The two
+// packed buffers use float2(base_before_candle, peak_during_candle) and
 // int2(event_k, monotonic_peak_slot) respectively.
 struct HslRollingPnlWindow {
     int event_head;
@@ -103,6 +106,37 @@ inline void record_hsl_rolling_pnl(
     prune_hsl_rolling_pnl_window(
         window, values, indices, base, capacity, k, lookback_bars
     );
+    if (window.event_count > 0) {
+        int slot = (window.event_head + window.event_count - 1) % capacity;
+        if (indices[base + slot].x == k) {
+            values[base + slot].y = fmax(
+                values[base + slot].y, window.absolute_cumulative
+            );
+            if (window.peak_count > 0) {
+                int peak_tail = (
+                    window.peak_head + window.peak_count - 1
+                ) % capacity;
+                if (indices[base + peak_tail].y == slot) {
+                    window.peak_count -= 1;
+                }
+            }
+            while (window.peak_count > 0) {
+                int back = (
+                    window.peak_head + window.peak_count - 1
+                ) % capacity;
+                int peak_slot = indices[base + back].y;
+                if (values[base + peak_slot].y
+                    > values[base + slot].y) break;
+                window.peak_count -= 1;
+            }
+            int peak_tail = (
+                window.peak_head + window.peak_count
+            ) % capacity;
+            indices[base + peak_tail].y = slot;
+            window.peak_count += 1;
+            return;
+        }
+    }
     if (window.event_count >= capacity || window.peak_count >= capacity) {
         window.overflowed = true;
         return;

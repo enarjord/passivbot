@@ -898,8 +898,8 @@ def test_mps_coin_hsl_rolling_pnl_window_expires_and_resets_fill_events():
     import passivbot_rust
 
     dense_round_trip_count = 2_096
-    dense_event_count = dense_round_trip_count * 2
-    assert MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY >= dense_event_count
+    fills_per_round_trip = 4
+    assert MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY >= dense_round_trip_count
     probe_kernel = r"""
 kernel void passivbot_hsl_rolling_pnl_probe(
     device float2* values,
@@ -974,26 +974,43 @@ kernel void passivbot_hsl_rolling_pnl_probe(
 
     HslRollingPnlWindow dense = init_hsl_rolling_pnl_window();
     for (int k = 0; k < __DENSE_ROUND_TRIP_COUNT__; ++k) {
+        for (int fill = 0; fill < __FILLS_PER_ROUND_TRIP__; ++fill) {
+            record_hsl_rolling_pnl(
+                dense, values, indices, 6, __DENSE_CAPACITY__, k,
+                __DENSE_ROUND_TRIP_COUNT__ + 1, true, -0.1f
+            );
+        }
         record_hsl_rolling_pnl(
             dense, values, indices, 6, __DENSE_CAPACITY__, k,
-            __DENSE_EVENT_COUNT__ + 1, true, 1.0f
-        );
-        record_hsl_rolling_pnl(
-            dense, values, indices, 6, __DENSE_CAPACITY__, k,
-            __DENSE_EVENT_COUNT__ + 1, true, -0.1f
+            __DENSE_ROUND_TRIP_COUNT__ + 1, true, 1.0f
         );
     }
     output[12] = dense.overflowed ? 1.0f : 0.0f;
+    output[13] = float(dense.event_count);
+
+    HslRollingPnlWindow coalesced = init_hsl_rolling_pnl_window();
+    record_hsl_rolling_pnl(
+        coalesced, values, indices, 6, __DENSE_CAPACITY__, 0, 2, true, 50.0f
+    );
+    record_hsl_rolling_pnl(
+        coalesced, values, indices, 6, __DENSE_CAPACITY__, 0, 2, true, -80.0f
+    );
+    HslRollingPnlSignal coalesced_signal = effective_hsl_rolling_pnl(
+        coalesced, values, indices, 6, __DENSE_CAPACITY__, 0, 2
+    );
+    output[14] = coalesced_signal.peak;
+    output[15] = coalesced_signal.current;
+    output[16] = float(coalesced.event_count);
 }
 """.replace(
         "__DENSE_ROUND_TRIP_COUNT__", str(dense_round_trip_count)
-    ).replace("__DENSE_EVENT_COUNT__", str(dense_event_count)).replace(
+    ).replace("__FILLS_PER_ROUND_TRIP__", str(fills_per_round_trip)).replace(
         "__DENSE_CAPACITY__", str(MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY)
     )
     buffer_size = 6 + MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
     values = torch.empty((buffer_size, 2), dtype=torch.float32, device="mps")
     indices = torch.empty((buffer_size, 2), dtype=torch.int32, device="mps")
-    output = torch.zeros(13, dtype=torch.float32, device="mps")
+    output = torch.zeros(17, dtype=torch.float32, device="mps")
     library = torch.mps.compile_shader(
         passivbot_rust.mps_ema_anchor_source_py() + probe_kernel
     )
@@ -1017,6 +1034,10 @@ kernel void passivbot_hsl_rolling_pnl_probe(
         0.0,
         1.0,
         0.0,
+        float(dense_round_trip_count),
+        50.0,
+        -30.0,
+        1.0,
     ]
 
 
@@ -13226,6 +13247,76 @@ def test_mps_tm_recursive_market_entry_retains_exact_twel_prefix(
     # snapshot, before backtest-only adverse slippage is applied to the fill.
     assert promoted[size_key].item() * 100.0 / 1_000.0 < threshold
     assert promoted["balance"].item() < 1_000.0
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_coin_hsl_coalesces_recursive_same_candle_entry_fees(side):
+    count = 5
+    close = np.full(count, 100.0)
+    high = np.full(count, 100.0)
+    low = np.full(count, 100.0)
+    low[3] = 99.89
+    high[3] = 100.11
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(
+        initial_ema_dist=0.001,
+        gate_initial=False,
+        gate_reentry=False,
+        entry_gate=True,
+        threshold=0.15,
+    )
+    for key, value in {
+        "entry_double_down_factor": 1.0,
+        "entry_initial_qty_pct": 0.05,
+        "entry_threshold_base_pct": 0.001,
+        "entry_retracement_base_pct": 0.0,
+        "close_threshold_base_pct": 10.0,
+        "close_retracement_base_pct": 0.001,
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 1.0,
+        "hsl_signal_mode": 2.0,
+    }.items():
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(key)] = value
+    params = np.asarray([row + row], dtype=np.float64)
+    runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        pnl_lookback_bars=count,
+        taker_fee=0.01,
+        market_order_slippage_pct=0.01,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.003,
+    )
+    # Three production ladder fills land on one candle. A one-slot ring proves
+    # their fees are coalesced rather than overflowing per fill.
+    runner.rolling_capacity = 1
+
+    output = runner.run(params)
+    torch.mps.synchronize()
+
+    assert output["fill_count_entry"].item() == 3.0
+    assert output["alive"].item()
+    assert output["balance"].item() > 0.0
 
 
 @pytest.mark.skipif(
