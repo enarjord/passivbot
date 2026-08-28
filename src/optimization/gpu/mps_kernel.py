@@ -2784,6 +2784,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self._encode_hour_boundary_flags()
         self.hsl_diagnostics_enabled = bool(hsl_diagnostics_enabled)
         if not self.hsl_diagnostics_enabled and (
             self.hsl_ema_tail_enabled
@@ -2807,6 +2808,20 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.hsl_ema_tail_enabled = False
             self.hsl_raw_drawdown_enabled = False
             self.hsl_raw_tail_enabled = False
+
+    def _encode_hour_boundary_flags(self) -> None:
+        derived_timestamps = (
+            int(self.run_config.first_ts_ms)
+            + np.arange(self.n, dtype=np.int64)
+            * int(self.run_config.interval_ms)
+        )
+        hour_indices = derived_timestamps // 3_600_000
+        hour_boundaries = np.zeros(self.n, dtype=np.int32)
+        hour_boundaries[1:] = hour_indices[1:] > hour_indices[:-1]
+        boundary_bits = torch.as_tensor(
+            hour_boundaries * 2, dtype=torch.int32, device="mps"
+        )
+        self.flags[:, 3].bitwise_or_(boundary_bits)
 
     def _shader_library(self):
         loader, args = self._shader_library_cache_call()
@@ -2952,25 +2967,42 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     "recent-history MPS steps must satisfy 0 <= history start < "
                     "trade start < end_step - 1"
                 )
-            if self.recovery_distribution_enabled:
-                values[9] = max(
-                    1,
-                    int(
-                        np.ceil(
-                            (effective_end_step - trade_start_step)
-                            / self.recovery_stride
+            recovery_sample_count = (
+                min(
+                    self.n_recovery_samples,
+                    max(
+                        1,
+                        int(
+                            np.ceil(
+                                (effective_end_step - trade_start_step)
+                                / self.recovery_stride
+                            )
                         )
-                    )
-                    + 1,
+                        + 1,
+                    ),
                 )
+                if self.recovery_distribution_enabled
+                else 0
+            )
         else:
             history_start_step = -1
             trade_start_step = -1
+            recovery_sample_count = (
+                self.n_recovery_samples
+                if self.recovery_distribution_enabled
+                else 0
+            )
         # Reserve the existing recovery ABI slots even when that feature is
         # compiled out, then append the recent-window fields at fixed indices.
         if not self.recovery_distribution_enabled:
             values.extend([0, 0])
-        values.extend([history_start_step, trade_start_step])
+        values.extend(
+            [
+                history_start_step,
+                trade_start_step,
+                recovery_sample_count,
+            ]
+        )
         return values
 
     def run(
@@ -3016,15 +3048,18 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         )
         effective_recovery_sample_count = self.n_recovery_samples
         if self.recovery_distribution_enabled and effective_trade_start >= 0:
-            effective_recovery_sample_count = max(
-                1,
-                int(
-                    np.ceil(
-                        (effective_end_step - effective_trade_start)
-                        / self.recovery_stride
+            effective_recovery_sample_count = min(
+                self.n_recovery_samples,
+                max(
+                    1,
+                    int(
+                        np.ceil(
+                            (effective_end_step - effective_trade_start)
+                            / self.recovery_stride
+                        )
                     )
-                )
-                + 1,
+                    + 1,
+                ),
             )
         sizes_key = (
             batch_size,

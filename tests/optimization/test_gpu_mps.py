@@ -617,6 +617,11 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
         self.hsl_raw_tail_enabled = bool(kwargs["hsl_raw_tail_enabled"])
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None,
         None,
@@ -651,6 +656,11 @@ def test_trailing_martingale_hsl_specialization_keeps_requested_features(
         self.hsl_raw_tail_enabled = bool(kwargs["hsl_raw_tail_enabled"])
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None,
         None,
@@ -686,6 +696,11 @@ def test_trailing_martingale_hsl_specialization_disables_unrequested_diagnostics
         self.equity_balance_diff_enabled = False
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None,
         None,
@@ -802,7 +817,12 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = _tm_single_row(initial_ema_dist=0.0)
-    matrix = np.asarray([row + row], dtype=np.float64)
+    row_two = _tm_single_row(initial_ema_dist=0.002)
+    matrix = np.asarray([row + row, row_two + row_two], dtype=np.float64)
+    volatility_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_threshold_volatility_1h_weight"
+    )
+    matrix[:, volatility_column] = [0.25, 0.5]
 
     def run_once(end_step=None, history_start_step=None, trade_start_step=None):
         runner = MpsTrailingMartingaleRunner(
@@ -812,6 +832,7 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
             long_enabled=True,
             short_enabled=False,
             hsl_enabled=False,
+            recovery_distribution_enabled=True,
         )
         return runner.run(
             matrix,
@@ -849,6 +870,7 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
         long_enabled=True,
         short_enabled=False,
         hsl_enabled=False,
+        recovery_distribution_enabled=True,
     ).run(matrix)
     torch.mps.synchronize()
 
@@ -858,9 +880,9 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
                 ordinary[key], explicit_full[key], rtol=0.0, atol=0.0,
                 equal_nan=True,
             )
-    assert truncated["last_eq_ts"].item() < ordinary["last_eq_ts"].item()
-    assert recent["first_eq_ts"].item() == 80 * 60_000
-    assert recent["last_eq_ts"].item() == ordinary["last_eq_ts"].item()
+    assert truncated["last_eq_ts"][0].item() < ordinary["last_eq_ts"][0].item()
+    assert recent["first_eq_ts"][0].item() == 80 * 60_000
+    assert recent["last_eq_ts"][0].item() == ordinary["last_eq_ts"][0].item()
     for key in (
         "balance",
         "psize",
@@ -872,11 +894,20 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
         "held_sum_ms",
     ):
         torch.testing.assert_close(recent[key], sliced[key], rtol=0.0, atol=0.0)
-    assert recent["first_eq_ts"].item() == (
-        sliced["first_eq_ts"].item() + 59 * 60_000
+    torch.testing.assert_close(
+        recent["strategy_eq_recovery_samples"],
+        sliced["strategy_eq_recovery_samples"][
+            :, : recent["strategy_eq_recovery_samples"].shape[1]
+        ],
+        rtol=0.0,
+        atol=0.0,
+        equal_nan=True,
     )
-    assert recent["last_eq_ts"].item() == (
-        sliced["last_eq_ts"].item() + 59 * 60_000
+    assert recent["first_eq_ts"][0].item() == (
+        sliced["first_eq_ts"][0].item() + 59 * 60_000
+    )
+    assert recent["last_eq_ts"][0].item() == (
+        sliced["last_eq_ts"][0].item() + 59 * 60_000
     )
 
 
@@ -936,7 +967,7 @@ def test_tm_size_buffer_appends_recent_window_after_recovery_fields(
     runner.pnl_lookback_bars = 7
     runner.recovery_distribution_enabled = recovery_enabled
     runner.recovery_stride = 2
-    runner.n_recovery_samples = 4
+    runner.n_recovery_samples = 10
 
     ordinary = runner._trailing_single_coin_size_values(5, 13)
     recent = runner._trailing_single_coin_size_values(
@@ -946,10 +977,17 @@ def test_tm_size_buffer_appends_recent_window_after_recovery_fields(
         trade_start_step=10,
     )
 
-    recovery = [2, 4] if recovery_enabled else [0, 0]
-    assert ordinary == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [-1, -1]
-    recent_recovery = [2, 5] if recovery_enabled else [0, 0]
-    assert recent == [5, 17, 2, 13, 3, 9, 7, 11] + recent_recovery + [5, 10]
+    recovery = [2, 10] if recovery_enabled else [0, 0]
+    assert ordinary == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [
+        -1,
+        -1,
+        10 if recovery_enabled else 0,
+    ]
+    assert recent == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [
+        5,
+        10,
+        5 if recovery_enabled else 0,
+    ]
     with pytest.raises(ValueError, match="requires both"):
         runner._trailing_single_coin_size_values(
             5, 13, history_start_step=5
@@ -969,6 +1007,11 @@ def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatc
         self.recovery_distribution_enabled = False
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None, None, None, market_orders_allowed=True, hsl_enabled=False
     )
