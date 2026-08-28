@@ -465,6 +465,13 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
             "batch_size": len(parameters),
             "dispatch_count": 1,
             "cold": len(calls) == 1,
+            "dispatch_specialization": {
+                "trailing_entry_only": True,
+                "trailing_close_only": True,
+                "reducers_disabled": True,
+                "market_orders_disabled": True,
+                "loss_gate_disabled": True,
+            },
         }
         return output
 
@@ -478,6 +485,15 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
     assert profile["dispatch_batch_size"] == 2
     assert profile["dispatch_chunk_count"] == 3
     assert profile["actual_dispatch_batch_sizes"] == [2, 2, 1]
+    assert profile["dispatch_specializations"] == [
+        {
+            "trailing_entry_only": True,
+            "trailing_close_only": True,
+            "reducers_disabled": True,
+            "market_orders_disabled": True,
+            "loss_gate_disabled": True,
+        }
+    ] * 3
     assert profile["dispatch_count"] == 3
     assert profile["cold_dispatch_count"] == 1
     assert profile["warm_dispatch_count"] == 2

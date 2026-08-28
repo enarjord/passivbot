@@ -731,11 +731,22 @@ reports candidate materialization and Metal parameter packing, upload/buffer cle
 cold compilation versus warm library lookup, kernel execution, device-to-host transfer, metric
 reduction, and remaining host overhead. Shape metadata includes requested and actual dispatch batch
 sizes, dispatch chunk and strategy-kernel counts, candidate-bars, candle/coin/side counts, requested
-optional metric features, and cold/warm dispatch counts. Exact Rust evaluation remains
+optional metric features, dispatch-proven Trailing Martingale specializations, and cold/warm
+dispatch counts. Exact Rust evaluation remains
 authoritative; profiling fields are diagnostic log output and are not added to retained optimization
 results. Chunked proxy generations that run for at least 30 seconds also emit rate-limited ordinary
 progress with completed chunks and candidates, elapsed time, and ETA. This progress remains
 available without enabling profiling or adding synchronization points.
+
+Single-coin Trailing Martingale runners inspect the packed rows in each dispatch before choosing a
+cached Metal library. When every enabled-side candidate has positive entry or close retracement,
+the corresponding recursive grid path is compiled out. When every enabled-side candidate disables
+the position/total-exposure enforcers and auto-unstuck, those reducer paths are compiled out as a
+group. Fixed run settings similarly specialize ordinary market execution and the realized-loss
+gate. A mixed dispatch keeps each relevant full path, so this changes compiled work rather than
+proxy semantics. A run may record an additional cold compile if its dispatch feature shape changes.
+HSL topology likewise considers enabled sides only; an HSL setting left on an exposure-disabled
+side does not make the active side pay for an HSL controller.
 
 For comparable local MPS measurements, first confirm another optimizer is not using the device,
 then run each case in a fresh process. The harness uses only fixed-seed, in-memory synthetic candles

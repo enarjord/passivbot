@@ -49,6 +49,7 @@ from optimization.gpu.mps_kernel import (
     _decode_multicoin_fused_outputs,
     _encode_max_realized_loss_pct,
     _pack_tm_parameter_matrix,
+    _tm_dispatch_specialization,
     _scale_directional_minute_parameters,
     _scale_ema_multicoin_coin_overrides,
     _scale_tm_multicoin_coin_overrides,
@@ -60,6 +61,7 @@ from optimization.gpu.mps_kernel import (
     _with_hsl_ema_tail,
     _with_hsl_features,
     _with_recovery_distribution,
+    _with_tm_dispatch_features,
     strategy_eq_recovery_distribution_from_samples,
 )
 from optimization.gpu.metrics import (
@@ -4565,7 +4567,10 @@ def test_mps_multicoin_recovery_samples_all_internal_nan_candle(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
+@pytest.mark.parametrize("inactive_hsl_enabled", [False, True])
+def test_mps_single_coin_service_dispatches_forced_delist_tail(
+    strategy_kind, inactive_hsl_enabled
+):
     from backtest import run_backtest
     from config.schema import get_template_config
     from optimization.gpu.service import MpsSingleCoinProxy
@@ -4614,7 +4619,9 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
         risk["we_excess_allowance_pct"] = 0.0
         risk["position_exposure_enforcer_enabled"] = False
         risk["total_exposure_enforcer_enabled"] = False
-        config["bot"][side]["hsl"]["enabled"] = False
+        config["bot"][side]["hsl"]["enabled"] = (
+            inactive_hsl_enabled if not enabled else False
+        )
         config["bot"][side]["unstuck"]["enabled"] = False
     if strategy_kind == "ema_anchor":
         config["bot"]["long"]["strategy"]["ema_anchor"].update(
@@ -4664,6 +4671,7 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(strategy_kind):
             "strategy_eq_recovery_days_p99",
         },
     )
+    assert proxy.runner.shader_topology == "long_no_hsl"
     result = proxy.evaluate([{}])[0]
     exact_fills, _, exact_analysis = run_backtest(
         hlcvs,
@@ -12505,6 +12513,85 @@ def _tm_single_row(
     ) + [-1.0]
 
 
+def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
+    row = _tm_single_row()
+    matrix = np.asarray([row + row, row + row], dtype=np.float32)
+
+    assert _tm_dispatch_specialization(
+        matrix,
+        long_enabled=True,
+        short_enabled=False,
+        market_orders_allowed=False,
+        loss_gate_enabled=False,
+    ) == (True, True, True, True, True)
+
+    entry_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_retracement_base_pct"
+    )
+    matrix[1, entry_column] = 0.0
+    assert _tm_dispatch_specialization(
+        matrix,
+        long_enabled=True,
+        short_enabled=False,
+        market_orders_allowed=True,
+        loss_gate_enabled=True,
+    ) == (False, True, True, False, False)
+
+    matrix[1, entry_column] = 0.001
+    side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+    short_wel_column = side_width + TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "wel_enforcer_enabled"
+    )
+    matrix[:, short_wel_column] = 1.0
+    assert _tm_dispatch_specialization(
+        matrix,
+        long_enabled=True,
+        short_enabled=False,
+        market_orders_allowed=False,
+        loss_gate_enabled=False,
+    )[2] is True
+    assert _tm_dispatch_specialization(
+        matrix,
+        long_enabled=True,
+        short_enabled=True,
+        market_orders_allowed=False,
+        loss_gate_enabled=False,
+    )[2] is False
+
+
+def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
+    import passivbot_rust
+
+    source = passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py()
+    transformed = _with_tm_dispatch_features(
+        source,
+        trailing_entry_only=True,
+        trailing_close_only=True,
+        reducers_disabled=True,
+        market_orders_disabled=True,
+        loss_gate_disabled=True,
+    )
+
+    for name in (
+        "PASSIVBOT_TM_TRAILING_ENTRY_ONLY",
+        "PASSIVBOT_TM_TRAILING_CLOSE_ONLY",
+        "PASSIVBOT_TM_REDUCERS_DISABLED",
+        "PASSIVBOT_TM_MARKET_ORDERS_DISABLED",
+        "PASSIVBOT_TM_LOSS_GATE_DISABLED",
+    ):
+        assert f"#define {name} 1" in transformed
+        assert f"#ifndef {name}" in transformed
+
+    assert _with_tm_dispatch_features(
+        source,
+        trailing_entry_only=False,
+        trailing_close_only=False,
+        reducers_disabled=False,
+        market_orders_disabled=False,
+        loss_gate_disabled=False,
+    ) == source
+
+
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
@@ -20011,13 +20098,19 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert source.count("float reducer_fee_rate = reducer_market") == 4
     assert "realized_loss_proxy_allows_close" in source
     assert "const float max_realized_loss_pct = settings[14]" in source
-    assert "const bool loss_gate_enabled = max_realized_loss_pct < 1.0f" in source
+    assert "const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED" in source
     assert "const float taker_fee = settings[15]" in source
     assert "const float market_order_slippage_pct = fmax(settings[16], 0.0f)" in source
     assert "const bool long_hsl_panic_market = settings[17] > 0.5f" in source
     assert "const bool short_hsl_panic_market = settings[18] > 0.5f" in source
     assert "market_execution ? taker_fee : maker_fee" in source
-    assert "const bool market_orders_allowed = settings[19] > 0.5f" in source
+    assert (
+        "const bool market_orders_allowed = !PASSIVBOT_TM_MARKET_ORDERS_DISABLED"
+        in source
+    )
+    assert "#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY" in source
+    assert "#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY" in source
+    assert "#ifndef PASSIVBOT_TM_REDUCERS_DISABLED" in source
     assert (
         "const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"
         in source

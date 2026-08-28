@@ -250,6 +250,7 @@ def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count
             else 0
         ),
         "actual_dispatch_batch_sizes": [],
+        "dispatch_specializations": [],
         "dispatch_chunk_wall_seconds": [],
         "dispatch_count": 0,
         "cold_dispatch_count": 0,
@@ -306,6 +307,9 @@ def _add_gpu_runner_profile(
     dispatch_count = int(runner_profile.get("dispatch_count", 1))
     cold = bool(runner_profile.get("cold", False))
     profile["actual_dispatch_batch_sizes"].append(batch_size)
+    dispatch_specialization = runner_profile.get("dispatch_specialization")
+    if dispatch_specialization is not None:
+        profile["dispatch_specializations"].append(dict(dispatch_specialization))
     profile["dispatch_count"] += dispatch_count
     profile["cold_dispatch_count"] += dispatch_count if cold else 0
     profile["warm_dispatch_count"] += 0 if cold else dispatch_count
@@ -1733,9 +1737,6 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
-        any_configured_hsl = any(
-            bool(bot.get("hsl_enabled")) for bot in (long_bot, short_bot)
-        )
         signal_mode = (
             backtest_params.get("equity_hard_stop_loss", {})
             .get("signal_mode", "unified")
@@ -1978,7 +1979,7 @@ class MpsSingleCoinProxy:
             runner_kwargs["hsl_diagnostics_enabled"] = _hsl_diagnostics_needed(
                 self.needed_metrics
             )
-        runner_kwargs["hsl_enabled"] = any_configured_hsl
+        runner_kwargs["hsl_enabled"] = bool(hsl_enabled_sides)
         self.runner = runner_cls(
             self.market,
             self.run,

@@ -65,6 +65,17 @@ _EQUITY_BALANCE_DIFF_DEFINE = (
     "#define PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED 1\n"
 )
 _ENTRY_INTERVAL_DEFINE = "#define PASSIVBOT_ENTRY_INTERVAL_ENABLED 1\n"
+_TM_TRAILING_ENTRY_ONLY_DEFINE = (
+    "#define PASSIVBOT_TM_TRAILING_ENTRY_ONLY 1\n"
+)
+_TM_TRAILING_CLOSE_ONLY_DEFINE = (
+    "#define PASSIVBOT_TM_TRAILING_CLOSE_ONLY 1\n"
+)
+_TM_REDUCERS_DISABLED_DEFINE = "#define PASSIVBOT_TM_REDUCERS_DISABLED 1\n"
+_TM_MARKET_ORDERS_DISABLED_DEFINE = (
+    "#define PASSIVBOT_TM_MARKET_ORDERS_DISABLED 1\n"
+)
+_TM_LOSS_GATE_DISABLED_DEFINE = "#define PASSIVBOT_TM_LOSS_GATE_DISABLED 1\n"
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -153,6 +164,53 @@ def _with_entry_interval(source: str, enabled: bool) -> str:
     return _ENTRY_INTERVAL_DEFINE + source
 
 
+def _with_tm_dispatch_features(
+    source: str,
+    *,
+    trailing_entry_only: bool,
+    trailing_close_only: bool,
+    reducers_disabled: bool,
+    market_orders_disabled: bool,
+    loss_gate_disabled: bool,
+) -> str:
+    features = (
+        (
+            trailing_entry_only,
+            "#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY",
+            _TM_TRAILING_ENTRY_ONLY_DEFINE,
+        ),
+        (
+            trailing_close_only,
+            "#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY",
+            _TM_TRAILING_CLOSE_ONLY_DEFINE,
+        ),
+        (
+            reducers_disabled,
+            "#ifndef PASSIVBOT_TM_REDUCERS_DISABLED",
+            _TM_REDUCERS_DISABLED_DEFINE,
+        ),
+        (
+            market_orders_disabled,
+            "#ifndef PASSIVBOT_TM_MARKET_ORDERS_DISABLED",
+            _TM_MARKET_ORDERS_DISABLED_DEFINE,
+        ),
+        (
+            loss_gate_disabled,
+            "#ifndef PASSIVBOT_TM_LOSS_GATE_DISABLED",
+            _TM_LOSS_GATE_DISABLED_DEFINE,
+        ),
+    )
+    for enabled, marker, define in features:
+        if not enabled:
+            continue
+        if marker not in source:
+            raise RuntimeError(
+                f"MPS source is missing the TM dispatch feature guard {marker}"
+            )
+        source = define + source
+    return source
+
+
 def _encode_max_realized_loss_pct(value: float) -> float:
     """Encode a float64 loss fraction without loosening its Metal budget."""
 
@@ -204,6 +262,59 @@ def _pack_tm_parameter_matrix(
                     np.finfo(np.float64).tiny
                 )
     return matrix
+
+
+def _tm_dispatch_specialization(
+    matrix: np.ndarray,
+    *,
+    long_enabled: bool,
+    short_enabled: bool,
+    market_orders_allowed: bool,
+    loss_gate_enabled: bool,
+) -> tuple[bool, bool, bool, bool, bool]:
+    """Prove dispatch-wide TM features before compiling away inactive paths."""
+
+    side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+    active_offsets = [
+        side_index * side_width
+        for side_index, enabled in enumerate((long_enabled, short_enabled))
+        if enabled
+    ]
+
+    def all_active_rows(predicate, key: str) -> bool:
+        key_index = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(key)
+        return bool(
+            active_offsets
+            and matrix.shape[0] > 0
+            and all(predicate(matrix[:, offset + key_index]) for offset in active_offsets)
+        )
+
+    trailing_entry_only = all_active_rows(
+        lambda values: np.all(np.isfinite(values) & (values > 0.0)),
+        "entry_retracement_base_pct",
+    )
+    trailing_close_only = all_active_rows(
+        lambda values: np.all(np.isfinite(values) & (values > 0.0)),
+        "close_retracement_base_pct",
+    )
+    reducers_disabled = all(
+        all_active_rows(
+            lambda values: np.all(np.isfinite(values) & (values <= 0.5)),
+            key,
+        )
+        for key in (
+            "wel_enforcer_enabled",
+            "twel_enforcer_enabled",
+            "unstuck_enabled",
+        )
+    )
+    return (
+        trailing_entry_only,
+        trailing_close_only,
+        reducers_disabled,
+        not market_orders_allowed,
+        not loss_gate_enabled,
+    )
 
 
 def _upgrade_legacy_single_coin_wel_params(
@@ -536,6 +647,11 @@ def _ema_anchor_short_no_hsl_shader_library(
 
 @lru_cache(maxsize=16)
 def _trailing_martingale_shader_library(
+    trailing_entry_only: bool = False,
+    trailing_close_only: bool = False,
+    reducers_disabled: bool = False,
+    market_orders_disabled: bool = False,
+    loss_gate_disabled: bool = False,
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
@@ -549,8 +665,16 @@ def _trailing_martingale_shader_library(
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
-    source = _with_hsl_features(
+    source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_source_py(),
+        trailing_entry_only=trailing_entry_only,
+        trailing_close_only=trailing_close_only,
+        reducers_disabled=reducers_disabled,
+        market_orders_disabled=market_orders_disabled,
+        loss_gate_disabled=loss_gate_disabled,
+    )
+    source = _with_hsl_features(
+        source,
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
@@ -565,6 +689,11 @@ def _trailing_martingale_shader_library(
 
 @lru_cache(maxsize=16)
 def _trailing_martingale_long_hsl_shader_library(
+    trailing_entry_only: bool = False,
+    trailing_close_only: bool = False,
+    reducers_disabled: bool = False,
+    market_orders_disabled: bool = False,
+    loss_gate_disabled: bool = False,
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
@@ -578,8 +707,16 @@ def _trailing_martingale_long_hsl_shader_library(
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
-    source = _with_hsl_features(
+    source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_long_hsl_source_py(),
+        trailing_entry_only=trailing_entry_only,
+        trailing_close_only=trailing_close_only,
+        reducers_disabled=reducers_disabled,
+        market_orders_disabled=market_orders_disabled,
+        loss_gate_disabled=loss_gate_disabled,
+    )
+    source = _with_hsl_features(
+        source,
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
@@ -594,6 +731,11 @@ def _trailing_martingale_long_hsl_shader_library(
 
 @lru_cache(maxsize=16)
 def _trailing_martingale_short_hsl_shader_library(
+    trailing_entry_only: bool = False,
+    trailing_close_only: bool = False,
+    reducers_disabled: bool = False,
+    market_orders_disabled: bool = False,
+    loss_gate_disabled: bool = False,
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
@@ -607,8 +749,16 @@ def _trailing_martingale_short_hsl_shader_library(
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
-    source = _with_hsl_features(
+    source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_short_hsl_source_py(),
+        trailing_entry_only=trailing_entry_only,
+        trailing_close_only=trailing_close_only,
+        reducers_disabled=reducers_disabled,
+        market_orders_disabled=market_orders_disabled,
+        loss_gate_disabled=loss_gate_disabled,
+    )
+    source = _with_hsl_features(
+        source,
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
@@ -621,8 +771,13 @@ def _trailing_martingale_short_hsl_shader_library(
     return torch.mps.compile_shader(source)
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _trailing_martingale_long_no_hsl_shader_library(
+    trailing_entry_only: bool = False,
+    trailing_close_only: bool = False,
+    reducers_disabled: bool = False,
+    market_orders_disabled: bool = False,
+    loss_gate_disabled: bool = False,
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
@@ -632,8 +787,16 @@ def _trailing_martingale_long_no_hsl_shader_library(
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
-    source = _with_recovery_distribution(
+    source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py(),
+        trailing_entry_only=trailing_entry_only,
+        trailing_close_only=trailing_close_only,
+        reducers_disabled=reducers_disabled,
+        market_orders_disabled=market_orders_disabled,
+        loss_gate_disabled=loss_gate_disabled,
+    )
+    source = _with_recovery_distribution(
+        source,
         recovery_distribution_enabled,
     )
     source = _with_btc_risk(source, btc_risk_enabled)
@@ -642,8 +805,13 @@ def _trailing_martingale_long_no_hsl_shader_library(
     return torch.mps.compile_shader(source)
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _trailing_martingale_short_no_hsl_shader_library(
+    trailing_entry_only: bool = False,
+    trailing_close_only: bool = False,
+    reducers_disabled: bool = False,
+    market_orders_disabled: bool = False,
+    loss_gate_disabled: bool = False,
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
@@ -653,8 +821,16 @@ def _trailing_martingale_short_no_hsl_shader_library(
         raise RuntimeError("Apple MPS is not available in this process")
     import passivbot_rust
 
-    source = _with_recovery_distribution(
+    source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py(),
+        trailing_entry_only=trailing_entry_only,
+        trailing_close_only=trailing_close_only,
+        reducers_disabled=reducers_disabled,
+        market_orders_disabled=market_orders_disabled,
+        loss_gate_disabled=loss_gate_disabled,
+    )
+    source = _with_recovery_distribution(
+        source,
         recovery_distribution_enabled,
     )
     source = _with_btc_risk(source, btc_risk_enabled)
@@ -1102,6 +1278,8 @@ class MpsEmaAnchorRunner:
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             max_realized_loss_pct
         )
+        self.loss_gate_enabled = encoded_max_realized_loss_pct < 1.0
+        self.market_orders_allowed = bool(market_orders_allowed)
         taker_fee = market.maker_fee if taker_fee is None else float(taker_fee)
         market_order_slippage_pct = float(market_order_slippage_pct)
         market_order_near_touch_threshold = float(
@@ -2573,9 +2751,21 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         loader, args = self._shader_library_cache_call()
         return loader(*args)
 
-    def _shader_library_cache_call(self):
+    def _shader_library_cache_call(
+        self,
+        dispatch_features: tuple[bool, bool, bool, bool, bool] | None = None,
+    ):
+        if dispatch_features is None:
+            dispatch_features = (
+                False,
+                False,
+                False,
+                not getattr(self, "market_orders_allowed", False),
+                not getattr(self, "loss_gate_enabled", False),
+            )
         if self.shader_topology == "long_hsl":
             return _trailing_martingale_long_hsl_shader_library, (
+                *dispatch_features,
                 self.hsl_ema_tail_enabled,
                 self.hsl_raw_drawdown_enabled,
                 self.hsl_raw_tail_enabled,
@@ -2587,6 +2777,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
         if self.shader_topology == "short_hsl":
             return _trailing_martingale_short_hsl_shader_library, (
+                *dispatch_features,
                 self.hsl_ema_tail_enabled,
                 self.hsl_raw_drawdown_enabled,
                 self.hsl_raw_tail_enabled,
@@ -2598,6 +2789,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
         if self.shader_topology == "long_no_hsl":
             return _trailing_martingale_long_no_hsl_shader_library, (
+                *dispatch_features,
                 self.recovery_distribution_enabled,
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
@@ -2605,12 +2797,14 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
         if self.shader_topology == "short_no_hsl":
             return _trailing_martingale_short_no_hsl_shader_library, (
+                *dispatch_features,
                 self.recovery_distribution_enabled,
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
             )
         return _trailing_martingale_shader_library, (
+            *dispatch_features,
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -2672,6 +2866,13 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
     def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
+        dispatch_features = _tm_dispatch_specialization(
+            matrix,
+            long_enabled=self.long_enabled,
+            short_enabled=self.short_enabled,
+            market_orders_allowed=self.market_orders_allowed,
+            loss_gate_enabled=self.loss_gate_enabled,
+        )
         packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device="mps")
         batch_size = int(matrix.shape[0])
@@ -2699,7 +2900,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 device="mps",
             )
         prepared = time.perf_counter() if profile else 0.0
-        loader, library_args = self._shader_library_cache_call()
+        loader, library_args = self._shader_library_cache_call(dispatch_features)
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
@@ -2748,6 +2949,13 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "batch_size": batch_size,
                 "dispatch_count": 1,
                 "cold": cold,
+                "dispatch_specialization": {
+                    "trailing_entry_only": dispatch_features[0],
+                    "trailing_close_only": dispatch_features[1],
+                    "reducers_disabled": dispatch_features[2],
+                    "market_orders_disabled": dispatch_features[3],
+                    "loss_gate_disabled": dispatch_features[4],
+                },
             }
         else:
             self.last_profile = {}
