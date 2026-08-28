@@ -62,6 +62,12 @@ GPU_DEFAULTS = {
     "drift_halt": 0.60,
     "exact_workers": 0,
     "max_pending_exact": 0,
+    "successive_halving": {
+        "enabled": False,
+        "history_fractions": [0.25, 0.5, 1.0],
+        "survival_fraction": 0.5,
+        "min_survivors": 64,
+    },
 }
 
 MIN_DRIFT_PROBES = 8
@@ -511,6 +517,19 @@ def validate_gpu_preparation_scope(
             allow_suite=suite_enabled,
         )
     )
+    halving_config = (
+        config.get("optimize", {}).get("gpu", {}).get("successive_halving", {})
+        or {}
+    )
+    if not isinstance(halving_config, dict):
+        raise TypeError("optimize.gpu.successive_halving must be an object")
+    if bool(halving_config.get("enabled")) and (
+        strategy_kind != "trailing_martingale" or suite_enabled
+    ):
+        raise ValueError(
+            "optimize.gpu.successive_halving currently requires a non-suite, "
+            "single-coin trailing_martingale optimization"
+        )
     if bool(suite_cfg.get("enabled")):
         from optimization.warmup import _apply_config_overrides
 
@@ -986,6 +1005,57 @@ def _resolve_options(config: dict) -> dict:
     for key, default in GPU_DEFAULTS.items():
         if key in (configured or {}):
             options[key] = type(default)(configured[key])
+    halving = dict(GPU_DEFAULTS["successive_halving"])
+    configured_halving = options.get("successive_halving")
+    if configured_halving is not None and not isinstance(configured_halving, dict):
+        raise TypeError("optimize.gpu.successive_halving must be an object")
+    halving.update(configured_halving or {})
+    unknown_halving = sorted(
+        set(halving) - set(GPU_DEFAULTS["successive_halving"])
+    )
+    if unknown_halving:
+        raise ValueError(
+            "unknown optimize.gpu.successive_halving settings: "
+            + ", ".join(unknown_halving)
+        )
+    halving["enabled"] = bool(halving["enabled"])
+    try:
+        fractions = [float(value) for value in halving["history_fractions"]]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "optimize.gpu.successive_halving.history_fractions must be an array "
+            "of finite fractions"
+        ) from exc
+    if (
+        not fractions
+        or any(
+            not math.isfinite(value) or value <= 0.0 or value > 1.0
+            for value in fractions
+        )
+        or any(right <= left for left, right in zip(fractions, fractions[1:]))
+        or not math.isclose(fractions[-1], 1.0, rel_tol=0.0, abs_tol=1.0e-12)
+    ):
+        raise ValueError(
+            "optimize.gpu.successive_halving.history_fractions must be strictly "
+            "increasing finite values in (0, 1] ending at 1.0"
+        )
+    survival_fraction = float(halving["survival_fraction"])
+    if not math.isfinite(survival_fraction) or not 0.0 < survival_fraction <= 1.0:
+        raise ValueError(
+            "optimize.gpu.successive_halving.survival_fraction must be greater "
+            "than zero and at most one"
+        )
+    min_survivors = int(halving["min_survivors"])
+    if min_survivors <= 0:
+        raise ValueError(
+            "optimize.gpu.successive_halving.min_survivors must be greater than zero"
+        )
+    halving.update(
+        history_fractions=fractions,
+        survival_fraction=survival_fraction,
+        min_survivors=min_survivors,
+    )
+    options["successive_halving"] = halving
     for key in (
         "population_size",
         "batch_size",
@@ -1017,6 +1087,13 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.drift_probes must be less than "
             "optimize.gpu.validate_per_generation so proxy-front safety evidence "
             "is always collected"
+        )
+    if halving["enabled"] and min(
+        min_survivors, int(options["population_size"])
+    ) < validations:
+        raise ValueError(
+            "optimize.gpu.successive_halving.min_survivors must be at least "
+            "optimize.gpu.validate_per_generation"
         )
     exact_workers = int(options["exact_workers"]) or int(
         config.get("optimize", {}).get("n_cpus", 0)
@@ -2076,6 +2153,142 @@ def _normalized_farthest_indices(values: np.ndarray, count: int) -> list[int]:
     return chosen
 
 
+def _successive_halving_survivor_indices(
+    objectives: np.ndarray,
+    violations: np.ndarray,
+    *,
+    count: int,
+) -> np.ndarray:
+    """Select a deterministic constraint-aware, Pareto-diverse rung subset."""
+
+    from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
+
+    objectives = np.asarray(objectives, dtype=np.float64)
+    violations = np.asarray(violations, dtype=np.float64)
+    if objectives.ndim != 2 or len(objectives) != len(violations):
+        raise ValueError("successive-halving objectives and violations must align")
+    count = min(max(0, int(count)), len(objectives))
+    if count == 0:
+        return np.empty(0, dtype=np.int64)
+
+    feasible = np.flatnonzero(np.isfinite(violations) & (violations <= 0.0))
+    feasible_ids = set(map(int, feasible))
+    infeasible = np.asarray(
+        sorted(
+            (
+                int(index)
+                for index in range(len(objectives))
+                if int(index) not in feasible_ids
+            ),
+            key=lambda index: (
+                float(violations[index])
+                if np.isfinite(violations[index])
+                else float("inf"),
+                index,
+            ),
+        ),
+        dtype=np.int64,
+    )
+    selected: list[int] = []
+    if len(feasible):
+        for front_local in NonDominatedSorting().do(objectives[feasible]):
+            front = feasible[np.asarray(front_local, dtype=np.int64)]
+            remaining = count - len(selected)
+            if remaining <= 0:
+                break
+            if len(front) <= remaining:
+                selected.extend(map(int, front))
+                continue
+            diverse = _normalized_farthest_indices(objectives[front], remaining)
+            selected.extend(int(front[index]) for index in diverse)
+            break
+    if len(selected) < count:
+        selected.extend(map(int, infeasible[: count - len(selected)]))
+    return np.asarray(selected, dtype=np.int64)
+
+
+def _evaluate_successive_halving(
+    candidates: list[dict],
+    *,
+    policy: dict,
+    evaluate_proxy,
+    proxy_fitness,
+    interrupt_check: InterruptCheck,
+    stage_callback=None,
+) -> tuple[list[dict], np.ndarray, np.ndarray, np.ndarray, list[dict]]:
+    """Evaluate progressively longer prefixes and return full-rung eligibility."""
+
+    active = np.arange(len(candidates), dtype=np.int64)
+    metric_rows: list[dict | None] = [None] * len(candidates)
+    objectives = None
+    violations = np.full(len(candidates), np.inf, dtype=np.float64)
+    trace: list[dict] = []
+    fractions = list(policy["history_fractions"])
+    for rung, fraction in enumerate(fractions):
+        interrupt_check()
+        stage_candidates = [candidates[int(index)] for index in active]
+        stage_metrics = evaluate_proxy(
+            stage_candidates,
+            history_fraction=float(fraction),
+        )
+        stage_objectives, stage_violations = proxy_fitness(stage_metrics)
+        if stage_callback is not None:
+            stage_callback(rung + 1, float(fraction), len(active))
+        if objectives is None:
+            objectives = np.full(
+                (len(candidates), stage_objectives.shape[1]),
+                np.nan,
+                dtype=np.float64,
+            )
+        objectives[active] = stage_objectives
+        violations[active] = stage_violations
+        for local_index, source_index in enumerate(active):
+            metric_rows[int(source_index)] = dict(stage_metrics[local_index])
+
+        final_rung = rung == len(fractions) - 1
+        survivor_count = len(active)
+        if not final_rung:
+            survivor_count = min(
+                len(active),
+                max(
+                    int(policy["min_survivors"]),
+                    int(math.ceil(len(active) * float(policy["survival_fraction"]))),
+                ),
+            )
+        trace.append(
+            {
+                "rung": rung + 1,
+                "history_fraction": float(fraction),
+                "candidate_count": int(len(active)),
+                "survivor_count": int(survivor_count),
+            }
+        )
+        if final_rung:
+            break
+        local_survivors = _successive_halving_survivor_indices(
+            stage_objectives,
+            stage_violations,
+            count=survivor_count,
+        )
+        active = active[local_survivors]
+
+    if objectives is None or any(row is None for row in metric_rows):
+        raise RuntimeError("successive-halving proxy evaluation produced incomplete rows")
+    full_rung_indices = active.copy()
+    rejected = np.ones(len(candidates), dtype=bool)
+    rejected[full_rung_indices] = False
+    # Partial-history rows remain useful as weak proposal evidence, but must
+    # never outrank or masquerade as full-history proxy evidence.
+    violations[rejected] = np.inf
+    return (
+        [dict(row) for row in metric_rows if row is not None],
+        objectives,
+        violations,
+        full_rung_indices,
+        trace,
+    )
+
+
 def _select_validation_indices(
     objectives: np.ndarray,
     scores: np.ndarray,
@@ -2702,12 +2915,13 @@ def _gpu_search_checkpoint_contract(
     optimizer_overrides,
     sig_digits,
     algorithm_contract,
+    proxy_evaluation_policy=None,
 ) -> dict:
     """Fingerprint fixed and dormant search inputs omitted from active genes."""
 
     if not (len(key_paths) == len(bounds) == len(base_vector)):
         raise ValueError("GPU checkpoint search contract shape mismatch")
-    return {
+    contract = {
         "version": 1,
         "sig_digits": int(sig_digits),
         "dimensions": [
@@ -2734,6 +2948,10 @@ def _gpu_search_checkpoint_contract(
         "optimizer_overrides": sorted(str(value) for value in optimizer_overrides),
         "algorithm": deepcopy(algorithm_contract),
     }
+    if proxy_evaluation_policy is not None:
+        contract["version"] = 2
+        contract["proxy_evaluation"] = deepcopy(proxy_evaluation_policy)
+    return contract
 
 
 def _save_checkpoint(path: str | None, state: dict) -> None:
@@ -3365,6 +3583,16 @@ def run_backend(
             evaluator.shared_hlcvs_np[exchange].shape[1]
         )
         suite_multicoin_sides = None
+    halving_policy = options["successive_halving"]
+    if halving_policy["enabled"] and (
+        suite_enabled
+        or max_coin_count != 1
+        or strategy_kind != "trailing_martingale"
+    ):
+        raise ValueError(
+            "optimize.gpu.successive_halving currently requires a non-suite, "
+            "single-coin trailing_martingale optimization"
+        )
     if max_coin_count > 1:
         multicoin_sides = (
             list(suite_multicoin_sides)
@@ -3715,7 +3943,13 @@ def run_backend(
             for _exchange, proxy in exchange_proxies
         ]
 
-        def evaluate_proxy(candidates):
+        def evaluate_proxy(candidates, *, history_fraction=1.0):
+            if not math.isclose(
+                float(history_fraction), 1.0, rel_tol=0.0, abs_tol=1.0e-12
+            ):
+                raise ValueError(
+                    "GPU suite proxy evaluation does not support partial history"
+                )
             return _evaluate_gpu_suite_proxies(
                 evaluator_for_pool,
                 scenario_proxies,
@@ -3737,8 +3971,13 @@ def run_backend(
         )
         profile_proxies = [proxy]
 
-        def evaluate_proxy(candidates):
-            return proxy.evaluate(candidates)
+        def evaluate_proxy(candidates, *, history_fraction=1.0):
+            end_step = (
+                proxy.end_step_for_history_fraction(history_fraction)
+                if float(history_fraction) < 1.0
+                else None
+            )
+            return proxy.evaluate(candidates, end_step=end_step)
 
     active_low = np.asarray(
         [bound.low for _name, _index, bound in active], dtype=np.float64
@@ -3874,6 +4113,9 @@ def run_backend(
             optimizer_overrides=gpu_optimizer_overrides,
             sig_digits=sig_digits,
             algorithm_contract=algorithm_contract,
+            proxy_evaluation_policy=(
+                halving_policy if halving_policy["enabled"] else None
+            ),
         ),
     )
     budget = int(config["optimize"]["iters"])
@@ -4227,14 +4469,57 @@ def run_backend(
                 else 0.0
             )
             proxy_started = time.perf_counter() if profile_enabled else 0.0
-            metric_rows = evaluate_proxy(proxy_candidates)
+            proxy_profile_records = []
+
+            def capture_halving_profile(rung, history_fraction, candidate_count):
+                if not profile_enabled:
+                    return
+                for item in profile_proxies:
+                    record = deepcopy(getattr(item, "last_profile", {}))
+                    record.update(
+                        successive_halving_rung=int(rung),
+                        history_fraction=float(history_fraction),
+                        rung_candidate_count=int(candidate_count),
+                    )
+                    proxy_profile_records.append(record)
+
+            if halving_policy["enabled"]:
+                (
+                    metric_rows,
+                    proxy_objectives,
+                    proxy_violations,
+                    full_rung_indices,
+                    halving_trace,
+                ) = _evaluate_successive_halving(
+                    proxy_candidates,
+                    policy=halving_policy,
+                    evaluate_proxy=evaluate_proxy,
+                    proxy_fitness=proxy_fitness,
+                    interrupt_check=interrupt_check,
+                    stage_callback=capture_halving_profile,
+                )
+            else:
+                metric_rows = evaluate_proxy(proxy_candidates)
+                proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
+                full_rung_indices = np.arange(len(rows), dtype=np.int64)
+                halving_trace = []
             proxy_seconds = (
                 time.perf_counter() - proxy_started if profile_enabled else 0.0
             )
-            proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
             proxy_evaluations += len(rows)
+            if halving_trace:
+                logging.info(
+                    "GPU successive halving | gen=%d rungs=%s full_history=%d/%d",
+                    generation + 1,
+                    ",".join(
+                        f"{item['history_fraction']:.0%}:{item['candidate_count']}"
+                        for item in halving_trace
+                    ),
+                    len(full_rung_indices),
+                    len(rows),
+                )
             if objective_scale.median is None:
-                objective_scale.fit(proxy_objectives)
+                objective_scale.fit(proxy_objectives[full_rung_indices])
             proxy_scores = objective_scale.score(proxy_objectives)
             population.set("F", proxy_objectives)
             population.set(
@@ -4263,13 +4548,17 @@ def run_backend(
                 int(options["validate_per_generation"]),
                 int(options["drift_probes"]),
             )
-            selections = _select_validation_indices(
-                proxy_objectives,
-                proxy_scores,
-                proxy_violations,
+            full_rung_selections = _select_validation_indices(
+                proxy_objectives[full_rung_indices],
+                proxy_scores[full_rung_indices],
+                proxy_violations[full_rung_indices],
                 total=validation_count,
                 probes=probe_count,
             )
+            selections = [
+                (int(full_rung_indices[index]), is_probe, is_proxy_front)
+                for index, is_probe, is_proxy_front in full_rung_selections
+            ]
             while True:
                 try:
                     exact_selections = _select_exact_validations(
@@ -4327,10 +4616,11 @@ def run_backend(
                 generation_wall_seconds = (
                     time.perf_counter() - generation_profile_started
                 )
-                proxy_profile_records = [
-                    deepcopy(getattr(item, "last_profile", {}))
-                    for item in profile_proxies
-                ]
+                if not halving_policy["enabled"]:
+                    proxy_profile_records = [
+                        deepcopy(getattr(item, "last_profile", {}))
+                        for item in profile_proxies
+                    ]
                 proxy_profile_wall = sum(
                     float(item.get("wall_seconds", 0.0))
                     for item in proxy_profile_records
@@ -4345,6 +4635,8 @@ def run_backend(
                     "generation",
                     generation=generation,
                     population_size=len(rows),
+                    successive_halving=halving_trace,
+                    full_history_candidate_count=len(full_rung_indices),
                     proxy_profiles=proxy_profile_records,
                     timings_seconds={
                         "nsga_ask": ask_seconds,

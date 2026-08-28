@@ -510,6 +510,12 @@ def get_template_config():
                         "exact_workers": 0,
                         "max_pending_exact": 0,
                         "population_size": 1024,
+                        "successive_halving": {
+                            "enabled": False,
+                            "history_fractions": [0.25, 0.5, 1.0],
+                            "min_survivors": 64,
+                            "survival_fraction": 0.5,
+                        },
                         "validate_per_generation": 8
                     },
                     "pymoo": {

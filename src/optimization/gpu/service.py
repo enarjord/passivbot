@@ -230,13 +230,26 @@ def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
     }
 
 
-def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count):
-    candle_count = max(
-        (int(getattr(runner, "n", 0)) for runner in runners), default=0
-    )
-    dispatch_batch_size = int(
-        getattr(proxy, "dispatch_batch_size", getattr(proxy, "batch_size", 0))
-    )
+def _new_gpu_proxy_profile(
+    proxy,
+    candidates,
+    runners,
+    *,
+    coin_count,
+    side_count,
+    candle_count=None,
+    dispatch_batch_size=None,
+):
+    if candle_count is None:
+        candle_count = max(
+            (int(getattr(runner, "n", 0)) for runner in runners), default=0
+        )
+    candle_count = int(candle_count)
+    if dispatch_batch_size is None:
+        dispatch_batch_size = int(
+            getattr(proxy, "dispatch_batch_size", getattr(proxy, "batch_size", 0))
+        )
+    dispatch_batch_size = int(dispatch_batch_size)
     return {
         "schema_version": 1,
         "scope": "proxy_evaluation",
@@ -2014,9 +2027,61 @@ class MpsSingleCoinProxy:
             rows.append(row)
         return np.asarray(rows, dtype=np.float64)
 
-    def evaluate(self, candidates: list[dict]) -> list[dict]:
+    def end_step_for_history_fraction(self, history_fraction: float) -> int:
+        """Map a prefix fraction to a safe candle boundary after warmup."""
+
+        fraction = float(history_fraction)
+        if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+            raise ValueError("GPU history fraction must be finite and in (0, 1]")
+        candle_count = int(self.runner.n)
+        minimum = min(
+            candle_count,
+            max(
+                3,
+                int(self.run.trade_start_idx) + 2,
+                int(self.run.first_valid_idx) + 2,
+            ),
+        )
+        return min(
+            candle_count,
+            max(minimum, int(np.ceil(candle_count * fraction))),
+        )
+
+    def evaluate(
+        self, candidates: list[dict], *, end_step: int | None = None
+    ) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
+        full_candle_count = max(
+            3,
+            int(
+                getattr(
+                    self.runner,
+                    "n",
+                    getattr(self, "metrics_data", {}).get("n", 3),
+                )
+            ),
+        )
+        effective_end_step = (
+            full_candle_count if end_step is None else int(end_step)
+        )
+        if not 3 <= effective_end_step <= full_candle_count:
+            raise ValueError(
+                "GPU single-coin end_step must be between 3 and the full candle "
+                f"count {full_candle_count}, got {effective_end_step}"
+            )
+        side_count = int(bool(getattr(self.runner, "long_enabled", True))) + int(
+            bool(getattr(self.runner, "short_enabled", False))
+        )
+        dispatch_batch_size = (
+            int(getattr(self, "dispatch_batch_size", self.batch_size))
+            if end_step is None
+            else _mps_dispatch_batch_size(
+                self.batch_size,
+                n_bars=effective_end_step,
+                n_sides=side_count,
+            )
+        )
         profile_started = time.perf_counter() if self.profile_enabled else 0.0
         profile = (
             _new_gpu_proxy_profile(
@@ -2024,16 +2089,14 @@ class MpsSingleCoinProxy:
                 candidates,
                 (self.runner,),
                 coin_count=1,
-                side_count=int(bool(getattr(self.runner, "long_enabled", True)))
-                + int(bool(getattr(self.runner, "short_enabled", False))),
+                side_count=side_count,
+                candle_count=effective_end_step,
+                dispatch_batch_size=dispatch_batch_size,
             )
             if self.profile_enabled
             else None
         )
         self.last_profile = {}
-        dispatch_batch_size = getattr(
-            self, "dispatch_batch_size", self.batch_size
-        )
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
         progress = _new_gpu_dispatch_progress(
             len(candidates), dispatch_batch_size
@@ -2055,12 +2118,16 @@ class MpsSingleCoinProxy:
             output = self.runner.run(
                 parameter_matrix,
                 profile=self.profile_enabled,
+                end_step=effective_end_step,
             )
             if profile is not None:
                 _add_gpu_runner_profile(
                     profile,
                     self.runner,
                     side_count=profile["side_count"],
+                    effective_candidate_steps=np.full(
+                        len(chunk), effective_end_step, dtype=np.int64
+                    ),
                 )
             interrupt_check()
             stage_started = (
@@ -2121,7 +2188,7 @@ class MpsSingleCoinProxy:
             objectives = self._compute_objectives(
                 output,
                 self.run,
-                self.metrics_data,
+                {**self.metrics_data, "n": effective_end_step},
                 needed=self.needed_metrics,
             )
             if profile is not None:

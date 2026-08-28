@@ -32,6 +32,7 @@ from optimization.backends.gpu_backend import (
     _constraint_diagnostics,
     _ema_multicoin_bound_map,
     _evaluate_gpu_suite_proxies,
+    _evaluate_successive_halving,
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
     _gpu_candidate_search_sides,
@@ -66,6 +67,7 @@ from optimization.backends.gpu_backend import (
     _restore_gpu_result_run_contract,
     _gpu_unstuck_search_sides,
     _single_scenario_metric_surface,
+    _successive_halving_survivor_indices,
     _suite_limit_metric_value,
     _trailing_martingale_multicoin_bound_map,
     _ProxyFrontValidationPending,
@@ -350,6 +352,106 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_halt"] = 0.0
     with pytest.raises(ValueError, match="greater than zero"):
         _resolve_options(config)
+
+
+def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
+    config = _long_only_ema_config()
+    options = _resolve_options(config)
+    assert options["successive_halving"] == {
+        "enabled": False,
+        "history_fractions": [0.25, 0.5, 1.0],
+        "survival_fraction": 0.5,
+        "min_survivors": 64,
+    }
+
+    config["optimize"]["gpu"]["successive_halving"] = {
+        "enabled": True,
+        "history_fractions": [0.5, 0.25, 1.0],
+    }
+    with pytest.raises(ValueError, match="strictly increasing"):
+        _resolve_options(config)
+
+    config["optimize"]["gpu"]["successive_halving"] = {
+        "enabled": True,
+        "min_survivors": 7,
+    }
+    with pytest.raises(ValueError, match="validate_per_generation"):
+        _resolve_options(config)
+
+
+def test_successive_halving_keeps_pareto_diversity_and_full_rung_evidence_only():
+    candidates = [{"id": index} for index in range(8)]
+    calls = []
+
+    def evaluate_proxy(stage_candidates, *, history_fraction):
+        ids = [candidate["id"] for candidate in stage_candidates]
+        calls.append((history_fraction, ids))
+        return [
+            {
+                "left": float(index),
+                "right": float(7 - index),
+                "violation": 0.0,
+            }
+            for index in ids
+        ]
+
+    def proxy_fitness(rows):
+        return (
+            np.asarray([[row["left"], row["right"]] for row in rows]),
+            np.asarray([row["violation"] for row in rows]),
+        )
+
+    metric_rows, objectives, violations, full_indices, trace = (
+        _evaluate_successive_halving(
+            candidates,
+            policy={
+                "history_fractions": [0.25, 0.5, 1.0],
+                "survival_fraction": 0.5,
+                "min_survivors": 2,
+            },
+            evaluate_proxy=evaluate_proxy,
+            proxy_fitness=proxy_fitness,
+            interrupt_check=lambda: None,
+        )
+    )
+
+    assert [len(ids) for _fraction, ids in calls] == [8, 4, 2]
+    assert trace == [
+        {
+            "rung": 1,
+            "history_fraction": 0.25,
+            "candidate_count": 8,
+            "survivor_count": 4,
+        },
+        {
+            "rung": 2,
+            "history_fraction": 0.5,
+            "candidate_count": 4,
+            "survivor_count": 2,
+        },
+        {
+            "rung": 3,
+            "history_fraction": 1.0,
+            "candidate_count": 2,
+            "survivor_count": 2,
+        },
+    ]
+    assert len(metric_rows) == len(objectives) == len(violations) == 8
+    assert len(full_indices) == 2
+    assert np.all(np.isfinite(violations[full_indices]))
+    assert np.all(np.isinf(np.delete(violations, full_indices)))
+
+
+def test_successive_halving_survivors_prioritize_feasibility_then_violation():
+    objectives = np.asarray([[0.0], [1.0], [2.0], [3.0]])
+    violations = np.asarray([0.0, 0.0, 0.2, 0.1])
+
+    survivors = _successive_halving_survivor_indices(
+        objectives, violations, count=3
+    )
+
+    assert set(survivors[:2]) == {0, 1}
+    assert survivors[2] == 3
 
 
 def test_fresh_run_accepts_partial_suffix_with_opportunistic_probes():
@@ -2004,6 +2106,26 @@ def test_gpu_preparation_preflight_explains_trailing_grid_cpu_fallback():
     ):
         validate_gpu_preparation_scope(
             config,
+            torch_module=_fake_torch_with_mps(),
+        )
+
+
+def test_gpu_preparation_preflight_rejects_halving_for_ema_or_suite():
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["successive_halving"]["enabled"] = True
+
+    with pytest.raises(ValueError, match="single-coin trailing_martingale"):
+        validate_gpu_preparation_scope(
+            config,
+            torch_module=_fake_torch_with_mps(),
+        )
+
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["optimize"]["gpu"]["successive_halving"]["enabled"] = True
+    with pytest.raises(ValueError, match="non-suite"):
+        validate_gpu_preparation_scope(
+            config,
+            {"enabled": True, "scenarios": []},
             torch_module=_fake_torch_with_mps(),
         )
 
@@ -6295,7 +6417,25 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
             "population_size": 64,
             "mutation": {"prob": 0.5},
         },
+        proxy_evaluation_policy={
+            "enabled": False,
+            "history_fractions": [0.25, 0.5, 1.0],
+        },
     )
+    assert contract["version"] == 2
+    assert contract["proxy_evaluation"]["enabled"] is False
+    ordinary_contract = _gpu_search_checkpoint_contract(
+        key_paths=key_paths,
+        bounds=bounds,
+        base_vector=base,
+        fixed_bound_values={"long_base_qty_pct": 0.02},
+        fixed_parameter_overrides={"long_base_qty_pct": 0.02},
+        optimizer_overrides=set(),
+        sig_digits=3,
+        algorithm_contract=contract["algorithm"],
+    )
+    assert ordinary_contract["version"] == 1
+    assert "proxy_evaluation" not in ordinary_contract
     active = [("long_offset", 0, bounds[0])]
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
     original = _checkpoint_signature(
@@ -6321,6 +6461,9 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
     changed_mutation = copy.deepcopy(contract)
     changed_mutation["algorithm"]["mutation"]["prob"] = 0.25
     mutations.append(changed_mutation)
+    changed_proxy_policy = copy.deepcopy(contract)
+    changed_proxy_policy["proxy_evaluation"]["enabled"] = True
+    mutations.append(changed_proxy_policy)
 
     assert all(
         _checkpoint_signature(active, scoring, search_contract=changed)

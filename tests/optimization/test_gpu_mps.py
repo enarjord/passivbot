@@ -776,6 +776,58 @@ def test_mps_tm_hsl_diagnostic_opt_out_preserves_strategy_outputs():
     assert lean["hsl_triggers_long"].item() == 0.0
 
 
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
+    count = 120
+    steps = np.arange(count, dtype=np.float64)
+    close = 100.0 + np.sin(steps / 7.0)
+    high = close + 0.2
+    low = close - 0.2
+    timestamps = 1_700_000_000_000 + steps.astype(np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.0)
+    matrix = np.asarray([row + row], dtype=np.float64)
+
+    def run_once(end_step=None):
+        runner = MpsTrailingMartingaleRunner(
+            market,
+            run,
+            data,
+            long_enabled=True,
+            short_enabled=False,
+            hsl_enabled=False,
+        )
+        return runner.run(matrix, end_step=end_step)
+
+    ordinary = run_once()
+    explicit_full = run_once(count)
+    truncated = run_once(60)
+    torch.mps.synchronize()
+
+    for key in ordinary:
+        if isinstance(ordinary[key], torch.Tensor):
+            torch.testing.assert_close(
+                ordinary[key], explicit_full[key], rtol=0.0, atol=0.0,
+                equal_nan=True,
+            )
+    assert truncated["last_eq_ts"].item() < ordinary["last_eq_ts"].item()
+
+
 @pytest.mark.parametrize("recovery_enabled", [False, True])
 @pytest.mark.parametrize("runner_name", ["ema_anchor", "trailing_martingale"])
 def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
@@ -808,6 +860,14 @@ def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
     assert actual == [5, 17, 2, 13, 3, 9, 7, 11] + (
         [60, 4] if recovery_enabled else []
     )
+
+    truncated = runner._single_coin_size_values(5, 13, end_step=12)
+    assert truncated == [5, 12, 2, 13, 3, 9, 7, 11] + (
+        [60, 4] if recovery_enabled else []
+    )
+
+    with pytest.raises(ValueError, match="end_step"):
+        runner._single_coin_size_values(5, 13, end_step=18)
 
 
 def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):
