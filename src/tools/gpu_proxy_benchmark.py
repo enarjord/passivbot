@@ -546,10 +546,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--coins must be at least two")
     selected = CASES if args.case == "all" else (args.case,)
     if any(name.endswith("single-long") for name in selected):
-        if candidates * single_bars > MAX_DISPATCH_CANDIDATE_BARS:
+        if dispatch_batch_size * single_bars > MAX_DISPATCH_CANDIDATE_BARS:
             parser.error("single-coin candidate-bars exceed the safe benchmark limit")
     if any(name.startswith("ema-multicoin") for name in selected):
-        if candidates * multicoin_bars * coins > MAX_DISPATCH_CANDIDATE_BARS:
+        if dispatch_batch_size * multicoin_bars * coins > MAX_DISPATCH_CANDIDATE_BARS:
             parser.error("multicoin candidate-bars exceed the safe benchmark limit")
 
     torch = _require_mps_torch(parser)

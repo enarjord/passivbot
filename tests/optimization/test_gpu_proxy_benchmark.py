@@ -14,6 +14,7 @@ from tools.gpu_proxy_benchmark import (
     _parameter_matrix,
     _require_mps_torch,
     build_parser,
+    main,
     run_benchmark_case,
 )
 
@@ -53,6 +54,77 @@ def test_gpu_proxy_benchmark_accepts_independent_dispatch_batch_size():
 
     assert args.candidates == 4096
     assert args.dispatch_batch_size == 512
+
+
+@pytest.mark.parametrize(
+    "case, extra_args",
+    (
+        ("ema-single-long", ["--single-bars", "525600"]),
+        (
+            "ema-multicoin-overhead",
+            ["--multicoin-bars", "100000", "--coins", "32"],
+        ),
+    ),
+)
+def test_gpu_proxy_benchmark_applies_safety_limit_per_dispatch(
+    monkeypatch, case, extra_args
+):
+    class FakeTorch:
+        __version__ = "test"
+
+    monkeypatch.setattr(
+        "tools.gpu_proxy_benchmark._require_mps_torch", lambda _parser: FakeTorch()
+    )
+    monkeypatch.setattr(
+        "tools.gpu_proxy_benchmark.run_benchmark_case",
+        lambda *_args, **_kwargs: {},
+    )
+
+    assert (
+        main(
+            [
+                "--case",
+                case,
+                "--candidates",
+                "4096",
+                "--dispatch-batch-size",
+                "1",
+                "--warm-runs",
+                "1",
+                *extra_args,
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "case, extra_args",
+    (
+        ("ema-single-long", ["--single-bars", "525600"]),
+        (
+            "ema-multicoin-overhead",
+            ["--multicoin-bars", "100000", "--coins", "32"],
+        ),
+    ),
+)
+def test_gpu_proxy_benchmark_rejects_oversized_dispatch(case, extra_args):
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--case",
+                case,
+                "--candidates",
+                "4096",
+                "--dispatch-batch-size",
+                "4096",
+                "--warm-runs",
+                "1",
+                *extra_args,
+                "--compact",
+            ]
+        )
 
 
 def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
