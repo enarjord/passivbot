@@ -1818,6 +1818,11 @@ inline void passivbot_single_coin_impl(
     const int bounded_history_start = sizes[10];
     const int bounded_trade_start = sizes[11];
     const bool recent_history_window = bounded_history_start >= 0;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+    const int bounded_first_hour_step = sizes[13];
+    const bool bounded_first_hour_ready = sizes[14] != 0;
+    const int bounded_first_next_window_start = sizes[15];
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     const int recovery_stride = sizes[8];
     const int recovery_sample_capacity = sizes[9];
@@ -1986,7 +1991,7 @@ inline void passivbot_single_coin_impl(
     float bounded_hour_latest = 0.0f;
     bool bounded_hour_has_price = false;
     bool bounded_hour_latest_valid = false;
-    int bounded_hour_start_k = seed_k;
+    bool bounded_hour_synced = false;
     if (recent_history_window && seed_k <= last_valid) {
         const float seed_high = bars[seed_k * 5 + 0];
         const float seed_low = bars[seed_k * 5 + 1];
@@ -2017,30 +2022,53 @@ inline void passivbot_single_coin_impl(
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
         const int hour_flags = flags[fo + 3];
         bool hour_valid = (hour_flags & 1) != 0;
-        if (recent_history_window) {
+        if (recent_history_window && !bounded_hour_synced) {
             const bool hour_boundary = (hour_flags & 2) != 0;
             if (hour_boundary) {
-                if (k > bounded_hour_start_k + 1 && bounded_hour_has_price
+                const bool bounded_window_ready = k == bounded_first_hour_step
+                    ? bounded_first_hour_ready
+                    : (hour_flags & 4) != 0;
+                if (bounded_window_ready && bounded_hour_has_price
                         && bounded_hour_high > 0.0f && bounded_hour_low > 0.0f) {
                     bounded_hour_latest = log(
                         bounded_hour_high / bounded_hour_low
                     );
                     bounded_hour_latest_valid = isfinite(bounded_hour_latest);
+                    bounded_hour_synced = bounded_hour_latest_valid;
                 }
                 hour_lr = bounded_hour_latest;
                 hour_valid = bounded_hour_latest_valid;
-                bounded_hour_start_k = k;
-                bounded_hour_high = -INFINITY;
-                bounded_hour_low = INFINITY;
-                bounded_hour_has_price = false;
+                if (!bounded_hour_synced) {
+                    const int next_window_start = k == bounded_first_hour_step
+                        ? bounded_first_next_window_start
+                        : ((hour_flags & 8) != 0 ? k - 1 : k);
+                    bounded_hour_high = -INFINITY;
+                    bounded_hour_low = INFINITY;
+                    bounded_hour_has_price = false;
+                    for (int hour_k = max(seed_k, next_window_start);
+                            hour_k <= k && hour_k <= last_valid; ++hour_k) {
+                        const float hour_high = bars[hour_k * 5 + 0];
+                        const float hour_low = bars[hour_k * 5 + 1];
+                        if (isfinite(hour_high) && isfinite(hour_low)
+                                && hour_high > 0.0f && hour_low > 0.0f) {
+                            bounded_hour_high = fmax(
+                                bounded_hour_high, hour_high
+                            );
+                            bounded_hour_low = fmin(
+                                bounded_hour_low, hour_low
+                            );
+                            bounded_hour_has_price = true;
+                        }
+                    }
+                }
             } else {
                 hour_valid = false;
-            }
-            if (k <= last_valid && isfinite(high) && isfinite(low)
-                    && high > 0.0f && low > 0.0f) {
-                bounded_hour_high = fmax(bounded_hour_high, high);
-                bounded_hour_low = fmin(bounded_hour_low, low);
-                bounded_hour_has_price = true;
+                if (k <= last_valid && isfinite(high) && isfinite(low)
+                        && high > 0.0f && low > 0.0f) {
+                    bounded_hour_high = fmax(bounded_hour_high, high);
+                    bounded_hour_low = fmin(bounded_hour_low, low);
+                    bounded_hour_has_price = true;
+                }
             }
         }
 #endif

@@ -1043,8 +1043,21 @@ mod tests {
         assert!(source.contains("k >= bounded_trade_start"));
         assert!(source.contains("const int recovery_sample_capacity = sizes[9]"));
         assert!(source.contains("const int recovery_sample_count = sizes[12]"));
+        assert!(source.contains(
+            "const int bounded_first_hour_step = sizes[13]"
+        ));
+        assert!(source.contains(
+            "const bool bounded_first_hour_ready = sizes[14] != 0"
+        ));
+        assert!(source.contains(
+            "const int bounded_first_next_window_start = sizes[15]"
+        ));
         assert!(source.contains("const bool hour_boundary = (hour_flags & 2)"));
+        assert!(source.contains("(hour_flags & 4) != 0"));
+        assert!(source.contains("(hour_flags & 8) != 0"));
         assert!(source.contains("bounded_hour_latest_valid"));
+        assert!(source.contains("bounded_hour_synced"));
+        assert!(!source.contains("k > bounded_hour_start_k + 1"));
         assert_eq!(source.matches("record_initial_entry_interval(").count(), 3);
         assert!(source.contains("long_last_initial_entry_k"));
         assert!(source.contains("short_last_initial_entry_k"));

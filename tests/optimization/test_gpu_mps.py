@@ -795,13 +795,23 @@ def test_mps_tm_hsl_diagnostic_opt_out_preserves_strategy_outputs():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
+@pytest.mark.parametrize(
+    ("interval_ms", "history_start_step", "trade_start_step"),
+    [
+        (60_000, 59, 80),
+        (45 * 60_000, 1, 4),
+    ],
+)
+def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix(
+    interval_ms, history_start_step, trade_start_step
+):
     count = 120
     steps = np.arange(count, dtype=np.float64)
     close = 100.0 + np.sin(steps / 7.0)
     high = close + 0.2
     low = close - 0.2
-    timestamps = 1_700_000_000_000 + steps.astype(np.int64) * 60_000
+    first_ts_ms = (1_700_000_000_000 // 3_600_000) * 3_600_000
+    timestamps = first_ts_ms + steps.astype(np.int64) * interval_ms
     market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
     run = ProxyRun(
         1_000.0,
@@ -810,7 +820,7 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
         int(timestamps[0]),
         int(timestamps[0]),
         int(timestamps[0]),
-        60_000,
+        interval_ms,
         0.05,
         0,
         count - 1,
@@ -845,23 +855,28 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
     explicit_full = run_once(count)
     truncated = run_once(60)
     recent = run_once(
-        history_start_step=59,
-        trade_start_step=80,
+        history_start_step=history_start_step,
+        trade_start_step=trade_start_step,
     )
     sliced_run = ProxyRun(
         1_000.0,
-        20,
-        21,
-        int(timestamps[80]),
-        int(timestamps[80]),
-        int(timestamps[59]),
-        60_000,
+        trade_start_step - history_start_step - 1,
+        trade_start_step - history_start_step,
+        int(timestamps[trade_start_step]),
+        int(timestamps[trade_start_step]),
+        int(timestamps[history_start_step]),
+        interval_ms,
         0.05,
         0,
-        count - 60,
+        count - history_start_step - 1,
     )
     sliced_data = build_mps_data(
-        high[59:], low[59:], close[59:], timestamps[59:], sliced_run, market
+        high[history_start_step:],
+        low[history_start_step:],
+        close[history_start_step:],
+        timestamps[history_start_step:],
+        sliced_run,
+        market,
     )
     sliced = MpsTrailingMartingaleRunner(
         market,
@@ -881,7 +896,7 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
                 equal_nan=True,
             )
     assert truncated["last_eq_ts"][0].item() < ordinary["last_eq_ts"][0].item()
-    assert recent["first_eq_ts"][0].item() == 80 * 60_000
+    assert recent["first_eq_ts"][0].item() == trade_start_step * interval_ms
     assert recent["last_eq_ts"][0].item() == ordinary["last_eq_ts"][0].item()
     for key in (
         "balance",
@@ -904,10 +919,10 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
         equal_nan=True,
     )
     assert recent["first_eq_ts"][0].item() == (
-        sliced["first_eq_ts"][0].item() + 59 * 60_000
+        sliced["first_eq_ts"][0].item() + history_start_step * interval_ms
     )
     assert recent["last_eq_ts"][0].item() == (
-        sliced["last_eq_ts"][0].item() + 59 * 60_000
+        sliced["last_eq_ts"][0].item() + history_start_step * interval_ms
     )
 
 
@@ -982,11 +997,17 @@ def test_tm_size_buffer_appends_recent_window_after_recovery_fields(
         -1,
         -1,
         10 if recovery_enabled else 0,
+        -1,
+        0,
+        -1,
     ]
     assert recent == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [
         5,
         10,
         5 if recovery_enabled else 0,
+        17,
+        0,
+        5,
     ]
     with pytest.raises(ValueError, match="requires both"):
         runner._trailing_single_coin_size_values(
