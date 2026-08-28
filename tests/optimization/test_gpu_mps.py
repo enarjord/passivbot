@@ -850,7 +850,7 @@ def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
     )
     sliced_run = ProxyRun(
         1_000.0,
-        1,
+        20,
         21,
         int(timestamps[80]),
         int(timestamps[80]),

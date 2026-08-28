@@ -1039,6 +1039,7 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.successive_halving.history_fractions must be strictly "
             "increasing finite values in (0, 1] ending at 1.0"
         )
+    fractions[-1] = 1.0
     survival_fraction = float(halving["survival_fraction"])
     if not math.isfinite(survival_fraction) or not 0.0 < survival_fraction <= 1.0:
         raise ValueError(

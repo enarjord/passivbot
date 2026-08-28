@@ -371,6 +371,16 @@ def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
     with pytest.raises(ValueError, match="strictly increasing"):
         _resolve_options(config)
 
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["successive_halving"] = {
+        "enabled": True,
+        "history_fractions": [0.25, 0.5, 0.999_999_999_999_5],
+    }
+    assert _resolve_options(config)["successive_halving"][
+        "history_fractions"
+    ] == [0.25, 0.5, 1.0]
+
+    config = _long_only_ema_config()
     config["optimize"]["gpu"]["successive_halving"] = {
         "enabled": True,
         "min_survivors": 7,

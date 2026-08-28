@@ -2114,9 +2114,19 @@ class MpsSingleCoinProxy:
         if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
             raise ValueError("GPU history fraction must be finite and in (0, 1]")
         candle_count = int(self.runner.n)
+        warmup_readiness_bars = max(
+            1,
+            int(
+                getattr(self, "history_warmup_bars", self.run.warmup_bars)
+            ),
+        )
         full_trade_start = min(
             candle_count - 3,
-            max(2, int(self.run.trade_start_idx), int(self.run.first_valid_idx) + 1),
+            max(
+                2,
+                int(self.run.trade_start_idx),
+                int(self.run.first_valid_idx) + warmup_readiness_bars + 1,
+            ),
         )
         suffix_candles = max(
             2,
@@ -2125,15 +2135,7 @@ class MpsSingleCoinProxy:
         trade_start = max(full_trade_start, candle_count - suffix_candles)
         history_start = max(
             int(self.run.first_valid_idx),
-            trade_start
-            - max(
-                1,
-                int(
-                    getattr(
-                        self, "history_warmup_bars", self.run.warmup_bars
-                    )
-                ),
-            ),
+            trade_start - warmup_readiness_bars - 1,
         )
         history_start = min(history_start, trade_start - 1)
         return history_start, trade_start
