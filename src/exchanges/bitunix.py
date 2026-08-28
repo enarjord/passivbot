@@ -289,8 +289,9 @@ class BitunixClient:
         separately calculated maximum-transfer value. This covers both restart
         and a transition that changes frozen or margin components while the
         inconsistent response is active. Keep the last accepted components
-        unchanged until the response either returns to them or a new response
-        passes the transfer reconciliation.
+        unchanged until a response with locked funds passes the transfer
+        reconciliation, even when its visible components match the last
+        accepted tuple.
         """
         current = (available, frozen, margin)
         previous = self._accepted_balance_components
@@ -300,6 +301,17 @@ class BitunixClient:
             bonus=bonus,
             unrealized_pnl=unrealized_pnl,
         )
+        current_used = frozen + margin
+        if current_used > 0.0 and not transfer_reconciled:
+            self._defer_balance_candidate(
+                current,
+                defer_message=(
+                    "[balance] Bitunix locked-fund balance did not reconcile "
+                    "with maximum transfer; action=defer_authoritative_state"
+                ),
+            )
+            return
+
         if self._balance_components_close(previous, current):
             if self._pending_balance_components is not None:
                 logging.info(
@@ -307,17 +319,6 @@ class BitunixClient:
                     "action=resume_authoritative_state"
                 )
                 self._clear_pending_balance_transition()
-            return
-
-        current_used = frozen + margin
-        if current_used > 0.0 and not transfer_reconciled:
-            self._defer_balance_candidate(
-                current,
-                defer_message=(
-                    "[balance] Bitunix changed locked-fund balance did not reconcile "
-                    "with maximum transfer; action=defer_authoritative_state"
-                ),
-            )
             return
 
         if self._pending_balance_components is not None:

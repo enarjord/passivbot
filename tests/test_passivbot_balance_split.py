@@ -11277,6 +11277,11 @@ async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_
         == "balance_consistency_check"
     ]
     assert len(balance_events) == 12
+    assert balance_events[0]["level"] == "warning"
+    assert all(event["level"] == "debug" for event in balance_events[1:])
+    assert [event["data"]["retry_count"] for event in balance_events] == list(
+        range(1, 13)
+    )
 
 
 @pytest.mark.asyncio

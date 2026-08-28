@@ -250,6 +250,93 @@ async def test_init_markets_gates_exchange_config_write_on_balance_readiness(mon
 
 
 @pytest.mark.asyncio
+async def test_init_markets_stops_after_balance_readiness_check(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        raise AssertionError("load_markets should not run after shutdown")
+
+    async def _update_exchange_config(_attempt):
+        raise AssertionError("exchange config should not be written after shutdown")
+
+    bot = _FakeBot(_update_exchange_config)
+
+    async def _exchange_config_ready(_attempt):
+        bot.stop_signal_received = True
+        return True
+
+    bot._exchange_config_ready_impl = _exchange_config_ready
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.exchange_config_ready_calls == 1
+    assert bot.update_exchange_config_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_init_markets_retries_transient_balance_readiness_errors(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    async def _exchange_config_ready(attempt):
+        if attempt < 3:
+            raise pb_mod.RequestTimeout("timed out")
+        return True
+
+    async def _update_exchange_config(_attempt):
+        return None
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+    bot = _FakeBot(
+        _update_exchange_config,
+        exchange_config_ready_impl=_exchange_config_ready,
+    )
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.exchange_config_ready_calls == 3
+    assert bot.update_exchange_config_calls == 1
+    assert bot.shutdown_sleeps == [
+        (5, "exchange_config_balance_readiness_retry"),
+        (10, "exchange_config_balance_readiness_retry"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_init_markets_reraises_after_max_balance_readiness_retries(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _exchange_config_ready(_attempt):
+        raise pb_mod.NetworkError("unavailable")
+
+    async def _update_exchange_config(_attempt):
+        raise AssertionError("exchange config should not run without readiness")
+
+    bot = _FakeBot(
+        _update_exchange_config,
+        exchange_config_ready_impl=_exchange_config_ready,
+    )
+
+    with pytest.raises(pb_mod.NetworkError, match="unavailable"):
+        await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.exchange_config_ready_calls == 3
+    assert bot.update_exchange_config_calls == 0
+    assert bot.shutdown_sleeps == [
+        (5, "exchange_config_balance_readiness_retry"),
+        (10, "exchange_config_balance_readiness_retry"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_init_markets_validates_coin_overrides_before_sizing(monkeypatch):
     import passivbot as pb_mod
 

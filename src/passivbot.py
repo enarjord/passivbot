@@ -3783,15 +3783,42 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
-        exchange_config_ready = await self._exchange_config_write_ready()
-        while exchange_config_ready is False and not self.stop_signal_received:
+        readiness_network_attempt = 0
+        while True:
+            try:
+                exchange_config_ready = await self._exchange_config_write_ready()
+            except (RequestTimeout, NetworkError) as e:
+                if self.stop_signal_received:
+                    return
+                readiness_network_attempt += 1
+                if readiness_network_attempt == 3:
+                    raise
+                retry_delay_seconds = 5 * readiness_network_attempt
+                logging.warning(
+                    "[init_markets] exchange-config readiness error "
+                    "(attempt %d/3): error_type=%s – retrying in %ds",
+                    readiness_network_attempt,
+                    bounded_exception_type(e),
+                    retry_delay_seconds,
+                )
+                await self._sleep_unless_shutdown(
+                    retry_delay_seconds,
+                    stage="exchange_config_balance_readiness_retry",
+                )
+                if self.stop_signal_received:
+                    return
+                continue
+            if self.stop_signal_received:
+                return
+            readiness_network_attempt = 0
+            if exchange_config_ready:
+                break
             await self._sleep_unless_shutdown(
                 5.0,
                 stage="exchange_config_balance_readiness",
             )
             if self.stop_signal_received:
                 return
-            exchange_config_ready = await self._exchange_config_write_ready()
         # Retry on transient network errors (TCP + TLS handshake on a fresh
         # aiohttp session can time out; also called hourly so transient errors
         # should not abort the refresh cycle).
@@ -6110,6 +6137,8 @@ class Passivbot:
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         authoritative_fill_retry_count = 0
         authoritative_fill_retry_reason = None
+        balance_consistency_retry_count = 0
+        balance_consistency_last_warning_ms = 0
         max_n_fails = 10
         if self._equity_hard_stop_enabled():
             if self._equity_hard_stop_signal_mode() == "coin":
@@ -6158,6 +6187,14 @@ class Passivbot:
                         break
                     raise
                 mark_phase("authoritative", phase_start_ms)
+                if authoritative_ok and balance_consistency_retry_count:
+                    logging.info(
+                        "[balance] authoritative balance consistency recovered "
+                        "after %d retries; action=resume_execution",
+                        balance_consistency_retry_count,
+                    )
+                    balance_consistency_retry_count = 0
+                    balance_consistency_last_warning_ms = 0
                 if not authoritative_ok:
                     if self._shutdown_requested():
                         self._emit_live_cycle_degraded(
@@ -6182,14 +6219,24 @@ class Passivbot:
                             authoritative_fill_retry_count = 0
                             authoritative_fill_retry_reason = None
                             failed_update_pos_oos_pnls_ohlcvs_count = 0
+                            balance_consistency_retry_count += 1
+                            now_ms = utc_ms()
+                            warning_due = (
+                                balance_consistency_last_warning_ms <= 0
+                                or now_ms - balance_consistency_last_warning_ms
+                                >= 15 * 60 * 1000
+                            )
+                            if warning_due:
+                                balance_consistency_last_warning_ms = now_ms
                             self._emit_live_cycle_degraded(
                                 cycle_id=cycle_id,
                                 reason_code=authoritative_block_reason,
                                 data={
+                                    "retry_count": balance_consistency_retry_count,
                                     "retry_delay_seconds": 5.0,
                                     "timings_ms": dict(loop_timings_ms),
                                 },
-                                level="warning",
+                                level="warning" if warning_due else "debug",
                             )
                             await self._sleep_unless_shutdown(
                                 5.0,
