@@ -1881,8 +1881,7 @@ class MpsSingleCoinProxy:
             equity_balance_diff_enabled=self.equity_balance_diff_enabled,
             entry_interval_enabled=self.entry_interval_enabled,
         )
-        if self.strategy_kind == "trailing_martingale":
-            runner_kwargs["hsl_enabled"] = any_configured_hsl
+        runner_kwargs["hsl_enabled"] = any_configured_hsl
         self.runner = runner_cls(
             self.market,
             self.run,

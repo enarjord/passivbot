@@ -8618,6 +8618,7 @@ def test_mps_ema_anchor_near_touch_market_entry_uses_next_close_and_taker_fee(si
         "long_enabled": side == "long",
         "short_enabled": side == "short",
         "hedge_mode": True,
+        "hsl_enabled": False,
     }
 
     resting = MpsEmaAnchorRunner(market, run, data, **common).run(parameters)
@@ -8632,12 +8633,32 @@ def test_mps_ema_anchor_near_touch_market_entry_uses_next_close_and_taker_fee(si
         **common,
     )
     promoted = promoted_runner.run(parameters)
+    generic = MpsEmaAnchorRunner(
+        market,
+        run,
+        data,
+        market_orders_allowed=True,
+        market_order_near_touch_threshold=0.001,
+        market_order_slippage_pct=0.01,
+        taker_fee=market.taker_fee,
+        **{**common, "hsl_enabled": True},
+    ).run(parameters)
     torch.mps.synchronize()
 
     assert promoted_runner.settings[19].item() == 1.0
     assert promoted_runner.settings[20].item() == pytest.approx(0.001)
+    assert promoted_runner.shader_topology == f"{side}_no_hsl"
     assert resting["fill_count"].item() == 0.0
     assert promoted["fill_count"].item() == 1.0
+    assert promoted.keys() == generic.keys()
+    for key in promoted:
+        torch.testing.assert_close(
+            promoted[key].cpu(),
+            generic[key].cpu(),
+            rtol=1.0e-6,
+            atol=1.0e-6,
+            equal_nan=True,
+        )
     if side == "long":
         expected_qty = 1.001
         expected_price = 101.0

@@ -183,6 +183,7 @@ def _build_case(
     name: str,
     *,
     candidates: int,
+    dispatch_batch_size: int,
     single_bars: int,
     multicoin_bars: int,
     coins: int,
@@ -216,7 +217,12 @@ def _build_case(
         )
         if name == "ema-single-long":
             runner = MpsEmaAnchorRunner(
-                market, run, data, long_enabled=True, short_enabled=False
+                market,
+                run,
+                data,
+                long_enabled=True,
+                short_enabled=False,
+                hsl_enabled=False,
             )
             side_matrix = _parameter_matrix(
                 EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS, candidates, seed
@@ -237,7 +243,7 @@ def _build_case(
             )
         proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
         proxy.batch_size = candidates
-        proxy.dispatch_batch_size = candidates
+        proxy.dispatch_batch_size = dispatch_batch_size
         proxy.interrupt_check = lambda: None
         proxy._torch = __import__("torch")
         proxy.profile_enabled = True
@@ -314,7 +320,7 @@ def _build_case(
     matrix = _parameter_matrix(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidates, seed)
     proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
     proxy.batch_size = candidates
-    proxy.dispatch_batch_size = candidates
+    proxy.dispatch_batch_size = dispatch_batch_size
     proxy.interrupt_check = lambda: None
     proxy._torch = __import__("torch")
     proxy.profile_enabled = True
@@ -408,6 +414,7 @@ def run_benchmark_case(
     name: str,
     *,
     candidates: int,
+    dispatch_batch_size: int,
     warm_runs: int,
     single_bars: int,
     multicoin_bars: int,
@@ -417,6 +424,7 @@ def run_benchmark_case(
     proxy, candidate_dicts, bars, coin_count, side_count, fixture_sha256 = _build_case(
         name,
         candidates=candidates,
+        dispatch_batch_size=dispatch_batch_size,
         single_bars=single_bars,
         multicoin_bars=multicoin_bars,
         coins=coins,
@@ -428,6 +436,7 @@ def run_benchmark_case(
     def median(key):
         return statistics.median(float(item[key]) for item in warm)
 
+    cold_profile = cold["proxy_profile"]
     return {
         "case": name,
         "seed": seed,
@@ -437,10 +446,17 @@ def run_benchmark_case(
         "coin_count": coin_count,
         "side_count": side_count,
         "candidate_bars": candidates * bars * coin_count * side_count,
-        "kernel_candidate_bars": candidates * bars * coin_count * side_count,
+        "kernel_candidate_bars": int(
+            cold_profile.get(
+                "kernel_candidate_bars",
+                candidates * bars * coin_count * side_count,
+            )
+        ),
         "actual_dispatch_batch_size": int(cold["batch_size"]),
-        "dispatch_chunk_count": 1,
-        "dispatch_count_per_run": 1,
+        "dispatch_chunk_count": int(
+            cold_profile.get("dispatch_chunk_count", cold["dispatch_count"])
+        ),
+        "dispatch_count_per_run": int(cold["dispatch_count"]),
         "cold": cold,
         "warm": {
             "runs": warm_runs,
@@ -462,6 +478,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--case", choices=(*CASES, "all"), default="all")
     parser.add_argument("--candidates", type=int, default=256)
+    parser.add_argument(
+        "--dispatch-batch-size",
+        type=int,
+        help="Candidates per MPS dispatch (defaults to --candidates)",
+    )
     parser.add_argument("--warm-runs", type=int, default=5)
     parser.add_argument("--single-bars", type=int, default=60_000)
     parser.add_argument("--multicoin-bars", type=int, default=4_320)
@@ -500,6 +521,16 @@ def main(argv: list[str] | None = None) -> int:
     candidates = _bounded_positive(
         parser, "--candidates", args.candidates, MAX_CANDIDATES
     )
+    dispatch_batch_size = (
+        candidates
+        if args.dispatch_batch_size is None
+        else _bounded_positive(
+            parser,
+            "--dispatch-batch-size",
+            args.dispatch_batch_size,
+            candidates,
+        )
+    )
     warm_runs = _bounded_positive(parser, "--warm-runs", args.warm_runs, MAX_WARM_RUNS)
     single_bars = _bounded_positive(
         parser, "--single-bars", args.single_bars, MAX_SINGLE_BARS
@@ -535,6 +566,7 @@ def main(argv: list[str] | None = None) -> int:
             run_benchmark_case(
                 name,
                 candidates=candidates,
+                dispatch_batch_size=dispatch_batch_size,
                 warm_runs=warm_runs,
                 single_bars=single_bars,
                 multicoin_bars=multicoin_bars,
