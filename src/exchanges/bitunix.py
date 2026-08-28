@@ -285,11 +285,12 @@ class BitunixClient:
 
         The known inconsistent response moves ``available`` by exactly the
         unchanged locked amount while continuing to report that amount as locked.
-        Reconcile an initial nonzero locked-funds state with Bitunix's separately
-        calculated maximum-transfer value, so a restart during the inconsistency
-        cannot establish the duplicated response as trusted truth. Keep the last
-        accepted components unchanged until the response either returns to it or
-        a new response passes the transfer reconciliation.
+        Reconcile every new tuple with nonzero locked funds against Bitunix's
+        separately calculated maximum-transfer value. This covers both restart
+        and a transition that changes frozen or margin components while the
+        inconsistent response is active. Keep the last accepted components
+        unchanged until the response either returns to them or a new response
+        passes the transfer reconciliation.
         """
         current = (available, frozen, margin)
         previous = self._accepted_balance_components
@@ -299,67 +300,38 @@ class BitunixClient:
             bonus=bonus,
             unrealized_pnl=unrealized_pnl,
         )
-        if previous is None:
-            current_used = frozen + margin
-            if current_used <= 0.0 or transfer_reconciled:
-                self._accepted_balance_components = current
+        if self._balance_components_close(previous, current):
+            if self._pending_balance_components is not None:
+                logging.info(
+                    "[balance] Bitunix balance returned to the last trusted state; "
+                    "action=resume_authoritative_state"
+                )
                 self._clear_pending_balance_transition()
-                return
+            return
+
+        current_used = frozen + margin
+        if current_used > 0.0 and not transfer_reconciled:
             self._defer_balance_candidate(
                 current,
                 defer_message=(
-                    "[balance] Bitunix initial locked-fund balance did not reconcile "
+                    "[balance] Bitunix changed locked-fund balance did not reconcile "
                     "with maximum transfer; action=defer_authoritative_state"
                 ),
             )
             return
 
         if self._pending_balance_components is not None:
-            if self._balance_components_close(previous, current):
-                logging.info(
-                    "[balance] Bitunix balance returned to the last trusted state; "
-                    "action=resume_authoritative_state"
-                )
-                self._clear_pending_balance_transition()
-                return
             if transfer_reconciled:
                 logging.info(
                     "[balance] Bitunix balance passed maximum-transfer reconciliation; "
                     "action=resume_authoritative_state"
                 )
-                self._accepted_balance_components = current
-                self._clear_pending_balance_transition()
-                return
-            self._defer_balance_candidate(
-                current,
-                defer_message=(
-                    "[balance] Bitunix balance remained inconsistent after a deferred "
-                    "transition; action=defer_authoritative_state"
-                ),
-            )
-            return
-
-        previous_available, previous_frozen, previous_margin = previous
-        previous_used = previous_frozen + previous_margin
-        available_delta = available - previous_available
-        duplicates_locked_funds = bool(
-            previous_used > 0.0
-            and self._balance_values_close(frozen, previous_frozen)
-            and self._balance_values_close(margin, previous_margin)
-            and self._balance_values_close(available_delta, previous_used)
-        )
-
-        if duplicates_locked_funds:
-            if not transfer_reconciled:
-                self._defer_balance_candidate(
-                    current,
-                    defer_message=(
-                        "[balance] Bitunix reported locked funds in both available and "
-                        "used without maximum-transfer reconciliation; "
-                        "action=defer_authoritative_state"
-                    ),
+            else:
+                logging.info(
+                    "[balance] Bitunix balance cleared locked funds; "
+                    "action=resume_authoritative_state"
                 )
-                return
+            self._clear_pending_balance_transition()
         self._accepted_balance_components = current
 
     def milliseconds(self) -> int:

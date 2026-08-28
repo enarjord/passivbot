@@ -582,6 +582,40 @@ async def test_balance_changed_locks_remain_deferred_until_transfer_reconciles()
 
 
 @pytest.mark.asyncio
+async def test_balance_new_locked_funds_require_transfer_reconciliation():
+    client = _prepared_client()
+    client._accepted_balance_components = (90.0, 0.0, 0.0)
+
+    def account(*, available, margin):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": "0",
+            "margin": str(margin),
+            "transfer": "90",
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "0",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    client._request = AsyncMock(
+        side_effect=[
+            account(available=100, margin=10),
+            account(available=90, margin=10),
+        ]
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    reconciled = await client.fetch_balance()
+
+    assert reconciled["total"]["USDT"] == 100.0
+    assert client._accepted_balance_components == (90.0, 0.0, 10.0)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
 async def test_balance_initial_state_without_locked_funds_is_immediately_usable():
     client = _prepared_client()
     client._request = AsyncMock(
