@@ -2034,7 +2034,7 @@ class MpsSingleCoinProxy:
         if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
             raise ValueError("GPU history fraction must be finite and in (0, 1]")
         candle_count = int(self.runner.n)
-        minimum = min(
+        effective_start = min(
             candle_count,
             max(
                 3,
@@ -2044,7 +2044,8 @@ class MpsSingleCoinProxy:
         )
         return min(
             candle_count,
-            max(minimum, int(np.ceil(candle_count * fraction))),
+            effective_start
+            + int(np.ceil((candle_count - effective_start) * fraction)),
         )
 
     def evaluate(

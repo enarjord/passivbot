@@ -464,10 +464,14 @@ def test_single_coin_proxy_partial_history_expands_safe_dispatch_and_routes_end_
         end_step=end_step,
     )
 
-    assert end_step == 482_954
+    assert end_step == 482_963
     assert len(results) == 1024
     assert [len(call) for call in calls] == [1024]
-    assert routed_end_steps == [482_954]
+    assert routed_end_steps == [482_963]
+
+    proxy.runner.n = 1_250
+    proxy.run = SimpleNamespace(trade_start_idx=1_000, first_valid_idx=900)
+    assert proxy.end_step_for_history_fraction(0.25) == 1_064
 
 
 def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatch):
