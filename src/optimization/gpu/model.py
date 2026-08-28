@@ -49,16 +49,20 @@ def validate_single_coin_hsl_signal_topology(
 
 
 def single_coin_shader_topology(
-    *, long_enabled: bool, short_enabled: bool, hsl_enabled: bool
+    *,
+    long_enabled: bool,
+    short_enabled: bool,
+    hsl_enabled: bool,
+    hsl_one_side_enabled: bool = False,
 ) -> str:
     """Select a one-side variant only when compile-time assumptions are exact."""
 
-    if hsl_enabled:
+    if hsl_enabled and not hsl_one_side_enabled:
         return "generic"
     if long_enabled and not short_enabled:
-        return "long_no_hsl"
+        return "long_hsl" if hsl_enabled else "long_no_hsl"
     if short_enabled and not long_enabled:
-        return "short_no_hsl"
+        return "short_hsl" if hsl_enabled else "short_no_hsl"
     return "generic"
 
 

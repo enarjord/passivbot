@@ -341,23 +341,38 @@ def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypat
 
 
 @pytest.mark.parametrize(
-    ("long_enabled", "short_enabled", "hsl_enabled", "expected"),
+    (
+        "long_enabled",
+        "short_enabled",
+        "hsl_enabled",
+        "hsl_one_side_enabled",
+        "expected",
+    ),
     [
-        (True, False, False, "long_no_hsl"),
-        (False, True, False, "short_no_hsl"),
-        (True, True, False, "generic"),
-        (True, False, True, "generic"),
-        (False, True, True, "generic"),
+        (True, False, False, False, "long_no_hsl"),
+        (False, True, False, False, "short_no_hsl"),
+        (True, True, False, False, "generic"),
+        (True, False, True, False, "generic"),
+        (False, True, True, False, "generic"),
+        (True, False, True, True, "long_hsl"),
+        (False, True, True, True, "short_hsl"),
+        (True, True, True, True, "generic"),
+        (False, False, True, True, "generic"),
     ],
 )
 def test_single_coin_shader_topology_is_fail_closed(
-    long_enabled, short_enabled, hsl_enabled, expected
+    long_enabled,
+    short_enabled,
+    hsl_enabled,
+    hsl_one_side_enabled,
+    expected,
 ):
     assert (
         single_coin_shader_topology(
             long_enabled=long_enabled,
             short_enabled=short_enabled,
             hsl_enabled=hsl_enabled,
+            hsl_one_side_enabled=hsl_one_side_enabled,
         )
         == expected
     )

@@ -64,6 +64,16 @@ fn mps_trailing_martingale_source_py() -> &'static str {
 }
 
 #[pyfunction]
+fn mps_trailing_martingale_long_hsl_source_py() -> &'static str {
+    gpu::mps_trailing_martingale_long_hsl_source()
+}
+
+#[pyfunction]
+fn mps_trailing_martingale_short_hsl_source_py() -> &'static str {
+    gpu::mps_trailing_martingale_short_hsl_source()
+}
+
+#[pyfunction]
 fn mps_trailing_martingale_long_no_hsl_source_py() -> &'static str {
     gpu::mps_trailing_martingale_long_no_hsl_source()
 }
@@ -99,6 +109,14 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(mps_trailing_martingale_source_py, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        mps_trailing_martingale_long_hsl_source_py,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        mps_trailing_martingale_short_hsl_source_py,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(
         mps_trailing_martingale_long_no_hsl_source_py,
         m
