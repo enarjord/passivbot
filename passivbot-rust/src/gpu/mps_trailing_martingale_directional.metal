@@ -16,6 +16,9 @@ using namespace metal;
 #ifndef PASSIVBOT_TM_LOSS_GATE_DISABLED
 #define PASSIVBOT_TM_LOSS_GATE_DISABLED 0
 #endif
+#ifndef PASSIVBOT_TM_VOLATILITY_DISABLED
+#define PASSIVBOT_TM_VOLATILITY_DISABLED 0
+#endif
 
 #if PASSIVBOT_BTC_RISK_ENABLED
 constant int DAILY_COLS = 11;
@@ -278,15 +281,26 @@ inline void record_directional_gross_pnl(
 }
 
 struct TmSide {
-    float alpha0, alpha1, alpha2, alpha1m, alpha1h;
+    float alpha0, alpha1, alpha2;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+    float alpha1m, alpha1h;
+#endif
     float ddf, initial_ema_dist, initial_qty_pct;
     float entry_threshold_base, entry_threshold_we;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     float entry_threshold_v1h, entry_threshold_v1m;
+#endif
     float entry_retracement_base, entry_retracement_we;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     float entry_retracement_v1h, entry_retracement_v1m;
+#endif
     float close_qty_pct, close_threshold_base, close_threshold_we;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     float close_threshold_v1h, close_threshold_v1m;
     float close_retracement_base, close_retracement_v1h, close_retracement_v1m;
+#else
+    float close_retracement_base;
+#endif
     float cooldown_min, twel, allowed_wel, entry_cap;
     bool gate_initial, gate_reentry, twel_entry_gate_enabled;
     bool wel_enforcer_enabled;
@@ -307,7 +321,10 @@ struct TmSide {
     bool entry_market, close_market, secondary_close_market;
     bool market_orders_allowed;
     float market_order_near_touch_threshold;
-    float ema0, ema1, ema2, vol1m, vol1h;
+    float ema0, ema1, ema2;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+    float vol1m, vol1h;
+#endif
     float psize, pprice, last_inc_k, pos_open_k;
     int entry_ticks, close_ticks, secondary_close_ticks;
     float entry_price, close_price, entry_qty, entry_strategy_qty, close_qty;
@@ -421,27 +438,37 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.alpha0 = clamp(2.0f / (lo + 1.0f), 0.0f, 1.0f);
     s.alpha1 = clamp(2.0f / (mid + 1.0f), 0.0f, 1.0f);
     s.alpha2 = clamp(2.0f / (hi + 1.0f), 0.0f, 1.0f);
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.alpha1h = p[o + 2] > 0.0f ? 2.0f / (fmax(p[o + 2], 1.0f) + 1.0f) : 0.0f;
     s.alpha1m = p[o + 3] > 0.0f ? clamp(2.0f / (p[o + 3] + 1.0f), 0.0f, 1.0f) : 0.0f;
+#endif
     s.ddf = p[o + 4];
     s.initial_ema_dist = p[o + 5];
     s.initial_qty_pct = p[o + 6];
     s.entry_threshold_base = p[o + 7];
     s.entry_threshold_we = p[o + 8];
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.entry_threshold_v1h = p[o + 9];
     s.entry_threshold_v1m = p[o + 10];
+#endif
     s.entry_retracement_base = p[o + 11];
     s.entry_retracement_we = p[o + 12];
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.entry_retracement_v1h = p[o + 13];
     s.entry_retracement_v1m = p[o + 14];
+#endif
     s.close_qty_pct = p[o + 15];
     s.close_threshold_base = p[o + 16];
     s.close_threshold_we = p[o + 17];
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.close_threshold_v1h = p[o + 18];
     s.close_threshold_v1m = p[o + 19];
+#endif
     s.close_retracement_base = p[o + 20];
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.close_retracement_v1h = p[o + 21];
     s.close_retracement_v1m = p[o + 22];
+#endif
     s.cooldown_min = ceil(p[o + 23]);
     s.twel = p[o + 24];
     s.gate_initial = p[o + 25] > 0.5f;
@@ -491,7 +518,9 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.market_orders_allowed = false;
     s.market_order_near_touch_threshold = 0.0f;
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.vol1m = 0.0f; s.vol1h = 0.0f;
+#endif
     s.psize = 0.0f; s.pprice = 0.0f;
     s.last_inc_k = -1.0f; s.pos_open_k = -1.0f;
     s.entry_ticks = 0; s.entry_qty = 0.0f; s.entry_strategy_qty = 0.0f;
@@ -521,14 +550,18 @@ inline TmSide load_side(constant float* p, int o, float seed) {
 inline void update_indicators(
     thread TmSide& s, float close, float lr, float hour_lr, bool valid, bool hour_valid
 ) {
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
     if (hour_valid && s.alpha1h > 0.0f)
         s.vol1h = fma(s.alpha1h, hour_lr - s.vol1h, s.vol1h);
+#endif
     if (valid) {
         s.ema0 = fma(s.alpha0, close - s.ema0, s.ema0);
         s.ema1 = fma(s.alpha1, close - s.ema1, s.ema1);
         s.ema2 = fma(s.alpha2, close - s.ema2, s.ema2);
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
         if (s.alpha1m > 0.0f)
             s.vol1m = fma(s.alpha1m, lr - s.vol1m, s.vol1m);
+#endif
     }
 }
 
@@ -934,6 +967,10 @@ inline void generate_orders(
     float we = !flat && balance > 0.0f
         ? s.psize * s.pprice * c_mult / balance : 0.0f;
     float wer = we / fmax(s.allowed_wel, 1.0e-12f);
+#if PASSIVBOT_TM_VOLATILITY_DISABLED
+    float tm = fmax(1.0f + wer * s.entry_threshold_we, 1.0f);
+    float rm = fmax(1.0f + wer * s.entry_retracement_we, 1.0f);
+#else
     float tm = fmax(
         1.0f + s.vol1h * s.entry_threshold_v1h
             + s.vol1m * s.entry_threshold_v1m + wer * s.entry_threshold_we,
@@ -944,6 +981,7 @@ inline void generate_orders(
             + s.vol1m * s.entry_retracement_v1m + wer * s.entry_retracement_we,
         1.0f
     );
+#endif
     float threshold = fmax(s.entry_threshold_base, 0.0f) * tm;
     float retracement = fmax(s.entry_retracement_base, 0.0f) * rm;
     const bool trailing_entry = PASSIVBOT_TM_TRAILING_ENTRY_ONLY
@@ -1117,6 +1155,10 @@ inline void generate_orders(
     }
     float unstuck_exec_price = unstuck_market ? price_now : unstuck_price;
 
+#if PASSIVBOT_TM_VOLATILITY_DISABLED
+    float ct = s.close_threshold_base + wer * s.close_threshold_we;
+    float cr = fmax(s.close_retracement_base, 0.0f);
+#else
     float ct = s.close_threshold_base + wer * s.close_threshold_we
         + s.vol1h * s.close_threshold_v1h + s.vol1m * s.close_threshold_v1m;
     float cr = fmax(s.close_retracement_base, 0.0f) * fmax(
@@ -1124,6 +1166,7 @@ inline void generate_orders(
             + s.vol1m * s.close_retracement_v1m,
         1.0f
     );
+#endif
     const bool trailing_close = PASSIVBOT_TM_TRAILING_CLOSE_ONLY
         || s.close_retracement_base > 0.0f;
     bool retraced_close = is_long
@@ -1937,12 +1980,16 @@ inline void passivbot_single_coin_impl(
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
         const float log_range = bars[bo + 3];
         const float hour_lr = bars[bo + 4];
+#endif
         const bool valid = flags[fo + 0] != 0;
         const bool can_gen = flags[fo + 1] != 0;
         const int di = flags[fo + 2];
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
         const bool hour_valid = flags[fo + 3] != 0;
+#endif
         const int high_fill_max_tick = flags[fo + 4];
         const int low_nonfill_max_tick = flags[fo + 5];
         const int touch_down_tick = flags[fo + 6];
@@ -2023,9 +2070,13 @@ inline void passivbot_single_coin_impl(
             // Positive WE weight makes later generated long closes nearer.
             // The zero-WE target is a conservative lower bound: reconstruct
             // the sorted grid only if this candle can reach that bound.
+#if PASSIVBOT_TM_VOLATILITY_DISABLED
+            float threshold_floor = long_side.close_threshold_base;
+#else
             float threshold_floor = long_side.close_threshold_base
                 + long_side.vol1h * long_side.close_threshold_v1h
                 + long_side.vol1m * long_side.close_threshold_v1m;
+#endif
             int target_ticks = directional_ticks(
                 long_side.close_gen_pprice * (1.0f + threshold_floor),
                 price_step, true
@@ -2781,9 +2832,13 @@ inline void passivbot_single_coin_impl(
             && short_side.close_threshold_we > 0.0f) {
             // Positive WE weight makes later generated short closes nearer.
             // The zero-WE target is a conservative upper bound.
+#if PASSIVBOT_TM_VOLATILITY_DISABLED
+            float threshold_floor = short_side.close_threshold_base;
+#else
             float threshold_floor = short_side.close_threshold_base
                 + short_side.vol1h * short_side.close_threshold_v1h
                 + short_side.vol1m * short_side.close_threshold_v1m;
+#endif
             int target_ticks = directional_ticks(
                 short_side.close_gen_pprice * (1.0f - threshold_floor),
                 price_step, false
@@ -3619,12 +3674,20 @@ inline void passivbot_single_coin_impl(
 
 #if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
         if (long_enabled) {
+#if PASSIVBOT_TM_VOLATILITY_DISABLED
+            update_indicators(long_side, close, 0.0f, 0.0f, valid, false);
+#else
             update_indicators(long_side, close, log_range, hour_lr, valid, hour_valid);
+#endif
         }
 #endif
 #if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
         if (short_enabled) {
+#if PASSIVBOT_TM_VOLATILITY_DISABLED
+            update_indicators(short_side, close, 0.0f, 0.0f, valid, false);
+#else
             update_indicators(short_side, close, log_range, hour_lr, valid, hour_valid);
+#endif
         }
 #endif
 #if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)

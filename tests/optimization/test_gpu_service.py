@@ -424,6 +424,7 @@ def _minimal_single_coin_proxy(*, interrupt_check=lambda: None):
             )
         }
         output["max_dd"] = torch.as_tensor(parameters[:, 0])
+        output["alive"] = torch.ones(batch, dtype=torch.bool)
         return output
 
     proxy.runner = SimpleNamespace(run=run)
@@ -481,11 +482,17 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
     proxy.strategy_kind = "ema_anchor"
     proxy.runner.n = 100
     proxy.runner.long_enabled = True
-    proxy.runner.short_enabled = False
+    proxy.runner.short_enabled = True
+    proxy.run = SimpleNamespace(interval_ms=60_000)
     original_run = proxy.runner.run
 
     def profiled_run(parameters, **kwargs):
         output = original_run(parameters, **kwargs)
+        candidate_ids = parameters[:, 0].astype(int)
+        output["alive"] = torch.as_tensor(candidate_ids % 2 == 0)
+        output["last_eq_ts"] = torch.as_tensor(
+            np.where(candidate_ids % 2 == 0, 99, candidate_ids + 9) * 60_000.0
+        )
         proxy.runner.last_profile = {
             "cpu_pack_seconds": 0.001,
             "upload_and_zero_seconds": 0.002,
@@ -502,6 +509,7 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
                 "reducers_disabled": True,
                 "market_orders_disabled": True,
                 "loss_gate_disabled": True,
+                "volatility_disabled": True,
             },
         }
         return output
@@ -523,6 +531,7 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
             "reducers_disabled": True,
             "market_orders_disabled": True,
             "loss_gate_disabled": True,
+            "volatility_disabled": True,
         }
     ] * 3
     assert profile["dispatch_count"] == 3
@@ -530,10 +539,18 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
     assert profile["warm_dispatch_count"] == 2
     assert len(profile["dispatch_chunk_wall_seconds"]) == 3
     assert all(value >= 0.0 for value in profile["dispatch_chunk_wall_seconds"])
-    assert profile["candidate_bars"] == 500
-    assert profile["kernel_candidate_bars"] == 500
+    assert profile["candidate_bars"] == 1_000
+    assert profile["kernel_candidate_bars"] == 1_000
+    assert profile["terminal_candidate_count"] == 2
+    assert profile["terminal_without_equity_count"] == 0
+    assert profile["estimated_post_terminal_candidate_bars"] == 348
+    assert profile["estimated_post_terminal_candidate_bar_fraction"] == pytest.approx(
+        0.348
+    )
+    assert profile["terminal_step_fraction_p50"] == pytest.approx(11.0 / 98.0)
+    assert profile["terminal_step_fraction_p90"] == pytest.approx(11.8 / 98.0)
     assert profile["coin_count"] == 1
-    assert profile["side_count"] == 1
+    assert profile["side_count"] == 2
     assert profile["timings_seconds"]["kernel_execution"] == pytest.approx(
         0.015
     )

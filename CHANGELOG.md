@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin Trailing Martingale screening now compiles out the 1-minute and 1-hour
+  volatility EMA state, candle-range loads, and volatility-weight arithmetic when every active
+  candidate in a dispatch uses zero volatility weights for entry and close thresholds and
+  retracements. Mixed or nonzero-weight dispatches retain the full kernel. Opt-in GPU profiles now
+  also report terminated-candidate counts and estimated post-termination candidate-bars, making
+  future early-exit work measurable. Exact Rust validation, CPU optimization, backtests, and live
+  behavior are unchanged.
+
 - Apple MPS single-coin Trailing Martingale optimization now offers disabled-by-default
   successive-halving proxy screening. The default opt-in ladder evaluates 1024 candidates on 25%
   of history, 512 on 50%, and 256 on the complete history, while preserving the existing

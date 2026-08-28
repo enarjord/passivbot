@@ -12583,7 +12583,7 @@ def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
         short_enabled=False,
         market_orders_allowed=False,
         loss_gate_enabled=False,
-    ) == (True, True, True, True, True)
+    ) == (True, True, True, True, True, True)
 
     entry_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
         "entry_retracement_base_pct"
@@ -12595,7 +12595,20 @@ def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
         short_enabled=False,
         market_orders_allowed=True,
         loss_gate_enabled=True,
-    ) == (False, True, True, False, False)
+    ) == (False, True, True, False, False, True)
+
+    volatility_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_threshold_volatility_1m_weight"
+    )
+    matrix[1, volatility_column] = 0.1
+    assert _tm_dispatch_specialization(
+        matrix,
+        long_enabled=True,
+        short_enabled=False,
+        market_orders_allowed=False,
+        loss_gate_enabled=False,
+    )[5] is False
+    matrix[1, volatility_column] = 0.0
 
     matrix[1, entry_column] = 0.001
     side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
@@ -12630,6 +12643,7 @@ def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
         reducers_disabled=True,
         market_orders_disabled=True,
         loss_gate_disabled=True,
+        volatility_disabled=True,
     )
 
     for name in (
@@ -12638,6 +12652,7 @@ def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
         "PASSIVBOT_TM_REDUCERS_DISABLED",
         "PASSIVBOT_TM_MARKET_ORDERS_DISABLED",
         "PASSIVBOT_TM_LOSS_GATE_DISABLED",
+        "PASSIVBOT_TM_VOLATILITY_DISABLED",
     ):
         assert f"#define {name} 1" in transformed
         assert f"#ifndef {name}" in transformed
@@ -12649,7 +12664,107 @@ def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
         reducers_disabled=False,
         market_orders_disabled=False,
         loss_gate_disabled=False,
+        volatility_disabled=False,
     ) == source
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize(
+    ("topology", "hsl_enabled"),
+    [
+        ("long", True),
+        ("short", True),
+        ("long", False),
+        ("short", False),
+        ("dual", True),
+    ],
+)
+def test_mps_tm_zero_volatility_specialization_matches_generic(
+    monkeypatch, topology, hsl_enabled
+):
+    import optimization.gpu.mps_kernel as mps_kernel
+
+    count = 512
+    steps = np.arange(count, dtype=np.float64)
+    close = 100.0 + np.sin(steps / 17.0) * 3.0
+    high = close + 0.5
+    low = close - 0.5
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    rows = []
+    for initial_dist, threshold in ((0.005, 0.03), (0.01, 0.08)):
+        row = _tm_single_row(initial_ema_dist=initial_dist)
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("hsl_enabled")] = (
+            float(hsl_enabled)
+        )
+        row[
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("hsl_red_threshold")
+        ] = threshold
+        rows.append(row + row)
+    parameters = np.asarray(rows, dtype=np.float64)
+
+    specialized_runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=topology != "short",
+        short_enabled=topology != "long",
+        hsl_enabled=hsl_enabled,
+    )
+    specialized = specialized_runner.run(parameters, profile=True)
+    original_specialization = mps_kernel._tm_dispatch_specialization
+
+    def force_generic_volatility(*args, **kwargs):
+        features = original_specialization(*args, **kwargs)
+        return (*features[:5], False)
+
+    monkeypatch.setattr(
+        mps_kernel, "_tm_dispatch_specialization", force_generic_volatility
+    )
+    generic_runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=topology != "short",
+        short_enabled=topology != "long",
+        hsl_enabled=hsl_enabled,
+    )
+    generic = generic_runner.run(parameters, profile=True)
+    torch.mps.synchronize()
+
+    assert specialized_runner.last_profile["dispatch_specialization"][
+        "volatility_disabled"
+    ] is True
+    assert generic_runner.last_profile["dispatch_specialization"][
+        "volatility_disabled"
+    ] is False
+    assert specialized.keys() == generic.keys()
+    for key in specialized:
+        if isinstance(specialized[key], torch.Tensor):
+            torch.testing.assert_close(
+                specialized[key].cpu(),
+                generic[key].cpu(),
+                rtol=0.0,
+                atol=0.0,
+                equal_nan=True,
+            )
+        else:
+            assert specialized[key] == generic[key]
 
 
 @pytest.mark.skipif(

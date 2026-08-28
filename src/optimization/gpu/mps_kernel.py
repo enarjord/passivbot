@@ -76,6 +76,9 @@ _TM_MARKET_ORDERS_DISABLED_DEFINE = (
     "#define PASSIVBOT_TM_MARKET_ORDERS_DISABLED 1\n"
 )
 _TM_LOSS_GATE_DISABLED_DEFINE = "#define PASSIVBOT_TM_LOSS_GATE_DISABLED 1\n"
+_TM_VOLATILITY_DISABLED_DEFINE = (
+    "#define PASSIVBOT_TM_VOLATILITY_DISABLED 1\n"
+)
 
 
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
@@ -172,6 +175,7 @@ def _with_tm_dispatch_features(
     reducers_disabled: bool,
     market_orders_disabled: bool,
     loss_gate_disabled: bool,
+    volatility_disabled: bool,
 ) -> str:
     features = (
         (
@@ -198,6 +202,11 @@ def _with_tm_dispatch_features(
             loss_gate_disabled,
             "#ifndef PASSIVBOT_TM_LOSS_GATE_DISABLED",
             _TM_LOSS_GATE_DISABLED_DEFINE,
+        ),
+        (
+            volatility_disabled,
+            "#ifndef PASSIVBOT_TM_VOLATILITY_DISABLED",
+            _TM_VOLATILITY_DISABLED_DEFINE,
         ),
     )
     for enabled, marker, define in features:
@@ -271,7 +280,7 @@ def _tm_dispatch_specialization(
     short_enabled: bool,
     market_orders_allowed: bool,
     loss_gate_enabled: bool,
-) -> tuple[bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool]:
     """Prove dispatch-wide TM features before compiling away inactive paths."""
 
     side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
@@ -308,12 +317,29 @@ def _tm_dispatch_specialization(
             "unstuck_enabled",
         )
     )
+    volatility_disabled = all(
+        all_active_rows(
+            lambda values: np.all(np.isfinite(values) & (values == 0.0)),
+            key,
+        )
+        for key in (
+            "entry_threshold_volatility_1h_weight",
+            "entry_threshold_volatility_1m_weight",
+            "entry_retracement_volatility_1h_weight",
+            "entry_retracement_volatility_1m_weight",
+            "close_threshold_volatility_1h_weight",
+            "close_threshold_volatility_1m_weight",
+            "close_retracement_volatility_1h_weight",
+            "close_retracement_volatility_1m_weight",
+        )
+    )
     return (
         trailing_entry_only,
         trailing_close_only,
         reducers_disabled,
         not market_orders_allowed,
         not loss_gate_enabled,
+        volatility_disabled,
     )
 
 
@@ -652,6 +678,7 @@ def _trailing_martingale_shader_library(
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
     loss_gate_disabled: bool = False,
+    volatility_disabled: bool = False,
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
@@ -672,6 +699,7 @@ def _trailing_martingale_shader_library(
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
         loss_gate_disabled=loss_gate_disabled,
+        volatility_disabled=volatility_disabled,
     )
     source = _with_hsl_features(
         source,
@@ -694,6 +722,7 @@ def _trailing_martingale_long_hsl_shader_library(
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
     loss_gate_disabled: bool = False,
+    volatility_disabled: bool = False,
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
@@ -714,6 +743,7 @@ def _trailing_martingale_long_hsl_shader_library(
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
         loss_gate_disabled=loss_gate_disabled,
+        volatility_disabled=volatility_disabled,
     )
     source = _with_hsl_features(
         source,
@@ -736,6 +766,7 @@ def _trailing_martingale_short_hsl_shader_library(
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
     loss_gate_disabled: bool = False,
+    volatility_disabled: bool = False,
     hsl_ema_tail_enabled: bool = False,
     hsl_raw_drawdown_enabled: bool = False,
     hsl_raw_tail_enabled: bool = False,
@@ -756,6 +787,7 @@ def _trailing_martingale_short_hsl_shader_library(
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
         loss_gate_disabled=loss_gate_disabled,
+        volatility_disabled=volatility_disabled,
     )
     source = _with_hsl_features(
         source,
@@ -778,6 +810,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
     loss_gate_disabled: bool = False,
+    volatility_disabled: bool = False,
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
@@ -794,6 +827,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
         loss_gate_disabled=loss_gate_disabled,
+        volatility_disabled=volatility_disabled,
     )
     source = _with_recovery_distribution(
         source,
@@ -812,6 +846,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
     loss_gate_disabled: bool = False,
+    volatility_disabled: bool = False,
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
@@ -828,6 +863,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
         loss_gate_disabled=loss_gate_disabled,
+        volatility_disabled=volatility_disabled,
     )
     source = _with_recovery_distribution(
         source,
@@ -2773,7 +2809,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
 
     def _shader_library_cache_call(
         self,
-        dispatch_features: tuple[bool, bool, bool, bool, bool] | None = None,
+        dispatch_features: tuple[bool, bool, bool, bool, bool, bool] | None = None,
     ):
         if dispatch_features is None:
             dispatch_features = (
@@ -2782,6 +2818,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 False,
                 not getattr(self, "market_orders_allowed", False),
                 not getattr(self, "loss_gate_enabled", False),
+                False,
             )
         if self.shader_topology == "long_hsl":
             return _trailing_martingale_long_hsl_shader_library, (
@@ -2985,6 +3022,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     "reducers_disabled": dispatch_features[2],
                     "market_orders_disabled": dispatch_features[3],
                     "loss_gate_disabled": dispatch_features[4],
+                    "volatility_disabled": dispatch_features[5],
                 },
             }
         else:
