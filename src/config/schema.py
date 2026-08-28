@@ -509,7 +509,7 @@ def get_template_config():
                         "drift_window": 128,
                         "exact_workers": 0,
                         "max_pending_exact": 0,
-                        "population_size": 4096,
+                        "population_size": 1024,
                         "validate_per_generation": 8
                     },
                     "pymoo": {

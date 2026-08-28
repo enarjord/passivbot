@@ -274,7 +274,7 @@ def _directional_tm_config(*, long_enabled: bool, short_enabled: bool):
 
 def test_gpu_options_are_additive_and_validate_ranges():
     config = _long_only_ema_config()
-    assert _resolve_options(config)["population_size"] == 4096
+    assert _resolve_options(config)["population_size"] == 1024
 
     config["optimize"]["gpu"]["batch_size"] = 0
     with pytest.raises(ValueError, match="batch_size"):

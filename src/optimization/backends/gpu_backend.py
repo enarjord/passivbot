@@ -52,7 +52,7 @@ from utils import to_standard_exchange_name
 
 
 GPU_DEFAULTS = {
-    "population_size": 4096,
+    "population_size": 1024,
     "batch_size": 4096,
     "checkpoint_interval_seconds": 5.0,
     "validate_per_generation": 8,

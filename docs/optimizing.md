@@ -637,7 +637,7 @@ GPU-specific settings live under `optimize.gpu`:
       "drift_window": 128,
       "exact_workers": 0,
       "max_pending_exact": 0,
-      "population_size": 4096,
+      "population_size": 1024,
       "validate_per_generation": 8
     }
   }
@@ -647,7 +647,9 @@ GPU-specific settings live under `optimize.gpu`:
 The CPU-side NSGA-II proposal stage uses the same `optimize.pymoo.shared` crossover, mutation, and
 duplicate-elimination controls as the ordinary pymoo optimizer.
 
-- `population_size` is the NSGA-II proxy population.
+- `population_size` is the NSGA-II proxy population. The default is 1024 so long-history runs
+  reach their first exact Rust validation batch four times sooner than the former 4096 default.
+  Larger explicit populations remain supported.
 - `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
   shares the GPU with WindowServer, the backend transparently splits a batch when its
   candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too
