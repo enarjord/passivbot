@@ -217,8 +217,10 @@ The supported slice is intentionally narrow:
   candle interval. Pending directional orders are cleared at a gap before the next valid candle.
   Normal CPU input validation stays strict.
   Finite non-positive, partially invalid, or float32-unrepresentable prices remain fail-closed
-  for GPU screening. A bounded coin-HSL rolling-PnL overflow still fails closed with a
-  conservative full-horizon recovery penalty. Independent dual-side multi-coin summaries remain
+  for GPU screening. The single-coin coin-HSL ring coalesces realized-PnL components from the same
+  candle and retains up to 8,192 event candles in the configured finite lookback; an overflow
+  beyond that bounded capacity still fails closed with a conservative full-horizon recovery
+  penalty. Independent dual-side multi-coin summaries remain
   fail closed for these metrics because they cannot reconstruct one shared portfolio-equity curve.
   Compatible suites may use the supported topologies.
 - single-coin EMA Anchor and Trailing Martingale support auto-unstuck for long-only,
@@ -720,9 +722,10 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
    successful completion. Checkpoint identity includes the complete optimizer shape (including
    fixed and dormant dimensions, quantization, runtime optimizer overrides, and effective NSGA-II
    population/variation policy) plus every prepared proxy's effective execution contract:
-   strategy and side topology, ordered coins, hashes of prepared candle values and timestamps,
-   starting balance, valid/trade windows, fully resolved fixed proxy parameters, liquidation and
-   exposure policy, resolved maker/taker fees and market settings, and other modeled execution settings.
+  strategy and side topology, ordered coins, hashes of prepared candle values and timestamps,
+  starting balance, valid/trade windows, fully resolved fixed proxy parameters, liquidation and
+  exposure policy, finite coin-HSL rolling capacity where applicable, resolved maker/taker fees and
+  market settings, and other modeled execution settings.
    Suite checkpoints record that contract independently for every scenario. Changing any of these
    inputs makes resume fail closed instead of mixing evolutionary state from incompatible runs.
    Checkpoints written before this expanded identity contract are intentionally incompatible.
