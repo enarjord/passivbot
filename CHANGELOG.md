@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin Trailing Martingale optimization now offers disabled-by-default
+  successive-halving proxy screening. The default opt-in ladder evaluates 1024 candidates on 25%
+  of history, 512 on 50%, and 256 on the complete history, while preserving the existing
+  candidate-bars dispatch safety envelope. Only complete-history survivors are eligible for exact
+  Rust validation and proxy/exact drift evidence; CPU optimization, backtests, live behavior, and
+  ordinary GPU runs are unchanged.
+
 - Apple MPS single-coin Trailing Martingale screening now selects dispatch-proven Metal variants
   that compile out recursive entry/close grids when every active candidate uses positive
   retracement, and compile out WEL/TWEL enforcers plus auto-unstuck when every active candidate has

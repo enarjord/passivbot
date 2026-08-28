@@ -1421,7 +1421,7 @@ class MpsEmaAnchorRunner:
         self._rolling_buffers: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
-        self._sizes: dict[tuple[int, int], torch.Tensor] = {}
+        self._sizes: dict[tuple[int, int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float | int | bool] = {}
 
     def _shader_library_cache_call(self):
@@ -1550,11 +1550,21 @@ class MpsEmaAnchorRunner:
         return self._equity_balance_diff_buffers[batch_size]
 
     def _single_coin_size_values(
-        self, batch_size: int, parameter_count: int
+        self,
+        batch_size: int,
+        parameter_count: int,
+        *,
+        end_step: int | None = None,
     ) -> list[int]:
+        effective_end_step = self.n if end_step is None else int(end_step)
+        if not 3 <= effective_end_step <= self.n:
+            raise ValueError(
+                "single-coin MPS end_step must be between 3 and the full candle "
+                f"count {self.n}, got {effective_end_step}"
+            )
         values = [
             int(batch_size),
-            self.n,
+            effective_end_step,
             self.n_days,
             int(parameter_count),
             self.run_config.first_valid_idx,
@@ -1566,7 +1576,13 @@ class MpsEmaAnchorRunner:
             values.extend([self.recovery_stride, self.n_recovery_samples])
         return values
 
-    def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
+    def run(
+        self,
+        params: np.ndarray,
+        *,
+        profile: bool = False,
+        end_step: int | None = None,
+    ) -> dict:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         packed = time.perf_counter() if profile else 0.0
@@ -1582,10 +1598,13 @@ class MpsEmaAnchorRunner:
             else None
         )
         equity_balance_diff = self._equity_balance_diff_buffer(batch_size)
-        sizes_key = (batch_size, int(matrix.shape[1]))
+        effective_end_step = self.n if end_step is None else int(end_step)
+        sizes_key = (batch_size, int(matrix.shape[1]), effective_end_step)
         if sizes_key not in self._sizes:
             size_values = self._single_coin_size_values(
-                batch_size, int(matrix.shape[1])
+                batch_size,
+                int(matrix.shape[1]),
+                end_step=effective_end_step,
             )
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
@@ -1640,6 +1659,7 @@ class MpsEmaAnchorRunner:
                 "batch_size": batch_size,
                 "dispatch_count": 1,
                 "cold": cold,
+                "effective_candle_count": effective_end_step,
             }
         else:
             self.last_profile = {}
@@ -2863,7 +2883,13 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             scaled, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
         )
 
-    def run(self, params: np.ndarray, *, profile: bool = False) -> dict:
+    def run(
+        self,
+        params: np.ndarray,
+        *,
+        profile: bool = False,
+        end_step: int | None = None,
+    ) -> dict:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         dispatch_features = _tm_dispatch_specialization(
@@ -2889,10 +2915,13 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         entry_interval_stats, entry_interval_counts = self._entry_interval_buffers(
             batch_size
         )
-        sizes_key = (batch_size, int(matrix.shape[1]))
+        effective_end_step = self.n if end_step is None else int(end_step)
+        sizes_key = (batch_size, int(matrix.shape[1]), effective_end_step)
         if sizes_key not in self._sizes:
             size_values = self._single_coin_size_values(
-                batch_size, int(matrix.shape[1])
+                batch_size,
+                int(matrix.shape[1]),
+                end_step=effective_end_step,
             )
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
@@ -2949,6 +2978,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "batch_size": batch_size,
                 "dispatch_count": 1,
                 "cold": cold,
+                "effective_candle_count": effective_end_step,
                 "dispatch_specialization": {
                     "trailing_entry_only": dispatch_features[0],
                     "trailing_close_only": dispatch_features[1],

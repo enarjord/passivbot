@@ -443,6 +443,37 @@ def test_single_coin_proxy_preserves_order_across_bounded_dispatches():
     assert calls == [[0.0, 1.0], [2.0, 3.0], [4.0]]
 
 
+def test_single_coin_proxy_partial_history_expands_safe_dispatch_and_routes_end_step():
+    proxy, calls = _minimal_single_coin_proxy()
+    proxy.batch_size = 4096
+    proxy.dispatch_batch_size = 258
+    proxy.runner.n = 1_931_815
+    proxy.run = SimpleNamespace(trade_start_idx=10, first_valid_idx=0)
+    original_run = proxy.runner.run
+    routed_end_steps = []
+
+    def routed_run(parameters, **kwargs):
+        routed_end_steps.append(kwargs["end_step"])
+        return original_run(parameters, **kwargs)
+
+    proxy.runner.run = routed_run
+
+    end_step = proxy.end_step_for_history_fraction(0.25)
+    results = proxy.evaluate(
+        [{"value": float(index)} for index in range(1024)],
+        end_step=end_step,
+    )
+
+    assert end_step == 482_963
+    assert len(results) == 1024
+    assert [len(call) for call in calls] == [1024]
+    assert routed_end_steps == [482_963]
+
+    proxy.runner.n = 1_250
+    proxy.run = SimpleNamespace(trade_start_idx=1_000, first_valid_idx=900)
+    assert proxy.end_step_for_history_fraction(0.25) == 1_064
+
+
 def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatch):
     torch = pytest.importorskip("torch")
     proxy, calls = _minimal_single_coin_proxy()
