@@ -272,6 +272,10 @@ def _new_gpu_proxy_profile(
             len(candidates) * candle_count * int(coin_count) * int(side_count)
         ),
         "kernel_candidate_bars": 0,
+        "terminal_candidate_count": 0,
+        "terminal_without_equity_count": 0,
+        "estimated_post_terminal_candidate_bars": 0,
+        "_terminal_step_fractions": [],
         "candle_count": candle_count,
         "coin_count": int(coin_count),
         "side_count": int(side_count),
@@ -365,6 +369,45 @@ def _add_gpu_runner_profile(
     )
 
 
+def _add_gpu_terminal_profile(
+    profile: dict,
+    output: dict,
+    *,
+    interval_ms: int,
+    effective_end_step: int,
+) -> None:
+    """Estimate work after irreversible single-coin candidate termination."""
+
+    alive = output.get("alive")
+    last_eq_ts = output.get("last_eq_ts")
+    if alive is None or last_eq_ts is None:
+        return
+    alive_values = alive.detach().cpu().numpy().astype(bool, copy=False)
+    terminal = ~alive_values
+    terminal_count = int(terminal.sum())
+    if terminal_count == 0:
+        return
+    last_eq_values = np.asarray(
+        last_eq_ts.detach().cpu().numpy(), dtype=np.float64
+    )
+    terminal_last_eq = last_eq_values[terminal]
+    finite = np.isfinite(terminal_last_eq)
+    estimated_steps = np.ones(terminal_count, dtype=np.int64)
+    if np.any(finite):
+        estimated_steps[finite] = np.rint(
+            terminal_last_eq[finite] / max(1, int(interval_ms))
+        ).astype(np.int64)
+    estimated_steps = np.clip(estimated_steps, 1, max(1, effective_end_step - 2))
+    profile["terminal_candidate_count"] += terminal_count
+    profile["terminal_without_equity_count"] += int((~finite).sum())
+    profile["estimated_post_terminal_candidate_bars"] += int(
+        np.maximum(effective_end_step - 2 - estimated_steps, 0).sum()
+    ) * int(profile.get("side_count", 1))
+    profile["_terminal_step_fractions"].extend(
+        (estimated_steps / max(1, effective_end_step - 2)).tolist()
+    )
+
+
 def _finish_gpu_proxy_profile(profile: dict, started: float) -> dict:
     profile["actual_dispatch_batch_sizes"] = list(
         profile["actual_dispatch_batch_sizes"]
@@ -374,6 +417,23 @@ def _finish_gpu_proxy_profile(profile: dict, started: float) -> dict:
     profile["timings_seconds"]["host_overhead"] = max(
         0.0,
         profile["wall_seconds"] - accounted,
+    )
+    terminal_fractions = np.asarray(
+        profile.pop("_terminal_step_fractions", ()), dtype=np.float64
+    )
+    avoidable = int(profile["estimated_post_terminal_candidate_bars"])
+    profile["estimated_post_terminal_candidate_bar_fraction"] = (
+        avoidable / max(1, int(profile["candidate_bars"]))
+    )
+    profile["terminal_step_fraction_p50"] = (
+        float(np.quantile(terminal_fractions, 0.50))
+        if len(terminal_fractions)
+        else None
+    )
+    profile["terminal_step_fraction_p90"] = (
+        float(np.quantile(terminal_fractions, 0.90))
+        if len(terminal_fractions)
+        else None
     )
     return profile
 
@@ -2143,10 +2203,13 @@ class MpsSingleCoinProxy:
                     time.perf_counter() - stage_started
                 )
                 stage_started = time.perf_counter()
+            host_output_keys = CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+            if profile is not None:
+                host_output_keys = host_output_keys | {"alive"}
             output = {
                 key: value.cpu()
                 for key, value in output.items()
-                if key in CORE_OUTPUT_KEYS | DIRECTIONAL_HSL_OUTPUT_KEYS
+                if key in host_output_keys
             }
             if recovery_distribution is not None:
                 output["strategy_eq_recovery_distribution"] = (
@@ -2157,6 +2220,12 @@ class MpsSingleCoinProxy:
                     time.perf_counter() - stage_started
                 )
                 stage_started = time.perf_counter()
+                _add_gpu_terminal_profile(
+                    profile,
+                    output,
+                    interval_ms=int(self.run.interval_ms),
+                    effective_end_step=effective_end_step,
+                )
             timestamp_origin = float(self.metrics_data["ts0"])
             for key in (
                 "first_fill_ts",

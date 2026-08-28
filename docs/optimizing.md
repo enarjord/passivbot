@@ -750,7 +750,10 @@ cold compilation versus warm library lookup, kernel execution, device-to-host tr
 reduction, and remaining host overhead. Shape metadata includes requested and actual dispatch batch
 sizes, dispatch chunk and strategy-kernel counts, candidate-bars, candle/coin/side counts, requested
 optional metric features, dispatch-proven Trailing Martingale specializations, and cold/warm
-dispatch counts. Exact Rust evaluation remains
+dispatch counts. Single-coin profiles also report how many candidates terminated before the end of
+the evaluated history, estimated candidate-bars after termination, the corresponding fraction of
+total candidate-bars, and terminal-step p50/p90. These estimates make the ceiling for a future
+early-exit optimization visible without adding work to unprofiled runs. Exact Rust evaluation remains
 authoritative; profiling fields are diagnostic log output and are not added to retained optimization
 results. Chunked proxy generations that run for at least 30 seconds also emit rate-limited ordinary
 progress with completed chunks and candidates, elapsed time, and ETA. This progress remains
@@ -761,8 +764,12 @@ cached Metal library. When every enabled-side candidate has positive entry or cl
 the corresponding recursive grid path is compiled out. When every enabled-side candidate disables
 the position/total-exposure enforcers and auto-unstuck, those reducer paths are compiled out as a
 group. Fixed run settings similarly specialize ordinary market execution and the realized-loss
-gate. A mixed dispatch keeps each relevant full path, so this changes compiled work rather than
-proxy semantics. A run may record an additional cold compile if its dispatch feature shape changes.
+gate. When all eight entry/close threshold and retracement volatility weights are exactly zero for
+every active row, the selected kernel also omits the 1-minute and 1-hour volatility EMA state,
+candle-range loads, and volatility-weight arithmetic. Any nonzero, non-finite, or mixed row keeps
+the full volatility path. A mixed dispatch keeps each relevant full path, so this changes compiled
+work rather than proxy semantics. A run may record an additional cold compile if its dispatch
+feature shape changes.
 HSL topology likewise considers enabled sides only; an HSL setting left on an exposure-disabled
 side does not make the active side pay for an HSL controller.
 

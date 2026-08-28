@@ -1194,6 +1194,8 @@ mod tests {
         assert!(source.contains("#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY"));
         assert!(source.contains("#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY"));
         assert!(source.contains("#ifndef PASSIVBOT_TM_REDUCERS_DISABLED"));
+        assert!(source.contains("#ifndef PASSIVBOT_TM_VOLATILITY_DISABLED"));
+        assert!(source.contains("#if !PASSIVBOT_TM_VOLATILITY_DISABLED"));
         assert!(source
             .contains("const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"));
         assert!(source.contains("should_use_ordinary_market_execution("));
