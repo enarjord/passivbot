@@ -44,6 +44,7 @@ from optimization.gpu.service import (
     _directional_gross_pnl_outputs,
     _gpu_proxy_execution_checkpoint_contract,
     _gpu_profile_unattributed_seconds,
+    _add_gpu_terminal_profile,
     _hsl_params,
     _hsl_diagnostics_needed,
     _mps_dispatch_batch_size,
@@ -630,6 +631,32 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
         0.006
     )
     assert profile["wall_seconds"] >= 0.0
+
+
+def test_gpu_terminal_profile_rebases_recent_window_steps():
+    torch = pytest.importorskip("torch")
+    profile = {
+        "terminal_candidate_count": 0,
+        "terminal_without_equity_count": 0,
+        "estimated_post_terminal_candidate_bars": 0,
+        "_terminal_step_fractions": [],
+        "side_count": 1,
+    }
+
+    _add_gpu_terminal_profile(
+        profile,
+        {
+            "alive": torch.as_tensor([False]),
+            "last_eq_ts": torch.as_tensor([75 * 60_000.0]),
+        },
+        interval_ms=60_000,
+        effective_start_step=50,
+        effective_end_step=100,
+    )
+
+    assert profile["terminal_candidate_count"] == 1
+    assert profile["estimated_post_terminal_candidate_bars"] == 23
+    assert profile["_terminal_step_fractions"] == [pytest.approx(25.0 / 48.0)]
 
 
 def test_gpu_dispatch_progress_is_rate_limited_and_reports_eta(

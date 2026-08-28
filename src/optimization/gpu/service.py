@@ -374,6 +374,7 @@ def _add_gpu_terminal_profile(
     output: dict,
     *,
     interval_ms: int,
+    effective_start_step: int = 0,
     effective_end_step: int,
 ) -> None:
     """Estimate work after irreversible single-coin candidate termination."""
@@ -396,15 +397,20 @@ def _add_gpu_terminal_profile(
     if np.any(finite):
         estimated_steps[finite] = np.rint(
             terminal_last_eq[finite] / max(1, int(interval_ms))
-        ).astype(np.int64)
-    estimated_steps = np.clip(estimated_steps, 1, max(1, effective_end_step - 2))
+        ).astype(np.int64) - int(effective_start_step)
+    effective_step_count = max(
+        1, int(effective_end_step) - int(effective_start_step)
+    )
+    estimated_steps = np.clip(
+        estimated_steps, 1, max(1, effective_step_count - 2)
+    )
     profile["terminal_candidate_count"] += terminal_count
     profile["terminal_without_equity_count"] += int((~finite).sum())
     profile["estimated_post_terminal_candidate_bars"] += int(
-        np.maximum(effective_end_step - 2 - estimated_steps, 0).sum()
+        np.maximum(effective_step_count - 2 - estimated_steps, 0).sum()
     ) * int(profile.get("side_count", 1))
     profile["_terminal_step_fractions"].extend(
-        (estimated_steps / max(1, effective_end_step - 2)).tolist()
+        (estimated_steps / max(1, effective_step_count - 2)).tolist()
     )
 
 
@@ -2288,6 +2294,7 @@ class MpsSingleCoinProxy:
                     profile,
                     output,
                     interval_ms=int(self.run.interval_ms),
+                    effective_start_step=effective_history_start,
                     effective_end_step=effective_end_step,
                 )
             timestamp_origin = float(self.metrics_data["ts0"])
