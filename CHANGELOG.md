@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin `coin`-mode HSL screening now retains up to 4,096 realized-PnL events in
+  the finite lookback window. High-cadence candidates with more than 2,048 valid close events no
+  longer receive an artificial early-stop penalty that can poison proxy/exact drift evidence;
+  overflow remains bounded and fail closed. Exact Rust validation, CPU optimization, backtests,
+  and live behavior are unchanged.
+
 - Apple MPS single-coin Trailing Martingale screening now compiles out the 1-minute and 1-hour
   volatility EMA state, candle-range loads, and volatility-weight arithmetic when every active
   candidate in a dispatch uses zero volatility weights for entry and close thresholds and

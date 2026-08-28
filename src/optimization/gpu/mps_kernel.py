@@ -42,7 +42,12 @@ MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 66
 MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 68
 MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 70
 MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
-MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 2048
+# A 30-day coin-HSL lookback can legitimately contain slightly more than
+# 2,048 realized close events for high-cadence single-coin candidates. Keep
+# this bounded, but leave enough headroom that ordinary dense strategies do
+# not fail closed solely because their valid rolling window crossed the old
+# capacity.
+MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY = 4096
 MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS = 7
 MPS_EQUITY_BALANCE_DIFF_COLS = 12
 MPS_ENTRY_INTERVAL_STAT_COLS = 2
