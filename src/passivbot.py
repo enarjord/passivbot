@@ -3783,6 +3783,15 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
+        exchange_config_ready = await self._exchange_config_write_ready()
+        while exchange_config_ready is False and not self.stop_signal_received:
+            await self._sleep_unless_shutdown(
+                5.0,
+                stage="exchange_config_balance_readiness",
+            )
+            if self.stop_signal_received:
+                return
+            exchange_config_ready = await self._exchange_config_write_ready()
         # Retry on transient network errors (TCP + TLS handshake on a fresh
         # aiohttp session can time out; also called hourly so transient errors
         # should not abort the refresh cycle).
@@ -3828,12 +3837,12 @@ class Passivbot:
         while (
             authoritative_ready is False
             and getattr(self, "_last_authoritative_block_reason", None)
-            == "balance_transition_confirmation"
+            == "balance_consistency_check"
             and not self.stop_signal_received
         ):
             await self._sleep_unless_shutdown(
                 5.0,
-                stage="initial_balance_transition_confirmation",
+                stage="initial_balance_consistency_check",
             )
             if self.stop_signal_received:
                 return
@@ -6164,11 +6173,11 @@ class Passivbot:
                         "pending_pnl",
                         "degraded_pnl",
                         "fill_history_coverage",
-                        "balance_transition_confirmation",
+                        "balance_consistency_check",
                     }:
                         if (
                             authoritative_block_reason
-                            == "balance_transition_confirmation"
+                            == "balance_consistency_check"
                         ):
                             authoritative_fill_retry_count = 0
                             authoritative_fill_retry_reason = None
@@ -6184,7 +6193,7 @@ class Passivbot:
                             )
                             await self._sleep_unless_shutdown(
                                 5.0,
-                                stage="balance_transition_confirmation",
+                                stage="balance_consistency_check",
                             )
                             continue
                         if authoritative_fill_retry_reason != authoritative_block_reason:
@@ -10122,6 +10131,10 @@ class Passivbot:
         """Exchange-specific hook to refresh global config state."""
         # defined by each exchange child class
         pass
+
+    async def _exchange_config_write_ready(self) -> bool:
+        """Return whether startup may perform authenticated exchange config writes."""
+        return True
 
     def is_old_enough(self, pside, symbol):
         """Return True if the market age exceeds the configured minimum for forager mode."""

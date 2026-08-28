@@ -207,6 +207,12 @@ async def capture_balance_staged_snapshot(
     bot,
 ) -> tuple[object, dict, float | DeferredAuthoritativeSurface]:
     """Fetch one raw balance response plus bounded diagnostics and normalized value."""
+    if getattr(bot, "balance_override", None) is not None:
+        return (
+            None,
+            unavailable_balance_composition(reason="balance_override"),
+            bot.get_raw_balance(),
+        )
     try:
         if hasattr(bot, "capture_balance_snapshot"):
             raw_balance, balance = await bot.capture_balance_snapshot()

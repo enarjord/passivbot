@@ -655,17 +655,17 @@ async def test_staged_balance_unavailability_is_explicit_and_bounded():
     class Bot:
         async def capture_balance_snapshot(self):
             raise AuthoritativeSurfaceUnavailable(
-                "balance", "balance_transition_confirmation"
+                "balance", "balance_consistency_check"
             )
 
     raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(Bot())
 
     assert raw is None
     assert composition == unavailable_balance_composition(
-        reason="balance_transition_confirmation"
+        reason="balance_consistency_check"
     )
     assert balance == DeferredAuthoritativeSurface(
-        surface="balance", reason="balance_transition_confirmation"
+        surface="balance", reason="balance_consistency_check"
     )
 
 
@@ -679,7 +679,7 @@ async def test_staged_refresh_does_not_prepare_or_commit_deferred_balance():
             return {
                 "balance": DeferredAuthoritativeSurface(
                     surface="balance",
-                    reason="balance_transition_confirmation",
+                    reason="balance_consistency_check",
                 )
             }
 
@@ -691,7 +691,7 @@ async def test_staged_refresh_does_not_prepare_or_commit_deferred_balance():
     assert await state_refresh.refresh_authoritative_state_staged(bot) is False
     assert (
         bot._last_authoritative_block_reason
-        == "balance_transition_confirmation"
+        == "balance_consistency_check"
     )
 
 

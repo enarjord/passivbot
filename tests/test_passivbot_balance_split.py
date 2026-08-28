@@ -72,6 +72,30 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
 )
 
 
+@pytest.mark.asyncio
+async def test_staged_balance_override_bypasses_exchange_fetch_and_deferred_state():
+    from live import state_refresh
+
+    bot = SimpleNamespace(
+        balance_override=123.0,
+        get_raw_balance=lambda: 7.0,
+        fetch_balance=AsyncMock(
+            side_effect=AuthoritativeSurfaceUnavailable(
+                "balance", "balance_consistency_check"
+            )
+        ),
+    )
+
+    raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(
+        bot
+    )
+
+    assert raw is None
+    assert balance == 7.0
+    assert composition["reason"] == "balance_override"
+    bot.fetch_balance.assert_not_awaited()
+
+
 def _empty_orchestrator_output(payload: dict, diagnostics: dict | None = None) -> str:
     global_bot_params = payload.get("global", {}).get("global_bot_params", {})
     symbol_states = []
@@ -8002,7 +8026,7 @@ async def test_update_balance_defers_explicitly_unavailable_surface_without_muta
 
     async def fake_fetch_balance():
         raise AuthoritativeSurfaceUnavailable(
-            "balance", "balance_transition_confirmation"
+            "balance", "balance_consistency_check"
         )
 
     bot.fetch_balance = fake_fetch_balance
@@ -8012,7 +8036,7 @@ async def test_update_balance_defers_explicitly_unavailable_surface_without_muta
     assert bot.balance_raw == 50.0
     assert (
         bot._last_authoritative_block_reason
-        == "balance_transition_confirmation"
+        == "balance_consistency_check"
     )
 
 
@@ -11222,7 +11246,7 @@ async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_
         cycle["n"] += 1
         if cycle["n"] <= 12:
             bot._last_authoritative_block_reason = (
-                "balance_transition_confirmation"
+                "balance_consistency_check"
             )
             return False
         bot._begin_authoritative_refresh_epoch()
@@ -11244,13 +11268,13 @@ async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_
     assert await bot.run_execution_loop() == {"executed_cycle": 13}
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
     assert sleeps == [
-        (5.0, "balance_transition_confirmation")
+        (5.0, "balance_consistency_check")
     ] * 12
     balance_events = [
         call.kwargs
         for call in bot._emit_live_cycle_degraded.call_args_list
         if call.kwargs["reason_code"]
-        == "balance_transition_confirmation"
+        == "balance_consistency_check"
     ]
     assert len(balance_events) == 12
 

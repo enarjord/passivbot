@@ -171,8 +171,7 @@ class BitunixClient:
         "1w": 7 * 24 * 60 * 60_000,
         "1M": 30 * 24 * 60 * 60_000,
     }
-    BALANCE_TRANSITION_REASON = "balance_transition_confirmation"
-    BALANCE_TRANSITION_CONFIRMATION_SECONDS = 120.0
+    BALANCE_TRANSITION_REASON = "balance_consistency_check"
 
     def __init__(self, config: dict | None = None):
         config = config or {}
@@ -213,8 +212,6 @@ class BitunixClient:
         self._pending_status_warning_monotonic: dict[str, float] = {}
         self._accepted_balance_components: tuple[float, float, float] | None = None
         self._pending_balance_components: tuple[float, float, float] | None = None
-        self._pending_balance_started_monotonic: float | None = None
-        self._pending_balance_observation_count = 0
         self._closed = False
 
     @staticmethod
@@ -235,46 +232,44 @@ class BitunixClient:
             )
         )
 
-    def _clear_pending_balance_confirmation(self) -> None:
+    def _clear_pending_balance_transition(self) -> None:
         self._pending_balance_components = None
-        self._pending_balance_started_monotonic = None
-        self._pending_balance_observation_count = 0
 
-    def _confirm_balance_candidate(
+    def _defer_balance_candidate(
         self,
         current: tuple[float, float, float],
         *,
         defer_message: str,
     ) -> None:
-        now = time.monotonic()
         if not self._balance_components_close(
             self._pending_balance_components, current
         ):
             self._pending_balance_components = current
-            self._pending_balance_started_monotonic = now
-            self._pending_balance_observation_count = 1
             logging.warning(defer_message)
-        else:
-            self._pending_balance_observation_count += 1
-        pending_started = self._pending_balance_started_monotonic
-        pending_seconds = max(
-            0.0,
-            now - float(now if pending_started is None else pending_started),
-        )
-        if (
-            self._pending_balance_observation_count >= 2
-            and pending_seconds >= self.BALANCE_TRANSITION_CONFIRMATION_SECONDS
-        ):
-            logging.warning(
-                "[balance] Bitunix balance state remained stable through "
-                "confirmation; action=resume_authoritative_state"
-            )
-            self._accepted_balance_components = current
-            self._clear_pending_balance_confirmation()
-            return
         raise AuthoritativeSurfaceUnavailable(
             "balance", self.BALANCE_TRANSITION_REASON
         )
+
+    def _available_is_transfer_reconciled(
+        self,
+        *,
+        available: float,
+        transfer: float | None,
+        bonus: float,
+        unrealized_pnl: float,
+    ) -> bool:
+        """Corroborate available funds with Bitunix's maximum-transfer metric.
+
+        Bitunix excludes non-transferable bonus funds and unrealized losses from
+        the amount transferable out of futures. Rearranging that relationship
+        gives an exchange-calculated cross-check for ``available``. The known
+        inconsistent account response changed ``available`` alone, so this
+        remains false even if that response is repeated across a restart.
+        """
+        if transfer is None:
+            return False
+        expected_available = transfer + bonus - min(unrealized_pnl, 0.0)
+        return self._balance_values_close(available, expected_available)
 
     def _validate_balance_transition(
         self,
@@ -282,49 +277,64 @@ class BitunixClient:
         available: float,
         frozen: float,
         margin: float,
+        transfer: float | None,
+        bonus: float,
+        unrealized_pnl: float,
     ) -> None:
         """Reject Bitunix's transient duplication of locked funds into available.
 
         The known inconsistent response moves ``available`` by exactly the
         unchanged locked amount while continuing to report that amount as locked.
-        Confirm an initial nonzero locked-funds state as well, so a restart during
-        the inconsistency cannot establish the duplicated response as trusted
-        truth. Keep the last accepted components unchanged until the response
-        either reverts or remains stable across a bounded confirmation window.
+        Reconcile an initial nonzero locked-funds state with Bitunix's separately
+        calculated maximum-transfer value, so a restart during the inconsistency
+        cannot establish the duplicated response as trusted truth. Keep the last
+        accepted components unchanged until the response either returns to it or
+        a new response passes the transfer reconciliation.
         """
         current = (available, frozen, margin)
         previous = self._accepted_balance_components
+        transfer_reconciled = self._available_is_transfer_reconciled(
+            available=available,
+            transfer=transfer,
+            bonus=bonus,
+            unrealized_pnl=unrealized_pnl,
+        )
         if previous is None:
             current_used = frozen + margin
-            if current_used <= 0.0:
+            if current_used <= 0.0 or transfer_reconciled:
                 self._accepted_balance_components = current
-                self._clear_pending_balance_confirmation()
+                self._clear_pending_balance_transition()
                 return
-            pending = self._pending_balance_components
-            if pending is not None:
-                pending_available, pending_frozen, pending_margin = pending
-                pending_used = pending_frozen + pending_margin
-                recovered_from_initial_duplication = bool(
-                    pending_used > 0.0
-                    and self._balance_values_close(frozen, pending_frozen)
-                    and self._balance_values_close(margin, pending_margin)
-                    and self._balance_values_close(
-                        pending_available - available, pending_used
-                    )
-                )
-                if recovered_from_initial_duplication:
-                    logging.info(
-                        "[balance] Bitunix initial balance returned to a consistent "
-                        "state; action=resume_authoritative_state"
-                    )
-                    self._accepted_balance_components = current
-                    self._clear_pending_balance_confirmation()
-                    return
-            self._confirm_balance_candidate(
+            self._defer_balance_candidate(
                 current,
                 defer_message=(
-                    "[balance] Bitunix initial balance has nonzero locked funds; "
-                    "action=defer_authoritative_state_until_confirmed"
+                    "[balance] Bitunix initial locked-fund balance did not reconcile "
+                    "with maximum transfer; action=defer_authoritative_state"
+                ),
+            )
+            return
+
+        if self._pending_balance_components is not None:
+            if self._balance_components_close(previous, current):
+                logging.info(
+                    "[balance] Bitunix balance returned to the last trusted state; "
+                    "action=resume_authoritative_state"
+                )
+                self._clear_pending_balance_transition()
+                return
+            if transfer_reconciled:
+                logging.info(
+                    "[balance] Bitunix balance passed maximum-transfer reconciliation; "
+                    "action=resume_authoritative_state"
+                )
+                self._accepted_balance_components = current
+                self._clear_pending_balance_transition()
+                return
+            self._defer_balance_candidate(
+                current,
+                defer_message=(
+                    "[balance] Bitunix balance remained inconsistent after a deferred "
+                    "transition; action=defer_authoritative_state"
                 ),
             )
             return
@@ -340,21 +350,16 @@ class BitunixClient:
         )
 
         if duplicates_locked_funds:
-            self._confirm_balance_candidate(
-                current,
-                defer_message=(
-                    "[balance] Bitunix reported locked funds in both available and used; "
-                    "action=defer_authoritative_state"
-                ),
-            )
-            return
-
-        if self._pending_balance_components is not None:
-            logging.info(
-                "[balance] Bitunix balance transition returned to a consistent state; "
-                "action=resume_authoritative_state"
-            )
-            self._clear_pending_balance_confirmation()
+            if not transfer_reconciled:
+                self._defer_balance_candidate(
+                    current,
+                    defer_message=(
+                        "[balance] Bitunix reported locked funds in both available and "
+                        "used without maximum-transfer reconciliation; "
+                        "action=defer_authoritative_state"
+                    ),
+                )
+                return
         self._accepted_balance_components = current
 
     def milliseconds(self) -> int:
@@ -626,10 +631,19 @@ class BitunixClient:
             raw.get("isolationUnrealizedPNL"),
             field="account.isolationUnrealizedPNL",
         )
+        transfer = (
+            None
+            if raw.get("transfer") in (None, "")
+            else _float(raw.get("transfer"), field="account.transfer")
+        )
+        bonus = _float(raw.get("bonus"), field="account.bonus", default=0.0)
         self._validate_balance_transition(
             available=available,
             frozen=frozen,
             margin=margin,
+            transfer=transfer,
+            bonus=bonus,
+            unrealized_pnl=cross_upnl + isolated_upnl,
         )
         # Bitunix documents these as disjoint available, order-locked, and
         # position-locked quantities. Unrealized PnL is mark-to-market state,
@@ -2275,6 +2289,19 @@ class BitunixBot(CCXTBot):
     def _normalize_balance_diagnostics(self, fetched: object) -> dict:
         """Expose only documented Bitunix account components for diagnostics."""
         return normalize_bitunix_balance_composition(fetched)
+
+    async def _exchange_config_write_ready(self) -> bool:
+        """Gate position-mode writes on an authoritative Bitunix balance sample."""
+        if getattr(self, "balance_override", None) is not None:
+            return True
+        try:
+            await self.cca.fetch_balance()
+        except AuthoritativeSurfaceUnavailable as exc:
+            if exc.surface != "balance":
+                raise
+            self._last_authoritative_block_reason = exc.reason
+            return False
+        return True
 
     async def update_exchange_config(self) -> None:
         current = await self.cca.fetch_position_mode()

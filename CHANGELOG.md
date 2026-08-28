@@ -4,9 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Bitunix now defers live exchange actions while confirming nonzero locked-fund balance state,
-  including after restart, when the account endpoint may transiently report unchanged locked funds
-  in both `available` and `used` balance components.
+- Bitunix now defers live exchange actions when a locked-fund balance does not reconcile with the
+  exchange-calculated maximum-transfer amount, including after restart, preventing a transient
+  account response from reporting unchanged locked funds in both `available` and `used` balance
+  components.
 
 - Apple MPS successive-halving optimization now evaluates its opt-in 25% and 50% rungs on the
   most recent portion of the configured date range, with the normal indicator warmup immediately
