@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin Trailing Martingale screening now selects dispatch-proven Metal variants
+  that compile out recursive entry/close grids when every active candidate uses positive
+  retracement, and compile out WEL/TWEL enforcers plus auto-unstuck when every active candidate has
+  those reducers disabled. Ordinary market execution and the realized-loss gate are likewise
+  removed only when their fixed run settings disable them. Mixed or enabled-feature dispatches
+  keep the full kernel. HSL configured only on an exposure-disabled side no longer promotes the
+  active side to an HSL kernel. Exact Rust validation remains unchanged and authoritative.
+
 - The Apple MPS optimizer now defaults to a 1024-candidate NSGA-II population instead of 4096,
   allowing long-history runs to reach exact Rust validation four times sooner. Explicit population
   sizes and the independent 4096-candidate dispatch-batch upper bound remain unchanged.

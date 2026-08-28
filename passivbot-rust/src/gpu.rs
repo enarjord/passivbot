@@ -1182,7 +1182,7 @@ mod tests {
         assert!(!source.contains("strategy_wel_qty = reducer_qty"));
         assert!(source.contains("realized_loss_proxy_allows_close"));
         assert!(source.contains("const float max_realized_loss_pct = settings[14]"));
-        assert!(source.contains("const bool loss_gate_enabled = max_realized_loss_pct < 1.0f"));
+        assert!(source.contains("const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED"));
         assert!(source.contains("const float taker_fee = settings[15]"));
         assert!(source.contains("const float market_order_slippage_pct = fmax(settings[16], 0.0f)"));
         assert!(source.contains("const bool long_hsl_panic_market = settings[17] > 0.5f"));
@@ -1190,7 +1190,10 @@ mod tests {
         assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("close * (1.0f - market_order_slippage_pct)"));
         assert!(source.contains("close * (1.0f + market_order_slippage_pct)"));
-        assert!(source.contains("const bool market_orders_allowed = settings[19] > 0.5f"));
+        assert!(source.contains("const bool market_orders_allowed = !PASSIVBOT_TM_MARKET_ORDERS_DISABLED"));
+        assert!(source.contains("#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY"));
+        assert!(source.contains("#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY"));
+        assert!(source.contains("#ifndef PASSIVBOT_TM_REDUCERS_DISABLED"));
         assert!(source
             .contains("const float market_order_near_touch_threshold = fmax(settings[20], 0.0f)"));
         assert!(source.contains("should_use_ordinary_market_execution("));

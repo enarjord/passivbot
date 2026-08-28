@@ -1,6 +1,22 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY
+#define PASSIVBOT_TM_TRAILING_ENTRY_ONLY 0
+#endif
+#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY
+#define PASSIVBOT_TM_TRAILING_CLOSE_ONLY 0
+#endif
+#ifndef PASSIVBOT_TM_REDUCERS_DISABLED
+#define PASSIVBOT_TM_REDUCERS_DISABLED 0
+#endif
+#ifndef PASSIVBOT_TM_MARKET_ORDERS_DISABLED
+#define PASSIVBOT_TM_MARKET_ORDERS_DISABLED 0
+#endif
+#ifndef PASSIVBOT_TM_LOSS_GATE_DISABLED
+#define PASSIVBOT_TM_LOSS_GATE_DISABLED 0
+#endif
+
 #if PASSIVBOT_BTC_RISK_ENABLED
 constant int DAILY_COLS = 11;
 #else
@@ -450,11 +466,14 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     }
     s.entry_cap = s.twel_entry_gate_enabled
         ? fmin(s.allowed_wel, gate_cap) : s.allowed_wel;
-    s.wel_enforcer_enabled = p[o + 31] > 0.5f;
+    s.wel_enforcer_enabled = !PASSIVBOT_TM_REDUCERS_DISABLED
+        && p[o + 31] > 0.5f;
     s.wel_enforcer_threshold = p[o + 32];
-    s.twel_enforcer_enabled = p[o + 33] > 0.5f;
+    s.twel_enforcer_enabled = !PASSIVBOT_TM_REDUCERS_DISABLED
+        && p[o + 33] > 0.5f;
     s.twel_enforcer_threshold = twel_threshold;
-    s.unstuck_enabled = p[o + 34] > 0.5f;
+    s.unstuck_enabled = !PASSIVBOT_TM_REDUCERS_DISABLED
+        && p[o + 34] > 0.5f;
     s.unstuck_ema_gating_enabled = p[o + 35] > 0.5f;
     s.unstuck_close_pct = p[o + 36];
     s.unstuck_ema_dist = p[o + 37];
@@ -927,7 +946,8 @@ inline void generate_orders(
     );
     float threshold = fmax(s.entry_threshold_base, 0.0f) * tm;
     float retracement = fmax(s.entry_retracement_base, 0.0f) * rm;
-    bool trailing_entry = s.entry_retracement_base > 0.0f;
+    const bool trailing_entry = PASSIVBOT_TM_TRAILING_ENTRY_ONLY
+        || s.entry_retracement_base > 0.0f;
     bool retraced_entry = is_long
         ? s.max_since_min > s.min_since_open * (1.0f + retracement)
         : s.min_since_max < s.max_since_open * (1.0f - retracement);
@@ -1104,7 +1124,8 @@ inline void generate_orders(
             + s.vol1m * s.close_retracement_v1m,
         1.0f
     );
-    bool trailing_close = s.close_retracement_base > 0.0f;
+    const bool trailing_close = PASSIVBOT_TM_TRAILING_CLOSE_ONLY
+        || s.close_retracement_base > 0.0f;
     bool retraced_close = is_long
         ? s.min_since_max < s.max_since_open * (1.0f - cr)
         : s.max_since_min > s.min_since_open * (1.0f + cr);
@@ -1784,11 +1805,13 @@ inline void passivbot_single_coin_impl(
     const float market_order_slippage_pct = fmax(settings[16], 0.0f);
     const bool long_hsl_panic_market = settings[17] > 0.5f;
     const bool short_hsl_panic_market = settings[18] > 0.5f;
-    const bool market_orders_allowed = settings[19] > 0.5f;
+    const bool market_orders_allowed = !PASSIVBOT_TM_MARKET_ORDERS_DISABLED
+        && settings[19] > 0.5f;
     const float market_order_near_touch_threshold = fmax(settings[20], 0.0f);
     const int pnl_lookback_bars = max(sizes[6], 0);
     const int rolling_capacity = sizes[5];
-    const bool loss_gate_enabled = max_realized_loss_pct < 1.0f;
+    const bool loss_gate_enabled = !PASSIVBOT_TM_LOSS_GATE_DISABLED
+        && max_realized_loss_pct < 1.0f;
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
@@ -1975,7 +1998,8 @@ inline void passivbot_single_coin_impl(
             && (long_side.secondary_close_market
                 || long_side.secondary_close_ticks <= high_fill_max_tick)
             && long_side.psize > 0.0f;
-        bool long_recursive_close = long_side.close_retracement_base <= 0.0f;
+        const bool long_recursive_close = !PASSIVBOT_TM_TRAILING_CLOSE_ONLY
+            && long_side.close_retracement_base <= 0.0f;
         bool long_close_fill_ready = long_close_ready
             && ((long_side.close_is_panic && long_hsl_panic_market)
                 || long_side.close_market
@@ -2715,7 +2739,8 @@ inline void passivbot_single_coin_impl(
                 // candle. Market promotion guarantees rung zero's execution,
                 // but does not itself authorize expansion.
                 if (rung == 0 && !long_entry_passive_reachable) break;
-                if (long_side.entry_retracement_base > 0.0f
+                if (PASSIVBOT_TM_TRAILING_ENTRY_ONLY
+                    || long_side.entry_retracement_base > 0.0f
                     || long_side.cooldown_min != 0.0f) break;
                 generate_long_orders(
                     ladder_side, ladder_balance, ep, qty_step,
@@ -2736,7 +2761,8 @@ inline void passivbot_single_coin_impl(
             && (short_side.secondary_close_market
                 || short_side.secondary_close_ticks > low_nonfill_max_tick)
             && short_side.psize > 0.0f;
-        bool short_recursive_close = short_side.close_retracement_base <= 0.0f;
+        const bool short_recursive_close = !PASSIVBOT_TM_TRAILING_CLOSE_ONLY
+            && short_side.close_retracement_base <= 0.0f;
         bool short_close_fill_ready = short_close_ready
             && ((short_side.close_is_panic && short_hsl_panic_market)
                 || short_side.close_market
@@ -3467,7 +3493,8 @@ inline void passivbot_single_coin_impl(
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = max(ladder_touch_ticks, entry_ticks);
                 if (rung == 0 && !short_entry_passive_reachable) break;
-                if (short_side.entry_retracement_base > 0.0f
+                if (PASSIVBOT_TM_TRAILING_ENTRY_ONLY
+                    || short_side.entry_retracement_base > 0.0f
                     || short_side.cooldown_min != 0.0f) break;
                 generate_short_orders(
                     ladder_side, ladder_balance, ep, qty_step,
