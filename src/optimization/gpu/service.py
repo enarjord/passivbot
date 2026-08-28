@@ -2128,11 +2128,7 @@ class MpsSingleCoinProxy:
         )
         full_trade_start = min(
             candle_count - 3,
-            max(
-                2,
-                int(self.run.trade_start_idx),
-                int(self.run.first_valid_idx) + warmup_readiness_bars + 1,
-            ),
+            max(2, int(self.run.trade_start_idx), int(self.run.first_valid_idx) + 1),
         )
         suffix_candles = max(
             2,

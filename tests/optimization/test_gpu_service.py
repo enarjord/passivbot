@@ -514,20 +514,20 @@ def test_single_coin_proxy_recent_history_expands_safe_dispatch_and_routes_windo
         trade_start_step=trade_start,
     )
 
-    assert (history_start, trade_start) == (1_448_785, 1_448_886)
+    assert (history_start, trade_start) == (1_448_762, 1_448_863)
     assert len(results) == 1024
     assert [len(call) for call in calls] == [1024]
     assert routed_windows == [
         {
             "profile": False,
             "end_step": 1_931_815,
-            "history_start_step": 1_448_785,
-            "trade_start_step": 1_448_886,
+            "history_start_step": 1_448_762,
+            "trade_start_step": 1_448_863,
         }
     ]
     assert len(metric_runs) == 1
-    assert metric_runs[0].trade_start_idx == 1_448_886
-    assert metric_runs[0].requested_start_ts_ms == 1_448_886 * 60_000
+    assert metric_runs[0].trade_start_idx == 1_448_863
+    assert metric_runs[0].requested_start_ts_ms == 1_448_863 * 60_000
 
     proxy.runner.n = 1_250
     proxy.run = ProxyRun(
@@ -542,6 +542,7 @@ def test_single_coin_proxy_recent_history_expands_safe_dispatch_and_routes_windo
         900,
         1_249,
     )
+    assert proxy.recent_window_for_history_fraction(1.0) == (900, 1_000)
     assert proxy.recent_window_for_history_fraction(0.25) == (1_086, 1_187)
 
 
