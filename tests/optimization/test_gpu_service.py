@@ -46,7 +46,9 @@ from optimization.gpu.service import (
     _gpu_profile_unattributed_seconds,
     _mps_dispatch_batch_size,
     _mps_strategy_eq_recovery_distribution,
+    _new_gpu_dispatch_progress,
     _new_gpu_proxy_profile,
+    _update_gpu_dispatch_progress,
     _add_gpu_runner_profile,
     _multicoin_exposure_eligible_coins,
     _position_exposure_enforcer_params,
@@ -463,6 +465,8 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
     assert profile["dispatch_count"] == 3
     assert profile["cold_dispatch_count"] == 1
     assert profile["warm_dispatch_count"] == 2
+    assert len(profile["dispatch_chunk_wall_seconds"]) == 3
+    assert all(value >= 0.0 for value in profile["dispatch_chunk_wall_seconds"])
     assert profile["candidate_bars"] == 500
     assert profile["kernel_candidate_bars"] == 500
     assert profile["coin_count"] == 1
@@ -477,6 +481,34 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
         0.006
     )
     assert profile["wall_seconds"] >= 0.0
+
+
+def test_gpu_dispatch_progress_is_rate_limited_and_reports_eta(
+    monkeypatch, caplog
+):
+    readings = iter((100.0, 120.0, 131.0, 162.0))
+    monkeypatch.setattr(
+        "optimization.gpu.service.time.monotonic", lambda: next(readings)
+    )
+    progress = _new_gpu_dispatch_progress(8, 2)
+
+    _update_gpu_dispatch_progress(
+        progress, completed_candidates=2, strategy="trailing_martingale"
+    )
+    assert not caplog.records
+
+    with caplog.at_level("INFO"):
+        _update_gpu_dispatch_progress(
+            progress, completed_candidates=4, strategy="trailing_martingale"
+        )
+        _update_gpu_dispatch_progress(
+            progress, completed_candidates=8, strategy="trailing_martingale"
+        )
+
+    assert "chunks=2/4" in caplog.records[0].message
+    assert "candidates=4/8" in caplog.records[0].message
+    assert "eta=" in caplog.records[0].message
+    assert "chunks=4/4" in caplog.records[1].message
 
 
 def test_single_coin_proxy_profile_is_empty_when_disabled(monkeypatch):

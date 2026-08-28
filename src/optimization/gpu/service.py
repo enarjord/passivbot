@@ -133,6 +133,65 @@ _GPU_PROFILE_RUNNER_TIMING_KEYS = (
     "metric_reduction",
 )
 
+_GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS = 30.0
+
+
+def _new_gpu_dispatch_progress(candidate_count: int, dispatch_batch_size: int):
+    if candidate_count <= dispatch_batch_size:
+        return None
+    started = time.monotonic()
+    return {
+        "candidate_count": int(candidate_count),
+        "dispatch_batch_size": int(dispatch_batch_size),
+        "started": started,
+        "last_log": started,
+        "total_chunks": (
+            int(candidate_count) + int(dispatch_batch_size) - 1
+        )
+        // int(dispatch_batch_size),
+    }
+
+
+def _update_gpu_dispatch_progress(
+    progress,
+    *,
+    completed_candidates: int,
+    strategy: str,
+) -> None:
+    if progress is None:
+        return
+    now = time.monotonic()
+    elapsed = now - float(progress["started"])
+    completed_candidates = min(
+        int(completed_candidates), int(progress["candidate_count"])
+    )
+    completed_chunks = min(
+        (completed_candidates + int(progress["dispatch_batch_size"]) - 1)
+        // int(progress["dispatch_batch_size"]),
+        int(progress["total_chunks"]),
+    )
+    complete = completed_candidates >= int(progress["candidate_count"])
+    if elapsed < _GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS or (
+        not complete
+        and now - float(progress["last_log"])
+        < _GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS
+    ):
+        return
+    rate = completed_candidates / max(elapsed, 1.0e-12)
+    remaining = int(progress["candidate_count"]) - completed_candidates
+    logging.info(
+        "GPU proxy dispatch progress | strategy=%s chunks=%d/%d "
+        "candidates=%d/%d elapsed=%.1fs eta=%.1fs",
+        strategy,
+        completed_chunks,
+        int(progress["total_chunks"]),
+        completed_candidates,
+        int(progress["candidate_count"]),
+        elapsed,
+        remaining / max(rate, 1.0e-12),
+    )
+    progress["last_log"] = now
+
 
 def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
     runners = tuple(runners)
@@ -186,6 +245,7 @@ def _new_gpu_proxy_profile(proxy, candidates, runners, *, coin_count, side_count
             else 0
         ),
         "actual_dispatch_batch_sizes": [],
+        "dispatch_chunk_wall_seconds": [],
         "dispatch_count": 0,
         "cold_dispatch_count": 0,
         "warm_dispatch_count": 0,
@@ -1937,7 +1997,13 @@ class MpsSingleCoinProxy:
             self, "dispatch_batch_size", self.batch_size
         )
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
+        progress = _new_gpu_dispatch_progress(
+            len(candidates), dispatch_batch_size
+        )
         for start in range(0, len(candidates), dispatch_batch_size):
+            chunk_profile_started = (
+                time.perf_counter() if profile is not None else 0.0
+            )
             interrupt_check()
             chunk = candidates[start : start + dispatch_batch_size]
             stage_started = (
@@ -2036,6 +2102,14 @@ class MpsSingleCoinProxy:
                 profile["timings_seconds"]["result_materialization"] += (
                     time.perf_counter() - stage_started
                 )
+                profile["dispatch_chunk_wall_seconds"].append(
+                    time.perf_counter() - chunk_profile_started
+                )
+            _update_gpu_dispatch_progress(
+                progress,
+                completed_candidates=start + len(chunk),
+                strategy=str(getattr(self, "strategy_kind", "unknown")),
+            )
         if profile is not None:
             self.last_profile = _finish_gpu_proxy_profile(
                 profile, profile_started
@@ -3029,7 +3103,13 @@ class MpsMulticoinProxy:
             self, "dispatch_batch_size", self.batch_size
         )
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
+        progress = _new_gpu_dispatch_progress(
+            len(candidates), dispatch_batch_size
+        )
         for start in range(0, len(candidates), dispatch_batch_size):
+            chunk_profile_started = (
+                time.perf_counter() if profile is not None else 0.0
+            )
             interrupt_check()
             chunk = candidates[start : start + dispatch_batch_size]
             stage_started = (
@@ -3249,6 +3329,14 @@ class MpsMulticoinProxy:
                 profile["timings_seconds"]["result_materialization"] += (
                     time.perf_counter() - stage_started
                 )
+                profile["dispatch_chunk_wall_seconds"].append(
+                    time.perf_counter() - chunk_profile_started
+                )
+            _update_gpu_dispatch_progress(
+                progress,
+                completed_candidates=start + len(chunk),
+                strategy=str(getattr(self, "strategy_kind", "unknown")),
+            )
         if profile is not None:
             self.last_profile = _finish_gpu_proxy_profile(
                 profile, profile_started
