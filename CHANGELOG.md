@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The Apple MPS optimizer now defaults to a 1024-candidate NSGA-II population instead of 4096,
+  allowing long-history runs to reach exact Rust validation four times sooner. Explicit population
+  sizes and the independent 4096-candidate dispatch-batch upper bound remain unchanged.
+
 - Apple MPS single-coin Trailing Martingale optimization now compiles dedicated long-only and
   short-only kernels while HSL is enabled, allowing Metal to eliminate the inactive strategy side
   and use a one-controller HSL update. HSL lifecycle, drawdown, tail, and recovery accumulators are
