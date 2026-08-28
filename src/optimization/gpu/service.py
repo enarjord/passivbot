@@ -535,6 +535,7 @@ def _gpu_proxy_execution_checkpoint_contract(
     exchange_params,
     base_params,
     btc_prices=None,
+    directional_hsl_rolling_capacity: int | None = None,
 ) -> dict:
     """Return the prepared execution inputs which make proxy state reusable."""
 
@@ -610,6 +611,10 @@ def _gpu_proxy_execution_checkpoint_contract(
             for side, params in sorted((base_params or {}).items())
         },
     }
+    if directional_hsl_rolling_capacity is not None:
+        contract["directional_hsl_rolling_capacity"] = int(
+            directional_hsl_rolling_capacity
+        )
     if btc_prices is not None:
         btc_values = np.ascontiguousarray(
             np.asarray(btc_prices, dtype=np.float64).reshape(-1)
@@ -1722,6 +1727,7 @@ class MpsSingleCoinProxy:
 
         from backtest import build_backtest_payload
         from optimization.gpu.mps_kernel import (
+            MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY,
             MpsEmaAnchorRunner,
             MpsTrailingMartingaleRunner,
         )
@@ -1918,6 +1924,11 @@ class MpsSingleCoinProxy:
             exchange_params=payload.exchange_params,
             base_params=self.base_params,
             btc_prices=btc_values if self.btc_analysis_enabled else None,
+            directional_hsl_rolling_capacity=(
+                MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
+                if pnl_lookback_bars > 0
+                else None
+            ),
         )
 
         self.base_total_wallet_exposure_limits = {

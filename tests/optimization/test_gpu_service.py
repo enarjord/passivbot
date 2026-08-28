@@ -147,6 +147,28 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
         exchange_params=[market],
         base_params={"long": {"offset": 0.01}},
     )
+    with_hsl_ring = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
+        directional_hsl_rolling_capacity=4_096,
+    )
+    changed_hsl_ring = _gpu_proxy_execution_checkpoint_contract(
+        strategy_kind="ema_anchor",
+        exchange="bybit",
+        enabled_sides=["long"],
+        hlcvs=np.arange(12, dtype=np.float64).reshape(3, 1, 4),
+        timestamps=np.array([1_000, 2_000, 3_000], dtype=np.int64),
+        backtest_params=backtest_params,
+        exchange_params=[market],
+        base_params={"long": {"offset": 0.01}},
+        directional_hsl_rolling_capacity=2_048,
+    )
     changed_fee = dict(market, maker_fee=0.0005)
     changed = _gpu_proxy_execution_checkpoint_contract(
         strategy_kind="ema_anchor",
@@ -218,6 +240,9 @@ def test_gpu_proxy_execution_checkpoint_contract_tracks_effective_inputs():
     assert changed_timestamps != original
     assert changed_hlcvs != original
     assert changed_base_params != original
+    assert "directional_hsl_rolling_capacity" not in original
+    assert with_hsl_ring["directional_hsl_rolling_capacity"] == 4_096
+    assert changed_hsl_ring != with_hsl_ring
     assert "btc_analysis" not in original
     assert changed_btc != with_btc
     assert original["timestamps"]["count"] == 3
