@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
+from optimization.gpu.metric_registry import HARD_STOP_PROXY_METRICS
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
@@ -688,8 +689,6 @@ _HSL_STRATEGY_EQ_RECOVERY_METRICS = {
 
 def _hsl_diagnostics_needed(needed_metrics) -> bool:
     """Return whether the requested proxy surface needs HSL-only telemetry."""
-    from optimization.gpu.metrics import HARD_STOP_PROXY_METRICS
-
     return bool(
         set(needed_metrics)
         & (

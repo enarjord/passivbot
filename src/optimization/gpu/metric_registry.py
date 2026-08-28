@@ -78,6 +78,45 @@ GPU_EXACT_ONLY_METRICS = frozenset(
     }
 )
 
+HARD_STOP_LIFECYCLE_METRICS = frozenset(
+    {
+        "hard_stop_duration_minutes_max",
+        "hard_stop_duration_minutes_mean",
+        "hard_stop_flatten_time_minutes_mean",
+        "hard_stop_post_restart_retrigger_pct",
+        "hard_stop_restarts",
+        "hard_stop_restarts_long",
+        "hard_stop_restarts_per_year",
+        "hard_stop_restarts_per_year_long",
+        "hard_stop_restarts_per_year_short",
+        "hard_stop_restarts_short",
+        "hard_stop_time_in_orange_pct",
+        "hard_stop_time_in_red_pct",
+        "hard_stop_time_in_yellow_pct",
+        "hard_stop_trigger_drawdown_mean",
+        "hard_stop_triggers",
+        "hard_stop_triggers_long",
+        "hard_stop_triggers_per_year",
+        "hard_stop_triggers_short",
+    }
+)
+HARD_STOP_PANIC_LOSS_METRICS = frozenset(
+    {
+        "hard_stop_halt_to_restart_equity_loss_pct",
+        "hard_stop_panic_close_loss_drawdown_pct_max",
+        "hard_stop_panic_close_loss_drawdown_pct_mean",
+        "hard_stop_panic_close_loss_drawdown_pct_min",
+        "hard_stop_panic_close_loss_max",
+        "hard_stop_panic_close_loss_sum",
+    }
+)
+HARD_STOP_PROXY_METRICS = tuple(
+    sorted(
+        (HARD_STOP_LIFECYCLE_METRICS | HARD_STOP_PANIC_LOSS_METRICS)
+        - GPU_EXACT_ONLY_METRICS
+    )
+)
+
 
 def reject_exact_only_gpu_metric_names(metric_names) -> frozenset[str]:
     raw = frozenset(str(name).strip() for name in metric_names)
