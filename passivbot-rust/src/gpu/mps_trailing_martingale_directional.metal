@@ -1802,8 +1802,10 @@ inline void passivbot_single_coin_impl(
     short_side.market_order_near_touch_threshold = market_order_near_touch_threshold;
     HslState long_hsl = load_hsl(params, po, 40);
     HslState short_hsl = load_hsl(params, po + SIDE_PARAMS, 40);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     HslStrategyEquityStats long_hsl_strategy_eq = init_hsl_strategy_equity_stats();
     HslStrategyEquityStats short_hsl_strategy_eq = init_hsl_strategy_equity_stats();
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats long_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
     HslDrawdownEmaTailStats short_hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
@@ -1880,10 +1882,12 @@ inline void passivbot_single_coin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     int recovery_start_k = -1;
 #endif
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float hsl_tier_samples_total = 0.0f;
     float hsl_tier_samples_yellow = 0.0f;
     float hsl_tier_samples_orange = 0.0f;
     float hsl_tier_samples_red = 0.0f;
+#endif
 
     int cur_day = flags[2];
     bool day_touched = false;
@@ -1960,6 +1964,10 @@ inline void passivbot_single_coin_impl(
         }
 
         bool long_close_fill = false;
+        bool long_entry_fill = false;
+        bool short_close_fill = false;
+        bool short_entry_fill = false;
+#if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
         bool long_close_ready = valid && alive && long_enabled
             && long_side.close_qty > 0.0f && long_side.psize > 0.0f;
         bool long_secondary_close_fill = valid && alive && long_enabled
@@ -2560,7 +2568,7 @@ inline void passivbot_single_coin_impl(
 
         bool long_entry_passive_reachable = long_side.entry_qty > 0.0f
             && long_side.entry_ticks > low_nonfill_max_tick;
-        bool long_entry_fill = valid && alive && long_enabled
+        long_entry_fill = valid && alive && long_enabled
             && long_side.entry_qty > 0.0f
             && (long_side.entry_market
                 || long_entry_passive_reachable);
@@ -2718,8 +2726,9 @@ inline void passivbot_single_coin_impl(
             }
             long_side.entry_qty = 0.0f;
         }
+#endif
 
-        bool short_close_fill = false;
+#if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
         bool short_close_ready = valid && alive && short_enabled
             && short_side.close_qty > 0.0f && short_side.psize > 0.0f;
         bool short_secondary_close_fill = valid && alive && short_enabled
@@ -3317,7 +3326,7 @@ inline void passivbot_single_coin_impl(
 
         bool short_entry_passive_reachable = short_side.entry_qty > 0.0f
             && short_side.entry_ticks <= high_fill_max_tick;
-        bool short_entry_fill = valid && alive && short_enabled
+        short_entry_fill = valid && alive && short_enabled
             && short_side.entry_qty > 0.0f
             && (short_side.entry_market
                 || short_entry_passive_reachable);
@@ -3469,6 +3478,7 @@ inline void passivbot_single_coin_impl(
             }
             short_side.entry_qty = 0.0f;
         }
+#endif
 
         // Exact Rust generates this candle's bundles first, then force-closes and
         // clears both bundles.  Closing here and suppressing only that dead order
@@ -3477,9 +3487,14 @@ inline void passivbot_single_coin_impl(
             && last_valid + 1400 < T;
         bool forced_delist_closed_any = false;
         if (forced_delist && alive && balance > 0.0f) {
+#if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
+#if defined(PASSIVBOT_TRAILING_LONG_ONLY)
+            float short_unrealized = 0.0f;
+#else
             float short_unrealized = short_side.psize > 0.0f
                 ? short_side.psize * c_mult * (short_side.pprice - close)
                 : 0.0f;
+#endif
             bool forced_long_close = force_close_delisted_position(
                 long_side.psize, long_side.pprice, long_side.pos_open_k,
                 long_hsl, true, close, short_unrealized, price_step,
@@ -3493,9 +3508,17 @@ inline void passivbot_single_coin_impl(
                 long_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_long,
                 loss_sum_long, held_max_min, held_sum_min, held_count, day_volume
             );
+#else
+            bool forced_long_close = false;
+#endif
+#if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
+#if defined(PASSIVBOT_TRAILING_SHORT_ONLY)
+            float long_unrealized = 0.0f;
+#else
             float long_unrealized = long_side.psize > 0.0f
                 ? long_side.psize * c_mult * (close - long_side.pprice)
                 : 0.0f;
+#endif
             bool forced_short_close = force_close_delisted_position(
                 short_side.psize, short_side.pprice, short_side.pos_open_k,
                 short_hsl, false, close, long_unrealized, price_step,
@@ -3509,19 +3532,27 @@ inline void passivbot_single_coin_impl(
                 short_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_short,
                 loss_sum_short, held_max_min, held_sum_min, held_count, day_volume
             );
+#else
+            bool forced_short_close = false;
+#endif
             long_close_fill = long_close_fill || forced_long_close;
             short_close_fill = short_close_fill || forced_short_close;
             forced_delist_closed_any = forced_long_close || forced_short_close;
             if (forced_delist_closed_any) {
+#if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
                 long_side.entry_qty = 0.0f;
                 long_side.close_qty = 0.0f;
                 long_side.secondary_close_qty = 0.0f;
+#endif
+#if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
                 short_side.entry_qty = 0.0f;
                 short_side.close_qty = 0.0f;
                 short_side.secondary_close_qty = 0.0f;
+#endif
             }
         }
 
+#if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
         if (long_close_fill || long_entry_fill) {
             if (long_position_last_fill_k >= 0.0f) {
                 position_unchanged_max_min = fmax(
@@ -3530,6 +3561,8 @@ inline void passivbot_single_coin_impl(
             }
             long_position_last_fill_k = long_side.psize > 0.0f ? kf : -1.0f;
         }
+#endif
+#if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
         if (short_close_fill || short_entry_fill) {
             if (short_position_last_fill_k >= 0.0f) {
                 position_unchanged_max_min = fmax(
@@ -3538,6 +3571,7 @@ inline void passivbot_single_coin_impl(
             }
             short_position_last_fill_k = short_side.psize > 0.0f ? kf : -1.0f;
         }
+#endif
 
         bool any_fill = long_close_fill || long_entry_fill
             || short_close_fill || short_entry_fill;
@@ -3556,24 +3590,32 @@ inline void passivbot_single_coin_impl(
             last_fill_k = kf;
         }
 
+#if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
         if (long_enabled) {
             update_indicators(long_side, close, log_range, hour_lr, valid, hour_valid);
         }
+#endif
+#if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
         if (short_enabled) {
             update_indicators(short_side, close, log_range, hour_lr, valid, hour_valid);
         }
+#endif
+#if !defined(PASSIVBOT_TRAILING_SHORT_ONLY)
         if (long_enabled) {
             update_trailing(
                 long_side, high, low, close, valid,
                 long_close_fill || long_entry_fill
             );
         }
+#endif
+#if !defined(PASSIVBOT_TRAILING_LONG_ONLY)
         if (short_enabled) {
             update_trailing(
                 short_side, high, low, close, valid,
                 short_close_fill || short_entry_fill
             );
         }
+#endif
 
         bool gen = can_gen && alive;
         eq_started = eq_started || gen;
@@ -3837,6 +3879,103 @@ inline void passivbot_single_coin_impl(
         }
         const bool hsl_step = gen || (eq_started && after_valid_tail);
         if (hsl_step && alive && balance > 0.0f && equity > liq_floor) {
+#if defined(PASSIVBOT_TRAILING_LONG_ONLY)
+            bool long_blocking_orders = valid && long_hsl_mode != 3 && (
+                long_side.entry_qty > 0.0f || long_side.close_qty > 0.0f
+                    || long_side.secondary_close_qty > 0.0f
+            );
+            prepare_coin_hsl_rolling_signal(
+                long_hsl, long_rolling_pnl,
+                rolling_pnl_values, rolling_pnl_indices,
+                long_rolling_base, rolling_capacity, int(kf),
+                pnl_lookback_bars, realized_pnl_cumsum_long
+            );
+            float long_triggers_before = long_hsl.triggers;
+            const bool long_hsl_sample_enabled = long_hsl.enabled
+                && (long_hsl.signal_mode == HSL_SIGNAL_COIN || !long_hsl.halted);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            if (long_hsl_sample_enabled) {
+                update_hsl_strategy_equity_stats(
+                    long_hsl_strategy_eq,
+                    starting_balance + realized_pnl_cumsum_long + long_unreal,
+                    di
+                );
+            }
+#endif
+            update_one_side_hsl(
+                long_hsl, balance, starting_balance,
+                realized_pnl_cumsum_long, long_unreal,
+                long_side.psize > 0.0f, long_blocking_orders,
+                kf, interval_ms
+            );
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            if (long_hsl_sample_enabled) {
+                update_hsl_drawdown_ema_tail_stats(
+                    long_hsl_ema_tail, long_hsl.drawdown_ema
+                );
+            }
+#endif
+            if (long_hsl.triggers > long_triggers_before) {
+                reset_hsl_rolling_pnl_window(long_rolling_pnl);
+            }
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            if (long_hsl.enabled) {
+                hsl_tier_samples_total += 1.0f;
+                hsl_tier_samples_yellow += long_hsl.tier == 1 ? 1.0f : 0.0f;
+                hsl_tier_samples_orange += long_hsl.tier == 2 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += long_hsl.tier == 3 ? 1.0f : 0.0f;
+            }
+#endif
+            try_restart_hsl(long_hsl, kf, equity);
+#elif defined(PASSIVBOT_TRAILING_SHORT_ONLY)
+            bool short_blocking_orders = valid && short_hsl_mode != 3 && (
+                short_side.entry_qty > 0.0f || short_side.close_qty > 0.0f
+                    || short_side.secondary_close_qty > 0.0f
+            );
+            prepare_coin_hsl_rolling_signal(
+                short_hsl, short_rolling_pnl,
+                rolling_pnl_values, rolling_pnl_indices,
+                short_rolling_base, rolling_capacity, int(kf),
+                pnl_lookback_bars, realized_pnl_cumsum_short
+            );
+            float short_triggers_before = short_hsl.triggers;
+            const bool short_hsl_sample_enabled = short_hsl.enabled
+                && (short_hsl.signal_mode == HSL_SIGNAL_COIN || !short_hsl.halted);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            if (short_hsl_sample_enabled) {
+                update_hsl_strategy_equity_stats(
+                    short_hsl_strategy_eq,
+                    starting_balance + realized_pnl_cumsum_short + short_unreal,
+                    di
+                );
+            }
+#endif
+            update_one_side_hsl(
+                short_hsl, balance, starting_balance,
+                realized_pnl_cumsum_short, short_unreal,
+                short_side.psize > 0.0f, short_blocking_orders,
+                kf, interval_ms
+            );
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+            if (short_hsl_sample_enabled) {
+                update_hsl_drawdown_ema_tail_stats(
+                    short_hsl_ema_tail, short_hsl.drawdown_ema
+                );
+            }
+#endif
+            if (short_hsl.triggers > short_triggers_before) {
+                reset_hsl_rolling_pnl_window(short_rolling_pnl);
+            }
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+            if (short_hsl.enabled) {
+                hsl_tier_samples_total += 1.0f;
+                hsl_tier_samples_yellow += short_hsl.tier == 1 ? 1.0f : 0.0f;
+                hsl_tier_samples_orange += short_hsl.tier == 2 ? 1.0f : 0.0f;
+                hsl_tier_samples_red += short_hsl.tier == 3 ? 1.0f : 0.0f;
+            }
+#endif
+            try_restart_hsl(short_hsl, kf, equity);
+#else
             bool long_blocking_orders = valid && long_hsl_mode != 3 && (
                 long_side.entry_qty > 0.0f || long_side.close_qty > 0.0f
                     || long_side.secondary_close_qty > 0.0f
@@ -3866,6 +4005,7 @@ inline void passivbot_single_coin_impl(
             const bool short_hsl_sample_enabled = hsl_modes_valid && short_enabled
                 && short_hsl.enabled
                 && (short_hsl.signal_mode == HSL_SIGNAL_COIN || !short_hsl.halted);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
             if (long_hsl_sample_enabled) {
                 update_hsl_strategy_equity_stats(
                     long_hsl_strategy_eq,
@@ -3886,6 +4026,7 @@ inline void passivbot_single_coin_impl(
                     di
                 );
             }
+#endif
             bool hsl_update_valid = update_dual_side_hsl(
                 long_hsl, short_hsl, balance, starting_balance,
                 realized_pnl_cumsum_last,
@@ -3918,6 +4059,7 @@ inline void passivbot_single_coin_impl(
                 alive = false;
                 liq_day = di;
             }
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
             if (hsl_update_valid && (long_hsl.enabled || short_hsl.enabled)) {
                 int hsl_tier = max(long_hsl.tier, short_hsl.tier);
                 hsl_tier_samples_total += 1.0f;
@@ -3925,10 +4067,12 @@ inline void passivbot_single_coin_impl(
                 hsl_tier_samples_orange += hsl_tier == 2 ? 1.0f : 0.0f;
                 hsl_tier_samples_red += hsl_tier == 3 ? 1.0f : 0.0f;
             }
+#endif
             if (hsl_update_valid) {
                 try_restart_hsl(long_hsl, kf, equity);
                 try_restart_hsl(short_hsl, kf, equity);
             }
+#endif
         }
         // Exact Rust records an equity sample at every tracked timestamp.
         // Invalid candles are non-tradable and contribute balance-only equity,
@@ -4083,6 +4227,7 @@ inline void passivbot_single_coin_impl(
     scalars[so + 15] = short_side.psize;
     scalars[so + 16] = short_side.pprice;
     scalars[so + 17] = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float long_terminal_count = long_hsl.halted
         && long_hsl.current_halt_start_k >= 0.0f && last_eq_k >= 0.0f
         ? 1.0f : 0.0f;
@@ -4148,6 +4293,11 @@ inline void passivbot_single_coin_impl(
         short_hsl.panic_loss_drawdown_max
     );
     scalars[so + 42] = panic_drawdown_count;
+#else
+    for (int column = 18; column <= 42; ++column) {
+        scalars[so + column] = 0.0f;
+    }
+#endif
     scalars[so + 43] = profit_sum;
     scalars[so + 44] = loss_sum;
     scalars[so + 45] = position_unchanged_max_min * interval_ms;
@@ -4169,6 +4319,7 @@ inline void passivbot_single_coin_impl(
     scalars[so + 59] = loss_sum_long;
     scalars[so + 60] = profit_sum_short;
     scalars[so + 61] = loss_sum_short;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     scalars[so + 62] = long_hsl.enabled ? long_hsl.drawdown_ema_max : 0.0f;
     scalars[so + 63] = short_hsl.enabled ? short_hsl.drawdown_ema_max : 0.0f;
     scalars[so + 64] = hsl_strategy_equity_recovery_max_steps(
@@ -4177,6 +4328,12 @@ inline void passivbot_single_coin_impl(
     scalars[so + 65] = hsl_strategy_equity_recovery_max_steps(
         short_hsl_strategy_eq
     ) * interval_ms;
+#else
+    scalars[so + 62] = 0.0f;
+    scalars[so + 63] = 0.0f;
+    scalars[so + 64] = 0.0f;
+    scalars[so + 65] = 0.0f;
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     scalars[so + 66] = hsl_drawdown_ema_mean_worst_1pct(long_hsl_ema_tail);
     scalars[so + 67] = hsl_drawdown_ema_mean_worst_1pct(short_hsl_ema_tail);

@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
+from optimization.gpu.metric_registry import HARD_STOP_PROXY_METRICS
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
@@ -216,6 +217,10 @@ def _gpu_profile_features(proxy, runners) -> dict[str, bool]:
         ),
         "hsl_raw_tail": any(
             bool(getattr(runner, "hsl_raw_tail_enabled", False))
+            for runner in runners
+        ),
+        "hsl_diagnostics": any(
+            bool(getattr(runner, "hsl_diagnostics_enabled", False))
             for runner in runners
         ),
         "coin_fill_counts": any(
@@ -661,6 +666,11 @@ _HSL_EMA_TAIL_METRICS = {
     "drawdown_worst_mean_1pct_ema_strategy_eq_long",
     "drawdown_worst_mean_1pct_ema_strategy_eq_short",
 }
+_HSL_EMA_DRAWDOWN_METRICS = {
+    "drawdown_worst_ema_strategy_eq",
+    "drawdown_worst_ema_strategy_eq_long",
+    "drawdown_worst_ema_strategy_eq_short",
+}
 _HSL_RAW_DRAWDOWN_METRICS = {
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",
@@ -669,6 +679,29 @@ _HSL_RAW_TAIL_METRICS = {
     "drawdown_worst_mean_1pct_strategy_eq_long",
     "drawdown_worst_mean_1pct_strategy_eq_short",
 }
+_HSL_STRATEGY_EQ_RECOVERY_METRICS = {
+    "peak_recovery_hours_strategy_eq_long",
+    "peak_recovery_hours_strategy_eq_short",
+    "peak_recovery_days_strategy_eq_long",
+    "peak_recovery_days_strategy_eq_short",
+}
+
+
+def _hsl_diagnostics_needed(needed_metrics) -> bool:
+    """Return whether the requested proxy surface needs HSL-only telemetry."""
+    return bool(
+        set(needed_metrics)
+        & (
+            set(HARD_STOP_PROXY_METRICS)
+            | _HSL_EMA_DRAWDOWN_METRICS
+            | _HSL_EMA_TAIL_METRICS
+            | _HSL_RAW_DRAWDOWN_METRICS
+            | _HSL_RAW_TAIL_METRICS
+            | _HSL_STRATEGY_EQ_RECOVERY_METRICS
+        )
+    )
+
+
 _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
     "strategy_eq_recovery_days_mean",
     "strategy_eq_recovery_days_median",
@@ -1941,6 +1974,10 @@ class MpsSingleCoinProxy:
             equity_balance_diff_enabled=self.equity_balance_diff_enabled,
             entry_interval_enabled=self.entry_interval_enabled,
         )
+        if self.strategy_kind == "trailing_martingale":
+            runner_kwargs["hsl_diagnostics_enabled"] = _hsl_diagnostics_needed(
+                self.needed_metrics
+            )
         runner_kwargs["hsl_enabled"] = any_configured_hsl
         self.runner = runner_cls(
             self.market,

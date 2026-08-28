@@ -13,6 +13,9 @@ import torch
 
 from optimization.gpu.metric_registry import (
     GPU_EXACT_ONLY_METRICS,
+    HARD_STOP_LIFECYCLE_METRICS,
+    HARD_STOP_PANIC_LOSS_METRICS,
+    HARD_STOP_PROXY_METRICS,
     reject_exact_only_gpu_metric_names,
 )
 
@@ -293,34 +296,8 @@ _FILL_GAP_HISTOGRAM_METRICS = {
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
 }
-_HARD_STOP_LIFECYCLE_METRICS = {
-    "hard_stop_duration_minutes_max",
-    "hard_stop_duration_minutes_mean",
-    "hard_stop_flatten_time_minutes_mean",
-    "hard_stop_post_restart_retrigger_pct",
-    "hard_stop_restarts",
-    "hard_stop_restarts_long",
-    "hard_stop_restarts_per_year",
-    "hard_stop_restarts_per_year_long",
-    "hard_stop_restarts_per_year_short",
-    "hard_stop_restarts_short",
-    "hard_stop_time_in_orange_pct",
-    "hard_stop_time_in_red_pct",
-    "hard_stop_time_in_yellow_pct",
-    "hard_stop_trigger_drawdown_mean",
-    "hard_stop_triggers",
-    "hard_stop_triggers_long",
-    "hard_stop_triggers_per_year",
-    "hard_stop_triggers_short",
-}
-_HARD_STOP_PANIC_LOSS_METRICS = {
-    "hard_stop_halt_to_restart_equity_loss_pct",
-    "hard_stop_panic_close_loss_drawdown_pct_max",
-    "hard_stop_panic_close_loss_drawdown_pct_mean",
-    "hard_stop_panic_close_loss_drawdown_pct_min",
-    "hard_stop_panic_close_loss_max",
-    "hard_stop_panic_close_loss_sum",
-}
+_HARD_STOP_LIFECYCLE_METRICS = HARD_STOP_LIFECYCLE_METRICS
+_HARD_STOP_PANIC_LOSS_METRICS = HARD_STOP_PANIC_LOSS_METRICS
 _HARD_STOP_EMA_DRAWDOWN_METRICS = {
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_ema_strategy_eq_long",
@@ -351,14 +328,6 @@ _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
     "strategy_eq_recovery_days_mean_worst_5pct",
     "strategy_eq_recovery_days_mean_worst_1pct",
 }
-HARD_STOP_PROXY_METRICS = tuple(
-    sorted(
-        (_HARD_STOP_LIFECYCLE_METRICS | _HARD_STOP_PANIC_LOSS_METRICS)
-        - GPU_EXACT_ONLY_METRICS
-    )
-)
-
-
 def _loss_profit_ratio(loss_sum: torch.Tensor, profit_sum: torch.Tensor):
     """Match Rust's capped gross close-fill loss/profit ratio contract."""
 

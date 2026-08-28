@@ -475,6 +475,34 @@ def test_hsl_raw_tail_source_variant_is_separately_opt_in_and_guarded():
         )
 
 
+def test_hsl_diagnostics_source_variant_is_opt_out_and_fail_closed():
+    source = "#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED\nbody"
+
+    assert _with_hsl_features(
+        source,
+        ema_tail_enabled=False,
+        raw_drawdown_enabled=False,
+        raw_tail_enabled=False,
+        diagnostics_enabled=False,
+    ) == ("#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 0\n" + source)
+    with pytest.raises(ValueError, match="require diagnostics"):
+        _with_hsl_features(
+            source,
+            ema_tail_enabled=True,
+            raw_drawdown_enabled=False,
+            raw_tail_enabled=False,
+            diagnostics_enabled=False,
+        )
+    with pytest.raises(RuntimeError, match="diagnostics feature guard"):
+        _with_hsl_features(
+            "body",
+            ema_tail_enabled=False,
+            raw_drawdown_enabled=False,
+            raw_tail_enabled=False,
+            diagnostics_enabled=False,
+        )
+
+
 def test_recovery_distribution_source_variant_is_opt_in_and_guarded():
     source = "#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED\nbody"
 
@@ -634,6 +662,116 @@ def test_trailing_martingale_hsl_specialization_keeps_requested_features(
     assert runner.hsl_ema_tail_enabled is True
     assert runner.hsl_raw_drawdown_enabled is True
     assert runner.hsl_raw_tail_enabled is True
+
+
+def test_trailing_martingale_hsl_specialization_disables_unrequested_diagnostics(
+    monkeypatch,
+):
+    from optimization.gpu.mps_kernel import (
+        MpsEmaAnchorRunner,
+        MpsTrailingMartingaleRunner,
+    )
+
+    def fake_base_init(self, *args, **kwargs):
+        self.long_enabled = True
+        self.short_enabled = False
+        self.hsl_ema_tail_enabled = False
+        self.hsl_raw_drawdown_enabled = False
+        self.hsl_raw_tail_enabled = False
+        self.recovery_distribution_enabled = False
+        self.btc_risk_enabled = False
+        self.equity_balance_diff_enabled = False
+
+    monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    runner = MpsTrailingMartingaleRunner(
+        None,
+        None,
+        None,
+        hsl_enabled=True,
+        hsl_diagnostics_enabled=False,
+    )
+
+    assert runner.shader_topology == "long_hsl"
+    assert runner.hsl_diagnostics_enabled is False
+    assert runner._shader_library_cache_call()[1][-1] is False
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+def test_mps_tm_hsl_diagnostic_opt_out_preserves_strategy_outputs():
+    count = 30
+    close = np.full(count, 100.0)
+    close[8:] = 70.0
+    high = close * 1.02
+    low = close * 0.98
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.0)
+    row[6] = 0.5
+    row[7] = 0.5
+    row[16] = 0.5
+    for key, value in {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.01,
+        "hsl_ema_span_minutes": 1.0,
+        "hsl_cooldown_minutes_after_red": 0.0,
+        "hsl_no_restart_drawdown_threshold": 1.0,
+        "hsl_restart_policy": 2.0,
+        "hsl_tier_ratio_yellow": 0.5,
+        "hsl_tier_ratio_orange": 0.75,
+        "hsl_orange_graceful_stop": 0.0,
+        "hsl_signal_mode": 2.0,
+        "hsl_slot_count": 1.0,
+    }.items():
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(key)] = value
+    matrix = np.asarray([row + row], dtype=np.float64)
+
+    full = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        hsl_enabled=True,
+        hsl_diagnostics_enabled=True,
+    ).run(matrix)
+    lean = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=True,
+        short_enabled=False,
+        hsl_enabled=True,
+        hsl_diagnostics_enabled=False,
+    ).run(matrix)
+    torch.mps.synchronize()
+
+    for key in (
+        "day_end_eq",
+        "day_min_eq",
+        "day_max_dd",
+        "fill_count",
+        "psize",
+        "pprice",
+        "liq_step",
+    ):
+        torch.testing.assert_close(lean[key], full[key], rtol=0.0, atol=0.0)
+    assert full["hsl_triggers_long"].item() > 0.0
+    assert lean["hsl_triggers_long"].item() == 0.0
 
 
 @pytest.mark.parametrize("recovery_enabled", [False, True])

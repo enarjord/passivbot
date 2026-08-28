@@ -587,6 +587,7 @@ mod tests {
             assert!(source.contains("#if defined(PASSIVBOT_TRAILING_LONG_ONLY)"));
             assert!(source.contains("#elif defined(PASSIVBOT_TRAILING_SHORT_ONLY)"));
             assert!(source.contains("#if defined(PASSIVBOT_TRAILING_HSL_DISABLED)"));
+            assert!(source.contains("update_one_side_hsl("));
             assert_shared_hsl_contract(source);
             assert_directional_hsl_accounting_contract(source);
         }

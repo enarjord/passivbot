@@ -51,6 +51,9 @@ MPS_ENTRY_INTERVAL_COUNT_COLS = 129
 _HSL_EMA_TAIL_DEFINE = "#define PASSIVBOT_HSL_EMA_TAIL_ENABLED 1\n"
 _HSL_RAW_DRAWDOWN_DEFINE = "#define PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED 1\n"
 _HSL_RAW_TAIL_DEFINE = "#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 1\n"
+_HSL_DIAGNOSTICS_DISABLE_DEFINE = (
+    "#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 0\n"
+)
 _RECOVERY_DISTRIBUTION_DEFINE = (
     "#define PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED 1\n"
 )
@@ -78,9 +81,18 @@ def _with_hsl_features(
     ema_tail_enabled: bool,
     raw_drawdown_enabled: bool,
     raw_tail_enabled: bool,
+    diagnostics_enabled: bool = True,
 ) -> str:
     if raw_tail_enabled and not raw_drawdown_enabled:
         raise ValueError("HSL raw-tail metrics require raw-drawdown metrics")
+    if not diagnostics_enabled and (
+        ema_tail_enabled or raw_drawdown_enabled or raw_tail_enabled
+    ):
+        raise ValueError("HSL diagnostic feature outputs require diagnostics")
+    if not diagnostics_enabled:
+        if "#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED" not in source:
+            raise RuntimeError("MPS source is missing the HSL diagnostics feature guard")
+        source = _HSL_DIAGNOSTICS_DISABLE_DEFINE + source
     source = _with_hsl_ema_tail(source, ema_tail_enabled)
     if raw_drawdown_enabled:
         if "#ifndef PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED" not in source:
@@ -531,6 +543,7 @@ def _trailing_martingale_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
+    hsl_diagnostics_enabled: bool = True,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -541,6 +554,7 @@ def _trailing_martingale_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        diagnostics_enabled=hsl_diagnostics_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
@@ -558,6 +572,7 @@ def _trailing_martingale_long_hsl_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
+    hsl_diagnostics_enabled: bool = True,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -568,6 +583,7 @@ def _trailing_martingale_long_hsl_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        diagnostics_enabled=hsl_diagnostics_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
@@ -585,6 +601,7 @@ def _trailing_martingale_short_hsl_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
+    hsl_diagnostics_enabled: bool = True,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -595,6 +612,7 @@ def _trailing_martingale_short_hsl_shader_library(
         ema_tail_enabled=hsl_ema_tail_enabled,
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
+        diagnostics_enabled=hsl_diagnostics_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
@@ -2522,10 +2540,18 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         self,
         *args,
         hsl_enabled: bool = True,
+        hsl_diagnostics_enabled: bool = True,
         entry_interval_enabled: bool = False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self.hsl_diagnostics_enabled = bool(hsl_diagnostics_enabled)
+        if not self.hsl_diagnostics_enabled and (
+            self.hsl_ema_tail_enabled
+            or self.hsl_raw_drawdown_enabled
+            or self.hsl_raw_tail_enabled
+        ):
+            raise ValueError("HSL diagnostic feature outputs require diagnostics")
         self.entry_interval_enabled = bool(entry_interval_enabled)
         self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
@@ -2557,6 +2583,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
+                self.hsl_diagnostics_enabled,
             )
         if self.shader_topology == "short_hsl":
             return _trailing_martingale_short_hsl_shader_library, (
@@ -2567,6 +2594,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.btc_risk_enabled,
                 self.equity_balance_diff_enabled,
                 self.entry_interval_enabled,
+                self.hsl_diagnostics_enabled,
             )
         if self.shader_topology == "long_no_hsl":
             return _trailing_martingale_long_no_hsl_shader_library, (
@@ -2590,6 +2618,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
+            self.hsl_diagnostics_enabled,
         )
 
     def _entry_interval_buffers(self, batch_size: int):
