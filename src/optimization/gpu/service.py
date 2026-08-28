@@ -1913,6 +1913,11 @@ class MpsSingleCoinProxy:
             },
             "proxy_mode": "single-coin-exact-last-v1",
         }
+        pnl_lookback_bars = _directional_coin_hsl_lookback_bars(
+            backtest_params,
+            signal_mode=signal_mode,
+            hsl_enabled=bool(hsl_enabled_sides),
+        )
 
         self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
             strategy_kind=self.strategy_kind,
@@ -1950,11 +1955,6 @@ class MpsSingleCoinProxy:
             taker_fee=float(market_params["taker_fee"]),
         )
         interval_ms = candle_interval_minutes * 60_000
-        pnl_lookback_bars = _directional_coin_hsl_lookback_bars(
-            backtest_params,
-            signal_mode=signal_mode,
-            hsl_enabled=bool(hsl_enabled_sides),
-        )
         self.run = ProxyRun(
             starting_balance=float(backtest_params["starting_balance"]),
             warmup_bars=max(1, int(backtest_params.get("global_warmup_bars", 0) or 1)),

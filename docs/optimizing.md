@@ -217,7 +217,7 @@ The supported slice is intentionally narrow:
   candle interval. Pending directional orders are cleared at a gap before the next valid candle.
   Normal CPU input validation stays strict.
   Finite non-positive, partially invalid, or float32-unrepresentable prices remain fail-closed
-  for GPU screening. The single-coin coin-HSL ring retains up to 4,096 realized-PnL events in the
+  for GPU screening. The single-coin coin-HSL ring retains up to 8,192 realized-PnL events in the
   configured finite lookback; an overflow beyond that bounded capacity still fails closed with a
   conservative full-horizon recovery penalty. Independent dual-side multi-coin summaries remain
   fail closed for these metrics because they cannot reconstruct one shared portfolio-equity curve.

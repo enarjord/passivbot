@@ -897,7 +897,8 @@ def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatc
 def test_mps_coin_hsl_rolling_pnl_window_expires_and_resets_fill_events():
     import passivbot_rust
 
-    dense_event_count = 2_096
+    dense_round_trip_count = 2_096
+    dense_event_count = dense_round_trip_count * 2
     assert MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY >= dense_event_count
     probe_kernel = r"""
 kernel void passivbot_hsl_rolling_pnl_probe(
@@ -972,15 +973,21 @@ kernel void passivbot_hsl_rolling_pnl_probe(
     output[11] = overflow.overflowed ? 1.0f : 0.0f;
 
     HslRollingPnlWindow dense = init_hsl_rolling_pnl_window();
-    for (int k = 0; k < __DENSE_EVENT_COUNT__; ++k) {
+    for (int k = 0; k < __DENSE_ROUND_TRIP_COUNT__; ++k) {
         record_hsl_rolling_pnl(
             dense, values, indices, 6, __DENSE_CAPACITY__, k,
             __DENSE_EVENT_COUNT__ + 1, true, 1.0f
         );
+        record_hsl_rolling_pnl(
+            dense, values, indices, 6, __DENSE_CAPACITY__, k,
+            __DENSE_EVENT_COUNT__ + 1, true, -0.1f
+        );
     }
     output[12] = dense.overflowed ? 1.0f : 0.0f;
 }
-""".replace("__DENSE_EVENT_COUNT__", str(dense_event_count)).replace(
+""".replace(
+        "__DENSE_ROUND_TRIP_COUNT__", str(dense_round_trip_count)
+    ).replace("__DENSE_EVENT_COUNT__", str(dense_event_count)).replace(
         "__DENSE_CAPACITY__", str(MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY)
     )
     buffer_size = 6 + MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
