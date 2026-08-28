@@ -41,9 +41,10 @@ from optimization.gpu.service import (
     _directional_coin_hsl_lookback_bars,
     _directional_entry_initial_metrics,
     _directional_gross_pnl_outputs,
-    _hsl_params,
     _gpu_proxy_execution_checkpoint_contract,
     _gpu_profile_unattributed_seconds,
+    _hsl_params,
+    _hsl_diagnostics_needed,
     _mps_dispatch_batch_size,
     _mps_strategy_eq_recovery_distribution,
     _new_gpu_dispatch_progress,
@@ -842,6 +843,19 @@ def test_directional_hsl_output_contract_retains_lifecycle_and_panic_scalars():
         "hsl_drawdown_raw_mean_worst_1pct_long",
         "hsl_drawdown_raw_mean_worst_1pct_short",
     } <= DIRECTIONAL_HSL_OUTPUT_KEYS
+
+
+def test_hsl_diagnostics_are_requested_only_for_hsl_metric_families():
+    assert not _hsl_diagnostics_needed(
+        {
+            "adg_strategy_eq",
+            "drawdown_worst_strategy_eq",
+            "fills_per_day",
+        }
+    )
+    assert _hsl_diagnostics_needed({"hard_stop_triggers_per_year"})
+    assert _hsl_diagnostics_needed({"drawdown_worst_ema_strategy_eq_long"})
+    assert _hsl_diagnostics_needed({"peak_recovery_days_strategy_eq_long"})
 
 
 def test_combine_hedged_multicoin_hsl_outputs_reduces_pside_episodes():

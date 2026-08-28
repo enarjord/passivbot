@@ -15,6 +15,10 @@
 #define PASSIVBOT_HSL_RAW_TAIL_ENABLED 0
 #endif
 
+#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 1
+#endif
+
 #define HSL_EMA_TAIL_BINS 32
 
 constant int HSL_SIGNAL_UNIFIED = 0;
@@ -162,7 +166,9 @@ struct HslState {
     float slot_count;
     bool initialized;
     float drawdown_ema;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float drawdown_ema_max;
+#endif
     float peak_strategy_pnl;
     float no_restart_peak_strategy_equity;
     float coin_realized_baseline;
@@ -181,9 +187,12 @@ struct HslState {
     float pending_stop_k;
     float current_red_start_k;
     float current_halt_start_k;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float last_restart_k;
+#endif
     float triggers;
     float restarts;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float halt_duration_sum_steps;
     float halt_duration_max_steps;
     float halt_duration_count;
@@ -202,6 +211,7 @@ struct HslState {
     float panic_loss_drawdown_sum;
     float panic_loss_drawdown_max;
     float panic_loss_drawdown_count;
+#endif
 };
 
 inline void prepare_coin_hsl_rolling_signal(
@@ -477,7 +487,9 @@ inline HslState load_hsl(
     h.slot_count = fmax(round(params[ho + 10]), 1.0f);
     h.initialized = false;
     h.drawdown_ema = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = 0.0f;
+#endif
     h.peak_strategy_pnl = -INFINITY;
     h.no_restart_peak_strategy_equity = 0.0f;
     h.coin_realized_baseline = 0.0f;
@@ -496,9 +508,12 @@ inline HslState load_hsl(
     h.pending_stop_k = -1.0f;
     h.current_red_start_k = -1.0f;
     h.current_halt_start_k = -1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.last_restart_k = -1.0f;
+#endif
     h.triggers = 0.0f;
     h.restarts = 0.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.halt_duration_sum_steps = 0.0f;
     h.halt_duration_max_steps = 0.0f;
     h.halt_duration_count = 0.0f;
@@ -517,6 +532,7 @@ inline HslState load_hsl(
     h.panic_loss_drawdown_sum = 0.0f;
     h.panic_loss_drawdown_max = 0.0f;
     h.panic_loss_drawdown_count = 0.0f;
+#endif
     return h;
 }
 
@@ -658,7 +674,9 @@ inline void update_hsl_from_signal(
         return;
     }
     h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = fmax(h.drawdown_ema_max, fabs(h.drawdown_ema));
+#endif
     float score = fmin(drawdown_raw, fmax(h.drawdown_ema, 0.0f));
     const float cmp_eps = 1.0e-12f;
     h.red_active_now = score + cmp_eps >= h.red_threshold;
@@ -686,7 +704,9 @@ inline void update_hsl_from_signal(
                 h.halted = true;
                 h.current_halt_start_k = h.pending_stop_k;
                 h.triggers += 1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
                 h.equity_at_halt = strategy_equity;
+#endif
                 if (h.signal_mode == HSL_SIGNAL_COIN) {
                     h.coin_realized_baseline = realized_pnl;
                     h.coin_realized_peak = 0.0f;
@@ -708,6 +728,7 @@ inline void update_hsl_from_signal(
                         ),
                         0.9999999403953552f
                     );
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
                 float stop_drawdown_raw = fmax(
                     h.pending_drawdown_raw,
                     fmax(
@@ -747,6 +768,7 @@ inline void update_hsl_from_signal(
                     h.panic_event_start_equity = -1.0f;
                     h.panic_event_loss = 0.0f;
                 }
+#endif
                 bool terminal = h.restart_policy == 2
                     || (h.restart_policy == 1
                         && fmax(no_restart_drawdown_raw, h.pending_drawdown_ema)
@@ -778,6 +800,23 @@ inline void update_hsl(
     )) return;
     update_hsl_from_signal(
         h, signal, realized_pnl, has_position, has_blocking_orders, kf, interval_ms
+    );
+}
+
+inline void update_one_side_hsl(
+    thread HslState& hsl,
+    float balance,
+    float starting_balance,
+    float realized_pnl,
+    float unrealized_pnl,
+    bool has_position,
+    bool has_blocking_orders,
+    float kf,
+    float interval_ms
+) {
+    update_hsl(
+        hsl, balance, starting_balance, realized_pnl, unrealized_pnl,
+        has_position, has_blocking_orders, kf, interval_ms
     );
 }
 
@@ -830,19 +869,23 @@ inline void try_restart_hsl(thread HslState& h, float kf, float current_equity) 
     if (!h.enabled || !h.halted || h.no_restart_latched
         || h.cooldown_until_k < 0.0f || kf < h.cooldown_until_k) return;
     if (h.current_halt_start_k >= 0.0f) {
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
         float duration = fmax(kf - h.current_halt_start_k, 0.0f);
         h.halt_duration_sum_steps += duration;
         h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
         h.halt_duration_count += 1.0f;
+#endif
         h.current_halt_start_k = -1.0f;
     }
     h.restarts += 1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     if (h.signal_mode != HSL_SIGNAL_COIN && h.equity_at_halt > 0.0f) {
         h.halt_to_restart_equity_loss += fmax(
             h.equity_at_halt - current_equity, 0.0f
         );
     }
     h.last_restart_k = kf;
+#endif
     h.initialized = false;
     h.drawdown_ema = 0.0f;
     h.peak_strategy_pnl = -INFINITY;
@@ -860,6 +903,7 @@ inline void record_hsl_panic_fill(
     float net_pnl,
     float current_equity
 ) {
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     if (h.panic_event_start_equity < 0.0f) {
         h.panic_event_start_equity = fmax(current_equity, 1.0e-12f);
     }
@@ -867,6 +911,11 @@ inline void record_hsl_panic_fill(
     h.panic_event_loss += panic_loss;
     h.panic_close_loss_sum += panic_loss;
     h.panic_close_loss_max = fmax(h.panic_close_loss_max, panic_loss);
+#else
+    (void)h;
+    (void)net_pnl;
+    (void)current_equity;
+#endif
 }
 
 // Keep every HSL scalar reduction in one contract. Existing one-side kernels
@@ -945,6 +994,7 @@ inline void accumulate_hsl_output(
     bool short_side,
     float last_equity_k
 ) {
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     // Forced delist closes are panic fills even when HSL itself is disabled.
     // Exact Rust reports their loss metrics independently of controller
     // enablement, so retain those fields before filtering HSL-only telemetry.
@@ -995,6 +1045,12 @@ inline void accumulate_hsl_output(
     output.flatten_time_count += h.flatten_time_count;
     output.restart_retrigger_count += h.restart_retrigger_count;
     output.halt_to_restart_equity_loss += h.halt_to_restart_equity_loss;
+#else
+    (void)output;
+    (void)h;
+    (void)short_side;
+    (void)last_equity_k;
+#endif
 }
 
 inline void write_hsl_output_aggregate(

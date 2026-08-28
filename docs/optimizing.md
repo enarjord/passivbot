@@ -596,12 +596,14 @@ The backend is hybrid rather than a replacement backtester:
    price finalization, and their ordering relative to aligned quantity steps is retained across
    float32 transport. Tick-aligned computed targets remain on their exchange tick; residual
    float32 arithmetic drift is measured by exact validation.
-   For HSL-disabled, one-sided single-coin Trailing Martingale runs, the backend automatically
-   selects a Rust-owned long-only or short-only Metal variant. Compile-time side and HSL constants
-   let Metal remove unreachable controller and opposite-side work without changing candidate
-   ordering or optimizer semantics. Dual-side and HSL-enabled runs retain the generic kernel. The
-   selected variant is logged as `GPU MPS specialized kernel selected`; exact Rust validation and
-   the normal drift gates remain authoritative.
+   For one-sided single-coin Trailing Martingale runs, the backend automatically selects a
+   Rust-owned long-only or short-only Metal variant, including supported coin-HSL configurations.
+   Compile-time side constants remove the opposite-side fill, indicator, trailing, and HSL update
+   paths. HSL lifecycle and drawdown telemetry is compiled only when a requested proxy objective or
+   limit consumes it; ordinary strategy-equity and fill metrics keep the controller behavior but
+   omit those unused accumulators. Dual-side runs retain the generic kernel. The selected variant
+   is logged as `GPU MPS specialized kernel selected`; exact Rust validation and the normal drift
+   gates remain authoritative.
 3. In suite mode, the same candidate batch is screened once per scenario and reduced with the
    canonical suite scoring and limit contract.
 4. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
