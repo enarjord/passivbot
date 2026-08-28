@@ -2143,10 +2143,17 @@ def _normalized_farthest_indices(values: np.ndarray, count: int) -> list[int]:
     span = np.nanmax(values, axis=0) - low
     normalized = (values - low) / np.where(span > 1.0e-12, span, 1.0)
     chosen = [int(np.argmin(np.nanmean(normalized, axis=1)))]
+    selected = np.zeros(len(values), dtype=bool)
+    selected[chosen[0]] = True
     distance = np.linalg.norm(normalized - normalized[chosen[0]], axis=1)
     for _ in range(count - 1):
-        index = int(np.argmax(distance))
+        available = np.flatnonzero(~selected)
+        available_distances = np.where(
+            np.isfinite(distance[available]), distance[available], -np.inf
+        )
+        index = int(available[int(np.argmax(available_distances))])
         chosen.append(index)
+        selected[index] = True
         distance = np.minimum(
             distance, np.linalg.norm(normalized - normalized[index], axis=1)
         )
@@ -4506,7 +4513,11 @@ def run_backend(
             proxy_seconds = (
                 time.perf_counter() - proxy_started if profile_enabled else 0.0
             )
-            proxy_evaluations += len(rows)
+            proxy_evaluations += (
+                sum(int(item["candidate_count"]) for item in halving_trace)
+                if halving_trace
+                else len(rows)
+            )
             if halving_trace:
                 logging.info(
                     "GPU successive halving | gen=%d rungs=%s full_history=%d/%d",

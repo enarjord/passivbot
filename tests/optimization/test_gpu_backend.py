@@ -438,8 +438,10 @@ def test_successive_halving_keeps_pareto_diversity_and_full_rung_evidence_only()
     ]
     assert len(metric_rows) == len(objectives) == len(violations) == 8
     assert len(full_indices) == 2
+    assert len(np.unique(full_indices)) == 2
     assert np.all(np.isfinite(violations[full_indices]))
     assert np.all(np.isinf(np.delete(violations, full_indices)))
+    assert sum(item["candidate_count"] for item in trace) == 14
 
 
 def test_successive_halving_survivors_prioritize_feasibility_then_violation():
@@ -452,6 +454,16 @@ def test_successive_halving_survivors_prioritize_feasibility_then_violation():
 
     assert set(survivors[:2]) == {0, 1}
     assert survivors[2] == 3
+
+
+def test_successive_halving_survivors_remain_unique_when_objectives_tie():
+    survivors = _successive_halving_survivor_indices(
+        np.zeros((8, 2), dtype=np.float64),
+        np.zeros(8, dtype=np.float64),
+        count=6,
+    )
+
+    assert survivors.tolist() == [0, 1, 2, 3, 4, 5]
 
 
 def test_fresh_run_accepts_partial_suffix_with_opportunistic_probes():
