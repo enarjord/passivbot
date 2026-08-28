@@ -741,6 +741,9 @@ passivbot tool gpu-proxy-benchmark --case ema-single-long
 passivbot tool gpu-proxy-benchmark --case tm-single-long
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overhead
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overrides
+# Hold one candidate matrix constant while measuring dispatch chunking:
+passivbot tool gpu-proxy-benchmark --case ema-single-long \
+  --candidates 4096 --dispatch-batch-size 1024
 ```
 
 The single-coin cases default to 60,000 one-minute candles; the overhead-sensitive multicoin cases
@@ -751,7 +754,9 @@ arguments and immutable commits for before/after comparisons. The harness calls 
 proxy evaluation path, including its full output transfer, metric reduction, and result
 materialization. Run one `--case` per process when comparing cold compilation; `--case all` is
 convenient for smoke checks, and shared-cache hit/miss state still keeps later cold/warm labels
-accurate.
+accurate. `--dispatch-batch-size` defaults to `--candidates`; setting it lower preserves the fixed
+candidate matrix and reports the actual chunk and strategy-dispatch counts, which isolates dispatch
+saturation from population-size changes.
 
 ### Pymoo Configuration
 

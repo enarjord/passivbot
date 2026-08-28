@@ -14,6 +14,8 @@ from tools.gpu_proxy_benchmark import (
     _parameter_matrix,
     _require_mps_torch,
     build_parser,
+    main,
+    run_benchmark_case,
 )
 
 
@@ -43,6 +45,126 @@ def test_gpu_proxy_benchmark_rejects_non_positive_sizes():
         _bounded_positive(parser, "--candidates", 0, 10)
     with pytest.raises(SystemExit):
         _bounded_positive(parser, "--candidates", 11, 10)
+
+
+def test_gpu_proxy_benchmark_accepts_independent_dispatch_batch_size():
+    args = build_parser().parse_args(
+        ["--candidates", "4096", "--dispatch-batch-size", "512"]
+    )
+
+    assert args.candidates == 4096
+    assert args.dispatch_batch_size == 512
+
+
+@pytest.mark.parametrize(
+    "case, extra_args",
+    (
+        ("ema-single-long", ["--single-bars", "525600"]),
+        (
+            "ema-multicoin-overhead",
+            ["--multicoin-bars", "100000", "--coins", "32"],
+        ),
+    ),
+)
+def test_gpu_proxy_benchmark_applies_safety_limit_per_dispatch(
+    monkeypatch, case, extra_args
+):
+    class FakeTorch:
+        __version__ = "test"
+
+    monkeypatch.setattr(
+        "tools.gpu_proxy_benchmark._require_mps_torch", lambda _parser: FakeTorch()
+    )
+    monkeypatch.setattr(
+        "tools.gpu_proxy_benchmark.run_benchmark_case",
+        lambda *_args, **_kwargs: {},
+    )
+
+    assert (
+        main(
+            [
+                "--case",
+                case,
+                "--candidates",
+                "4096",
+                "--dispatch-batch-size",
+                "1",
+                "--warm-runs",
+                "1",
+                *extra_args,
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize(
+    "case, extra_args",
+    (
+        ("ema-single-long", ["--single-bars", "525600"]),
+        (
+            "ema-multicoin-overhead",
+            ["--multicoin-bars", "100000", "--coins", "32"],
+        ),
+    ),
+)
+def test_gpu_proxy_benchmark_rejects_oversized_dispatch(case, extra_args):
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "--case",
+                case,
+                "--candidates",
+                "4096",
+                "--dispatch-batch-size",
+                "4096",
+                "--warm-runs",
+                "1",
+                *extra_args,
+                "--compact",
+            ]
+        )
+
+
+def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
+    class FakeProxy:
+        def evaluate(self, _candidates):
+            self.last_profile = {
+                "actual_dispatch_batch_sizes": [2, 2, 2, 2],
+                "cold_dispatch_count": 0,
+                "dispatch_chunk_count": 4,
+                "dispatch_count": 4,
+                "kernel_candidate_bars": 80,
+                "timings_seconds": {
+                    "cold_compilation": 0.0,
+                    "device_to_host": 0.1,
+                    "host_overhead": 0.2,
+                    "kernel_execution": 0.3,
+                    "warm_library_lookup": 0.0,
+                },
+            }
+
+    monkeypatch.setattr(
+        "tools.gpu_proxy_benchmark._build_case",
+        lambda *_args, **_kwargs: (FakeProxy(), [{}] * 8, 10, 1, 1, "fixture"),
+    )
+
+    report = run_benchmark_case(
+        "ema-single-long",
+        candidates=8,
+        dispatch_batch_size=2,
+        warm_runs=1,
+        single_bars=10,
+        multicoin_bars=10,
+        coins=2,
+        seed=7,
+    )
+
+    assert report["actual_dispatch_batch_size"] == 2
+    assert report["dispatch_chunk_count"] == 4
+    assert report["dispatch_count_per_run"] == 4
+    assert report["kernel_candidate_bars"] == 80
 
 
 def test_gpu_proxy_benchmark_reports_missing_optional_gpu_dependencies(

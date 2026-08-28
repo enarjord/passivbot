@@ -20,7 +20,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_PARAM_KEYS,
     flatten_trailing_martingale_params,
     gpu_side_enabled,
-    trailing_martingale_shader_topology,
+    single_coin_shader_topology,
     validate_hsl_signal_topology,
     validate_single_coin_hsl_signal_topology,
 )
@@ -348,11 +348,11 @@ def test_recovery_distribution_postprocessor_is_opt_in_and_fail_closed(monkeypat
         (False, True, True, "generic"),
     ],
 )
-def test_trailing_martingale_shader_topology_is_fail_closed(
+def test_single_coin_shader_topology_is_fail_closed(
     long_enabled, short_enabled, hsl_enabled, expected
 ):
     assert (
-        trailing_martingale_shader_topology(
+        single_coin_shader_topology(
             long_enabled=long_enabled,
             short_enabled=short_enabled,
             hsl_enabled=hsl_enabled,

@@ -48,10 +48,10 @@ def validate_single_coin_hsl_signal_topology(
     )
 
 
-def trailing_martingale_shader_topology(
+def single_coin_shader_topology(
     *, long_enabled: bool, short_enabled: bool, hsl_enabled: bool
 ) -> str:
-    """Select a topology variant only when compile-time assumptions are exact."""
+    """Select a one-side variant only when compile-time assumptions are exact."""
 
     if hsl_enabled:
         return "generic"

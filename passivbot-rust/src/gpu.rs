@@ -29,6 +29,10 @@ const MPS_TRAILING_LONG_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_TRAILING_LONG_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
 const MPS_TRAILING_SHORT_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_TRAILING_SHORT_ONLY 1\n#define PASSIVBOT_TRAILING_HSL_DISABLED 1\n";
+const MPS_EMA_LONG_NO_HSL_PREAMBLE: &str =
+    "#define PASSIVBOT_EMA_LONG_ONLY 1\n#define PASSIVBOT_EMA_HSL_DISABLED 1\n";
+const MPS_EMA_SHORT_NO_HSL_PREAMBLE: &str =
+    "#define PASSIVBOT_EMA_SHORT_ONLY 1\n#define PASSIVBOT_EMA_HSL_DISABLED 1\n";
 
 fn compose_hsl_source(body: &str) -> String {
     assert_eq!(
@@ -81,8 +85,16 @@ fn compose_trailing_topology_source(preamble: &str) -> String {
     )
 }
 
+fn compose_ema_topology_source(preamble: &str) -> String {
+    format!("{preamble}{}", compose_hsl_source(MPS_EMA_ANCHOR_BODY))
+}
+
 pub static MPS_EMA_ANCHOR_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_hsl_source(MPS_EMA_ANCHOR_BODY));
+pub static MPS_EMA_ANCHOR_LONG_NO_HSL_SOURCE: LazyLock<String> =
+    LazyLock::new(|| compose_ema_topology_source(MPS_EMA_LONG_NO_HSL_PREAMBLE));
+pub static MPS_EMA_ANCHOR_SHORT_NO_HSL_SOURCE: LazyLock<String> =
+    LazyLock::new(|| compose_ema_topology_source(MPS_EMA_SHORT_NO_HSL_PREAMBLE));
 pub static MPS_EMA_ANCHOR_MULTICOIN_SOURCE: LazyLock<String> =
     LazyLock::new(|| compose_multicoin_source(MPS_EMA_ANCHOR_MULTICOIN_BODY));
 pub static MPS_TRAILING_MARTINGALE_SOURCE: LazyLock<String> =
@@ -96,6 +108,14 @@ pub static MPS_TRAILING_MARTINGALE_MULTICOIN_SOURCE: LazyLock<String> =
 
 pub fn mps_ema_anchor_source() -> &'static str {
     MPS_EMA_ANCHOR_SOURCE.as_str()
+}
+
+pub fn mps_ema_anchor_long_no_hsl_source() -> &'static str {
+    MPS_EMA_ANCHOR_LONG_NO_HSL_SOURCE.as_str()
+}
+
+pub fn mps_ema_anchor_short_no_hsl_source() -> &'static str {
+    MPS_EMA_ANCHOR_SHORT_NO_HSL_SOURCE.as_str()
 }
 
 pub fn mps_ema_anchor_multicoin_source() -> &'static str {
@@ -429,6 +449,8 @@ mod tests {
         }
         for source in [
             mps_ema_anchor_source(),
+            mps_ema_anchor_long_no_hsl_source(),
+            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
             mps_trailing_martingale_source(),
             mps_trailing_martingale_long_no_hsl_source(),
@@ -455,6 +477,8 @@ mod tests {
         }
         for source in [
             mps_ema_anchor_source(),
+            mps_ema_anchor_long_no_hsl_source(),
+            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
             mps_trailing_martingale_source(),
             mps_trailing_martingale_long_no_hsl_source(),
@@ -480,6 +504,8 @@ mod tests {
         }
         for source in [
             mps_ema_anchor_source(),
+            mps_ema_anchor_long_no_hsl_source(),
+            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
             mps_trailing_martingale_source(),
             mps_trailing_martingale_long_no_hsl_source(),
@@ -498,6 +524,8 @@ mod tests {
             MPS_TRAILING_MARTINGALE_BODY,
             MPS_TRAILING_MARTINGALE_MULTICOIN_BODY,
             mps_ema_anchor_source(),
+            mps_ema_anchor_long_no_hsl_source(),
+            mps_ema_anchor_short_no_hsl_source(),
             mps_ema_anchor_multicoin_source(),
             mps_trailing_martingale_source(),
             mps_trailing_martingale_long_no_hsl_source(),
@@ -535,6 +563,33 @@ mod tests {
         assert!(!generic.contains("#define PASSIVBOT_TRAILING_LONG_ONLY 1"));
         assert!(!generic.contains("#define PASSIVBOT_TRAILING_SHORT_ONLY 1"));
         assert!(!generic.contains("#define PASSIVBOT_TRAILING_HSL_DISABLED 1"));
+    }
+
+    #[test]
+    fn ema_anchor_specialized_sources_pin_one_side_without_hsl() {
+        let variants = [
+            (
+                mps_ema_anchor_long_no_hsl_source(),
+                "#define PASSIVBOT_EMA_LONG_ONLY 1",
+            ),
+            (
+                mps_ema_anchor_short_no_hsl_source(),
+                "#define PASSIVBOT_EMA_SHORT_ONLY 1",
+            ),
+        ];
+        for (source, side_define) in variants {
+            assert!(source.starts_with(side_define));
+            assert!(source.contains("#define PASSIVBOT_EMA_HSL_DISABLED 1"));
+            assert!(source.contains("#if defined(PASSIVBOT_EMA_LONG_ONLY)"));
+            assert!(source.contains("#elif defined(PASSIVBOT_EMA_SHORT_ONLY)"));
+            assert!(source.contains("#if defined(PASSIVBOT_EMA_HSL_DISABLED)"));
+            assert_shared_hsl_contract(source);
+            assert_directional_hsl_accounting_contract(source);
+        }
+        let generic = mps_ema_anchor_source();
+        assert!(!generic.contains("#define PASSIVBOT_EMA_LONG_ONLY 1"));
+        assert!(!generic.contains("#define PASSIVBOT_EMA_SHORT_ONLY 1"));
+        assert!(!generic.contains("#define PASSIVBOT_EMA_HSL_DISABLED 1"));
     }
 
     #[test]

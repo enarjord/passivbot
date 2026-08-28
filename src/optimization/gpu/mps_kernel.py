@@ -23,7 +23,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
     encode_tm_retracement_base_pct,
-    trailing_martingale_shader_topology,
+    single_coin_shader_topology,
 )
 
 
@@ -479,6 +479,44 @@ def _shader_library(
         raw_tail_enabled=hsl_raw_tail_enabled,
     )
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
+    source = _with_btc_risk(source, btc_risk_enabled)
+    source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    return torch.mps.compile_shader(source)
+
+
+@lru_cache(maxsize=4)
+def _ema_anchor_long_no_hsl_shader_library(
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+    equity_balance_diff_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    source = _with_recovery_distribution(
+        passivbot_rust.mps_ema_anchor_long_no_hsl_source_py(),
+        recovery_distribution_enabled,
+    )
+    source = _with_btc_risk(source, btc_risk_enabled)
+    source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    return torch.mps.compile_shader(source)
+
+
+@lru_cache(maxsize=4)
+def _ema_anchor_short_no_hsl_shader_library(
+    recovery_distribution_enabled: bool = False,
+    btc_risk_enabled: bool = False,
+    equity_balance_diff_enabled: bool = False,
+):
+    if not torch.backends.mps.is_available():
+        raise RuntimeError("Apple MPS is not available in this process")
+    import passivbot_rust
+
+    source = _with_recovery_distribution(
+        passivbot_rust.mps_ema_anchor_short_no_hsl_source_py(),
+        recovery_distribution_enabled,
+    )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     return torch.mps.compile_shader(source)
@@ -952,6 +990,7 @@ class MpsEmaAnchorRunner:
         market_order_near_touch_threshold: float = 0.001,
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
+        hsl_enabled: bool = True,
         pnl_lookback_bars: int = 0,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -1019,6 +1058,15 @@ class MpsEmaAnchorRunner:
         self.hsl_ema_tail_enabled = bool(hsl_ema_tail_enabled)
         self.hsl_raw_drawdown_enabled = bool(hsl_raw_drawdown_enabled)
         self.hsl_raw_tail_enabled = bool(hsl_raw_tail_enabled)
+        self.shader_topology = single_coin_shader_topology(
+            long_enabled=self.long_enabled,
+            short_enabled=self.short_enabled,
+            hsl_enabled=bool(hsl_enabled),
+        )
+        if self.shader_topology != "generic":
+            self.hsl_ema_tail_enabled = False
+            self.hsl_raw_drawdown_enabled = False
+            self.hsl_raw_tail_enabled = False
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.rolling_capacity = (
             MPS_DIRECTIONAL_HSL_ROLLING_CAPACITY
@@ -1125,6 +1173,28 @@ class MpsEmaAnchorRunner:
         self._equity_balance_diff_buffers: dict[int, torch.Tensor] = {}
         self._sizes: dict[tuple[int, int], torch.Tensor] = {}
         self.last_profile: dict[str, float | int | bool] = {}
+
+    def _shader_library_cache_call(self):
+        if self.shader_topology == "long_no_hsl":
+            return _ema_anchor_long_no_hsl_shader_library, (
+                self.recovery_distribution_enabled,
+                self.btc_risk_enabled,
+                self.equity_balance_diff_enabled,
+            )
+        if self.shader_topology == "short_no_hsl":
+            return _ema_anchor_short_no_hsl_shader_library, (
+                self.recovery_distribution_enabled,
+                self.btc_risk_enabled,
+                self.equity_balance_diff_enabled,
+            )
+        return _shader_library, (
+            self.hsl_ema_tail_enabled,
+            self.hsl_raw_drawdown_enabled,
+            self.hsl_raw_tail_enabled,
+            self.recovery_distribution_enabled,
+            self.btc_risk_enabled,
+            self.equity_balance_diff_enabled,
+        )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         params = _upgrade_legacy_single_coin_wel_params(
@@ -1273,15 +1343,8 @@ class MpsEmaAnchorRunner:
                 device="mps",
             )
         prepared = time.perf_counter() if profile else 0.0
-        library, cold = _cached_library_with_miss(
-            _shader_library,
-            self.hsl_ema_tail_enabled,
-            self.hsl_raw_drawdown_enabled,
-            self.hsl_raw_tail_enabled,
-            self.recovery_distribution_enabled,
-            self.btc_risk_enabled,
-            self.equity_balance_diff_enabled,
-        )
+        loader, library_args = self._shader_library_cache_call()
+        library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
             torch.mps.synchronize()
@@ -2412,7 +2475,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         self.entry_interval_enabled = bool(entry_interval_enabled)
         self._entry_interval_stat_buffers: dict[int, torch.Tensor] = {}
         self._entry_interval_count_buffers: dict[int, torch.Tensor] = {}
-        self.shader_topology = trailing_martingale_shader_topology(
+        self.shader_topology = single_coin_shader_topology(
             long_enabled=self.long_enabled,
             short_enabled=self.short_enabled,
             hsl_enabled=bool(hsl_enabled),

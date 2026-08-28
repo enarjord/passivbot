@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS EMA Anchor optimization now compiles a one-side kernel when HSL is disabled, allowing
+  Metal to eliminate the inactive side and HSL state from the hot candle loop. Dual-side and HSL
+  runs keep the generic kernel, and exact Rust validation remains authoritative. The offline GPU
+  benchmark also accepts an independent dispatch batch size so saturation studies can hold the
+  candidate matrix constant while varying only dispatch chunking.
+
 - Apple MPS optimization now provides disabled-by-default structured profiling for candidate
   materialization and packing, buffer upload/clearing, cold and warm shader-library work, kernel
   execution, device transfer, metric reduction, NSGA orchestration, exact-validation queue/work,
