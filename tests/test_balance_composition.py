@@ -26,6 +26,10 @@ from live.event_bus import (
     format_console_event,
 )
 from live import state_refresh
+from live.state_refresh import (
+    AuthoritativeSurfaceUnavailable,
+    DeferredAuthoritativeSurface,
+)
 
 
 def _okx_payload(details):
@@ -644,6 +648,51 @@ async def test_diagnostic_normalizer_failure_is_explicit_without_losing_scalar_b
         source="normalizer", reason="normalizer_error"
     )
     assert "secret" not in str(composition)
+
+
+@pytest.mark.asyncio
+async def test_staged_balance_unavailability_is_explicit_and_bounded():
+    class Bot:
+        async def capture_balance_snapshot(self):
+            raise AuthoritativeSurfaceUnavailable(
+                "balance", "balance_transition_confirmation"
+            )
+
+    raw, composition, balance = await state_refresh.capture_balance_staged_snapshot(Bot())
+
+    assert raw is None
+    assert composition == unavailable_balance_composition(
+        reason="balance_transition_confirmation"
+    )
+    assert balance == DeferredAuthoritativeSurface(
+        surface="balance", reason="balance_transition_confirmation"
+    )
+
+
+@pytest.mark.asyncio
+async def test_staged_refresh_does_not_prepare_or_commit_deferred_balance():
+    class Bot:
+        def _authoritative_staged_refresh_plan(self):
+            return {"balance"}
+
+        async def _fetch_authoritative_state_staged_snapshot(self, _plan):
+            return {
+                "balance": DeferredAuthoritativeSurface(
+                    surface="balance",
+                    reason="balance_transition_confirmation",
+                )
+            }
+
+        def _prepare_balance_snapshot(self, _balance):
+            raise AssertionError("deferred balance must not be prepared")
+
+    bot = Bot()
+
+    assert await state_refresh.refresh_authoritative_state_staged(bot) is False
+    assert (
+        bot._last_authoritative_block_reason
+        == "balance_transition_confirmation"
+    )
 
 
 def test_composition_only_balance_event_remains_durable_but_is_not_console_visible():

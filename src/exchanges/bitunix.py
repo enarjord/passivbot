@@ -28,6 +28,7 @@ from config.access import require_live_value
 from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import normalize_bitunix_balance_composition
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from passivbot import logging
 from utils import symbol_to_coin
 
@@ -170,6 +171,8 @@ class BitunixClient:
         "1w": 7 * 24 * 60 * 60_000,
         "1M": 30 * 24 * 60 * 60_000,
     }
+    BALANCE_TRANSITION_REASON = "balance_transition_confirmation"
+    BALANCE_TRANSITION_CONFIRMATION_SECONDS = 120.0
 
     def __init__(self, config: dict | None = None):
         config = config or {}
@@ -208,7 +211,105 @@ class BitunixClient:
         self._ticker_subscription_ids: tuple[str, ...] = ()
         self._ticker_ready = asyncio.Event()
         self._pending_status_warning_monotonic: dict[str, float] = {}
+        self._accepted_balance_components: tuple[float, float, float] | None = None
+        self._pending_balance_components: tuple[float, float, float] | None = None
+        self._pending_balance_started_monotonic: float | None = None
+        self._pending_balance_observation_count = 0
         self._closed = False
+
+    @staticmethod
+    def _balance_values_close(left: float, right: float) -> bool:
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-9)
+
+    @classmethod
+    def _balance_components_close(
+        cls,
+        left: tuple[float, float, float] | None,
+        right: tuple[float, float, float],
+    ) -> bool:
+        return bool(
+            left is not None
+            and all(
+                cls._balance_values_close(left_value, right_value)
+                for left_value, right_value in zip(left, right)
+            )
+        )
+
+    def _validate_balance_transition(
+        self,
+        *,
+        available: float,
+        frozen: float,
+        margin: float,
+    ) -> None:
+        """Reject Bitunix's transient duplication of locked funds into available.
+
+        The known inconsistent response moves ``available`` by exactly the
+        unchanged locked amount while continuing to report that amount as locked.
+        Keep the last accepted components unchanged until the response either
+        reverts or remains stable across a bounded confirmation window.
+        """
+        current = (available, frozen, margin)
+        previous = self._accepted_balance_components
+        if previous is None:
+            self._accepted_balance_components = current
+            return
+
+        previous_available, previous_frozen, previous_margin = previous
+        previous_used = previous_frozen + previous_margin
+        available_delta = available - previous_available
+        duplicates_locked_funds = bool(
+            previous_used > 0.0
+            and self._balance_values_close(frozen, previous_frozen)
+            and self._balance_values_close(margin, previous_margin)
+            and self._balance_values_close(available_delta, previous_used)
+        )
+
+        if duplicates_locked_funds:
+            now = time.monotonic()
+            if not self._balance_components_close(
+                self._pending_balance_components, current
+            ):
+                self._pending_balance_components = current
+                self._pending_balance_started_monotonic = now
+                self._pending_balance_observation_count = 1
+                logging.warning(
+                    "[balance] Bitunix reported locked funds in both available and used; "
+                    "action=defer_authoritative_state"
+                )
+            else:
+                self._pending_balance_observation_count += 1
+            pending_started = self._pending_balance_started_monotonic
+            pending_seconds = max(
+                0.0,
+                now - float(now if pending_started is None else pending_started),
+            )
+            if (
+                self._pending_balance_observation_count >= 2
+                and pending_seconds >= self.BALANCE_TRANSITION_CONFIRMATION_SECONDS
+            ):
+                logging.warning(
+                    "[balance] Bitunix balance transition remained stable through "
+                    "confirmation; action=resume_authoritative_state"
+                )
+                self._accepted_balance_components = current
+                self._pending_balance_components = None
+                self._pending_balance_started_monotonic = None
+                self._pending_balance_observation_count = 0
+                return
+            raise AuthoritativeSurfaceUnavailable(
+                "balance", self.BALANCE_TRANSITION_REASON
+            )
+
+        if self._pending_balance_components is not None:
+            logging.info(
+                "[balance] Bitunix balance transition returned to a consistent state; "
+                "action=resume_authoritative_state"
+            )
+            self._pending_balance_components = None
+            self._pending_balance_started_monotonic = None
+            self._pending_balance_observation_count = 0
+        self._accepted_balance_components = current
 
     def milliseconds(self) -> int:
         return int(time.time() * 1000)
@@ -478,6 +579,11 @@ class BitunixClient:
         isolated_upnl = _float(
             raw.get("isolationUnrealizedPNL"),
             field="account.isolationUnrealizedPNL",
+        )
+        self._validate_balance_transition(
+            available=available,
+            frozen=frozen,
+            margin=margin,
         )
         # Bitunix documents these as disjoint available, order-locked, and
         # position-locked quantities. Unrealized PnL is mark-to-market state,

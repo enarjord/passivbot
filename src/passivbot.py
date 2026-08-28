@@ -6151,7 +6151,29 @@ class Passivbot:
                         "pending_pnl",
                         "degraded_pnl",
                         "fill_history_coverage",
+                        "balance_transition_confirmation",
                     }:
+                        if (
+                            authoritative_block_reason
+                            == "balance_transition_confirmation"
+                        ):
+                            authoritative_fill_retry_count = 0
+                            authoritative_fill_retry_reason = None
+                            failed_update_pos_oos_pnls_ohlcvs_count = 0
+                            self._emit_live_cycle_degraded(
+                                cycle_id=cycle_id,
+                                reason_code=authoritative_block_reason,
+                                data={
+                                    "retry_delay_seconds": 5.0,
+                                    "timings_ms": dict(loop_timings_ms),
+                                },
+                                level="warning",
+                            )
+                            await self._sleep_unless_shutdown(
+                                5.0,
+                                stage="balance_transition_confirmation",
+                            )
+                            continue
                         if authoritative_fill_retry_reason != authoritative_block_reason:
                             authoritative_fill_retry_count = 0
                             authoritative_fill_retry_reason = authoritative_block_reason
@@ -7456,7 +7478,7 @@ class Passivbot:
         """Refresh live account state through the staged authoritative cohort."""
         return await state_refresh.refresh_authoritative_state_staged(self)
 
-    async def _capture_balance_staged_snapshot(self) -> tuple[object, dict, float]:
+    async def _capture_balance_staged_snapshot(self) -> tuple[object, dict, object]:
         """Fetch raw balance, bounded diagnostics, and its normalized value."""
         return await state_refresh.capture_balance_staged_snapshot(self)
 
@@ -15861,7 +15883,13 @@ class Passivbot:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
                 return False
-            balance_raw = await self.fetch_balance()
+            try:
+                balance_raw = await self.fetch_balance()
+            except state_refresh.AuthoritativeSurfaceUnavailable as exc:
+                if exc.surface != "balance":
+                    raise
+                self._last_authoritative_block_reason = exc.reason
+                return False
         return self._apply_balance_snapshot(balance_raw)
 
     def _reconcile_balance_after_open_orders_refresh(self) -> bool:

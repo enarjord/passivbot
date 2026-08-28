@@ -55,6 +55,7 @@ from live.balance_composition import (
     normalize_okx_balance_composition,
 )
 from live.data_packets import stable_hash
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 
 TEST_RUNTIME_IDENTITY = RuntimeIdentity(
@@ -7991,6 +7992,31 @@ async def test_update_balance_failure_keeps_previous():
 
 
 @pytest.mark.asyncio
+async def test_update_balance_defers_explicitly_unavailable_surface_without_mutation():
+    bot = Passivbot.__new__(Passivbot)
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.balance_override = None
+    bot.previous_hysteresis_balance = 50.0
+
+    async def fake_fetch_balance():
+        raise AuthoritativeSurfaceUnavailable(
+            "balance", "balance_transition_confirmation"
+        )
+
+    bot.fetch_balance = fake_fetch_balance
+
+    assert await bot.update_balance() is False
+    assert bot.balance == 50.0
+    assert bot.balance_raw == 50.0
+    assert (
+        bot._last_authoritative_block_reason
+        == "balance_transition_confirmation"
+    )
+
+
+@pytest.mark.asyncio
 async def test_update_balance_override_does_not_reset_hysteresis_anchor():
     bot = Passivbot.__new__(Passivbot)
     bot.quote = "USDT"
@@ -11167,6 +11193,66 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     assert sleep_seconds[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
     assert sleep_seconds[7:12] == [60.0] * 5
     assert {stage for _seconds, stage in sleeps} == {"pending_pnl_authoritative_retry"}
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_restart():
+    bot = Passivbot.__new__(Passivbot)
+    cycle = {"n": 0}
+    sleeps = []
+
+    async def fake_sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        cycle["n"] += 1
+        if cycle["n"] <= 12:
+            bot._last_authoritative_block_reason = (
+                "balance_transition_confirmation"
+            )
+            return False
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", 1)),
+            ("positions", ("p", 1)),
+            ("open_orders", ("o", 1)),
+            ("fills", ("f", 1)),
+            ("completed_candles", tuple()),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        return True
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.prepare_planning_universe = AsyncMock()
+    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
+    bot.execute_to_exchange = AsyncMock(return_value={"executed_cycle": 13})
+
+    assert await bot.run_execution_loop() == {"executed_cycle": 13}
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert sleeps == [
+        (5.0, "balance_transition_confirmation")
+    ] * 12
+    balance_events = [
+        call.kwargs
+        for call in bot._emit_live_cycle_degraded.call_args_list
+        if call.kwargs["reason_code"]
+        == "balance_transition_confirmation"
+    ]
+    assert len(balance_events) == 12
 
 
 @pytest.mark.asyncio
