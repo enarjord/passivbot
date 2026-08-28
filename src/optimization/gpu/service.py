@@ -1976,6 +1976,13 @@ class MpsSingleCoinProxy:
             first_valid_idx=int(backtest_params["first_valid_indices"][0]),
             last_valid_idx=int(backtest_params["last_valid_indices"][0]),
         )
+        coin_warmup_minutes = int(
+            (backtest_params.get("warmup_minutes") or [0])[0]
+        )
+        self.history_warmup_bars = max(
+            int(self.run.warmup_bars),
+            int(np.ceil(coin_warmup_minutes / candle_interval_minutes)),
+        )
 
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
@@ -2098,29 +2105,46 @@ class MpsSingleCoinProxy:
             rows.append(row)
         return np.asarray(rows, dtype=np.float64)
 
-    def end_step_for_history_fraction(self, history_fraction: float) -> int:
-        """Map a prefix fraction to a safe candle boundary after warmup."""
+    def recent_window_for_history_fraction(
+        self, history_fraction: float
+    ) -> tuple[int, int]:
+        """Map a history fraction to warmup and trade starts for a recent suffix."""
 
         fraction = float(history_fraction)
         if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
             raise ValueError("GPU history fraction must be finite and in (0, 1]")
         candle_count = int(self.runner.n)
-        effective_start = min(
-            candle_count,
-            max(
-                3,
-                int(self.run.trade_start_idx) + 2,
-                int(self.run.first_valid_idx) + 2,
+        full_trade_start = min(
+            candle_count - 3,
+            max(2, int(self.run.trade_start_idx), int(self.run.first_valid_idx) + 1),
+        )
+        suffix_candles = max(
+            2,
+            int(np.ceil((candle_count - full_trade_start) * fraction)),
+        )
+        trade_start = max(full_trade_start, candle_count - suffix_candles)
+        history_start = max(
+            int(self.run.first_valid_idx),
+            trade_start
+            - max(
+                1,
+                int(
+                    getattr(
+                        self, "history_warmup_bars", self.run.warmup_bars
+                    )
+                ),
             ),
         )
-        return min(
-            candle_count,
-            effective_start
-            + int(np.ceil((candle_count - effective_start) * fraction)),
-        )
+        history_start = min(history_start, trade_start - 1)
+        return history_start, trade_start
 
     def evaluate(
-        self, candidates: list[dict], *, end_step: int | None = None
+        self,
+        candidates: list[dict],
+        *,
+        end_step: int | None = None,
+        history_start_step: int | None = None,
+        trade_start_step: int | None = None,
     ) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
@@ -2142,15 +2166,37 @@ class MpsSingleCoinProxy:
                 "GPU single-coin end_step must be between 3 and the full candle "
                 f"count {full_candle_count}, got {effective_end_step}"
             )
+        bounded_history = (
+            history_start_step is not None or trade_start_step is not None
+        )
+        if bounded_history and (
+            history_start_step is None or trade_start_step is None
+        ):
+            raise ValueError(
+                "GPU recent-history evaluation requires both history and trade starts"
+            )
+        if bounded_history and self.strategy_kind != "trailing_martingale":
+            raise ValueError(
+                "GPU recent-history evaluation currently requires trailing_martingale"
+            )
+        effective_history_start = (
+            0 if history_start_step is None else int(history_start_step)
+        )
+        effective_trade_start = (
+            int(trade_start_step) if bounded_history else 0
+        )
+        effective_candle_count = effective_end_step - effective_history_start
+        if effective_candle_count < 3:
+            raise ValueError("GPU recent-history evaluation requires at least 3 candles")
         side_count = int(bool(getattr(self.runner, "long_enabled", True))) + int(
             bool(getattr(self.runner, "short_enabled", False))
         )
         dispatch_batch_size = (
             int(getattr(self, "dispatch_batch_size", self.batch_size))
-            if end_step is None
+            if end_step is None and not bounded_history
             else _mps_dispatch_batch_size(
                 self.batch_size,
-                n_bars=effective_end_step,
+                n_bars=effective_candle_count,
                 n_sides=side_count,
             )
         )
@@ -2162,7 +2208,7 @@ class MpsSingleCoinProxy:
                 (self.runner,),
                 coin_count=1,
                 side_count=side_count,
-                candle_count=effective_end_step,
+                candle_count=effective_candle_count,
                 dispatch_batch_size=dispatch_batch_size,
             )
             if self.profile_enabled
@@ -2187,18 +2233,23 @@ class MpsSingleCoinProxy:
                 profile["timings_seconds"]["candidate_materialization"] += (
                     time.perf_counter() - stage_started
                 )
-            output = self.runner.run(
-                parameter_matrix,
-                profile=self.profile_enabled,
-                end_step=effective_end_step,
-            )
+            runner_kwargs = {
+                "profile": self.profile_enabled,
+                "end_step": effective_end_step,
+            }
+            if bounded_history:
+                runner_kwargs.update(
+                    history_start_step=effective_history_start,
+                    trade_start_step=effective_trade_start,
+                )
+            output = self.runner.run(parameter_matrix, **runner_kwargs)
             if profile is not None:
                 _add_gpu_runner_profile(
                     profile,
                     self.runner,
                     side_count=profile["side_count"],
                     effective_candidate_steps=np.full(
-                        len(chunk), effective_end_step, dtype=np.int64
+                        len(chunk), effective_candle_count, dtype=np.int64
                     ),
                 )
             interrupt_check()
@@ -2266,9 +2317,21 @@ class MpsSingleCoinProxy:
                         torch=torch,
                     )
                 )
+            metrics_run = self.run
+            if bounded_history:
+                requested_start_ts_ms = int(
+                    self.metrics_data["ts0"]
+                    + effective_trade_start * self.run.interval_ms
+                )
+                metrics_run = replace(
+                    self.run,
+                    trade_start_idx=effective_trade_start,
+                    requested_start_ts_ms=requested_start_ts_ms,
+                    guard_ts_ms=requested_start_ts_ms,
+                )
             objectives = self._compute_objectives(
                 output,
-                self.run,
+                metrics_run,
                 {**self.metrics_data, "n": effective_end_step},
                 needed=self.needed_metrics,
             )

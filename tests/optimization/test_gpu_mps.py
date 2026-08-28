@@ -780,7 +780,7 @@ def test_mps_tm_hsl_diagnostic_opt_out_preserves_strategy_outputs():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
+def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix():
     count = 120
     steps = np.arange(count, dtype=np.float64)
     close = 100.0 + np.sin(steps / 7.0)
@@ -804,7 +804,7 @@ def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
     row = _tm_single_row(initial_ema_dist=0.0)
     matrix = np.asarray([row + row], dtype=np.float64)
 
-    def run_once(end_step=None):
+    def run_once(end_step=None, history_start_step=None, trade_start_step=None):
         runner = MpsTrailingMartingaleRunner(
             market,
             run,
@@ -813,11 +813,43 @@ def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
             short_enabled=False,
             hsl_enabled=False,
         )
-        return runner.run(matrix, end_step=end_step)
+        return runner.run(
+            matrix,
+            end_step=end_step,
+            history_start_step=history_start_step,
+            trade_start_step=trade_start_step,
+        )
 
     ordinary = run_once()
     explicit_full = run_once(count)
     truncated = run_once(60)
+    recent = run_once(
+        history_start_step=59,
+        trade_start_step=80,
+    )
+    sliced_run = ProxyRun(
+        1_000.0,
+        1,
+        21,
+        int(timestamps[80]),
+        int(timestamps[80]),
+        int(timestamps[59]),
+        60_000,
+        0.05,
+        0,
+        count - 60,
+    )
+    sliced_data = build_mps_data(
+        high[59:], low[59:], close[59:], timestamps[59:], sliced_run, market
+    )
+    sliced = MpsTrailingMartingaleRunner(
+        market,
+        sliced_run,
+        sliced_data,
+        long_enabled=True,
+        short_enabled=False,
+        hsl_enabled=False,
+    ).run(matrix)
     torch.mps.synchronize()
 
     for key in ordinary:
@@ -827,6 +859,25 @@ def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
                 equal_nan=True,
             )
     assert truncated["last_eq_ts"].item() < ordinary["last_eq_ts"].item()
+    assert recent["first_eq_ts"].item() == 80 * 60_000
+    assert recent["last_eq_ts"].item() == ordinary["last_eq_ts"].item()
+    for key in (
+        "balance",
+        "psize",
+        "pprice",
+        "fill_count",
+        "fill_count_entry",
+        "max_dd",
+        "held_max_ms",
+        "held_sum_ms",
+    ):
+        torch.testing.assert_close(recent[key], sliced[key], rtol=0.0, atol=0.0)
+    assert recent["first_eq_ts"].item() == (
+        sliced["first_eq_ts"].item() + 59 * 60_000
+    )
+    assert recent["last_eq_ts"].item() == (
+        sliced["last_eq_ts"].item() + 59 * 60_000
+    )
 
 
 @pytest.mark.parametrize("recovery_enabled", [False, True])
@@ -869,6 +920,40 @@ def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
 
     with pytest.raises(ValueError, match="end_step"):
         runner._single_coin_size_values(5, 13, end_step=18)
+
+
+@pytest.mark.parametrize("recovery_enabled", [False, True])
+def test_tm_size_buffer_appends_recent_window_after_recovery_fields(
+    recovery_enabled,
+):
+    runner = object.__new__(MpsTrailingMartingaleRunner)
+    runner.n = 17
+    runner.n_days = 2
+    runner.run_config = ProxyRun(
+        1_000.0, 1, 1, 0, 0, 0, 60_000, 0.05, 3, 11
+    )
+    runner.rolling_capacity = 9
+    runner.pnl_lookback_bars = 7
+    runner.recovery_distribution_enabled = recovery_enabled
+    runner.recovery_stride = 2
+    runner.n_recovery_samples = 4
+
+    ordinary = runner._trailing_single_coin_size_values(5, 13)
+    recent = runner._trailing_single_coin_size_values(
+        5,
+        13,
+        history_start_step=5,
+        trade_start_step=10,
+    )
+
+    recovery = [2, 4] if recovery_enabled else [0, 0]
+    assert ordinary == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [-1, -1]
+    recent_recovery = [2, 5] if recovery_enabled else [0, 0]
+    assert recent == [5, 17, 2, 13, 3, 9, 7, 11] + recent_recovery + [5, 10]
+    with pytest.raises(ValueError, match="requires both"):
+        runner._trailing_single_coin_size_values(
+            5, 13, history_start_step=5
+        )
 
 
 def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):

@@ -1027,6 +1027,11 @@ mod tests {
         assert_directional_recovery_sampling_contract(source);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
+        assert!(source.contains("const int bounded_history_start = sizes[10]"));
+        assert!(source.contains("const int bounded_trade_start = sizes[11]"));
+        assert!(source.contains("const bool recent_history_window"));
+        assert!(source.contains("const int loop_start = recent_history_window"));
+        assert!(source.contains("k >= bounded_trade_start"));
         assert_eq!(source.matches("record_initial_entry_interval(").count(), 3);
         assert!(source.contains("long_last_initial_entry_k"));
         assert!(source.contains("short_last_initial_entry_k"));

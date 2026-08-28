@@ -1815,6 +1815,9 @@ inline void passivbot_single_coin_impl(
     const int P = sizes[3];
     const int first_valid = sizes[4];
     const int last_valid = sizes[7];
+    const int bounded_history_start = sizes[10];
+    const int bounded_trade_start = sizes[11];
+    const bool recent_history_window = bounded_history_start >= 0;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     const int recovery_stride = sizes[8];
     const int recovery_sample_count = sizes[9];
@@ -1858,7 +1861,9 @@ inline void passivbot_single_coin_impl(
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
-    const int seed_k = clamp(first_valid, 0, T - 1);
+    const int seed_k = recent_history_window
+        ? clamp(bounded_history_start, 0, T - 1)
+        : clamp(first_valid, 0, T - 1);
     const float seed_close = bars[seed_k * 5 + 2];
     TmSide long_side = load_side(params, po, seed_close);
     TmSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
@@ -1955,7 +1960,7 @@ inline void passivbot_single_coin_impl(
     float hsl_tier_samples_red = 0.0f;
 #endif
 
-    int cur_day = flags[2];
+    int cur_day = flags[seed_k * 11 + 2];
     bool day_touched = false;
     float day_end = 0.0f;
     float day_min = INFINITY;
@@ -1974,7 +1979,8 @@ inline void passivbot_single_coin_impl(
     );
 #endif
 
-    for (int k = 1; k < T - 1; ++k) {
+    const int loop_start = recent_history_window ? max(seed_k + 1, 1) : 1;
+    for (int k = loop_start; k < T - 1; ++k) {
         const int bo = k * 5;
         const int fo = k * 11;
         const float high = bars[bo + 0];
@@ -1985,7 +1991,8 @@ inline void passivbot_single_coin_impl(
         const float hour_lr = bars[bo + 4];
 #endif
         const bool valid = flags[fo + 0] != 0;
-        const bool can_gen = flags[fo + 1] != 0;
+        const bool can_gen = flags[fo + 1] != 0
+            && (!recent_history_window || k >= bounded_trade_start);
         const int di = flags[fo + 2];
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
         const bool hour_valid = flags[fo + 3] != 0;

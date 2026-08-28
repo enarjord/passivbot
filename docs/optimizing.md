@@ -668,17 +668,20 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   A topology whose single candidate already exceeds the safety envelope fails closed with guidance
   to shorten the date range or reduce its coin count.
 - `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
-  progressively longer history prefixes. The default `history_fractions` are 25%, 50%, and 100%;
-  after each partial rung, constraint-aware Pareto selection retains `survival_fraction` (50% by
-  default), subject to `min_survivors` (64 by default). With the default 1024 population this means
-  1024 candidates at 25%, 512 at 50%, and 256 at full history. Shorter rungs use the same 500
-  million candidate-bars safety envelope, so they can safely dispatch more candidates together;
-  the cap itself is not raised. Partial-rung rows are marked ineligible in NSGA-II, and only the
-  full-history survivors may enter exact Rust validation, proxy-front selection, broad probes, or
-  drift evidence. The ladder is disabled by default because progressive prefixes trade some
-  search breadth for throughput and emphasize the earlier part of the configured period. Its
-  policy is included in checkpoint identity. EMA Anchor, multicoin, and suite runs fail closed if
-  this opt-in is requested.
+  progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
+  100%, measured backwards from the configured end date; each partial suffix receives the normal
+  indicator warmup immediately before its scoring boundary. After each partial rung,
+  constraint-aware Pareto selection retains `survival_fraction` (50% by default), subject to
+  `min_survivors` (64 by default). With the default 1024 population this means 1024 candidates on
+  the most recent 25%, 512 on the most recent 50%, and 256 on full history. Shorter rungs use the
+  same 500 million candidate-bars safety envelope, so they can safely dispatch more candidates
+  together; the cap itself is not raised. Partial-rung rows are marked ineligible in NSGA-II, and
+  only the full-history survivors may enter exact Rust validation, proxy-front selection, broad
+  probes, or drift evidence. The ladder remains disabled by default because it trades some search
+  breadth for throughput and deliberately biases early filtering toward recent market behavior.
+  The suffix-window semantics are included in checkpoint identity, so checkpoints made with the
+  former prefix behavior do not resume. EMA Anchor, multicoin, and suite runs fail closed if this
+  opt-in is requested.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
 - `drift_probes` reserves at least part of that validation budget for candidates away from the
   proxy front.
