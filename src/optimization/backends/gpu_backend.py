@@ -1039,6 +1039,7 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.successive_halving.history_fractions must be strictly "
             "increasing finite values in (0, 1] ending at 1.0"
         )
+    fractions[-1] = 1.0
     survival_fraction = float(halving["survival_fraction"])
     if not math.isfinite(survival_fraction) or not 0.0 < survival_fraction <= 1.0:
         raise ValueError(
@@ -2223,7 +2224,7 @@ def _evaluate_successive_halving(
     interrupt_check: InterruptCheck,
     stage_callback=None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray, np.ndarray, list[dict]]:
-    """Evaluate progressively longer prefixes and return full-rung eligibility."""
+    """Evaluate progressively longer history windows and return full-rung eligibility."""
 
     active = np.arange(len(candidates), dtype=np.int64)
     metric_rows: list[dict | None] = [None] * len(candidates)
@@ -3979,12 +3980,16 @@ def run_backend(
         profile_proxies = [proxy]
 
         def evaluate_proxy(candidates, *, history_fraction=1.0):
-            end_step = (
-                proxy.end_step_for_history_fraction(history_fraction)
-                if float(history_fraction) < 1.0
-                else None
-            )
-            return proxy.evaluate(candidates, end_step=end_step)
+            if float(history_fraction) < 1.0:
+                history_start, trade_start = (
+                    proxy.recent_window_for_history_fraction(history_fraction)
+                )
+                return proxy.evaluate(
+                    candidates,
+                    history_start_step=history_start,
+                    trade_start_step=trade_start,
+                )
+            return proxy.evaluate(candidates)
 
     active_low = np.asarray(
         [bound.low for _name, _index, bound in active], dtype=np.float64
@@ -4121,7 +4126,12 @@ def run_backend(
             sig_digits=sig_digits,
             algorithm_contract=algorithm_contract,
             proxy_evaluation_policy=(
-                halving_policy if halving_policy["enabled"] else None
+                {
+                    **halving_policy,
+                    "history_window": "recent_suffix_v1",
+                }
+                if halving_policy["enabled"]
+                else None
             ),
         ),
     )

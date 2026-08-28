@@ -1815,9 +1815,18 @@ inline void passivbot_single_coin_impl(
     const int P = sizes[3];
     const int first_valid = sizes[4];
     const int last_valid = sizes[7];
+    const int bounded_history_start = sizes[10];
+    const int bounded_trade_start = sizes[11];
+    const bool recent_history_window = bounded_history_start >= 0;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+    const int bounded_first_hour_step = sizes[13];
+    const bool bounded_first_hour_ready = sizes[14] != 0;
+    const int bounded_first_next_window_start = sizes[15];
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     const int recovery_stride = sizes[8];
-    const int recovery_sample_count = sizes[9];
+    const int recovery_sample_capacity = sizes[9];
+    const int recovery_sample_count = sizes[12];
 #endif
     if (b >= uint(B)) return;
 
@@ -1858,7 +1867,9 @@ inline void passivbot_single_coin_impl(
     const float log_bin_scale = 127.0f / log(4000001.0f);
 
     const int po = int(b) * P;
-    const int seed_k = clamp(first_valid, 0, T - 1);
+    const int seed_k = recent_history_window
+        ? clamp(bounded_history_start, 0, T - 1)
+        : clamp(first_valid, 0, T - 1);
     const float seed_close = bars[seed_k * 5 + 2];
     TmSide long_side = load_side(params, po, seed_close);
     TmSide short_side = load_side(params, po + SIDE_PARAMS, seed_close);
@@ -1955,7 +1966,7 @@ inline void passivbot_single_coin_impl(
     float hsl_tier_samples_red = 0.0f;
 #endif
 
-    int cur_day = flags[2];
+    int cur_day = flags[seed_k * 11 + 2];
     bool day_touched = false;
     float day_end = 0.0f;
     float day_min = INFINITY;
@@ -1974,7 +1985,27 @@ inline void passivbot_single_coin_impl(
     );
 #endif
 
-    for (int k = 1; k < T - 1; ++k) {
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+    float bounded_hour_high = -INFINITY;
+    float bounded_hour_low = INFINITY;
+    float bounded_hour_latest = 0.0f;
+    bool bounded_hour_has_price = false;
+    bool bounded_hour_latest_valid = false;
+    bool bounded_hour_synced = false;
+    if (recent_history_window && seed_k <= last_valid) {
+        const float seed_high = bars[seed_k * 5 + 0];
+        const float seed_low = bars[seed_k * 5 + 1];
+        if (isfinite(seed_high) && isfinite(seed_low)
+                && seed_high > 0.0f && seed_low > 0.0f) {
+            bounded_hour_high = seed_high;
+            bounded_hour_low = seed_low;
+            bounded_hour_has_price = true;
+        }
+    }
+#endif
+
+    const int loop_start = recent_history_window ? max(seed_k + 1, 1) : 1;
+    for (int k = loop_start; k < T - 1; ++k) {
         const int bo = k * 5;
         const int fo = k * 11;
         const float high = bars[bo + 0];
@@ -1982,13 +2013,64 @@ inline void passivbot_single_coin_impl(
         const float close = bars[bo + 2];
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
         const float log_range = bars[bo + 3];
-        const float hour_lr = bars[bo + 4];
+        float hour_lr = bars[bo + 4];
 #endif
         const bool valid = flags[fo + 0] != 0;
-        const bool can_gen = flags[fo + 1] != 0;
+        const bool can_gen = flags[fo + 1] != 0
+            && (!recent_history_window || k >= bounded_trade_start);
         const int di = flags[fo + 2];
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
-        const bool hour_valid = flags[fo + 3] != 0;
+        const int hour_flags = flags[fo + 3];
+        bool hour_valid = (hour_flags & 1) != 0;
+        if (recent_history_window && !bounded_hour_synced) {
+            const bool hour_boundary = (hour_flags & 2) != 0;
+            if (hour_boundary) {
+                const bool bounded_window_ready = k == bounded_first_hour_step
+                    ? bounded_first_hour_ready
+                    : (hour_flags & 4) != 0;
+                if (bounded_window_ready && bounded_hour_has_price
+                        && bounded_hour_high > 0.0f && bounded_hour_low > 0.0f) {
+                    bounded_hour_latest = log(
+                        bounded_hour_high / bounded_hour_low
+                    );
+                    bounded_hour_latest_valid = isfinite(bounded_hour_latest);
+                    bounded_hour_synced = bounded_hour_latest_valid;
+                }
+                hour_lr = bounded_hour_latest;
+                hour_valid = bounded_hour_latest_valid;
+                if (!bounded_hour_synced) {
+                    const int next_window_start = k == bounded_first_hour_step
+                        ? bounded_first_next_window_start
+                        : ((hour_flags & 8) != 0 ? k - 1 : k);
+                    bounded_hour_high = -INFINITY;
+                    bounded_hour_low = INFINITY;
+                    bounded_hour_has_price = false;
+                    for (int hour_k = max(seed_k, next_window_start);
+                            hour_k <= k && hour_k <= last_valid; ++hour_k) {
+                        const float hour_high = bars[hour_k * 5 + 0];
+                        const float hour_low = bars[hour_k * 5 + 1];
+                        if (isfinite(hour_high) && isfinite(hour_low)
+                                && hour_high > 0.0f && hour_low > 0.0f) {
+                            bounded_hour_high = fmax(
+                                bounded_hour_high, hour_high
+                            );
+                            bounded_hour_low = fmin(
+                                bounded_hour_low, hour_low
+                            );
+                            bounded_hour_has_price = true;
+                        }
+                    }
+                }
+            } else {
+                hour_valid = false;
+                if (k <= last_valid && isfinite(high) && isfinite(low)
+                        && high > 0.0f && low > 0.0f) {
+                    bounded_hour_high = fmax(bounded_hour_high, high);
+                    bounded_hour_low = fmin(bounded_hour_low, low);
+                    bounded_hour_has_price = true;
+                }
+            }
+        }
 #endif
         const int high_fill_max_tick = flags[fo + 4];
         const int low_nonfill_max_tick = flags[fo + 5];
@@ -3960,7 +4042,7 @@ inline void passivbot_single_coin_impl(
             // A bounded rolling-PnL overflow invalidates the proxy candidate.
             // The postprocessor maps this impossible equity to the maximum
             // bounded duration for every minimized recovery statistic.
-            recovery_samples[int(b) * recovery_sample_count]
+            recovery_samples[int(b) * recovery_sample_capacity]
                 = RECOVERY_FAIL_CLOSED_SENTINEL;
 #endif
             balance = 0.0f;
@@ -4185,7 +4267,7 @@ inline void passivbot_single_coin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
             if (recovery_stride > 0 && recovery_start_k < 0) {
                 recovery_start_k = k;
-                recovery_samples[int(b) * recovery_sample_count] = eqf;
+                recovery_samples[int(b) * recovery_sample_capacity] = eqf;
             } else if (recovery_stride > 0) {
                 const int recovery_elapsed = k - recovery_start_k;
                 const bool recovery_terminal = liq || k == T - 2;
@@ -4196,7 +4278,7 @@ inline void passivbot_single_coin_impl(
                         : recovery_elapsed / recovery_stride;
                     if (sample_index < recovery_sample_count) {
                         recovery_samples[
-                            int(b) * recovery_sample_count + sample_index
+                            int(b) * recovery_sample_capacity + sample_index
                         ] = eqf;
                     }
                 }

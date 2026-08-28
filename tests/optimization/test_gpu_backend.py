@@ -371,6 +371,16 @@ def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
     with pytest.raises(ValueError, match="strictly increasing"):
         _resolve_options(config)
 
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["successive_halving"] = {
+        "enabled": True,
+        "history_fractions": [0.25, 0.5, 0.999_999_999_999_5],
+    }
+    assert _resolve_options(config)["successive_halving"][
+        "history_fractions"
+    ] == [0.25, 0.5, 1.0]
+
+    config = _long_only_ema_config()
     config["optimize"]["gpu"]["successive_halving"] = {
         "enabled": True,
         "min_survivors": 7,
@@ -6432,10 +6442,12 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
         proxy_evaluation_policy={
             "enabled": False,
             "history_fractions": [0.25, 0.5, 1.0],
+            "history_window": "recent_suffix_v1",
         },
     )
     assert contract["version"] == 2
     assert contract["proxy_evaluation"]["enabled"] is False
+    assert contract["proxy_evaluation"]["history_window"] == "recent_suffix_v1"
     ordinary_contract = _gpu_search_checkpoint_contract(
         key_paths=key_paths,
         bounds=bounds,
@@ -6476,6 +6488,11 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
     changed_proxy_policy = copy.deepcopy(contract)
     changed_proxy_policy["proxy_evaluation"]["enabled"] = True
     mutations.append(changed_proxy_policy)
+    changed_history_window = copy.deepcopy(contract)
+    changed_history_window["proxy_evaluation"]["history_window"] = (
+        "historical_prefix_v1"
+    )
+    mutations.append(changed_history_window)
 
     assert all(
         _checkpoint_signature(active, scoring, search_contract=changed)

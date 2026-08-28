@@ -617,6 +617,11 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
         self.hsl_raw_tail_enabled = bool(kwargs["hsl_raw_tail_enabled"])
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None,
         None,
@@ -651,6 +656,11 @@ def test_trailing_martingale_hsl_specialization_keeps_requested_features(
         self.hsl_raw_tail_enabled = bool(kwargs["hsl_raw_tail_enabled"])
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None,
         None,
@@ -686,6 +696,11 @@ def test_trailing_martingale_hsl_specialization_disables_unrequested_diagnostics
         self.equity_balance_diff_enabled = False
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None,
         None,
@@ -780,13 +795,23 @@ def test_mps_tm_hsl_diagnostic_opt_out_preserves_strategy_outputs():
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
-def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
+@pytest.mark.parametrize(
+    ("interval_ms", "history_start_step", "trade_start_step"),
+    [
+        (60_000, 59, 80),
+        (45 * 60_000, 1, 4),
+    ],
+)
+def test_mps_tm_history_window_preserves_full_run_and_selects_recent_suffix(
+    interval_ms, history_start_step, trade_start_step
+):
     count = 120
     steps = np.arange(count, dtype=np.float64)
     close = 100.0 + np.sin(steps / 7.0)
     high = close + 0.2
     low = close - 0.2
-    timestamps = 1_700_000_000_000 + steps.astype(np.int64) * 60_000
+    first_ts_ms = (1_700_000_000_000 // 3_600_000) * 3_600_000
+    timestamps = first_ts_ms + steps.astype(np.int64) * interval_ms
     market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
     run = ProxyRun(
         1_000.0,
@@ -795,16 +820,21 @@ def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
         int(timestamps[0]),
         int(timestamps[0]),
         int(timestamps[0]),
-        60_000,
+        interval_ms,
         0.05,
         0,
         count - 1,
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = _tm_single_row(initial_ema_dist=0.0)
-    matrix = np.asarray([row + row], dtype=np.float64)
+    row_two = _tm_single_row(initial_ema_dist=0.002)
+    matrix = np.asarray([row + row, row_two + row_two], dtype=np.float64)
+    volatility_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_threshold_volatility_1h_weight"
+    )
+    matrix[:, volatility_column] = [0.25, 0.5]
 
-    def run_once(end_step=None):
+    def run_once(end_step=None, history_start_step=None, trade_start_step=None):
         runner = MpsTrailingMartingaleRunner(
             market,
             run,
@@ -812,12 +842,51 @@ def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
             long_enabled=True,
             short_enabled=False,
             hsl_enabled=False,
+            recovery_distribution_enabled=True,
         )
-        return runner.run(matrix, end_step=end_step)
+        return runner.run(
+            matrix,
+            end_step=end_step,
+            history_start_step=history_start_step,
+            trade_start_step=trade_start_step,
+        )
 
     ordinary = run_once()
     explicit_full = run_once(count)
     truncated = run_once(60)
+    recent = run_once(
+        history_start_step=history_start_step,
+        trade_start_step=trade_start_step,
+    )
+    sliced_run = ProxyRun(
+        1_000.0,
+        trade_start_step - history_start_step - 1,
+        trade_start_step - history_start_step,
+        int(timestamps[trade_start_step]),
+        int(timestamps[trade_start_step]),
+        int(timestamps[history_start_step]),
+        interval_ms,
+        0.05,
+        0,
+        count - history_start_step - 1,
+    )
+    sliced_data = build_mps_data(
+        high[history_start_step:],
+        low[history_start_step:],
+        close[history_start_step:],
+        timestamps[history_start_step:],
+        sliced_run,
+        market,
+    )
+    sliced = MpsTrailingMartingaleRunner(
+        market,
+        sliced_run,
+        sliced_data,
+        long_enabled=True,
+        short_enabled=False,
+        hsl_enabled=False,
+        recovery_distribution_enabled=True,
+    ).run(matrix)
     torch.mps.synchronize()
 
     for key in ordinary:
@@ -826,7 +895,35 @@ def test_mps_tm_end_step_preserves_full_run_and_truncates_only_the_horizon():
                 ordinary[key], explicit_full[key], rtol=0.0, atol=0.0,
                 equal_nan=True,
             )
-    assert truncated["last_eq_ts"].item() < ordinary["last_eq_ts"].item()
+    assert truncated["last_eq_ts"][0].item() < ordinary["last_eq_ts"][0].item()
+    assert recent["first_eq_ts"][0].item() == trade_start_step * interval_ms
+    assert recent["last_eq_ts"][0].item() == ordinary["last_eq_ts"][0].item()
+    for key in (
+        "balance",
+        "psize",
+        "pprice",
+        "fill_count",
+        "fill_count_entry",
+        "max_dd",
+        "held_max_ms",
+        "held_sum_ms",
+    ):
+        torch.testing.assert_close(recent[key], sliced[key], rtol=0.0, atol=0.0)
+    torch.testing.assert_close(
+        recent["strategy_eq_recovery_samples"],
+        sliced["strategy_eq_recovery_samples"][
+            :, : recent["strategy_eq_recovery_samples"].shape[1]
+        ],
+        rtol=0.0,
+        atol=0.0,
+        equal_nan=True,
+    )
+    assert recent["first_eq_ts"][0].item() == (
+        sliced["first_eq_ts"][0].item() + history_start_step * interval_ms
+    )
+    assert recent["last_eq_ts"][0].item() == (
+        sliced["last_eq_ts"][0].item() + history_start_step * interval_ms
+    )
 
 
 @pytest.mark.parametrize("recovery_enabled", [False, True])
@@ -871,6 +968,53 @@ def test_single_coin_size_buffer_packs_last_valid_before_recovery_fields(
         runner._single_coin_size_values(5, 13, end_step=18)
 
 
+@pytest.mark.parametrize("recovery_enabled", [False, True])
+def test_tm_size_buffer_appends_recent_window_after_recovery_fields(
+    recovery_enabled,
+):
+    runner = object.__new__(MpsTrailingMartingaleRunner)
+    runner.n = 17
+    runner.n_days = 2
+    runner.run_config = ProxyRun(
+        1_000.0, 1, 1, 0, 0, 0, 60_000, 0.05, 3, 11
+    )
+    runner.rolling_capacity = 9
+    runner.pnl_lookback_bars = 7
+    runner.recovery_distribution_enabled = recovery_enabled
+    runner.recovery_stride = 2
+    runner.n_recovery_samples = 10
+
+    ordinary = runner._trailing_single_coin_size_values(5, 13)
+    recent = runner._trailing_single_coin_size_values(
+        5,
+        13,
+        history_start_step=5,
+        trade_start_step=10,
+    )
+
+    recovery = [2, 10] if recovery_enabled else [0, 0]
+    assert ordinary == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [
+        -1,
+        -1,
+        10 if recovery_enabled else 0,
+        -1,
+        0,
+        -1,
+    ]
+    assert recent == [5, 17, 2, 13, 3, 9, 7, 11] + recovery + [
+        5,
+        10,
+        5 if recovery_enabled else 0,
+        17,
+        0,
+        5,
+    ]
+    with pytest.raises(ValueError, match="requires both"):
+        runner._trailing_single_coin_size_values(
+            5, 13, history_start_step=5
+        )
+
+
 def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatch):
     from optimization.gpu.mps_kernel import MpsEmaAnchorRunner
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
@@ -884,6 +1028,11 @@ def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatc
         self.recovery_distribution_enabled = False
 
     monkeypatch.setattr(MpsEmaAnchorRunner, "__init__", fake_base_init)
+    monkeypatch.setattr(
+        MpsTrailingMartingaleRunner,
+        "_encode_hour_boundary_flags",
+        lambda self: None,
+    )
     runner = MpsTrailingMartingaleRunner(
         None, None, None, market_orders_allowed=True, hsl_enabled=False
     )

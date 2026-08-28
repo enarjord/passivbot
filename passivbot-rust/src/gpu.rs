@@ -301,16 +301,25 @@ mod tests {
         assert!(source.contains("device int* counts"));
     }
 
-    fn assert_directional_recovery_sampling_contract(source: &str) {
+    fn assert_directional_recovery_sampling_contract(
+        source: &str,
+        separate_sample_capacity: bool,
+    ) {
         assert_eq!(source.matches("device float* recovery_samples").count(), 2);
         assert!(source.contains("#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED"));
         assert!(source.contains("const int last_valid = sizes[7]"));
         assert!(source.contains("const int recovery_stride = sizes[8]"));
-        assert!(source.contains("const int recovery_sample_count = sizes[9]"));
+        if separate_sample_capacity {
+            assert!(source.contains("const int recovery_sample_capacity = sizes[9]"));
+            assert!(source.contains("const int recovery_sample_count = sizes[12]"));
+            assert!(source.contains("int(b) * recovery_sample_capacity + sample_index"));
+        } else {
+            assert!(source.contains("const int recovery_sample_count = sizes[9]"));
+            assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
+        }
         assert!(source.contains("int recovery_start_k = -1"));
         assert!(source.contains("const bool recovery_terminal = liq || k == T - 2"));
         assert!(source.contains("(recovery_elapsed + recovery_stride - 1) / recovery_stride"));
-        assert!(source.contains("int(b) * recovery_sample_count + sample_index"));
         assert!(source.contains("const bool rolling_pnl_overflowed ="));
         assert!(source.contains("= RECOVERY_FAIL_CLOSED_SENTINEL;"));
         assert!(source.contains("const bool after_valid_tail = k > last_valid"));
@@ -682,7 +691,7 @@ mod tests {
     fn ema_anchor_mps_source_exposes_expected_kernel_contract() {
         let source = mps_ema_anchor_source();
         assert_shared_hsl_contract(source);
-        assert_directional_recovery_sampling_contract(source);
+        assert_directional_recovery_sampling_contract(source, false);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
@@ -1024,9 +1033,31 @@ mod tests {
         let source = mps_trailing_martingale_source();
         assert_shared_hsl_contract(source);
         assert_shared_entry_interval_contract(source);
-        assert_directional_recovery_sampling_contract(source);
+        assert_directional_recovery_sampling_contract(source, true);
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale"));
+        assert!(source.contains("const int bounded_history_start = sizes[10]"));
+        assert!(source.contains("const int bounded_trade_start = sizes[11]"));
+        assert!(source.contains("const bool recent_history_window"));
+        assert!(source.contains("const int loop_start = recent_history_window"));
+        assert!(source.contains("k >= bounded_trade_start"));
+        assert!(source.contains("const int recovery_sample_capacity = sizes[9]"));
+        assert!(source.contains("const int recovery_sample_count = sizes[12]"));
+        assert!(source.contains(
+            "const int bounded_first_hour_step = sizes[13]"
+        ));
+        assert!(source.contains(
+            "const bool bounded_first_hour_ready = sizes[14] != 0"
+        ));
+        assert!(source.contains(
+            "const int bounded_first_next_window_start = sizes[15]"
+        ));
+        assert!(source.contains("const bool hour_boundary = (hour_flags & 2)"));
+        assert!(source.contains("(hour_flags & 4) != 0"));
+        assert!(source.contains("(hour_flags & 8) != 0"));
+        assert!(source.contains("bounded_hour_latest_valid"));
+        assert!(source.contains("bounded_hour_synced"));
+        assert!(!source.contains("k > bounded_hour_start_k + 1"));
         assert_eq!(source.matches("record_initial_entry_interval(").count(), 3);
         assert!(source.contains("long_last_initial_entry_k"));
         assert!(source.contains("short_last_initial_entry_k"));

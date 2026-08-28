@@ -2784,6 +2784,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        self._encode_hour_boundary_flags()
         self.hsl_diagnostics_enabled = bool(hsl_diagnostics_enabled)
         if not self.hsl_diagnostics_enabled and (
             self.hsl_ema_tail_enabled
@@ -2807,6 +2808,40 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.hsl_ema_tail_enabled = False
             self.hsl_raw_drawdown_enabled = False
             self.hsl_raw_tail_enabled = False
+
+    def _encode_hour_boundary_flags(self) -> None:
+        first_ts_ms = int(self.run_config.first_ts_ms)
+        interval_ms = int(self.run_config.interval_ms)
+        derived_timestamps = (
+            first_ts_ms + np.arange(self.n, dtype=np.int64) * interval_ms
+        )
+        hour_indices = derived_timestamps // 3_600_000
+        boundary_indices = np.flatnonzero(
+            np.r_[False, hour_indices[1:] > hour_indices[:-1]]
+        )
+        hour_boundary_bits = np.zeros(self.n, dtype=np.int32)
+        last_hour_boundary_ms = (first_ts_ms // 3_600_000) * 3_600_000
+        for step in boundary_indices:
+            current_ts_ms = int(derived_timestamps[step])
+            window_start_ms = max(first_ts_ms, last_hour_boundary_ms)
+            window_ready = current_ts_ms > window_start_ms + interval_ms
+            current_hour_boundary_ms = (
+                current_ts_ms // 3_600_000
+            ) * 3_600_000
+            next_window_start = max(
+                0,
+                (current_hour_boundary_ms - first_ts_ms) // interval_ms,
+            )
+            hour_boundary_bits[step] = (
+                2
+                | (4 if window_ready else 0)
+                | (8 if next_window_start < step else 0)
+            )
+            last_hour_boundary_ms = current_hour_boundary_ms
+        boundary_bits = torch.as_tensor(
+            hour_boundary_bits, dtype=torch.int32, device="mps"
+        )
+        self.flags[:, 3].bitwise_or_(boundary_bits)
 
     def _shader_library(self):
         loader, args = self._shader_library_cache_call()
@@ -2925,12 +2960,106 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             scaled, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
         )
 
+    def _trailing_single_coin_size_values(
+        self,
+        batch_size: int,
+        parameter_count: int,
+        *,
+        end_step: int | None = None,
+        history_start_step: int | None = None,
+        trade_start_step: int | None = None,
+    ) -> list[int]:
+        values = self._single_coin_size_values(
+            batch_size, parameter_count, end_step=end_step
+        )
+        effective_end_step = self.n if end_step is None else int(end_step)
+        bounded = history_start_step is not None or trade_start_step is not None
+        if bounded and (history_start_step is None or trade_start_step is None):
+            raise ValueError(
+                "recent-history MPS dispatch requires both history_start_step "
+                "and trade_start_step"
+            )
+        if bounded:
+            history_start_step = int(history_start_step)
+            trade_start_step = int(trade_start_step)
+            if not 0 <= history_start_step < trade_start_step < effective_end_step - 1:
+                raise ValueError(
+                    "recent-history MPS steps must satisfy 0 <= history start < "
+                    "trade start < end_step - 1"
+                )
+            interval_ms = int(self.run_config.interval_ms)
+            first_ts_ms = int(self.run_config.first_ts_ms)
+            seed_ts_ms = first_ts_ms + history_start_step * interval_ms
+            next_hour_ms = (seed_ts_ms // 3_600_000 + 1) * 3_600_000
+            first_hour_step = min(
+                effective_end_step,
+                int(np.ceil((next_hour_ms - first_ts_ms) / interval_ms)),
+            )
+            first_hour_ts_ms = first_ts_ms + first_hour_step * interval_ms
+            first_hour_ready = int(
+                first_hour_step < effective_end_step
+                and first_hour_ts_ms > seed_ts_ms + interval_ms
+            )
+            first_hour_boundary_ms = (
+                first_hour_ts_ms // 3_600_000
+            ) * 3_600_000
+            first_next_window_start = max(
+                history_start_step,
+                history_start_step
+                + (first_hour_boundary_ms - seed_ts_ms) // interval_ms,
+            )
+            recovery_sample_count = (
+                min(
+                    self.n_recovery_samples,
+                    max(
+                        1,
+                        int(
+                            np.ceil(
+                                (effective_end_step - trade_start_step)
+                                / self.recovery_stride
+                            )
+                        )
+                        + 1,
+                    ),
+                )
+                if self.recovery_distribution_enabled
+                else 0
+            )
+        else:
+            history_start_step = -1
+            trade_start_step = -1
+            first_hour_step = -1
+            first_hour_ready = 0
+            first_next_window_start = -1
+            recovery_sample_count = (
+                self.n_recovery_samples
+                if self.recovery_distribution_enabled
+                else 0
+            )
+        # Reserve the existing recovery ABI slots even when that feature is
+        # compiled out, then append the recent-window fields at fixed indices.
+        if not self.recovery_distribution_enabled:
+            values.extend([0, 0])
+        values.extend(
+            [
+                history_start_step,
+                trade_start_step,
+                recovery_sample_count,
+                first_hour_step,
+                first_hour_ready,
+                first_next_window_start,
+            ]
+        )
+        return values
+
     def run(
         self,
         params: np.ndarray,
         *,
         profile: bool = False,
         end_step: int | None = None,
+        history_start_step: int | None = None,
+        trade_start_step: int | None = None,
     ) -> dict:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
@@ -2958,12 +3087,41 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             batch_size
         )
         effective_end_step = self.n if end_step is None else int(end_step)
-        sizes_key = (batch_size, int(matrix.shape[1]), effective_end_step)
+        effective_history_start = (
+            -1 if history_start_step is None else int(history_start_step)
+        )
+        effective_trade_start = (
+            -1 if trade_start_step is None else int(trade_start_step)
+        )
+        effective_recovery_sample_count = self.n_recovery_samples
+        if self.recovery_distribution_enabled and effective_trade_start >= 0:
+            effective_recovery_sample_count = min(
+                self.n_recovery_samples,
+                max(
+                    1,
+                    int(
+                        np.ceil(
+                            (effective_end_step - effective_trade_start)
+                            / self.recovery_stride
+                        )
+                    )
+                    + 1,
+                ),
+            )
+        sizes_key = (
+            batch_size,
+            int(matrix.shape[1]),
+            effective_end_step,
+            effective_history_start,
+            effective_trade_start,
+        )
         if sizes_key not in self._sizes:
-            size_values = self._single_coin_size_values(
+            size_values = self._trailing_single_coin_size_values(
                 batch_size,
                 int(matrix.shape[1]),
                 end_step=effective_end_step,
+                history_start_step=history_start_step,
+                trade_start_step=trade_start_step,
             )
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
@@ -3020,7 +3178,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "batch_size": batch_size,
                 "dispatch_count": 1,
                 "cold": cold,
-                "effective_candle_count": effective_end_step,
+                "effective_candle_count": effective_end_step
+                - max(0, effective_history_start),
                 "dispatch_specialization": {
                     "trailing_entry_only": dispatch_features[0],
                     "trailing_close_only": dispatch_features[1],
@@ -3040,7 +3199,9 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
         )
         if self.recovery_distribution_enabled:
-            output["strategy_eq_recovery_samples"] = recovery_samples
+            output["strategy_eq_recovery_samples"] = recovery_samples[
+                :, :effective_recovery_sample_count
+            ]
             output["strategy_eq_recovery_sample_interval_days"] = (
                 self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
             )

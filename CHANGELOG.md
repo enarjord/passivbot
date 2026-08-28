@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS successive-halving optimization now evaluates its opt-in 25% and 50% rungs on the
+  most recent portion of the configured date range, with the normal indicator warmup immediately
+  preceding each scoring window. The final rung remains the full configured history. Checkpoint
+  identity distinguishes these recent-suffix semantics from the former historical-prefix behavior.
 - Apple MPS single-coin `coin`-mode HSL screening now retains up to 8,192 realized-PnL event
   candles in the finite lookback window and coalesces all same-candle entry fees and close PnL.
   High-cadence candidates with more than 2,048 valid close events no longer receive an artificial

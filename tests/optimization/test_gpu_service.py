@@ -11,6 +11,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_PARAM_KEYS,
+    ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
     TRAILING_MARTINGALE_COIN_OVERRIDE_FORCED_ACTIVE_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_INITIAL_COLUMN,
@@ -43,6 +44,7 @@ from optimization.gpu.service import (
     _directional_gross_pnl_outputs,
     _gpu_proxy_execution_checkpoint_contract,
     _gpu_profile_unattributed_seconds,
+    _add_gpu_terminal_profile,
     _hsl_params,
     _hsl_diagnostics_needed,
     _mps_dispatch_batch_size,
@@ -469,35 +471,79 @@ def test_single_coin_proxy_preserves_order_across_bounded_dispatches():
     assert calls == [[0.0, 1.0], [2.0, 3.0], [4.0]]
 
 
-def test_single_coin_proxy_partial_history_expands_safe_dispatch_and_routes_end_step():
+def test_single_coin_proxy_recent_history_expands_safe_dispatch_and_routes_window():
     proxy, calls = _minimal_single_coin_proxy()
     proxy.batch_size = 4096
     proxy.dispatch_batch_size = 258
+    proxy.strategy_kind = "trailing_martingale"
     proxy.runner.n = 1_931_815
-    proxy.run = SimpleNamespace(trade_start_idx=10, first_valid_idx=0)
+    proxy.run = ProxyRun(
+        1_000.0,
+        100,
+        10,
+        0,
+        0,
+        0,
+        60_000,
+        0.05,
+        0,
+        1_931_814,
+    )
+    proxy.history_warmup_bars = 100
     original_run = proxy.runner.run
-    routed_end_steps = []
+    routed_windows = []
+    metric_runs = []
 
     def routed_run(parameters, **kwargs):
-        routed_end_steps.append(kwargs["end_step"])
+        routed_windows.append(dict(kwargs))
         return original_run(parameters, **kwargs)
 
     proxy.runner.run = routed_run
+    original_compute = proxy._compute_objectives
 
-    end_step = proxy.end_step_for_history_fraction(0.25)
+    def capture_compute(output, run, *args, **kwargs):
+        metric_runs.append(run)
+        return original_compute(output, run, *args, **kwargs)
+
+    proxy._compute_objectives = capture_compute
+
+    history_start, trade_start = proxy.recent_window_for_history_fraction(0.25)
     results = proxy.evaluate(
         [{"value": float(index)} for index in range(1024)],
-        end_step=end_step,
+        history_start_step=history_start,
+        trade_start_step=trade_start,
     )
 
-    assert end_step == 482_963
+    assert (history_start, trade_start) == (1_448_762, 1_448_863)
     assert len(results) == 1024
     assert [len(call) for call in calls] == [1024]
-    assert routed_end_steps == [482_963]
+    assert routed_windows == [
+        {
+            "profile": False,
+            "end_step": 1_931_815,
+            "history_start_step": 1_448_762,
+            "trade_start_step": 1_448_863,
+        }
+    ]
+    assert len(metric_runs) == 1
+    assert metric_runs[0].trade_start_idx == 1_448_863
+    assert metric_runs[0].requested_start_ts_ms == 1_448_863 * 60_000
 
     proxy.runner.n = 1_250
-    proxy.run = SimpleNamespace(trade_start_idx=1_000, first_valid_idx=900)
-    assert proxy.end_step_for_history_fraction(0.25) == 1_064
+    proxy.run = ProxyRun(
+        1_000.0,
+        100,
+        1_000,
+        0,
+        0,
+        0,
+        60_000,
+        0.05,
+        900,
+        1_249,
+    )
+    assert proxy.recent_window_for_history_fraction(1.0) == (900, 1_000)
+    assert proxy.recent_window_for_history_fraction(0.25) == (1_086, 1_187)
 
 
 def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatch):
@@ -586,6 +632,32 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
         0.006
     )
     assert profile["wall_seconds"] >= 0.0
+
+
+def test_gpu_terminal_profile_rebases_recent_window_steps():
+    torch = pytest.importorskip("torch")
+    profile = {
+        "terminal_candidate_count": 0,
+        "terminal_without_equity_count": 0,
+        "estimated_post_terminal_candidate_bars": 0,
+        "_terminal_step_fractions": [],
+        "side_count": 1,
+    }
+
+    _add_gpu_terminal_profile(
+        profile,
+        {
+            "alive": torch.as_tensor([False]),
+            "last_eq_ts": torch.as_tensor([75 * 60_000.0]),
+        },
+        interval_ms=60_000,
+        effective_start_step=50,
+        effective_end_step=100,
+    )
+
+    assert profile["terminal_candidate_count"] == 1
+    assert profile["estimated_post_terminal_candidate_bars"] == 23
+    assert profile["_terminal_step_fractions"] == [pytest.approx(25.0 / 48.0)]
 
 
 def test_gpu_dispatch_progress_is_rate_limited_and_reports_eta(
