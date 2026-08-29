@@ -632,6 +632,7 @@ GPU-specific settings live under `optimize.gpu`:
     "backend": "gpu",
     "gpu": {
       "batch_size": 4096,
+      "max_dispatch_candidate_bars": 1000000000,
       "checkpoint_interval_seconds": 5.0,
       "drift_halt": 0.6,
       "drift_min_samples": 32,
@@ -667,6 +668,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   that incomplete ask/tell transaction is discarded and the last complete checkpoint is retained.
   A topology whose single candidate already exceeds the safety envelope fails closed with guidance
   to shorten the date range or reduce its coin count.
+- `max_dispatch_candidate_bars` sets that MPS work envelope. The default is 1 billion, allowing
+  roughly 512 candidates per dispatch across 1.95 million one-sided candle bars on a dedicated
+  optimization Mac. Set it to `500000000` for the former conservative behavior when desktop
+  responsiveness is more important than GPU throughput. Larger values increase the time before
+  Ctrl+C can be observed and may make the shared display GPU temporarily unresponsive;
+  `batch_size` remains an independent upper bound.
 - `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
   progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
   100%, measured backwards from the configured end date; each partial suffix receives the normal

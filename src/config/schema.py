@@ -502,6 +502,7 @@ def get_template_config():
                     "seed": None,
                     "gpu": {
                         "batch_size": 4096,
+                        "max_dispatch_candidate_bars": 1000000000,
                         "checkpoint_interval_seconds": 5.0,
                         "drift_halt": 0.6,
                         "drift_min_samples": 32,

@@ -54,6 +54,7 @@ from utils import to_standard_exchange_name
 GPU_DEFAULTS = {
     "population_size": 1024,
     "batch_size": 4096,
+    "max_dispatch_candidate_bars": 1_000_000_000,
     "checkpoint_interval_seconds": 5.0,
     "validate_per_generation": 8,
     "drift_probes": 4,
@@ -1060,6 +1061,7 @@ def _resolve_options(config: dict) -> dict:
     for key in (
         "population_size",
         "batch_size",
+        "max_dispatch_candidate_bars",
         "validate_per_generation",
         "drift_window",
         "drift_min_samples",
@@ -3922,6 +3924,9 @@ def run_backend(
                 timestamps=item["timestamps"],
                 exchange=item["exchange"],
                 batch_size=int(options["batch_size"]),
+                max_dispatch_candidate_bars=int(
+                    options["max_dispatch_candidate_bars"]
+                ),
                 needed_metrics=needed_metrics,
                 interrupt_check=interrupt_check,
             )
@@ -3974,6 +3979,9 @@ def run_backend(
             timestamps=evaluator.timestamps.get(exchange),
             exchange=exchange,
             batch_size=int(options["batch_size"]),
+            max_dispatch_candidate_bars=int(
+                options["max_dispatch_candidate_bars"]
+            ),
             needed_metrics=needed_metrics,
             interrupt_check=interrupt_check,
         )
