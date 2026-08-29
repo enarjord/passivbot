@@ -501,6 +501,7 @@ def get_template_config():
                     "population_size": None,
                     "seed": None,
                     "gpu": {
+                        "auto_lean_parallelism": True,
                         "batch_size": 4096,
                         "max_dispatch_candidate_bars": 1000000000,
                         "checkpoint_interval_seconds": 5.0,

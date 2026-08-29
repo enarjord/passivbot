@@ -39,6 +39,7 @@ from optimization.backends.gpu_backend import (
     _gpu_candidate_source_sides,
     _gpu_hsl_search_sides,
     _gpu_hsl_parameter_active,
+    _gpu_lean_tm_parallelism_eligible,
     _gpu_nsga2_checkpoint_contract,
     _gpu_pinned_hsl_bound_contract,
     _gpu_profile_elapsed,
@@ -64,6 +65,7 @@ from optimization.backends.gpu_backend import (
     _spearman,
     _submit_gpu_exact_validation,
     _resolve_options,
+    _apply_gpu_lean_tm_parallelism_defaults,
     _restore_gpu_result_run_contract,
     _gpu_unstuck_search_sides,
     _single_scenario_metric_surface,
@@ -91,6 +93,9 @@ from optimization.backends.gpu_backend import (
     EMA_MULTICOIN_LONG_BOUND_MAP,
     EMA_MULTICOIN_SHORT_BOUND_MAP,
     TRAILING_MARTINGALE_BOUND_MAP,
+    GPU_DEFAULTS,
+    GPU_LEAN_TM_MAX_DISPATCH_CANDIDATE_BARS,
+    GPU_LEAN_TM_POPULATION_SIZE,
 )
 from optimization.gpu.metric_registry import configured_exact_only_gpu_metrics
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
@@ -276,6 +281,7 @@ def _directional_tm_config(*, long_enabled: bool, short_enabled: bool):
 
 def test_gpu_options_are_additive_and_validate_ranges():
     config = _long_only_ema_config()
+    assert _resolve_options(config)["auto_lean_parallelism"] is True
     assert _resolve_options(config)["population_size"] == 1024
     assert _resolve_options(config)["max_dispatch_candidate_bars"] == 1_000_000_000
 
@@ -358,6 +364,124 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_halt"] = 0.0
     with pytest.raises(ValueError, match="greater than zero"):
         _resolve_options(config)
+
+
+def _lean_tm_bounds(side="long"):
+    bounds = {
+        f"{side}_entry_retracement_base_pct": Bound(0.001, 0.02),
+        f"{side}_close_retracement_base_pct": Bound(0.001, 0.02),
+    }
+    for suffix in (
+        "entry_threshold_volatility_1h_weight",
+        "entry_threshold_volatility_1m_weight",
+        "entry_retracement_volatility_1h_weight",
+        "entry_retracement_volatility_1m_weight",
+        "close_threshold_volatility_1h_weight",
+        "close_threshold_volatility_1m_weight",
+        "close_retracement_volatility_1h_weight",
+        "close_retracement_volatility_1m_weight",
+    ):
+        bounds[f"{side}_{suffix}"] = Bound(0.0, 0.0)
+    return bounds
+
+
+def test_gpu_lean_tm_parallelism_requires_complete_compileout_proof():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["market_orders_allowed"] = False
+    config["live"]["max_realized_loss_pct"] = 1.0
+    bounds = _lean_tm_bounds()
+
+    def eligible(candidate=config, candidate_bounds=bounds, **kwargs):
+        return _gpu_lean_tm_parallelism_eligible(
+            candidate,
+            candidate_bounds,
+            kwargs.pop("enabled_sides", {"long"}),
+            suite_enabled=kwargs.pop("suite_enabled", False),
+            coin_count=kwargs.pop("coin_count", 1),
+        )
+
+    assert eligible()
+    assert not eligible(enabled_sides={"long", "short"})
+    assert not eligible(suite_enabled=True)
+    assert not eligible(coin_count=2)
+    ema_config = copy.deepcopy(config)
+    ema_config["live"]["strategy_kind"] = "ema_anchor"
+    assert not eligible(candidate=ema_config)
+    short_config = _directional_tm_config(
+        long_enabled=False, short_enabled=True
+    )
+    short_config["live"]["market_orders_allowed"] = False
+    short_config["live"]["max_realized_loss_pct"] = 1.0
+    assert _gpu_lean_tm_parallelism_eligible(
+        short_config,
+        _lean_tm_bounds("short"),
+        {"short"},
+        suite_enabled=False,
+        coin_count=1,
+    )
+
+    for path, value in (
+        (("bot", "long", "hsl", "enabled"), True),
+        (("bot", "long", "unstuck", "enabled"), True),
+        (("bot", "long", "risk", "position_exposure_enforcer_enabled"), True),
+        (("bot", "long", "risk", "total_exposure_enforcer_enabled"), True),
+        (("live", "market_orders_allowed"), True),
+        (("live", "max_realized_loss_pct"), 0.1),
+    ):
+        candidate = copy.deepcopy(config)
+        target = candidate
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+        assert not eligible(candidate=candidate), path
+
+    recursive_bounds = dict(bounds)
+    recursive_bounds["long_entry_retracement_base_pct"] = Bound(0.0, 0.02)
+    assert not eligible(candidate_bounds=recursive_bounds)
+    volatile_bounds = dict(bounds)
+    volatile_bounds["long_close_threshold_volatility_1h_weight"] = Bound(
+        0.0, 1.0
+    )
+    assert not eligible(candidate_bounds=volatile_bounds)
+
+
+def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["live"]["market_orders_allowed"] = False
+    config["live"]["max_realized_loss_pct"] = 1.0
+    bounds = _lean_tm_bounds()
+    options = copy.deepcopy(GPU_DEFAULTS)
+
+    assert _apply_gpu_lean_tm_parallelism_defaults(
+        options,
+        config,
+        bounds,
+        {"long"},
+        suite_enabled=False,
+        coin_count=1,
+    )
+    assert options["population_size"] == GPU_LEAN_TM_POPULATION_SIZE
+    assert (
+        options["max_dispatch_candidate_bars"]
+        == GPU_LEAN_TM_MAX_DISPATCH_CANDIDATE_BARS
+    )
+
+    for key, value in (
+        ("auto_lean_parallelism", False),
+        ("population_size", 2048),
+        ("batch_size", 1024),
+        ("max_dispatch_candidate_bars", 500_000_000),
+    ):
+        tuned = copy.deepcopy(GPU_DEFAULTS)
+        tuned[key] = value
+        assert not _apply_gpu_lean_tm_parallelism_defaults(
+            tuned,
+            config,
+            bounds,
+            {"long"},
+            suite_enabled=False,
+            coin_count=1,
+        )
 
 
 def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
