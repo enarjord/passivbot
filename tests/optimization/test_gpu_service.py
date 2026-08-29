@@ -409,16 +409,26 @@ def test_single_coin_shader_topology_is_fail_closed(
 def test_mps_dispatch_batch_size_bounds_single_and_multicoin_work():
     n_bars = 1_923_175
 
-    assert _mps_dispatch_batch_size(8192, n_bars=n_bars) == 259
-    assert _mps_dispatch_batch_size(8192, n_bars=n_bars, n_coins=4) == 64
+    assert _mps_dispatch_batch_size(8192, n_bars=n_bars) == 519
+    assert _mps_dispatch_batch_size(8192, n_bars=n_bars, n_coins=4) == 129
     assert (
         _mps_dispatch_batch_size(8192, n_bars=n_bars, n_coins=4, n_sides=2)
-        == 32
+        == 64
+    )
+    assert (
+        _mps_dispatch_batch_size(
+            8192,
+            n_bars=n_bars,
+            max_candidate_bars=500_000_000,
+        )
+        == 259
     )
     assert _mps_dispatch_batch_size(32, n_bars=1000, n_coins=4) == 32
     with pytest.raises(ValueError, match="one GPU candidate exceeds"):
-        _mps_dispatch_batch_size(8192, n_bars=10**9)
-    assert MPS_MAX_DISPATCH_CANDIDATE_BARS == 500_000_000
+        _mps_dispatch_batch_size(8192, n_bars=3 * 10**9)
+    with pytest.raises(ValueError, match="max_candidate_bars"):
+        _mps_dispatch_batch_size(32, n_bars=1000, max_candidate_bars=0)
+    assert MPS_MAX_DISPATCH_CANDIDATE_BARS == 1_000_000_000
 
 
 def _minimal_single_coin_proxy(*, interrupt_check=lambda: None):
@@ -426,6 +436,7 @@ def _minimal_single_coin_proxy(*, interrupt_check=lambda: None):
     proxy = MpsSingleCoinProxy.__new__(MpsSingleCoinProxy)
     proxy.batch_size = 8
     proxy.dispatch_batch_size = 2
+    proxy.max_dispatch_candidate_bars = MPS_MAX_DISPATCH_CANDIDATE_BARS
     proxy.interrupt_check = interrupt_check
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -592,6 +603,7 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
 
     profile = proxy.last_profile
     assert profile["candidate_count"] == 5
+    assert profile["max_dispatch_candidate_bars"] == 1_000_000_000
     assert profile["dispatch_batch_size"] == 2
     assert profile["dispatch_chunk_count"] == 3
     assert profile["actual_dispatch_batch_sizes"] == [2, 2, 1]

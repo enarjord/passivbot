@@ -256,6 +256,13 @@ def _new_gpu_proxy_profile(
         "strategy": str(getattr(proxy, "strategy_kind", "unknown")),
         "candidate_count": len(candidates),
         "configured_batch_size": int(getattr(proxy, "batch_size", 0)),
+        "max_dispatch_candidate_bars": int(
+            getattr(
+                proxy,
+                "max_dispatch_candidate_bars",
+                MPS_MAX_DISPATCH_CANDIDATE_BARS,
+            )
+        ),
         "dispatch_batch_size": dispatch_batch_size,
         "dispatch_chunk_count": (
             (len(candidates) + dispatch_batch_size - 1) // dispatch_batch_size
@@ -524,10 +531,12 @@ def _btc_daily_price_context(
 
 # One MPS thread simulates one candidate across every candle stream. Long-running
 # command buffers can starve WindowServer because Apple silicon shares the GPU
-# with the desktop. Keep one dispatch below the bounded work envelope measured
-# on the supported M3 target; callers may still use larger evolutionary
-# populations and configured batches, which are split transparently.
-MPS_MAX_DISPATCH_CANDIDATE_BARS = 500_000_000
+# with the desktop. Keep one dispatch below a configurable work envelope; callers
+# may still use larger evolutionary populations and configured batches, which are
+# split transparently. The default admits roughly 512 candidates per dispatch over
+# two million bars, while 500 million remains the documented conservative value
+# for a Mac that must stay responsive during optimization.
+MPS_MAX_DISPATCH_CANDIDATE_BARS = 1_000_000_000
 
 
 def _gpu_proxy_execution_checkpoint_contract(
@@ -644,22 +653,26 @@ def _mps_dispatch_batch_size(
     n_bars: int,
     n_coins: int = 1,
     n_sides: int = 1,
+    max_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
 ) -> int:
     requested_batch_size = max(1, int(requested_batch_size))
     n_bars = max(1, int(n_bars))
     n_coins = max(1, int(n_coins))
     n_sides = max(1, int(n_sides))
+    max_candidate_bars = int(max_candidate_bars)
+    if max_candidate_bars <= 0:
+        raise ValueError("max_candidate_bars must be greater than zero")
     per_candidate_work = n_bars * n_coins * n_sides
-    if per_candidate_work > MPS_MAX_DISPATCH_CANDIDATE_BARS:
+    if per_candidate_work > max_candidate_bars:
         raise ValueError(
             "one GPU candidate exceeds the Apple MPS dispatch safety envelope "
             f"(bars={n_bars}, coins={n_coins}, sides={n_sides}, "
             f"candidate_bars={per_candidate_work}, "
-            f"max_candidate_bars={MPS_MAX_DISPATCH_CANDIDATE_BARS}); "
+            f"max_candidate_bars={max_candidate_bars}); "
             "use a shorter date range or fewer coins"
         )
     safe_batch_size = max(
-        1, MPS_MAX_DISPATCH_CANDIDATE_BARS // per_candidate_work
+        1, max_candidate_bars // per_candidate_work
     )
     return min(requested_batch_size, safe_batch_size)
 
@@ -688,6 +701,7 @@ def _log_mps_dispatch_cap(
     n_bars: int,
     n_coins: int,
     n_sides: int,
+    max_candidate_bars: int,
 ) -> None:
     if dispatch_batch_size >= requested_batch_size:
         return
@@ -699,7 +713,7 @@ def _log_mps_dispatch_cap(
         n_bars,
         n_coins,
         n_sides,
-        MPS_MAX_DISPATCH_CANDIDATE_BARS,
+        max_candidate_bars,
     )
 
 _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
@@ -1707,6 +1721,7 @@ class MpsSingleCoinProxy:
         batch_size: int,
         needed_metrics,
         interrupt_check=None,
+        max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
     ):
         try:
             import torch
@@ -1753,6 +1768,7 @@ class MpsSingleCoinProxy:
             np.asarray(btc, dtype=np.float64).reshape(-1)
         )
         self.batch_size = max(1, int(batch_size))
+        self.max_dispatch_candidate_bars = int(max_dispatch_candidate_bars)
         self.interrupt_check = interrupt_check or (lambda: None)
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
@@ -1809,6 +1825,7 @@ class MpsSingleCoinProxy:
             self.batch_size,
             n_bars=len(hlcvs),
             n_sides=enabled_side_count,
+            max_candidate_bars=self.max_dispatch_candidate_bars,
         )
         _log_mps_dispatch_cap(
             requested_batch_size=self.batch_size,
@@ -1816,6 +1833,7 @@ class MpsSingleCoinProxy:
             n_bars=len(hlcvs),
             n_coins=1,
             n_sides=enabled_side_count,
+            max_candidate_bars=self.max_dispatch_candidate_bars,
         )
         hsl_enabled_sides = [
             side
@@ -2202,6 +2220,7 @@ class MpsSingleCoinProxy:
                 self.batch_size,
                 n_bars=effective_candle_count,
                 n_sides=side_count,
+                max_candidate_bars=self.max_dispatch_candidate_bars,
             )
         )
         profile_started = time.perf_counter() if self.profile_enabled else 0.0
@@ -2759,6 +2778,7 @@ class MpsMulticoinProxy:
         batch_size: int,
         needed_metrics,
         interrupt_check=None,
+        max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
     ):
         try:
             import torch
@@ -2804,6 +2824,7 @@ class MpsMulticoinProxy:
             np.asarray(btc, dtype=np.float64).reshape(-1)
         )
         self.batch_size = max(1, int(batch_size))
+        self.max_dispatch_candidate_bars = int(max_dispatch_candidate_bars)
         self.interrupt_check = interrupt_check or (lambda: None)
         self.profile_enabled = os.environ.get(
             "PASSIVBOT_GPU_PROFILE", ""
@@ -2852,6 +2873,7 @@ class MpsMulticoinProxy:
             n_bars=len(values),
             n_coins=coin_count,
             n_sides=len(enabled_sides),
+            max_candidate_bars=self.max_dispatch_candidate_bars,
         )
         _log_mps_dispatch_cap(
             requested_batch_size=self.batch_size,
@@ -2859,6 +2881,7 @@ class MpsMulticoinProxy:
             n_bars=len(values),
             n_coins=coin_count,
             n_sides=len(enabled_sides),
+            max_candidate_bars=self.max_dispatch_candidate_bars,
         )
         self.shared_account_fused = len(self.sides) == 2
         self.shared_account_proxy_mode = (

@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS optimization now defaults to a 1-billion candidate-bar dispatch envelope instead of
+  500 million, approximately doubling per-dispatch parallelism on long one-sided histories.
+  `optimize.gpu.max_dispatch_candidate_bars` may restore the former `500000000` conservative
+  setting; larger envelopes increase interrupt latency and may temporarily reduce desktop
+  responsiveness while a Metal dispatch is running.
+
 - Bitunix now defers live exchange actions when a locked-fund balance does not reconcile with the
   exchange-calculated maximum-transfer amount, including after restart, preventing a transient
   account response from reporting unchanged locked funds in both `available` and `used` balance
