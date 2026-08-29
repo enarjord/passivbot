@@ -36,7 +36,7 @@ sys.modules.setdefault(
     ),
 )
 
-from passivbot import Passivbot
+from passivbot import Passivbot, _parse_balance_override
 import passivbot as passivbot_module
 import fill_events_manager as fem
 from config import get_template_config, prepare_config
@@ -70,6 +70,49 @@ TEST_RUNTIME_IDENTITY = RuntimeIdentity(
     rust_source_sha256="d" * 64,
     rust_artifact_sha256="e" * 64,
 )
+
+
+@pytest.mark.parametrize(
+    "raw_value",
+    [True, False, 0.0, -1.0, float("nan"), float("inf"), "not-a-number"],
+)
+def test_parse_balance_override_rejects_invalid_raw_values(raw_value):
+    with pytest.raises(
+        ValueError,
+        match="balance_override must be a positive finite numeric value",
+    ):
+        _parse_balance_override(raw_value)
+
+
+@pytest.mark.parametrize(
+    ("raw_value", "expected"),
+    [(None, None), ("", None), ("100.5", 100.5), (100.5, 100.5)],
+)
+def test_parse_balance_override_accepts_disabled_and_positive_values(raw_value, expected):
+    assert _parse_balance_override(raw_value) == expected
+
+
+def test_passivbot_init_rejects_boolean_balance_override_before_coercion(monkeypatch):
+    config = get_template_config()
+    config["live"]["user"] = "test_user"
+    config["live"]["balance_override"] = True
+    monkeypatch.setattr(
+        passivbot_module,
+        "load_user_info",
+        lambda _user: {"exchange": "bitunix"},
+    )
+    monkeypatch.setattr(passivbot_module, "load_broker_code", lambda _exchange: "")
+    monkeypatch.setattr(
+        passivbot_module,
+        "resolve_custom_endpoint_override",
+        lambda _exchange: None,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="balance_override must be a positive finite numeric value",
+    ):
+        Passivbot(config)
 
 
 @pytest.mark.asyncio

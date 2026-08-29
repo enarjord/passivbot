@@ -244,6 +244,23 @@ FILL_COVERAGE_AUTHORITATIVE_RETRY_BASE_SECONDS = 30.0
 FILL_COVERAGE_AUTHORITATIVE_RETRY_MAX_SECONDS = 300.0
 
 
+def _parse_balance_override(raw_value: Any) -> Optional[float]:
+    """Parse the live sizing override without accepting boolean numerics."""
+    if raw_value in (None, ""):
+        return None
+    if isinstance(raw_value, bool):
+        raise ValueError("balance_override must be a positive finite numeric value")
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "balance_override must be a positive finite numeric value"
+        ) from None
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError("balance_override must be a positive finite numeric value")
+    return parsed
+
+
 # Match "...0xABCD..." anywhere (case-insensitive)
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 # Leading pure-hex fallback: optional 0x then 4 hex at the very start
@@ -1278,9 +1295,7 @@ class Passivbot:
         raw_balance_override = get_optional_live_value(
             self.config, "balance_override", None
         )
-        self.balance_override = (
-            None if raw_balance_override in (None, "") else float(raw_balance_override)
-        )
+        self.balance_override = _parse_balance_override(raw_balance_override)
         self._balance_override_logged = False
         self.balance = 1e-12
         self.balance_raw = 1e-12

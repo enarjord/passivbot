@@ -8,6 +8,8 @@ All notable user-facing changes will be documented in this file.
   exchange-calculated maximum-transfer amount, including after restart, preventing a transient
   account response from reporting unchanged locked funds in both `available` and `used` balance
   components.
+- Live `balance_override` values must now be positive finite numbers; booleans and other invalid
+  values fail during bot initialization instead of being coerced into a sizing balance.
 
 - Apple MPS successive-halving optimization now evaluates its opt-in 25% and 50% rungs on the
   most recent portion of the configured date range, with the normal indicator warmup immediately
