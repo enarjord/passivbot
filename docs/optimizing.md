@@ -632,8 +632,8 @@ GPU-specific settings live under `optimize.gpu`:
     "backend": "gpu",
     "gpu": {
       "auto_lean_parallelism": true,
-      "batch_size": 4096,
-      "max_dispatch_candidate_bars": 1000000000,
+      "batch_size": null,
+      "max_dispatch_candidate_bars": null,
       "checkpoint_interval_seconds": 5.0,
       "drift_halt": 0.6,
       "drift_min_samples": 32,
@@ -641,7 +641,7 @@ GPU-specific settings live under `optimize.gpu`:
       "drift_window": 128,
       "exact_workers": 0,
       "max_pending_exact": 0,
-      "population_size": 1024,
+      "population_size": null,
       "successive_halving": {
         "enabled": false,
         "history_fractions": [0.25, 0.5, 1.0],
@@ -659,13 +659,14 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
 
 - `population_size` is the NSGA-II proxy population. The general default is 1024 so long-history
   runs reach their first exact Rust validation batch four times sooner than the former 4096
-  default. With untouched GPU sizing defaults, `auto_lean_parallelism` raises the effective
-  population to 2304 only for a proven one-sided Trailing Martingale kernel with HSL, unstuck,
-  exposure reducers, market orders, the realized-loss gate, recursive entry/close modes, and
-  volatility weights all compiled out. This supplies enough resident work to hide divergent replay
-  latency on the supported M3 target. Set `auto_lean_parallelism` to `false`, or explicitly tune any
-  of `population_size`, `batch_size`, or `max_dispatch_candidate_bars`, to retain the configured
-  sizing unchanged.
+  default. `null` or an omitted key requests this automatic default. On a detected Apple M3 family
+  device, with all three sizing keys left automatic, `auto_lean_parallelism` raises the effective
+  population to 2304 only for a proven one-sided Trailing Martingale kernel with no coin overrides
+  and with HSL, unstuck, exposure reducers, market orders, the realized-loss gate, recursive
+  entry/close modes, and volatility weights all compiled out. This supplies enough resident work
+  to hide divergent replay latency on the benchmarked target. Set `auto_lean_parallelism` to
+  `false`, or set any of `population_size`, `batch_size`, or `max_dispatch_candidate_bars` to a
+  number (including the ordinary default number), to retain the configured sizing unchanged.
 - `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
   shares the GPU with WindowServer, the backend transparently splits a batch when its
   candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too
@@ -681,12 +682,13 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   responsiveness is more important than GPU throughput. Larger values increase the time before
   Ctrl+C can be observed and may make the shared display GPU temporarily unresponsive;
   `batch_size` remains an independent upper bound.
-  When `auto_lean_parallelism` proves the lean one-sided Trailing Martingale shape described above,
-  it raises the effective envelope to 4.5 billion together with the 2304 population. That exact
-  shape completed approximately 4.45 billion candidate-bars in about 20 seconds on the supported
-  M3 benchmark. All other shapes retain the 1-billion default; the optimizer does not apply the
-  wider envelope to HSL, multicoin, suite, market-order, reducer, recursive-mode, or active-
-  volatility kernels.
+  When `auto_lean_parallelism` detects an Apple M3 family device and proves the lean one-sided
+  Trailing Martingale shape described above, it raises the effective envelope to 4.5 billion
+  together with the 2304 population. That exact shape completed approximately 4.45 billion
+  candidate-bars in about 20 seconds on the supported M3 benchmark. Other Apple Silicon families
+  and all heavier shapes retain the 1-billion default; the optimizer does not apply the wider
+  envelope to coin-overridden, HSL, multicoin, suite, market-order, reducer, recursive-mode, or
+  active-volatility kernels.
 - `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
   progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
   100%, measured backwards from the configured end date; each partial suffix receives the normal

@@ -4,13 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Apple MPS optimization now auto-selects a 2304-candidate population and 4.5-billion candidate-bar
-  dispatch envelope for the proven lean one-sided Trailing Martingale kernel, restoring roughly
-  110–117 proxy candidates/second in the long-history M3 benchmark while keeping command buffers
-  near 20 seconds. HSL, multicoin, suite, market-order, reducer, recursive-mode, and active-
-  volatility kernels retain the 1-billion safety envelope. Set
-  `optimize.gpu.auto_lean_parallelism` to `false`, or customize any GPU sizing setting, to disable
-  the automatic selection.
+- Apple M3-family MPS optimization now auto-selects a 2304-candidate population and 4.5-billion
+  candidate-bar dispatch envelope for the proven lean one-sided Trailing Martingale kernel,
+  restoring roughly 110–117 proxy candidates/second in the long-history benchmark while keeping
+  command buffers near 20 seconds. Other Apple Silicon families plus coin-overridden, HSL,
+  multicoin, suite, market-order, reducer, recursive-mode, and active-volatility kernels retain the
+  1-billion safety envelope. Set `optimize.gpu.auto_lean_parallelism` to `false`, or set any GPU
+  sizing value explicitly, to disable the automatic selection.
 
 - Apple MPS optimization now defaults to a 1-billion candidate-bar dispatch envelope instead of
   500 million, approximately doubling per-dispatch parallelism on long one-sided histories.

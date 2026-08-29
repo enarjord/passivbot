@@ -10,6 +10,8 @@ import math
 import multiprocessing
 import os
 import pickle
+import platform
+import subprocess
 import time
 from typing import Any
 
@@ -1008,7 +1010,7 @@ def _resolve_options(config: dict) -> dict:
     if configured is not None and not isinstance(configured, dict):
         raise TypeError("optimize.gpu must be an object")
     for key, default in GPU_DEFAULTS.items():
-        if key in (configured or {}):
+        if key in (configured or {}) and configured[key] is not None:
             options[key] = type(default)(configured[key])
     halving = dict(GPU_DEFAULTS["successive_halving"])
     configured_halving = options.get("successive_halving")
@@ -1192,6 +1194,7 @@ def _gpu_lean_tm_parallelism_eligible(
     if (
         suite_enabled
         or int(coin_count) != 1
+        or bool(config.get("coin_overrides"))
         or str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
         != "trailing_martingale"
     ):
@@ -1244,6 +1247,25 @@ def _gpu_lean_tm_parallelism_eligible(
     )
 
 
+@functools.lru_cache(maxsize=1)
+def _apple_mps_chip_name() -> str:
+    """Return the Apple chip name without importing optional GPU packages."""
+
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return ""
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
 def _apply_gpu_lean_tm_parallelism_defaults(
     options: dict,
     config: dict,
@@ -1252,10 +1274,16 @@ def _apply_gpu_lean_tm_parallelism_defaults(
     *,
     suite_enabled: bool,
     coin_count: int,
+    mps_chip_name: str | None = None,
 ) -> bool:
     """Apply the M3-tested width only when sizing is otherwise untouched."""
 
     if not bool(options.get("auto_lean_parallelism", True)):
+        return False
+    effective_chip_name = (
+        _apple_mps_chip_name() if mps_chip_name is None else str(mps_chip_name)
+    )
+    if not effective_chip_name.startswith("Apple M3"):
         return False
     sizing_keys = (
         "population_size",
@@ -1263,6 +1291,9 @@ def _apply_gpu_lean_tm_parallelism_defaults(
         "max_dispatch_candidate_bars",
     )
     if any(options[key] != GPU_DEFAULTS[key] for key in sizing_keys):
+        return False
+    configured_gpu = config.get("optimize", {}).get("gpu", {}) or {}
+    if any(configured_gpu.get(key) is not None for key in sizing_keys):
         return False
     if not _gpu_lean_tm_parallelism_eligible(
         config,

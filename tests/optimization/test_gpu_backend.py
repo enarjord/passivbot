@@ -404,6 +404,11 @@ def test_gpu_lean_tm_parallelism_requires_complete_compileout_proof():
     assert not eligible(enabled_sides={"long", "short"})
     assert not eligible(suite_enabled=True)
     assert not eligible(coin_count=2)
+    overridden_config = copy.deepcopy(config)
+    overridden_config["coin_overrides"] = {
+        "BTC": {"bot": {"long": {"hsl": {"enabled": True}}}}
+    }
+    assert not eligible(candidate=overridden_config)
     ema_config = copy.deepcopy(config)
     ema_config["live"]["strategy_kind"] = "ema_anchor"
     assert not eligible(candidate=ema_config)
@@ -459,6 +464,7 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
         {"long"},
         suite_enabled=False,
         coin_count=1,
+        mps_chip_name="Apple M3",
     )
     assert options["population_size"] == GPU_LEAN_TM_POPULATION_SIZE
     assert (
@@ -481,6 +487,31 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
             {"long"},
             suite_enabled=False,
             coin_count=1,
+            mps_chip_name="Apple M3 Max",
+        )
+
+    for chip_name in ("", "Apple M2 Max", "Apple M4"):
+        assert not _apply_gpu_lean_tm_parallelism_defaults(
+            copy.deepcopy(GPU_DEFAULTS),
+            config,
+            bounds,
+            {"long"},
+            suite_enabled=False,
+            coin_count=1,
+            mps_chip_name=chip_name,
+        )
+
+    for key in ("population_size", "batch_size", "max_dispatch_candidate_bars"):
+        explicit_config = copy.deepcopy(config)
+        explicit_config["optimize"]["gpu"][key] = GPU_DEFAULTS[key]
+        assert not _apply_gpu_lean_tm_parallelism_defaults(
+            copy.deepcopy(GPU_DEFAULTS),
+            explicit_config,
+            bounds,
+            {"long"},
+            suite_enabled=False,
+            coin_count=1,
+            mps_chip_name="Apple M3",
         )
 
 

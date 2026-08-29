@@ -70,7 +70,10 @@ def test_format_config_accepts_gpu_backend():
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["backend"] == "gpu"
-    assert out["optimize"]["gpu"]["population_size"] == 1024
+    assert out["optimize"]["gpu"]["population_size"] is None
+    assert out["optimize"]["gpu"]["batch_size"] is None
+    assert out["optimize"]["gpu"]["max_dispatch_candidate_bars"] is None
+    assert out["optimize"]["gpu"]["auto_lean_parallelism"] is True
 
 
 def test_format_config_rejects_unknown_backend():

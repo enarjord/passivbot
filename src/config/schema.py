@@ -502,8 +502,8 @@ def get_template_config():
                     "seed": None,
                     "gpu": {
                         "auto_lean_parallelism": True,
-                        "batch_size": 4096,
-                        "max_dispatch_candidate_bars": 1000000000,
+                        "batch_size": None,
+                        "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,
                         "drift_halt": 0.6,
                         "drift_min_samples": 32,
@@ -511,7 +511,7 @@ def get_template_config():
                         "drift_window": 128,
                         "exact_workers": 0,
                         "max_pending_exact": 0,
-                        "population_size": 1024,
+                        "population_size": None,
                         "successive_halving": {
                             "enabled": False,
                             "history_fractions": [0.25, 0.5, 1.0],
