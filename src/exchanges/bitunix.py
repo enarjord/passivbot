@@ -256,19 +256,21 @@ class BitunixClient:
         available: float,
         transfer: float | None,
         bonus: float,
-        unrealized_pnl: float,
+        cross_unrealized_pnl: float,
     ) -> bool:
         """Corroborate available funds with Bitunix's maximum-transfer metric.
 
-        Bitunix excludes non-transferable bonus funds and unrealized losses from
-        the amount transferable out of futures. Rearranging that relationship
-        gives an exchange-calculated cross-check for ``available``. The known
-        inconsistent account response changed ``available`` alone, so this
-        remains false even if that response is repeated across a restart.
+        Bitunix excludes non-transferable bonus funds and cross-margin unrealized
+        losses from the amount transferable out of futures. Isolated PnL remains
+        confined to its position margin and therefore must not offset a cross
+        loss in this equation. Rearranging that relationship gives an
+        exchange-calculated cross-check for ``available``. The known inconsistent
+        account response changed ``available`` alone, so this remains false even
+        if that response is repeated across a restart.
         """
         if transfer is None:
             return False
-        expected_available = transfer + bonus - min(unrealized_pnl, 0.0)
+        expected_available = transfer + bonus - min(cross_unrealized_pnl, 0.0)
         return self._balance_values_close(available, expected_available)
 
     def _validate_balance_transition(
@@ -279,7 +281,7 @@ class BitunixClient:
         margin: float,
         transfer: float | None,
         bonus: float,
-        unrealized_pnl: float,
+        cross_unrealized_pnl: float,
     ) -> None:
         """Reject Bitunix's transient duplication of locked funds into available.
 
@@ -299,7 +301,7 @@ class BitunixClient:
             available=available,
             transfer=transfer,
             bonus=bonus,
-            unrealized_pnl=unrealized_pnl,
+            cross_unrealized_pnl=cross_unrealized_pnl,
         )
         current_used = frozen + margin
         if current_used > 0.0 and not transfer_reconciled:
@@ -600,7 +602,7 @@ class BitunixClient:
             raw.get("crossUnrealizedPNL"),
             field="account.crossUnrealizedPNL",
         )
-        isolated_upnl = _float(
+        _isolated_upnl = _float(
             raw.get("isolationUnrealizedPNL"),
             field="account.isolationUnrealizedPNL",
         )
@@ -616,7 +618,7 @@ class BitunixClient:
             margin=margin,
             transfer=transfer,
             bonus=bonus,
-            unrealized_pnl=cross_upnl + isolated_upnl,
+            cross_unrealized_pnl=cross_upnl,
         )
         # Bitunix documents these as disjoint available, order-locked, and
         # position-locked quantities. Unrealized PnL is mark-to-market state,
@@ -2265,7 +2267,16 @@ class BitunixBot(CCXTBot):
 
     async def _exchange_config_write_ready(self) -> bool:
         """Gate position-mode writes on an authoritative Bitunix balance sample."""
-        if getattr(self, "balance_override", None) is not None:
+        balance_override = getattr(self, "balance_override", None)
+        if balance_override is not None:
+            try:
+                if isinstance(balance_override, bool):
+                    raise ValueError("boolean balance override")
+                parsed_override = float(balance_override)
+            except (TypeError, ValueError):
+                raise ValueError("balance_override must be a finite numeric value") from None
+            if not math.isfinite(parsed_override):
+                raise ValueError("balance_override must be a finite numeric value")
             return True
         try:
             await self.cca.fetch_balance()

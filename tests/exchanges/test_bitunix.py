@@ -349,6 +349,31 @@ async def test_balance_sums_disjoint_components_after_transfer_reconciliation(as
 
 
 @pytest.mark.asyncio
+async def test_balance_transfer_reconciliation_does_not_net_isolated_profit():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={
+            "marginCoin": "USDT",
+            "available": "100",
+            "frozen": "0",
+            "margin": "10",
+            "transfer": "90",
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-10",
+            "isolationUnrealizedPNL": "10",
+        }
+    )
+
+    balance = await client.fetch_balance()
+
+    assert balance["free"]["USDT"] == 100.0
+    assert balance["used"]["USDT"] == 10.0
+    assert balance["total"]["USDT"] == 110.0
+    assert client._accepted_balance_components == (100.0, 0.0, 10.0)
+
+
+@pytest.mark.asyncio
 async def test_balance_wallet_is_invariant_to_unrealized_pnl():
     client = _prepared_client()
     client._accepted_balance_components = (90.0, 4.0, 6.0)
@@ -704,6 +729,29 @@ async def test_bitunix_config_write_readiness_honors_balance_override():
     ready = await bot._exchange_config_write_ready()
 
     assert ready is True
+    bot.cca.fetch_balance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "balance_override",
+    [float("nan"), float("inf"), float("-inf"), True, "not-a-number"],
+)
+async def test_bitunix_config_write_readiness_rejects_invalid_balance_override(
+    balance_override,
+):
+    bot = BitunixBot.__new__(BitunixBot)
+    bot.balance_override = balance_override
+    bot.cca = SimpleNamespace(
+        fetch_balance=AsyncMock(side_effect=AssertionError("must not fetch"))
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="balance_override must be a finite numeric value",
+    ):
+        await bot._exchange_config_write_ready()
+
     bot.cca.fetch_balance.assert_not_awaited()
 
 
