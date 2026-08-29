@@ -13,10 +13,13 @@ class _FakeBot:
         self,
         update_exchange_config_impl,
         assert_supported_live_state_impl=None,
+        exchange_config_ready_impl=None,
     ):
         self._update_exchange_config_impl = update_exchange_config_impl
         self._assert_supported_live_state_impl = assert_supported_live_state_impl
+        self._exchange_config_ready_impl = exchange_config_ready_impl
         self.update_exchange_config_calls = 0
+        self.exchange_config_ready_calls = 0
         self.determine_utc_offset_calls = 0
         self.market_specific_settings_calls = 0
         self.positions_balance_calls = 0
@@ -25,10 +28,23 @@ class _FakeBot:
         self.min_cost_calls = 0
         self.abstraction_refresh_calls = 0
         self.assert_supported_live_state_calls = 0
+        self.stop_signal_received = False
+        self.shutdown_sleeps = []
 
     async def update_exchange_config(self):
         self.update_exchange_config_calls += 1
         return await self._update_exchange_config_impl(self.update_exchange_config_calls)
+
+    async def _exchange_config_write_ready(self):
+        self.exchange_config_ready_calls += 1
+        if self._exchange_config_ready_impl is None:
+            return True
+        return await self._exchange_config_ready_impl(
+            self.exchange_config_ready_calls
+        )
+
+    async def _sleep_unless_shutdown(self, seconds, *, stage):
+        self.shutdown_sleeps.append((seconds, stage))
 
     async def determine_utc_offset(self, verbose=True):
         self.determine_utc_offset_calls += 1
@@ -96,6 +112,10 @@ class _InitMarketsSizingBot(CCXTBot):
         self.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
         self.positions = {}
         self.open_orders = {}
+        self.stop_signal_received = False
+
+    async def _exchange_config_write_ready(self):
+        return True
 
     async def update_exchange_config(self):
         self.update_exchange_config_calls += 1
@@ -184,6 +204,136 @@ async def test_init_markets_retries_request_timeout_then_succeeds(monkeypatch):
     assert bot.positions_balance_calls == 0
     assert bot.open_orders_calls == 0
     assert bot.min_cost_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_init_markets_gates_exchange_config_write_on_balance_readiness(monkeypatch):
+    import passivbot as pb_mod
+
+    events = []
+
+    async def _load_markets(*_args, **_kwargs):
+        events.append("load_markets")
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    async def _exchange_config_ready(attempt):
+        events.append(f"readiness:{attempt}")
+        return attempt >= 3
+
+    async def _update_exchange_config(_attempt):
+        events.append("update_exchange_config")
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+
+    bot = _FakeBot(
+        _update_exchange_config,
+        exchange_config_ready_impl=_exchange_config_ready,
+    )
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert events[:4] == [
+        "readiness:1",
+        "readiness:2",
+        "readiness:3",
+        "update_exchange_config",
+    ]
+    assert bot.shutdown_sleeps == [
+        (5.0, "exchange_config_balance_readiness"),
+        (5.0, "exchange_config_balance_readiness"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_init_markets_stops_after_balance_readiness_check(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        raise AssertionError("load_markets should not run after shutdown")
+
+    async def _update_exchange_config(_attempt):
+        raise AssertionError("exchange config should not be written after shutdown")
+
+    bot = _FakeBot(_update_exchange_config)
+
+    async def _exchange_config_ready(_attempt):
+        bot.stop_signal_received = True
+        return True
+
+    bot._exchange_config_ready_impl = _exchange_config_ready
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.exchange_config_ready_calls == 1
+    assert bot.update_exchange_config_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_init_markets_retries_transient_balance_readiness_errors(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    async def _exchange_config_ready(attempt):
+        if attempt < 3:
+            raise pb_mod.RequestTimeout("timed out")
+        return True
+
+    async def _update_exchange_config(_attempt):
+        return None
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+    bot = _FakeBot(
+        _update_exchange_config,
+        exchange_config_ready_impl=_exchange_config_ready,
+    )
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.exchange_config_ready_calls == 3
+    assert bot.update_exchange_config_calls == 1
+    assert bot.shutdown_sleeps == [
+        (5, "exchange_config_balance_readiness_retry"),
+        (10, "exchange_config_balance_readiness_retry"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_init_markets_reraises_after_max_balance_readiness_retries(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _exchange_config_ready(_attempt):
+        raise pb_mod.NetworkError("unavailable")
+
+    async def _update_exchange_config(_attempt):
+        raise AssertionError("exchange config should not run without readiness")
+
+    bot = _FakeBot(
+        _update_exchange_config,
+        exchange_config_ready_impl=_exchange_config_ready,
+    )
+
+    with pytest.raises(pb_mod.NetworkError, match="unavailable"):
+        await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.exchange_config_ready_calls == 3
+    assert bot.update_exchange_config_calls == 0
+    assert bot.shutdown_sleeps == [
+        (5, "exchange_config_balance_readiness_retry"),
+        (10, "exchange_config_balance_readiness_retry"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -370,4 +520,48 @@ async def test_init_markets_uses_staged_refresh_for_bybit(monkeypatch):
     assert bot.refresh_authoritative_state_calls == 1
     assert bot.positions_balance_calls == 0
     assert bot.open_orders_calls == 0
+    assert bot.min_cost_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_init_markets_waits_for_initial_balance_consistency(monkeypatch):
+    import passivbot as pb_mod
+
+    async def _load_markets(*_args, **_kwargs):
+        return {"BTC/USDT:USDT": {"id": "BTCUSDT"}}
+
+    monkeypatch.setattr(pb_mod, "load_markets", _load_markets)
+    monkeypatch.setattr(
+        pb_mod,
+        "filter_markets",
+        lambda *_args, **_kwargs: (["BTC/USDT:USDT"], [], {}),
+    )
+
+    async def _update_exchange_config(_attempt):
+        return None
+
+    bot = _FakeBot(_update_exchange_config)
+    bot.exchange = "bitunix"
+    bot.stop_signal_received = False
+    bot._last_authoritative_block_reason = "balance_consistency_check"
+    refresh_results = iter([False, False, True])
+    sleeps = []
+
+    async def _refresh_authoritative_state():
+        bot.refresh_authoritative_state_calls += 1
+        return next(refresh_results)
+
+    async def _sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
+
+    bot.refresh_authoritative_state = _refresh_authoritative_state
+    bot._sleep_unless_shutdown = _sleep_unless_shutdown
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.refresh_authoritative_state_calls == 3
+    assert sleeps == [
+        (5.0, "initial_balance_consistency_check"),
+        (5.0, "initial_balance_consistency_check"),
+    ]
     assert bot.min_cost_calls == 1

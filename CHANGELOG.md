@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Bitunix now defers live exchange actions when a locked-fund balance does not reconcile with the
+  exchange-calculated maximum-transfer amount, including after restart, preventing a transient
+  account response from reporting unchanged locked funds in both `available` and `used` balance
+  components.
+- Live `balance_override` values must now be positive finite numbers; booleans and other invalid
+  values fail during bot initialization instead of being coerced into a sizing balance.
+
 - Apple MPS successive-halving optimization now evaluates its opt-in 25% and 50% rungs on the
   most recent portion of the configured date range, with the normal indicator warmup immediately
   preceding each scoring window. The final rung remains the full configured history. Checkpoint
@@ -17,7 +24,6 @@ All notable user-facing changes will be documented in this file.
   identity, so finite-lookback coin-HSL checkpoints from the old capacity cannot mix stale proxy
   evidence with new evaluations. Exact Rust validation, CPU optimization, backtests, and live
   behavior are unchanged.
-
 - Apple MPS single-coin Trailing Martingale screening now compiles out the 1-minute and 1-hour
   volatility EMA state, candle-range loads, and volatility-weight arithmetic when every active
   candidate in a dispatch uses zero volatility weights for entry and close thresholds and

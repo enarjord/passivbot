@@ -244,6 +244,23 @@ FILL_COVERAGE_AUTHORITATIVE_RETRY_BASE_SECONDS = 30.0
 FILL_COVERAGE_AUTHORITATIVE_RETRY_MAX_SECONDS = 300.0
 
 
+def _parse_balance_override(raw_value: Any) -> Optional[float]:
+    """Parse the live sizing override without accepting boolean numerics."""
+    if raw_value in (None, ""):
+        return None
+    if isinstance(raw_value, bool):
+        raise ValueError("balance_override must be a positive finite numeric value")
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "balance_override must be a positive finite numeric value"
+        ) from None
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError("balance_override must be a positive finite numeric value")
+    return parsed
+
+
 # Match "...0xABCD..." anywhere (case-insensitive)
 _TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
 # Leading pure-hex fallback: optional 0x then 4 hex at the very start
@@ -1278,9 +1295,7 @@ class Passivbot:
         raw_balance_override = get_optional_live_value(
             self.config, "balance_override", None
         )
-        self.balance_override = (
-            None if raw_balance_override in (None, "") else float(raw_balance_override)
-        )
+        self.balance_override = _parse_balance_override(raw_balance_override)
         self._balance_override_logged = False
         self.balance = 1e-12
         self.balance_raw = 1e-12
@@ -3783,6 +3798,42 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
+        readiness_network_attempt = 0
+        while True:
+            try:
+                exchange_config_ready = await self._exchange_config_write_ready()
+            except (RequestTimeout, NetworkError) as e:
+                if self.stop_signal_received:
+                    return
+                readiness_network_attempt += 1
+                if readiness_network_attempt == 3:
+                    raise
+                retry_delay_seconds = 5 * readiness_network_attempt
+                logging.warning(
+                    "[init_markets] exchange-config readiness error "
+                    "(attempt %d/3): error_type=%s – retrying in %ds",
+                    readiness_network_attempt,
+                    bounded_exception_type(e),
+                    retry_delay_seconds,
+                )
+                await self._sleep_unless_shutdown(
+                    retry_delay_seconds,
+                    stage="exchange_config_balance_readiness_retry",
+                )
+                if self.stop_signal_received:
+                    return
+                continue
+            if self.stop_signal_received:
+                return
+            readiness_network_attempt = 0
+            if exchange_config_ready:
+                break
+            await self._sleep_unless_shutdown(
+                5.0,
+                stage="exchange_config_balance_readiness",
+            )
+            if self.stop_signal_received:
+                return
         # Retry on transient network errors (TCP + TLS handshake on a fresh
         # aiohttp session can time out; also called hourly so transient errors
         # should not abort the refresh cycle).
@@ -3824,7 +3875,20 @@ class Passivbot:
         self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
-        await self.refresh_authoritative_state()
+        authoritative_ready = await self.refresh_authoritative_state()
+        while (
+            authoritative_ready is False
+            and getattr(self, "_last_authoritative_block_reason", None)
+            == "balance_consistency_check"
+            and not self.stop_signal_received
+        ):
+            await self._sleep_unless_shutdown(
+                5.0,
+                stage="initial_balance_consistency_check",
+            )
+            if self.stop_signal_received:
+                return
+            authoritative_ready = await self.refresh_authoritative_state()
         self._assert_supported_live_state()
         self.set_market_specific_settings()
         await self.update_effective_min_cost()
@@ -6088,6 +6152,8 @@ class Passivbot:
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         authoritative_fill_retry_count = 0
         authoritative_fill_retry_reason = None
+        balance_consistency_retry_count = 0
+        balance_consistency_last_warning_ms = 0
         max_n_fails = 10
         if self._equity_hard_stop_enabled():
             if self._equity_hard_stop_signal_mode() == "coin":
@@ -6136,6 +6202,14 @@ class Passivbot:
                         break
                     raise
                 mark_phase("authoritative", phase_start_ms)
+                if authoritative_ok and balance_consistency_retry_count:
+                    logging.info(
+                        "[balance] authoritative balance consistency recovered "
+                        "after %d retries; action=resume_execution",
+                        balance_consistency_retry_count,
+                    )
+                    balance_consistency_retry_count = 0
+                    balance_consistency_last_warning_ms = 0
                 if not authoritative_ok:
                     if self._shutdown_requested():
                         self._emit_live_cycle_degraded(
@@ -6151,7 +6225,39 @@ class Passivbot:
                         "pending_pnl",
                         "degraded_pnl",
                         "fill_history_coverage",
+                        "balance_consistency_check",
                     }:
+                        if (
+                            authoritative_block_reason
+                            == "balance_consistency_check"
+                        ):
+                            authoritative_fill_retry_count = 0
+                            authoritative_fill_retry_reason = None
+                            failed_update_pos_oos_pnls_ohlcvs_count = 0
+                            balance_consistency_retry_count += 1
+                            now_ms = utc_ms()
+                            warning_due = (
+                                balance_consistency_last_warning_ms <= 0
+                                or now_ms - balance_consistency_last_warning_ms
+                                >= 15 * 60 * 1000
+                            )
+                            if warning_due:
+                                balance_consistency_last_warning_ms = now_ms
+                            self._emit_live_cycle_degraded(
+                                cycle_id=cycle_id,
+                                reason_code=authoritative_block_reason,
+                                data={
+                                    "retry_count": balance_consistency_retry_count,
+                                    "retry_delay_seconds": 5.0,
+                                    "timings_ms": dict(loop_timings_ms),
+                                },
+                                level="warning" if warning_due else "debug",
+                            )
+                            await self._sleep_unless_shutdown(
+                                5.0,
+                                stage="balance_consistency_check",
+                            )
+                            continue
                         if authoritative_fill_retry_reason != authoritative_block_reason:
                             authoritative_fill_retry_count = 0
                             authoritative_fill_retry_reason = authoritative_block_reason
@@ -7456,7 +7562,7 @@ class Passivbot:
         """Refresh live account state through the staged authoritative cohort."""
         return await state_refresh.refresh_authoritative_state_staged(self)
 
-    async def _capture_balance_staged_snapshot(self) -> tuple[object, dict, float]:
+    async def _capture_balance_staged_snapshot(self) -> tuple[object, dict, object]:
         """Fetch raw balance, bounded diagnostics, and its normalized value."""
         return await state_refresh.capture_balance_staged_snapshot(self)
 
@@ -10087,6 +10193,10 @@ class Passivbot:
         """Exchange-specific hook to refresh global config state."""
         # defined by each exchange child class
         pass
+
+    async def _exchange_config_write_ready(self) -> bool:
+        """Return whether startup may perform authenticated exchange config writes."""
+        return True
 
     def is_old_enough(self, pside, symbol):
         """Return True if the market age exceeds the configured minimum for forager mode."""
@@ -15861,7 +15971,13 @@ class Passivbot:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
                 return False
-            balance_raw = await self.fetch_balance()
+            try:
+                balance_raw = await self.fetch_balance()
+            except state_refresh.AuthoritativeSurfaceUnavailable as exc:
+                if exc.surface != "balance":
+                    raise
+                self._last_authoritative_block_reason = exc.reason
+                return False
         return self._apply_balance_snapshot(balance_raw)
 
     def _reconcile_balance_after_open_orders_refresh(self) -> bool:

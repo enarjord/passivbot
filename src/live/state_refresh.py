@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import sys
 
@@ -9,6 +10,23 @@ from live import event_emitters
 from live.balance_composition import malformed_balance_composition, unavailable_balance_composition
 from live.diagnostic_safety import bounded_exception_type
 from utils import ts_to_date, utc_ms
+
+
+@dataclass(frozen=True)
+class DeferredAuthoritativeSurface:
+    """Explicit fail-closed result for a temporarily untrustworthy surface."""
+
+    surface: str
+    reason: str
+
+
+class AuthoritativeSurfaceUnavailable(RuntimeError):
+    """Signal that a fetched surface must not be committed or used for trading."""
+
+    def __init__(self, surface: str, reason: str):
+        self.surface = str(surface)
+        self.reason = str(reason)
+        super().__init__(f"{self.surface} unavailable: {self.reason}")
 
 
 def _utc_ms() -> int:
@@ -51,6 +69,10 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     balance_composition = snapshot.get("balance_composition")
     fetched_positions = snapshot.get("positions")
     fetched_open_orders = snapshot.get("open_orders")
+
+    if isinstance(fetched_balance, DeferredAuthoritativeSurface):
+        bot._last_authoritative_block_reason = fetched_balance.reason
+        return False
 
     prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
     if prepared_balance_snapshot is None:
@@ -122,6 +144,9 @@ async def refresh_authoritative_state_staged(bot) -> bool:
         return False
     prepared_balance_snapshot = None
     if "balance" in plan:
+        if isinstance(fetched_balance, DeferredAuthoritativeSurface):
+            bot._last_authoritative_block_reason = fetched_balance.reason
+            return False
         prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
         if prepared_balance_snapshot is None:
             return False
@@ -178,25 +203,44 @@ async def refresh_authoritative_state_staged(bot) -> bool:
     return True
 
 
-async def capture_balance_staged_snapshot(bot) -> tuple[object, dict, float]:
+async def capture_balance_staged_snapshot(
+    bot,
+) -> tuple[object, dict, float | DeferredAuthoritativeSurface]:
     """Fetch one raw balance response plus bounded diagnostics and normalized value."""
-    if hasattr(bot, "capture_balance_snapshot"):
-        raw_balance, balance = await bot.capture_balance_snapshot()
-        normalizer = getattr(bot, "_normalize_balance_diagnostics", None)
-        if not callable(normalizer):
-            return raw_balance, unavailable_balance_composition(), balance
-        try:
-            return raw_balance, normalizer(raw_balance), balance
-        except Exception:
-            return (
-                raw_balance,
-                malformed_balance_composition(
-                    source="normalizer", reason="normalizer_error"
-                ),
-                balance,
-            )
-    balance = await bot.fetch_balance()
-    return None, unavailable_balance_composition(), balance
+    if getattr(bot, "balance_override", None) is not None:
+        return (
+            None,
+            unavailable_balance_composition(reason="balance_override"),
+            bot.get_raw_balance(),
+        )
+    try:
+        if hasattr(bot, "capture_balance_snapshot"):
+            raw_balance, balance = await bot.capture_balance_snapshot()
+            normalizer = getattr(bot, "_normalize_balance_diagnostics", None)
+            if not callable(normalizer):
+                return raw_balance, unavailable_balance_composition(), balance
+            try:
+                return raw_balance, normalizer(raw_balance), balance
+            except AuthoritativeSurfaceUnavailable:
+                raise
+            except Exception:
+                return (
+                    raw_balance,
+                    malformed_balance_composition(
+                        source="normalizer", reason="normalizer_error"
+                    ),
+                    balance,
+                )
+        balance = await bot.fetch_balance()
+        return None, unavailable_balance_composition(), balance
+    except AuthoritativeSurfaceUnavailable as exc:
+        if exc.surface != "balance":
+            raise
+        return (
+            None,
+            unavailable_balance_composition(reason=exc.reason),
+            DeferredAuthoritativeSurface(surface=exc.surface, reason=exc.reason),
+        )
 
 
 async def capture_positions_staged_snapshot(bot) -> tuple[object, list[dict]]:

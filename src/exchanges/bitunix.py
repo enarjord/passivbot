@@ -28,6 +28,7 @@ from config.access import require_live_value
 from custom_endpoint_overrides import CustomEndpointConfigError
 from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import normalize_bitunix_balance_composition
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from passivbot import logging
 from utils import symbol_to_coin
 
@@ -170,6 +171,7 @@ class BitunixClient:
         "1w": 7 * 24 * 60 * 60_000,
         "1M": 30 * 24 * 60 * 60_000,
     }
+    BALANCE_TRANSITION_REASON = "balance_consistency_check"
 
     def __init__(self, config: dict | None = None):
         config = config or {}
@@ -208,7 +210,136 @@ class BitunixClient:
         self._ticker_subscription_ids: tuple[str, ...] = ()
         self._ticker_ready = asyncio.Event()
         self._pending_status_warning_monotonic: dict[str, float] = {}
+        self._accepted_balance_components: tuple[float, float, float] | None = None
+        self._pending_balance_components: tuple[float, float, float] | None = None
         self._closed = False
+
+    @staticmethod
+    def _balance_values_close(left: float, right: float) -> bool:
+        return math.isclose(float(left), float(right), rel_tol=1e-9, abs_tol=1e-9)
+
+    @classmethod
+    def _balance_components_close(
+        cls,
+        left: tuple[float, float, float] | None,
+        right: tuple[float, float, float],
+    ) -> bool:
+        return bool(
+            left is not None
+            and all(
+                cls._balance_values_close(left_value, right_value)
+                for left_value, right_value in zip(left, right)
+            )
+        )
+
+    def _clear_pending_balance_transition(self) -> None:
+        self._pending_balance_components = None
+
+    def _defer_balance_candidate(
+        self,
+        current: tuple[float, float, float],
+        *,
+        defer_message: str,
+    ) -> None:
+        if not self._balance_components_close(
+            self._pending_balance_components, current
+        ):
+            self._pending_balance_components = current
+            logging.warning(defer_message)
+        raise AuthoritativeSurfaceUnavailable(
+            "balance", self.BALANCE_TRANSITION_REASON
+        )
+
+    def _available_is_transfer_reconciled(
+        self,
+        *,
+        available: float,
+        transfer: float | None,
+        bonus: float,
+        cross_unrealized_pnl: float,
+    ) -> bool:
+        """Corroborate available funds with Bitunix's maximum-transfer metric.
+
+        Bitunix excludes non-transferable bonus funds and cross-margin unrealized
+        losses from the amount transferable out of futures. Isolated PnL remains
+        confined to its position margin and therefore must not offset a cross
+        loss in this equation. Rearranging that relationship gives an
+        exchange-calculated cross-check for ``available``. The known inconsistent
+        account response changed ``available`` alone, so this remains false even
+        if that response is repeated across a restart.
+        """
+        # ``transfer`` is floored at zero. At that floor it only proves that
+        # ``available + min(cross_unrealized_pnl, 0) - bonus <= 0``; it cannot
+        # independently disambiguate a locked-fund duplication. Keep the sample
+        # unavailable until a positive transfer value restores an exact cross-check.
+        if transfer is None or transfer <= 0.0:
+            return False
+        expected_available = transfer + bonus - min(cross_unrealized_pnl, 0.0)
+        return self._balance_values_close(available, expected_available)
+
+    def _validate_balance_transition(
+        self,
+        *,
+        available: float,
+        frozen: float,
+        margin: float,
+        transfer: float | None,
+        bonus: float,
+        cross_unrealized_pnl: float,
+    ) -> None:
+        """Reject Bitunix's transient duplication of locked funds into available.
+
+        The known inconsistent response moves ``available`` by exactly the
+        unchanged locked amount while continuing to report that amount as locked.
+        Reconcile every new tuple with nonzero locked funds against Bitunix's
+        separately calculated maximum-transfer value. This covers both restart
+        and a transition that changes frozen or margin components while the
+        inconsistent response is active. Keep the last accepted components
+        unchanged until a response with locked funds passes the transfer
+        reconciliation, even when its visible components match the last
+        accepted tuple.
+        """
+        current = (available, frozen, margin)
+        previous = self._accepted_balance_components
+        transfer_reconciled = self._available_is_transfer_reconciled(
+            available=available,
+            transfer=transfer,
+            bonus=bonus,
+            cross_unrealized_pnl=cross_unrealized_pnl,
+        )
+        current_used = frozen + margin
+        if current_used > 0.0 and not transfer_reconciled:
+            self._defer_balance_candidate(
+                current,
+                defer_message=(
+                    "[balance] Bitunix locked-fund balance did not reconcile "
+                    "with maximum transfer; action=defer_authoritative_state"
+                ),
+            )
+            return
+
+        if self._balance_components_close(previous, current):
+            if self._pending_balance_components is not None:
+                logging.info(
+                    "[balance] Bitunix balance returned to the last trusted state; "
+                    "action=resume_authoritative_state"
+                )
+                self._clear_pending_balance_transition()
+            return
+
+        if self._pending_balance_components is not None:
+            if transfer_reconciled:
+                logging.info(
+                    "[balance] Bitunix balance passed maximum-transfer reconciliation; "
+                    "action=resume_authoritative_state"
+                )
+            else:
+                logging.info(
+                    "[balance] Bitunix balance cleared locked funds; "
+                    "action=resume_authoritative_state"
+                )
+            self._clear_pending_balance_transition()
+        self._accepted_balance_components = current
 
     def milliseconds(self) -> int:
         return int(time.time() * 1000)
@@ -475,9 +606,23 @@ class BitunixClient:
             raw.get("crossUnrealizedPNL"),
             field="account.crossUnrealizedPNL",
         )
-        isolated_upnl = _float(
+        _isolated_upnl = _float(
             raw.get("isolationUnrealizedPNL"),
             field="account.isolationUnrealizedPNL",
+        )
+        transfer = (
+            None
+            if raw.get("transfer") in (None, "")
+            else _float(raw.get("transfer"), field="account.transfer")
+        )
+        bonus = _float(raw.get("bonus"), field="account.bonus", default=0.0)
+        self._validate_balance_transition(
+            available=available,
+            frozen=frozen,
+            margin=margin,
+            transfer=transfer,
+            bonus=bonus,
+            cross_unrealized_pnl=cross_upnl,
         )
         # Bitunix documents these as disjoint available, order-locked, and
         # position-locked quantities. Unrealized PnL is mark-to-market state,
@@ -2123,6 +2268,32 @@ class BitunixBot(CCXTBot):
     def _normalize_balance_diagnostics(self, fetched: object) -> dict:
         """Expose only documented Bitunix account components for diagnostics."""
         return normalize_bitunix_balance_composition(fetched)
+
+    async def _exchange_config_write_ready(self) -> bool:
+        """Gate position-mode writes on an authoritative Bitunix balance sample."""
+        balance_override = getattr(self, "balance_override", None)
+        if balance_override is not None:
+            try:
+                if isinstance(balance_override, bool):
+                    raise ValueError("boolean balance override")
+                parsed_override = float(balance_override)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    "balance_override must be a positive finite numeric value"
+                ) from None
+            if not math.isfinite(parsed_override) or parsed_override <= 0.0:
+                raise ValueError(
+                    "balance_override must be a positive finite numeric value"
+                )
+            return True
+        try:
+            await self.cca.fetch_balance()
+        except AuthoritativeSurfaceUnavailable as exc:
+            if exc.surface != "balance":
+                raise
+            self._last_authoritative_block_reason = exc.reason
+            return False
+        return True
 
     async def update_exchange_config(self) -> None:
         current = await self.cca.fetch_position_mode()

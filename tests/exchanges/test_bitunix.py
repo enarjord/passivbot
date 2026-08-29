@@ -24,6 +24,7 @@ from custom_endpoint_overrides import (
     ResolvedEndpointOverride,
 )
 from exchanges.bitunix import BitunixBot, BitunixClient, BitunixOrderStream
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from fill_events_manager import (
     BitunixFetcher,
     _build_fetcher_for_bot,
@@ -323,18 +324,21 @@ async def test_load_markets_retries_observed_network_error(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("as_list", [False, True])
-async def test_balance_sums_disjoint_components_and_accepts_both_account_shapes(as_list):
+async def test_balance_sums_disjoint_components_after_transfer_reconciliation(as_list):
     client = _prepared_client()
     raw = {
         "marginCoin": "USDT",
         "available": "1000",
         "frozen": "4",
         "margin": "10",
+        "transfer": "1000",
+        "bonus": "0",
         "positionMode": "HEDGE",
         "crossUnrealizedPNL": "2",
         "isolationUnrealizedPNL": "-1",
     }
-    client._request = AsyncMock(return_value=[raw] if as_list else raw)
+    response = [raw] if as_list else raw
+    client._request = AsyncMock(return_value=response)
 
     balance = await client.fetch_balance()
 
@@ -345,15 +349,67 @@ async def test_balance_sums_disjoint_components_and_accepts_both_account_shapes(
 
 
 @pytest.mark.asyncio
+async def test_balance_transfer_reconciliation_does_not_net_isolated_profit():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={
+            "marginCoin": "USDT",
+            "available": "100",
+            "frozen": "0",
+            "margin": "10",
+            "transfer": "90",
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-10",
+            "isolationUnrealizedPNL": "10",
+        }
+    )
+
+    balance = await client.fetch_balance()
+
+    assert balance["free"]["USDT"] == 100.0
+    assert balance["used"]["USDT"] == 10.0
+    assert balance["total"]["USDT"] == 110.0
+    assert client._accepted_balance_components == (100.0, 0.0, 10.0)
+
+
+@pytest.mark.asyncio
+async def test_balance_zero_transfer_floor_cannot_confirm_locked_funds():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={
+            "marginCoin": "USDT",
+            "available": "10",
+            "frozen": "0",
+            "margin": "10",
+            "transfer": "0",
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-10",
+            "isolationUnrealizedPNL": "0",
+        }
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable) as exc_info:
+        await client.fetch_balance()
+
+    assert exc_info.value.reason == "balance_consistency_check"
+    assert client._accepted_balance_components is None
+    assert client._pending_balance_components == (10.0, 0.0, 10.0)
+
+
+@pytest.mark.asyncio
 async def test_balance_wallet_is_invariant_to_unrealized_pnl():
     client = _prepared_client()
+    client._accepted_balance_components = (90.0, 4.0, 6.0)
     responses = []
-    for upnl in ("-25", "0", "25"):
+    for upnl, transfer in (("-25", "65"), ("0", "90"), ("25", "90")):
         raw = {
             "marginCoin": "USDT",
             "available": "90",
             "frozen": "4",
             "margin": "6",
+            "transfer": transfer,
             "positionMode": "HEDGE",
             "crossUnrealizedPNL": upnl,
             "isolationUnrealizedPNL": "0",
@@ -362,6 +418,374 @@ async def test_balance_wallet_is_invariant_to_unrealized_pnl():
         responses.append(await client.fetch_balance())
 
     assert [response["total"]["USDT"] for response in responses] == [100.0] * 3
+
+
+@pytest.mark.asyncio
+async def test_balance_defers_duplicated_locked_funds_until_response_recovers():
+    client = _prepared_client()
+    client._accepted_balance_components = (85.3, 0.4, 1.2)
+
+    def account(*, available, transfer):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": "0.4",
+            "margin": "1.2",
+            "transfer": str(transfer),
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-0.2",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    client._request = AsyncMock(
+        side_effect=[
+            account(available=85.3, transfer=85.1),
+            account(available=86.9, transfer=85.1),
+            account(available=86.9, transfer=85.1),
+            account(available=85.3, transfer=85.1),
+        ]
+    )
+
+    initial = await client.fetch_balance()
+    with pytest.raises(AuthoritativeSurfaceUnavailable) as first:
+        await client.fetch_balance()
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    recovered = await client.fetch_balance()
+
+    assert initial["total"]["USDT"] == pytest.approx(86.9)
+    assert first.value.surface == "balance"
+    assert first.value.reason == "balance_consistency_check"
+    assert recovered["total"]["USDT"] == pytest.approx(86.9)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_accepts_exact_increase_when_transfer_reconciles():
+    client = _prepared_client()
+    client._accepted_balance_components = (90.0, 4.0, 6.0)
+    client._request = AsyncMock(
+        side_effect=[
+            {
+                "marginCoin": "USDT",
+                "available": "90",
+                "frozen": "4",
+                "margin": "6",
+                "transfer": "90",
+                "positionMode": "HEDGE",
+                "crossUnrealizedPNL": "0",
+                "isolationUnrealizedPNL": "0",
+            },
+            {
+                "marginCoin": "USDT",
+                "available": "100",
+                "frozen": "4",
+                "margin": "6",
+                "transfer": "100",
+                "positionMode": "HEDGE",
+                "crossUnrealizedPNL": "0",
+                "isolationUnrealizedPNL": "0",
+            },
+            {
+                "marginCoin": "USDT",
+                "available": "100",
+                "frozen": "4",
+                "margin": "6",
+                "transfer": "100",
+                "positionMode": "HEDGE",
+                "crossUnrealizedPNL": "0",
+                "isolationUnrealizedPNL": "0",
+            },
+        ]
+    )
+
+    before = await client.fetch_balance()
+    after = await client.fetch_balance()
+
+    assert before["total"]["USDT"] == 100.0
+    assert after["total"]["USDT"] == 110.0
+
+
+@pytest.mark.asyncio
+async def test_balance_restart_during_duplication_waits_for_consistent_recovery():
+    client = _prepared_client()
+
+    def account(available):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": "0.4",
+            "margin": "1.2",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-0.2",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    def account_with_transfer(available, transfer):
+        result = account(available)
+        result["transfer"] = str(transfer)
+        return result
+
+    client._request = AsyncMock(
+        side_effect=[
+            account_with_transfer(86.9, 85.1),
+            account_with_transfer(86.9, 85.1),
+            account_with_transfer(85.3, 85.1),
+        ]
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    recovered = await client.fetch_balance()
+
+    assert recovered["free"]["USDT"] == pytest.approx(85.3)
+    assert recovered["used"]["USDT"] == pytest.approx(1.6)
+    assert recovered["total"]["USDT"] == pytest.approx(86.9)
+    assert client._accepted_balance_components == pytest.approx((85.3, 0.4, 1.2))
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_initial_locked_funds_require_transfer_reconciliation():
+    client = _prepared_client()
+    raw = {
+        "marginCoin": "USDT",
+        "available": "90",
+        "frozen": "4",
+        "margin": "6",
+        "transfer": "90",
+        "bonus": "0",
+        "positionMode": "HEDGE",
+        "crossUnrealizedPNL": "0",
+        "isolationUnrealizedPNL": "0",
+    }
+    client._request = AsyncMock(return_value=raw)
+
+    confirmed = await client.fetch_balance()
+
+    assert confirmed["total"]["USDT"] == 100.0
+    assert client._accepted_balance_components == (90.0, 4.0, 6.0)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_ambiguous_state_never_ages_into_acceptance():
+    client = _prepared_client()
+    raw = {
+        "marginCoin": "USDT",
+        "available": "100",
+        "frozen": "4",
+        "margin": "6",
+        "transfer": "90",
+        "bonus": "0",
+        "positionMode": "HEDGE",
+        "crossUnrealizedPNL": "0",
+        "isolationUnrealizedPNL": "0",
+    }
+    client._request = AsyncMock(return_value=raw)
+
+    for _ in range(100):
+        with pytest.raises(AuthoritativeSurfaceUnavailable) as exc_info:
+            await client.fetch_balance()
+
+    assert exc_info.value.reason == "balance_consistency_check"
+    assert client._accepted_balance_components is None
+    assert client._pending_balance_components == (100.0, 4.0, 6.0)
+
+
+@pytest.mark.asyncio
+async def test_balance_changed_locks_remain_deferred_until_transfer_reconciles():
+    client = _prepared_client()
+    client._accepted_balance_components = (90.0, 4.0, 6.0)
+
+    def account(*, available, frozen, margin, transfer):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": str(frozen),
+            "margin": str(margin),
+            "transfer": str(transfer),
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "0",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    client._request = AsyncMock(
+        side_effect=[
+            account(available=100, frozen=4, margin=6, transfer=90),
+            account(available=101, frozen=3, margin=7, transfer=90),
+            account(available=91, frozen=3, margin=7, transfer=91),
+        ]
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    reconciled = await client.fetch_balance()
+
+    assert reconciled["total"]["USDT"] == 101.0
+    assert client._accepted_balance_components == (91.0, 3.0, 7.0)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_new_locked_funds_require_transfer_reconciliation():
+    client = _prepared_client()
+    client._accepted_balance_components = (90.0, 0.0, 0.0)
+
+    def account(*, available, margin):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": "0",
+            "margin": str(margin),
+            "transfer": "90",
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "0",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    client._request = AsyncMock(
+        side_effect=[
+            account(available=100, margin=10),
+            account(available=90, margin=10),
+        ]
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await client.fetch_balance()
+    reconciled = await client.fetch_balance()
+
+    assert reconciled["total"]["USDT"] == 100.0
+    assert client._accepted_balance_components == (90.0, 0.0, 10.0)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_matching_locked_funds_still_require_transfer_reconciliation():
+    client = _prepared_client()
+    client._accepted_balance_components = (90.0, 0.0, 10.0)
+
+    def account(*, available, transfer):
+        return {
+            "marginCoin": "USDT",
+            "available": str(available),
+            "frozen": "0",
+            "margin": "10",
+            "transfer": str(transfer),
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "0",
+            "isolationUnrealizedPNL": "0",
+        }
+
+    client._request = AsyncMock(
+        side_effect=[
+            account(available=90, transfer=80),
+            account(available=80, transfer=80),
+        ]
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable) as exc_info:
+        await client.fetch_balance()
+    reconciled = await client.fetch_balance()
+
+    assert exc_info.value.reason == "balance_consistency_check"
+    assert reconciled["free"]["USDT"] == 80.0
+    assert reconciled["used"]["USDT"] == 10.0
+    assert reconciled["total"]["USDT"] == 90.0
+    assert client._accepted_balance_components == (80.0, 0.0, 10.0)
+    assert client._pending_balance_components is None
+
+
+@pytest.mark.asyncio
+async def test_balance_initial_state_without_locked_funds_is_immediately_usable():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={
+            "marginCoin": "USDT",
+            "available": "100",
+            "frozen": "0",
+            "margin": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "0",
+            "isolationUnrealizedPNL": "0",
+        }
+    )
+
+    balance = await client.fetch_balance()
+
+    assert balance["total"]["USDT"] == 100.0
+    assert client._accepted_balance_components == (100.0, 0.0, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_bitunix_config_write_readiness_defers_unavailable_balance():
+    bot = BitunixBot.__new__(BitunixBot)
+    bot.balance_override = None
+    bot.cca = SimpleNamespace(
+        fetch_balance=AsyncMock(
+            side_effect=AuthoritativeSurfaceUnavailable(
+                "balance", "balance_consistency_check"
+            )
+        )
+    )
+
+    ready = await bot._exchange_config_write_ready()
+
+    assert ready is False
+    assert bot._last_authoritative_block_reason == "balance_consistency_check"
+    bot.cca.fetch_balance.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bitunix_config_write_readiness_honors_balance_override():
+    bot = BitunixBot.__new__(BitunixBot)
+    bot.balance_override = 100.0
+    bot.cca = SimpleNamespace(
+        fetch_balance=AsyncMock(side_effect=AssertionError("must not fetch"))
+    )
+
+    ready = await bot._exchange_config_write_ready()
+
+    assert ready is True
+    bot.cca.fetch_balance.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "balance_override",
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        0.0,
+        -1.0,
+        True,
+        "not-a-number",
+    ],
+)
+async def test_bitunix_config_write_readiness_rejects_invalid_balance_override(
+    balance_override,
+):
+    bot = BitunixBot.__new__(BitunixBot)
+    bot.balance_override = balance_override
+    bot.cca = SimpleNamespace(
+        fetch_balance=AsyncMock(side_effect=AssertionError("must not fetch"))
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="balance_override must be a positive finite numeric value",
+    ):
+        await bot._exchange_config_write_ready()
+
+    bot.cca.fetch_balance.assert_not_awaited()
 
 
 def test_hedge_order_normalization_preserves_position_and_action_side():
