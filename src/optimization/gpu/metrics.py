@@ -12,6 +12,9 @@ import math
 import torch
 
 from optimization.gpu.metric_registry import (
+    BTC_INTRADAY_RISK_METRICS,
+    ENTRY_INTERVAL_METRICS,
+    EQUITY_BALANCE_DIFF_METRICS,
     GPU_EXACT_ONLY_METRICS,
     HARD_STOP_LIFECYCLE_METRICS,
     HARD_STOP_PANIC_LOSS_METRICS,
@@ -72,42 +75,6 @@ _BTC_ACCOUNT_METRICS = {
     "peak_recovery_days_equity_btc",
     "peak_recovery_hours_equity_btc",
 }
-
-BTC_INTRADAY_RISK_METRICS = frozenset(
-    {
-        "calmar_ratio_btc",
-        "drawdown_worst_btc",
-        "drawdown_worst_mean_1pct_btc",
-        "expected_shortfall_1pct_btc",
-        "sharpe_ratio_btc",
-        "sortino_ratio_btc",
-        "sterling_ratio_btc",
-    }
-)
-
-EQUITY_BALANCE_DIFF_METRICS = frozenset(
-    {
-        f"equity_balance_diff_{sign}_{stat}_{currency}"
-        for sign in ("neg", "pos")
-        for stat in ("max", "mean")
-        for currency in ("btc", "usd")
-    }
-    | {
-        f"paper_loss{middle}_ratio_{currency}"
-        for middle in ("", "_mean")
-        for currency in ("btc", "usd")
-    }
-)
-
-ENTRY_INTERVAL_METRICS = frozenset(
-    {
-        "entry_interval_hours_mean",
-        "entry_interval_hours_median",
-        "entry_interval_hours_p95",
-        "entry_interval_hours_p99",
-        "entry_interval_hours_max",
-    }
-)
 
 _BTC_ACCOUNT_METRICS.update(BTC_INTRADAY_RISK_METRICS)
 _BTC_ACCOUNT_METRICS.update(

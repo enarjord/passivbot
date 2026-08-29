@@ -10,6 +10,8 @@ import math
 import multiprocessing
 import os
 import pickle
+import platform
+import subprocess
 import time
 from typing import Any
 
@@ -52,6 +54,7 @@ from utils import to_standard_exchange_name
 
 
 GPU_DEFAULTS = {
+    "auto_lean_parallelism": True,
     "population_size": 1024,
     "batch_size": 4096,
     "max_dispatch_candidate_bars": 1_000_000_000,
@@ -70,6 +73,9 @@ GPU_DEFAULTS = {
         "min_survivors": 64,
     },
 }
+
+GPU_LEAN_TM_POPULATION_SIZE = 2304
+GPU_LEAN_TM_MAX_DISPATCH_CANDIDATE_BARS = 4_500_000_000
 
 MIN_DRIFT_PROBES = 8
 
@@ -1004,7 +1010,7 @@ def _resolve_options(config: dict) -> dict:
     if configured is not None and not isinstance(configured, dict):
         raise TypeError("optimize.gpu must be an object")
     for key, default in GPU_DEFAULTS.items():
-        if key in (configured or {}):
+        if key in (configured or {}) and configured[key] is not None:
             options[key] = type(default)(configured[key])
     halving = dict(GPU_DEFAULTS["successive_halving"])
     configured_halving = options.get("successive_halving")
@@ -1162,6 +1168,150 @@ def _resolve_options(config: dict) -> dict:
         error_type=ValueError,
     )
     return options
+
+
+def _bound_proves(
+    bound_by_key: dict[str, Bound], key: str, predicate
+) -> bool:
+    bound = bound_by_key.get(key)
+    return bool(
+        bound is not None
+        and predicate(float(bound.low))
+        and predicate(float(bound.high))
+    )
+
+
+def _gpu_lean_tm_parallelism_eligible(
+    config: dict,
+    bound_by_key: dict[str, Bound],
+    enabled_sides,
+    *,
+    suite_enabled: bool,
+    coin_count: int,
+    requested_metric_features,
+) -> bool:
+    """Prove the measured one-side TM kernel shape before widening dispatches."""
+
+    if (
+        suite_enabled
+        or int(coin_count) != 1
+        or bool(requested_metric_features)
+        or bool(config.get("coin_overrides"))
+        or str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
+        != "trailing_martingale"
+    ):
+        return False
+    sides = sorted(str(side) for side in enabled_sides)
+    if len(sides) != 1 or sides[0] not in {"long", "short"}:
+        return False
+    side = sides[0]
+    bot = config.get("bot", {}).get(side, {})
+    risk = bot.get("risk", {})
+    live = config.get("live", {})
+    if (
+        bool(bot.get("hsl", {}).get("enabled", False))
+        or bool(bot.get("unstuck", {}).get("enabled", False))
+        or bool(risk.get("position_exposure_enforcer_enabled", False))
+        or bool(risk.get("total_exposure_enforcer_enabled", False))
+        or bool(live.get("market_orders_allowed", False))
+    ):
+        return False
+    try:
+        max_realized_loss_pct = float(live.get("max_realized_loss_pct", 1.0))
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(max_realized_loss_pct) or max_realized_loss_pct < 1.0:
+        return False
+    if not all(
+        _bound_proves(bound_by_key, f"{side}_{suffix}", lambda value: value > 0.0)
+        for suffix in (
+            "entry_retracement_base_pct",
+            "close_retracement_base_pct",
+        )
+    ):
+        return False
+    return all(
+        _bound_proves(
+            bound_by_key,
+            f"{side}_{suffix}",
+            lambda value: value == 0.0,
+        )
+        for suffix in (
+            "entry_threshold_volatility_1h_weight",
+            "entry_threshold_volatility_1m_weight",
+            "entry_retracement_volatility_1h_weight",
+            "entry_retracement_volatility_1m_weight",
+            "close_threshold_volatility_1h_weight",
+            "close_threshold_volatility_1m_weight",
+            "close_retracement_volatility_1h_weight",
+            "close_retracement_volatility_1m_weight",
+        )
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _apple_mps_chip_name() -> str:
+    """Return the Apple chip name without importing optional GPU packages."""
+
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        return ""
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return result.stdout.strip()
+
+
+def _apply_gpu_lean_tm_parallelism_defaults(
+    options: dict,
+    config: dict,
+    bound_by_key: dict[str, Bound],
+    enabled_sides,
+    *,
+    suite_enabled: bool,
+    coin_count: int,
+    requested_metric_features,
+    mps_chip_name: str | None = None,
+) -> bool:
+    """Apply the M3-tested width only when sizing is otherwise untouched."""
+
+    if not bool(options.get("auto_lean_parallelism", True)):
+        return False
+    effective_chip_name = (
+        _apple_mps_chip_name() if mps_chip_name is None else str(mps_chip_name)
+    )
+    if not effective_chip_name.startswith("Apple M3"):
+        return False
+    sizing_keys = (
+        "population_size",
+        "batch_size",
+        "max_dispatch_candidate_bars",
+    )
+    if any(options[key] != GPU_DEFAULTS[key] for key in sizing_keys):
+        return False
+    configured_gpu = config.get("optimize", {}).get("gpu", {}) or {}
+    if any(configured_gpu.get(key) is not None for key in sizing_keys):
+        return False
+    if not _gpu_lean_tm_parallelism_eligible(
+        config,
+        bound_by_key,
+        enabled_sides,
+        suite_enabled=suite_enabled,
+        coin_count=coin_count,
+        requested_metric_features=requested_metric_features,
+    ):
+        return False
+    options["population_size"] = GPU_LEAN_TM_POPULATION_SIZE
+    options["max_dispatch_candidate_bars"] = (
+        GPU_LEAN_TM_MAX_DISPATCH_CANDIDATE_BARS
+    )
+    return True
 
 
 def _validation_probe_count(
@@ -3525,7 +3675,11 @@ def run_backend(
         HARD_STOP_PROXY_METRICS,
         validate_gpu_metric_names,
     )
-    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import (
+        MpsMulticoinProxy,
+        MpsSingleCoinProxy,
+        mps_requested_metric_features,
+    )
     from optimization.warmup import (
         _finalize_optimizer_vector_config,
         validate_optimizer_effective_configs,
@@ -3535,7 +3689,6 @@ def run_backend(
     interrupt_check()
     reject_configured_exact_only_gpu_metrics(config)
     options = _resolve_options(config)
-    logging.info("GPU optimizer options: %s", options)
     validate_optimizer_effective_configs(config)
 
     shape = (
@@ -3908,6 +4061,25 @@ def run_backend(
             max_coin_count > 1 and len(enabled_sides) == 2
         ),
     )
+
+    if _apply_gpu_lean_tm_parallelism_defaults(
+        options,
+        proxy_config,
+        bound_by_key,
+        enabled_sides,
+        suite_enabled=suite_enabled,
+        coin_count=max_coin_count,
+        requested_metric_features=mps_requested_metric_features(
+            needed_metrics, strategy_kind=strategy_kind
+        ),
+    ):
+        logging.info(
+            "GPU lean Trailing Martingale parallelism selected | "
+            "population=%d max_dispatch_candidate_bars=%d",
+            int(options["population_size"]),
+            int(options["max_dispatch_candidate_bars"]),
+        )
+    logging.info("GPU optimizer options: %s", options)
 
     if suite_enabled:
         scenario_proxy_groups = {}

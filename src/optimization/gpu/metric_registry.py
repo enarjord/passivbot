@@ -6,6 +6,45 @@ import json
 
 import hjson
 
+# Metric-name groups that toggle opt-in MPS proxy features. Keep this metadata
+# Torch-free so backend preflight and ordinary CPU-only installs can prove the
+# dispatch contract without importing the optional GPU runtime.
+BTC_INTRADAY_RISK_METRICS = frozenset(
+    {
+        "calmar_ratio_btc",
+        "drawdown_worst_btc",
+        "drawdown_worst_mean_1pct_btc",
+        "expected_shortfall_1pct_btc",
+        "sharpe_ratio_btc",
+        "sortino_ratio_btc",
+        "sterling_ratio_btc",
+    }
+)
+
+EQUITY_BALANCE_DIFF_METRICS = frozenset(
+    {
+        f"equity_balance_diff_{sign}_{stat}_{currency}"
+        for sign in ("neg", "pos")
+        for stat in ("max", "mean")
+        for currency in ("btc", "usd")
+    }
+    | {
+        f"paper_loss{middle}_ratio_{currency}"
+        for middle in ("", "_mean")
+        for currency in ("btc", "usd")
+    }
+)
+
+ENTRY_INTERVAL_METRICS = frozenset(
+    {
+        "entry_interval_hours_mean",
+        "entry_interval_hours_median",
+        "entry_interval_hours_p95",
+        "entry_interval_hours_p99",
+        "entry_interval_hours_max",
+    }
+)
+
 # These metrics remain available from exact Rust backtests and analysis, but are
 # intentionally ineligible for Metal proxy objectives and proxy-side limits.
 # The registry is Torch-free so GPU backend preflight can inspect preserved raw
