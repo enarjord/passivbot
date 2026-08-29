@@ -374,6 +374,31 @@ async def test_balance_transfer_reconciliation_does_not_net_isolated_profit():
 
 
 @pytest.mark.asyncio
+async def test_balance_zero_transfer_floor_cannot_confirm_locked_funds():
+    client = _prepared_client()
+    client._request = AsyncMock(
+        return_value={
+            "marginCoin": "USDT",
+            "available": "10",
+            "frozen": "0",
+            "margin": "10",
+            "transfer": "0",
+            "bonus": "0",
+            "positionMode": "HEDGE",
+            "crossUnrealizedPNL": "-10",
+            "isolationUnrealizedPNL": "0",
+        }
+    )
+
+    with pytest.raises(AuthoritativeSurfaceUnavailable) as exc_info:
+        await client.fetch_balance()
+
+    assert exc_info.value.reason == "balance_consistency_check"
+    assert client._accepted_balance_components is None
+    assert client._pending_balance_components == (10.0, 0.0, 10.0)
+
+
+@pytest.mark.asyncio
 async def test_balance_wallet_is_invariant_to_unrealized_pnl():
     client = _prepared_client()
     client._accepted_balance_components = (90.0, 4.0, 6.0)

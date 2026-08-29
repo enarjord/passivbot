@@ -268,7 +268,11 @@ class BitunixClient:
         account response changed ``available`` alone, so this remains false even
         if that response is repeated across a restart.
         """
-        if transfer is None:
+        # ``transfer`` is floored at zero. At that floor it only proves that
+        # ``available + min(cross_unrealized_pnl, 0) - bonus <= 0``; it cannot
+        # independently disambiguate a locked-fund duplication. Keep the sample
+        # unavailable until a positive transfer value restores an exact cross-check.
+        if transfer is None or transfer <= 0.0:
             return False
         expected_available = transfer + bonus - min(cross_unrealized_pnl, 0.0)
         return self._balance_values_close(available, expected_available)
