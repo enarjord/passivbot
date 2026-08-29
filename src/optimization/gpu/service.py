@@ -10,7 +10,12 @@ import time
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
-from optimization.gpu.metric_registry import HARD_STOP_PROXY_METRICS
+from optimization.gpu.metric_registry import (
+    BTC_INTRADAY_RISK_METRICS,
+    ENTRY_INTERVAL_METRICS,
+    EQUITY_BALANCE_DIFF_METRICS,
+    HARD_STOP_PROXY_METRICS,
+)
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
@@ -818,12 +823,6 @@ def mps_requested_metric_features(
     needed_metrics, *, strategy_kind: str
 ) -> frozenset[str]:
     """Name opt-in MPS metric paths required by a proxy metric surface."""
-
-    from optimization.gpu.metrics import (
-        BTC_INTRADAY_RISK_METRICS,
-        ENTRY_INTERVAL_METRICS,
-        EQUITY_BALANCE_DIFF_METRICS,
-    )
 
     metrics = set(needed_metrics)
     features = {

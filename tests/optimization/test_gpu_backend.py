@@ -601,6 +601,13 @@ def test_gpu_lean_tm_metric_feature_detection(metric, expected_features):
     ) == expected_features
 
 
+def test_gpu_lean_tm_metric_feature_detection_is_torch_free(monkeypatch):
+    monkeypatch.setitem(sys.modules, "optimization.gpu.metrics", None)
+    assert mps_requested_metric_features(
+        {"entry_interval_hours_p95"}, strategy_kind="trailing_martingale"
+    ) == {"entry_interval"}
+
+
 def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
     config = _long_only_ema_config()
     options = _resolve_options(config)
