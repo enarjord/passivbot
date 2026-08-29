@@ -663,10 +663,13 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   device, with all three sizing keys left automatic, `auto_lean_parallelism` raises the effective
   population to 2304 only for a proven one-sided Trailing Martingale kernel with no coin overrides
   and with HSL, unstuck, exposure reducers, market orders, the realized-loss gate, recursive
-  entry/close modes, and volatility weights all compiled out. This supplies enough resident work
-  to hide divergent replay latency on the benchmarked target. Set `auto_lean_parallelism` to
-  `false`, or set any of `population_size`, `batch_size`, or `max_dispatch_candidate_bars` to a
-  number (including the ordinary default number), to retain the configured sizing unchanged.
+  entry/close modes, volatility weights, and opt-in metric feature paths all compiled out. Metric
+  surfaces needing BTC analysis, entry intervals, recovery distributions, equity-balance
+  divergence, HSL diagnostics, or other optional proxy output paths retain the general envelope.
+  This supplies enough resident work to hide divergent replay latency on the benchmarked target.
+  Set `auto_lean_parallelism` to `false`, or set any of `population_size`, `batch_size`, or
+  `max_dispatch_candidate_bars` to a number (including the ordinary default number), to retain the
+  configured sizing unchanged.
 - `batch_size` is the requested upper bound on candidates per MPS dispatch. Because Apple Silicon
   shares the GPU with WindowServer, the backend transparently splits a batch when its
   candidates-by-candles-by-coins-by-enabled-sides workload would make one Metal command buffer too
@@ -688,7 +691,7 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   candidate-bars in about 20 seconds on the supported M3 benchmark. Other Apple Silicon families
   and all heavier shapes retain the 1-billion default; the optimizer does not apply the wider
   envelope to coin-overridden, HSL, multicoin, suite, market-order, reducer, recursive-mode, or
-  active-volatility kernels.
+  active-volatility kernels, nor to kernels with optional metric feature paths enabled.
 - `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
   progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
   100%, measured backwards from the configured end date; each partial suffix receives the normal

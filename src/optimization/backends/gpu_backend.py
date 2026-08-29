@@ -1188,12 +1188,14 @@ def _gpu_lean_tm_parallelism_eligible(
     *,
     suite_enabled: bool,
     coin_count: int,
+    requested_metric_features,
 ) -> bool:
     """Prove the measured one-side TM kernel shape before widening dispatches."""
 
     if (
         suite_enabled
         or int(coin_count) != 1
+        or bool(requested_metric_features)
         or bool(config.get("coin_overrides"))
         or str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
         != "trailing_martingale"
@@ -1255,7 +1257,7 @@ def _apple_mps_chip_name() -> str:
         return ""
     try:
         result = subprocess.run(
-            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
             check=True,
             capture_output=True,
             text=True,
@@ -1274,6 +1276,7 @@ def _apply_gpu_lean_tm_parallelism_defaults(
     *,
     suite_enabled: bool,
     coin_count: int,
+    requested_metric_features,
     mps_chip_name: str | None = None,
 ) -> bool:
     """Apply the M3-tested width only when sizing is otherwise untouched."""
@@ -1301,6 +1304,7 @@ def _apply_gpu_lean_tm_parallelism_defaults(
         enabled_sides,
         suite_enabled=suite_enabled,
         coin_count=coin_count,
+        requested_metric_features=requested_metric_features,
     ):
         return False
     options["population_size"] = GPU_LEAN_TM_POPULATION_SIZE
@@ -3671,7 +3675,11 @@ def run_backend(
         HARD_STOP_PROXY_METRICS,
         validate_gpu_metric_names,
     )
-    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import (
+        MpsMulticoinProxy,
+        MpsSingleCoinProxy,
+        mps_requested_metric_features,
+    )
     from optimization.warmup import (
         _finalize_optimizer_vector_config,
         validate_optimizer_effective_configs,
@@ -4061,6 +4069,9 @@ def run_backend(
         enabled_sides,
         suite_enabled=suite_enabled,
         coin_count=max_coin_count,
+        requested_metric_features=mps_requested_metric_features(
+            needed_metrics, strategy_kind=strategy_kind
+        ),
     ):
         logging.info(
             "GPU lean Trailing Martingale parallelism selected | "

@@ -9,8 +9,10 @@ All notable user-facing changes will be documented in this file.
   restoring roughly 110–117 proxy candidates/second in the long-history benchmark while keeping
   command buffers near 20 seconds. Other Apple Silicon families plus coin-overridden, HSL,
   multicoin, suite, market-order, reducer, recursive-mode, and active-volatility kernels retain the
-  1-billion safety envelope. Set `optimize.gpu.auto_lean_parallelism` to `false`, or set any GPU
-  sizing value explicitly, to disable the automatic selection.
+  1-billion safety envelope. Runs requesting opt-in proxy metric features, including BTC analysis,
+  entry intervals, recovery distributions, equity-balance divergence, and HSL diagnostics, also
+  retain the 1-billion envelope. Set `optimize.gpu.auto_lean_parallelism` to `false`, or set any
+  GPU sizing value explicitly, to disable the automatic selection.
 
 - Apple MPS optimization now defaults to a 1-billion candidate-bar dispatch envelope instead of
   500 million, approximately doubling per-dispatch parallelism on long one-sided histories.

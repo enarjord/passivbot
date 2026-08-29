@@ -814,6 +814,44 @@ _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS = {
 }
 
 
+def mps_requested_metric_features(
+    needed_metrics, *, strategy_kind: str
+) -> frozenset[str]:
+    """Name opt-in MPS metric paths required by a proxy metric surface."""
+
+    from optimization.gpu.metrics import (
+        BTC_INTRADAY_RISK_METRICS,
+        ENTRY_INTERVAL_METRICS,
+        EQUITY_BALANCE_DIFF_METRICS,
+    )
+
+    metrics = set(needed_metrics)
+    features = {
+        "btc_analysis": any(
+            _metric_uses_btc_analysis(metric) for metric in metrics
+        ),
+        "btc_intraday_risk": bool(metrics & BTC_INTRADAY_RISK_METRICS),
+        "equity_balance_diff": bool(metrics & EQUITY_BALANCE_DIFF_METRICS),
+        "entry_interval": bool(
+            str(strategy_kind).strip().lower() == "trailing_martingale"
+            and metrics & ENTRY_INTERVAL_METRICS
+        ),
+        "strategy_eq_recovery_distribution": bool(
+            metrics & _STRATEGY_EQ_RECOVERY_DISTRIBUTION_METRICS
+        ),
+        "hsl_ema_tail": bool(metrics & _HSL_EMA_TAIL_METRICS),
+        "hsl_raw_drawdown": bool(
+            metrics & (_HSL_RAW_DRAWDOWN_METRICS | _HSL_RAW_TAIL_METRICS)
+        ),
+        "hsl_raw_tail": bool(metrics & _HSL_RAW_TAIL_METRICS),
+        "hsl_diagnostics": _hsl_diagnostics_needed(metrics),
+        "coin_fill_counts": bool(
+            metrics & {"fills_active_symbols_count", "fills_top_symbol_share"}
+        ),
+    }
+    return frozenset(name for name, enabled in features.items() if enabled)
+
+
 def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
     """Run the opt-in recovery postprocessor before proxy outputs leave MPS."""
 

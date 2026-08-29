@@ -98,6 +98,7 @@ from optimization.backends.gpu_backend import (
     GPU_LEAN_TM_POPULATION_SIZE,
 )
 from optimization.gpu.metric_registry import configured_exact_only_gpu_metrics
+from optimization.gpu.service import mps_requested_metric_features
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
 from optimization.warmup import build_optimizer_vector_config
 
@@ -398,6 +399,9 @@ def test_gpu_lean_tm_parallelism_requires_complete_compileout_proof():
             kwargs.pop("enabled_sides", {"long"}),
             suite_enabled=kwargs.pop("suite_enabled", False),
             coin_count=kwargs.pop("coin_count", 1),
+            requested_metric_features=kwargs.pop(
+                "requested_metric_features", frozenset()
+            ),
         )
 
     assert eligible()
@@ -423,7 +427,22 @@ def test_gpu_lean_tm_parallelism_requires_complete_compileout_proof():
         {"short"},
         suite_enabled=False,
         coin_count=1,
+        requested_metric_features=frozenset(),
     )
+
+    for feature in (
+        "entry_interval",
+        "strategy_eq_recovery_distribution",
+        "btc_analysis",
+        "btc_intraday_risk",
+        "equity_balance_diff",
+        "hsl_ema_tail",
+        "hsl_raw_drawdown",
+        "hsl_raw_tail",
+        "hsl_diagnostics",
+        "coin_fill_counts",
+    ):
+        assert not eligible(requested_metric_features={feature}), feature
 
     for path, value in (
         (("bot", "long", "hsl", "enabled"), True),
@@ -464,6 +483,7 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
         {"long"},
         suite_enabled=False,
         coin_count=1,
+        requested_metric_features=frozenset(),
         mps_chip_name="Apple M3",
     )
     assert options["population_size"] == GPU_LEAN_TM_POPULATION_SIZE
@@ -471,6 +491,19 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
         options["max_dispatch_candidate_bars"]
         == GPU_LEAN_TM_MAX_DISPATCH_CANDIDATE_BARS
     )
+
+    metric_enabled = copy.deepcopy(GPU_DEFAULTS)
+    assert not _apply_gpu_lean_tm_parallelism_defaults(
+        metric_enabled,
+        config,
+        bounds,
+        {"long"},
+        suite_enabled=False,
+        coin_count=1,
+        requested_metric_features={"entry_interval"},
+        mps_chip_name="Apple M3",
+    )
+    assert metric_enabled == GPU_DEFAULTS
 
     for key, value in (
         ("auto_lean_parallelism", False),
@@ -487,6 +520,7 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
             {"long"},
             suite_enabled=False,
             coin_count=1,
+            requested_metric_features=frozenset(),
             mps_chip_name="Apple M3 Max",
         )
 
@@ -498,6 +532,7 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
             {"long"},
             suite_enabled=False,
             coin_count=1,
+            requested_metric_features=frozenset(),
             mps_chip_name=chip_name,
         )
 
@@ -511,8 +546,59 @@ def test_gpu_lean_tm_parallelism_auto_sizes_only_untuned_defaults():
             {"long"},
             suite_enabled=False,
             coin_count=1,
+            requested_metric_features=frozenset(),
             mps_chip_name="Apple M3",
         )
+
+
+def test_apple_mps_chip_probe_does_not_depend_on_shell_path(monkeypatch):
+    from optimization.backends import gpu_backend
+
+    gpu_backend._apple_mps_chip_name.cache_clear()
+    monkeypatch.setattr(gpu_backend.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(gpu_backend.platform, "machine", lambda: "arm64")
+    run = MagicMock(return_value=SimpleNamespace(stdout="Apple M3\n"))
+    monkeypatch.setattr(gpu_backend.subprocess, "run", run)
+
+    assert gpu_backend._apple_mps_chip_name() == "Apple M3"
+    assert run.call_args.args[0] == [
+        "/usr/sbin/sysctl",
+        "-n",
+        "machdep.cpu.brand_string",
+    ]
+    gpu_backend._apple_mps_chip_name.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("metric", "expected_features"),
+    (
+        ("entry_interval_hours_p95", {"entry_interval"}),
+        (
+            "strategy_eq_recovery_days_p99",
+            {"strategy_eq_recovery_distribution"},
+        ),
+        ("adg_btc", {"btc_analysis"}),
+        ("drawdown_worst_btc", {"btc_analysis", "btc_intraday_risk"}),
+        (
+            "equity_balance_diff_neg_max_usd",
+            {"equity_balance_diff"},
+        ),
+        (
+            "drawdown_worst_mean_1pct_ema_strategy_eq",
+            {"hsl_ema_tail", "hsl_diagnostics"},
+        ),
+        (
+            "drawdown_worst_mean_1pct_strategy_eq_long",
+            {"hsl_raw_drawdown", "hsl_raw_tail", "hsl_diagnostics"},
+        ),
+        ("hard_stop_time_in_red_pct", {"hsl_diagnostics"}),
+        ("fills_top_symbol_share", {"coin_fill_counts"}),
+    ),
+)
+def test_gpu_lean_tm_metric_feature_detection(metric, expected_features):
+    assert mps_requested_metric_features(
+        {metric}, strategy_kind="trailing_martingale"
+    ) == expected_features
 
 
 def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
