@@ -2278,9 +2278,13 @@ class BitunixBot(CCXTBot):
                     raise ValueError("boolean balance override")
                 parsed_override = float(balance_override)
             except (TypeError, ValueError):
-                raise ValueError("balance_override must be a finite numeric value") from None
-            if not math.isfinite(parsed_override):
-                raise ValueError("balance_override must be a finite numeric value")
+                raise ValueError(
+                    "balance_override must be a positive finite numeric value"
+                ) from None
+            if not math.isfinite(parsed_override) or parsed_override <= 0.0:
+                raise ValueError(
+                    "balance_override must be a positive finite numeric value"
+                )
             return True
         try:
             await self.cca.fetch_balance()

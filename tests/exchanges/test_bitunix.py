@@ -760,7 +760,15 @@ async def test_bitunix_config_write_readiness_honors_balance_override():
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "balance_override",
-    [float("nan"), float("inf"), float("-inf"), True, "not-a-number"],
+    [
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+        0.0,
+        -1.0,
+        True,
+        "not-a-number",
+    ],
 )
 async def test_bitunix_config_write_readiness_rejects_invalid_balance_override(
     balance_override,
@@ -773,7 +781,7 @@ async def test_bitunix_config_write_readiness_rejects_invalid_balance_override(
 
     with pytest.raises(
         ValueError,
-        match="balance_override must be a finite numeric value",
+        match="balance_override must be a positive finite numeric value",
     ):
         await bot._exchange_config_write_ready()
 
