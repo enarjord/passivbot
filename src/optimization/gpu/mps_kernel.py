@@ -73,6 +73,9 @@ _ENTRY_INTERVAL_DEFINE = "#define PASSIVBOT_ENTRY_INTERVAL_ENABLED 1\n"
 _TM_TRAILING_ENTRY_ONLY_DEFINE = (
     "#define PASSIVBOT_TM_TRAILING_ENTRY_ONLY 1\n"
 )
+_TM_RECURSIVE_ENTRY_ONLY_DEFINE = (
+    "#define PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY 1\n"
+)
 _TM_TRAILING_CLOSE_ONLY_DEFINE = (
     "#define PASSIVBOT_TM_TRAILING_CLOSE_ONLY 1\n"
 )
@@ -176,17 +179,27 @@ def _with_tm_dispatch_features(
     source: str,
     *,
     trailing_entry_only: bool,
+    recursive_entry_only: bool,
     trailing_close_only: bool,
     reducers_disabled: bool,
     market_orders_disabled: bool,
     loss_gate_disabled: bool,
     volatility_disabled: bool,
 ) -> str:
+    if trailing_entry_only and recursive_entry_only:
+        raise ValueError(
+            "TM trailing-entry-only and recursive-entry-only modes are mutually exclusive"
+        )
     features = (
         (
             trailing_entry_only,
             "#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY",
             _TM_TRAILING_ENTRY_ONLY_DEFINE,
+        ),
+        (
+            recursive_entry_only,
+            "#ifndef PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY",
+            _TM_RECURSIVE_ENTRY_ONLY_DEFINE,
         ),
         (
             trailing_close_only,
@@ -285,7 +298,7 @@ def _tm_dispatch_specialization(
     short_enabled: bool,
     market_orders_allowed: bool,
     loss_gate_enabled: bool,
-) -> tuple[bool, bool, bool, bool, bool, bool]:
+) -> tuple[bool, bool, bool, bool, bool, bool, bool]:
     """Prove dispatch-wide TM features before compiling away inactive paths."""
 
     side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
@@ -305,6 +318,10 @@ def _tm_dispatch_specialization(
 
     trailing_entry_only = all_active_rows(
         lambda values: np.all(np.isfinite(values) & (values > 0.0)),
+        "entry_retracement_base_pct",
+    )
+    recursive_entry_only = all_active_rows(
+        lambda values: np.all(np.isfinite(values) & (values <= 0.0)),
         "entry_retracement_base_pct",
     )
     trailing_close_only = all_active_rows(
@@ -340,6 +357,7 @@ def _tm_dispatch_specialization(
     )
     return (
         trailing_entry_only,
+        recursive_entry_only,
         trailing_close_only,
         reducers_disabled,
         not market_orders_allowed,
@@ -679,6 +697,7 @@ def _ema_anchor_short_no_hsl_shader_library(
 @lru_cache(maxsize=16)
 def _trailing_martingale_shader_library(
     trailing_entry_only: bool = False,
+    recursive_entry_only: bool = False,
     trailing_close_only: bool = False,
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
@@ -700,6 +719,7 @@ def _trailing_martingale_shader_library(
     source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_source_py(),
         trailing_entry_only=trailing_entry_only,
+        recursive_entry_only=recursive_entry_only,
         trailing_close_only=trailing_close_only,
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
@@ -723,6 +743,7 @@ def _trailing_martingale_shader_library(
 @lru_cache(maxsize=16)
 def _trailing_martingale_long_hsl_shader_library(
     trailing_entry_only: bool = False,
+    recursive_entry_only: bool = False,
     trailing_close_only: bool = False,
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
@@ -744,6 +765,7 @@ def _trailing_martingale_long_hsl_shader_library(
     source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_long_hsl_source_py(),
         trailing_entry_only=trailing_entry_only,
+        recursive_entry_only=recursive_entry_only,
         trailing_close_only=trailing_close_only,
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
@@ -767,6 +789,7 @@ def _trailing_martingale_long_hsl_shader_library(
 @lru_cache(maxsize=16)
 def _trailing_martingale_short_hsl_shader_library(
     trailing_entry_only: bool = False,
+    recursive_entry_only: bool = False,
     trailing_close_only: bool = False,
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
@@ -788,6 +811,7 @@ def _trailing_martingale_short_hsl_shader_library(
     source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_short_hsl_source_py(),
         trailing_entry_only=trailing_entry_only,
+        recursive_entry_only=recursive_entry_only,
         trailing_close_only=trailing_close_only,
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
@@ -811,6 +835,7 @@ def _trailing_martingale_short_hsl_shader_library(
 @lru_cache(maxsize=8)
 def _trailing_martingale_long_no_hsl_shader_library(
     trailing_entry_only: bool = False,
+    recursive_entry_only: bool = False,
     trailing_close_only: bool = False,
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
@@ -828,6 +853,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
     source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_long_no_hsl_source_py(),
         trailing_entry_only=trailing_entry_only,
+        recursive_entry_only=recursive_entry_only,
         trailing_close_only=trailing_close_only,
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
@@ -847,6 +873,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
 @lru_cache(maxsize=8)
 def _trailing_martingale_short_no_hsl_shader_library(
     trailing_entry_only: bool = False,
+    recursive_entry_only: bool = False,
     trailing_close_only: bool = False,
     reducers_disabled: bool = False,
     market_orders_disabled: bool = False,
@@ -864,6 +891,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
     source = _with_tm_dispatch_features(
         passivbot_rust.mps_trailing_martingale_short_no_hsl_source_py(),
         trailing_entry_only=trailing_entry_only,
+        recursive_entry_only=recursive_entry_only,
         trailing_close_only=trailing_close_only,
         reducers_disabled=reducers_disabled,
         market_orders_disabled=market_orders_disabled,
@@ -2849,10 +2877,13 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
 
     def _shader_library_cache_call(
         self,
-        dispatch_features: tuple[bool, bool, bool, bool, bool, bool] | None = None,
+        dispatch_features: tuple[
+            bool, bool, bool, bool, bool, bool, bool
+        ] | None = None,
     ):
         if dispatch_features is None:
             dispatch_features = (
+                False,
                 False,
                 False,
                 False,
@@ -3182,11 +3213,12 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 - max(0, effective_history_start),
                 "dispatch_specialization": {
                     "trailing_entry_only": dispatch_features[0],
-                    "trailing_close_only": dispatch_features[1],
-                    "reducers_disabled": dispatch_features[2],
-                    "market_orders_disabled": dispatch_features[3],
-                    "loss_gate_disabled": dispatch_features[4],
-                    "volatility_disabled": dispatch_features[5],
+                    "recursive_entry_only": dispatch_features[1],
+                    "trailing_close_only": dispatch_features[2],
+                    "reducers_disabled": dispatch_features[3],
+                    "market_orders_disabled": dispatch_features[4],
+                    "loss_gate_disabled": dispatch_features[5],
+                    "volatility_disabled": dispatch_features[6],
                 },
             }
         else:

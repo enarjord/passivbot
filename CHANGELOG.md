@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin Trailing Martingale now selects a recursive-entry-only Metal variant when
+  every active candidate uses nonpositive entry retracement. The variant compiles out trailing
+  entry retracement/trigger work while preserving the recursive ladder and bitwise generic-kernel
+  outputs. The deterministic GPU benchmark adds a fixed recursive-entry case for repeatable
+  before/after measurements. Exact Rust validation, CPU optimization, backtests, and live behavior
+  are unchanged.
+
 - Apple MPS single-coin Trailing Martingale now uses a reducer-free recursive-close fast path when
   every active candidate side disables WEL/TWEL enforcers and auto-unstuck, avoiding redundant
   reducer allocations while preserving the ordinary close ladder. The deterministic GPU benchmark
