@@ -24,12 +24,20 @@ from optimization.gpu.model import (
 CASES = (
     "ema-single-long",
     "tm-single-long",
+    "tm-single-long-static-close",
+    "tm-single-long-close-ladder",
     "tm-single-long-hsl",
     "ema-multicoin-overhead",
     "ema-multicoin-overrides",
 )
 SINGLE_COIN_CASES = frozenset(
-    {"ema-single-long", "tm-single-long", "tm-single-long-hsl"}
+    {
+        "ema-single-long",
+        "tm-single-long",
+        "tm-single-long-static-close",
+        "tm-single-long-close-ladder",
+        "tm-single-long-hsl",
+    }
 )
 DEFAULT_SEED = 7
 MAX_CANDIDATES = 4096
@@ -115,6 +123,17 @@ def _base_parameter_values() -> dict[str, float]:
 
 
 def _single_coin_value_overrides(name: str) -> dict[str, float]:
+    if name in {
+        "tm-single-long-static-close",
+        "tm-single-long-close-ladder",
+    }:
+        return {
+            "close_qty_pct": 0.25,
+            "close_retracement_base_pct": 0.0,
+            "close_threshold_we_weight": (
+                0.02 if name == "tm-single-long-close-ladder" else 0.0
+            ),
+        }
     if name != "tm-single-long-hsl":
         return {}
     return {
@@ -188,6 +207,15 @@ def _fixture_sha256(*arrays) -> str:
         digest.update(str(array.shape).encode())
         digest.update(array.tobytes())
     return digest.hexdigest()
+
+
+def _recursive_close_ladder_candidate_count(candidates) -> int:
+    return sum(
+        float(candidate.get("long_close_retracement_base_pct", 1.0)) <= 0.0
+        and float(candidate.get("long_close_threshold_we_weight", 0.0)) != 0.0
+        and float(candidate.get("long_close_qty_pct", 1.0)) < 1.0
+        for candidate in candidates
+    )
 
 
 def _market_and_run(timestamps, bars: int):
@@ -515,6 +543,9 @@ def run_benchmark_case(
         ),
         "hsl_signal_mode": float(
             candidate_dicts[0].get("long_hsl_signal_mode", 0.0)
+        ),
+        "recursive_close_ladder_candidate_count": (
+            _recursive_close_ladder_candidate_count(candidate_dicts)
         ),
         "actual_dispatch_batch_size": int(cold["batch_size"]),
         "dispatch_chunk_count": int(
