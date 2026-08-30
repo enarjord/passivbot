@@ -9,6 +9,7 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
 )
 from tools.gpu_proxy_benchmark import (
+    HSL_PNL_LOOKBACK_BARS,
     _bounded_positive,
     _fixture_sha256,
     _parameter_matrix,
@@ -79,6 +80,7 @@ def test_gpu_proxy_benchmark_exposes_single_side_tm_hsl_case():
         ]
         == 0.03
     )
+    assert HSL_PNL_LOOKBACK_BARS == 43_200
 
 
 @pytest.mark.parametrize(
@@ -154,6 +156,8 @@ def test_gpu_proxy_benchmark_rejects_oversized_dispatch(case, extra_args):
 
 def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
     class FakeProxy:
+        runner = type("Runner", (), {"pnl_lookback_bars": 43_200})()
+
         def evaluate(self, _candidates):
             self.last_profile = {
                 "actual_dispatch_batch_sizes": [2, 2, 2, 2],
@@ -195,6 +199,7 @@ def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
         0.4
     )
     assert report["kernel_candidate_bars"] == 80
+    assert report["hsl_pnl_lookback_bars"] == 43_200
 
 
 def test_gpu_proxy_benchmark_reports_missing_optional_gpu_dependencies(

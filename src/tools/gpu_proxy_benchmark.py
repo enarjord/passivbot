@@ -38,6 +38,7 @@ MAX_SINGLE_BARS = 525_600
 MAX_MULTICOIN_BARS = 100_000
 MAX_COINS = 64
 MAX_DISPATCH_CANDIDATE_BARS = 500_000_000
+HSL_PNL_LOOKBACK_BARS = 30 * 24 * 60
 
 
 def _base_parameter_values() -> dict[str, float]:
@@ -206,7 +207,11 @@ def _build_case(
         MpsTrailingMartingaleRunner,
     )
     from optimization.gpu.metrics import compute_objectives
-    from optimization.gpu.service import MpsMulticoinProxy, MpsSingleCoinProxy
+    from optimization.gpu.service import (
+        MpsMulticoinProxy,
+        MpsSingleCoinProxy,
+        mps_requested_metric_features,
+    )
 
     needed_metrics = {
         "adg_strategy_eq",
@@ -253,6 +258,10 @@ def _build_case(
                 EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS, candidates, seed
             )
         else:
+            requested_metric_features = mps_requested_metric_features(
+                needed_metrics,
+                strategy_kind="trailing_martingale",
+            )
             runner = MpsTrailingMartingaleRunner(
                 market,
                 run,
@@ -260,6 +269,12 @@ def _build_case(
                 long_enabled=True,
                 short_enabled=False,
                 hsl_enabled=hsl_enabled,
+                pnl_lookback_bars=(
+                    HSL_PNL_LOOKBACK_BARS if hsl_enabled else 0
+                ),
+                hsl_diagnostics_enabled=(
+                    "hsl_diagnostics" in requested_metric_features
+                ),
             )
             side_matrix = _parameter_matrix(
                 TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
@@ -475,6 +490,7 @@ def run_benchmark_case(
         return statistics.median(float(item[key]) for item in warm)
 
     cold_profile = cold["proxy_profile"]
+    runner = getattr(proxy, "runner", None)
     return {
         "case": name,
         "seed": seed,
@@ -489,6 +505,9 @@ def run_benchmark_case(
                 "kernel_candidate_bars",
                 candidates * bars * coin_count * side_count,
             )
+        ),
+        "hsl_pnl_lookback_bars": int(
+            getattr(runner, "pnl_lookback_bars", 0)
         ),
         "actual_dispatch_batch_size": int(cold["batch_size"]),
         "dispatch_chunk_count": int(
