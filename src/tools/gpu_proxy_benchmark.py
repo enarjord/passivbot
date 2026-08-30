@@ -39,6 +39,7 @@ MAX_MULTICOIN_BARS = 100_000
 MAX_COINS = 64
 MAX_DISPATCH_CANDIDATE_BARS = 500_000_000
 HSL_PNL_LOOKBACK_BARS = 30 * 24 * 60
+HSL_SIGNAL_MODE_COIN = 2.0
 
 
 def _base_parameter_values() -> dict[str, float]:
@@ -110,6 +111,21 @@ def _base_parameter_values() -> dict[str, float]:
         "hsl_signal_mode": 0.0,
         "hsl_slot_count": 1.0,
         "wallet_exposure_limit": -1.0,
+    }
+
+
+def _single_coin_value_overrides(name: str) -> dict[str, float]:
+    if name != "tm-single-long-hsl":
+        return {}
+    return {
+        "hsl_enabled": 1.0,
+        "hsl_red_threshold": 0.02,
+        "hsl_ema_span_minutes": 60.0,
+        "hsl_cooldown_minutes_after_red": 1_440.0,
+        "hsl_restart_policy": 1.0,
+        "hsl_signal_mode": HSL_SIGNAL_MODE_COIN,
+        "entry_double_down_factor": 2.0,
+        "total_wallet_exposure_limit": 5.0,
     }
 
 
@@ -232,19 +248,7 @@ def _build_case(
             market,
         )
         hsl_enabled = name == "tm-single-long-hsl"
-        hsl_value_overrides = (
-            {
-                "hsl_enabled": 1.0,
-                "hsl_red_threshold": 0.02,
-                "hsl_ema_span_minutes": 60.0,
-                "hsl_cooldown_minutes_after_red": 1_440.0,
-                "hsl_restart_policy": 1.0,
-                "entry_double_down_factor": 2.0,
-                "total_wallet_exposure_limit": 5.0,
-            }
-            if hsl_enabled
-            else {}
-        )
+        hsl_value_overrides = _single_coin_value_overrides(name)
         if name == "ema-single-long":
             runner = MpsEmaAnchorRunner(
                 market,
@@ -508,6 +512,9 @@ def run_benchmark_case(
         ),
         "hsl_pnl_lookback_bars": int(
             getattr(runner, "pnl_lookback_bars", 0)
+        ),
+        "hsl_signal_mode": float(
+            candidate_dicts[0].get("long_hsl_signal_mode", 0.0)
         ),
         "actual_dispatch_batch_size": int(cold["batch_size"]),
         "dispatch_chunk_count": int(
