@@ -825,8 +825,12 @@ default to 4,320 candles and eight coins. Every report records the seed and work
 compile/run timing, a fixture hash, and warm p50 across five repeated runs, including
 candidates/second, kernel time, maximum chunk wall time, dispatch count, device transfer, and host
 overhead. The HSL case uses the same fixed candles and candidate generation as ordinary Trailing
-Martingale while enabling a deterministic long-side HSL lifecycle. Use identical arguments and
-immutable commits for before/after comparisons. The harness calls the production proxy evaluation
+Martingale while enabling a deterministic long-side HSL lifecycle with the production-equivalent
+30-day finite coin-PnL lookback in `coin` signal mode. It derives optional HSL diagnostic
+compilation from the same requested metric surface as the production proxy; the default case
+requests no HSL-only diagnostics. Reports record the effective lookback in bars and numeric
+signal-mode ID. Use identical arguments and immutable commits for before/after comparisons. The
+harness calls the production proxy evaluation
 path, including its full output transfer, metric reduction, and result materialization. Run one
 `--case` per process when comparing cold compilation; `--case all` is convenient for smoke checks,
 and shared-cache hit/miss state still keeps later cold/warm labels accurate.

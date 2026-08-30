@@ -9,10 +9,13 @@ from optimization.gpu.model import (
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
 )
 from tools.gpu_proxy_benchmark import (
+    HSL_PNL_LOOKBACK_BARS,
+    HSL_SIGNAL_MODE_COIN,
     _bounded_positive,
     _fixture_sha256,
     _parameter_matrix,
     _require_mps_torch,
+    _single_coin_value_overrides,
     build_parser,
     main,
     run_benchmark_case,
@@ -58,11 +61,12 @@ def test_gpu_proxy_benchmark_accepts_independent_dispatch_batch_size():
 
 def test_gpu_proxy_benchmark_exposes_single_side_tm_hsl_case():
     args = build_parser().parse_args(["--case", "tm-single-long-hsl"])
+    overrides = _single_coin_value_overrides(args.case)
     matrix = _parameter_matrix(
         TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
         2,
         7,
-        value_overrides={"hsl_enabled": 1.0, "hsl_red_threshold": 0.03},
+        value_overrides=overrides,
     )
 
     assert args.case == "tm-single-long-hsl"
@@ -77,8 +81,16 @@ def test_gpu_proxy_benchmark_exposes_single_side_tm_hsl_case():
                 "hsl_red_threshold"
             ),
         ]
-        == 0.03
+        == 0.02
     )
+    assert np.all(
+        matrix[
+            :,
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("hsl_signal_mode"),
+        ]
+        == HSL_SIGNAL_MODE_COIN
+    )
+    assert HSL_PNL_LOOKBACK_BARS == 43_200
 
 
 @pytest.mark.parametrize(
@@ -154,6 +166,8 @@ def test_gpu_proxy_benchmark_rejects_oversized_dispatch(case, extra_args):
 
 def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
     class FakeProxy:
+        runner = type("Runner", (), {"pnl_lookback_bars": 43_200})()
+
         def evaluate(self, _candidates):
             self.last_profile = {
                 "actual_dispatch_batch_sizes": [2, 2, 2, 2],
@@ -195,6 +209,8 @@ def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
         0.4
     )
     assert report["kernel_candidate_bars"] == 80
+    assert report["hsl_pnl_lookback_bars"] == 43_200
+    assert report["hsl_signal_mode"] == 0.0
 
 
 def test_gpu_proxy_benchmark_reports_missing_optional_gpu_dependencies(
