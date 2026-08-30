@@ -793,9 +793,12 @@ available without enabling profiling or adding synchronization points.
 Single-coin Trailing Martingale runners inspect the packed rows in each dispatch before choosing a
 cached Metal library. When every enabled-side candidate has positive entry or close retracement,
 the corresponding recursive grid path is compiled out. When every enabled-side candidate disables
-the position/total-exposure enforcers and auto-unstuck, those reducer paths are compiled out as a
-group. Fixed run settings similarly specialize ordinary market execution and the realized-loss
-gate. When all eight entry/close threshold and retracement volatility weights are exactly zero for
+entry retracement, the entry path instead compiles out trailing trigger and retracement work while
+retaining recursive ladder expansion. Mixed entry modes keep the generic path. When every
+enabled-side candidate disables the position/total-exposure enforcers and auto-unstuck, those
+reducer paths are compiled out as a group. Fixed run settings similarly specialize ordinary market
+execution and the realized-loss gate. When all eight entry/close threshold and retracement
+volatility weights are exactly zero for
 every active row, the selected kernel also omits the 1-minute and 1-hour volatility EMA state,
 candle-range loads, and volatility-weight arithmetic. Any nonzero, non-finite, or mixed row keeps
 the full volatility path. A mixed dispatch keeps each relevant full path, so this changes compiled
@@ -812,6 +815,7 @@ optimization results.
 ```bash
 passivbot tool gpu-proxy-benchmark --case ema-single-long
 passivbot tool gpu-proxy-benchmark --case tm-single-long
+passivbot tool gpu-proxy-benchmark --case tm-single-long-entry-ladder
 passivbot tool gpu-proxy-benchmark --case tm-single-long-static-close
 passivbot tool gpu-proxy-benchmark --case tm-single-long-close-ladder
 passivbot tool gpu-proxy-benchmark --case tm-single-long-hsl
@@ -845,6 +849,10 @@ parameters can emit multiple close rungs. When every active candidate side disab
 enforcers and auto-unstuck, the directional kernel skips reducer candidate construction and
 performs the one ordinary close-grid allocation directly; exact Rust validation remains
 authoritative.
+The ordinary and entry-ladder Trailing Martingale cases likewise hold candles, candidate count,
+seed, and all other parameters constant while switching entry retracement from positive to zero.
+Reports include the number of recursive-entry candidates. Homogeneous recursive-entry dispatches
+select the recursive-only Metal variant; mixed entry modes retain the generic kernel.
 
 ### Pymoo Configuration
 

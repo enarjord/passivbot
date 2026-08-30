@@ -24,6 +24,7 @@ from optimization.gpu.model import (
 CASES = (
     "ema-single-long",
     "tm-single-long",
+    "tm-single-long-entry-ladder",
     "tm-single-long-static-close",
     "tm-single-long-close-ladder",
     "tm-single-long-hsl",
@@ -34,6 +35,7 @@ SINGLE_COIN_CASES = frozenset(
     {
         "ema-single-long",
         "tm-single-long",
+        "tm-single-long-entry-ladder",
         "tm-single-long-static-close",
         "tm-single-long-close-ladder",
         "tm-single-long-hsl",
@@ -123,6 +125,10 @@ def _base_parameter_values() -> dict[str, float]:
 
 
 def _single_coin_value_overrides(name: str) -> dict[str, float]:
+    if name == "tm-single-long-entry-ladder":
+        return {
+            "entry_retracement_base_pct": 0.0,
+        }
     if name in {
         "tm-single-long-static-close",
         "tm-single-long-close-ladder",
@@ -214,6 +220,14 @@ def _recursive_close_ladder_candidate_count(candidates) -> int:
         float(candidate.get("long_close_retracement_base_pct", 1.0)) <= 0.0
         and float(candidate.get("long_close_threshold_we_weight", 0.0)) != 0.0
         and float(candidate.get("long_close_qty_pct", 1.0)) < 1.0
+        for candidate in candidates
+    )
+
+
+def _recursive_entry_ladder_candidate_count(candidates) -> int:
+    return sum(
+        float(candidate.get("long_entry_retracement_base_pct", 1.0)) <= 0.0
+        and float(candidate.get("long_entry_cooldown_minutes", 0.0)) == 0.0
         for candidate in candidates
     )
 
@@ -546,6 +560,9 @@ def run_benchmark_case(
         ),
         "recursive_close_ladder_candidate_count": (
             _recursive_close_ladder_candidate_count(candidate_dicts)
+        ),
+        "recursive_entry_ladder_candidate_count": (
+            _recursive_entry_ladder_candidate_count(candidate_dicts)
         ),
         "actual_dispatch_batch_size": int(cold["batch_size"]),
         "dispatch_chunk_count": int(

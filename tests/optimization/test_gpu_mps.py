@@ -12776,7 +12776,7 @@ def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
         short_enabled=False,
         market_orders_allowed=False,
         loss_gate_enabled=False,
-    ) == (True, True, True, True, True, True)
+    ) == (True, False, True, True, True, True, True)
 
     entry_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
         "entry_retracement_base_pct"
@@ -12788,7 +12788,16 @@ def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
         short_enabled=False,
         market_orders_allowed=True,
         loss_gate_enabled=True,
-    ) == (False, True, True, False, False, True)
+    ) == (False, False, True, True, False, False, True)
+
+    matrix[:, entry_column] = 0.0
+    assert _tm_dispatch_specialization(
+        matrix,
+        long_enabled=True,
+        short_enabled=False,
+        market_orders_allowed=False,
+        loss_gate_enabled=False,
+    )[:2] == (False, True)
 
     volatility_column = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
         "entry_threshold_volatility_1m_weight"
@@ -12800,10 +12809,10 @@ def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
         short_enabled=False,
         market_orders_allowed=False,
         loss_gate_enabled=False,
-    )[5] is False
+    )[6] is False
     matrix[1, volatility_column] = 0.0
 
-    matrix[1, entry_column] = 0.001
+    matrix[:, entry_column] = 0.001
     side_width = len(TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
     short_wel_column = side_width + TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
         "wel_enforcer_enabled"
@@ -12815,14 +12824,14 @@ def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
         short_enabled=False,
         market_orders_allowed=False,
         loss_gate_enabled=False,
-    )[2] is True
+    )[3] is True
     assert _tm_dispatch_specialization(
         matrix,
         long_enabled=True,
         short_enabled=True,
         market_orders_allowed=False,
         loss_gate_enabled=False,
-    )[2] is False
+    )[3] is False
 
 
 def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
@@ -12832,6 +12841,7 @@ def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
     transformed = _with_tm_dispatch_features(
         source,
         trailing_entry_only=True,
+        recursive_entry_only=False,
         trailing_close_only=True,
         reducers_disabled=True,
         market_orders_disabled=True,
@@ -12853,12 +12863,130 @@ def test_tm_dispatch_feature_defines_are_opt_in_and_guarded():
     assert _with_tm_dispatch_features(
         source,
         trailing_entry_only=False,
+        recursive_entry_only=False,
         trailing_close_only=False,
         reducers_disabled=False,
         market_orders_disabled=False,
         loss_gate_disabled=False,
         volatility_disabled=False,
     ) == source
+
+    recursive = _with_tm_dispatch_features(
+        source,
+        trailing_entry_only=False,
+        recursive_entry_only=True,
+        trailing_close_only=False,
+        reducers_disabled=False,
+        market_orders_disabled=False,
+        loss_gate_disabled=False,
+        volatility_disabled=False,
+    )
+    assert "#define PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY 1" in recursive
+    assert "#ifndef PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY" in recursive
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _with_tm_dispatch_features(
+            source,
+            trailing_entry_only=True,
+            recursive_entry_only=True,
+            trailing_close_only=False,
+            reducers_disabled=False,
+            market_orders_disabled=False,
+            loss_gate_disabled=False,
+            volatility_disabled=False,
+        )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_recursive_entry_specialization_matches_generic(
+    monkeypatch, side
+):
+    import optimization.gpu.mps_kernel as mps_kernel
+
+    count = 512
+    steps = np.arange(count, dtype=np.float64)
+    close = 100.0 + np.sin(steps / 17.0) * 6.0
+    high = close + 0.75
+    low = close - 0.75
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
+    row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_double_down_factor"
+    )] = 1.5
+    row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_initial_qty_pct"
+    )] = 0.05
+    row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+        "entry_retracement_base_pct"
+    )] = 0.0
+    parameters = np.asarray([row + row], dtype=np.float64)
+
+    specialized_runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+    )
+    specialized = specialized_runner.run(parameters, profile=True)
+    original_specialization = mps_kernel._tm_dispatch_specialization
+
+    def force_generic_recursive_entry(*args, **kwargs):
+        features = original_specialization(*args, **kwargs)
+        return (features[0], False, *features[2:])
+
+    monkeypatch.setattr(
+        mps_kernel,
+        "_tm_dispatch_specialization",
+        force_generic_recursive_entry,
+    )
+    generic_runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+    )
+    generic = generic_runner.run(parameters, profile=True)
+    torch.mps.synchronize()
+
+    assert specialized_runner.last_profile["dispatch_specialization"][
+        "recursive_entry_only"
+    ] is True
+    assert generic_runner.last_profile["dispatch_specialization"][
+        "recursive_entry_only"
+    ] is False
+    assert specialized.keys() == generic.keys()
+    for key in specialized:
+        if isinstance(specialized[key], torch.Tensor):
+            torch.testing.assert_close(
+                specialized[key].cpu(),
+                generic[key].cpu(),
+                rtol=0.0,
+                atol=0.0,
+                equal_nan=True,
+            )
+        else:
+            assert specialized[key] == generic[key]
 
 
 @pytest.mark.skipif(
@@ -12924,7 +13052,7 @@ def test_mps_tm_zero_volatility_specialization_matches_generic(
 
     def force_generic_volatility(*args, **kwargs):
         features = original_specialization(*args, **kwargs)
-        return (*features[:5], False)
+        return (*features[:6], False)
 
     monkeypatch.setattr(
         mps_kernel, "_tm_dispatch_specialization", force_generic_volatility
@@ -13009,7 +13137,7 @@ def test_mps_tm_reducer_free_recursive_close_matches_generic(monkeypatch, side):
 
     def force_generic_reducers(*args, **kwargs):
         features = original_specialization(*args, **kwargs)
-        return (*features[:2], False, *features[3:])
+        return (*features[:3], False, *features[4:])
 
     monkeypatch.setattr(
         mps_kernel, "_tm_dispatch_specialization", force_generic_reducers
@@ -20633,6 +20761,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
         in source
     )
     assert "#ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY" in source
+    assert "#ifndef PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY" in source
     assert "#ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY" in source
     assert "#ifndef PASSIVBOT_TM_REDUCERS_DISABLED" in source
     assert (
@@ -20674,6 +20803,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert "gate_market_entry_by_twel_strict" not in source
     assert source.count("gate_entry_by_twel_strict(") == 4
     assert "s.entry_retracement_base > 0.0f" in source
+    assert "#if PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY" in source
     assert "s.close_retracement_base > 0.0f" in source
     assert "the proxy uses a zero-loss envelope" in source
     assert "const bool filter_by_min_effective_cost" in source

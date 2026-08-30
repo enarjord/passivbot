@@ -15,6 +15,7 @@ from tools.gpu_proxy_benchmark import (
     _fixture_sha256,
     _parameter_matrix,
     _recursive_close_ladder_candidate_count,
+    _recursive_entry_ladder_candidate_count,
     _require_mps_torch,
     _single_coin_value_overrides,
     build_parser,
@@ -92,6 +93,41 @@ def test_gpu_proxy_benchmark_exposes_single_side_tm_hsl_case():
         == HSL_SIGNAL_MODE_COIN
     )
     assert HSL_PNL_LOOKBACK_BARS == 43_200
+
+
+def test_gpu_proxy_benchmark_exposes_recursive_entry_comparison_case():
+    args = build_parser().parse_args(["--case", "tm-single-long-entry-ladder"])
+    matrix = _parameter_matrix(
+        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+        2,
+        7,
+        value_overrides=_single_coin_value_overrides(args.case),
+    )
+
+    assert np.all(
+        matrix[
+            :,
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "entry_retracement_base_pct"
+            ),
+        ]
+        == 0.0
+    )
+
+
+def test_gpu_proxy_benchmark_counts_only_recursive_entry_ladder_candidates():
+    base = {
+        "long_entry_retracement_base_pct": 0.0,
+        "long_entry_cooldown_minutes": 0.0,
+    }
+
+    assert _recursive_entry_ladder_candidate_count(
+        [
+            base,
+            {**base, "long_entry_retracement_base_pct": 0.001},
+            {**base, "long_entry_cooldown_minutes": 1.0},
+        ]
+    ) == 1
 
 
 @pytest.mark.parametrize(

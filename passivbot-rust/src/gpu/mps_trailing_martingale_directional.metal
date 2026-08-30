@@ -4,6 +4,10 @@ using namespace metal;
 #ifndef PASSIVBOT_TM_TRAILING_ENTRY_ONLY
 #define PASSIVBOT_TM_TRAILING_ENTRY_ONLY 0
 #endif
+
+#ifndef PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
+#define PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY 0
+#endif
 #ifndef PASSIVBOT_TM_TRAILING_CLOSE_ONLY
 #define PASSIVBOT_TM_TRAILING_CLOSE_ONLY 0
 #endif
@@ -969,20 +973,32 @@ inline void generate_orders(
     float wer = we / fmax(s.allowed_wel, 1.0e-12f);
 #if PASSIVBOT_TM_VOLATILITY_DISABLED
     float tm = fmax(1.0f + wer * s.entry_threshold_we, 1.0f);
+#if !PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
     float rm = fmax(1.0f + wer * s.entry_retracement_we, 1.0f);
+#endif
 #else
     float tm = fmax(
         1.0f + s.vol1h * s.entry_threshold_v1h
             + s.vol1m * s.entry_threshold_v1m + wer * s.entry_threshold_we,
         1.0f
     );
+#if !PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
     float rm = fmax(
         1.0f + s.vol1h * s.entry_retracement_v1h
             + s.vol1m * s.entry_retracement_v1m + wer * s.entry_retracement_we,
         1.0f
     );
 #endif
+#endif
     float threshold = fmax(s.entry_threshold_base, 0.0f) * tm;
+#if PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
+    const bool trailing_entry = false;
+    bool entry_triggered = true;
+    float reentry_target = s.pprice * (
+        is_long ? 1.0f - s.entry_threshold_base * tm
+                : 1.0f + s.entry_threshold_base * tm
+    );
+#else
     float retracement = fmax(s.entry_retracement_base, 0.0f) * rm;
     const bool trailing_entry = PASSIVBOT_TM_TRAILING_ENTRY_ONLY
         || s.entry_retracement_base > 0.0f;
@@ -1011,6 +1027,7 @@ inline void generate_orders(
             );
         }
     }
+#endif
     bool reentry_target_is_touch = trailing_entry && threshold <= 0.0f;
     int raw_reentry_ticks = reentry_target_is_touch
         ? entry_touch : directional_ticks(reentry_target, price_step, entry_up);
@@ -2887,9 +2904,13 @@ inline void passivbot_single_coin_impl(
                 // candle. Market promotion guarantees rung zero's execution,
                 // but does not itself authorize expansion.
                 if (rung == 0 && !long_entry_passive_reachable) break;
+#if PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
+                if (long_side.cooldown_min != 0.0f) break;
+#else
                 if (PASSIVBOT_TM_TRAILING_ENTRY_ONLY
                     || long_side.entry_retracement_base > 0.0f
                     || long_side.cooldown_min != 0.0f) break;
+#endif
                 generate_long_orders(
                     ladder_side, ladder_balance, ep, qty_step,
                     ladder_touch_ticks, ladder_touch_ticks, ladder_touch_ticks,
@@ -3660,9 +3681,13 @@ inline void passivbot_single_coin_impl(
                 previous_ticks = entry_ticks;
                 ladder_touch_ticks = max(ladder_touch_ticks, entry_ticks);
                 if (rung == 0 && !short_entry_passive_reachable) break;
+#if PASSIVBOT_TM_RECURSIVE_ENTRY_ONLY
+                if (short_side.cooldown_min != 0.0f) break;
+#else
                 if (PASSIVBOT_TM_TRAILING_ENTRY_ONLY
                     || short_side.entry_retracement_base > 0.0f
                     || short_side.cooldown_min != 0.0f) break;
+#endif
                 generate_short_orders(
                     ladder_side, ladder_balance, ep, qty_step,
                     ladder_touch_ticks, ladder_touch_ticks, ladder_touch_ticks,
