@@ -1187,8 +1187,12 @@ mod tests {
         assert!(!source.contains("close_gen_psize + 1.0e-6f"));
         assert_eq!(source.matches("bool normalize_close_groups").count(), 3);
         assert_eq!(source.matches("int collapse_ordinary_rank").count(), 3);
-        assert_eq!(source.matches("recursive_close_allocation(").count(), 5);
+        assert_eq!(source.matches("recursive_close_allocation(").count(), 7);
         assert_eq!(source.matches("select_recursive_close_reducer(").count(), 3);
+        assert_eq!(
+            source.matches("#if PASSIVBOT_TM_REDUCERS_DISABLED").count(),
+            2
+        );
         assert_eq!(source.matches("ReducerCandidate candidates[3]").count(), 2);
         assert_eq!(source.matches("candidate_allocations[candidate_idx]").count(), 4);
         assert_eq!(source.matches("candidates[candidate_idx].finalized_qty").count(), 4);

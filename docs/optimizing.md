@@ -812,6 +812,8 @@ optimization results.
 ```bash
 passivbot tool gpu-proxy-benchmark --case ema-single-long
 passivbot tool gpu-proxy-benchmark --case tm-single-long
+passivbot tool gpu-proxy-benchmark --case tm-single-long-static-close
+passivbot tool gpu-proxy-benchmark --case tm-single-long-close-ladder
 passivbot tool gpu-proxy-benchmark --case tm-single-long-hsl
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overhead
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overrides
@@ -837,6 +839,12 @@ and shared-cache hit/miss state still keeps later cold/warm labels accurate.
 `--dispatch-batch-size` defaults to `--candidates`; setting it lower preserves the fixed candidate
 matrix and reports the actual chunk and strategy-dispatch counts, which isolates dispatch
 saturation from population-size changes.
+The static-close and close-ladder cases hold the Trailing Martingale fixture constant while
+switching only the recursive close inputs. Reports include the number of candidates whose fixed
+parameters can emit multiple close rungs. When every active candidate side disables WEL/TWEL
+enforcers and auto-unstuck, the directional kernel skips reducer candidate construction and
+performs the one ordinary close-grid allocation directly; exact Rust validation remains
+authoritative.
 
 ### Pymoo Configuration
 

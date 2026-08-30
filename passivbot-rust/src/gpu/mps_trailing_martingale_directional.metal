@@ -2220,6 +2220,22 @@ inline void passivbot_single_coin_impl(
                 strategy_wel_merged = group.ticks == strategy_wel_ticks;
             }
 
+            ReducerCandidate selected_reducer = empty_reducer_candidate();
+            RecursiveCloseAllocation allocation;
+#if PASSIVBOT_TM_REDUCERS_DISABLED
+            allocation = recursive_close_allocation(
+                grid_source, true, group_count,
+                long_side.close_gen_psize,
+                0.0f, 0.0f, false,
+                qty_step, price_step, min_qty, min_cost, c_mult,
+                prefix_merge_ticks, prefix_merge_qty,
+                grid_rung_limit
+            );
+            long_side.close_is_exposure_reducer = false;
+            long_side.close_is_twel_reducer = false;
+            long_side.close_is_unstuck_reducer = false;
+            long_side.close_loss_gate_disabled_reducers = false;
+#else
             ReducerCandidate candidates[3];
             RecursiveCloseAllocation candidate_allocations[3];
             for (int candidate_idx = 0; candidate_idx < 3; ++candidate_idx) {
@@ -2335,8 +2351,6 @@ inline void passivbot_single_coin_impl(
                 loss_gate_enabled, max_realized_loss_pct
             );
 
-            ReducerCandidate selected_reducer = empty_reducer_candidate();
-            RecursiveCloseAllocation allocation;
             if (selected_candidate_idx >= 0) {
                 selected_reducer = candidates[selected_candidate_idx];
                 allocation = candidate_allocations[selected_candidate_idx];
@@ -2359,6 +2373,7 @@ inline void passivbot_single_coin_impl(
                 && (candidates[0].finalized_qty > 0.0f
                     || candidates[1].finalized_qty > 0.0f
                     || candidates[2].finalized_qty > 0.0f);
+#endif
 
             float reducer_qty = allocation.reducer_qty;
             int reducer_ticks = selected_reducer.ticks;
@@ -2982,6 +2997,22 @@ inline void passivbot_single_coin_impl(
                 strategy_wel_merged = group.ticks == strategy_wel_ticks;
             }
 
+            ReducerCandidate selected_reducer = empty_reducer_candidate();
+            RecursiveCloseAllocation allocation;
+#if PASSIVBOT_TM_REDUCERS_DISABLED
+            allocation = recursive_close_allocation(
+                grid_source, false, group_count,
+                short_side.close_gen_psize,
+                0.0f, 0.0f, false,
+                qty_step, price_step, min_qty, min_cost, c_mult,
+                prefix_merge_ticks, prefix_merge_qty,
+                grid_rung_limit
+            );
+            short_side.close_is_exposure_reducer = false;
+            short_side.close_is_twel_reducer = false;
+            short_side.close_is_unstuck_reducer = false;
+            short_side.close_loss_gate_disabled_reducers = false;
+#else
             ReducerCandidate candidates[3];
             RecursiveCloseAllocation candidate_allocations[3];
             for (int candidate_idx = 0; candidate_idx < 3; ++candidate_idx) {
@@ -3097,8 +3128,6 @@ inline void passivbot_single_coin_impl(
                 loss_gate_enabled, max_realized_loss_pct
             );
 
-            ReducerCandidate selected_reducer = empty_reducer_candidate();
-            RecursiveCloseAllocation allocation;
             if (selected_candidate_idx >= 0) {
                 selected_reducer = candidates[selected_candidate_idx];
                 allocation = candidate_allocations[selected_candidate_idx];
@@ -3121,6 +3150,7 @@ inline void passivbot_single_coin_impl(
                 && (candidates[0].finalized_qty > 0.0f
                     || candidates[1].finalized_qty > 0.0f
                     || candidates[2].finalized_qty > 0.0f);
+#endif
 
             float reducer_qty = allocation.reducer_qty;
             int reducer_ticks = selected_reducer.ticks;

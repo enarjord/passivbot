@@ -12963,6 +12963,91 @@ def test_mps_tm_zero_volatility_specialization_matches_generic(
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_tm_reducer_free_recursive_close_matches_generic(monkeypatch, side):
+    import optimization.gpu.mps_kernel as mps_kernel
+
+    count = 512
+    steps = np.arange(count, dtype=np.float64)
+    close = 100.0 + np.sin(steps / 17.0) * 3.0
+    high = close + 0.5
+    low = close - 0.5
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
+    run = ProxyRun(
+        1_000.0,
+        1,
+        1,
+        int(timestamps[0]),
+        int(timestamps[0]),
+        int(timestamps[0]),
+        60_000,
+        0.05,
+        0,
+        count - 1,
+    )
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row()
+    for key, value in (
+        ("close_qty_pct", 0.25),
+        ("close_threshold_we_weight", 0.02),
+        ("close_retracement_base_pct", 0.0),
+    ):
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(key)] = value
+    parameters = np.asarray([row + row], dtype=np.float64)
+
+    specialized_runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+    )
+    specialized = specialized_runner.run(parameters, profile=True)
+    original_specialization = mps_kernel._tm_dispatch_specialization
+
+    def force_generic_reducers(*args, **kwargs):
+        features = original_specialization(*args, **kwargs)
+        return (*features[:2], False, *features[3:])
+
+    monkeypatch.setattr(
+        mps_kernel, "_tm_dispatch_specialization", force_generic_reducers
+    )
+    generic_runner = MpsTrailingMartingaleRunner(
+        market,
+        run,
+        data,
+        long_enabled=side == "long",
+        short_enabled=side == "short",
+        hsl_enabled=False,
+    )
+    generic = generic_runner.run(parameters, profile=True)
+    torch.mps.synchronize()
+
+    assert specialized_runner.last_profile["dispatch_specialization"][
+        "reducers_disabled"
+    ] is True
+    assert generic_runner.last_profile["dispatch_specialization"][
+        "reducers_disabled"
+    ] is False
+    assert specialized.keys() == generic.keys()
+    for key in specialized:
+        if isinstance(specialized[key], torch.Tensor):
+            torch.testing.assert_close(
+                specialized[key].cpu(),
+                generic[key].cpu(),
+                rtol=0.0,
+                atol=0.0,
+                equal_nan=True,
+            )
+        else:
+            assert specialized[key] == generic[key]
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
 @pytest.mark.parametrize("topology", ["long", "short", "fused"])
 def test_mps_tm_single_coin_entry_intervals_track_only_fresh_positions(topology):
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
@@ -20525,8 +20610,9 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     assert source.count("bool all_below_min") == 1
     assert source.count("bool normalize_close_groups") == 3
     assert source.count("int collapse_ordinary_rank") == 3
-    assert source.count("recursive_close_allocation(") == 5
+    assert source.count("recursive_close_allocation(") == 7
     assert source.count("select_recursive_close_reducer(") == 3
+    assert source.count("#if PASSIVBOT_TM_REDUCERS_DISABLED") == 2
     assert source.count("ReducerCandidate candidates[3]") == 2
     assert source.count("candidate_allocations[candidate_idx]") == 4
     assert source.count("candidates[candidate_idx].finalized_qty") == 4

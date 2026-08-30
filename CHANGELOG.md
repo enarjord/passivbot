@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS single-coin Trailing Martingale now uses a reducer-free recursive-close fast path when
+  every active candidate side disables WEL/TWEL enforcers and auto-unstuck, avoiding redundant
+  reducer allocations while preserving the ordinary close ladder. The deterministic GPU benchmark
+  adds paired static-close and recursive-close cases so this cost remains reproducible and visible.
+
 - Apple M3-family MPS optimization now auto-selects a 2304-candidate population and 4.5-billion
   candidate-bar dispatch envelope for the proven lean one-sided Trailing Martingale kernel,
   restoring roughly 110–117 proxy candidates/second in the long-history benchmark while keeping

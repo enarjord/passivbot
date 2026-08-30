@@ -14,6 +14,7 @@ from tools.gpu_proxy_benchmark import (
     _bounded_positive,
     _fixture_sha256,
     _parameter_matrix,
+    _recursive_close_ladder_candidate_count,
     _require_mps_torch,
     _single_coin_value_overrides,
     build_parser,
@@ -91,6 +92,65 @@ def test_gpu_proxy_benchmark_exposes_single_side_tm_hsl_case():
         == HSL_SIGNAL_MODE_COIN
     )
     assert HSL_PNL_LOOKBACK_BARS == 43_200
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_weight"),
+    (
+        ("tm-single-long-static-close", 0.0),
+        ("tm-single-long-close-ladder", 0.02),
+    ),
+)
+def test_gpu_proxy_benchmark_exposes_recursive_close_comparison_cases(
+    case, expected_weight
+):
+    args = build_parser().parse_args(["--case", case])
+    matrix = _parameter_matrix(
+        TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+        2,
+        7,
+        value_overrides=_single_coin_value_overrides(args.case),
+    )
+
+    assert np.all(
+        matrix[:, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("close_qty_pct")]
+        == 0.25
+    )
+    assert np.all(
+        matrix[
+            :,
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "close_retracement_base_pct"
+            ),
+        ]
+        == 0.0
+    )
+    assert np.all(
+        matrix[
+            :,
+            TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(
+                "close_threshold_we_weight"
+            ),
+        ]
+        == expected_weight
+    )
+
+
+def test_gpu_proxy_benchmark_counts_only_recursive_close_ladder_candidates():
+    base = {
+        "long_close_qty_pct": 0.25,
+        "long_close_retracement_base_pct": 0.0,
+        "long_close_threshold_we_weight": 0.02,
+    }
+
+    assert _recursive_close_ladder_candidate_count(
+        [
+            base,
+            {**base, "long_close_qty_pct": 1.0},
+            {**base, "long_close_retracement_base_pct": 0.001},
+            {**base, "long_close_threshold_we_weight": 0.0},
+        ]
+    ) == 1
 
 
 @pytest.mark.parametrize(
@@ -211,6 +271,7 @@ def test_gpu_proxy_benchmark_reports_profiled_dispatch_chunks(monkeypatch):
     assert report["kernel_candidate_bars"] == 80
     assert report["hsl_pnl_lookback_bars"] == 43_200
     assert report["hsl_signal_mode"] == 0.0
+    assert report["recursive_close_ladder_candidate_count"] == 0
 
 
 def test_gpu_proxy_benchmark_reports_missing_optional_gpu_dependencies(
