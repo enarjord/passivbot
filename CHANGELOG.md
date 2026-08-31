@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- GPU optimization now bootstraps `--start` configs into an authoritative exact-Rust seed archive.
+  The default `auto` policy exact-evaluates up to 128 deduplicated seeds; larger pools receive one
+  full-history Metal proxy screen followed by capped exact validation of diverse proxy-Pareto
+  members, objective extremes, and broad probes. Bootstrap evaluations are additional to
+  `optimize.iters`, exact and proxy fitness remain isolated, and crash-safe checkpoints preserve
+  incomplete seed plans. CPU optimization retains exact evaluation of every starting config.
+
 - Apple MPS single-coin Trailing Martingale now selects a recursive-entry-only Metal variant when
   every active candidate uses nonpositive entry retracement. The variant compiles out trailing
   entry retracement/trigger work while preserving the recursive ladder and bitwise generic-kernel

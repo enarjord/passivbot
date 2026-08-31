@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -33,6 +34,7 @@ from optimization.backends.gpu_backend import (
     _ema_multicoin_bound_map,
     _evaluate_gpu_suite_proxies,
     _evaluate_successive_halving,
+    _effective_seed_bootstrap_mode,
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
     _gpu_candidate_search_sides,
@@ -58,6 +60,7 @@ from optimization.backends.gpu_backend import (
     _profiled_gpu_exact_worker,
     _DriftMonitor,
     _ObjectiveScale,
+    _recover_durable_seed_bootstrap,
     _recover_durable_validations,
     _ready_submission_prefix,
     _update_novelty_stall,
@@ -74,6 +77,8 @@ from optimization.backends.gpu_backend import (
     _trailing_martingale_multicoin_bound_map,
     _ProxyFrontValidationPending,
     _select_exact_validations,
+    _select_seed_bootstrap_indices,
+    _select_seed_population_indices,
     _select_validation_indices,
     _update_probe_shortfall_log,
     _validate_directional_search_space,
@@ -82,6 +87,7 @@ from optimization.backends.gpu_backend import (
     _validate_gpu_coin_overrides,
     _validate_pinned_scope_bounds,
     _validate_resume_evidence_budget,
+    _validate_seed_bootstrap_plan,
     _validate_seed_side_match,
     _validate_scope,
     _validate_tm_market_mode_bounds,
@@ -282,9 +288,11 @@ def _directional_tm_config(*, long_enabled: bool, short_enabled: bool):
 
 def test_gpu_options_are_additive_and_validate_ranges():
     config = _long_only_ema_config()
-    assert _resolve_options(config)["auto_lean_parallelism"] is True
-    assert _resolve_options(config)["population_size"] == 1024
-    assert _resolve_options(config)["max_dispatch_candidate_bars"] == 1_000_000_000
+    options = _resolve_options(config)
+    assert options["auto_lean_parallelism"] is True
+    assert options["population_size"] == 1024
+    assert options["max_dispatch_candidate_bars"] == 1_000_000_000
+    assert options["seed_bootstrap"] == {"mode": "auto", "max_exact": 128}
 
     config["optimize"]["gpu"]["batch_size"] = 0
     with pytest.raises(ValueError, match="batch_size"):
@@ -365,6 +373,156 @@ def test_gpu_options_are_additive_and_validate_ranges():
     config["optimize"]["gpu"]["drift_halt"] = 0.0
     with pytest.raises(ValueError, match="greater than zero"):
         _resolve_options(config)
+
+
+def test_gpu_seed_bootstrap_options_are_explicit_and_fail_closed():
+    config = _long_only_ema_config()
+    config["optimize"]["gpu"]["seed_bootstrap"] = {
+        "mode": "SCREENED",
+        "max_exact": 64,
+    }
+    assert _resolve_options(config)["seed_bootstrap"] == {
+        "mode": "screened",
+        "max_exact": 64,
+    }
+
+    config["optimize"]["gpu"]["seed_bootstrap"]["mode"] = "best-effort"
+    with pytest.raises(ValueError, match="seed_bootstrap.mode"):
+        _resolve_options(config)
+
+    config["optimize"]["gpu"]["seed_bootstrap"] = {
+        "mode": "auto",
+        "max_exact": 0,
+    }
+    with pytest.raises(ValueError, match="max_exact"):
+        _resolve_options(config)
+
+    config["optimize"]["gpu"]["seed_bootstrap"] = {
+        "mode": "auto",
+        "max_exact": 64,
+        "unexpected": True,
+    }
+    with pytest.raises(ValueError, match="unknown.*unexpected"):
+        _resolve_options(config)
+
+    config["optimize"]["gpu"]["seed_bootstrap"] = "auto"
+    with pytest.raises(TypeError, match="seed_bootstrap must be an object"):
+        _resolve_options(config)
+
+
+def test_gpu_seed_bootstrap_auto_switches_only_at_the_exact_cap():
+    policy = {"mode": "auto", "max_exact": 128}
+
+    assert _effective_seed_bootstrap_mode(policy, 0) == "none"
+    assert _effective_seed_bootstrap_mode(policy, 128) == "exact"
+    assert _effective_seed_bootstrap_mode(policy, 129) == "screened"
+    assert (
+        _effective_seed_bootstrap_mode({"mode": "exact", "max_exact": 1}, 500)
+        == "exact"
+    )
+
+
+def test_gpu_seed_bootstrap_selection_keeps_extremes_front_and_probe_coverage():
+    objectives = np.asarray(
+        [
+            [0.0, 10.0],
+            [2.0, 7.0],
+            [5.0, 5.0],
+            [7.0, 2.0],
+            [10.0, 0.0],
+            [8.0, 8.0],
+        ],
+        dtype=np.float64,
+    )
+    scores = np.sum(objectives, axis=1)
+    violations = np.full(len(objectives), -1.0, dtype=np.float64)
+
+    selected = _select_seed_bootstrap_indices(
+        objectives,
+        scores,
+        violations,
+        total=4,
+    )
+
+    selected_ids = {index for index, _probe, _front in selected}
+    assert {0, 4}.issubset(selected_ids)
+    assert len(selected) == 4
+    assert any(probe and not front for _index, probe, front in selected)
+
+
+def test_gpu_seed_bootstrap_selection_reserves_front_and_probe_slots():
+    objectives = np.asarray(
+        [[float(index), float(9 - index)] for index in range(10)]
+        + [[20.0 + index, 20.0 + index] for index in range(10)],
+        dtype=np.float64,
+    )
+    scores = np.sum(objectives, axis=1)
+    violations = np.full(len(objectives), -1.0, dtype=np.float64)
+
+    selected = _select_seed_bootstrap_indices(
+        objectives,
+        scores,
+        violations,
+        total=8,
+    )
+
+    assert len(selected) == 8
+    assert sum(front for _index, _probe, front in selected) == 6
+    assert sum(probe for _index, probe, _front in selected) == 2
+    assert {0, 9}.issubset({index for index, _probe, _front in selected})
+
+
+def test_gpu_seed_population_reduction_prefers_feasible_pareto_diversity():
+    objectives = np.asarray(
+        [[0.0, 4.0], [2.0, 2.0], [4.0, 0.0], [1.0, 1.0]],
+        dtype=np.float64,
+    )
+    violations = np.asarray([-1.0, -1.0, -1.0, 0.5], dtype=np.float64)
+
+    selected = _select_seed_population_indices(
+        objectives,
+        violations,
+        count=3,
+    )
+
+    assert set(selected) == {0, 1, 2}
+
+
+def test_gpu_seed_bootstrap_checkpoint_plan_fails_closed_on_pool_drift():
+    vectors = [[0.1], [0.2], [0.3]]
+    digest = hashlib.sha256(b"0.1\n0.2\n0.3").hexdigest()
+    contract = {
+        "effective_mode": "screened",
+        "seed_count": 3,
+        "selected_exact_count": 2,
+        "all_seeds_exact": False,
+        "seed_pool_sha256": digest,
+    }
+    kwargs = {
+        "hash_vector": lambda vector: str(vector[0]),
+        "proxy_metrics": {0: {}, 2: {}},
+        "proxy_objectives": [[0.0, 2.0], [1.0, 1.0], [2.0, 0.0]],
+        "proxy_violations": [-1.0, -1.0, -1.0],
+    }
+
+    _validate_seed_bootstrap_plan(
+        vectors,
+        [(0, False, True), (2, True, False)],
+        [0, 2, 1],
+        contract,
+        **kwargs,
+    )
+
+    changed = copy.deepcopy(vectors)
+    changed[1][0] = 0.25
+    with pytest.raises(RuntimeError, match="does not match its seed contract"):
+        _validate_seed_bootstrap_plan(
+            changed,
+            [(0, False, True), (2, True, False)],
+            [0, 2, 1],
+            contract,
+            **kwargs,
+        )
 
 
 def _lean_tm_bounds(side="long"):
@@ -854,6 +1012,35 @@ def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
         "mutation": {"operator": "pm", "prob": 0.2, "eta": 13.0},
         "eliminate_duplicates": False,
     }
+
+
+def test_gpu_nsga2_accepts_exact_seed_sampling_before_first_ask():
+    from pymoo.core.problem import Problem
+    from pymoo.core.termination import NoTermination
+
+    config = _long_only_ema_config()
+    initial = np.zeros((8, 2), dtype=np.float64)
+    exact_seed_sampling = np.asarray(
+        [[index / 10.0, (index + 1) / 10.0] for index in range(8)],
+        dtype=np.float64,
+    )
+    algorithm = _build_gpu_nsga2(
+        config,
+        sampling=initial,
+        population_size=8,
+        n_params=2,
+    )
+    algorithm.setup(
+        Problem(n_var=2, n_obj=1, xl=np.zeros(2), xu=np.ones(2)),
+        termination=NoTermination(),
+        seed=1,
+        verbose=False,
+    )
+
+    algorithm.initialization.sampling = exact_seed_sampling
+    population = algorithm.ask()
+
+    np.testing.assert_allclose(population.get("X"), exact_seed_sampling)
 
 
 def test_trailing_martingale_bound_map_covers_both_directional_shapes():
@@ -6747,6 +6934,29 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
         "historical_prefix_v1"
     )
     mutations.append(changed_history_window)
+    changed_seed_bootstrap = _gpu_search_checkpoint_contract(
+        key_paths=key_paths,
+        bounds=bounds,
+        base_vector=base,
+        fixed_bound_values={"long_base_qty_pct": 0.02},
+        fixed_parameter_overrides={"long_base_qty_pct": 0.02},
+        optimizer_overrides=set(),
+        sig_digits=3,
+        algorithm_contract=contract["algorithm"],
+        proxy_evaluation_policy=contract["proxy_evaluation"],
+        seed_bootstrap_contract={
+            "version": 1,
+            "requested_mode": "auto",
+            "effective_mode": "screened",
+            "max_exact": 128,
+            "seed_count": 1000,
+            "selected_exact_count": 128,
+            "all_seeds_exact": False,
+            "seed_pool_sha256": "abc123",
+        },
+    )
+    assert changed_seed_bootstrap["version"] == 3
+    mutations.append(changed_seed_bootstrap)
 
     assert all(
         _checkpoint_signature(active, scoring, search_contract=changed)
@@ -7207,6 +7417,85 @@ def test_resume_recovers_hashes_and_drift_for_results_ahead_of_checkpoint():
         (2.0, 2.5, False, False, True),
         (3.0, 3.5, True, False, False),
     ]
+
+
+def test_resume_recovers_exact_and_screened_seed_bootstrap_results():
+    entries = [
+        {
+            "id": 7,
+            "metrics": {
+                "gpu_seed_bootstrap": {
+                    "schema_version": 1,
+                    "mode": "exact",
+                    "source_index": 3,
+                    "exact_objectives": [0.1, 0.2],
+                    "exact_violation": -1.0,
+                }
+            },
+        },
+        {
+            "id": 8,
+            "metrics": {
+                "gpu_seed_bootstrap": {
+                    "schema_version": 1,
+                    "mode": "screened",
+                    "source_index": 5,
+                    "exact_objectives": [0.3, 0.4],
+                    "exact_violation": 0.5,
+                },
+                "gpu_validation": {
+                    "schema_version": 2,
+                    "phase": "seed_bootstrap",
+                    "proxy_score": 0.25,
+                    "exact_score": 0.35,
+                    "probe": True,
+                    "proxy_front": False,
+                    "constraint_classification_mismatch": True,
+                },
+            },
+        },
+    ]
+
+    payloads, recovered, drift_pairs = _recover_durable_seed_bootstrap(
+        entries,
+        start_index=0,
+        stop_index=2,
+        vector_from_entry=lambda entry: [float(entry["id"])],
+        hash_vector=lambda vector: f"hash-{vector[0]}",
+    )
+
+    assert recovered == {"hash-7.0", "hash-8.0"}
+    assert payloads["hash-7.0"] == {
+        "source_index": 3,
+        "F": [0.1, 0.2],
+        "G": [-1.0],
+    }
+    assert payloads["hash-8.0"]["source_index"] == 5
+    assert drift_pairs == [(0.25, 0.35, True, True, False)]
+
+
+def test_resume_rejects_screened_seed_without_proxy_exact_evidence():
+    with pytest.raises(RuntimeError, match="without proxy/exact metadata"):
+        _recover_durable_seed_bootstrap(
+            [
+                {
+                    "id": 1,
+                    "metrics": {
+                        "gpu_seed_bootstrap": {
+                            "schema_version": 1,
+                            "mode": "screened",
+                            "source_index": 0,
+                            "exact_objectives": [0.1],
+                            "exact_violation": -1.0,
+                        }
+                    },
+                }
+            ],
+            start_index=0,
+            stop_index=1,
+            vector_from_entry=lambda entry: [float(entry["id"])],
+            hash_vector=lambda vector: f"hash-{vector[0]}",
+        )
 
 
 def test_resume_hash_recovery_fails_if_durable_tail_is_missing():

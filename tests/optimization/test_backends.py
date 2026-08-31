@@ -74,6 +74,10 @@ def test_format_config_accepts_gpu_backend():
     assert out["optimize"]["gpu"]["batch_size"] is None
     assert out["optimize"]["gpu"]["max_dispatch_candidate_bars"] is None
     assert out["optimize"]["gpu"]["auto_lean_parallelism"] is True
+    assert out["optimize"]["gpu"]["seed_bootstrap"] == {
+        "max_exact": 128,
+        "mode": "auto",
+    }
 
 
 def test_format_config_rejects_unknown_backend():

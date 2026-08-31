@@ -512,6 +512,10 @@ def get_template_config():
                         "exact_workers": 0,
                         "max_pending_exact": 0,
                         "population_size": None,
+                        "seed_bootstrap": {
+                            "max_exact": 128,
+                            "mode": "auto",
+                        },
                         "successive_halving": {
                             "enabled": False,
                             "history_fractions": [0.25, 0.5, 1.0],
