@@ -68,6 +68,12 @@ fine-tune anchors: non-tuned optimizer-bound bot params are fixed from the selec
 only the fine-tune selectors are optimized. Runtime policy from the base config still wins, and
 seed/anchor values outside `optimize.bounds` are clamped with aggregated source/key logging.
 
+CPU optimizers exact-evaluate every deduplicated `--start` config. The GPU backend defaults to
+`optimize.gpu.seed_bootstrap.mode=auto`: it exact-evaluates pools of at most 128 seeds and
+proxy-screens larger pools before capped exact validation. Use `mode=exact` only when the startup
+cost of exact-evaluating the complete pool is intentional. GPU bootstrap exact work is additional
+to `optimize.iters`.
+
 ## Rust
 
 ```bash

@@ -155,7 +155,13 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
 import math
 import fcntl
 from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
-from opt_utils import make_json_serializable, generate_incremental_diff, round_floats, quantize_floats
+from opt_utils import (
+    deep_updated,
+    generate_incremental_diff,
+    make_json_serializable,
+    quantize_floats,
+    round_floats,
+)
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
@@ -442,6 +448,7 @@ class ResultRecorder:
         pareto_max_size: int = 1000,
         bounds: Optional[Sequence[Bound]] = None,
         starting_iters: int = 0,
+        previous_data: dict | None = None,
     ):
         self.scoring_specs = extract_objective_specs(scoring_keys)
         self.scoring_keys = [spec.metric for spec in self.scoring_specs]
@@ -463,18 +470,21 @@ class ResultRecorder:
             filename = os.path.join(results_dir, "all_results.bin")
             self.results_file = open(filename, "ab")
             self.packer = msgpack.Packer(use_bin_type=True)
-        self.prev_data = None
-        self.counter = 0
+        self.prev_data = previous_data
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
             if self.compress:
-                if self.prev_data is None or self.counter % 100 == 0:
+                # The on-disk format is an overlay stream: readers apply every
+                # object to the preceding result.  A plain "full" object at a
+                # periodic boundary therefore cannot clear keys that existed
+                # only in the previous result.  Emit a diff after the first
+                # record so deletion markers remain explicit at every boundary.
+                if self.prev_data is None:
                     output_data = make_json_serializable(data)
                 else:
                     diff = generate_incremental_diff(self.prev_data, data)
                     output_data = make_json_serializable(diff)
-                self.counter += 1
                 self.prev_data = data
             else:
                 output_data = data
@@ -869,14 +879,101 @@ def _require_resume_checkpoint(results_dir: str) -> str:
     return checkpoint_path
 
 
-def _validate_resume_results(results_dir: str, config: dict) -> int:
+def _restore_gpu_resume_anchor_plan(config: dict, checkpoint_path: str) -> bool:
+    """Restore checkpoint-owned fine-tune anchors before building optimizer shape."""
+
+    if config.get("optimize", {}).get("backend") != "gpu":
+        return False
+    try:
+        import pickle
+
+        with open(checkpoint_path, "rb") as file:
+            checkpoint = pickle.load(file)
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot resume: failed to read checkpoint: {checkpoint_path}"
+        ) from exc
+    anchor_plan = checkpoint.get("anchor_plan")
+    if anchor_plan is None:
+        return False
+    if not isinstance(anchor_plan, dict) or not anchor_plan.get("anchors"):
+        raise ValueError("Cannot resume: GPU checkpoint has an invalid anchor plan")
+    checkpoint_strategy = normalize_strategy_kind(anchor_plan.get("strategy_kind"))
+    config_strategy = normalize_strategy_kind(
+        config.get("live", {}).get("strategy_kind")
+    )
+    if checkpoint_strategy != config_strategy:
+        raise ValueError(
+            "Cannot resume: GPU checkpoint anchor strategy does not match config"
+        )
+    config[ANCHOR_PLAN_KEY] = deepcopy(anchor_plan)
+    logging.info(
+        "Restored %d checkpoint-owned fine-tune anchors",
+        len(anchor_plan["anchors"]),
+    )
+    return True
+
+
+def _should_apply_fine_tune_bounds(
+    *, restored_resume_anchor_plan: bool, installing_anchor_plan: bool
+) -> bool:
+    """Keep a checkpoint-owned optimizer shape stable across GPU resume."""
+
+    return not restored_resume_anchor_plan and not installing_anchor_plan
+
+
+def _gpu_checkpoint_allows_empty_results(
+    checkpoint_path: str | None,
+    config: dict,
+) -> bool:
+    """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
+
+    if (
+        config.get("optimize", {}).get("backend") != "gpu"
+        or checkpoint_path is None
+    ):
+        return False
+    try:
+        import pickle
+
+        with open(checkpoint_path, "rb") as file:
+            checkpoint = pickle.load(file)
+    except Exception:
+        return False
+    plan = checkpoint.get("seed_bootstrap_plan")
+    return bool(
+        not checkpoint.get("seed_bootstrap_complete", True)
+        and int(checkpoint.get("seed_exact_done", -1)) == 0
+        and int(checkpoint.get("exact_done", -1)) == 0
+        and isinstance(checkpoint.get("seed_bootstrap_contract"), dict)
+        and isinstance(plan, dict)
+        and plan.get("starting_vectors")
+        and plan.get("effective_mode") in {"exact", "screened"}
+    )
+
+
+def _validate_resume_results(
+    results_dir: str,
+    config: dict,
+    *,
+    checkpoint_path: str | None = None,
+    resume_state: dict | None = None,
+) -> int:
     results_filename = os.path.join(results_dir, "all_results.bin")
     if not os.path.isfile(results_filename):
         raise ValueError(f"Cannot resume: all_results.bin not found: {results_filename}")
     if os.path.getsize(results_filename) <= 0:
+        if _gpu_checkpoint_allows_empty_results(checkpoint_path, config):
+            if resume_state is not None:
+                resume_state["previous_data"] = None
+            logging.info(
+                "Resuming GPU seed bootstrap before its first durable exact result"
+            )
+            return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
 
     previous_evals = 0
+    previous_data = {}
     try:
         with open(results_filename, "rb") as f:
             for entry in _iter_strict_msgpack_objects(
@@ -893,6 +990,7 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
                         f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
                         f"{results_filename}"
                     )
+                previous_data = deep_updated(previous_data, entry)
                 if previous_evals == 1:
                     mismatches = _resume_config_mismatches(entry, config)
                     if mismatches:
@@ -912,6 +1010,8 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
 
     if previous_evals <= 0:
         raise ValueError(f"Cannot resume: all_results.bin contains no entries: {results_filename}")
+    if resume_state is not None:
+        resume_state["previous_data"] = previous_data
     logging.info("Resuming with %d previous evaluations from all_results.bin", previous_evals)
     return previous_evals
 
@@ -3361,6 +3461,19 @@ async def main():
         scenario_labels=active_suite_scenario_labels,
     )
 
+    resume_results_dir = None
+    resume_checkpoint_path = None
+    restored_resume_anchor_plan = False
+    if args.resume:
+        resume_results_dir = _resolve_resume_results_dir(args.resume)
+        resume_checkpoint_path = _require_resume_checkpoint(resume_results_dir)
+        if get_anchor_plan(config) is None:
+            restored_resume_anchor_plan = _restore_gpu_resume_anchor_plan(
+                config, resume_checkpoint_path
+            )
+        else:
+            restored_resume_anchor_plan = True
+
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
         preselected_starting_configs = preselect_starting_configs(
@@ -3385,14 +3498,18 @@ async def main():
     }
     if polish_bounds_pct is not None:
         apply_polish_bounds(config, polish_bounds_pct, bounds_mode=polish_bounds_mode)
-    if fine_tune_params and args.starting_configs:
+    installing_anchor_plan = bool(fine_tune_params and args.starting_configs)
+    if installing_anchor_plan:
         install_anchored_fine_tune_plan(
             config,
             fine_tune_params,
             args.starting_configs,
             starting_configs_override=preselected_starting_configs,
         )
-    else:
+    elif _should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=restored_resume_anchor_plan,
+        installing_anchor_plan=installing_anchor_plan,
+    ):
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     validate_optimizer_effective_configs(config)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
@@ -3561,13 +3678,19 @@ async def main():
             )
         )
         previous_evals = 0
+        resume_recorder_state = {}
         checkpoint_path = None
         if args.resume:
             if not config["optimize"].get("write_all_results", True):
                 raise ValueError("Cannot resume with optimize.write_all_results=false")
-            results_dir = _resolve_resume_results_dir(args.resume)
-            checkpoint_path = _require_resume_checkpoint(results_dir)
-            previous_evals = _validate_resume_results(results_dir, config)
+            results_dir = resume_results_dir
+            checkpoint_path = resume_checkpoint_path
+            previous_evals = _validate_resume_results(
+                results_dir,
+                config,
+                checkpoint_path=checkpoint_path,
+                resume_state=resume_recorder_state,
+            )
         else:
             results_dir = make_get_filepath(
                 f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
@@ -3621,6 +3744,7 @@ async def main():
             pareto_max_size=pareto_max,
             bounds=evaluator.bounds,
             starting_iters=previous_evals,
+            previous_data=resume_recorder_state.get("previous_data"),
         )
         backend_name = config["optimize"]["backend"]
         logging.info("Selected optimizer backend: %s", backend_name)

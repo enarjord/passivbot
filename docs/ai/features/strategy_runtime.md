@@ -63,6 +63,21 @@ Optimizer selector contract:
   `optimize.bounds` are clamped into bounds with aggregated source/key logging. Without
   `--fine_tune_params`, `--start` remains seed-only.
 
+Seed evaluation contract:
+
+- Shared ingestion normalizes, clamps, quantizes, and deduplicates starting configs before each
+  backend applies its seed policy.
+- CPU optimization exact-Rust evaluates every deduplicated seed before population trimming.
+- GPU `seed_bootstrap.mode=auto` exact-evaluates small pools and full-history proxy-screens pools
+  larger than `max_exact`. Screened pools exact-Rust validate a capped, constraint-aware diverse
+  proxy set; only that subset enters the authoritative exact archive.
+- Seed-bootstrap exact evaluations are recorded separately from the GPU evolutionary
+  `optimize.iters` budget. Exact fitness seeds the archive and vector-only initial sampling; exact
+  and proxy fitness must never share an NSGA objective matrix.
+- An incomplete bootstrap checkpoint owns its normalized seed plan. Resume does not depend on the
+  original seed files, including for anchored fine-tuning, and must recover any exact seed result
+  already flushed to durable history.
+
 Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
 for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example
 `volatility_ema_span_1m`, `volatility_ema_span_1h`, `forager_volume_ema_span_1m`, and

@@ -492,6 +492,19 @@ against the GPU scope: an anchor cannot change enabled sides or introduce unsupp
 behavior. Base-config runtime policy fields still win over anchor configs as described in
 [Fine-Tuning Specific Parameters](#fine-tuning-specific-parameters).
 
+Starting configs are normalized, clamped, quantized, and deduplicated through the shared optimizer
+loader before either backend evaluates them. CPU optimization retains its exact-all contract: every
+deduplicated seed is evaluated by the exact Rust backtester before population trimming. GPU
+optimization uses `optimize.gpu.seed_bootstrap`: the default `auto` mode also exact-evaluates every
+seed when the pool contains at most `max_exact` entries (128 by default). Larger pools are screened
+once by the full-history Metal proxy; a deterministic, constraint-aware mixture of diverse proxy-
+Pareto members, per-objective extremes, and off-front probes is then exact-evaluated, capped at
+`max_exact`. The authoritative Pareto archive contains only those exact results, so screened mode
+does not claim that the unevaluated remainder of the seed pool has an exact Pareto classification.
+Exact-selected seeds are placed first in the initial GPU population, followed by proxy-diverse
+seeds and then random candidates. Their exact objective values are never inserted into the proxy
+NSGA-II fitness matrix.
+
 The V8 `optimize.enable_overrides` values `mirror_short_from_long` and
 `lossless_close_trailing` are applied to Metal candidates in the same order as exact candidate
 materialization. Mirroring may be used with the supported single-coin directional scopes; short
@@ -620,9 +633,10 @@ The backend is hybrid rather than a replacement backtester:
    comparable broad probes. Window and exact-budget validation reserve enough total probes to retain
    those eight whenever the configured probe constraint-agreement gate has not already failed.
 
-`optimize.iters` remains the number of exact Rust validations. GPU screening counts and throughput
-are reported separately in the log. `n_cpus` controls the exact-validation worker pool; MPS device
-scheduling is managed by Metal.
+`optimize.iters` remains the number of evolutionary exact Rust validations. Any exact seed-
+bootstrap evaluations are additional and are reported separately. GPU screening counts and
+throughput are also logged separately. `n_cpus` controls the exact-validation worker pool; MPS
+device scheduling is managed by Metal.
 
 GPU-specific settings live under `optimize.gpu`:
 
@@ -642,6 +656,10 @@ GPU-specific settings live under `optimize.gpu`:
       "exact_workers": 0,
       "max_pending_exact": 0,
       "population_size": null,
+      "seed_bootstrap": {
+        "max_exact": 128,
+        "mode": "auto"
+      },
       "successive_halving": {
         "enabled": false,
         "history_fractions": [0.25, 0.5, 1.0],
@@ -692,6 +710,16 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   and all heavier shapes retain the 1-billion default; the optimizer does not apply the wider
   envelope to coin-overridden, HSL, multicoin, suite, market-order, reducer, recursive-mode, or
   active-volatility kernels, nor to kernels with optional metric feature paths enabled.
+- `seed_bootstrap.mode` controls `-t/--start` handling. `auto` exact-evaluates all deduplicated seeds
+  up to `seed_bootstrap.max_exact`, then switches to full-history proxy screening plus capped exact
+  validation for larger pools. `exact` forces exact evaluation of every seed even above the cap;
+  `screened` always performs proxy screening and validates at most the cap; and `legacy` restores
+  the former behavior of copying seeds directly into the first proxy population without an
+  authoritative bootstrap archive. Bootstrap exact evaluations are recorded in `all_results.bin`
+  and the Pareto store but do not consume `optimize.iters`, which remains the subsequent
+  evolutionary exact-validation budget. Checkpoints preserve incomplete bootstrap plans and can
+  recover a seed result durably flushed immediately before a restart. Anchored fine-tune context
+  is checkpoint-owned as well, so resume does not require the original starting-config files.
 - `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
   progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
   100%, measured backwards from the configured end date; each partial suffix receives the normal
@@ -1146,8 +1174,9 @@ be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strateg
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
 `strategy_eq_recovery_days_max` instead of being prematurely truncated.
 
-When you provide many starting configs, optimizer bounds how many seed evaluations may be in flight
-at once. For the DEAP backend, the same cap also applies to generation offspring evaluations:
+When you provide many starting configs to a CPU optimizer, it bounds how many seed evaluations may
+be in flight at once. For the DEAP backend, the same cap also applies to generation offspring
+evaluations:
 
 ```json
 "optimize": {
@@ -1158,8 +1187,9 @@ at once. For the DEAP backend, the same cap also applies to generation offspring
 Effective cap:
 
 - `max_pending = n_cpus * max_pending_starting_evals_per_cpu`
-- All provided starting configs are still evaluated before the optimizer trims them down to the
-  backend's initial population.
+- All provided starting configs are still exact-evaluated before a CPU optimizer trims them down to
+  its initial population. GPU `auto` and `screened` seed bootstrapping instead use the capped policy
+  described above.
 
 This is mainly a memory-control knob for large seed pools and DEAP generation batches, especially
 in suite mode where each candidate returns a larger metrics payload. Lower it first if the VPS

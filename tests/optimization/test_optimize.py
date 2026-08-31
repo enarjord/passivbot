@@ -12,6 +12,7 @@ import argparse
 import builtins
 import json
 import logging
+import pickle
 from multiprocessing.reduction import ForkingPickler
 import tempfile
 from collections import defaultdict
@@ -23,6 +24,7 @@ import numpy as np
 import pytest
 
 import optimize
+from opt_utils import load_results
 from optimize import (
     _apply_config_overrides,
     _analysis_indicates_liquidation,
@@ -5237,6 +5239,62 @@ def test_validate_resume_results_rejects_empty_all_results(tmp_path: Path):
         optimize._validate_resume_results(str(tmp_path), config)
 
 
+def test_validate_resume_results_allows_empty_gpu_seed_bootstrap_checkpoint(
+    tmp_path: Path,
+):
+    config = _resume_validation_entry()
+    config["optimize"]["backend"] = "gpu"
+    results_path = tmp_path / "all_results.bin"
+    results_path.write_bytes(b"")
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+    checkpoint = {
+        "seed_bootstrap_complete": False,
+        "seed_exact_done": 0,
+        "exact_done": 0,
+        "seed_bootstrap_contract": {"version": 1},
+        "seed_bootstrap_plan": {
+            "effective_mode": "screened",
+            "starting_vectors": [[0.1]],
+        },
+    }
+    with open(checkpoint_path, "wb") as file:
+        pickle.dump(checkpoint, file)
+
+    assert (
+        optimize._validate_resume_results(
+            str(tmp_path),
+            config,
+            checkpoint_path=str(checkpoint_path),
+        )
+        == 0
+    )
+
+
+def test_validate_resume_results_rejects_empty_completed_gpu_checkpoint(
+    tmp_path: Path,
+):
+    config = _resume_validation_entry()
+    config["optimize"]["backend"] = "gpu"
+    (tmp_path / "all_results.bin").write_bytes(b"")
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+    with open(checkpoint_path, "wb") as file:
+        pickle.dump(
+            {
+                "seed_bootstrap_complete": True,
+                "seed_exact_done": 0,
+                "exact_done": 0,
+            },
+            file,
+        )
+
+    with pytest.raises(ValueError, match="all_results.bin is empty"):
+        optimize._validate_resume_results(
+            str(tmp_path),
+            config,
+            checkpoint_path=str(checkpoint_path),
+        )
+
+
 def test_validate_resume_results_rejects_corrupt_all_results(tmp_path: Path):
     config = _resume_validation_entry()
     (tmp_path / "all_results.bin").write_bytes(b"\xc1")
@@ -5287,6 +5345,113 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
     _write_msgpack_entries(tmp_path / "all_results.bin", [entry, deepcopy(entry)])
 
     assert optimize._validate_resume_results(str(tmp_path), deepcopy(entry)) == 2
+
+
+def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path):
+    seed_entry = _resume_validation_entry()
+    seed_entry["metrics"] = {
+        "objectives": {"adg_strategy_eq": 0.1},
+        "constraint_violation": 0.0,
+        "gpu_seed_bootstrap": {"mode": "exact", "source_index": 0},
+    }
+    _write_msgpack_entries(tmp_path / "all_results.bin", [seed_entry])
+    resume_state = {}
+    assert (
+        optimize._validate_resume_results(
+            str(tmp_path),
+            deepcopy(seed_entry),
+            resume_state=resume_state,
+        )
+        == 1
+    )
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path),
+        sig_digits=6,
+        flush_interval=60,
+        scoring_keys=["adg_strategy_eq"],
+        compress=True,
+        write_all_results=True,
+        starting_iters=1,
+        previous_data=resume_state["previous_data"],
+    )
+    recorder.store.add_entry = Mock(return_value=False)
+    evolution_entry = deepcopy(seed_entry)
+    evolution_entry["metrics"].pop("gpu_seed_bootstrap")
+    evolution_entry["metrics"]["objectives"]["adg_strategy_eq"] = 0.2
+    recorder.record(evolution_entry)
+    recorder.close()
+
+    results = list(load_results(tmp_path / "all_results.bin"))
+    assert results[0]["metrics"]["gpu_seed_bootstrap"]["source_index"] == 0
+    assert "gpu_seed_bootstrap" not in results[1]["metrics"]
+
+
+def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Path):
+    seed_entry = _resume_validation_entry()
+    seed_entry["metrics"] = {
+        "objectives": {"adg_strategy_eq": 0.1},
+        "constraint_violation": 0.0,
+        "gpu_seed_bootstrap": {"mode": "exact", "source_index": 99},
+    }
+    _write_msgpack_entries(tmp_path / "all_results.bin", [seed_entry])
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path),
+        sig_digits=6,
+        flush_interval=60,
+        scoring_keys=["adg_strategy_eq"],
+        compress=True,
+        write_all_results=True,
+        starting_iters=100,
+        previous_data=seed_entry,
+    )
+    recorder.store.add_entry = Mock(return_value=False)
+    evolution_entry = deepcopy(seed_entry)
+    evolution_entry["metrics"].pop("gpu_seed_bootstrap")
+    evolution_entry["metrics"]["objectives"]["adg_strategy_eq"] = 0.2
+    recorder.record(evolution_entry)
+    recorder.close()
+
+    results = list(load_results(tmp_path / "all_results.bin"))
+    assert results[0]["metrics"]["gpu_seed_bootstrap"]["source_index"] == 99
+    assert "gpu_seed_bootstrap" not in results[1]["metrics"]
+
+
+def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path):
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+    anchor_plan = {
+        "anchors": [{"seed_bot": {}, "fixed_values": [], "source": "checkpoint"}],
+        "fixed_keys": ["long_base_qty_pct"],
+        "key_paths": [["bot", "long", "base_qty_pct"]],
+        "strategy_kind": "trailing_martingale",
+        "tunable_keys": ["long_base_qty_pct"],
+    }
+    with open(checkpoint_path, "wb") as file:
+        pickle.dump({"anchor_plan": anchor_plan}, file)
+    config = {
+        "live": {"strategy_kind": "trailing_martingale"},
+        "optimize": {"backend": "gpu"},
+    }
+
+    assert optimize._restore_gpu_resume_anchor_plan(
+        config, str(checkpoint_path)
+    )
+    assert config[optimize.ANCHOR_PLAN_KEY] == anchor_plan
+    assert config[optimize.ANCHOR_PLAN_KEY] is not anchor_plan
+
+
+def test_restored_gpu_anchor_plan_skips_ordinary_fine_tune_bounds():
+    assert not optimize._should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=True,
+        installing_anchor_plan=False,
+    )
+    assert not optimize._should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=False,
+        installing_anchor_plan=True,
+    )
+    assert optimize._should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=False,
+        installing_anchor_plan=False,
+    )
 
 
 def test_optimizer_exit_code_is_nonzero_for_fatal_errors():

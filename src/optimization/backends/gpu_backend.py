@@ -66,6 +66,10 @@ GPU_DEFAULTS = {
     "drift_halt": 0.60,
     "exact_workers": 0,
     "max_pending_exact": 0,
+    "seed_bootstrap": {
+        "mode": "auto",
+        "max_exact": 128,
+    },
     "successive_halving": {
         "enabled": False,
         "history_fractions": [0.25, 0.5, 1.0],
@@ -73,6 +77,9 @@ GPU_DEFAULTS = {
         "min_survivors": 64,
     },
 }
+
+GPU_SEED_BOOTSTRAP_MODES = frozenset({"auto", "exact", "screened", "legacy"})
+GPU_SEED_BOOTSTRAP_PROBE_FRACTION = 0.25
 
 GPU_LEAN_TM_POPULATION_SIZE = 2304
 GPU_LEAN_TM_MAX_DISPATCH_CANDIDATE_BARS = 4_500_000_000
@@ -102,6 +109,14 @@ def _ask_gpu_population(algorithm, interrupt_check: InterruptCheck):
 
     interrupt_check()
     return algorithm.ask()
+
+
+def _disable_gpu_exact_duplicate_guard(evaluator) -> None:
+    """GPU owns canonical submission deduplication and exact revalidation."""
+
+    base_evaluator = getattr(evaluator, "base", evaluator)
+    if hasattr(base_evaluator, "use_duplicate_guard"):
+        base_evaluator.use_duplicate_guard = False
 
 
 def _submit_gpu_exact_validation(
@@ -1009,11 +1024,42 @@ def _resolve_options(config: dict) -> dict:
     configured = config.get("optimize", {}).get("gpu", {})
     if configured is not None and not isinstance(configured, dict):
         raise TypeError("optimize.gpu must be an object")
+    nested_options = {"seed_bootstrap", "successive_halving"}
     for key, default in GPU_DEFAULTS.items():
+        if key in nested_options:
+            continue
         if key in (configured or {}) and configured[key] is not None:
             options[key] = type(default)(configured[key])
+    seed_bootstrap = dict(GPU_DEFAULTS["seed_bootstrap"])
+    configured_seed_bootstrap = (configured or {}).get("seed_bootstrap")
+    if configured_seed_bootstrap is not None and not isinstance(
+        configured_seed_bootstrap, dict
+    ):
+        raise TypeError("optimize.gpu.seed_bootstrap must be an object")
+    seed_bootstrap.update(configured_seed_bootstrap or {})
+    unknown_seed_bootstrap = sorted(
+        set(seed_bootstrap) - set(GPU_DEFAULTS["seed_bootstrap"])
+    )
+    if unknown_seed_bootstrap:
+        raise ValueError(
+            "unknown optimize.gpu.seed_bootstrap settings: "
+            + ", ".join(unknown_seed_bootstrap)
+        )
+    seed_bootstrap["mode"] = str(seed_bootstrap["mode"]).strip().lower()
+    if seed_bootstrap["mode"] not in GPU_SEED_BOOTSTRAP_MODES:
+        allowed = ", ".join(sorted(GPU_SEED_BOOTSTRAP_MODES))
+        raise ValueError(
+            "optimize.gpu.seed_bootstrap.mode must be one of "
+            f"{{{allowed}}}"
+        )
+    seed_bootstrap["max_exact"] = int(seed_bootstrap["max_exact"])
+    if seed_bootstrap["max_exact"] <= 0:
+        raise ValueError(
+            "optimize.gpu.seed_bootstrap.max_exact must be greater than zero"
+        )
+    options["seed_bootstrap"] = seed_bootstrap
     halving = dict(GPU_DEFAULTS["successive_halving"])
-    configured_halving = options.get("successive_halving")
+    configured_halving = (configured or {}).get("successive_halving")
     if configured_halving is not None and not isinstance(configured_halving, dict):
         raise TypeError("optimize.gpu.successive_halving must be an object")
     halving.update(configured_halving or {})
@@ -2541,6 +2587,254 @@ def _select_validation_indices(
     return selected
 
 
+def _effective_seed_bootstrap_mode(policy: dict, seed_count: int) -> str:
+    """Resolve auto without silently weakening an explicit exact request."""
+
+    mode = str(policy["mode"])
+    if int(seed_count) <= 0:
+        return "none"
+    if mode != "auto":
+        return mode
+    return "exact" if int(seed_count) <= int(policy["max_exact"]) else "screened"
+
+
+def _deduplicate_canonical_seed_vectors(
+    vectors,
+    *,
+    hash_vector,
+) -> tuple[list, int]:
+    """Drop seeds that become identical after GPU runtime overrides."""
+
+    deduplicated = []
+    seen = set()
+    for vector in vectors:
+        digest = hash_vector(vector)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        deduplicated.append(vector)
+    return deduplicated, len(vectors) - len(deduplicated)
+
+
+def _select_seed_bootstrap_indices(
+    objectives: np.ndarray,
+    scores: np.ndarray,
+    violations: np.ndarray,
+    *,
+    total: int,
+) -> list[tuple[int, bool, bool]]:
+    """Select objective extremes, a diverse proxy front, and broad probes."""
+
+    objectives = np.asarray(objectives, dtype=np.float64)
+    scores = np.asarray(scores, dtype=np.float64)
+    violations = np.asarray(violations, dtype=np.float64)
+    total = min(max(0, int(total)), len(objectives))
+    if total == 0:
+        return []
+    if objectives.ndim != 2 or len(scores) != len(objectives) or len(
+        violations
+    ) != len(objectives):
+        raise ValueError(
+            "GPU seed-bootstrap objectives, scores and violations must align"
+        )
+
+    requested_probes = min(
+        total - 1,
+        max(1, int(round(total * GPU_SEED_BOOTSTRAP_PROBE_FRACTION))),
+    )
+    preference = _select_validation_indices(
+        objectives,
+        scores,
+        violations,
+        total=total,
+        probes=requested_probes,
+    )
+    classification = {
+        int(index): (bool(is_probe), bool(is_front))
+        for index, is_probe, is_front in preference
+    }
+    feasible = np.flatnonzero(np.isfinite(violations) & (violations <= 0.0))
+    primary = feasible if len(feasible) else np.arange(len(objectives), dtype=np.int64)
+    constraint_priority = []
+    if len(feasible) == 0:
+        # Proxy constraints can drift from exact Rust constraints, so retain
+        # objective diversity, but explicitly reserve part of the exact budget
+        # for the seeds closest to feasibility.  Otherwise an all-infeasible
+        # objective front can crowd out the most promising constraint repairs.
+        reserve = min(total, max(1, requested_probes))
+        constraint_priority = sorted(
+            map(int, primary),
+            key=lambda index: (
+                float(violations[index])
+                if np.isfinite(violations[index])
+                else float("inf"),
+                float(scores[index]),
+            ),
+        )[:reserve]
+    extremes = []
+    for column in range(objectives.shape[1]):
+        values = objectives[primary, column]
+        finite = np.isfinite(values)
+        if not np.any(finite):
+            continue
+        eligible = primary[finite]
+        finite_values = values[finite]
+        minimum = float(np.min(finite_values))
+        minima = eligible[
+            np.isclose(finite_values, minimum, rtol=0.0, atol=1.0e-12)
+        ]
+        front_minima = np.asarray(
+            [
+                index
+                for index in minima
+                if int(index) in classification
+                and classification[int(index)][1]
+            ],
+            dtype=np.int64,
+        )
+        choices = front_minima if len(front_minima) else minima
+        index = int(min(choices, key=lambda item: float(scores[int(item)])))
+        if index not in extremes:
+            extremes.append(index)
+
+    selected: list[tuple[int, bool, bool]] = []
+    selected_ids = set()
+
+    def append(index: int) -> None:
+        if len(selected) >= total or index in selected_ids:
+            return
+        is_probe, is_front = classification[int(index)]
+        selected.append((int(index), is_probe, is_front))
+        selected_ids.add(int(index))
+
+    front_target = max(1, total - requested_probes)
+    for index in constraint_priority:
+        append(index)
+    for index in extremes[:front_target]:
+        append(index)
+    for index, _is_probe, is_front in preference:
+        if is_front and sum(front for _idx, _probe, front in selected) < front_target:
+            append(index)
+    for index, is_probe, _is_front in preference:
+        if is_probe:
+            append(index)
+    for index, _is_probe, _is_front in preference:
+        append(index)
+    return selected
+
+
+def _select_seed_population_indices(
+    objectives: np.ndarray,
+    violations: np.ndarray,
+    *,
+    count: int,
+) -> list[int]:
+    """Reduce a seed pool with constraint-aware Pareto diversity."""
+
+    return list(
+        map(
+            int,
+            _successive_halving_survivor_indices(
+                objectives,
+                violations,
+                count=count,
+            ),
+        )
+    )
+
+
+def _validate_seed_bootstrap_plan(
+    starting_vectors,
+    selections,
+    population_indices,
+    contract,
+    *,
+    hash_vector,
+    proxy_metrics=None,
+    proxy_objectives=None,
+    proxy_violations=None,
+    screen_complete: bool = True,
+) -> None:
+    """Fail closed when an incomplete checkpoint seed plan is inconsistent."""
+
+    if not isinstance(contract, dict):
+        raise RuntimeError("GPU checkpoint seed-bootstrap plan has no contract")
+    seed_count = len(starting_vectors)
+    hashes = [hash_vector(vector) for vector in starting_vectors]
+    digest = hashlib.sha256("\n".join(hashes).encode()).hexdigest()
+    if (
+        int(contract.get("seed_count", -1)) != seed_count
+        or contract.get("seed_pool_sha256") != digest
+    ):
+        raise RuntimeError(
+            "GPU checkpoint seed-bootstrap plan does not match its seed contract"
+        )
+    mode = str(contract.get("effective_mode"))
+    if mode not in {"exact", "screened"}:
+        raise RuntimeError(
+            "GPU checkpoint has an incomplete seed-bootstrap plan for unsupported "
+            f"mode {mode!r}"
+        )
+    if len(hashes) != len(set(hashes)):
+        raise RuntimeError(
+            "GPU checkpoint seed-bootstrap plan contains canonical duplicate seeds"
+        )
+    expected_selected = int(contract.get("selected_exact_count", -1))
+    if not screen_complete:
+        if (
+            mode != "screened"
+            or expected_selected != min(
+                seed_count, int(contract.get("max_exact", -1))
+            )
+            or selections
+            or population_indices
+            or proxy_metrics is not None
+            or proxy_objectives is not None
+            or proxy_violations is not None
+        ):
+            raise RuntimeError(
+                "GPU checkpoint pending seed screen has invalid partial evidence"
+            )
+        return
+    if expected_selected != len(selections):
+        raise RuntimeError(
+            "GPU checkpoint seed-bootstrap plan does not match its seed contract"
+        )
+    selected_ids = [int(index) for index, _probe, _front in selections]
+    if (
+        len(selected_ids) != len(set(selected_ids))
+        or any(index < 0 or index >= seed_count for index in selected_ids)
+        or len(population_indices) != len(set(map(int, population_indices)))
+        or any(
+            int(index) < 0 or int(index) >= seed_count
+            for index in population_indices
+        )
+    ):
+        raise RuntimeError("GPU checkpoint seed-bootstrap plan has invalid indices")
+    if mode == "exact":
+        if selected_ids != list(range(seed_count)) or not bool(
+            contract.get("all_seeds_exact")
+        ):
+            raise RuntimeError(
+                "GPU checkpoint exact seed-bootstrap plan is incomplete"
+            )
+        return
+    objectives = np.asarray(proxy_objectives, dtype=np.float64)
+    violations = np.asarray(proxy_violations, dtype=np.float64)
+    if (
+        not isinstance(proxy_metrics, dict)
+        or set(map(int, proxy_metrics)) != set(selected_ids)
+        or objectives.ndim != 2
+        or len(objectives) != seed_count
+        or violations.shape != (seed_count,)
+        or bool(contract.get("all_seeds_exact"))
+        or any(bool(probe) == bool(front) for _index, probe, front in selections)
+    ):
+        raise RuntimeError(
+            "GPU checkpoint screened seed-bootstrap plan has invalid proxy evidence"
+        )
+
+
 class _ProxyFrontValidationPending(RuntimeError):
     """The current proxy front has exact work in flight but no ready evidence."""
 
@@ -3076,6 +3370,7 @@ def _gpu_search_checkpoint_contract(
     sig_digits,
     algorithm_contract,
     proxy_evaluation_policy=None,
+    seed_bootstrap_contract=None,
 ) -> dict:
     """Fingerprint fixed and dormant search inputs omitted from active genes."""
 
@@ -3111,6 +3406,9 @@ def _gpu_search_checkpoint_contract(
     if proxy_evaluation_policy is not None:
         contract["version"] = 2
         contract["proxy_evaluation"] = deepcopy(proxy_evaluation_policy)
+    if seed_bootstrap_contract is not None:
+        contract["version"] = 3
+        contract["seed_bootstrap"] = deepcopy(seed_bootstrap_contract)
     return contract
 
 
@@ -3640,6 +3938,121 @@ def _recover_durable_validations(
     return recovered, drift_pairs
 
 
+def _recover_durable_seed_bootstrap(
+    entries,
+    *,
+    start_index: int,
+    stop_index: int,
+    vector_from_entry,
+    hash_vector,
+) -> tuple[
+    dict[str, dict[str, Any]],
+    set[str],
+    list[tuple[float, float, bool, bool, bool]],
+]:
+    """Recover exact seed payloads flushed after a stale bootstrap checkpoint."""
+
+    payloads: dict[str, dict[str, Any]] = {}
+    recovered: set[str] = set()
+    drift_pairs: list[tuple[float, float, bool, bool, bool]] = []
+    consumed = 0
+    for index, entry in enumerate(entries):
+        if index < start_index:
+            continue
+        if index >= stop_index:
+            break
+        metrics = entry.get("metrics") or {}
+        metadata = metrics.get("gpu_seed_bootstrap")
+        if not isinstance(metadata, dict) or metadata.get("schema_version") != 1:
+            raise RuntimeError(
+                "GPU resume cannot recover seed-bootstrap evidence from "
+                f"durable result {index}"
+            )
+        try:
+            mode = str(metadata["mode"])
+            source_index = int(metadata["source_index"])
+            objectives = [float(value) for value in metadata["exact_objectives"]]
+            violation = float(metadata["exact_violation"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "GPU resume found invalid seed-bootstrap evidence in "
+                f"durable result {index}"
+            ) from exc
+        if (
+            mode not in {"exact", "screened"}
+            or source_index < 0
+            or not objectives
+            or not all(np.isfinite(objectives))
+            or not np.isfinite(violation)
+        ):
+            raise RuntimeError(
+                "GPU resume found non-finite seed-bootstrap evidence in "
+                f"durable result {index}"
+            )
+        digest = hash_vector(vector_from_entry(entry))
+        if digest in payloads:
+            raise RuntimeError(
+                "GPU resume found duplicate durable seed-bootstrap evidence for "
+                f"result {index}"
+            )
+        payloads[digest] = {
+            "source_index": source_index,
+            "F": objectives,
+            "G": [violation],
+        }
+        recovered.add(digest)
+        validation = metrics.get("gpu_validation")
+        if mode == "screened" and validation is None:
+            raise RuntimeError(
+                "GPU resume found screened seed-bootstrap evidence without "
+                f"proxy/exact metadata in durable result {index}"
+            )
+        if validation is not None:
+            if (
+                not isinstance(validation, dict)
+                or validation.get("schema_version") != 2
+                or validation.get("phase") != "seed_bootstrap"
+            ):
+                raise RuntimeError(
+                    "GPU resume found invalid proxy/exact seed-bootstrap evidence "
+                    f"in durable result {index}"
+                )
+            try:
+                proxy_score = float(validation["proxy_score"])
+                exact_score = float(validation["exact_score"])
+                probe = validation["probe"]
+                proxy_front = validation["proxy_front"]
+                mismatch = validation["constraint_classification_mismatch"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "GPU resume found invalid proxy/exact seed-bootstrap evidence "
+                    f"in durable result {index}"
+                ) from exc
+            if (
+                not np.isfinite(proxy_score)
+                or not np.isfinite(exact_score)
+                or not isinstance(probe, bool)
+                or not isinstance(proxy_front, bool)
+                or probe == proxy_front
+                or not isinstance(mismatch, bool)
+            ):
+                raise RuntimeError(
+                    "GPU resume found invalid proxy/exact seed-bootstrap evidence "
+                    f"in durable result {index}"
+                )
+            drift_pairs.append(
+                (proxy_score, exact_score, probe, mismatch, proxy_front)
+            )
+        consumed += 1
+    expected = max(0, stop_index - start_index)
+    if consumed != expected:
+        raise RuntimeError(
+            "GPU resume could not reconstruct all durable seed-bootstrap results: "
+            f"expected {expected}, recovered {consumed}"
+        )
+    return payloads, recovered, drift_pairs
+
+
 def run_backend(
     *,
     config: dict[str, Any],
@@ -3690,6 +4103,12 @@ def run_backend(
     reject_configured_exact_only_gpu_metrics(config)
     options = _resolve_options(config)
     validate_optimizer_effective_configs(config)
+    checkpoint = None
+    if resume:
+        if checkpoint_path is None or not os.path.isfile(checkpoint_path):
+            raise FileNotFoundError(f"GPU checkpoint not found: {checkpoint_path}")
+        with open(checkpoint_path, "rb") as file:
+            checkpoint = pickle.load(file)
 
     shape = (
         optimization_shape
@@ -4171,6 +4590,35 @@ def run_backend(
                 )
             return proxy.evaluate(candidates)
 
+    def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+        objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)
+        violations = np.empty(len(metric_rows), dtype=np.float64)
+        for row, metrics in enumerate(metric_rows):
+            if _GPU_SUITE_OBJECTIVES_KEY in metrics:
+                objective_values = np.asarray(
+                    metrics[_GPU_SUITE_OBJECTIVES_KEY], dtype=np.float64
+                )
+                if len(objective_values) != len(specs):
+                    raise ValueError(
+                        "GPU suite proxy objective length mismatch: "
+                        f"expected {len(specs)}, got {len(objective_values)}"
+                    )
+                objectives[row] = objective_values
+                violations[row] = float(metrics[_GPU_SUITE_VIOLATION_KEY])
+                continue
+            flattened = _single_scenario_metric_surface(metrics)
+            objective_values = [
+                metrics[canonicalize_metric_name(spec.metric)] for spec in specs
+            ]
+            fitness, violation = evaluator.calc_fitness(
+                flattened,
+                limit_metrics=flattened,
+                objective_values=objective_values,
+            )
+            objectives[row] = fitness
+            violations[row] = float(violation)
+        return objectives, violations
+
     active_low = np.asarray(
         [bound.low for _name, _index, bound in active], dtype=np.float64
     )
@@ -4227,26 +4675,158 @@ def run_backend(
 
     population_size = max(8, int(options["population_size"]))
     seed = config["optimize"].get("seed")
-    if seed is None:
+    if checkpoint is not None and checkpoint.get("seed") is not None:
+        seed = int(checkpoint["seed"])
+    elif seed is None:
         seed = int(np.random.SeedSequence().generate_state(1)[0])
         logging.info("GPU optimizer generated reproducible seed %d", seed)
     seed = int(seed)
     rng = np.random.default_rng(seed)
     sampling = rng.random((population_size, len(active)))
     sampling[0] = normalize_vector(base_vector)
-    starting_vectors = load_starting_individuals(
-        starting_configs_path=starting_configs_path,
-        population_size=population_size,
-        get_starting_configs=get_starting_configs,
-        configs_to_individuals=configs_to_individuals,
-        iter_starting_configs=iter_starting_configs,
-        configs_to_individuals_streaming=configs_to_individuals_streaming,
-        optimization_shape=shape,
-        bounds=bounds,
-        sig_digits=sig_digits,
+    seed_policy = options["seed_bootstrap"]
+    objective_scale = _ObjectiveScale()
+    seed_proxy_metrics = None
+    seed_proxy_objectives = None
+    seed_proxy_violations = None
+    seed_proxy_scores = None
+    seed_bootstrap_selections = []
+    seed_population_indices = []
+    seed_screen_complete = True
+    checkpoint_seed_plan = (
+        checkpoint.get("seed_bootstrap_plan") if checkpoint is not None else None
     )
-    for index, vector in enumerate(starting_vectors[: population_size - 1], start=1):
-        sampling[index] = normalize_vector(vector)
+    checkpoint_seed_contract = (
+        checkpoint.get("seed_bootstrap_contract")
+        if checkpoint is not None
+        else None
+    )
+    if checkpoint_seed_contract is not None and (
+        str(checkpoint_seed_contract.get("requested_mode"))
+        != str(seed_policy["mode"])
+        or int(checkpoint_seed_contract.get("max_exact", -1))
+        != int(seed_policy["max_exact"])
+    ):
+        raise ValueError(
+            "GPU checkpoint does not match current seed-bootstrap policy"
+        )
+    if checkpoint_seed_plan:
+        starting_vectors = [
+            [float(value) for value in vector]
+            for vector in checkpoint_seed_plan["starting_vectors"]
+        ]
+        seed_bootstrap_mode = str(checkpoint_seed_plan["effective_mode"])
+        seed_bootstrap_selections = [
+            (int(index), bool(probe), bool(front))
+            for index, probe, front in checkpoint_seed_plan["selections"]
+        ]
+        seed_population_indices = [
+            int(index) for index in checkpoint_seed_plan["population_indices"]
+        ]
+        seed_screen_complete = bool(
+            checkpoint_seed_plan.get("screen_complete", True)
+        )
+        seed_proxy_metrics = checkpoint_seed_plan.get("proxy_metrics")
+        if checkpoint_seed_plan.get("proxy_objectives") is not None:
+            seed_proxy_objectives = np.asarray(
+                checkpoint_seed_plan["proxy_objectives"], dtype=np.float64
+            )
+            seed_proxy_violations = np.asarray(
+                checkpoint_seed_plan["proxy_violations"], dtype=np.float64
+            )
+            objective_scale.fit(seed_proxy_objectives)
+            seed_proxy_scores = objective_scale.score(seed_proxy_objectives)
+        seed_bootstrap_contract = deepcopy(checkpoint_seed_contract)
+        _validate_seed_bootstrap_plan(
+            starting_vectors,
+            seed_bootstrap_selections,
+            seed_population_indices,
+            seed_bootstrap_contract,
+            hash_vector=vector_hash,
+            proxy_metrics=seed_proxy_metrics,
+            proxy_objectives=seed_proxy_objectives,
+            proxy_violations=seed_proxy_violations,
+            screen_complete=seed_screen_complete,
+        )
+    elif checkpoint_seed_contract is not None:
+        starting_vectors = []
+        seed_bootstrap_mode = str(
+            checkpoint_seed_contract.get("effective_mode", "none")
+        )
+        seed_screen_complete = True
+        seed_bootstrap_contract = deepcopy(checkpoint_seed_contract)
+    else:
+        starting_vectors = load_starting_individuals(
+            starting_configs_path=starting_configs_path,
+            population_size=population_size,
+            get_starting_configs=get_starting_configs,
+            configs_to_individuals=configs_to_individuals,
+            iter_starting_configs=iter_starting_configs,
+            configs_to_individuals_streaming=configs_to_individuals_streaming,
+            optimization_shape=shape,
+            bounds=bounds,
+            sig_digits=sig_digits,
+        )
+        if str(seed_policy["mode"]) != "legacy":
+            starting_vectors, duplicate_count = (
+                _deduplicate_canonical_seed_vectors(
+                    starting_vectors,
+                    hash_vector=vector_hash,
+                )
+            )
+            if duplicate_count:
+                logging.info(
+                    "Dropped %d GPU seed configs made equivalent by runtime "
+                    "overrides",
+                    duplicate_count,
+                )
+        seed_bootstrap_mode = _effective_seed_bootstrap_mode(
+            seed_policy, len(starting_vectors)
+        )
+        if seed_bootstrap_mode == "legacy":
+            for index, vector in enumerate(
+                starting_vectors[: population_size - 1], start=1
+            ):
+                sampling[index] = normalize_vector(vector)
+        elif seed_bootstrap_mode == "exact":
+            seed_bootstrap_selections = [
+                (index, False, False) for index in range(len(starting_vectors))
+            ]
+        elif seed_bootstrap_mode == "screened":
+            seed_screen_complete = False
+        seed_hashes = [vector_hash(vector) for vector in starting_vectors]
+        if seed_bootstrap_mode == "exact":
+            selected_exact_count = len(starting_vectors)
+        elif seed_bootstrap_mode == "screened":
+            selected_exact_count = min(
+                len(starting_vectors), int(seed_policy["max_exact"])
+            )
+        else:
+            selected_exact_count = 0
+        seed_bootstrap_contract = (
+            {
+                "version": 1,
+                "requested_mode": str(seed_policy["mode"]),
+                "effective_mode": seed_bootstrap_mode,
+                "max_exact": int(seed_policy["max_exact"]),
+                "seed_count": len(starting_vectors),
+                "selected_exact_count": selected_exact_count,
+                "all_seeds_exact": seed_bootstrap_mode == "exact",
+                "seed_pool_sha256": hashlib.sha256(
+                    "\n".join(seed_hashes).encode()
+                ).hexdigest(),
+            }
+            if starting_vectors
+            else None
+        )
+    if starting_vectors and seed_screen_complete:
+        logging.info(
+            "GPU seed bootstrap prepared | mode=%s seeds=%d exact=%d population=%d",
+            seed_bootstrap_mode,
+            len(starting_vectors),
+            len(seed_bootstrap_selections),
+            population_size,
+        )
 
     problem = Problem(
         n_var=len(active),
@@ -4270,8 +4850,10 @@ def run_backend(
     algorithm.setup(problem, termination=NoTermination(), seed=seed, verbose=False)
     generation = 0
     exact_done = 0
+    seed_exact_done = 0
     completed_hashes: set[str] = set()
-    objective_scale = _ObjectiveScale()
+    seed_bootstrap_payloads = {}
+    seed_bootstrap_complete = seed_bootstrap_mode in {"none", "legacy"}
     drift_monitor = _DriftMonitor(options)
     persisted_halt_reason = None
     signature = _checkpoint_signature(
@@ -4313,6 +4895,7 @@ def run_backend(
                 if halving_policy["enabled"]
                 else None
             ),
+            seed_bootstrap_contract=seed_bootstrap_contract,
         ),
     )
     budget = int(config["optimize"]["iters"])
@@ -4320,10 +4903,6 @@ def run_backend(
         raise ValueError("optimize.iters must be greater than zero")
 
     if resume:
-        if checkpoint_path is None or not os.path.isfile(checkpoint_path):
-            raise FileNotFoundError(f"GPU checkpoint not found: {checkpoint_path}")
-        with open(checkpoint_path, "rb") as file:
-            checkpoint = pickle.load(file)
         if checkpoint.get("signature") != signature:
             raise ValueError(
                 "GPU checkpoint does not match current search, scoring, suite, "
@@ -4333,18 +4912,30 @@ def run_backend(
         seed = int(checkpoint.get("seed", seed))
         generation = int(checkpoint["generation"])
         exact_done = int(checkpoint["exact_done"])
+        seed_exact_done = int(checkpoint.get("seed_exact_done", 0))
+        seed_bootstrap_complete = bool(
+            checkpoint.get("seed_bootstrap_complete", True)
+        )
+        if not seed_bootstrap_complete and not checkpoint_seed_plan:
+            raise RuntimeError(
+                "GPU checkpoint is missing its incomplete seed-bootstrap plan"
+            )
+        seed_bootstrap_payloads = dict(
+            checkpoint.get("seed_bootstrap_payloads", {})
+        )
         completed_hashes = set(checkpoint.get("completed_hashes", []))
         objective_scale.median = checkpoint.get("scale_median")
         objective_scale.spread = checkpoint.get("scale_spread")
         drift_monitor.pairs.extend(checkpoint.get("drift_pairs", []))
         persisted_halt_reason = checkpoint.get("halt_reason")
         recorded_exact = int(getattr(getattr(recorder, "store", None), "n_iters", 0))
-        if recorded_exact < exact_done:
+        checkpoint_exact_total = seed_exact_done + exact_done
+        if recorded_exact < checkpoint_exact_total:
             raise RuntimeError(
                 "GPU checkpoint is ahead of durable all_results.bin state: "
-                f"checkpoint={exact_done}, durable={recorded_exact}"
+                f"checkpoint={checkpoint_exact_total}, durable={recorded_exact}"
             )
-        if recorded_exact > exact_done:
+        if recorded_exact > checkpoint_exact_total:
             from opt_utils import load_results
 
             results_file = getattr(getattr(recorder, "results_file", None), "name", None)
@@ -4365,13 +4956,29 @@ def run_backend(
                     )
                 return vectors[0]
 
-            recovered_hashes, recovered_pairs = _recover_durable_validations(
-                load_results(results_file),
-                start_index=exact_done,
-                stop_index=recorded_exact,
-                vector_from_entry=vector_from_entry,
-                hash_vector=vector_hash,
-            )
+            if seed_bootstrap_complete:
+                recovered_hashes, recovered_pairs = _recover_durable_validations(
+                    load_results(results_file),
+                    start_index=checkpoint_exact_total,
+                    stop_index=recorded_exact,
+                    vector_from_entry=vector_from_entry,
+                    hash_vector=vector_hash,
+                )
+                exact_done += recorded_exact - checkpoint_exact_total
+            else:
+                (
+                    recovered_seed_payloads,
+                    recovered_hashes,
+                    recovered_pairs,
+                ) = _recover_durable_seed_bootstrap(
+                    load_results(results_file),
+                    start_index=checkpoint_exact_total,
+                    stop_index=recorded_exact,
+                    vector_from_entry=vector_from_entry,
+                    hash_vector=vector_hash,
+                )
+                seed_bootstrap_payloads.update(recovered_seed_payloads)
+                seed_exact_done += recorded_exact - checkpoint_exact_total
             completed_hashes.update(recovered_hashes)
             drift_monitor.pairs.extend(recovered_pairs)
             recovered_drift_status = drift_monitor.evaluate()
@@ -4384,10 +4991,9 @@ def run_backend(
                 "GPU checkpoint records %d exact evaluations but all_results.bin "
                 "records %d; recovered the missing durable candidate identities "
                 "and safety evidence",
-                exact_done,
+                checkpoint_exact_total,
                 recorded_exact,
             )
-            exact_done = recorded_exact
         if persisted_halt_reason:
             raise RuntimeError(
                 "Cannot resume a GPU run stopped by its drift safety gate: "
@@ -4400,11 +5006,14 @@ def run_backend(
             options=options,
         )
         logging.info(
-            "Resumed GPU optimizer at generation %d with %d exact evaluations",
+            "Resumed GPU optimizer at generation %d with %d seed and %d "
+            "evolution exact evaluations",
             generation,
+            seed_exact_done,
             exact_done,
         )
 
+    _disable_gpu_exact_duplicate_guard(evaluator_for_pool)
     adapter = PymooEvaluatorAdapter(evaluator_for_pool, overrides_list=overrides_list)
     profile_enabled = any(
         bool(getattr(item, "profile_enabled", False)) for item in profile_proxies
@@ -4444,16 +5053,44 @@ def run_backend(
     last_warning = None
     last_probe_shortfall = None
     last_checkpoint_at = 0.0
-    last_checkpoint_exact = exact_done
+    last_checkpoint_exact = seed_exact_done + exact_done
     generation_in_progress = False
 
     def checkpoint_state() -> dict:
+        seed_plan = None
+        if not seed_bootstrap_complete and starting_vectors:
+            seed_plan = {
+                "effective_mode": seed_bootstrap_mode,
+                "screen_complete": seed_screen_complete,
+                "starting_vectors": starting_vectors,
+                "selections": seed_bootstrap_selections,
+                "population_indices": seed_population_indices,
+                "proxy_metrics": seed_proxy_metrics,
+                "proxy_objectives": (
+                    None
+                    if seed_proxy_objectives is None
+                    else seed_proxy_objectives.tolist()
+                ),
+                "proxy_violations": (
+                    None
+                    if seed_proxy_violations is None
+                    else seed_proxy_violations.tolist()
+                ),
+            }
         return {
             "signature": signature,
             "algorithm": algorithm,
             "generation": generation,
             "seed": seed,
             "exact_done": exact_done,
+            "seed_exact_done": seed_exact_done,
+            "seed_bootstrap_complete": seed_bootstrap_complete,
+            "seed_bootstrap_payloads": (
+                {} if seed_bootstrap_complete else seed_bootstrap_payloads
+            ),
+            "seed_bootstrap_contract": deepcopy(seed_bootstrap_contract),
+            "seed_bootstrap_plan": seed_plan,
+            "anchor_plan": deepcopy(get_anchor_plan(config)),
             "completed_hashes": sorted(completed_hashes),
             "scale_median": objective_scale.median,
             "scale_spread": objective_scale.spread,
@@ -4465,7 +5102,8 @@ def run_backend(
         nonlocal last_checkpoint_at, last_checkpoint_exact
         now = time.monotonic()
         due = now - last_checkpoint_at >= float(options["checkpoint_interval_seconds"])
-        if not force and (exact_done == last_checkpoint_exact or not due):
+        result_count = seed_exact_done + exact_done
+        if not force and (result_count == last_checkpoint_exact or not due):
             return
         profile_started = time.perf_counter() if profile_enabled else 0.0
         _save_checkpoint(checkpoint_path, checkpoint_state())
@@ -4474,38 +5112,15 @@ def run_backend(
                 time.perf_counter() - profile_started
             )
         last_checkpoint_at = now
-        last_checkpoint_exact = exact_done
+        last_checkpoint_exact = result_count
 
-    def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
-        objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)
-        violations = np.empty(len(metric_rows), dtype=np.float64)
-        for row, metrics in enumerate(metric_rows):
-            if _GPU_SUITE_OBJECTIVES_KEY in metrics:
-                objective_values = np.asarray(
-                    metrics[_GPU_SUITE_OBJECTIVES_KEY], dtype=np.float64
-                )
-                if len(objective_values) != len(specs):
-                    raise ValueError(
-                        "GPU suite proxy objective length mismatch: "
-                        f"expected {len(specs)}, got {len(objective_values)}"
-                    )
-                objectives[row] = objective_values
-                violations[row] = float(metrics[_GPU_SUITE_VIOLATION_KEY])
-                continue
-            flattened = _single_scenario_metric_surface(metrics)
-            objective_values = [
-                metrics[canonicalize_metric_name(spec.metric)] for spec in specs
-            ]
-            fitness, violation = evaluator.calc_fitness(
-                flattened,
-                limit_metrics=flattened,
-                objective_values=objective_values,
-            )
-            objectives[row] = fitness
-            violations[row] = float(violation)
-        return objectives, violations
-
-    def record_exact(vector, payload, *, validation_metadata: dict) -> None:
+    def record_exact(
+        vector,
+        payload,
+        *,
+        validation_metadata: dict | None = None,
+        seed_metadata: dict | None = None,
+    ) -> None:
         entry = build_pymoo_record_entry(
             vector=payload.get("evaluation_vector", vector),
             metrics=payload.get("metrics") or {},
@@ -4518,8 +5133,281 @@ def run_backend(
             overrides_fn=overrides_fn,
             overrides_list=overrides_list,
         )
-        entry.setdefault("metrics", {})["gpu_validation"] = validation_metadata
+        if validation_metadata is not None:
+            entry.setdefault("metrics", {})["gpu_validation"] = validation_metadata
+        if seed_metadata is not None:
+            entry.setdefault("metrics", {})["gpu_seed_bootstrap"] = seed_metadata
         recorder.record(_restore_gpu_result_run_contract(entry, config))
+
+    def prepare_seed_proxy_screen() -> None:
+        nonlocal seed_screen_complete
+        nonlocal seed_proxy_metrics, seed_proxy_objectives
+        nonlocal seed_proxy_violations, seed_proxy_scores
+        nonlocal seed_bootstrap_selections, seed_population_indices
+        if seed_bootstrap_mode != "screened" or seed_screen_complete:
+            return
+
+        # Persist the normalized canonical seed pool before the potentially
+        # long Metal dispatch. An interruption can resume without the original
+        # --start input; a completed screen is checkpointed again immediately.
+        maybe_save_checkpoint(force=True)
+        logging.info(
+            "GPU seed proxy screen started | seeds=%d exact_cap=%d",
+            len(starting_vectors),
+            int(seed_policy["max_exact"]),
+        )
+        seed_proxy_started = time.perf_counter()
+        seed_rows = np.asarray(
+            [normalize_vector(vector) for vector in starting_vectors],
+            dtype=np.float64,
+        )
+        proxy_metric_rows = evaluate_proxy(parameter_dicts(seed_rows))
+        seed_proxy_seconds = time.perf_counter() - seed_proxy_started
+        logging.info(
+            "GPU seed proxy screen complete | seeds=%d wall=%.2fs rate=%.1f/s",
+            len(starting_vectors),
+            seed_proxy_seconds,
+            len(starting_vectors) / max(seed_proxy_seconds, 1.0e-9),
+        )
+        seed_proxy_objectives, seed_proxy_violations = proxy_fitness(
+            proxy_metric_rows
+        )
+        objective_scale.fit(seed_proxy_objectives)
+        seed_proxy_scores = objective_scale.score(seed_proxy_objectives)
+        seed_bootstrap_selections = _select_seed_bootstrap_indices(
+            seed_proxy_objectives,
+            seed_proxy_scores,
+            seed_proxy_violations,
+            total=min(len(starting_vectors), int(seed_policy["max_exact"])),
+        )
+        seed_proxy_metrics = {
+            int(index): proxy_metric_rows[int(index)]
+            for index, _probe, _front in seed_bootstrap_selections
+        }
+        seed_population_indices = _select_seed_population_indices(
+            seed_proxy_objectives,
+            seed_proxy_violations,
+            count=min(len(starting_vectors), population_size - 1),
+        )
+        # Keep only compact objective arrays and the selected exact-validation
+        # metric rows. Full per-seed metrics and normalized screen inputs can be
+        # substantial for large seed archives.
+        del proxy_metric_rows
+        del seed_rows
+        seed_screen_complete = True
+        maybe_save_checkpoint(force=True)
+        logging.info(
+            "GPU seed bootstrap prepared | mode=%s seeds=%d exact=%d population=%d",
+            seed_bootstrap_mode,
+            len(starting_vectors),
+            len(seed_bootstrap_selections),
+            population_size,
+        )
+
+    def run_seed_bootstrap() -> None:
+        nonlocal seed_exact_done, seed_bootstrap_complete, persisted_halt_reason
+        if seed_bootstrap_complete:
+            return
+
+        prepare_seed_proxy_screen()
+
+        # Preserve the normalized seed pool and proxy-screening result before
+        # starting exact work. A hard interruption can then resume without
+        # rereading private seed files or repeating the GPU screen.
+        maybe_save_checkpoint(force=True)
+
+        selected = []
+        for source_index, is_probe, is_proxy_front in seed_bootstrap_selections:
+            vector = starting_vectors[int(source_index)]
+            digest = vector_hash(vector)
+            if digest in seed_bootstrap_payloads:
+                continue
+            selected.append(
+                (
+                    int(source_index),
+                    bool(is_probe),
+                    bool(is_proxy_front),
+                    vector,
+                    digest,
+                )
+            )
+
+        pending_seed = {}
+        cursor = 0
+        try:
+            while cursor < len(selected) or pending_seed:
+                interrupt_check()
+                while cursor < len(selected) and len(pending_seed) < max_pending:
+                    item = selected[cursor]
+                    result = _submit_gpu_exact_validation(
+                        pool,
+                        item[3],
+                        interrupt_check,
+                        profile=profile_enabled,
+                    )
+                    pending_seed[result] = item
+                    cursor += 1
+                ready = _ready_submission_prefix(pending_seed)
+                if not ready:
+                    PymooAsyncRecordingRunner._raise_if_pool_workers_exited(
+                        pool_workers
+                    )
+                    time.sleep(0.05)
+                    continue
+                for result in ready:
+                    interrupt_check()
+                    (
+                        source_index,
+                        is_probe,
+                        is_proxy_front,
+                        vector,
+                        digest,
+                    ) = pending_seed.pop(result)
+                    payload = result.get()
+                    PymooAsyncRecordingRunner._raise_if_worker_failure(
+                        payload, source_index
+                    )
+                    validation_metadata = None
+                    proxy_score = None
+                    proxy_violation = None
+                    classification_mismatch = False
+                    if seed_bootstrap_mode == "screened":
+                        proxy_score = float(seed_proxy_scores[source_index])
+                        proxy_violation = float(seed_proxy_violations[source_index])
+                        exact_score = float(
+                            objective_scale.score(
+                                np.asarray(payload["F"], dtype=np.float64).reshape(
+                                    1, -1
+                                )
+                            )[0]
+                        )
+                        classification_mismatch = (
+                            _constraint_classification_mismatch(
+                                proxy_violation, payload
+                            )
+                        )
+                        validation_metadata = {
+                            "schema_version": 2,
+                            "phase": "seed_bootstrap",
+                            "proxy_score": proxy_score,
+                            "exact_score": exact_score,
+                            "probe": is_probe,
+                            "proxy_front": is_proxy_front,
+                            "constraint_classification_mismatch": (
+                                classification_mismatch
+                            ),
+                            "constraint_diagnostics": _constraint_diagnostics(
+                                evaluator,
+                                seed_proxy_metrics[source_index],
+                                payload,
+                            ),
+                        }
+                        drift_monitor.add(
+                            proxy_score,
+                            exact_score,
+                            probe=is_probe,
+                            proxy_front=is_proxy_front,
+                            constraint_mismatch=classification_mismatch,
+                        )
+                    seed_metadata = {
+                        "schema_version": 1,
+                        "mode": seed_bootstrap_mode,
+                        "source_index": source_index,
+                        "seed_count": len(starting_vectors),
+                        "selected_exact_count": len(seed_bootstrap_selections),
+                        "proxy_evaluated": seed_bootstrap_mode == "screened",
+                        "all_seeds_exact": seed_bootstrap_mode == "exact",
+                        "exact_objectives": np.asarray(
+                            payload["F"], dtype=np.float64
+                        ).tolist(),
+                        "exact_violation": float(
+                            np.asarray(payload.get("G", [-1.0])).reshape(-1)[0]
+                        ),
+                    }
+                    record_exact(
+                        vector,
+                        payload,
+                        validation_metadata=validation_metadata,
+                        seed_metadata=seed_metadata,
+                    )
+                    seed_bootstrap_payloads[digest] = {
+                        "source_index": source_index,
+                        "F": np.asarray(payload["F"], dtype=np.float64).tolist(),
+                        "G": np.asarray(
+                            payload.get("G", [-1.0]), dtype=np.float64
+                        ).tolist(),
+                    }
+                    seed_exact_done += 1
+                    completed_hashes.add(digest)
+                    # all_results.bin is flushed for every exact result and
+                    # recovery replays durable results beyond a stale
+                    # checkpoint.  Honor the configured checkpoint interval
+                    # instead of rewriting the complete seed plan per seed.
+                    maybe_save_checkpoint()
+        except KeyboardInterrupt:
+            cancel_pending_async_results(pending_seed)
+            maybe_save_checkpoint(force=True)
+            raise
+
+        ordered_payloads = []
+        for source_index, _is_probe, _is_proxy_front in seed_bootstrap_selections:
+            digest = vector_hash(starting_vectors[int(source_index)])
+            payload = seed_bootstrap_payloads.get(digest)
+            if payload is None:
+                raise RuntimeError(
+                    "GPU seed bootstrap completed without exact evidence for "
+                    f"source index {source_index}"
+                )
+            ordered_payloads.append(payload)
+        exact_objectives = np.asarray(
+            [payload["F"] for payload in ordered_payloads], dtype=np.float64
+        )
+        exact_violations = np.asarray(
+            [
+                float(np.asarray(payload["G"]).reshape(-1)[0])
+                for payload in ordered_payloads
+            ],
+            dtype=np.float64,
+        )
+        exact_preference = _select_seed_population_indices(
+            exact_objectives,
+            exact_violations,
+            count=min(len(ordered_payloads), population_size - 1),
+        )
+        exact_source_indices = [
+            int(seed_bootstrap_selections[index][0]) for index in exact_preference
+        ]
+        if seed_bootstrap_mode == "exact":
+            population_seed_indices = exact_source_indices
+        else:
+            population_seed_indices = list(exact_source_indices)
+            population_seed_ids = set(population_seed_indices)
+            population_seed_indices.extend(
+                index
+                for index in seed_population_indices
+                if index not in population_seed_ids
+            )
+        for slot, source_index in enumerate(
+            population_seed_indices[: population_size - 1], start=1
+        ):
+            sampling[slot] = normalize_vector(starting_vectors[source_index])
+        algorithm.initialization.sampling = sampling
+
+        status = drift_monitor.evaluate()
+        if status["halt_reason"]:
+            persisted_halt_reason = status["halt_reason"]
+            maybe_save_checkpoint(force=True)
+            raise RuntimeError(status["halt_reason"])
+        seed_bootstrap_complete = True
+        logging.info(
+            "GPU seed bootstrap complete | mode=%s proxy=%d exact=%d "
+            "population_seeds=%d",
+            seed_bootstrap_mode,
+            len(starting_vectors) if seed_bootstrap_mode == "screened" else 0,
+            seed_exact_done,
+            min(len(population_seed_indices), population_size - 1),
+        )
+        maybe_save_checkpoint(force=True)
 
     def consume_ready(*, wait_for_one: bool = False) -> None:
         nonlocal exact_done, last_warning, persisted_halt_reason
@@ -4629,6 +5517,7 @@ def run_backend(
         maybe_save_checkpoint(force=True)
 
     try:
+        run_seed_bootstrap()
         while exact_done < budget:
             interrupt_check()
             consume_ready()
@@ -4884,9 +5773,11 @@ def run_backend(
                 exact_validation_cumulative_seconds=dict(profile_totals),
             )
         logging.info(
-            "GPU optimization complete | generations=%d proxy=%d exact=%d wall=%.1fs",
+            "GPU optimization complete | generations=%d proxy=%d seed_exact=%d "
+            "evolution_exact=%d wall=%.1fs",
             generation,
             proxy_evaluations,
+            seed_exact_done,
             exact_done,
             time.time() - start_time,
         )
