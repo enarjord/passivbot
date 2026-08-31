@@ -2655,6 +2655,22 @@ def _select_seed_bootstrap_indices(
     }
     feasible = np.flatnonzero(np.isfinite(violations) & (violations <= 0.0))
     primary = feasible if len(feasible) else np.arange(len(objectives), dtype=np.int64)
+    constraint_priority = []
+    if len(feasible) == 0:
+        # Proxy constraints can drift from exact Rust constraints, so retain
+        # objective diversity, but explicitly reserve part of the exact budget
+        # for the seeds closest to feasibility.  Otherwise an all-infeasible
+        # objective front can crowd out the most promising constraint repairs.
+        reserve = min(total, max(1, requested_probes))
+        constraint_priority = sorted(
+            map(int, primary),
+            key=lambda index: (
+                float(violations[index])
+                if np.isfinite(violations[index])
+                else float("inf"),
+                float(scores[index]),
+            ),
+        )[:reserve]
     extremes = []
     for column in range(objectives.shape[1]):
         values = objectives[primary, column]
@@ -2692,6 +2708,8 @@ def _select_seed_bootstrap_indices(
         selected_ids.add(int(index))
 
     front_target = max(1, total - requested_probes)
+    for index in constraint_priority:
+        append(index)
     for index in extremes[:front_target]:
         append(index)
     for index, _is_probe, is_front in preference:
@@ -5321,7 +5339,11 @@ def run_backend(
                     }
                     seed_exact_done += 1
                     completed_hashes.add(digest)
-                    maybe_save_checkpoint(force=True)
+                    # all_results.bin is flushed for every exact result and
+                    # recovery replays durable results beyond a stale
+                    # checkpoint.  Honor the configured checkpoint interval
+                    # instead of rewriting the complete seed plan per seed.
+                    maybe_save_checkpoint()
         except KeyboardInterrupt:
             cancel_pending_async_results(pending_seed)
             maybe_save_checkpoint(force=True)

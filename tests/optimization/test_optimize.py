@@ -5386,6 +5386,36 @@ def test_compressed_result_resume_clears_seed_bootstrap_metadata(tmp_path: Path)
     assert "gpu_seed_bootstrap" not in results[1]["metrics"]
 
 
+def test_compressed_result_boundary_clears_seed_bootstrap_metadata(tmp_path: Path):
+    seed_entry = _resume_validation_entry()
+    seed_entry["metrics"] = {
+        "objectives": {"adg_strategy_eq": 0.1},
+        "constraint_violation": 0.0,
+        "gpu_seed_bootstrap": {"mode": "exact", "source_index": 99},
+    }
+    _write_msgpack_entries(tmp_path / "all_results.bin", [seed_entry])
+    recorder = ResultRecorder(
+        results_dir=str(tmp_path),
+        sig_digits=6,
+        flush_interval=60,
+        scoring_keys=["adg_strategy_eq"],
+        compress=True,
+        write_all_results=True,
+        starting_iters=100,
+        previous_data=seed_entry,
+    )
+    recorder.store.add_entry = Mock(return_value=False)
+    evolution_entry = deepcopy(seed_entry)
+    evolution_entry["metrics"].pop("gpu_seed_bootstrap")
+    evolution_entry["metrics"]["objectives"]["adg_strategy_eq"] = 0.2
+    recorder.record(evolution_entry)
+    recorder.close()
+
+    results = list(load_results(tmp_path / "all_results.bin"))
+    assert results[0]["metrics"]["gpu_seed_bootstrap"]["source_index"] == 99
+    assert "gpu_seed_bootstrap" not in results[1]["metrics"]
+
+
 def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path):
     checkpoint_path = tmp_path / "checkpoint.pkl"
     anchor_plan = {
@@ -5407,6 +5437,21 @@ def test_restore_gpu_resume_anchor_plan_before_shape_build(tmp_path: Path):
     )
     assert config[optimize.ANCHOR_PLAN_KEY] == anchor_plan
     assert config[optimize.ANCHOR_PLAN_KEY] is not anchor_plan
+
+
+def test_restored_gpu_anchor_plan_skips_ordinary_fine_tune_bounds():
+    assert not optimize._should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=True,
+        installing_anchor_plan=False,
+    )
+    assert not optimize._should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=False,
+        installing_anchor_plan=True,
+    )
+    assert optimize._should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=False,
+        installing_anchor_plan=False,
+    )
 
 
 def test_optimizer_exit_code_is_nonzero_for_fatal_errors():

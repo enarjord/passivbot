@@ -471,17 +471,20 @@ class ResultRecorder:
             self.results_file = open(filename, "ab")
             self.packer = msgpack.Packer(use_bin_type=True)
         self.prev_data = previous_data
-        self.counter = int(starting_iters)
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
             if self.compress:
-                if self.prev_data is None or self.counter % 100 == 0:
+                # The on-disk format is an overlay stream: readers apply every
+                # object to the preceding result.  A plain "full" object at a
+                # periodic boundary therefore cannot clear keys that existed
+                # only in the previous result.  Emit a diff after the first
+                # record so deletion markers remain explicit at every boundary.
+                if self.prev_data is None:
                     output_data = make_json_serializable(data)
                 else:
                     diff = generate_incremental_diff(self.prev_data, data)
                     output_data = make_json_serializable(diff)
-                self.counter += 1
                 self.prev_data = data
             else:
                 output_data = data
@@ -909,6 +912,14 @@ def _restore_gpu_resume_anchor_plan(config: dict, checkpoint_path: str) -> bool:
         len(anchor_plan["anchors"]),
     )
     return True
+
+
+def _should_apply_fine_tune_bounds(
+    *, restored_resume_anchor_plan: bool, installing_anchor_plan: bool
+) -> bool:
+    """Keep a checkpoint-owned optimizer shape stable across GPU resume."""
+
+    return not restored_resume_anchor_plan and not installing_anchor_plan
 
 
 def _gpu_checkpoint_allows_empty_results(
@@ -3452,11 +3463,16 @@ async def main():
 
     resume_results_dir = None
     resume_checkpoint_path = None
+    restored_resume_anchor_plan = False
     if args.resume:
         resume_results_dir = _resolve_resume_results_dir(args.resume)
         resume_checkpoint_path = _require_resume_checkpoint(resume_results_dir)
         if get_anchor_plan(config) is None:
-            _restore_gpu_resume_anchor_plan(config, resume_checkpoint_path)
+            restored_resume_anchor_plan = _restore_gpu_resume_anchor_plan(
+                config, resume_checkpoint_path
+            )
+        else:
+            restored_resume_anchor_plan = True
 
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
@@ -3482,14 +3498,18 @@ async def main():
     }
     if polish_bounds_pct is not None:
         apply_polish_bounds(config, polish_bounds_pct, bounds_mode=polish_bounds_mode)
-    if fine_tune_params and args.starting_configs:
+    installing_anchor_plan = bool(fine_tune_params and args.starting_configs)
+    if installing_anchor_plan:
         install_anchored_fine_tune_plan(
             config,
             fine_tune_params,
             args.starting_configs,
             starting_configs_override=preselected_starting_configs,
         )
-    else:
+    elif _should_apply_fine_tune_bounds(
+        restored_resume_anchor_plan=restored_resume_anchor_plan,
+        installing_anchor_plan=installing_anchor_plan,
+    ):
         apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     validate_optimizer_effective_configs(config)
     backtest_exchanges = require_config_value(config, "backtest.exchanges")

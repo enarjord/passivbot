@@ -516,6 +516,24 @@ def test_gpu_seed_bootstrap_extremes_do_not_consume_reserved_probes():
     assert sum(probe for _index, probe, _front in selected) == 2
 
 
+def test_gpu_seed_bootstrap_all_infeasible_reserves_lowest_violations():
+    objectives = np.asarray(
+        [[0.0, 10.0], [10.0, 0.0], [6.0, 6.0], [7.0, 7.0]],
+        dtype=np.float64,
+    )
+    scores = np.sum(objectives, axis=1)
+    violations = np.asarray([10.0, 8.0, 0.01, 0.02], dtype=np.float64)
+
+    selected = _select_seed_bootstrap_indices(
+        objectives,
+        scores,
+        violations,
+        total=2,
+    )
+
+    assert 2 in {index for index, _probe, _front in selected}
+
+
 def test_gpu_seed_population_reduction_prefers_feasible_pareto_diversity():
     objectives = np.asarray(
         [[0.0, 4.0], [2.0, 2.0], [4.0, 0.0], [1.0, 1.0]],
