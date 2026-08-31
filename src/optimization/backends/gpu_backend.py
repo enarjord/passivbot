@@ -2590,6 +2590,24 @@ def _effective_seed_bootstrap_mode(policy: dict, seed_count: int) -> str:
     return "exact" if int(seed_count) <= int(policy["max_exact"]) else "screened"
 
 
+def _deduplicate_canonical_seed_vectors(
+    vectors,
+    *,
+    hash_vector,
+) -> tuple[list, int]:
+    """Drop seeds that become identical after GPU runtime overrides."""
+
+    deduplicated = []
+    seen = set()
+    for vector in vectors:
+        digest = hash_vector(vector)
+        if digest in seen:
+            continue
+        seen.add(digest)
+        deduplicated.append(vector)
+    return deduplicated, len(vectors) - len(deduplicated)
+
+
 def _select_seed_bootstrap_indices(
     objectives: np.ndarray,
     scores: np.ndarray,
@@ -2694,6 +2712,7 @@ def _validate_seed_bootstrap_plan(
     proxy_metrics=None,
     proxy_objectives=None,
     proxy_violations=None,
+    screen_complete: bool = True,
 ) -> None:
     """Fail closed when an incomplete checkpoint seed plan is inconsistent."""
 
@@ -2705,7 +2724,6 @@ def _validate_seed_bootstrap_plan(
     if (
         int(contract.get("seed_count", -1)) != seed_count
         or contract.get("seed_pool_sha256") != digest
-        or int(contract.get("selected_exact_count", -1)) != len(selections)
     ):
         raise RuntimeError(
             "GPU checkpoint seed-bootstrap plan does not match its seed contract"
@@ -2715,6 +2733,31 @@ def _validate_seed_bootstrap_plan(
         raise RuntimeError(
             "GPU checkpoint has an incomplete seed-bootstrap plan for unsupported "
             f"mode {mode!r}"
+        )
+    if len(hashes) != len(set(hashes)):
+        raise RuntimeError(
+            "GPU checkpoint seed-bootstrap plan contains canonical duplicate seeds"
+        )
+    expected_selected = int(contract.get("selected_exact_count", -1))
+    if not screen_complete:
+        if (
+            mode != "screened"
+            or expected_selected != min(
+                seed_count, int(contract.get("max_exact", -1))
+            )
+            or selections
+            or population_indices
+            or proxy_metrics is not None
+            or proxy_objectives is not None
+            or proxy_violations is not None
+        ):
+            raise RuntimeError(
+                "GPU checkpoint pending seed screen has invalid partial evidence"
+            )
+        return
+    if expected_selected != len(selections):
+        raise RuntimeError(
+            "GPU checkpoint seed-bootstrap plan does not match its seed contract"
         )
     selected_ids = [int(index) for index, _probe, _front in selections]
     if (
@@ -4608,6 +4651,7 @@ def run_backend(
     seed_proxy_scores = None
     seed_bootstrap_selections = []
     seed_population_indices = []
+    seed_screen_complete = True
     checkpoint_seed_plan = (
         checkpoint.get("seed_bootstrap_plan") if checkpoint is not None else None
     )
@@ -4638,6 +4682,9 @@ def run_backend(
         seed_population_indices = [
             int(index) for index in checkpoint_seed_plan["population_indices"]
         ]
+        seed_screen_complete = bool(
+            checkpoint_seed_plan.get("screen_complete", True)
+        )
         seed_proxy_metrics = checkpoint_seed_plan.get("proxy_metrics")
         if checkpoint_seed_plan.get("proxy_objectives") is not None:
             seed_proxy_objectives = np.asarray(
@@ -4658,12 +4705,14 @@ def run_backend(
             proxy_metrics=seed_proxy_metrics,
             proxy_objectives=seed_proxy_objectives,
             proxy_violations=seed_proxy_violations,
+            screen_complete=seed_screen_complete,
         )
     elif checkpoint_seed_contract is not None:
         starting_vectors = []
         seed_bootstrap_mode = str(
             checkpoint_seed_contract.get("effective_mode", "none")
         )
+        seed_screen_complete = True
         seed_bootstrap_contract = deepcopy(checkpoint_seed_contract)
     else:
         starting_vectors = load_starting_individuals(
@@ -4677,6 +4726,19 @@ def run_backend(
             bounds=bounds,
             sig_digits=sig_digits,
         )
+        if str(seed_policy["mode"]) != "legacy":
+            starting_vectors, duplicate_count = (
+                _deduplicate_canonical_seed_vectors(
+                    starting_vectors,
+                    hash_vector=vector_hash,
+                )
+            )
+            if duplicate_count:
+                logging.info(
+                    "Dropped %d GPU seed configs made equivalent by runtime "
+                    "overrides",
+                    duplicate_count,
+                )
         seed_bootstrap_mode = _effective_seed_bootstrap_mode(
             seed_policy, len(starting_vectors)
         )
@@ -4690,45 +4752,16 @@ def run_backend(
                 (index, False, False) for index in range(len(starting_vectors))
             ]
         elif seed_bootstrap_mode == "screened":
-            seed_rows = np.asarray(
-                [normalize_vector(vector) for vector in starting_vectors],
-                dtype=np.float64,
-            )
-            logging.info(
-                "GPU seed proxy screen started | seeds=%d exact_cap=%d",
-                len(starting_vectors),
-                int(seed_policy["max_exact"]),
-            )
-            seed_proxy_started = time.perf_counter()
-            proxy_metric_rows = evaluate_proxy(parameter_dicts(seed_rows))
-            seed_proxy_seconds = time.perf_counter() - seed_proxy_started
-            logging.info(
-                "GPU seed proxy screen complete | seeds=%d wall=%.2fs rate=%.1f/s",
-                len(starting_vectors),
-                seed_proxy_seconds,
-                len(starting_vectors) / max(seed_proxy_seconds, 1.0e-9),
-            )
-            seed_proxy_objectives, seed_proxy_violations = proxy_fitness(
-                proxy_metric_rows
-            )
-            objective_scale.fit(seed_proxy_objectives)
-            seed_proxy_scores = objective_scale.score(seed_proxy_objectives)
-            seed_bootstrap_selections = _select_seed_bootstrap_indices(
-                seed_proxy_objectives,
-                seed_proxy_scores,
-                seed_proxy_violations,
-                total=min(len(starting_vectors), int(seed_policy["max_exact"])),
-            )
-            seed_proxy_metrics = {
-                int(index): proxy_metric_rows[int(index)]
-                for index, _probe, _front in seed_bootstrap_selections
-            }
-            seed_population_indices = _select_seed_population_indices(
-                seed_proxy_objectives,
-                seed_proxy_violations,
-                count=min(len(starting_vectors), population_size - 1),
-            )
+            seed_screen_complete = False
         seed_hashes = [vector_hash(vector) for vector in starting_vectors]
+        if seed_bootstrap_mode == "exact":
+            selected_exact_count = len(starting_vectors)
+        elif seed_bootstrap_mode == "screened":
+            selected_exact_count = min(
+                len(starting_vectors), int(seed_policy["max_exact"])
+            )
+        else:
+            selected_exact_count = 0
         seed_bootstrap_contract = (
             {
                 "version": 1,
@@ -4736,7 +4769,7 @@ def run_backend(
                 "effective_mode": seed_bootstrap_mode,
                 "max_exact": int(seed_policy["max_exact"]),
                 "seed_count": len(starting_vectors),
-                "selected_exact_count": len(seed_bootstrap_selections),
+                "selected_exact_count": selected_exact_count,
                 "all_seeds_exact": seed_bootstrap_mode == "exact",
                 "seed_pool_sha256": hashlib.sha256(
                     "\n".join(seed_hashes).encode()
@@ -4745,7 +4778,7 @@ def run_backend(
             if starting_vectors
             else None
         )
-    if starting_vectors:
+    if starting_vectors and seed_screen_complete:
         logging.info(
             "GPU seed bootstrap prepared | mode=%s seeds=%d exact=%d population=%d",
             seed_bootstrap_mode,
@@ -4986,6 +5019,7 @@ def run_backend(
         if not seed_bootstrap_complete and starting_vectors:
             seed_plan = {
                 "effective_mode": seed_bootstrap_mode,
+                "screen_complete": seed_screen_complete,
                 "starting_vectors": starting_vectors,
                 "selections": seed_bootstrap_selections,
                 "population_indices": seed_population_indices,
@@ -5062,10 +5096,77 @@ def run_backend(
             entry.setdefault("metrics", {})["gpu_seed_bootstrap"] = seed_metadata
         recorder.record(_restore_gpu_result_run_contract(entry, config))
 
+    def prepare_seed_proxy_screen() -> None:
+        nonlocal seed_screen_complete
+        nonlocal seed_proxy_metrics, seed_proxy_objectives
+        nonlocal seed_proxy_violations, seed_proxy_scores
+        nonlocal seed_bootstrap_selections, seed_population_indices
+        if seed_bootstrap_mode != "screened" or seed_screen_complete:
+            return
+
+        # Persist the normalized canonical seed pool before the potentially
+        # long Metal dispatch. An interruption can resume without the original
+        # --start input; a completed screen is checkpointed again immediately.
+        maybe_save_checkpoint(force=True)
+        logging.info(
+            "GPU seed proxy screen started | seeds=%d exact_cap=%d",
+            len(starting_vectors),
+            int(seed_policy["max_exact"]),
+        )
+        seed_proxy_started = time.perf_counter()
+        seed_rows = np.asarray(
+            [normalize_vector(vector) for vector in starting_vectors],
+            dtype=np.float64,
+        )
+        proxy_metric_rows = evaluate_proxy(parameter_dicts(seed_rows))
+        seed_proxy_seconds = time.perf_counter() - seed_proxy_started
+        logging.info(
+            "GPU seed proxy screen complete | seeds=%d wall=%.2fs rate=%.1f/s",
+            len(starting_vectors),
+            seed_proxy_seconds,
+            len(starting_vectors) / max(seed_proxy_seconds, 1.0e-9),
+        )
+        seed_proxy_objectives, seed_proxy_violations = proxy_fitness(
+            proxy_metric_rows
+        )
+        objective_scale.fit(seed_proxy_objectives)
+        seed_proxy_scores = objective_scale.score(seed_proxy_objectives)
+        seed_bootstrap_selections = _select_seed_bootstrap_indices(
+            seed_proxy_objectives,
+            seed_proxy_scores,
+            seed_proxy_violations,
+            total=min(len(starting_vectors), int(seed_policy["max_exact"])),
+        )
+        seed_proxy_metrics = {
+            int(index): proxy_metric_rows[int(index)]
+            for index, _probe, _front in seed_bootstrap_selections
+        }
+        seed_population_indices = _select_seed_population_indices(
+            seed_proxy_objectives,
+            seed_proxy_violations,
+            count=min(len(starting_vectors), population_size - 1),
+        )
+        # Keep only compact objective arrays and the selected exact-validation
+        # metric rows. Full per-seed metrics and normalized screen inputs can be
+        # substantial for large seed archives.
+        del proxy_metric_rows
+        del seed_rows
+        seed_screen_complete = True
+        maybe_save_checkpoint(force=True)
+        logging.info(
+            "GPU seed bootstrap prepared | mode=%s seeds=%d exact=%d population=%d",
+            seed_bootstrap_mode,
+            len(starting_vectors),
+            len(seed_bootstrap_selections),
+            population_size,
+        )
+
     def run_seed_bootstrap() -> None:
         nonlocal seed_exact_done, seed_bootstrap_complete, persisted_halt_reason
         if seed_bootstrap_complete:
             return
+
+        prepare_seed_proxy_screen()
 
         # Preserve the normalized seed pool and proxy-screening result before
         # starting exact work. A hard interruption can then resume without

@@ -869,11 +869,51 @@ def _require_resume_checkpoint(results_dir: str) -> str:
     return checkpoint_path
 
 
-def _validate_resume_results(results_dir: str, config: dict) -> int:
+def _gpu_checkpoint_allows_empty_results(
+    checkpoint_path: str | None,
+    config: dict,
+) -> bool:
+    """Permit the durable pre-result checkpoint of a GPU seed bootstrap."""
+
+    if (
+        config.get("optimize", {}).get("backend") != "gpu"
+        or checkpoint_path is None
+    ):
+        return False
+    try:
+        import pickle
+
+        with open(checkpoint_path, "rb") as file:
+            checkpoint = pickle.load(file)
+    except Exception:
+        return False
+    plan = checkpoint.get("seed_bootstrap_plan")
+    return bool(
+        not checkpoint.get("seed_bootstrap_complete", True)
+        and int(checkpoint.get("seed_exact_done", -1)) == 0
+        and int(checkpoint.get("exact_done", -1)) == 0
+        and isinstance(checkpoint.get("seed_bootstrap_contract"), dict)
+        and isinstance(plan, dict)
+        and plan.get("starting_vectors")
+        and plan.get("effective_mode") in {"exact", "screened"}
+    )
+
+
+def _validate_resume_results(
+    results_dir: str,
+    config: dict,
+    *,
+    checkpoint_path: str | None = None,
+) -> int:
     results_filename = os.path.join(results_dir, "all_results.bin")
     if not os.path.isfile(results_filename):
         raise ValueError(f"Cannot resume: all_results.bin not found: {results_filename}")
     if os.path.getsize(results_filename) <= 0:
+        if _gpu_checkpoint_allows_empty_results(checkpoint_path, config):
+            logging.info(
+                "Resuming GPU seed bootstrap before its first durable exact result"
+            )
+            return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
 
     previous_evals = 0
@@ -3567,7 +3607,11 @@ async def main():
                 raise ValueError("Cannot resume with optimize.write_all_results=false")
             results_dir = _resolve_resume_results_dir(args.resume)
             checkpoint_path = _require_resume_checkpoint(results_dir)
-            previous_evals = _validate_resume_results(results_dir, config)
+            previous_evals = _validate_resume_results(
+                results_dir,
+                config,
+                checkpoint_path=checkpoint_path,
+            )
         else:
             results_dir = make_get_filepath(
                 f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"

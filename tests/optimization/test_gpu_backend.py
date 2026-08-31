@@ -31,6 +31,7 @@ from optimization.backends.gpu_backend import (
     _checkpoint_gpu_interrupt,
     _constraint_classification_mismatch,
     _constraint_diagnostics,
+    _deduplicate_canonical_seed_vectors,
     _ema_multicoin_bound_map,
     _evaluate_gpu_suite_proxies,
     _evaluate_successive_halving,
@@ -422,6 +423,18 @@ def test_gpu_seed_bootstrap_auto_switches_only_at_the_exact_cap():
     )
 
 
+def test_gpu_seed_bootstrap_deduplicates_runtime_override_equivalents():
+    vectors = [[0.1, 0.2], [0.1, 0.9], [0.3, 0.4]]
+
+    deduplicated, dropped = _deduplicate_canonical_seed_vectors(
+        vectors,
+        hash_vector=lambda vector: str(vector[0]),
+    )
+
+    assert deduplicated == [vectors[0], vectors[2]]
+    assert dropped == 1
+
+
 def test_gpu_seed_bootstrap_selection_keeps_extremes_front_and_probe_coverage():
     objectives = np.asarray(
         [
@@ -522,6 +535,37 @@ def test_gpu_seed_bootstrap_checkpoint_plan_fails_closed_on_pool_drift():
             [0, 2, 1],
             contract,
             **kwargs,
+        )
+
+
+def test_gpu_seed_bootstrap_checkpoint_accepts_only_valid_pending_screen():
+    vectors = [[0.1], [0.2], [0.3]]
+    contract = {
+        "effective_mode": "screened",
+        "max_exact": 2,
+        "seed_count": 3,
+        "selected_exact_count": 2,
+        "all_seeds_exact": False,
+        "seed_pool_sha256": hashlib.sha256(b"0.1\n0.2\n0.3").hexdigest(),
+    }
+
+    _validate_seed_bootstrap_plan(
+        vectors,
+        [],
+        [],
+        contract,
+        hash_vector=lambda vector: str(vector[0]),
+        screen_complete=False,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid partial evidence"):
+        _validate_seed_bootstrap_plan(
+            vectors,
+            [(0, False, True)],
+            [],
+            contract,
+            hash_vector=lambda vector: str(vector[0]),
+            screen_complete=False,
         )
 
 

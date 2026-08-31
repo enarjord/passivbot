@@ -12,6 +12,7 @@ import argparse
 import builtins
 import json
 import logging
+import pickle
 from multiprocessing.reduction import ForkingPickler
 import tempfile
 from collections import defaultdict
@@ -5235,6 +5236,62 @@ def test_validate_resume_results_rejects_empty_all_results(tmp_path: Path):
 
     with pytest.raises(ValueError, match="all_results.bin is empty"):
         optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_allows_empty_gpu_seed_bootstrap_checkpoint(
+    tmp_path: Path,
+):
+    config = _resume_validation_entry()
+    config["optimize"]["backend"] = "gpu"
+    results_path = tmp_path / "all_results.bin"
+    results_path.write_bytes(b"")
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+    checkpoint = {
+        "seed_bootstrap_complete": False,
+        "seed_exact_done": 0,
+        "exact_done": 0,
+        "seed_bootstrap_contract": {"version": 1},
+        "seed_bootstrap_plan": {
+            "effective_mode": "screened",
+            "starting_vectors": [[0.1]],
+        },
+    }
+    with open(checkpoint_path, "wb") as file:
+        pickle.dump(checkpoint, file)
+
+    assert (
+        optimize._validate_resume_results(
+            str(tmp_path),
+            config,
+            checkpoint_path=str(checkpoint_path),
+        )
+        == 0
+    )
+
+
+def test_validate_resume_results_rejects_empty_completed_gpu_checkpoint(
+    tmp_path: Path,
+):
+    config = _resume_validation_entry()
+    config["optimize"]["backend"] = "gpu"
+    (tmp_path / "all_results.bin").write_bytes(b"")
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+    with open(checkpoint_path, "wb") as file:
+        pickle.dump(
+            {
+                "seed_bootstrap_complete": True,
+                "seed_exact_done": 0,
+                "exact_done": 0,
+            },
+            file,
+        )
+
+    with pytest.raises(ValueError, match="all_results.bin is empty"):
+        optimize._validate_resume_results(
+            str(tmp_path),
+            config,
+            checkpoint_path=str(checkpoint_path),
+        )
 
 
 def test_validate_resume_results_rejects_corrupt_all_results(tmp_path: Path):
