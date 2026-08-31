@@ -75,7 +75,8 @@ Seed evaluation contract:
   `optimize.iters` budget. Exact fitness seeds the archive and vector-only initial sampling; exact
   and proxy fitness must never share an NSGA objective matrix.
 - An incomplete bootstrap checkpoint owns its normalized seed plan. Resume does not depend on the
-  original seed files and must recover any exact seed result already flushed to durable history.
+  original seed files, including for anchored fine-tuning, and must recover any exact seed result
+  already flushed to durable history.
 
 Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
 for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example

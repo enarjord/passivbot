@@ -111,6 +111,14 @@ def _ask_gpu_population(algorithm, interrupt_check: InterruptCheck):
     return algorithm.ask()
 
 
+def _disable_gpu_exact_duplicate_guard(evaluator) -> None:
+    """GPU owns canonical submission deduplication and exact revalidation."""
+
+    base_evaluator = getattr(evaluator, "base", evaluator)
+    if hasattr(base_evaluator, "use_duplicate_guard"):
+        base_evaluator.use_duplicate_guard = False
+
+
 def _submit_gpu_exact_validation(
     pool,
     vector,
@@ -2654,7 +2662,22 @@ def _select_seed_bootstrap_indices(
         if not np.any(finite):
             continue
         eligible = primary[finite]
-        index = int(eligible[int(np.argmin(values[finite]))])
+        finite_values = values[finite]
+        minimum = float(np.min(finite_values))
+        minima = eligible[
+            np.isclose(finite_values, minimum, rtol=0.0, atol=1.0e-12)
+        ]
+        front_minima = np.asarray(
+            [
+                index
+                for index in minima
+                if int(index) in classification
+                and classification[int(index)][1]
+            ],
+            dtype=np.int64,
+        )
+        choices = front_minima if len(front_minima) else minima
+        index = int(min(choices, key=lambda item: float(scores[int(item)])))
         if index not in extremes:
             extremes.append(index)
 
@@ -2668,9 +2691,9 @@ def _select_seed_bootstrap_indices(
         selected.append((int(index), is_probe, is_front))
         selected_ids.add(int(index))
 
-    for index in extremes:
-        append(index)
     front_target = max(1, total - requested_probes)
+    for index in extremes[:front_target]:
+        append(index)
     for index, _is_probe, is_front in preference:
         if is_front and sum(front for _idx, _probe, front in selected) < front_target:
             append(index)
@@ -4972,6 +4995,7 @@ def run_backend(
             exact_done,
         )
 
+    _disable_gpu_exact_duplicate_guard(evaluator_for_pool)
     adapter = PymooEvaluatorAdapter(evaluator_for_pool, overrides_list=overrides_list)
     profile_enabled = any(
         bool(getattr(item, "profile_enabled", False)) for item in profile_proxies
@@ -5048,6 +5072,7 @@ def run_backend(
             ),
             "seed_bootstrap_contract": deepcopy(seed_bootstrap_contract),
             "seed_bootstrap_plan": seed_plan,
+            "anchor_plan": deepcopy(get_anchor_plan(config)),
             "completed_hashes": sorted(completed_hashes),
             "scale_median": objective_scale.median,
             "scale_spread": objective_scale.spread,

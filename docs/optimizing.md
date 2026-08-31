@@ -718,7 +718,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   authoritative bootstrap archive. Bootstrap exact evaluations are recorded in `all_results.bin`
   and the Pareto store but do not consume `optimize.iters`, which remains the subsequent
   evolutionary exact-validation budget. Checkpoints preserve incomplete bootstrap plans and can
-  recover a seed result durably flushed immediately before a restart.
+  recover a seed result durably flushed immediately before a restart. Anchored fine-tune context
+  is checkpoint-owned as well, so resume does not require the original starting-config files.
 - `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
   progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
   100%, measured backwards from the configured end date; each partial suffix receives the normal

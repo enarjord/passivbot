@@ -32,6 +32,7 @@ from optimization.backends.gpu_backend import (
     _constraint_classification_mismatch,
     _constraint_diagnostics,
     _deduplicate_canonical_seed_vectors,
+    _disable_gpu_exact_duplicate_guard,
     _ema_multicoin_bound_map,
     _evaluate_gpu_suite_proxies,
     _evaluate_successive_halving,
@@ -435,6 +436,15 @@ def test_gpu_seed_bootstrap_deduplicates_runtime_override_equivalents():
     assert dropped == 1
 
 
+def test_gpu_exact_validation_disables_evaluator_duplicate_perturbation():
+    base = SimpleNamespace(use_duplicate_guard=True)
+    suite = SimpleNamespace(base=base)
+
+    _disable_gpu_exact_duplicate_guard(suite)
+
+    assert base.use_duplicate_guard is False
+
+
 def test_gpu_seed_bootstrap_selection_keeps_extremes_front_and_probe_coverage():
     objectives = np.asarray(
         [
@@ -483,6 +493,27 @@ def test_gpu_seed_bootstrap_selection_reserves_front_and_probe_slots():
     assert sum(front for _index, _probe, front in selected) == 6
     assert sum(probe for _index, probe, _front in selected) == 2
     assert {0, 9}.issubset({index for index, _probe, _front in selected})
+
+
+def test_gpu_seed_bootstrap_extremes_do_not_consume_reserved_probes():
+    objective_count = 8
+    extremes = np.full((objective_count, objective_count), 10.0)
+    for index in range(objective_count):
+        extremes[index, index] = 0.0
+    dominated = np.full((4, objective_count), 20.0)
+    objectives = np.vstack((extremes, dominated))
+    scores = np.sum(objectives, axis=1)
+    violations = np.full(len(objectives), -1.0, dtype=np.float64)
+
+    selected = _select_seed_bootstrap_indices(
+        objectives,
+        scores,
+        violations,
+        total=8,
+    )
+
+    assert sum(front for _index, _probe, front in selected) == 6
+    assert sum(probe for _index, probe, _front in selected) == 2
 
 
 def test_gpu_seed_population_reduction_prefers_feasible_pareto_diversity():

@@ -155,7 +155,13 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
 import math
 import fcntl
 from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
-from opt_utils import make_json_serializable, generate_incremental_diff, round_floats, quantize_floats
+from opt_utils import (
+    deep_updated,
+    generate_incremental_diff,
+    make_json_serializable,
+    quantize_floats,
+    round_floats,
+)
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
 import msgpack
@@ -442,6 +448,7 @@ class ResultRecorder:
         pareto_max_size: int = 1000,
         bounds: Optional[Sequence[Bound]] = None,
         starting_iters: int = 0,
+        previous_data: dict | None = None,
     ):
         self.scoring_specs = extract_objective_specs(scoring_keys)
         self.scoring_keys = [spec.metric for spec in self.scoring_specs]
@@ -463,8 +470,8 @@ class ResultRecorder:
             filename = os.path.join(results_dir, "all_results.bin")
             self.results_file = open(filename, "ab")
             self.packer = msgpack.Packer(use_bin_type=True)
-        self.prev_data = None
-        self.counter = 0
+        self.prev_data = previous_data
+        self.counter = int(starting_iters)
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
@@ -869,6 +876,41 @@ def _require_resume_checkpoint(results_dir: str) -> str:
     return checkpoint_path
 
 
+def _restore_gpu_resume_anchor_plan(config: dict, checkpoint_path: str) -> bool:
+    """Restore checkpoint-owned fine-tune anchors before building optimizer shape."""
+
+    if config.get("optimize", {}).get("backend") != "gpu":
+        return False
+    try:
+        import pickle
+
+        with open(checkpoint_path, "rb") as file:
+            checkpoint = pickle.load(file)
+    except Exception as exc:
+        raise ValueError(
+            f"Cannot resume: failed to read checkpoint: {checkpoint_path}"
+        ) from exc
+    anchor_plan = checkpoint.get("anchor_plan")
+    if anchor_plan is None:
+        return False
+    if not isinstance(anchor_plan, dict) or not anchor_plan.get("anchors"):
+        raise ValueError("Cannot resume: GPU checkpoint has an invalid anchor plan")
+    checkpoint_strategy = normalize_strategy_kind(anchor_plan.get("strategy_kind"))
+    config_strategy = normalize_strategy_kind(
+        config.get("live", {}).get("strategy_kind")
+    )
+    if checkpoint_strategy != config_strategy:
+        raise ValueError(
+            "Cannot resume: GPU checkpoint anchor strategy does not match config"
+        )
+    config[ANCHOR_PLAN_KEY] = deepcopy(anchor_plan)
+    logging.info(
+        "Restored %d checkpoint-owned fine-tune anchors",
+        len(anchor_plan["anchors"]),
+    )
+    return True
+
+
 def _gpu_checkpoint_allows_empty_results(
     checkpoint_path: str | None,
     config: dict,
@@ -904,12 +946,15 @@ def _validate_resume_results(
     config: dict,
     *,
     checkpoint_path: str | None = None,
+    resume_state: dict | None = None,
 ) -> int:
     results_filename = os.path.join(results_dir, "all_results.bin")
     if not os.path.isfile(results_filename):
         raise ValueError(f"Cannot resume: all_results.bin not found: {results_filename}")
     if os.path.getsize(results_filename) <= 0:
         if _gpu_checkpoint_allows_empty_results(checkpoint_path, config):
+            if resume_state is not None:
+                resume_state["previous_data"] = None
             logging.info(
                 "Resuming GPU seed bootstrap before its first durable exact result"
             )
@@ -917,6 +962,7 @@ def _validate_resume_results(
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
 
     previous_evals = 0
+    previous_data = {}
     try:
         with open(results_filename, "rb") as f:
             for entry in _iter_strict_msgpack_objects(
@@ -933,6 +979,7 @@ def _validate_resume_results(
                         f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
                         f"{results_filename}"
                     )
+                previous_data = deep_updated(previous_data, entry)
                 if previous_evals == 1:
                     mismatches = _resume_config_mismatches(entry, config)
                     if mismatches:
@@ -952,6 +999,8 @@ def _validate_resume_results(
 
     if previous_evals <= 0:
         raise ValueError(f"Cannot resume: all_results.bin contains no entries: {results_filename}")
+    if resume_state is not None:
+        resume_state["previous_data"] = previous_data
     logging.info("Resuming with %d previous evaluations from all_results.bin", previous_evals)
     return previous_evals
 
@@ -3401,6 +3450,14 @@ async def main():
         scenario_labels=active_suite_scenario_labels,
     )
 
+    resume_results_dir = None
+    resume_checkpoint_path = None
+    if args.resume:
+        resume_results_dir = _resolve_resume_results_dir(args.resume)
+        resume_checkpoint_path = _require_resume_checkpoint(resume_results_dir)
+        if get_anchor_plan(config) is None:
+            _restore_gpu_resume_anchor_plan(config, resume_checkpoint_path)
+
     preselected_starting_configs = None
     if args.filter_starting_configs or args.starting_configs_max is not None:
         preselected_starting_configs = preselect_starting_configs(
@@ -3601,16 +3658,18 @@ async def main():
             )
         )
         previous_evals = 0
+        resume_recorder_state = {}
         checkpoint_path = None
         if args.resume:
             if not config["optimize"].get("write_all_results", True):
                 raise ValueError("Cannot resume with optimize.write_all_results=false")
-            results_dir = _resolve_resume_results_dir(args.resume)
-            checkpoint_path = _require_resume_checkpoint(results_dir)
+            results_dir = resume_results_dir
+            checkpoint_path = resume_checkpoint_path
             previous_evals = _validate_resume_results(
                 results_dir,
                 config,
                 checkpoint_path=checkpoint_path,
+                resume_state=resume_recorder_state,
             )
         else:
             results_dir = make_get_filepath(
@@ -3665,6 +3724,7 @@ async def main():
             pareto_max_size=pareto_max,
             bounds=evaluator.bounds,
             starting_iters=previous_evals,
+            previous_data=resume_recorder_state.get("previous_data"),
         )
         backend_name = config["optimize"]["backend"]
         logging.info("Selected optimizer backend: %s", backend_name)
