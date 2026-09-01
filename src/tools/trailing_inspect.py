@@ -84,6 +84,19 @@ def _require_mapping(value: Any, path: str) -> Mapping[str, Any]:
     return value
 
 
+def _validate_derived_finite(value: Any, path: str = "result") -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _validate_derived_finite(item, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _validate_derived_finite(item, f"{path}[{index}]")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(
+            f"derived value {path} is not finite; reduce scenario inputs or parameter weights"
+        )
+
+
 def _extract_strategy_params(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
     live = _require_mapping(config.get("live"), "live")
     strategy_kind = str(live.get("strategy_kind") or STRATEGY_KIND).strip().lower()
@@ -441,7 +454,7 @@ def inspect_trailing(
         "effective"
     ]
 
-    return {
+    result = {
         "symbol": symbol,
         "pside": pside,
         "position": {"size": position_size, "price": position_price},
@@ -484,6 +497,8 @@ def inspect_trailing(
             ),
         },
     }
+    _validate_derived_finite(result)
+    return result
 
 
 def _threshold_style(kind: str, threshold_pct: float, *, trailing_enabled: bool) -> str:
@@ -797,8 +812,9 @@ def _classify_side(
             overall.append(
                 "Position-exposure enforcement is enabled at "
                 f"{enforcer_threshold * 100.0:g}% WE / effective WEL. CLOSE rows above that "
-                "ratio are marked 'WEL auto-reduce': Rust returns a market-side exposure-reduction "
-                "order before trailing/passive close logic, including in 'tp_only' mode."
+                "ratio are marked 'WEL reducer first': the next-close path returns a market-side "
+                "reducer before strategy close logic, including in 'tp_only' mode. Expanded close "
+                "generation simulates that reduction and may then add the displayed strategy closes."
             )
     if representative["volatility_scenario_count"] == 1:
         basis = (
@@ -899,7 +915,7 @@ def build_overview(
                     if context
                     else 0.0
                 )
-                close_payload["superseded_by"] = (
+                close_payload["preceded_by"] = (
                     "position_exposure_enforcer"
                     if enforcer_enabled and exposure_ratio > enforcer_threshold
                     else None
@@ -1151,8 +1167,8 @@ def _scenario_runtime_path(
             return "tp_only blocked"
     if kind == "entry":
         return "exposure-capped" if payload.get("inactive_reason") == "exposure_cap" else "re-entry"
-    if payload.get("superseded_by") == "position_exposure_enforcer":
-        return "WEL auto-reduce"
+    if payload.get("preceded_by") == "position_exposure_enforcer":
+        return "WEL reducer first"
     return "strategy close"
 
 
@@ -1274,8 +1290,9 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "market by the configured initial-entry EMA gate.",
             "* A RE-ENTRY / ADD row marked 'exposure-capped' emits no entry: passive entries stop at "
             "99.9% of effective WEL, while trailing entries stop only when strictly above 99.9%.",
-            "* A CLOSE row marked 'WEL auto-reduce' is superseded at that exposure ratio: Rust returns "
-            "the position-exposure-enforcer order before evaluating the displayed strategy close.",
+            "* A CLOSE row marked 'WEL reducer first' remains relevant: a next-close request returns "
+            "the reducer first, while expanded ideal-order generation simulates its fill and may then "
+            "include ordinary strategy closes using the displayed geometry.",
             "* With close trailing enabled, a non-positive threshold is immediate: trailing is "
             "armed from position open. With close trailing disabled, the row is passive and no "
             "extrema or reversal confirmation participate.",
@@ -1478,15 +1495,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 exposure_ratios=args.exposure_ratios,
                 overridden_parameters=overridden_by_side,
             )
+        if args.json:
+            output = json.dumps(result, indent=2, sort_keys=True, allow_nan=False)
+        elif result.get("mode") == "overview":
+            output = render_overview(result)
+        else:
+            output = render_report(result)
     except (FileNotFoundError, KeyError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
-    if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
-    elif result.get("mode") == "overview":
-        print(render_overview(result))
-    else:
-        print(render_report(result))
+    print(output)
     return 0
 
 

@@ -367,7 +367,7 @@ def test_overview_explains_global_forced_mode(forced_mode, expected):
     assert "Long is enabled" not in comments
 
 
-def test_overview_marks_close_scenarios_superseded_by_position_enforcer():
+def test_overview_marks_position_enforcer_before_close_geometry():
     result = trailing_inspect.build_overview(
         sources={
             "long": {
@@ -384,13 +384,15 @@ def test_overview_marks_close_scenarios_superseded_by_position_enforcer():
     scenarios = result["sides"]["long"]["scenarios"]
     at_threshold = next(row for row in scenarios if row["exposure_ratio"] == 0.8)
     above_threshold = next(row for row in scenarios if row["exposure_ratio"] == 0.9)
-    assert at_threshold["close"]["superseded_by"] is None
-    assert above_threshold["close"]["superseded_by"] == "position_exposure_enforcer"
+    assert at_threshold["close"]["preceded_by"] is None
+    assert above_threshold["close"]["preceded_by"] == "position_exposure_enforcer"
 
     report = trailing_inspect.render_overview(result)
     assert "Position-exposure enforcement is enabled at 80% WE / effective WEL" in report
-    assert "WEL auto-reduce" in report
-    assert "before trailing/passive close logic" in report
+    assert "WEL reducer first" in report
+    assert "Expanded close generation simulates that reduction" in report
+    assert "may then add the displayed strategy closes" in report
+    assert "remains relevant" in report
 
 
 def test_overview_separates_initial_entry_and_describes_close_qty_basis():
@@ -448,6 +450,52 @@ def test_overview_qualifies_full_position_passive_close_sizing():
     assert "ignores the configured close quantity percentage" in comments
     assert "targets the full remaining position" in comments
     assert "allowed full-position size × 25.00%" not in comments
+
+
+def test_inspect_rejects_non_finite_derived_geometry():
+    with pytest.raises(ValueError, match=r"derived value result\..* is not finite"):
+        trailing_inspect.inspect_trailing(
+            symbol="COIN",
+            pside="long",
+            position_size=None,
+            position_price=100.0,
+            wallet_exposure=0.5,
+            effective_wallet_exposure_limit=1.0,
+            volatility_ema_1m=1e308,
+            volatility_ema_1h=0.0,
+            params=_params(),
+            parameter_source="test",
+        )
+
+
+@pytest.mark.parametrize("json_args", ((), ("--json",)))
+def test_main_reports_derived_overflow_without_traceback(monkeypatch, capsys, json_args):
+    monkeypatch.setattr(
+        trailing_inspect,
+        "load_overview_sources",
+        lambda config_path, psides: (
+            {pside: {"params": _params(), "context": _context()} for pside in psides},
+            "test config",
+        ),
+    )
+
+    assert (
+        trailing_inspect.main(
+            [
+                "--side",
+                "long",
+                "--volatility-scenarios",
+                "huge:1e308:0",
+                *json_args,
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "error: derived value" in captured.err
+    assert "is not finite" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_overview_qualifies_immediate_close_by_trailing_mode():
