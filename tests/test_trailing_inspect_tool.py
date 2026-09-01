@@ -229,6 +229,22 @@ def test_detailed_mode_requires_both_exposure_inputs(state_args, capsys):
     )
 
 
+def test_detailed_mode_requires_explicit_position_price(capsys):
+    assert (
+        trailing_inspect.main(
+            [
+                "--wallet-exposure",
+                "0.6",
+                "--effective-wallet-exposure-limit",
+                "0.9",
+                "--json",
+            ]
+        )
+        == 2
+    )
+    assert "requires an explicit --position-price" in capsys.readouterr().err
+
+
 def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     result = trailing_inspect.build_overview(
         sources={

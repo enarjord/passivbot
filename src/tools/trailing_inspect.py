@@ -1264,8 +1264,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--position-price",
         dest="price_anchor",
         type=float,
-        default=100.0,
-        help="Average position price used for example trigger geometry",
+        default=None,
+        help="Average position price used for example trigger geometry (overview default: 100)",
     )
     state.add_argument("--wallet-exposure", type=float, default=None, help="Current WE ratio")
     state.add_argument(
@@ -1345,6 +1345,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "detailed single-scenario mode requires both --wallet-exposure and "
                     "--effective-wallet-exposure-limit"
                 )
+            if args.price_anchor is None:
+                raise ValueError(
+                    "detailed single-scenario mode requires an explicit --position-price"
+                )
             pside = args.side or "long"
             params, source = load_parameter_source(config_path, pside)
             overridden = apply_parameter_overrides(params, args)
@@ -1376,7 +1380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = build_overview(
                 sources=sources,
                 parameter_source=source,
-                price_anchor=args.price_anchor,
+                price_anchor=args.price_anchor if args.price_anchor is not None else 100.0,
                 volatility_scenarios=args.volatility_scenarios,
                 exposure_ratios=args.exposure_ratios,
                 overridden_parameters=overridden_by_side,
