@@ -401,6 +401,34 @@ def test_volatility_sensitivity_selects_extremes_independent_of_input_order():
 
     headline = result["sides"]["long"]["classification"]["entry_headline"]
     assert headline.startswith("very strong volatility sensitivity")
+    assert "sensitivity spans all 3 displayed scenarios" in result["sides"]["long"][
+        "classification"
+    ]["basis"]
+
+
+def test_volatility_sensitivity_includes_effective_middle_extreme():
+    params = _params()
+    params["entry"].update(
+        {
+            "threshold_volatility_1m_weight": 20.0,
+            "threshold_volatility_1h_weight": 0.0,
+            "retracement_volatility_1m_weight": 0.0,
+            "retracement_volatility_1h_weight": 0.0,
+        }
+    )
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(
+            ("quiet", 0.0, 0.0),
+            ("large 1m effect", 0.05, 0.0),
+            ("larger summed volatility", 0.0, 0.06),
+        ),
+    )
+
+    headline = result["sides"]["long"]["classification"]["entry_headline"]
+    assert headline.startswith("very strong volatility sensitivity")
 
 
 @pytest.mark.parametrize(("pside", "expected_reference"), [("long", 98.0), ("short", 102.0)])
@@ -431,6 +459,33 @@ def test_passive_negative_close_threshold_keeps_rust_analytical_reference(
     table_row = trailing_inspect._scenario_rows(result["sides"][pside], "close")[0]
     assert table_row[4] == "n/a"
     assert table_row[7] == f"{expected_reference:.4f}"
+    headline = result["sides"][pside]["classification"]["close_headline"]
+    assert "passive" in headline
+    assert "immediate" not in headline
+
+
+def test_negative_threshold_exposure_change_uses_absolute_distance():
+    params = _params()
+    params["close"].update(
+        {
+            "retracement_base_pct": 0.0,
+            "threshold_base_pct": -0.02,
+            "threshold_we_weight": -0.1,
+            "threshold_volatility_1m_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+        }
+    )
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("only", 0.0, 0.0),),
+        exposure_ratios=(0.0, 0.9),
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["close_comments"])
+    assert "widens the absolute close threshold distance from 2.0000% to 11.0000%" in comments
+    assert "narrows the close threshold" not in comments
 
 
 @pytest.mark.parametrize(
@@ -464,6 +519,9 @@ def test_passive_negative_entry_threshold_keeps_rust_analytical_reference(
     table_row = trailing_inspect._scenario_rows(result["sides"][pside], "entry")[0]
     assert table_row[4] == "n/a"
     assert table_row[7] == f"{expected_reference:.4f}"
+    headline = result["sides"][pside]["classification"]["entry_headline"]
+    assert "passive" in headline
+    assert "immediate" not in headline
 
 
 def test_trailing_negative_entry_threshold_is_clamped_like_rust():
@@ -490,6 +548,21 @@ def test_trailing_negative_entry_threshold_is_clamped_like_rust():
     assert entry["trailing_enabled"] is True
     assert entry["threshold_base_pct"] == 0.0
     assert entry["threshold_pct"] == 0.0
+
+
+def test_scenario_prices_preserve_precision_for_small_anchor():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=0.00001,
+        volatility_scenarios=(("only", 0.005, 0.0025),),
+        exposure_ratios=(0.5,),
+    )
+
+    row = trailing_inspect._scenario_rows(result["sides"]["long"], "entry")[0]
+    for price in (row[4], row[6], row[7]):
+        assert price != "0.0000"
+        assert float(price) > 0.0
 
 
 def test_overview_rejects_duplicate_volatility_scenario_labels():

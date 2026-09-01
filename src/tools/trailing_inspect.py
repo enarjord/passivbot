@@ -468,7 +468,11 @@ def inspect_trailing(
     }
 
 
-def _threshold_style(kind: str, threshold_pct: float) -> str:
+def _threshold_style(kind: str, threshold_pct: float, *, trailing_enabled: bool) -> str:
+    if not trailing_enabled:
+        if threshold_pct == 0.0:
+            return "passive at-position"
+        return f"passive {_threshold_style(kind, abs(threshold_pct), trailing_enabled=True)}"
     if threshold_pct <= 0.0:
         return "immediate (no threshold gate)"
     cutoffs = (
@@ -494,12 +498,11 @@ def _retracement_style(retracement_pct: float) -> str:
     return "deep"
 
 
-def _sensitivity_style(
-    low_values: Sequence[float], high_values: Sequence[float]
-) -> str:
+def _sensitivity_style(scenario_values: Sequence[Sequence[float]]) -> str:
     relative_change = max(
-        abs(high_value - low_value) / max(abs(low_value), 0.001)
-        for low_value, high_value in zip(low_values, high_values, strict=True)
+        (max(component_values) - min(component_values))
+        / max(min(abs(value) for value in component_values), 0.001)
+        for component_values in zip(*scenario_values, strict=True)
     )
     if relative_change < 0.1:
         return "low effective volatility sensitivity"
@@ -511,20 +514,38 @@ def _sensitivity_style(
 
 
 def _movement_description(
-    delta: float,
+    low_value: float,
+    high_value: float,
     subject: str,
     low_exposure_ratio: float,
     high_exposure_ratio: float,
     volatility_label: str,
+    *,
+    compare_absolute_distance: bool = False,
 ) -> str:
     if low_exposure_ratio == high_exposure_ratio:
         return f"Only one exposure ratio is shown, so {subject} exposure sensitivity is not compared."
+    signed_delta = high_value - low_value
+    delta = abs(high_value) - abs(low_value) if compare_absolute_distance else signed_delta
     if abs(delta) < 0.00005:
+        if compare_absolute_distance and abs(signed_delta) >= 0.00005:
+            return (
+                f"Moving from {low_exposure_ratio * 100.0:g}% to "
+                f"{high_exposure_ratio * 100.0:g}% of the exposure limit changes the signed "
+                f"{subject} from {_fmt_pct(low_value, signed=True)} to "
+                f"{_fmt_pct(high_value, signed=True)}, while its absolute distance is nearly unchanged."
+            )
         return f"Exposure has almost no effect on the {subject}."
     verb = "widens" if delta > 0.0 else "narrows"
+    distance_qualifier = "absolute " if compare_absolute_distance else ""
+    endpoints = (
+        f" from {_fmt_pct(abs(low_value))} to {_fmt_pct(abs(high_value))}"
+        if compare_absolute_distance
+        else ""
+    )
     return (
         f"Moving from {low_exposure_ratio * 100.0:g}% to {high_exposure_ratio * 100.0:g}% "
-        f"of the exposure limit {verb} the {subject} by "
+        f"of the exposure limit {verb} the {distance_qualifier}{subject} distance{endpoints} by "
         f"{abs(delta) * 100.0:.4f} percentage points in the "
         f"{volatility_label!r} volatility example."
     )
@@ -534,11 +555,10 @@ def _classify_side(
     *,
     pside: str,
     context: Mapping[str, Any] | None,
-    representative: Mapping[str, Mapping[str, Any]],
+    representative: Mapping[str, Any],
 ) -> dict[str, Any]:
     normal = representative["normal"]
-    quiet = representative["quiet"]
-    high = representative["high"]
+    volatility_results = representative["volatility_results"]
     exposure_low = representative["exposure_low"]
     exposure_high = representative["exposure_high"]
     entry = normal["entry"]
@@ -550,38 +570,32 @@ def _classify_side(
         "one volatility scenario shown"
         if representative["volatility_scenario_count"] == 1
         else _sensitivity_style(
-            (
-                quiet["entry"]["threshold_pct"],
-                quiet["entry"]["retracement_pct"],
-            ),
-            (
-                high["entry"]["threshold_pct"],
-                high["entry"]["retracement_pct"],
-            ),
+            tuple(
+                (result["entry"]["threshold_pct"], result["entry"]["retracement_pct"])
+                for result in volatility_results
+            )
         )
     )
     close_volatility_style = (
         "one volatility scenario shown"
         if representative["volatility_scenario_count"] == 1
         else _sensitivity_style(
-            (
-                quiet["close"]["threshold_pct"],
-                quiet["close"]["retracement_pct"],
-            ),
-            (
-                high["close"]["threshold_pct"],
-                high["close"]["retracement_pct"],
-            ),
+            tuple(
+                (result["close"]["threshold_pct"], result["close"]["retracement_pct"])
+                for result in volatility_results
+            )
         )
     )
     entry_headline = (
         f"{volatility_style}; "
-        f"{_threshold_style('entry', entry['threshold_pct'])} entry threshold with "
+        f"{_threshold_style('entry', entry['threshold_pct'], trailing_enabled=entry_trailing)} "
+        "entry threshold with "
         f"{_retracement_style(entry['retracement_pct'])} retracement"
     )
     close_headline = (
         f"{close_volatility_style}; "
-        f"{_threshold_style('close', close['threshold_pct'])} close threshold with "
+        f"{_threshold_style('close', close['threshold_pct'], trailing_enabled=close_trailing)} "
+        "close threshold with "
         f"{_retracement_style(close['retracement_pct'])} retracement"
     )
 
@@ -620,20 +634,19 @@ def _classify_side(
         )
     entry_comments.append(
         _movement_description(
-            exposure_high["entry"]["threshold_pct"] - exposure_low["entry"]["threshold_pct"],
+            exposure_low["entry"]["threshold_pct"],
+            exposure_high["entry"]["threshold_pct"],
             "entry threshold",
             representative["exposure_low_ratio"],
             representative["exposure_high_ratio"],
             representative["normal_label"],
+            compare_absolute_distance=True,
         )
-    )
-    entry_retracement_delta = (
-        exposure_high["entry"]["retracement_pct"]
-        - exposure_low["entry"]["retracement_pct"]
     )
     entry_comments.append(
         _movement_description(
-            entry_retracement_delta,
+            exposure_low["entry"]["retracement_pct"],
+            exposure_high["entry"]["retracement_pct"],
             "entry retracement",
             representative["exposure_low_ratio"],
             representative["exposure_high_ratio"],
@@ -665,11 +678,13 @@ def _classify_side(
         )
     close_comments.append(
         _movement_description(
-            exposure_high["close"]["threshold_pct"] - exposure_low["close"]["threshold_pct"],
+            exposure_low["close"]["threshold_pct"],
+            exposure_high["close"]["threshold_pct"],
             "close threshold",
             representative["exposure_low_ratio"],
             representative["exposure_high_ratio"],
             representative["normal_label"],
+            compare_absolute_distance=True,
         )
     )
     close_comments.append(
@@ -713,16 +728,24 @@ def _classify_side(
             f"Each trailing close targets {context['close_qty_pct'] * 100.0:.2f}% before "
             "minimum-size and remaining-position rules."
         )
+    if representative["volatility_scenario_count"] == 1:
+        basis = (
+            f"Headlines use {representative['normal_label']!r} volatility at "
+            f"{representative['middle_ratio'] * 100.0:g}% WE/WEL."
+        )
+    else:
+        basis = (
+            f"Threshold/retracement style uses {representative['normal_label']!r} volatility at "
+            f"{representative['middle_ratio'] * 100.0:g}% WE/WEL; volatility sensitivity spans "
+            f"all {representative['volatility_scenario_count']} displayed scenarios at that exposure."
+        )
     return {
         "entry_headline": entry_headline,
         "entry_comments": entry_comments,
         "close_headline": close_headline,
         "close_comments": close_comments,
         "overall_comments": overall,
-        "basis": (
-            f"Headlines use {representative['normal_label']!r} volatility at "
-            f"{representative['middle_ratio'] * 100.0:g}% WE/WEL."
-        ),
+        "basis": basis,
     }
 
 
@@ -798,21 +821,15 @@ def build_overview(
             checked_scenarios,
             key=lambda item: abs(item[1] - 0.005) + abs(item[2] - 0.0025),
         )[0]
-        quiet_label = min(
-            checked_scenarios,
-            key=lambda item: (item[1] + item[2], item[1], item[2], item[0]),
-        )[0]
-        high_label = max(
-            checked_scenarios,
-            key=lambda item: (item[1] + item[2], item[1], item[2], item[0]),
-        )[0]
         middle_ratio = min(checked_ratios, key=lambda value: abs(value - 0.5))
         low_ratio = min(checked_ratios)
         high_ratio = max(checked_ratios)
         representative = {
             "normal": scenario_results[(normal_label, middle_ratio)],
-            "quiet": scenario_results[(quiet_label, middle_ratio)],
-            "high": scenario_results[(high_label, middle_ratio)],
+            "volatility_results": [
+                scenario_results[(label, middle_ratio)]
+                for label, _volatility_ema_1m, _volatility_ema_1h in checked_scenarios
+            ],
             "exposure_low": scenario_results[(normal_label, low_ratio)],
             "exposure_high": scenario_results[(normal_label, high_ratio)],
             "exposure_low_ratio": low_ratio,
@@ -1006,7 +1023,16 @@ def _format_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> list
 
 
 def _scenario_price(value: float | None, *, fallback: str = "-") -> str:
-    return fallback if value is None else f"{value:.4f}"
+    if value is None:
+        return fallback
+    if value == 0.0:
+        return "0.0000"
+    magnitude = math.floor(math.log10(abs(value)))
+    if magnitude >= -3:
+        return f"{value:.4f}"
+    if magnitude >= -8:
+        return f"{value:.{-magnitude + 4}f}"
+    return f"{value:.6g}"
 
 
 def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
