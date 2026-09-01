@@ -212,6 +212,22 @@ def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
     assert "must be greater than zero" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "state_args",
+    (
+        ("--wallet-exposure", "0.6"),
+        ("--effective-wallet-exposure-limit", "0.9"),
+        ("--volatility-ema-1m", "0.01"),
+    ),
+)
+def test_detailed_mode_requires_both_exposure_inputs(state_args, capsys):
+    assert trailing_inspect.main([*state_args, "--json"]) == 2
+    assert (
+        "requires both --wallet-exposure and --effective-wallet-exposure-limit"
+        in capsys.readouterr().err
+    )
+
+
 def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     result = trailing_inspect.build_overview(
         sources={
@@ -243,6 +259,19 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     assert "dormant parameters" in " ".join(
         result["sides"]["short"]["classification"]["overall_comments"]
     )
+
+
+def test_overview_qualifies_immediate_close_by_trailing_mode():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "With close trailing enabled, a non-positive threshold is immediate" in report
+    assert "With close trailing disabled, the row is passive" in report
+    assert "no extrema or reversal confirmation participate" in report
 
 
 @pytest.mark.parametrize(

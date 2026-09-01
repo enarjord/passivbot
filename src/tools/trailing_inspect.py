@@ -1116,7 +1116,9 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "confirmation follows the running low/high, so a farther extreme moves the trigger.",
             "* Order ref is Rust's analytical emitted-order reference after both conditions pass; "
             "the live price is also constrained by bid/ask, tick rounding, sizing, exposure caps, and EMA gating.",
-            "* A non-positive close threshold is shown as immediate: trailing is armed from position open.",
+            "* With close trailing enabled, a non-positive threshold is immediate: trailing is "
+            "armed from position open. With close trailing disabled, the row is passive and no "
+            "extrema or reversal confirmation participate.",
             "* Trailing extrema reset after every fill for the same coin and position side.",
             "* Categories are descriptive heuristics for intuition, not trading-quality judgments.",
             "Percent inputs use config ratios: 0.01 = 1%.",
@@ -1268,6 +1270,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if detailed_mode:
             if args.side == "both":
                 raise ValueError("detailed single-scenario mode requires --side long or --side short")
+            if (
+                args.wallet_exposure is None
+                or args.effective_wallet_exposure_limit is None
+            ):
+                raise ValueError(
+                    "detailed single-scenario mode requires both --wallet-exposure and "
+                    "--effective-wallet-exposure-limit"
+                )
             pside = args.side or "long"
             params, source = load_parameter_source(config_path, pside)
             overridden = apply_parameter_overrides(params, args)
@@ -1276,14 +1286,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 pside=pside,
                 position_price=args.price_anchor,
                 position_size=args.position_size,
-                wallet_exposure=(
-                    args.wallet_exposure if args.wallet_exposure is not None else 0.0
-                ),
-                effective_wallet_exposure_limit=(
-                    args.effective_wallet_exposure_limit
-                    if args.effective_wallet_exposure_limit is not None
-                    else 1.0
-                ),
+                wallet_exposure=args.wallet_exposure,
+                effective_wallet_exposure_limit=args.effective_wallet_exposure_limit,
                 volatility_ema_1m=(
                     args.volatility_ema_1m if args.volatility_ema_1m is not None else 0.0
                 ),
