@@ -44,11 +44,12 @@ def _inspect(pside="long"):
     )
 
 
-def _context(*, active=True, cooldown=1.5):
+def _context(*, active=True, cooldown=1.5, forced_mode="normal"):
     return {
         "active": active,
         "total_wallet_exposure_limit": 1.0 if active else 0.0,
         "n_positions": 1,
+        "forced_mode": forced_mode,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_dist": 0.01,
@@ -259,6 +260,58 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     assert "dormant parameters" in " ".join(
         result["sides"]["short"]["classification"]["overall_comments"]
     )
+
+
+def test_extract_side_context_includes_global_forced_mode():
+    config = {
+        "live": {"forced_mode_long": "p"},
+        "bot": {
+            "long": {
+                "risk": {
+                    "total_wallet_exposure_limit": 1.0,
+                    "n_positions": 1,
+                    "entry_cooldown_minutes": 2.0,
+                },
+                "strategy": {
+                    "trailing_martingale": {
+                        **_params(),
+                        "volatility_ema_span_1m": 100.0,
+                        "volatility_ema_span_1h": 200.0,
+                    }
+                },
+            }
+        },
+    }
+
+    context = trailing_inspect._extract_side_context(config, "long")
+    assert context["forced_mode"] == "panic"
+
+
+@pytest.mark.parametrize(
+    ("forced_mode", "expected"),
+    (
+        ("panic", "immediate panic close"),
+        ("manual", "emits no strategy orders"),
+        ("tp_only", "ENTRY table is dormant and the CLOSE table applies"),
+        ("graceful_stop", "blocks a new initial entry while flat"),
+    ),
+)
+def test_overview_explains_global_forced_mode(forced_mode, expected):
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(forced_mode=forced_mode),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["overall_comments"])
+    assert f"Global forced mode '{forced_mode}'" in comments
+    assert expected in comments
+    assert "Long is enabled" not in comments
 
 
 def test_overview_qualifies_immediate_close_by_trailing_mode():
@@ -563,6 +616,24 @@ def test_scenario_prices_preserve_precision_for_small_anchor():
     for price in (row[4], row[6], row[7]):
         assert price != "0.0000"
         assert float(price) > 0.0
+
+
+def test_scenario_inputs_preserve_small_custom_values():
+    params = _params()
+    params["entry"]["threshold_volatility_1m_weight"] = 100_000.0
+    params["entry"]["threshold_we_weight"] = 100.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("zero", 0.0, 0.0), ("tiny", 0.00001, 0.0)),
+        exposure_ratios=(0.0, 0.004),
+    )
+
+    rows = trailing_inspect._scenario_rows(result["sides"]["long"], "entry")
+    assert {row[1] for row in rows} == {"0/0%", "0.001/0%"}
+    assert {row[2] for row in rows} == {"0%", "0.4%"}
+    assert len({row[3] for row in rows}) == 4
 
 
 def test_overview_rejects_duplicate_volatility_scenario_labels():

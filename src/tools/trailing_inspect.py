@@ -134,6 +134,9 @@ def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str
 
 
 def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
+    from config_utils import expand_PB_mode
+
+    live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
@@ -149,10 +152,13 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         f"bot.{pside}.risk.total_wallet_exposure_limit",
     )
     n_positions = int(_finite_float(risk.get("n_positions"), f"bot.{pside}.risk.n_positions"))
+    forced_mode_raw = str(live.get(f"forced_mode_{pside}", "") or "").strip()
+    forced_mode = expand_PB_mode(forced_mode_raw) if forced_mode_raw else "normal"
     return {
         "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
         "n_positions": n_positions,
+        "forced_mode": forced_mode,
         "entry_cooldown_minutes": _finite_float(
             risk.get("entry_cooldown_minutes", 0.0),
             f"bot.{pside}.risk.entry_cooldown_minutes",
@@ -693,16 +699,46 @@ def _classify_side(
 
     overall: list[str] = []
     if context:
-        if context["active"]:
+        forced_mode = context.get("forced_mode", "normal")
+        if not context["active"]:
+            forced_mode_note = (
+                f" Global forced mode is {forced_mode!r}, but it cannot reactivate a disabled side."
+                if forced_mode != "normal"
+                else ""
+            )
+            overall.append(
+                f"{pside.capitalize()} is disabled by its zero exposure limit or position count. "
+                "The tables below describe dormant parameters, not orders the current config will place."
+                + forced_mode_note
+            )
+        elif forced_mode == "normal":
             overall.append(
                 f"{pside.capitalize()} is enabled: total exposure limit "
                 f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
                 f"{context['n_positions']} configured position slot(s)."
             )
-        else:
+        elif forced_mode == "panic":
             overall.append(
-                f"{pside.capitalize()} is disabled by its zero exposure limit or position count. "
-                "The tables below describe dormant parameters, not orders the current config will place."
+                "Global forced mode 'panic' supersedes trailing_martingale: Rust emits an "
+                "immediate panic close for a held position and no strategy entries or closes; "
+                "if flat, it emits no order. Both tables below are dormant while this mode applies."
+            )
+        elif forced_mode == "manual":
+            overall.append(
+                "Global forced mode 'manual' supersedes trailing_martingale: Rust emits no "
+                "strategy orders and ignores any held position. Both tables below are dormant "
+                "while this mode applies."
+            )
+        elif forced_mode == "tp_only":
+            overall.append(
+                "Global forced mode 'tp_only' blocks all entries. For a held position Rust still "
+                "uses strategy close orders, so the ENTRY table is dormant and the CLOSE table applies."
+            )
+        elif forced_mode == "graceful_stop":
+            overall.append(
+                "Global forced mode 'graceful_stop' blocks a new initial entry while flat. With a "
+                "held position Rust manages the strategy normally, so re-entries and closes use "
+                "the tables until the position is flat."
             )
         ema_gate_mode = context["entry_ema_gate_mode"]
         if ema_gate_mode in {"all", "reentry"}:
@@ -1035,6 +1071,10 @@ def _scenario_price(value: float | None, *, fallback: str = "-") -> str:
     return f"{value:.6g}"
 
 
+def _scenario_input_pct(value: float) -> str:
+    return f"{value * 100.0:.10g}"
+
+
 def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
     rows: list[list[str]] = []
     for scenario in side["scenarios"]:
@@ -1055,8 +1095,9 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
         rows.append(
             [
                 scenario["volatility_label"],
-                f"{scenario['volatility_ema_1m'] * 100.0:.2f}/{scenario['volatility_ema_1h'] * 100.0:.2f}%",
-                f"{scenario['exposure_ratio'] * 100.0:.0f}%",
+                f"{_scenario_input_pct(scenario['volatility_ema_1m'])}/"
+                f"{_scenario_input_pct(scenario['volatility_ema_1h'])}%",
+                f"{_scenario_input_pct(scenario['exposure_ratio'])}%",
                 _fmt_pct(payload["threshold_pct"], signed=kind == "close"),
                 threshold_price,
                 _fmt_pct(payload["retracement_pct"]),
