@@ -44,12 +44,21 @@ def _inspect(pside="long"):
     )
 
 
-def _context(*, active=True, cooldown=1.5, forced_mode="normal"):
+def _context(
+    *,
+    active=True,
+    cooldown=1.5,
+    forced_mode="normal",
+    enforcer_enabled=False,
+    enforcer_threshold=0.8,
+):
     return {
         "active": active,
         "total_wallet_exposure_limit": 1.0 if active else 0.0,
         "n_positions": 1,
         "forced_mode": forced_mode,
+        "position_exposure_enforcer_enabled": enforcer_enabled,
+        "position_exposure_enforcer_threshold": enforcer_threshold,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_dist": 0.01,
@@ -287,6 +296,8 @@ def test_extract_side_context_includes_global_forced_mode():
                     "total_wallet_exposure_limit": 1.0,
                     "n_positions": 1,
                     "entry_cooldown_minutes": 2.0,
+                    "position_exposure_enforcer_enabled": True,
+                    "position_exposure_enforcer_threshold": 0.8,
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -301,6 +312,32 @@ def test_extract_side_context_includes_global_forced_mode():
 
     context = trailing_inspect._extract_side_context(config, "long")
     assert context["forced_mode"] == "panic"
+    assert context["position_exposure_enforcer_enabled"] is True
+    assert context["position_exposure_enforcer_threshold"] == pytest.approx(0.8)
+
+
+def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
+    config = {
+        "live": {"forced_mode_long": "not-a-mode"},
+        "bot": {
+            "long": {
+                "risk": {
+                    "total_wallet_exposure_limit": 1.0,
+                    "n_positions": 1,
+                },
+                "strategy": {
+                    "trailing_martingale": {
+                        **_params(),
+                        "volatility_ema_span_1m": 100.0,
+                        "volatility_ema_span_1h": 200.0,
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="invalid live.forced_mode_long"):
+        trailing_inspect._extract_side_context(config, "long")
 
 
 @pytest.mark.parametrize(
@@ -328,6 +365,47 @@ def test_overview_explains_global_forced_mode(forced_mode, expected):
     assert f"Global forced mode '{forced_mode}'" in comments
     assert expected in comments
     assert "Long is enabled" not in comments
+
+
+def test_overview_marks_close_scenarios_superseded_by_position_enforcer():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(enforcer_enabled=True, enforcer_threshold=0.8),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.5, 0.8, 0.9),
+    )
+
+    scenarios = result["sides"]["long"]["scenarios"]
+    at_threshold = next(row for row in scenarios if row["exposure_ratio"] == 0.8)
+    above_threshold = next(row for row in scenarios if row["exposure_ratio"] == 0.9)
+    assert at_threshold["close"]["superseded_by"] is None
+    assert above_threshold["close"]["superseded_by"] == "position_exposure_enforcer"
+
+    report = trailing_inspect.render_overview(result)
+    assert "Position-exposure enforcement is enabled at 80% WE / effective WEL" in report
+    assert "WEL auto-reduce" in report
+    assert "before trailing/passive close logic" in report
+
+
+def test_overview_separates_initial_entry_and_describes_close_qty_basis():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "RE-ENTRY / ADD" in report
+    assert "While flat, Rust bypasses trailing threshold/retracement" in report
+    assert "initial entry at bid/ask" in report
+    assert "allowed full-position size × 25.00%" in report
+    assert "adds any current position size above that allowed full size" in report
 
 
 def test_overview_qualifies_immediate_close_by_trailing_mode():

@@ -153,12 +153,24 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     )
     n_positions = int(_finite_float(risk.get("n_positions"), f"bot.{pside}.risk.n_positions"))
     forced_mode_raw = str(live.get(f"forced_mode_{pside}", "") or "").strip()
-    forced_mode = expand_PB_mode(forced_mode_raw) if forced_mode_raw else "normal"
+    try:
+        forced_mode = expand_PB_mode(forced_mode_raw) if forced_mode_raw else "normal"
+    except Exception as exc:
+        raise ValueError(
+            f"invalid live.forced_mode_{pside}={forced_mode_raw!r}: {exc}"
+        ) from exc
     return {
         "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
         "n_positions": n_positions,
         "forced_mode": forced_mode,
+        "position_exposure_enforcer_enabled": bool(
+            risk.get("position_exposure_enforcer_enabled", False)
+        ),
+        "position_exposure_enforcer_threshold": _finite_float(
+            risk.get("position_exposure_enforcer_threshold", 0.0),
+            f"bot.{pside}.risk.position_exposure_enforcer_threshold",
+        ),
         "entry_cooldown_minutes": _finite_float(
             risk.get("entry_cooldown_minutes", 0.0),
             f"bot.{pside}.risk.entry_cooldown_minutes",
@@ -761,9 +773,19 @@ def _classify_side(
             "minimum-quantity, rounding, and exposure-cropping rules."
         )
         overall.append(
-            f"Each trailing close targets {context['close_qty_pct'] * 100.0:.2f}% before "
-            "minimum-size and remaining-position rules."
+            "Each strategy close starts from the allowed full-position size × "
+            f"{context['close_qty_pct'] * 100.0:.2f}%, adds any current position size above "
+            "that allowed full size, then caps at the remaining position and applies minimum-quantity, "
+            "rounding, and dust-remainder rules."
         )
+        if context.get("position_exposure_enforcer_enabled", False):
+            enforcer_threshold = context.get("position_exposure_enforcer_threshold", 0.0)
+            overall.append(
+                "Position-exposure enforcement is enabled at "
+                f"{enforcer_threshold * 100.0:g}% WE / effective WEL. CLOSE rows above that "
+                "ratio are marked 'WEL auto-reduce': Rust returns a market-side exposure-reduction "
+                "order before trailing/passive close logic, including in 'tp_only' mode."
+            )
     if representative["volatility_scenario_count"] == 1:
         basis = (
             f"Headlines use {representative['normal_label']!r} volatility at "
@@ -842,6 +864,23 @@ def build_overview(
                     overridden_parameters=(overridden_parameters or {}).get(pside, ()),
                 )
                 scenario_results[(label, exposure_ratio)] = result
+                close_payload = deepcopy(result["close"])
+                enforcer_enabled = bool(
+                    context and context.get("position_exposure_enforcer_enabled", False)
+                )
+                enforcer_threshold = (
+                    _finite_float(
+                        context.get("position_exposure_enforcer_threshold", 0.0),
+                        "position_exposure_enforcer_threshold",
+                    )
+                    if context
+                    else 0.0
+                )
+                close_payload["superseded_by"] = (
+                    "position_exposure_enforcer"
+                    if enforcer_enabled and exposure_ratio > enforcer_threshold
+                    else None
+                )
                 rows.append(
                     {
                         "volatility_label": label,
@@ -849,7 +888,7 @@ def build_overview(
                         "volatility_ema_1h": volatility_ema_1h,
                         "exposure_ratio": exposure_ratio,
                         "entry": result["entry"],
-                        "close": result["close"],
+                        "close": close_payload,
                     }
                 )
 
@@ -1080,6 +1119,11 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
     for scenario in side["scenarios"]:
         payload = scenario[kind]
         geometry = payload["geometry"]
+        runtime_path = (
+            "WEL auto-reduce"
+            if payload.get("superseded_by") == "position_exposure_enforcer"
+            else ("re-entry" if kind == "entry" else "strategy close")
+        )
         if not payload["trailing_enabled"]:
             confirmation = "passive"
             threshold_price = "n/a"
@@ -1103,6 +1147,7 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
                 _fmt_pct(payload["retracement_pct"]),
                 confirmation,
                 order_reference,
+                runtime_path,
             ]
         )
     return rows
@@ -1150,6 +1195,7 @@ def render_overview(result: Mapping[str, Any]) -> str:
         "Retrace",
         "R confirm*",
         "Order ref*",
+        "Runtime path",
     )
     for pside, side in result["sides"].items():
         classification = side["classification"]
@@ -1166,7 +1212,7 @@ def render_overview(result: Mapping[str, Any]) -> str:
         if side["overridden_parameters"]:
             lines.append("  Overrides: " + ", ".join(side["overridden_parameters"]))
 
-        lines.extend(["", f"  ENTRY — {classification['entry_headline']}"])
+        lines.extend(["", f"  RE-ENTRY / ADD — {classification['entry_headline']}"])
         lines.extend(_parameter_summary(side, "entry"))
         lines.extend(f"  • {comment}" for comment in classification["entry_comments"])
         lines.extend(_format_table(headers, _scenario_rows(side, "entry")))
@@ -1183,6 +1229,11 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "confirmation follows the running low/high, so a farther extreme moves the trigger.",
             "* Order ref is Rust's analytical emitted-order reference after both conditions pass; "
             "the live price is also constrained by bid/ask, tick rounding, sizing, exposure caps, and EMA gating.",
+            "* Re-entry/add rows apply only while a position already exists. While flat, Rust bypasses "
+            "trailing threshold/retracement and submits the initial entry at bid/ask, optionally pushed "
+            "farther from market by the configured initial-entry EMA gate.",
+            "* A CLOSE row marked 'WEL auto-reduce' is superseded at that exposure ratio: Rust returns "
+            "the position-exposure-enforcer order before evaluating the displayed strategy close.",
             "* With close trailing enabled, a non-positive threshold is immediate: trailing is "
             "armed from position open. With close trailing disabled, the row is passive and no "
             "extrema or reversal confirmation participate.",
