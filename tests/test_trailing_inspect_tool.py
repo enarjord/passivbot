@@ -320,3 +320,55 @@ def test_overview_single_custom_scenario_does_not_invent_sensitivity_comparison(
     assert classification["entry_headline"].startswith("one volatility scenario shown")
     assert classification["basis"] == "Headlines use 'stress' volatility at 75% WE/WEL."
     assert "Only one exposure ratio is shown" in " ".join(classification["entry_comments"])
+
+
+def test_overview_sizing_description_matches_current_position_formula():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["overall_comments"])
+    assert "current absolute position size × 1.5 or initial-entry quantity" in comments
+    assert "minimum-quantity, rounding, and exposure-cropping rules" in comments
+    assert "previous fill" not in comments
+
+
+def test_volatility_sensitivity_includes_retracement_changes():
+    params = _params()
+    for kind in ("entry", "close"):
+        params[kind]["threshold_volatility_1m_weight"] = 0.0
+        params[kind]["threshold_volatility_1h_weight"] = 0.0
+        params[kind]["retracement_volatility_1m_weight"] = 100.0
+        params[kind]["retracement_volatility_1h_weight"] = 100.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    classification = result["sides"]["long"]["classification"]
+    assert classification["entry_headline"].startswith("very strong volatility sensitivity")
+    assert classification["close_headline"].startswith("very strong volatility sensitivity")
+
+
+def test_volatility_sensitivity_selects_extremes_independent_of_input_order():
+    params = _params()
+    params["entry"]["threshold_volatility_1m_weight"] = 20.0
+    params["entry"]["threshold_volatility_1h_weight"] = 20.0
+    params["entry"]["retracement_volatility_1m_weight"] = 0.0
+    params["entry"]["retracement_volatility_1h_weight"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(
+            ("quiet", 0.001, 0.0005),
+            ("extreme", 0.05, 0.025),
+            ("normal", 0.005, 0.0025),
+        ),
+    )
+
+    headline = result["sides"]["long"]["classification"]["entry_headline"]
+    assert headline.startswith("very strong volatility sensitivity")

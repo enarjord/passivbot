@@ -486,9 +486,13 @@ def _retracement_style(retracement_pct: float) -> str:
     return "deep"
 
 
-def _sensitivity_style(low_value: float, high_value: float) -> str:
-    scale = max(abs(low_value), 0.001)
-    relative_change = abs(high_value - low_value) / scale
+def _sensitivity_style(
+    low_values: Sequence[float], high_values: Sequence[float]
+) -> str:
+    relative_change = max(
+        abs(high_value - low_value) / max(abs(low_value), 0.001)
+        for low_value, high_value in zip(low_values, high_values, strict=True)
+    )
     if relative_change < 0.1:
         return "low effective volatility sensitivity"
     if relative_change < 0.35:
@@ -537,12 +541,30 @@ def _classify_side(
     volatility_style = (
         "one volatility scenario shown"
         if representative["volatility_scenario_count"] == 1
-        else _sensitivity_style(quiet["entry"]["threshold_pct"], high["entry"]["threshold_pct"])
+        else _sensitivity_style(
+            (
+                quiet["entry"]["threshold_pct"],
+                quiet["entry"]["retracement_pct"],
+            ),
+            (
+                high["entry"]["threshold_pct"],
+                high["entry"]["retracement_pct"],
+            ),
+        )
     )
     close_volatility_style = (
         "one volatility scenario shown"
         if representative["volatility_scenario_count"] == 1
-        else _sensitivity_style(quiet["close"]["threshold_pct"], high["close"]["threshold_pct"])
+        else _sensitivity_style(
+            (
+                quiet["close"]["threshold_pct"],
+                quiet["close"]["retracement_pct"],
+            ),
+            (
+                high["close"]["threshold_pct"],
+                high["close"]["retracement_pct"],
+            ),
+        )
     )
     entry_headline = (
         f"{volatility_style}; "
@@ -675,9 +697,13 @@ def _classify_side(
                 f"Entry EMA gate mode is {ema_gate_mode!r}; strategy entry prices are not EMA-gated."
             )
         overall.append(
-            f"Adds scale from the previous fill by {context['entry_double_down_factor']:.4g}x; "
-            f"each trailing close targets {context['close_qty_pct'] * 100.0:.2f}% before minimum-size "
-            "and remaining-position rules."
+            "Each add starts from the greater of current absolute position size × "
+            f"{context['entry_double_down_factor']:.4g} or initial-entry quantity, before "
+            "minimum-quantity, rounding, and exposure-cropping rules."
+        )
+        overall.append(
+            f"Each trailing close targets {context['close_qty_pct'] * 100.0:.2f}% before "
+            "minimum-size and remaining-position rules."
         )
     return {
         "entry_headline": entry_headline,
@@ -756,8 +782,14 @@ def build_overview(
             checked_scenarios,
             key=lambda item: abs(item[1] - 0.005) + abs(item[2] - 0.0025),
         )[0]
-        quiet_label = checked_scenarios[0][0]
-        high_label = checked_scenarios[-1][0]
+        quiet_label = min(
+            checked_scenarios,
+            key=lambda item: (item[1] + item[2], item[1], item[2], item[0]),
+        )[0]
+        high_label = max(
+            checked_scenarios,
+            key=lambda item: (item[1] + item[2], item[1], item[2], item[0]),
+        )[0]
         middle_ratio = min(checked_ratios, key=lambda value: abs(value - 0.5))
         low_ratio = min(checked_ratios)
         high_ratio = max(checked_ratios)
