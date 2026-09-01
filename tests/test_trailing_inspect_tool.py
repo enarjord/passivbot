@@ -139,7 +139,7 @@ def test_non_positive_retracement_reports_passive_mode():
     assert result["close"]["retracement_pct"] == 0.0
     report = trailing_inspect.render_report(result)
     assert report.count("trailing disabled") == 2
-    assert report.count("Passive threshold/reference") == 2
+    assert report.count("Passive analytical reference") == 2
 
 
 def test_extract_strategy_params_requires_canonical_trailing_martingale():
@@ -372,3 +372,46 @@ def test_volatility_sensitivity_selects_extremes_independent_of_input_order():
 
     headline = result["sides"]["long"]["classification"]["entry_headline"]
     assert headline.startswith("very strong volatility sensitivity")
+
+
+@pytest.mark.parametrize(("pside", "expected_reference"), [("long", 98.0), ("short", 102.0)])
+def test_passive_negative_close_threshold_keeps_rust_analytical_reference(
+    pside, expected_reference
+):
+    params = _params()
+    params["close"].update(
+        {
+            "retracement_base_pct": 0.0,
+            "threshold_base_pct": -0.02,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+        }
+    )
+    result = trailing_inspect.build_overview(
+        sources={pside: {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("only", 0.0, 0.0),),
+        exposure_ratios=(0.0,),
+    )
+
+    close = result["sides"][pside]["scenarios"][0]["close"]
+    assert close["geometry"]["threshold_price"] is None
+    assert close["geometry"]["passive_reference_price"] == pytest.approx(expected_reference)
+    table_row = trailing_inspect._scenario_rows(result["sides"][pside], "close")[0]
+    assert table_row[4] == "n/a"
+    assert table_row[7] == f"{expected_reference:.4f}"
+
+
+def test_overview_rejects_duplicate_volatility_scenario_labels():
+    with pytest.raises(ValueError, match="duplicate volatility scenario label.*same"):
+        trailing_inspect.build_overview(
+            sources={"long": {"params": _params(), "context": _context()}},
+            parameter_source="test config",
+            price_anchor=100.0,
+            volatility_scenarios=(
+                ("same", 0.001, 0.0005),
+                ("same", 0.02, 0.01),
+            ),
+        )

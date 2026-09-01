@@ -251,10 +251,9 @@ def _geometry(
     threshold_direction = -1.0 if (kind, pside) in {("entry", "long"), ("close", "short")} else 1.0
     retracement_direction = -threshold_direction
     threshold_gate_active = threshold_pct > 0.0
+    passive_reference_price = position_price * (1.0 + threshold_direction * threshold_pct)
     threshold_price = (
-        position_price * (1.0 + threshold_direction * threshold_pct)
-        if threshold_gate_active
-        else None
+        passive_reference_price if threshold_gate_active else None
     )
     nominal_confirmation_price = (
         threshold_price * (1.0 + retracement_direction * retracement_pct)
@@ -271,6 +270,7 @@ def _geometry(
         "threshold_gate_active": threshold_gate_active,
         "threshold_direction": "below" if threshold_direction < 0.0 else "above",
         "threshold_price": threshold_price,
+        "passive_reference_price": passive_reference_price,
         "retracement_direction": "above" if retracement_direction > 0.0 else "below",
         "nominal_confirmation_price": nominal_confirmation_price,
         "nominal_confirmation_pct_from_position": (
@@ -741,6 +741,14 @@ def build_overview(
         if vol_1m < 0.0 or vol_1h < 0.0:
             raise ValueError("volatility scenario values must not be negative")
         checked_scenarios.append((str(label), vol_1m, vol_1h))
+    scenario_labels = [item[0] for item in checked_scenarios]
+    duplicate_labels = sorted(
+        label for label in set(scenario_labels) if scenario_labels.count(label) > 1
+    )
+    if duplicate_labels:
+        raise ValueError(
+            "duplicate volatility scenario label(s): " + ", ".join(duplicate_labels)
+        )
     checked_ratios = [_finite_float(value, "exposure_ratio") for value in exposure_ratios]
     if any(value < 0.0 for value in checked_ratios):
         raise ValueError("exposure ratios must not be negative")
@@ -863,14 +871,12 @@ def _format_geometry(kind: str, payload: Mapping[str, Any]) -> list[str]:
     lines: list[str] = []
     if not payload["trailing_enabled"]:
         lines.append("  Mode: trailing disabled (retracement_base_pct <= 0); passive recursive orders")
-        if geometry["threshold_gate_active"]:
-            lines.append(
-                f"  Passive threshold/reference: {_fmt_pct(payload['threshold_pct'])} "
-                f"{geometry['threshold_direction']} position price -> "
-                f"{_fmt_number(geometry['threshold_price'])}"
-            )
-        else:
-            lines.append("  Effective threshold <= 0; passive reference is at the current market touch")
+        lines.append(
+            "  Passive analytical reference from position price and signed threshold "
+            f"{_fmt_pct(payload['threshold_pct'], signed=True)} -> "
+            f"{_fmt_number(geometry['passive_reference_price'])}"
+        )
+        lines.append("  Rust then clamps this reference against the current bid/ask before rounding.")
     elif geometry["threshold_gate_active"]:
         lines.append(
             f"  Threshold: {_fmt_pct(payload['threshold_pct'])} {geometry['threshold_direction']} "
@@ -1002,12 +1008,15 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
         geometry = payload["geometry"]
         if not payload["trailing_enabled"]:
             confirmation = "passive"
-            order_reference = _scenario_price(geometry["threshold_price"], fallback="market")
+            threshold_price = "n/a"
+            order_reference = _scenario_price(geometry["passive_reference_price"])
         elif not geometry["threshold_gate_active"]:
             confirmation = "extreme-based"
+            threshold_price = "immediate"
             order_reference = "market"
         else:
             confirmation = _scenario_price(geometry["nominal_confirmation_price"])
+            threshold_price = _scenario_price(geometry["threshold_price"])
             order_reference = _scenario_price(geometry["order_reference_price"])
         rows.append(
             [
@@ -1015,7 +1024,7 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
                 f"{scenario['volatility_ema_1m'] * 100.0:.2f}/{scenario['volatility_ema_1h'] * 100.0:.2f}%",
                 f"{scenario['exposure_ratio'] * 100.0:.0f}%",
                 _fmt_pct(payload["threshold_pct"], signed=kind == "close"),
-                _scenario_price(geometry["threshold_price"], fallback="immediate"),
+                threshold_price,
                 _fmt_pct(payload["retracement_pct"]),
                 confirmation,
                 order_reference,
