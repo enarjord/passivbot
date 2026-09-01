@@ -18,6 +18,15 @@
    canonical nested strategy parameters and mirrors the Rust formulas: entry distances are
    multiplicative, close threshold terms are additive, and close retracement has no wallet-exposure
    term.
+7. A positional config path defaults to a both-sides scenario overview. The overview uses explicit
+   example volatility and exposure-ratio inputs, a configurable price anchor, and descriptive
+   behavior categories. It must distinguish dormant sides, threshold-gated versus immediately
+   armed trailing, passive ladders, entry cooldown staging, and recursive closes without claiming
+   that a category predicts profitability.
+8. Scenario confirmation prices are nominal illustrations where the reversal begins exactly at the
+   threshold. The report must say that real confirmation follows the running extreme and that the
+   emitted price remains subject to market touch, tick rounding, EMA gates, sizing, and exposure
+   constraints.
 
 ## Validation
 
@@ -26,7 +35,8 @@
 3. command handling should mutate inputs deterministically and support dump/reset/help flows
 4. the tool wrapper should start with `--help` without import errors
 5. the one-shot inspector should cover additive close thresholds, separate entry multipliers,
-   long/short geometry, config extraction, overrides, and unified CLI dispatch
+   long/short geometry, config extraction, overrides, scenario grids, passive-entry cooldown modes,
+   dormant sides, price anchors, and unified CLI dispatch
 
 ## Key Code
 

@@ -44,6 +44,22 @@ def _inspect(pside="long"):
     )
 
 
+def _context(*, active=True, cooldown=1.5):
+    return {
+        "active": active,
+        "total_wallet_exposure_limit": 1.0 if active else 0.0,
+        "n_positions": 1,
+        "entry_cooldown_minutes": cooldown,
+        "entry_ema_gate_mode": "all",
+        "entry_initial_ema_dist": 0.01,
+        "entry_initial_qty_pct": 0.02,
+        "entry_double_down_factor": 1.5,
+        "close_qty_pct": 0.25,
+        "volatility_ema_span_1m": 100.0,
+        "volatility_ema_span_1h": 200.0,
+    }
+
+
 def test_inspect_trailing_matches_current_entry_and_close_formulas():
     result = _inspect()
 
@@ -194,3 +210,113 @@ def test_main_rejects_non_positive_effective_limit(monkeypatch, capsys):
         == 2
     )
     assert "must be greater than zero" in capsys.readouterr().err
+
+
+def test_overview_scenario_grid_uses_formulas_and_side_geometry():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {"params": _params(), "context": _context()},
+            "short": {"params": _params(), "context": _context(active=False)},
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    assert result["mode"] == "overview"
+    assert len(result["sides"]["long"]["scenarios"]) == 9
+    normal_half = next(
+        row
+        for row in result["sides"]["long"]["scenarios"]
+        if row["volatility_label"] == "normal" and row["exposure_ratio"] == 0.5
+    )
+    expected_entry_threshold = 0.02 * (1.0 + 0.0025 * 2.0 + 0.005 * 10.0 + 0.5 * 0.5)
+    expected_close_threshold = 0.01 + 0.5 * -0.02 + 0.0025 * 1.0 + 0.005 * 2.0
+    assert normal_half["entry"]["threshold_pct"] == pytest.approx(expected_entry_threshold)
+    assert normal_half["entry"]["geometry"]["threshold_price"] == pytest.approx(
+        100.0 * (1.0 - expected_entry_threshold)
+    )
+    assert normal_half["close"]["threshold_pct"] == pytest.approx(expected_close_threshold)
+
+    short_row = result["sides"]["short"]["scenarios"][0]
+    assert short_row["entry"]["geometry"]["threshold_price"] > 100.0
+    assert short_row["close"]["geometry"]["threshold_price"] < 100.0
+    assert "dormant parameters" in " ".join(
+        result["sides"]["short"]["classification"]["overall_comments"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("cooldown", "expected"),
+    [
+        (0.0, "full recursive entry ladder simultaneously"),
+        (5.0, "waits 5 minutes after an entry fill"),
+    ],
+)
+def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected):
+    params = _params()
+    params["entry"]["retracement_base_pct"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context(cooldown=cooldown)}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["entry_comments"])
+    assert expected in comments
+
+
+def test_main_positional_config_defaults_to_overview_and_accepts_price_anchor(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        trailing_inspect,
+        "load_overview_sources",
+        lambda config_path, psides: (
+            {
+                pside: {"params": _params(), "context": _context()}
+                for pside in psides
+            },
+            f"config {config_path}",
+        ),
+    )
+
+    assert (
+        trailing_inspect.main(
+            ["config.json", "--side", "long", "--price-anchor", "250", "--json"]
+        )
+        == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "overview"
+    assert payload["price_anchor"] == pytest.approx(250.0)
+    assert list(payload["sides"]) == ["long"]
+
+
+def test_render_overview_includes_formula_caveats_and_scenario_prices():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "Entry distance = base × max(1" in report
+    assert "Close threshold = base +" in report
+    assert "R confirm*" in report
+    assert "Order ref*" in report
+    assert "Trailing extrema reset after every fill" in report
+
+
+def test_overview_single_custom_scenario_does_not_invent_sensitivity_comparison():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("stress", 0.02, 0.01),),
+        exposure_ratios=(0.75,),
+    )
+
+    classification = result["sides"]["long"]["classification"]
+    assert classification["entry_headline"].startswith("one volatility scenario shown")
+    assert classification["basis"] == "Headlines use 'stress' volatility at 75% WE/WEL."
+    assert "Only one exposure ratio is shown" in " ".join(classification["entry_comments"])

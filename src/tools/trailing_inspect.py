@@ -11,6 +11,20 @@ from typing import Any, Mapping, Sequence
 
 STRATEGY_KIND = "trailing_martingale"
 
+DEFAULT_VOLATILITY_SCENARIOS = (
+    ("quiet", 0.001, 0.0005),
+    ("normal", 0.005, 0.0025),
+    ("high", 0.015, 0.0075),
+)
+DEFAULT_EXPOSURE_RATIOS = (0.0, 0.5, 0.9)
+
+
+class _HelpFormatter(
+    argparse.ArgumentDefaultsHelpFormatter,
+    argparse.RawDescriptionHelpFormatter,
+):
+    pass
+
 PARAMETER_FLAGS = {
     "entry_threshold_base_pct": ("entry", "threshold_base_pct"),
     "entry_threshold_we_weight": ("entry", "threshold_we_weight"),
@@ -117,6 +131,79 @@ def load_parameter_source(config_path: str | None, pside: str) -> tuple[dict[str
         },
         pside,
     ), f"Rust-owned {STRATEGY_KIND} defaults ({pside})"
+
+
+def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, Any]:
+    bot = _require_mapping(config.get("bot"), "bot")
+    side = _require_mapping(bot.get(pside), f"bot.{pside}")
+    risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
+    strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
+    strategy = _require_mapping(
+        strategies.get(STRATEGY_KIND),
+        f"bot.{pside}.strategy.{STRATEGY_KIND}",
+    )
+    entry = _require_mapping(strategy.get("entry"), "strategy.entry")
+    close = _require_mapping(strategy.get("close"), "strategy.close")
+    total_wallet_exposure_limit = _finite_float(
+        risk.get("total_wallet_exposure_limit"),
+        f"bot.{pside}.risk.total_wallet_exposure_limit",
+    )
+    n_positions = int(_finite_float(risk.get("n_positions"), f"bot.{pside}.risk.n_positions"))
+    return {
+        "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
+        "total_wallet_exposure_limit": total_wallet_exposure_limit,
+        "n_positions": n_positions,
+        "entry_cooldown_minutes": _finite_float(
+            risk.get("entry_cooldown_minutes", 0.0),
+            f"bot.{pside}.risk.entry_cooldown_minutes",
+        ),
+        "entry_ema_gate_mode": str(entry.get("ema_gate_mode", "unknown")),
+        "entry_initial_ema_dist": _finite_float(
+            entry.get("initial_ema_dist", 0.0), "entry.initial_ema_dist"
+        ),
+        "entry_initial_qty_pct": _finite_float(
+            entry.get("initial_qty_pct", 0.0), "entry.initial_qty_pct"
+        ),
+        "entry_double_down_factor": _finite_float(
+            entry.get("double_down_factor", 0.0), "entry.double_down_factor"
+        ),
+        "close_qty_pct": _finite_float(close.get("qty_pct", 0.0), "close.qty_pct"),
+        "volatility_ema_span_1m": _finite_float(
+            strategy.get("volatility_ema_span_1m", 0.0), "volatility_ema_span_1m"
+        ),
+        "volatility_ema_span_1h": _finite_float(
+            strategy.get("volatility_ema_span_1h", 0.0), "volatility_ema_span_1h"
+        ),
+    }
+
+
+def load_overview_sources(
+    config_path: str | None, psides: Sequence[str]
+) -> tuple[dict[str, dict[str, Any]], str]:
+    if config_path:
+        from config import load_prepared_config
+
+        config = load_prepared_config(
+            config_path,
+            live_only=True,
+            verbose=False,
+            target="canonical",
+            log_info=False,
+        )
+        sources = {
+            pside: {
+                "params": _extract_strategy_params(config, pside),
+                "context": _extract_side_context(config, pside),
+            }
+            for pside in psides
+        }
+        return sources, f"config {config_path}"
+
+    sources = {}
+    for pside in psides:
+        params, _ = load_parameter_source(None, pside)
+        sources[pside] = {"params": params, "context": None}
+    return sources, f"Rust-owned {STRATEGY_KIND} defaults"
 
 
 def apply_parameter_overrides(params: dict[str, Any], args: argparse.Namespace) -> list[str]:
@@ -373,6 +460,344 @@ def inspect_trailing(
     }
 
 
+def _threshold_style(kind: str, threshold_pct: float) -> str:
+    if threshold_pct <= 0.0:
+        return "immediate (no threshold gate)"
+    cutoffs = (
+        ((0.005 if kind == "entry" else 0.003), "aggressive/near"),
+        ((0.02 if kind == "entry" else 0.01), "moderate"),
+        ((0.05 if kind == "entry" else 0.03), "patient/deep"),
+    )
+    for cutoff, label in cutoffs:
+        if threshold_pct <= cutoff:
+            return label
+    return "very deep"
+
+
+def _retracement_style(retracement_pct: float) -> str:
+    if retracement_pct <= 0.0:
+        return "disabled"
+    if retracement_pct <= 0.001:
+        return "tight"
+    if retracement_pct <= 0.005:
+        return "modest"
+    if retracement_pct <= 0.015:
+        return "selective"
+    return "deep"
+
+
+def _sensitivity_style(low_value: float, high_value: float) -> str:
+    scale = max(abs(low_value), 0.001)
+    relative_change = abs(high_value - low_value) / scale
+    if relative_change < 0.1:
+        return "low effective volatility sensitivity"
+    if relative_change < 0.35:
+        return "light volatility sensitivity"
+    if relative_change < 0.75:
+        return "strong volatility sensitivity"
+    return "very strong volatility sensitivity"
+
+
+def _movement_description(
+    delta: float,
+    subject: str,
+    low_exposure_ratio: float,
+    high_exposure_ratio: float,
+    volatility_label: str,
+) -> str:
+    if low_exposure_ratio == high_exposure_ratio:
+        return f"Only one exposure ratio is shown, so {subject} exposure sensitivity is not compared."
+    if abs(delta) < 0.00005:
+        return f"Exposure has almost no effect on the {subject}."
+    verb = "widens" if delta > 0.0 else "narrows"
+    return (
+        f"Moving from {low_exposure_ratio * 100.0:g}% to {high_exposure_ratio * 100.0:g}% "
+        f"of the exposure limit {verb} the {subject} by "
+        f"{abs(delta) * 100.0:.4f} percentage points in the "
+        f"{volatility_label!r} volatility example."
+    )
+
+
+def _classify_side(
+    *,
+    pside: str,
+    context: Mapping[str, Any] | None,
+    representative: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    normal = representative["normal"]
+    quiet = representative["quiet"]
+    high = representative["high"]
+    exposure_low = representative["exposure_low"]
+    exposure_high = representative["exposure_high"]
+    entry = normal["entry"]
+    close = normal["close"]
+    entry_trailing = entry["trailing_enabled"]
+    close_trailing = close["trailing_enabled"]
+
+    volatility_style = (
+        "one volatility scenario shown"
+        if representative["volatility_scenario_count"] == 1
+        else _sensitivity_style(quiet["entry"]["threshold_pct"], high["entry"]["threshold_pct"])
+    )
+    close_volatility_style = (
+        "one volatility scenario shown"
+        if representative["volatility_scenario_count"] == 1
+        else _sensitivity_style(quiet["close"]["threshold_pct"], high["close"]["threshold_pct"])
+    )
+    entry_headline = (
+        f"{volatility_style}; "
+        f"{_threshold_style('entry', entry['threshold_pct'])} entry threshold with "
+        f"{_retracement_style(entry['retracement_pct'])} retracement"
+    )
+    close_headline = (
+        f"{close_volatility_style}; "
+        f"{_threshold_style('close', close['threshold_pct'])} close threshold with "
+        f"{_retracement_style(close['retracement_pct'])} retracement"
+    )
+
+    entry_comments: list[str] = []
+    close_comments: list[str] = []
+    cooldown = context["entry_cooldown_minutes"] if context else None
+    if not entry_trailing:
+        if cooldown == 0.0:
+            entry_comments.append(
+                "Trailing entries are disabled and entry cooldown is zero: Rust may expose the "
+                "full recursive entry ladder simultaneously."
+            )
+        elif cooldown is not None:
+            entry_comments.append(
+                "Trailing entries are disabled, but the entry cooldown is positive: the bot does "
+                "not wait for a reversal; it stages only the next rung and waits "
+                f"{cooldown:g} minutes after an entry fill before another add."
+            )
+        else:
+            entry_comments.append(
+                "Trailing entries are disabled: re-entries use passive recursive limit prices."
+            )
+    else:
+        entry_comments.append(
+            "Only the next add is staged. Price must first cross the adverse threshold, then "
+            "reverse by the retracement distance from the running extreme."
+        )
+        if cooldown and cooldown > 0.0:
+            entry_comments.append(
+                f"After an entry fill, the {cooldown:g}-minute cooldown blocks the next add even "
+                "if its trailing conditions are already satisfied."
+            )
+    if entry["threshold_pct"] <= 0.0 and entry_trailing:
+        entry_comments.append(
+            "The threshold gate is immediate, so reversal tracking begins as soon as the position changes."
+        )
+    entry_comments.append(
+        _movement_description(
+            exposure_high["entry"]["threshold_pct"] - exposure_low["entry"]["threshold_pct"],
+            "entry threshold",
+            representative["exposure_low_ratio"],
+            representative["exposure_high_ratio"],
+            representative["normal_label"],
+        )
+    )
+    entry_retracement_delta = (
+        exposure_high["entry"]["retracement_pct"]
+        - exposure_low["entry"]["retracement_pct"]
+    )
+    entry_comments.append(
+        _movement_description(
+            entry_retracement_delta,
+            "entry retracement",
+            representative["exposure_low_ratio"],
+            representative["exposure_high_ratio"],
+            representative["normal_label"],
+        )
+    )
+
+    close_params = representative["params"]["close"]
+    if not close_trailing:
+        if _finite_float(close_params.get("threshold_we_weight", 0.0), "threshold_we_weight") == 0.0:
+            close_comments.append(
+                "Trailing closes are disabled and the threshold has no exposure weight: Rust emits "
+                "one full-position passive close instead of duplicate same-price slices."
+            )
+        else:
+            close_comments.append(
+                "Trailing closes are disabled: Rust builds passive recursive close slices and "
+                "recomputes the exposure-weighted threshold after each hypothetical slice."
+            )
+    else:
+        close_comments.append(
+            "The close arms after favorable movement reaches the threshold, then confirms only "
+            "after price reverses from the running favorable extreme."
+        )
+    if close["threshold_pct"] <= 0.0 and close_trailing:
+        close_comments.append(
+            "At this scenario the close threshold is non-positive, so the close behaves like an "
+            "immediately armed trailing stop rather than waiting for profit first."
+        )
+    close_comments.append(
+        _movement_description(
+            exposure_high["close"]["threshold_pct"] - exposure_low["close"]["threshold_pct"],
+            "close threshold",
+            representative["exposure_low_ratio"],
+            representative["exposure_high_ratio"],
+            representative["normal_label"],
+        )
+    )
+    close_comments.append(
+        "Close retracement has no exposure term in Rust; only volatility changes it."
+    )
+
+    overall: list[str] = []
+    if context:
+        if context["active"]:
+            overall.append(
+                f"{pside.capitalize()} is enabled: total exposure limit "
+                f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
+                f"{context['n_positions']} configured position slot(s)."
+            )
+        else:
+            overall.append(
+                f"{pside.capitalize()} is disabled by its zero exposure limit or position count. "
+                "The tables below describe dormant parameters, not orders the current config will place."
+            )
+        ema_gate_mode = context["entry_ema_gate_mode"]
+        if ema_gate_mode in {"all", "reentry"}:
+            overall.append(
+                f"Entry EMA gate mode is {ema_gate_mode!r}; trailing re-entry prices may be pushed "
+                "farther from market by the EMA gate before exchange rounding."
+            )
+        elif ema_gate_mode == "initial":
+            overall.append(
+                "Entry EMA gate mode is 'initial': initial entries are EMA-gated, but trailing "
+                "re-entry prices are not."
+            )
+        else:
+            overall.append(
+                f"Entry EMA gate mode is {ema_gate_mode!r}; strategy entry prices are not EMA-gated."
+            )
+        overall.append(
+            f"Adds scale from the previous fill by {context['entry_double_down_factor']:.4g}x; "
+            f"each trailing close targets {context['close_qty_pct'] * 100.0:.2f}% before minimum-size "
+            "and remaining-position rules."
+        )
+    return {
+        "entry_headline": entry_headline,
+        "entry_comments": entry_comments,
+        "close_headline": close_headline,
+        "close_comments": close_comments,
+        "overall_comments": overall,
+        "basis": (
+            f"Headlines use {representative['normal_label']!r} volatility at "
+            f"{representative['middle_ratio'] * 100.0:g}% WE/WEL."
+        ),
+    }
+
+
+def build_overview(
+    *,
+    sources: Mapping[str, Mapping[str, Any]],
+    parameter_source: str,
+    price_anchor: float,
+    volatility_scenarios: Sequence[tuple[str, float, float]] = DEFAULT_VOLATILITY_SCENARIOS,
+    exposure_ratios: Sequence[float] = DEFAULT_EXPOSURE_RATIOS,
+    overridden_parameters: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, Any]:
+    price_anchor = _finite_float(price_anchor, "price_anchor")
+    if price_anchor <= 0.0:
+        raise ValueError("price_anchor must be greater than zero")
+    if not volatility_scenarios:
+        raise ValueError("at least one volatility scenario is required")
+    if not exposure_ratios:
+        raise ValueError("at least one exposure ratio is required")
+    checked_scenarios = []
+    for label, volatility_ema_1m, volatility_ema_1h in volatility_scenarios:
+        vol_1m = _finite_float(volatility_ema_1m, f"{label} volatility_ema_1m")
+        vol_1h = _finite_float(volatility_ema_1h, f"{label} volatility_ema_1h")
+        if vol_1m < 0.0 or vol_1h < 0.0:
+            raise ValueError("volatility scenario values must not be negative")
+        checked_scenarios.append((str(label), vol_1m, vol_1h))
+    checked_ratios = [_finite_float(value, "exposure_ratio") for value in exposure_ratios]
+    if any(value < 0.0 for value in checked_ratios):
+        raise ValueError("exposure ratios must not be negative")
+
+    sides: dict[str, Any] = {}
+    for pside, source in sources.items():
+        params = _require_mapping(source.get("params"), f"source.{pside}.params")
+        context = source.get("context")
+        rows = []
+        scenario_results: dict[tuple[str, float], Mapping[str, Any]] = {}
+        for label, volatility_ema_1m, volatility_ema_1h in checked_scenarios:
+            for exposure_ratio in checked_ratios:
+                result = inspect_trailing(
+                    symbol="ANCHOR",
+                    pside=pside,
+                    position_price=price_anchor,
+                    position_size=None,
+                    wallet_exposure=exposure_ratio,
+                    effective_wallet_exposure_limit=1.0,
+                    volatility_ema_1m=volatility_ema_1m,
+                    volatility_ema_1h=volatility_ema_1h,
+                    params=params,
+                    parameter_source=parameter_source,
+                    overridden_parameters=(overridden_parameters or {}).get(pside, ()),
+                )
+                scenario_results[(label, exposure_ratio)] = result
+                rows.append(
+                    {
+                        "volatility_label": label,
+                        "volatility_ema_1m": volatility_ema_1m,
+                        "volatility_ema_1h": volatility_ema_1h,
+                        "exposure_ratio": exposure_ratio,
+                        "entry": result["entry"],
+                        "close": result["close"],
+                    }
+                )
+
+        normal_label = min(
+            checked_scenarios,
+            key=lambda item: abs(item[1] - 0.005) + abs(item[2] - 0.0025),
+        )[0]
+        quiet_label = checked_scenarios[0][0]
+        high_label = checked_scenarios[-1][0]
+        middle_ratio = min(checked_ratios, key=lambda value: abs(value - 0.5))
+        low_ratio = min(checked_ratios)
+        high_ratio = max(checked_ratios)
+        representative = {
+            "normal": scenario_results[(normal_label, middle_ratio)],
+            "quiet": scenario_results[(quiet_label, middle_ratio)],
+            "high": scenario_results[(high_label, middle_ratio)],
+            "exposure_low": scenario_results[(normal_label, low_ratio)],
+            "exposure_high": scenario_results[(normal_label, high_ratio)],
+            "exposure_low_ratio": low_ratio,
+            "exposure_high_ratio": high_ratio,
+            "middle_ratio": middle_ratio,
+            "normal_label": normal_label,
+            "volatility_scenario_count": len(checked_scenarios),
+            "params": params,
+        }
+        sides[pside] = {
+            "context": context,
+            "parameters": deepcopy(dict(params)),
+            "overridden_parameters": list((overridden_parameters or {}).get(pside, ())),
+            "classification": _classify_side(
+                pside=pside,
+                context=context,
+                representative=representative,
+            ),
+            "scenarios": rows,
+        }
+    return {
+        "mode": "overview",
+        "parameter_source": parameter_source,
+        "price_anchor": price_anchor,
+        "volatility_scenarios": [
+            {"label": label, "volatility_ema_1m": vol_1m, "volatility_ema_1h": vol_1h}
+            for label, vol_1m, vol_1h in checked_scenarios
+        ],
+        "exposure_ratios": checked_ratios,
+        "sides": sides,
+    }
+
+
 def _fmt_number(value: float | None) -> str:
     if value is None:
         return "-"
@@ -514,6 +939,173 @@ def render_report(result: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _format_table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+    rendered = [
+        "  " + "  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)),
+        "  " + "  ".join("-" * width for width in widths),
+    ]
+    for row in rows:
+        rendered.append(
+            "  "
+            + "  ".join(
+                value.ljust(widths[index]) if index == 0 else value.rjust(widths[index])
+                for index, value in enumerate(row)
+            )
+        )
+    return rendered
+
+
+def _scenario_price(value: float | None, *, fallback: str = "-") -> str:
+    return fallback if value is None else f"{value:.4f}"
+
+
+def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for scenario in side["scenarios"]:
+        payload = scenario[kind]
+        geometry = payload["geometry"]
+        if not payload["trailing_enabled"]:
+            confirmation = "passive"
+            order_reference = _scenario_price(geometry["threshold_price"], fallback="market")
+        elif not geometry["threshold_gate_active"]:
+            confirmation = "extreme-based"
+            order_reference = "market"
+        else:
+            confirmation = _scenario_price(geometry["nominal_confirmation_price"])
+            order_reference = _scenario_price(geometry["order_reference_price"])
+        rows.append(
+            [
+                scenario["volatility_label"],
+                f"{scenario['volatility_ema_1m'] * 100.0:.2f}/{scenario['volatility_ema_1h'] * 100.0:.2f}%",
+                f"{scenario['exposure_ratio'] * 100.0:.0f}%",
+                _fmt_pct(payload["threshold_pct"], signed=kind == "close"),
+                _scenario_price(geometry["threshold_price"], fallback="immediate"),
+                _fmt_pct(payload["retracement_pct"]),
+                confirmation,
+                order_reference,
+            ]
+        )
+    return rows
+
+
+def _parameter_summary(side: Mapping[str, Any], kind: str) -> list[str]:
+    params = side["parameters"][kind]
+    threshold = (
+        f"base {_fmt_pct(_finite_float(params.get('threshold_base_pct', 0.0), 'threshold base'), signed=kind == 'close')}, "
+        f"weights WE {_finite_float(params.get('threshold_we_weight', 0.0), 'threshold WE'):g}, "
+        f"1m {_finite_float(params.get('threshold_volatility_1m_weight', 0.0), 'threshold 1m'):g}, "
+        f"1h {_finite_float(params.get('threshold_volatility_1h_weight', 0.0), 'threshold 1h'):g}"
+    )
+    retracement_parts = [
+        f"base {_fmt_pct(_finite_float(params.get('retracement_base_pct', 0.0), 'retracement base'))}"
+    ]
+    if kind == "entry":
+        retracement_parts.append(
+            f"WE {_finite_float(params.get('retracement_we_weight', 0.0), 'retracement WE'):g}"
+        )
+    retracement_parts.extend(
+        [
+            f"1m {_finite_float(params.get('retracement_volatility_1m_weight', 0.0), 'retracement 1m'):g}",
+            f"1h {_finite_float(params.get('retracement_volatility_1h_weight', 0.0), 'retracement 1h'):g}",
+        ]
+    )
+    return [f"  Threshold params: {threshold}", f"  Retracement params: {', '.join(retracement_parts)}"]
+
+
+def render_overview(result: Mapping[str, Any]) -> str:
+    lines = [
+        "Trailing behavior overview",
+        f"Parameters: {result['parameter_source']}",
+        f"Price anchor (average position price): {_fmt_number(result['price_anchor'])}",
+        "Scenario cells use volatility EMA values as 1m/1h percentages and exposure as WE / effective WEL.",
+        "Entry distance = base × max(1, 1 + 1m term + 1h term + exposure term).",
+        "Close threshold = base + 1m term + 1h term + exposure term; close retracement has no exposure term.",
+    ]
+    headers = (
+        "Vol",
+        "1m/1h",
+        "WE/WEL",
+        "Threshold",
+        "T price",
+        "Retrace",
+        "R confirm*",
+        "Order ref*",
+    )
+    for pside, side in result["sides"].items():
+        classification = side["classification"]
+        context = side["context"]
+        lines.extend(["", f"{pside.upper()} — BEHAVIOR"])
+        lines.append(f"  {classification['basis']}")
+        lines.extend(f"  {comment}" for comment in classification["overall_comments"])
+        if context:
+            lines.append(
+                "  Volatility EMA spans: "
+                f"1m {context['volatility_ema_span_1m']:g}, "
+                f"1h {context['volatility_ema_span_1h']:g}."
+            )
+        if side["overridden_parameters"]:
+            lines.append("  Overrides: " + ", ".join(side["overridden_parameters"]))
+
+        lines.extend(["", f"  ENTRY — {classification['entry_headline']}"])
+        lines.extend(_parameter_summary(side, "entry"))
+        lines.extend(f"  • {comment}" for comment in classification["entry_comments"])
+        lines.extend(_format_table(headers, _scenario_rows(side, "entry")))
+
+        lines.extend(["", f"  CLOSE — {classification['close_headline']}"])
+        lines.extend(_parameter_summary(side, "close"))
+        lines.extend(f"  • {comment}" for comment in classification["close_comments"])
+        lines.extend(_format_table(headers, _scenario_rows(side, "close")))
+
+    lines.extend(
+        [
+            "",
+            "* R confirm is the nominal price if reversal starts exactly at T price. In reality, "
+            "confirmation follows the running low/high, so a farther extreme moves the trigger.",
+            "* Order ref is Rust's analytical emitted-order reference after both conditions pass; "
+            "the live price is also constrained by bid/ask, tick rounding, sizing, exposure caps, and EMA gating.",
+            "* A non-positive close threshold is shown as immediate: trailing is armed from position open.",
+            "* Trailing extrema reset after every fill for the same coin and position side.",
+            "* Categories are descriptive heuristics for intuition, not trading-quality judgments.",
+            "Percent inputs use config ratios: 0.01 = 1%.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _parse_exposure_ratios(value: str) -> tuple[float, ...]:
+    try:
+        ratios = tuple(float(item.strip()) for item in value.split(",") if item.strip())
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected comma-separated ratios, e.g. 0,0.5,0.9") from exc
+    if not ratios or any(not math.isfinite(item) or item < 0.0 for item in ratios):
+        raise argparse.ArgumentTypeError("exposure ratios must be finite and non-negative")
+    return ratios
+
+
+def _parse_volatility_scenarios(value: str) -> tuple[tuple[str, float, float], ...]:
+    scenarios = []
+    try:
+        for raw_scenario in value.split(","):
+            label, vol_1m, vol_1h = (item.strip() for item in raw_scenario.split(":"))
+            if not label:
+                raise ValueError
+            values = float(vol_1m), float(vol_1h)
+            if any(not math.isfinite(item) or item < 0.0 for item in values):
+                raise ValueError
+            scenarios.append((label, *values))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "expected label:1m:1h scenarios, e.g. quiet:0.001:0.0005,high:0.015:0.0075"
+        ) from exc
+    if not scenarios:
+        raise argparse.ArgumentTypeError("at least one volatility scenario is required")
+    return tuple(scenarios)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool trailing-inspect",
@@ -521,35 +1113,67 @@ def build_parser() -> argparse.ArgumentParser:
             "Inspect trailing_martingale entry and close thresholds without starting a bot. "
             "Percent inputs use config ratios (0.01 = 1%)."
         ),
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=_HelpFormatter,
         epilog=(
             "Example:\n"
+            "  passivbot tool trailing-inspect path/to/config.json\n"
+            "  passivbot tool trailing-inspect path/to/config.json --price-anchor 250\n\n"
+            "Detailed single-scenario mode (backward compatible):\n"
             "  passivbot tool trailing-inspect --symbol COIN --side long "
             "--position-size 150 --position-price 20 --wallet-exposure 0.6 "
             "--effective-wallet-exposure-limit 0.9 --volatility-ema-1m 0.007 "
             "--volatility-ema-1h 0.0033\n\n"
-            "Add --config path/to/config.json to use that side's active strategy parameters. "
+            "A positional config path is preferred; --config remains available for compatibility. "
             "Any parameter flag below overrides the config/default value."
         ),
     )
+    parser.add_argument(
+        "config_path",
+        nargs="?",
+        help="Canonical config to inspect; omit to inspect Rust-owned defaults",
+    )
     state = parser.add_argument_group("position and market state")
     state.add_argument("--symbol", default="COIN", help="Display label only")
-    state.add_argument("--side", choices=("long", "short"), default="long")
+    state.add_argument(
+        "--side",
+        choices=("long", "short", "both"),
+        default=None,
+        help="Overview defaults to both sides; detailed mode defaults to long",
+    )
     state.add_argument("--position-size", type=float, default=None, help="Display-only position size")
-    state.add_argument("--position-price", type=float, required=True)
-    state.add_argument("--wallet-exposure", type=float, required=True, help="Current WE ratio")
+    state.add_argument(
+        "--price-anchor",
+        "--position-price",
+        dest="price_anchor",
+        type=float,
+        default=100.0,
+        help="Average position price used for example trigger geometry",
+    )
+    state.add_argument("--wallet-exposure", type=float, default=None, help="Current WE ratio")
     state.add_argument(
         "--effective-wallet-exposure-limit",
         type=float,
-        required=True,
+        default=None,
         help="Effective per-position WEL used by the strategy",
     )
-    state.add_argument("--volatility-ema-1m", type=float, default=0.0)
-    state.add_argument("--volatility-ema-1h", type=float, default=0.0)
+    state.add_argument("--volatility-ema-1m", type=float, default=None)
+    state.add_argument("--volatility-ema-1h", type=float, default=None)
     state.add_argument(
         "--config",
         default=None,
-        help="Canonical config source; otherwise Rust-owned defaults are used",
+        help="Legacy alternative to the positional config path",
+    )
+    state.add_argument(
+        "--exposure-ratios",
+        type=_parse_exposure_ratios,
+        default=DEFAULT_EXPOSURE_RATIOS,
+        help="Overview WE/WEL examples as comma-separated ratios",
+    )
+    state.add_argument(
+        "--volatility-scenarios",
+        type=_parse_volatility_scenarios,
+        default=DEFAULT_VOLATILITY_SCENARIOS,
+        help="Overview examples as comma-separated label:1m:1h triples",
     )
     state.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
 
@@ -579,26 +1203,71 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        params, source = load_parameter_source(args.config, args.side)
-        overridden = apply_parameter_overrides(params, args)
-        result = inspect_trailing(
-            symbol=args.symbol,
-            pside=args.side,
-            position_price=args.position_price,
-            position_size=args.position_size,
-            wallet_exposure=args.wallet_exposure,
-            effective_wallet_exposure_limit=args.effective_wallet_exposure_limit,
-            volatility_ema_1m=args.volatility_ema_1m,
-            volatility_ema_1h=args.volatility_ema_1h,
-            params=params,
-            parameter_source=source,
-            overridden_parameters=overridden,
+        if args.config_path and args.config and args.config_path != args.config:
+            raise ValueError("positional config path and --config name different files")
+        config_path = args.config_path or args.config
+        detailed_mode = any(
+            value is not None
+            for value in (
+                args.position_size,
+                args.wallet_exposure,
+                args.effective_wallet_exposure_limit,
+                args.volatility_ema_1m,
+                args.volatility_ema_1h,
+            )
         )
+        if detailed_mode:
+            if args.side == "both":
+                raise ValueError("detailed single-scenario mode requires --side long or --side short")
+            pside = args.side or "long"
+            params, source = load_parameter_source(config_path, pside)
+            overridden = apply_parameter_overrides(params, args)
+            result = inspect_trailing(
+                symbol=args.symbol,
+                pside=pside,
+                position_price=args.price_anchor,
+                position_size=args.position_size,
+                wallet_exposure=(
+                    args.wallet_exposure if args.wallet_exposure is not None else 0.0
+                ),
+                effective_wallet_exposure_limit=(
+                    args.effective_wallet_exposure_limit
+                    if args.effective_wallet_exposure_limit is not None
+                    else 1.0
+                ),
+                volatility_ema_1m=(
+                    args.volatility_ema_1m if args.volatility_ema_1m is not None else 0.0
+                ),
+                volatility_ema_1h=(
+                    args.volatility_ema_1h if args.volatility_ema_1h is not None else 0.0
+                ),
+                params=params,
+                parameter_source=source,
+                overridden_parameters=overridden,
+            )
+        else:
+            psides = (args.side,) if args.side in {"long", "short"} else ("long", "short")
+            sources, source = load_overview_sources(config_path, psides)
+            overridden_by_side = {}
+            for pside in psides:
+                overridden_by_side[pside] = apply_parameter_overrides(
+                    sources[pside]["params"], args
+                )
+            result = build_overview(
+                sources=sources,
+                parameter_source=source,
+                price_anchor=args.price_anchor,
+                volatility_scenarios=args.volatility_scenarios,
+                exposure_ratios=args.exposure_ratios,
+                overridden_parameters=overridden_by_side,
+            )
     except (FileNotFoundError, KeyError, RuntimeError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
+    elif result.get("mode") == "overview":
+        print(render_overview(result))
     else:
         print(render_report(result))
     return 0
