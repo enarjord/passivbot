@@ -360,13 +360,21 @@ def inspect_trailing(
             "entry.retracement_we_weight",
         ),
     )
-    entry_threshold_base = max(
-        0.0,
-        _finite_float(entry.get("threshold_base_pct", 0.0), "entry.threshold_base_pct"),
+    entry_threshold_base_configured = _finite_float(
+        entry.get("threshold_base_pct", 0.0),
+        "entry.threshold_base_pct",
     )
     entry_retracement_base = _finite_float(
         entry.get("retracement_base_pct", 0.0),
         "entry.retracement_base_pct",
+    )
+    entry_trailing_enabled = entry_retracement_base > 0.0
+    # Rust clamps the threshold only in calc_trailing_entry_{long,short}. Passive
+    # calc_reentry_price_{bid,ask} uses the configured signed value directly.
+    entry_threshold_base = (
+        max(0.0, entry_threshold_base_configured)
+        if entry_trailing_enabled
+        else entry_threshold_base_configured
     )
     entry_threshold_pct = entry_threshold_base * entry_threshold_multiplier["effective"]
     entry_retracement_pct = max(0.0, entry_retracement_base) * entry_retracement_multiplier[
@@ -427,7 +435,7 @@ def inspect_trailing(
         "parameter_source": parameter_source,
         "overridden_parameters": list(overridden_parameters),
         "entry": {
-            "trailing_enabled": entry_retracement_base > 0.0,
+            "trailing_enabled": entry_trailing_enabled,
             "threshold_base_pct": entry_threshold_base,
             "threshold_multiplier": entry_threshold_multiplier,
             "threshold_pct": entry_threshold_pct,
