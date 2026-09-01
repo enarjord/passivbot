@@ -744,7 +744,8 @@ def _classify_side(
         elif forced_mode == "tp_only":
             overall.append(
                 "Global forced mode 'tp_only' blocks all entries. For a held position Rust still "
-                "uses strategy close orders, so the ENTRY table is dormant and the CLOSE table applies."
+                "uses strategy close orders, so the RE-ENTRY / ADD table is dormant and the CLOSE "
+                "table applies."
             )
         elif forced_mode == "graceful_stop":
             overall.append(
@@ -772,12 +773,25 @@ def _classify_side(
             f"{context['entry_double_down_factor']:.4g} or initial-entry quantity, before "
             "minimum-quantity, rounding, and exposure-cropping rules."
         )
-        overall.append(
-            "Each strategy close starts from the allowed full-position size × "
-            f"{context['close_qty_pct'] * 100.0:.2f}%, adds any current position size above "
-            "that allowed full size, then caps at the remaining position and applies minimum-quantity, "
-            "rounding, and dust-remainder rules."
+        passive_full_close = (
+            not close_trailing
+            and _finite_float(
+                close_params.get("threshold_we_weight", 0.0), "threshold_we_weight"
+            )
+            == 0.0
         )
+        if passive_full_close:
+            overall.append(
+                "This passive close path ignores the configured close quantity percentage and "
+                "targets the full remaining position because its threshold has no exposure weight."
+            )
+        else:
+            overall.append(
+                "Each strategy close starts from the allowed full-position size × "
+                f"{context['close_qty_pct'] * 100.0:.2f}%, adds any current position size above "
+                "that allowed full size, then caps at the remaining position and applies "
+                "minimum-quantity, rounding, and dust-remainder rules."
+            )
         if context.get("position_exposure_enforcer_enabled", False):
             enforcer_threshold = context.get("position_exposure_enforcer_threshold", 0.0)
             overall.append(
@@ -864,7 +878,16 @@ def build_overview(
                     overridden_parameters=(overridden_parameters or {}).get(pside, ()),
                 )
                 scenario_results[(label, exposure_ratio)] = result
+                entry_payload = deepcopy(result["entry"])
                 close_payload = deepcopy(result["close"])
+                entry_exposure_capped = (
+                    exposure_ratio > 0.999
+                    if entry_payload["trailing_enabled"]
+                    else exposure_ratio >= 0.999
+                )
+                entry_payload["inactive_reason"] = (
+                    "exposure_cap" if entry_exposure_capped else None
+                )
                 enforcer_enabled = bool(
                     context and context.get("position_exposure_enforcer_enabled", False)
                 )
@@ -887,7 +910,7 @@ def build_overview(
                         "volatility_ema_1m": volatility_ema_1m,
                         "volatility_ema_1h": volatility_ema_1h,
                         "exposure_ratio": exposure_ratio,
-                        "entry": result["entry"],
+                        "entry": entry_payload,
                         "close": close_payload,
                     }
                 )
@@ -1114,16 +1137,31 @@ def _scenario_input_pct(value: float) -> str:
     return f"{value * 100.0:.10g}"
 
 
+def _scenario_runtime_path(
+    side: Mapping[str, Any], kind: str, payload: Mapping[str, Any]
+) -> str:
+    context = side.get("context")
+    if context:
+        if not context["active"]:
+            return "side disabled"
+        forced_mode = context.get("forced_mode", "normal")
+        if forced_mode in {"panic", "manual"}:
+            return f"{forced_mode} dormant"
+        if kind == "entry" and forced_mode == "tp_only":
+            return "tp_only blocked"
+    if kind == "entry":
+        return "exposure-capped" if payload.get("inactive_reason") == "exposure_cap" else "re-entry"
+    if payload.get("superseded_by") == "position_exposure_enforcer":
+        return "WEL auto-reduce"
+    return "strategy close"
+
+
 def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
     rows: list[list[str]] = []
     for scenario in side["scenarios"]:
         payload = scenario[kind]
         geometry = payload["geometry"]
-        runtime_path = (
-            "WEL auto-reduce"
-            if payload.get("superseded_by") == "position_exposure_enforcer"
-            else ("re-entry" if kind == "entry" else "strategy close")
-        )
+        runtime_path = _scenario_runtime_path(side, kind, payload)
         if not payload["trailing_enabled"]:
             confirmation = "passive"
             threshold_price = "n/a"
@@ -1229,9 +1267,13 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "confirmation follows the running low/high, so a farther extreme moves the trigger.",
             "* Order ref is Rust's analytical emitted-order reference after both conditions pass; "
             "the live price is also constrained by bid/ask, tick rounding, sizing, exposure caps, and EMA gating.",
-            "* Re-entry/add rows apply only while a position already exists. While flat, Rust bypasses "
-            "trailing threshold/retracement and submits the initial entry at bid/ask, optionally pushed "
-            "farther from market by the configured initial-entry EMA gate.",
+            "* Re-entry/add rows apply only after the position reaches at least 80% of the calculated "
+            "initial-entry quantity. While flat, Rust submits the normal initial entry; below that 80% "
+            "boundary, it submits a partial initial entry. Both initial paths bypass trailing "
+            "threshold/retracement and use the initial bid/ask price, optionally pushed farther from "
+            "market by the configured initial-entry EMA gate.",
+            "* A RE-ENTRY / ADD row marked 'exposure-capped' emits no entry: passive entries stop at "
+            "99.9% of effective WEL, while trailing entries stop only when strictly above 99.9%.",
             "* A CLOSE row marked 'WEL auto-reduce' is superseded at that exposure ratio: Rust returns "
             "the position-exposure-enforcer order before evaluating the displayed strategy close.",
             "* With close trailing enabled, a non-positive threshold is immediate: trailing is "

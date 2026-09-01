@@ -345,7 +345,7 @@ def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
     (
         ("panic", "immediate panic close"),
         ("manual", "emits no strategy orders"),
-        ("tp_only", "ENTRY table is dormant and the CLOSE table applies"),
+        ("tp_only", "RE-ENTRY / ADD table is dormant and the CLOSE table applies"),
         ("graceful_stop", "blocks a new initial entry while flat"),
     ),
 )
@@ -402,10 +402,52 @@ def test_overview_separates_initial_entry_and_describes_close_qty_basis():
 
     report = trailing_inspect.render_overview(result)
     assert "RE-ENTRY / ADD" in report
-    assert "While flat, Rust bypasses trailing threshold/retracement" in report
-    assert "initial entry at bid/ask" in report
+    assert "reaches at least 80% of the calculated initial-entry quantity" in report
+    assert "below that 80% boundary, it submits a partial initial entry" in report
+    assert "Both initial paths bypass trailing threshold/retracement" in report
     assert "allowed full-position size × 25.00%" in report
     assert "adds any current position size above that allowed full size" in report
+
+
+def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
+    trailing = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.999, 1.0),
+    )
+    trailing_rows = trailing["sides"]["long"]["scenarios"]
+    assert trailing_rows[0]["entry"]["inactive_reason"] is None
+    assert trailing_rows[1]["entry"]["inactive_reason"] == "exposure_cap"
+    assert "exposure-capped" in trailing_inspect.render_overview(trailing)
+
+    passive_params = _params()
+    passive_params["entry"]["retracement_base_pct"] = 0.0
+    passive = trailing_inspect.build_overview(
+        sources={"long": {"params": passive_params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.999,),
+    )
+    assert passive["sides"]["long"]["scenarios"][0]["entry"]["inactive_reason"] == "exposure_cap"
+
+
+def test_overview_qualifies_full_position_passive_close_sizing():
+    params = _params()
+    params["close"]["retracement_base_pct"] = 0.0
+    params["close"]["threshold_we_weight"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["overall_comments"])
+    assert "ignores the configured close quantity percentage" in comments
+    assert "targets the full remaining position" in comments
+    assert "allowed full-position size × 25.00%" not in comments
 
 
 def test_overview_qualifies_immediate_close_by_trailing_mode():

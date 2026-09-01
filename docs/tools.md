@@ -177,9 +177,10 @@ versus staged entry ladders, EMA gating, volatility/exposure sensitivity, recurs
 and the difference between threshold-gated trailing and an immediately armed trailing stop.
 The descriptions are heuristics for intuition, not assessments of strategy quality.
 
-Without `--config`, the command uses the Rust-owned strategy defaults. With `--config`, it loads the
-selected side's canonical `bot.<side>.strategy.trailing_martingale` parameters. Individual flags
-override either source. Percent values use config ratios, so `0.01` means 1%.
+Without either a positional config path or `--config`, the command uses the Rust-owned strategy
+defaults. A positional config path or the legacy `--config` form loads canonical
+`bot.<side>.strategy.trailing_martingale` parameters. Individual flags override either source.
+Percent values use config ratios, so `0.01` means 1%.
 
 ```shell
 passivbot tool trailing-inspect configs/examples/default_trailing_martingale_long.json
