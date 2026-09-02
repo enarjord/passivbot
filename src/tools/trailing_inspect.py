@@ -152,6 +152,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     live = _require_mapping(config.get("live"), "live")
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
+    hsl = _require_mapping(side.get("hsl", {}), f"bot.{pside}.hsl")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
     unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
@@ -173,11 +174,40 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         raise ValueError(
             f"invalid live.forced_mode_{pside}={forced_mode_raw!r}: {exc}"
         ) from exc
+    coin_overrides = _require_mapping(config.get("coin_overrides", {}), "coin_overrides")
+    coin_strategy_override_symbols: list[str] = []
+    hsl_enabled_override_symbols: list[str] = []
+    for symbol, raw_override in coin_overrides.items():
+        override = _require_mapping(raw_override, f"coin_overrides.{symbol}")
+        override_bot = override.get("bot", {})
+        if not isinstance(override_bot, Mapping):
+            continue
+        override_side = override_bot.get(pside, {})
+        if not isinstance(override_side, Mapping):
+            continue
+        override_strategies = override_side.get("strategy", {})
+        if isinstance(override_strategies, Mapping):
+            strategy_override = override_strategies.get(STRATEGY_KIND, {})
+            if isinstance(strategy_override, Mapping) and strategy_override:
+                coin_strategy_override_symbols.append(str(symbol))
+        hsl_override = override_side.get("hsl", {})
+        if (
+            isinstance(hsl_override, Mapping)
+            and hsl_override
+            and bool(hsl_override.get("enabled", hsl.get("enabled", False)))
+        ):
+            hsl_enabled_override_symbols.append(str(symbol))
+    hsl_enabled_global = bool(hsl.get("enabled", False))
     return {
         "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
         "n_positions": n_positions,
         "forced_mode": forced_mode,
+        "hsl_enabled": hsl_enabled_global or bool(hsl_enabled_override_symbols),
+        "hsl_enabled_global": hsl_enabled_global,
+        "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
+        "hsl_signal_mode": str(live.get("hsl_signal_mode", "unknown")),
+        "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
         "max_realized_loss_pct": _finite_float(
             live.get("max_realized_loss_pct", 1.0), "live.max_realized_loss_pct"
         ),
@@ -909,6 +939,29 @@ def _classify_side(
                 "PnL-gated: Rust may remove losing strategy closes or protective reducers after "
                 "evaluating projected batch PnL, fees, and account-wide realized-loss allowance."
             )
+        if context.get("hsl_enabled", False):
+            hsl_scope = (
+                "globally for this side"
+                if context.get("hsl_enabled_global", False)
+                else "through coin overrides for "
+                + ", ".join(context.get("hsl_enabled_override_symbols", ()))
+            )
+            overall.append(
+                f"Equity hard stop loss is enabled {hsl_scope} with signal mode "
+                f"{context.get('hsl_signal_mode', 'unknown')!r}. Active rows are HSL-dependent: "
+                "the current account/position PnL drawdown tier may block entries at ORANGE or RED, "
+                "replace strategy closes with panic closes at RED, or leave the strategy path unchanged. "
+                "An offline config report cannot know the live HSL tier."
+            )
+        coin_strategy_override_symbols = context.get("coin_strategy_override_symbols", ())
+        if coin_strategy_override_symbols:
+            overall.append(
+                "Coin-specific trailing_martingale strategy overrides are configured for "
+                + ", ".join(coin_strategy_override_symbols)
+                + ". They are explicitly omitted from these tables, which show only the global "
+                "bot-side parameters; the listed coins may have different effective thresholds, "
+                "retracements, and prices at runtime."
+            )
     else:
         overall.append(
             "No config was supplied, so only strategy defaults are known. Side enablement, forced "
@@ -1003,7 +1056,11 @@ def build_overview(
                 entry_payload["inactive_reason"] = (
                     "unreachable_long_threshold"
                     if pside == "long" and entry_payload["threshold_pct"] >= 1.0
-                    else ("exposure_cap" if entry_exposure_capped else None)
+                    else (
+                        "unreachable_short_retracement"
+                        if pside == "short" and entry_payload["retracement_pct"] >= 1.0
+                        else ("exposure_cap" if entry_exposure_capped else None)
+                    )
                 )
                 enforcer_enabled = bool(
                     context
@@ -1028,7 +1085,11 @@ def build_overview(
                 close_payload["inactive_reason"] = (
                     "unreachable_short_threshold"
                     if pside == "short" and close_payload["threshold_pct"] >= 1.0
-                    else None
+                    else (
+                        "unreachable_long_retracement"
+                        if pside == "long" and close_payload["retracement_pct"] >= 1.0
+                        else None
+                    )
                 )
                 close_payload["post_reduction_geometry"] = (
                     "requires_runtime_sizing_inputs"
@@ -1281,28 +1342,39 @@ def _scenario_runtime_path(
         if kind == "entry" and forced_mode == "tp_only":
             return "tp_only blocked"
     if kind == "entry":
-        if payload.get("inactive_reason") == "unreachable_long_threshold":
+        if payload.get("inactive_reason") in {
+            "unreachable_long_threshold",
+            "unreachable_short_retracement",
+        }:
             return "unreachable"
         if payload.get("inactive_reason") == "exposure_cap":
             return "exposure-capped"
         if context is None:
             return "context unknown"
+        qualifiers = []
+        if context.get("hsl_enabled", False):
+            qualifiers.append("HSL-dependent")
         if context.get("total_exposure_entry_gate_enabled", False):
-            return "portfolio-dependent"
-        return "re-entry"
-    if payload.get("inactive_reason") == "unreachable_short_threshold":
-        return "unreachable"
+            qualifiers.append("portfolio-dependent")
+        return " / ".join(qualifiers) if qualifiers else "re-entry"
     if context is None:
         return "context unknown"
     qualifiers = []
     if payload.get("preceded_by") == "position_exposure_enforcer":
         qualifiers.append("WEL-first")
+    if context.get("hsl_enabled", False):
+        qualifiers.append("HSL-dependent")
     if context.get("total_exposure_enforcer_enabled", False):
         qualifiers.append("TWEL-dependent")
     if _unstuck_active(context):
         qualifiers.append("unstuck-dependent")
     if context.get("max_realized_loss_pct", 1.0) < 1.0:
         qualifiers.append("PnL-gated")
+    if payload.get("inactive_reason") in {
+        "unreachable_short_threshold",
+        "unreachable_long_retracement",
+    }:
+        qualifiers.append("strategy unreachable")
     return " / ".join(qualifiers) if qualifiers else "strategy close"
 
 
@@ -1312,17 +1384,19 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
         payload = scenario[kind]
         geometry = payload["geometry"]
         runtime_path = _scenario_runtime_path(side, kind, payload)
-        if payload.get("inactive_reason") in {
+        if payload.get("post_reduction_geometry") == "requires_runtime_sizing_inputs":
+            confirmation = "post-WE varies"
+            threshold_price = "post-WE varies"
+            order_reference = "post-WE varies"
+        elif payload.get("inactive_reason") in {
             "unreachable_long_threshold",
             "unreachable_short_threshold",
+            "unreachable_short_retracement",
+            "unreachable_long_retracement",
         }:
             confirmation = "n/a"
             threshold_price = "unreachable"
             order_reference = "n/a"
-        elif payload.get("post_reduction_geometry") == "requires_runtime_sizing_inputs":
-            confirmation = "post-WE varies"
-            threshold_price = "post-WE varies"
-            order_reference = "post-WE varies"
         elif not payload["trailing_enabled"]:
             confirmation = "passive"
             threshold_price = "n/a"
@@ -1446,6 +1520,11 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "the passive price is non-positive, and a positive market cannot cross the trailing target.",
             "* A short CLOSE row marked 'unreachable' has a threshold of at least 100%: its target "
             "price is non-positive, so a positive market cannot satisfy the trailing threshold.",
+            "* A short RE-ENTRY / ADD or long CLOSE row marked 'unreachable' has retracement of at "
+            "least 100%: Rust requires a positive trailing low below a non-positive fraction of the "
+            "running high, which a positive-priced market cannot satisfy.",
+            "* 'HSL-dependent' means the configured equity hard stop may block entries or replace "
+            "strategy closes according to live drawdown state that this offline report cannot observe.",
             "* A CLOSE runtime path containing 'TWEL-dependent' may coexist with an account-wide "
             "repair close. Which position is reduced and by how much requires full same-side portfolio state.",
             "* 'unstuck-dependent' means a globally selected auto-unstuck close may coexist when its "

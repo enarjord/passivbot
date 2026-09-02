@@ -60,12 +60,18 @@ def _context(
     unstuck_loss_allowance_pct=0.0,
     unstuck_threshold=0.0,
     max_realized_loss_pct=1.0,
+    hsl_enabled=False,
 ):
     return {
         "active": active,
         "total_wallet_exposure_limit": 1.0 if active else 0.0,
         "n_positions": 1,
         "forced_mode": forced_mode,
+        "hsl_enabled": hsl_enabled,
+        "hsl_enabled_global": hsl_enabled,
+        "hsl_enabled_override_symbols": [],
+        "hsl_signal_mode": "coin",
+        "coin_strategy_override_symbols": [],
         "max_realized_loss_pct": max_realized_loss_pct,
         "position_exposure_enforcer_enabled": enforcer_enabled,
         "position_exposure_enforcer_threshold": enforcer_threshold,
@@ -353,6 +359,74 @@ def test_extract_side_context_includes_global_and_risk_paths():
     assert context["max_realized_loss_pct"] == pytest.approx(0.05)
 
 
+def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
+    config = {
+        "live": {
+            "forced_mode_long": "normal",
+            "hsl_signal_mode": "coin",
+        },
+        "bot": {
+            "long": {
+                "hsl": {"enabled": False},
+                "risk": {
+                    "total_wallet_exposure_limit": 1.0,
+                    "n_positions": 1,
+                },
+                "strategy": {
+                    "trailing_martingale": {
+                        **_params(),
+                        "volatility_ema_span_1m": 100.0,
+                        "volatility_ema_span_1h": 200.0,
+                    }
+                },
+            }
+        },
+        "coin_overrides": {
+            "XRP": {
+                "bot": {
+                    "long": {
+                        "hsl": {"enabled": True},
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": 0.2}
+                            }
+                        },
+                    }
+                }
+            },
+            "DOGE": {"bot": {"long": {"hsl": {"enabled": False}}}},
+        },
+    }
+
+    context = trailing_inspect._extract_side_context(config, "long")
+
+    assert context["hsl_enabled"] is True
+    assert context["hsl_enabled_global"] is False
+    assert context["hsl_enabled_override_symbols"] == ["XRP"]
+    assert context["hsl_signal_mode"] == "coin"
+    assert context["coin_strategy_override_symbols"] == ["XRP"]
+
+
+def test_overview_marks_hsl_runtime_paths_and_coin_override_omission():
+    context = _context(hsl_enabled=True)
+    context["coin_strategy_override_symbols"] = ["XRP"]
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": context}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.5,),
+    )
+
+    side = result["sides"]["long"]
+    assert "HSL-dependent" in trailing_inspect._scenario_rows(side, "entry")[0][-1]
+    assert "HSL-dependent" in trailing_inspect._scenario_rows(side, "close")[0][-1]
+    comments = " ".join(side["classification"]["overall_comments"])
+    assert "offline config report cannot know the live HSL tier" in comments
+    assert "explicitly omitted from these tables" in comments
+    assert "XRP" in comments
+
+
 def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
     config = {
         "live": {"forced_mode_long": "not-a-mode"},
@@ -610,6 +684,70 @@ def test_overview_marks_short_close_threshold_at_100_percent_unreachable():
     assert "unreachable" in report
     assert "short CLOSE row" in report
     assert "positive market cannot satisfy the trailing threshold" in report
+
+
+def test_wel_reducer_precedes_unreachable_short_strategy_close():
+    params = _params()
+    params["close"].update(
+        {
+            "threshold_base_pct": 1.0,
+            "threshold_we_weight": 0.0,
+            "threshold_volatility_1m_weight": 0.0,
+            "threshold_volatility_1h_weight": 0.0,
+        }
+    )
+    result = trailing_inspect.build_overview(
+        sources={
+            "short": {
+                "params": params,
+                "context": _context(enforcer_enabled=True, enforcer_threshold=0.8),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.9,),
+    )
+
+    side = result["sides"]["short"]
+    row = side["scenarios"][0]["close"]
+    table_row = trailing_inspect._scenario_rows(side, "close")[0]
+    assert row["inactive_reason"] == "unreachable_short_threshold"
+    assert row["preceded_by"] == "position_exposure_enforcer"
+    assert table_row[4] == "post-WE varies"
+    assert table_row[6:8] == ["post-WE varies"] * 2
+    assert table_row[-1] == "WEL-first / strategy unreachable"
+
+
+@pytest.mark.parametrize(
+    ("pside", "kind", "inactive_reason"),
+    (
+        ("short", "entry", "unreachable_short_retracement"),
+        ("long", "close", "unreachable_long_retracement"),
+    ),
+)
+def test_overview_marks_100_percent_retracement_unreachable(
+    pside, kind, inactive_reason
+):
+    params = _params()
+    params[kind]["retracement_base_pct"] = 1.0
+    params[kind]["retracement_volatility_1m_weight"] = 0.0
+    params[kind]["retracement_volatility_1h_weight"] = 0.0
+    if kind == "entry":
+        params[kind]["retracement_we_weight"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={pside: {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.0,),
+    )
+
+    side = result["sides"][pside]
+    row = side["scenarios"][0][kind]
+    assert row["inactive_reason"] == inactive_reason
+    assert trailing_inspect._scenario_rows(side, kind)[0][-1].endswith("unreachable")
+    assert "retracement of at least 100%" in trailing_inspect.render_overview(result)
 
 
 def test_overview_qualifies_full_position_passive_close_sizing():
