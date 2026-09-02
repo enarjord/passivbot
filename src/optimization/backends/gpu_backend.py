@@ -1616,6 +1616,7 @@ def _validate_dual_multicoin_metrics(
             "fills_gap_median_hours",
             "fills_gap_p95_hours",
             "fills_gap_p99_hours",
+            "fills_gap_time_weighted_mean_hours",
             "loss_profit_ratio",
             "peak_recovery_days_equity_usd",
             "peak_recovery_hours_equity_usd",

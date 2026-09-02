@@ -85,6 +85,7 @@ SHARED_METRICS = {
     "fills_gap_median_hours",
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
+    "fills_gap_time_weighted_mean_hours",
     "fills_per_day",
     "fills_per_day_close",
     "fills_per_day_entry",

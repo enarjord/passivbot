@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
+  It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
+  analysis boundaries, providing smoother selection pressure against long no-fill periods than a
+  single maximum-gap objective. The EMA Anchor example now uses it in optimizer scoring.
+
 - Expanded `passivbot tool trailing-inspect` with a config-first overview of both long and short
   behavior across example volatility and exposure regimes. The report now includes threshold,
   retracement, nominal confirmation, and emitted-order reference prices from a configurable anchor;

@@ -63,6 +63,11 @@ Weighted `_w` variants use the same trailing-slice averaging as the rest of the 
 - `position_held_days_mean/median/max`: Same holding-time stats converted to days.
 - `position_unchanged_hours_max`: Longest span with no fills on an open position.
 - `position_unchanged_days_max`: Same unchanged-position span converted to days.
+- `fills_gap_time_weighted_mean_hours`: Time-weighted mean portfolio no-fill gap. Unique fill
+  timestamps split the full analysis window, including its leading and trailing boundaries, into
+  gaps `g`; the metric is `sum(g^2) / sum(g)`. A randomly selected moment is therefore weighted by
+  the length of the gap containing it, so long droughts contribute more strongly than clustered
+  fills. A zero-fill run equals the full analysis duration.
 - `peak_recovery_hours_equity`: Longest time to make a new high on the equity curve.
 - `peak_recovery_days_equity`: Same equity recovery duration converted to days.
 - `peak_recovery_hours_pnl`: Same calculation on cumulative realized PnL.

@@ -565,8 +565,8 @@ active-symbol count, and top-symbol fill share. Metal classifies every actual pr
 position side, and—when needed—coin. All rates use the same first-to-last analyzed-equity timestamp
 span as Rust. Fused dual-side kernels retain the shared intraday-liquidation cutoff.
 Initial-entry allocation uses the candidate's effective position count and the same
-first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest and p95 metrics
-are also supported. Metal coalesces multiple fills in the same candle and
+first-coin strategy/allowance override precedence as exact Rust. Fill-gap longest, p95, and
+time-weighted-mean metrics are also supported. Metal coalesces multiple fills in the same candle and
 records positive inter-candle gaps
 in a 128-bin logarithmic histogram; the proxy decodes each occupied bin with a float32-safe upper
 edge and adds the exact leading and trailing gaps. This deliberately overestimates the minimizing
@@ -1565,6 +1565,7 @@ over all exchanges before scoring.
 | `positions_held_per_day` | Average number of unique positions opened per day |
 | `position_held_hours_{mean,median,max}`, `position_held_days_{mean,median,max}` | Holding-time statistics in hours and equivalent days |
 | `position_unchanged_hours_max`, `position_unchanged_days_max` | Longest span without modifying an existing position, in hours and equivalent days |
+| `fills_gap_time_weighted_mean_hours` | Time-weighted mean portfolio no-fill gap: `sum(gap_hours^2) / sum(gap_hours)` over unique fill timestamps and the analysis boundaries. Lower values reward distributing fills through long droughts instead of clustering activity. |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
 | `peak_recovery_hours_equity_usd`, `_btc`; `peak_recovery_days_equity_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_days_equity_usd", "penalize_if": ">", "value": 7}`). |
 | `peak_recovery_hours_pnl`, `peak_recovery_days_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
