@@ -184,6 +184,9 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             risk.get("position_exposure_enforcer_threshold", 0.0),
             f"bot.{pside}.risk.position_exposure_enforcer_threshold",
         ),
+        "total_exposure_entry_gate_enabled": bool(
+            risk.get("total_exposure_entry_gate_enabled", False)
+        ),
         "entry_cooldown_minutes": _finite_float(
             risk.get("entry_cooldown_minutes", 0.0),
             f"bot.{pside}.risk.entry_cooldown_minutes",
@@ -809,12 +812,25 @@ def _classify_side(
             )
         if context.get("position_exposure_enforcer_enabled", False):
             enforcer_threshold = context.get("position_exposure_enforcer_threshold", 0.0)
+            if context["active"] and forced_mode not in {"panic", "manual"}:
+                overall.append(
+                    "Position-exposure enforcement is enabled at "
+                    f"{enforcer_threshold * 100.0:g}% WE / effective WEL. CLOSE rows above that "
+                    "ratio are marked 'WEL reducer first': the next-close path returns a market-side "
+                    "reducer before strategy close logic, including in 'tp_only' mode. Expanded close "
+                    "generation simulates that reduction and may then add strategy closes recomputed at "
+                    "the lower exposure. Post-reduction prices require runtime sizing and exchange inputs."
+                )
+            else:
+                overall.append(
+                    "Position-exposure enforcement is configured, but the disabled side or current "
+                    "forced mode keeps that close path dormant."
+                )
+        if context.get("total_exposure_entry_gate_enabled", False):
             overall.append(
-                "Position-exposure enforcement is enabled at "
-                f"{enforcer_threshold * 100.0:g}% WE / effective WEL. CLOSE rows above that "
-                "ratio are marked 'WEL reducer first': the next-close path returns a market-side "
-                "reducer before strategy close logic, including in 'tp_only' mode. Expanded close "
-                "generation simulates that reduction and may then add the displayed strategy closes."
+                "The account-wide total-exposure entry gate is enabled. Eligible RE-ENTRY / ADD "
+                "rows are marked 'portfolio-dependent': after strategy calculation, the orchestrator "
+                "may crop or remove the order based on exposure consumed by all positions on this side."
             )
     if representative["volatility_scenario_count"] == 1:
         basis = (
@@ -905,7 +921,11 @@ def build_overview(
                     "exposure_cap" if entry_exposure_capped else None
                 )
                 enforcer_enabled = bool(
-                    context and context.get("position_exposure_enforcer_enabled", False)
+                    context
+                    and context["active"]
+                    and context.get("forced_mode", "normal")
+                    not in {"panic", "manual"}
+                    and context.get("position_exposure_enforcer_enabled", False)
                 )
                 enforcer_threshold = (
                     _finite_float(
@@ -918,6 +938,11 @@ def build_overview(
                 close_payload["preceded_by"] = (
                     "position_exposure_enforcer"
                     if enforcer_enabled and exposure_ratio > enforcer_threshold
+                    else None
+                )
+                close_payload["post_reduction_geometry"] = (
+                    "requires_runtime_sizing_inputs"
+                    if close_payload["preceded_by"] == "position_exposure_enforcer"
                     else None
                 )
                 rows.append(
@@ -1166,7 +1191,11 @@ def _scenario_runtime_path(
         if kind == "entry" and forced_mode == "tp_only":
             return "tp_only blocked"
     if kind == "entry":
-        return "exposure-capped" if payload.get("inactive_reason") == "exposure_cap" else "re-entry"
+        if payload.get("inactive_reason") == "exposure_cap":
+            return "exposure-capped"
+        if context and context.get("total_exposure_entry_gate_enabled", False):
+            return "portfolio-dependent"
+        return "re-entry"
     if payload.get("preceded_by") == "position_exposure_enforcer":
         return "WEL reducer first"
     return "strategy close"
@@ -1178,7 +1207,11 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
         payload = scenario[kind]
         geometry = payload["geometry"]
         runtime_path = _scenario_runtime_path(side, kind, payload)
-        if not payload["trailing_enabled"]:
+        if payload.get("post_reduction_geometry") == "requires_runtime_sizing_inputs":
+            confirmation = "post-WE varies"
+            threshold_price = "post-WE varies"
+            order_reference = "post-WE varies"
+        elif not payload["trailing_enabled"]:
             confirmation = "passive"
             threshold_price = "n/a"
             order_reference = _scenario_price(geometry["passive_reference_price"])
@@ -1292,7 +1325,11 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "99.9% of effective WEL, while trailing entries stop only when strictly above 99.9%.",
             "* A CLOSE row marked 'WEL reducer first' remains relevant: a next-close request returns "
             "the reducer first, while expanded ideal-order generation simulates its fill and may then "
-            "include ordinary strategy closes using the displayed geometry.",
+            "include strategy closes whose WE-weighted threshold is recomputed after reduction. The "
+            "threshold/retracement percentages shown are pre-reducer examples; post-reduction prices "
+            "cannot be inferred without balance, position, exchange-step, and minimum-quantity inputs.",
+            "* A RE-ENTRY / ADD row marked 'portfolio-dependent' passed the per-position calculation, "
+            "but the account-wide total-exposure gate may crop or remove it using all positions on that side.",
             "* With close trailing enabled, a non-positive threshold is immediate: trailing is "
             "armed from position open. With close trailing disabled, the row is passive and no "
             "extrema or reversal confirmation participate.",

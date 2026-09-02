@@ -51,6 +51,7 @@ def _context(
     forced_mode="normal",
     enforcer_enabled=False,
     enforcer_threshold=0.8,
+    total_entry_gate=False,
 ):
     return {
         "active": active,
@@ -59,6 +60,7 @@ def _context(
         "forced_mode": forced_mode,
         "position_exposure_enforcer_enabled": enforcer_enabled,
         "position_exposure_enforcer_threshold": enforcer_threshold,
+        "total_exposure_entry_gate_enabled": total_entry_gate,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_dist": 0.01,
@@ -298,6 +300,7 @@ def test_extract_side_context_includes_global_forced_mode():
                     "entry_cooldown_minutes": 2.0,
                     "position_exposure_enforcer_enabled": True,
                     "position_exposure_enforcer_threshold": 0.8,
+                    "total_exposure_entry_gate_enabled": True,
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -314,6 +317,7 @@ def test_extract_side_context_includes_global_forced_mode():
     assert context["forced_mode"] == "panic"
     assert context["position_exposure_enforcer_enabled"] is True
     assert context["position_exposure_enforcer_threshold"] == pytest.approx(0.8)
+    assert context["total_exposure_entry_gate_enabled"] is True
 
 
 def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
@@ -386,13 +390,40 @@ def test_overview_marks_position_enforcer_before_close_geometry():
     above_threshold = next(row for row in scenarios if row["exposure_ratio"] == 0.9)
     assert at_threshold["close"]["preceded_by"] is None
     assert above_threshold["close"]["preceded_by"] == "position_exposure_enforcer"
+    assert (
+        above_threshold["close"]["post_reduction_geometry"]
+        == "requires_runtime_sizing_inputs"
+    )
 
     report = trailing_inspect.render_overview(result)
     assert "Position-exposure enforcement is enabled at 80% WE / effective WEL" in report
     assert "WEL reducer first" in report
     assert "Expanded close generation simulates that reduction" in report
-    assert "may then add the displayed strategy closes" in report
+    assert "strategy closes recomputed at the lower exposure" in report
     assert "remains relevant" in report
+    assert "post-WE varies" in report
+    assert "post-reduction prices cannot be inferred" in report
+
+
+def test_overview_marks_entries_portfolio_dependent_when_total_gate_enabled():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(total_entry_gate=True),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.5, 1.0),
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "account-wide total-exposure entry gate is enabled" in report
+    assert "portfolio-dependent" in report
+    assert "may crop or remove the order" in report
+    assert "exposure-capped" in report
 
 
 def test_overview_separates_initial_entry_and_describes_close_qty_basis():
