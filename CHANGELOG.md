@@ -4,6 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Expanded `passivbot tool trailing-inspect` with a config-first overview of both long and short
+  behavior across example volatility and exposure regimes. The report now includes threshold,
+  retracement, nominal confirmation, and emitted-order reference prices from a configurable anchor;
+  active/dormant side status; and plain-language explanations of sensitivity, entry cooldown and
+  ladder staging, EMA gating, and recursive closes. The existing detailed single-scenario and JSON
+  interfaces remain available.
+
 - GPU optimization now bootstraps `--start` configs into an authoritative exact-Rust seed archive.
   The default `auto` policy exact-evaluates up to 128 deduplicated seeds; larger pools receive one
   full-history Metal proxy screen followed by capped exact validation of diverse proxy-Pareto
