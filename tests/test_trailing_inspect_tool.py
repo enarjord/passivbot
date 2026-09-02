@@ -622,7 +622,7 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
         parameter_source="test config",
         price_anchor=100.0,
         volatility_scenarios=(("normal", 0.005, 0.0025),),
-        exposure_ratios=(0.5,),
+        exposure_ratios=(0.8,),
     )
 
     report = trailing_inspect.render_overview(result)
@@ -655,6 +655,36 @@ def test_unstuck_requires_positive_threshold():
     assert trailing_inspect._unstuck_active(context) is False
     assert "unstuck-dependent" not in trailing_inspect._scenario_rows(side, "close")[0][-1]
     assert "position threshold is non-positive" in trailing_inspect.render_overview(result)
+
+
+def test_unstuck_runtime_label_requires_exposure_strictly_above_threshold():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(
+                    unstuck_enabled=True,
+                    unstuck_close_pct=0.1,
+                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_threshold=0.7,
+                ),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.5, 0.7, 0.7001),
+    )
+
+    paths = {
+        row["exposure_ratio"]: trailing_inspect._scenario_rows(
+            {**result["sides"]["long"], "scenarios": [row]}, "close"
+        )[0][-1]
+        for row in result["sides"]["long"]["scenarios"]
+    }
+    assert "unstuck-dependent" not in paths[0.5]
+    assert "unstuck-dependent" not in paths[0.7]
+    assert "unstuck-dependent" in paths[0.7001]
 
 
 @pytest.mark.parametrize("ema_gating_enabled", (False, True))

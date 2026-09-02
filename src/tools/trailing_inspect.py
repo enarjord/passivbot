@@ -973,7 +973,8 @@ def _classify_side(
                 "Auto-unstuck is active with close quantity "
                 f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
                 f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
-                f"{context['unstuck_threshold'] * 100.0:g}%. CLOSE rows are unstuck-dependent: "
+                f"{context['unstuck_threshold'] * 100.0:g}%. Eligible CLOSE rows strictly above that "
+                "WE / effective WEL threshold are marked unstuck-dependent: "
                 "Rust may contribute a globally selected unstuck candidate based on realized PnL and "
                 f"portfolio/position state. {unstuck_ema_note}"
             )
@@ -1416,7 +1417,10 @@ def _scenario_input_pct(value: float) -> str:
 
 
 def _scenario_runtime_path(
-    side: Mapping[str, Any], kind: str, payload: Mapping[str, Any]
+    side: Mapping[str, Any],
+    kind: str,
+    payload: Mapping[str, Any],
+    exposure_ratio: float,
 ) -> str:
     context = side.get("context")
     if context:
@@ -1462,7 +1466,7 @@ def _scenario_runtime_path(
             qualifiers.append(f"{context['forced_mode']} fallback")
     if context.get("total_exposure_enforcer_enabled", False):
         qualifiers.append("TWEL-dependent")
-    if _unstuck_active(context):
+    if _unstuck_active(context) and exposure_ratio > context.get("unstuck_threshold", 0.0):
         qualifiers.append("unstuck-dependent")
     if context.get("max_realized_loss_pct", 1.0) < 1.0:
         qualifiers.append("PnL-gated")
@@ -1479,7 +1483,9 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
     for scenario in side["scenarios"]:
         payload = scenario[kind]
         geometry = payload["geometry"]
-        runtime_path = _scenario_runtime_path(side, kind, payload)
+        runtime_path = _scenario_runtime_path(
+            side, kind, payload, scenario["exposure_ratio"]
+        )
         if payload.get("post_reduction_geometry") == "requires_runtime_sizing_inputs":
             confirmation = "post-WE varies"
             threshold_price = "post-WE varies"
