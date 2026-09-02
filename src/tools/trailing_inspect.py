@@ -153,6 +153,7 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
     bot = _require_mapping(config.get("bot"), "bot")
     side = _require_mapping(bot.get(pside), f"bot.{pside}")
     risk = _require_mapping(side.get("risk"), f"bot.{pside}.risk")
+    unstuck = _require_mapping(side.get("unstuck", {}), f"bot.{pside}.unstuck")
     strategies = _require_mapping(side.get("strategy"), f"bot.{pside}.strategy")
     strategy = _require_mapping(
         strategies.get(STRATEGY_KIND),
@@ -177,6 +178,9 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "total_wallet_exposure_limit": total_wallet_exposure_limit,
         "n_positions": n_positions,
         "forced_mode": forced_mode,
+        "max_realized_loss_pct": _finite_float(
+            live.get("max_realized_loss_pct", 1.0), "live.max_realized_loss_pct"
+        ),
         "position_exposure_enforcer_enabled": bool(
             risk.get("position_exposure_enforcer_enabled", False)
         ),
@@ -196,6 +200,17 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         ),
         "total_exposure_enforcer_policy": str(
             risk.get("total_exposure_enforcer_policy", "unknown")
+        ),
+        "unstuck_enabled": bool(unstuck.get("enabled", False)),
+        "unstuck_close_pct": _finite_float(
+            unstuck.get("close_pct", 0.0), f"bot.{pside}.unstuck.close_pct"
+        ),
+        "unstuck_loss_allowance_pct": _finite_float(
+            unstuck.get("loss_allowance_pct", 0.0),
+            f"bot.{pside}.unstuck.loss_allowance_pct",
+        ),
+        "unstuck_threshold": _finite_float(
+            unstuck.get("threshold", 0.0), f"bot.{pside}.unstuck.threshold"
         ),
         "entry_cooldown_minutes": _finite_float(
             risk.get("entry_cooldown_minutes", 0.0),
@@ -597,6 +612,15 @@ def _movement_description(
     )
 
 
+def _unstuck_active(context: Mapping[str, Any] | None) -> bool:
+    return bool(
+        context
+        and context.get("unstuck_enabled", False)
+        and context.get("unstuck_close_pct", 0.0) > 0.0
+        and context.get("unstuck_loss_allowance_pct", 0.0) > 0.0
+    )
+
+
 def _classify_side(
     *,
     pside: str,
@@ -833,7 +857,7 @@ def _classify_side(
                 overall.append(
                     "Position-exposure enforcement is enabled at "
                     f"{enforcer_threshold * 100.0:g}% WE / effective WEL. CLOSE rows above that "
-                    "ratio are marked 'WEL reducer first': the next-close path returns a market-side "
+                    "ratio are marked 'WEL-first': the next-close path returns a market-side "
                     "reducer before strategy close logic, including in 'tp_only' mode. Expanded close "
                     "generation simulates that reduction and may then add strategy closes recomputed at "
                     "the lower exposure. Post-reduction prices require runtime sizing and exchange inputs."
@@ -864,6 +888,33 @@ def _classify_side(
                     "The account-wide total-exposure enforcer is configured, but the disabled side or "
                     "current forced mode keeps that repair path dormant."
                 )
+        if _unstuck_active(context):
+            overall.append(
+                "Auto-unstuck is active with close quantity "
+                f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
+                f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
+                f"{context['unstuck_threshold'] * 100.0:g}%. CLOSE rows are unstuck-dependent: "
+                "Rust may append one globally selected unstuck close based on realized PnL and "
+                "portfolio/position state."
+            )
+        elif context.get("unstuck_enabled", False):
+            overall.append(
+                "Auto-unstuck is enabled but inactive because its close quantity or loss allowance "
+                "is non-positive."
+            )
+        if context.get("max_realized_loss_pct", 1.0) < 1.0:
+            overall.append(
+                "The realized-loss gate is active at "
+                f"{context['max_realized_loss_pct'] * 100.0:g}% of peak balance. CLOSE rows are "
+                "PnL-gated: Rust may remove losing strategy closes or protective reducers after "
+                "evaluating projected batch PnL, fees, and account-wide realized-loss allowance."
+            )
+    else:
+        overall.append(
+            "No config was supplied, so only strategy defaults are known. Side enablement, forced "
+            "mode, cooldowns, risk enforcement, auto-unstuck, and realized-PnL gates are unknown; "
+            "runtime-path labels are intentionally marked 'context unknown'."
+        )
     if representative["volatility_scenario_count"] == 1:
         basis = (
             f"Headlines use {representative['normal_label']!r} volatility at "
@@ -972,6 +1023,11 @@ def build_overview(
                 close_payload["preceded_by"] = (
                     "position_exposure_enforcer"
                     if enforcer_enabled and exposure_ratio > enforcer_threshold
+                    else None
+                )
+                close_payload["inactive_reason"] = (
+                    "unreachable_short_threshold"
+                    if pside == "short" and close_payload["threshold_pct"] >= 1.0
                     else None
                 )
                 close_payload["post_reduction_geometry"] = (
@@ -1229,15 +1285,25 @@ def _scenario_runtime_path(
             return "unreachable"
         if payload.get("inactive_reason") == "exposure_cap":
             return "exposure-capped"
-        if context and context.get("total_exposure_entry_gate_enabled", False):
+        if context is None:
+            return "context unknown"
+        if context.get("total_exposure_entry_gate_enabled", False):
             return "portfolio-dependent"
         return "re-entry"
-    twel_dependent = bool(context and context.get("total_exposure_enforcer_enabled", False))
+    if payload.get("inactive_reason") == "unreachable_short_threshold":
+        return "unreachable"
+    if context is None:
+        return "context unknown"
+    qualifiers = []
     if payload.get("preceded_by") == "position_exposure_enforcer":
-        return "WEL first; TWEL-dependent" if twel_dependent else "WEL reducer first"
-    if twel_dependent:
-        return "TWEL-dependent close"
-    return "strategy close"
+        qualifiers.append("WEL-first")
+    if context.get("total_exposure_enforcer_enabled", False):
+        qualifiers.append("TWEL-dependent")
+    if _unstuck_active(context):
+        qualifiers.append("unstuck-dependent")
+    if context.get("max_realized_loss_pct", 1.0) < 1.0:
+        qualifiers.append("PnL-gated")
+    return " / ".join(qualifiers) if qualifiers else "strategy close"
 
 
 def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
@@ -1246,7 +1312,10 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
         payload = scenario[kind]
         geometry = payload["geometry"]
         runtime_path = _scenario_runtime_path(side, kind, payload)
-        if payload.get("inactive_reason") == "unreachable_long_threshold":
+        if payload.get("inactive_reason") in {
+            "unreachable_long_threshold",
+            "unreachable_short_threshold",
+        }:
             confirmation = "n/a"
             threshold_price = "unreachable"
             order_reference = "n/a"
@@ -1366,7 +1435,7 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "market by the configured initial-entry EMA gate.",
             "* A RE-ENTRY / ADD row marked 'exposure-capped' emits no entry: passive entries stop at "
             "99.9% of effective WEL, while trailing entries stop only when strictly above 99.9%.",
-            "* A CLOSE row marked 'WEL reducer first' remains relevant: a next-close request returns "
+            "* A CLOSE runtime path containing 'WEL-first' remains relevant: a next-close request returns "
             "the reducer first, while expanded ideal-order generation simulates its fill and may then "
             "include strategy closes whose WE-weighted threshold is recomputed after reduction. The "
             "threshold/retracement percentages shown are pre-reducer examples; post-reduction prices "
@@ -1375,8 +1444,16 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "but the account-wide total-exposure gate may crop or remove it using all positions on that side.",
             "* A long RE-ENTRY / ADD row marked 'unreachable' has a threshold of at least 100%: "
             "the passive price is non-positive, and a positive market cannot cross the trailing target.",
+            "* A short CLOSE row marked 'unreachable' has a threshold of at least 100%: its target "
+            "price is non-positive, so a positive market cannot satisfy the trailing threshold.",
             "* A CLOSE runtime path containing 'TWEL-dependent' may coexist with an account-wide "
             "repair close. Which position is reduced and by how much requires full same-side portfolio state.",
+            "* 'unstuck-dependent' means a globally selected auto-unstuck close may coexist when its "
+            "realized-PnL allowance, EMA gate, and position conditions pass.",
+            "* 'PnL-gated' means the realized-loss batch gate may remove losing strategy or protective "
+            "closes after projected PnL and fees are evaluated against account-wide allowance.",
+            "* 'context unknown' is used for strategy-default reports without a config; no claim is "
+            "made about live side enablement or orchestration/risk paths.",
             "* With close trailing enabled, a non-positive threshold is immediate: trailing is "
             "armed from position open. With close trailing disabled, the row is passive and no "
             "extrema or reversal confirmation participate.",

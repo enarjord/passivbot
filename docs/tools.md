@@ -172,10 +172,11 @@ effective exposure limit. Each row shows the threshold and retracement percentag
 price, nominal reversal-confirmation price, and Rust order-reference price from a readable 100.0
 average-position-price anchor. Use `--price-anchor` to change it.
 
-The overview labels each side as active or dormant and explains entry cooldown, simultaneous
-versus staged entry ladders, EMA gating, volatility/exposure sensitivity, recursive close sizing,
-and the difference between threshold-gated trailing and an immediately armed trailing stop.
-The descriptions are heuristics for intuition, not assessments of strategy quality.
+With a config, the overview labels each side as active or dormant and explains entry cooldown,
+simultaneous versus staged entry ladders, EMA gating, volatility/exposure sensitivity, recursive
+close sizing, and relevant portfolio/PnL risk paths. Without a config, only strategy defaults are
+loaded, so runtime paths are explicitly labeled as unknown. The descriptions are heuristics for
+intuition, not assessments of strategy quality.
 
 Without either a positional config path or `--config`, the command uses the Rust-owned strategy
 defaults. A positional config path or the legacy `--config` form loads canonical

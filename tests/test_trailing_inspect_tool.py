@@ -55,18 +55,28 @@ def _context(
     total_enforcer=False,
     total_enforcer_threshold=0.9,
     total_enforcer_policy="reduce_portfolio",
+    unstuck_enabled=False,
+    unstuck_close_pct=0.0,
+    unstuck_loss_allowance_pct=0.0,
+    unstuck_threshold=0.0,
+    max_realized_loss_pct=1.0,
 ):
     return {
         "active": active,
         "total_wallet_exposure_limit": 1.0 if active else 0.0,
         "n_positions": 1,
         "forced_mode": forced_mode,
+        "max_realized_loss_pct": max_realized_loss_pct,
         "position_exposure_enforcer_enabled": enforcer_enabled,
         "position_exposure_enforcer_threshold": enforcer_threshold,
         "total_exposure_entry_gate_enabled": total_entry_gate,
         "total_exposure_enforcer_enabled": total_enforcer,
         "total_exposure_enforcer_threshold": total_enforcer_threshold,
         "total_exposure_enforcer_policy": total_enforcer_policy,
+        "unstuck_enabled": unstuck_enabled,
+        "unstuck_close_pct": unstuck_close_pct,
+        "unstuck_loss_allowance_pct": unstuck_loss_allowance_pct,
+        "unstuck_threshold": unstuck_threshold,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_dist": 0.01,
@@ -295,9 +305,9 @@ def test_overview_scenario_grid_uses_formulas_and_side_geometry():
     )
 
 
-def test_extract_side_context_includes_global_forced_mode():
+def test_extract_side_context_includes_global_and_risk_paths():
     config = {
-        "live": {"forced_mode_long": "p"},
+        "live": {"forced_mode_long": "p", "max_realized_loss_pct": 0.05},
         "bot": {
             "long": {
                 "risk": {
@@ -310,6 +320,12 @@ def test_extract_side_context_includes_global_forced_mode():
                     "total_exposure_enforcer_enabled": True,
                     "total_exposure_enforcer_threshold": 0.9,
                     "total_exposure_enforcer_policy": "reduce_portfolio",
+                },
+                "unstuck": {
+                    "enabled": True,
+                    "close_pct": 0.1,
+                    "loss_allowance_pct": 0.02,
+                    "threshold": 0.7,
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -330,6 +346,11 @@ def test_extract_side_context_includes_global_forced_mode():
     assert context["total_exposure_enforcer_enabled"] is True
     assert context["total_exposure_enforcer_threshold"] == pytest.approx(0.9)
     assert context["total_exposure_enforcer_policy"] == "reduce_portfolio"
+    assert context["unstuck_enabled"] is True
+    assert context["unstuck_close_pct"] == pytest.approx(0.1)
+    assert context["unstuck_loss_allowance_pct"] == pytest.approx(0.02)
+    assert context["unstuck_threshold"] == pytest.approx(0.7)
+    assert context["max_realized_loss_pct"] == pytest.approx(0.05)
 
 
 def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
@@ -409,7 +430,7 @@ def test_overview_marks_position_enforcer_before_close_geometry():
 
     report = trailing_inspect.render_overview(result)
     assert "Position-exposure enforcement is enabled at 80% WE / effective WEL" in report
-    assert "WEL reducer first" in report
+    assert "WEL-first" in report
     assert "Expanded close generation simulates that reduction" in report
     assert "strategy closes recomputed at the lower exposure" in report
     assert "remains relevant" in report
@@ -459,9 +480,54 @@ def test_overview_marks_closes_account_dependent_when_total_enforcer_enabled():
     report = trailing_inspect.render_overview(result)
     assert "total-exposure enforcer is enabled at 85% of side TWEL" in report
     assert "policy 'reduce_overweight'" in report
-    assert "TWEL-dependent close" in report
+    assert "TWEL-dependent" in report
     assert "may append a TWEL repair close" in report
     assert "requires full same-side portfolio state" in report
+
+
+def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(
+                    unstuck_enabled=True,
+                    unstuck_close_pct=0.1,
+                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_threshold=0.7,
+                    max_realized_loss_pct=0.05,
+                ),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.5,),
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "Auto-unstuck is active with close quantity 10%" in report
+    assert "loss allowance 2%" in report
+    assert "position threshold 70%" in report
+    assert "unstuck-dependent" in report
+    assert "realized-loss gate is active at 5% of peak balance" in report
+    assert "PnL-gated" in report
+    assert "projected batch PnL" in report
+
+
+def test_overview_without_config_marks_runtime_context_unknown():
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": None}},
+        parameter_source="Rust-owned defaults",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.5,),
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "only strategy defaults are known" in report
+    assert report.count("context unknown") >= 3
+    assert "runtime-path labels are intentionally marked" in report
 
 
 def test_overview_separates_initial_entry_and_describes_close_qty_basis():
@@ -522,6 +588,28 @@ def test_overview_marks_long_threshold_at_100_percent_unreachable():
     assert "unreachable" in report
     assert "threshold of at least 100%" in report
     assert "positive market cannot cross the trailing target" in report
+
+
+def test_overview_marks_short_close_threshold_at_100_percent_unreachable():
+    params = _params()
+    params["close"]["threshold_base_pct"] = 1.0
+    params["close"]["threshold_we_weight"] = 0.0
+    params["close"]["threshold_volatility_1m_weight"] = 0.0
+    params["close"]["threshold_volatility_1h_weight"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"short": {"params": params, "context": _context()}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.0,),
+    )
+
+    row = result["sides"]["short"]["scenarios"][0]
+    assert row["close"]["inactive_reason"] == "unreachable_short_threshold"
+    report = trailing_inspect.render_overview(result)
+    assert "unreachable" in report
+    assert "short CLOSE row" in report
+    assert "positive market cannot satisfy the trailing threshold" in report
 
 
 def test_overview_qualifies_full_position_passive_close_sizing():
