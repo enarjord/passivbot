@@ -52,6 +52,9 @@ def _context(
     enforcer_enabled=False,
     enforcer_threshold=0.8,
     total_entry_gate=False,
+    total_enforcer=False,
+    total_enforcer_threshold=0.9,
+    total_enforcer_policy="reduce_portfolio",
 ):
     return {
         "active": active,
@@ -61,6 +64,9 @@ def _context(
         "position_exposure_enforcer_enabled": enforcer_enabled,
         "position_exposure_enforcer_threshold": enforcer_threshold,
         "total_exposure_entry_gate_enabled": total_entry_gate,
+        "total_exposure_enforcer_enabled": total_enforcer,
+        "total_exposure_enforcer_threshold": total_enforcer_threshold,
+        "total_exposure_enforcer_policy": total_enforcer_policy,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_dist": 0.01,
@@ -301,6 +307,9 @@ def test_extract_side_context_includes_global_forced_mode():
                     "position_exposure_enforcer_enabled": True,
                     "position_exposure_enforcer_threshold": 0.8,
                     "total_exposure_entry_gate_enabled": True,
+                    "total_exposure_enforcer_enabled": True,
+                    "total_exposure_enforcer_threshold": 0.9,
+                    "total_exposure_enforcer_policy": "reduce_portfolio",
                 },
                 "strategy": {
                     "trailing_martingale": {
@@ -318,6 +327,9 @@ def test_extract_side_context_includes_global_forced_mode():
     assert context["position_exposure_enforcer_enabled"] is True
     assert context["position_exposure_enforcer_threshold"] == pytest.approx(0.8)
     assert context["total_exposure_entry_gate_enabled"] is True
+    assert context["total_exposure_enforcer_enabled"] is True
+    assert context["total_exposure_enforcer_threshold"] == pytest.approx(0.9)
+    assert context["total_exposure_enforcer_policy"] == "reduce_portfolio"
 
 
 def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
@@ -426,6 +438,32 @@ def test_overview_marks_entries_portfolio_dependent_when_total_gate_enabled():
     assert "exposure-capped" in report
 
 
+def test_overview_marks_closes_account_dependent_when_total_enforcer_enabled():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(
+                    total_enforcer=True,
+                    total_enforcer_threshold=0.85,
+                    total_enforcer_policy="reduce_overweight",
+                ),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.005, 0.0025),),
+        exposure_ratios=(0.5,),
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "total-exposure enforcer is enabled at 85% of side TWEL" in report
+    assert "policy 'reduce_overweight'" in report
+    assert "TWEL-dependent close" in report
+    assert "may append a TWEL repair close" in report
+    assert "requires full same-side portfolio state" in report
+
+
 def test_overview_separates_initial_entry_and_describes_close_qty_basis():
     result = trailing_inspect.build_overview(
         sources={"long": {"params": _params(), "context": _context()}},
@@ -465,6 +503,25 @@ def test_overview_marks_entry_exposure_cap_with_exact_rust_boundaries():
         exposure_ratios=(0.999,),
     )
     assert passive["sides"]["long"]["scenarios"][0]["entry"]["inactive_reason"] == "exposure_cap"
+
+
+def test_overview_marks_long_threshold_at_100_percent_unreachable():
+    params = _params()
+    params["entry"]["threshold_base_pct"] = 1.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context(total_entry_gate=True)}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.0,),
+    )
+
+    row = result["sides"]["long"]["scenarios"][0]
+    assert row["entry"]["inactive_reason"] == "unreachable_long_threshold"
+    report = trailing_inspect.render_overview(result)
+    assert "unreachable" in report
+    assert "threshold of at least 100%" in report
+    assert "positive market cannot cross the trailing target" in report
 
 
 def test_overview_qualifies_full_position_passive_close_sizing():
@@ -560,6 +617,21 @@ def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected)
 
     comments = " ".join(result["sides"]["long"]["classification"]["entry_comments"])
     assert expected in comments
+
+
+def test_overview_explains_nonpositive_passive_threshold_emits_one_touch_rung():
+    params = _params()
+    params["entry"]["retracement_base_pct"] = 0.0
+    params["entry"]["threshold_base_pct"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["entry_comments"])
+    assert "Only one market-touch rung is emitted" in comments
+    assert "full recursive entry ladder simultaneously" not in comments
 
 
 def test_main_positional_config_defaults_to_overview_and_accepts_price_anchor(

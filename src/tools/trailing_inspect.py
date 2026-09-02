@@ -187,6 +187,16 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "total_exposure_entry_gate_enabled": bool(
             risk.get("total_exposure_entry_gate_enabled", False)
         ),
+        "total_exposure_enforcer_enabled": bool(
+            risk.get("total_exposure_enforcer_enabled", False)
+        ),
+        "total_exposure_enforcer_threshold": _finite_float(
+            risk.get("total_exposure_enforcer_threshold", 0.0),
+            f"bot.{pside}.risk.total_exposure_enforcer_threshold",
+        ),
+        "total_exposure_enforcer_policy": str(
+            risk.get("total_exposure_enforcer_policy", "unknown")
+        ),
         "entry_cooldown_minutes": _finite_float(
             risk.get("entry_cooldown_minutes", 0.0),
             f"bot.{pside}.risk.entry_cooldown_minutes",
@@ -640,10 +650,17 @@ def _classify_side(
     cooldown = context["entry_cooldown_minutes"] if context else None
     if not entry_trailing:
         if cooldown == 0.0:
-            entry_comments.append(
-                "Trailing entries are disabled and entry cooldown is zero: Rust may expose the "
-                "full recursive entry ladder simultaneously."
-            )
+            if entry["threshold_pct"] <= 0.0:
+                entry_comments.append(
+                    "Trailing entries are disabled, entry cooldown is zero, and the passive threshold "
+                    "is non-positive: Rust clamps the first add to current bid/ask, then stops because "
+                    "the next simulated rung duplicates that price. Only one market-touch rung is emitted."
+                )
+            else:
+                entry_comments.append(
+                    "Trailing entries are disabled and entry cooldown is zero: Rust may expose the "
+                    "full recursive entry ladder simultaneously."
+                )
         elif cooldown is not None:
             entry_comments.append(
                 "Trailing entries are disabled, but the entry cooldown is positive: the bot does "
@@ -832,6 +849,21 @@ def _classify_side(
                 "rows are marked 'portfolio-dependent': after strategy calculation, the orchestrator "
                 "may crop or remove the order based on exposure consumed by all positions on this side."
             )
+        if context.get("total_exposure_enforcer_enabled", False):
+            twel_threshold = context.get("total_exposure_enforcer_threshold", 0.0)
+            twel_policy = context.get("total_exposure_enforcer_policy", "unknown")
+            if context["active"] and forced_mode not in {"panic", "manual"}:
+                overall.append(
+                    "The account-wide total-exposure enforcer is enabled at "
+                    f"{twel_threshold * 100.0:g}% of side TWEL with policy {twel_policy!r}. CLOSE "
+                    "rows are account-dependent: Rust may append a TWEL repair close to the selected "
+                    "position alongside its strategy close, based on the full same-side portfolio."
+                )
+            else:
+                overall.append(
+                    "The account-wide total-exposure enforcer is configured, but the disabled side or "
+                    "current forced mode keeps that repair path dormant."
+                )
     if representative["volatility_scenario_count"] == 1:
         basis = (
             f"Headlines use {representative['normal_label']!r} volatility at "
@@ -918,7 +950,9 @@ def build_overview(
                     else exposure_ratio >= 0.999
                 )
                 entry_payload["inactive_reason"] = (
-                    "exposure_cap" if entry_exposure_capped else None
+                    "unreachable_long_threshold"
+                    if pside == "long" and entry_payload["threshold_pct"] >= 1.0
+                    else ("exposure_cap" if entry_exposure_capped else None)
                 )
                 enforcer_enabled = bool(
                     context
@@ -1191,13 +1225,18 @@ def _scenario_runtime_path(
         if kind == "entry" and forced_mode == "tp_only":
             return "tp_only blocked"
     if kind == "entry":
+        if payload.get("inactive_reason") == "unreachable_long_threshold":
+            return "unreachable"
         if payload.get("inactive_reason") == "exposure_cap":
             return "exposure-capped"
         if context and context.get("total_exposure_entry_gate_enabled", False):
             return "portfolio-dependent"
         return "re-entry"
+    twel_dependent = bool(context and context.get("total_exposure_enforcer_enabled", False))
     if payload.get("preceded_by") == "position_exposure_enforcer":
-        return "WEL reducer first"
+        return "WEL first; TWEL-dependent" if twel_dependent else "WEL reducer first"
+    if twel_dependent:
+        return "TWEL-dependent close"
     return "strategy close"
 
 
@@ -1207,7 +1246,11 @@ def _scenario_rows(side: Mapping[str, Any], kind: str) -> list[list[str]]:
         payload = scenario[kind]
         geometry = payload["geometry"]
         runtime_path = _scenario_runtime_path(side, kind, payload)
-        if payload.get("post_reduction_geometry") == "requires_runtime_sizing_inputs":
+        if payload.get("inactive_reason") == "unreachable_long_threshold":
+            confirmation = "n/a"
+            threshold_price = "unreachable"
+            order_reference = "n/a"
+        elif payload.get("post_reduction_geometry") == "requires_runtime_sizing_inputs":
             confirmation = "post-WE varies"
             threshold_price = "post-WE varies"
             order_reference = "post-WE varies"
@@ -1330,6 +1373,10 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "cannot be inferred without balance, position, exchange-step, and minimum-quantity inputs.",
             "* A RE-ENTRY / ADD row marked 'portfolio-dependent' passed the per-position calculation, "
             "but the account-wide total-exposure gate may crop or remove it using all positions on that side.",
+            "* A long RE-ENTRY / ADD row marked 'unreachable' has a threshold of at least 100%: "
+            "the passive price is non-positive, and a positive market cannot cross the trailing target.",
+            "* A CLOSE runtime path containing 'TWEL-dependent' may coexist with an account-wide "
+            "repair close. Which position is reduced and by how much requires full same-side portfolio state.",
             "* With close trailing enabled, a non-positive threshold is immediate: trailing is "
             "armed from position open. With close trailing disabled, the row is passive and no "
             "extrema or reversal confirmation participate.",
