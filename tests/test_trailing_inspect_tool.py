@@ -59,6 +59,7 @@ def _context(
     unstuck_close_pct=0.0,
     unstuck_loss_allowance_pct=0.0,
     unstuck_threshold=0.0,
+    unstuck_ema_gating_enabled=False,
     max_realized_loss_pct=1.0,
     hsl_enabled=False,
     hedge_mode=False,
@@ -86,6 +87,7 @@ def _context(
         "unstuck_close_pct": unstuck_close_pct,
         "unstuck_loss_allowance_pct": unstuck_loss_allowance_pct,
         "unstuck_threshold": unstuck_threshold,
+        "unstuck_ema_gating_enabled": unstuck_ema_gating_enabled,
         "entry_cooldown_minutes": cooldown,
         "entry_ema_gate_mode": "all",
         "entry_initial_ema_dist": 0.01,
@@ -359,6 +361,7 @@ def test_extract_side_context_includes_global_and_risk_paths():
     assert context["unstuck_close_pct"] == pytest.approx(0.1)
     assert context["unstuck_loss_allowance_pct"] == pytest.approx(0.02)
     assert context["unstuck_threshold"] == pytest.approx(0.7)
+    assert context["unstuck_ema_gating_enabled"] is False
     assert context["max_realized_loss_pct"] == pytest.approx(0.05)
 
 
@@ -627,9 +630,55 @@ def test_overview_marks_unstuck_and_realized_loss_close_dependencies():
     assert "loss allowance 2%" in report
     assert "position threshold 70%" in report
     assert "unstuck-dependent" in report
+    assert "EMA gating is disabled" in report
     assert "realized-loss gate is active at 5% of peak balance" in report
     assert "PnL-gated" in report
     assert "projected batch PnL" in report
+
+
+def test_unstuck_requires_positive_threshold():
+    context = _context(
+        unstuck_enabled=True,
+        unstuck_close_pct=0.1,
+        unstuck_loss_allowance_pct=0.02,
+        unstuck_threshold=0.0,
+    )
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": _params(), "context": context}},
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.5,),
+    )
+
+    side = result["sides"]["long"]
+    assert trailing_inspect._unstuck_active(context) is False
+    assert "unstuck-dependent" not in trailing_inspect._scenario_rows(side, "close")[0][-1]
+    assert "position threshold is non-positive" in trailing_inspect.render_overview(result)
+
+
+@pytest.mark.parametrize("ema_gating_enabled", (False, True))
+def test_unstuck_explanation_honors_ema_gating_toggle(ema_gating_enabled):
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(
+                    unstuck_enabled=True,
+                    unstuck_close_pct=0.1,
+                    unstuck_loss_allowance_pct=0.02,
+                    unstuck_threshold=0.7,
+                    unstuck_ema_gating_enabled=ema_gating_enabled,
+                ),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    report = trailing_inspect.render_overview(result)
+    expected = "EMA gating is enabled" if ema_gating_enabled else "EMA gating is disabled"
+    assert expected in report
 
 
 def test_overview_without_config_marks_runtime_context_unknown():
@@ -907,6 +956,23 @@ def test_overview_qualifies_negative_passive_threshold_touch_clamp():
     assert "full recursive entry ladder simultaneously" not in comments
 
 
+def test_zero_passive_threshold_reports_touch_and_ema_clamp():
+    params = _params()
+    params["entry"]["retracement_base_pct"] = 0.0
+    params["entry"]["threshold_base_pct"] = 0.0
+    result = trailing_inspect.build_overview(
+        sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    comments = " ".join(result["sides"]["long"]["classification"]["entry_comments"])
+    assert "clamps the first add to bid/ask" in comments
+    assert "enabled re-entry EMA gate may push it" in comments
+    assert "one touch/EMA-clamped rung is emitted" in comments
+    assert "at-position rung" not in comments
+
+
 def test_main_positional_config_defaults_to_overview_and_accepts_price_anchor(
     monkeypatch, capsys
 ):
@@ -990,6 +1056,7 @@ def test_overview_explains_protective_reducer_consolidation():
                     unstuck_enabled=True,
                     unstuck_close_pct=0.1,
                     unstuck_loss_allowance_pct=0.02,
+                    unstuck_threshold=0.7,
                 ),
             }
         },

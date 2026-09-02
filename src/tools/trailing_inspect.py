@@ -254,6 +254,9 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             unstuck.get("loss_allowance_pct", 0.0),
             f"bot.{pside}.unstuck.loss_allowance_pct",
         ),
+        "unstuck_ema_gating_enabled": bool(
+            unstuck.get("ema_gating_enabled", False)
+        ),
         "unstuck_threshold": _finite_float(
             unstuck.get("threshold", 0.0), f"bot.{pside}.unstuck.threshold"
         ),
@@ -663,6 +666,7 @@ def _unstuck_active(context: Mapping[str, Any] | None) -> bool:
         and context.get("unstuck_enabled", False)
         and context.get("unstuck_close_pct", 0.0) > 0.0
         and context.get("unstuck_loss_allowance_pct", 0.0) > 0.0
+        and context.get("unstuck_threshold", 0.0) > 0.0
     )
 
 
@@ -722,8 +726,11 @@ def _classify_side(
             if entry["threshold_pct"] == 0.0:
                 entry_comments.append(
                     "Trailing entries are disabled, entry cooldown is zero, and the passive threshold "
-                    "is zero: the first add remains at the position price, and the next simulated rung "
-                    "duplicates it, so Rust emits one at-position rung."
+                    "is zero. Rust clamps the first add to bid/ask when market touch is more adverse "
+                    "than the position-price reference, and an enabled re-entry EMA gate may push it "
+                    "farther away; recursive simulation then duplicates that price, so one touch/EMA-clamped "
+                    "rung is emitted. The overview has no current market or EMA state, so its exact price "
+                    "cannot be inferred."
                 )
             elif entry["threshold_pct"] < 0.0:
                 entry_comments.append(
@@ -957,18 +964,23 @@ def _classify_side(
                     "current forced mode keeps that repair path dormant."
                 )
         if _unstuck_active(context):
+            unstuck_ema_note = (
+                "EMA gating is enabled, so EMA trigger and readiness also constrain the candidate."
+                if context.get("unstuck_ema_gating_enabled", False)
+                else "EMA gating is disabled, so EMA trigger and readiness do not constrain the candidate."
+            )
             overall.append(
                 "Auto-unstuck is active with close quantity "
                 f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
                 f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
                 f"{context['unstuck_threshold'] * 100.0:g}%. CLOSE rows are unstuck-dependent: "
                 "Rust may contribute a globally selected unstuck candidate based on realized PnL and "
-                "portfolio/position state."
+                f"portfolio/position state. {unstuck_ema_note}"
             )
         elif context.get("unstuck_enabled", False):
             overall.append(
-                "Auto-unstuck is enabled but inactive because its close quantity or loss allowance "
-                "is non-positive."
+                "Auto-unstuck is enabled but inactive because its close quantity, loss allowance, "
+                "or position threshold is non-positive."
             )
         if context.get("max_realized_loss_pct", 1.0) < 1.0:
             overall.append(
@@ -1617,7 +1629,7 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "* A CLOSE runtime path containing 'TWEL-dependent' may coexist with an account-wide "
             "repair close. Which position is reduced and by how much requires full same-side portfolio state.",
             "* 'unstuck-dependent' means auto-unstuck may become the selected protective reducer when "
-            "its realized-PnL allowance, EMA gate, and position conditions pass.",
+            "its realized-PnL allowance, position conditions, and any enabled EMA gate pass.",
             "* 'PnL-gated' means the realized-loss batch gate may remove losing strategy or protective "
             "closes after projected PnL and fees are evaluated against account-wide allowance.",
             "* 'context unknown' is used for strategy-default reports without a config; no claim is "
