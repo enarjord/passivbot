@@ -365,7 +365,7 @@
             {"goal":"max","metric":"sortino_ratio_strategy_eq"},
             {"goal":"min","metric":"drawdown_worst_strategy_eq"},
             {"goal":"min","metric":"drawdown_worst_mean_1pct_strategy_eq"},
-            {"goal":"min","metric":"fills_gap_p95_hours"}
+            {"goal":"min","metric":"fills_gap_time_weighted_mean_hours"}
         ],
         "write_all_results": true
     }

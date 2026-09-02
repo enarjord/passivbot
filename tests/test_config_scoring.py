@@ -38,6 +38,7 @@ def test_default_objective_goal_recognizes_fill_activity_metrics():
     assert default_objective_goal("fills_gap_p95_hours") == "min"
     assert default_objective_goal("fills_gap_p99_hours") == "min"
     assert default_objective_goal("fills_gap_longest_days") == "min"
+    assert default_objective_goal("fills_gap_time_weighted_mean_hours") == "min"
     assert default_objective_goal("fills_per_day") == "max"
     assert default_objective_goal("fills_per_day_entry") == "max"
     assert default_objective_goal("fills_active_days_ratio") == "max"

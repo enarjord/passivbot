@@ -4666,6 +4666,15 @@ def test_gpu_foundation_accepts_entry_interval_metrics(metric):
     assert _validate_scope(config, _Evaluator()) == "bybit"
 
 
+def test_gpu_foundation_accepts_time_weighted_fill_gap_metric():
+    config = _long_only_ema_config()
+    config["optimize"]["scoring"] = [
+        {"goal": "min", "metric": "fills_gap_time_weighted_mean_hours"}
+    ]
+
+    assert _validate_scope(config, _Evaluator()) == "bybit"
+
+
 @pytest.mark.parametrize(
     "metric",
     [
@@ -4678,6 +4687,7 @@ def test_gpu_foundation_accepts_entry_interval_metrics(metric):
         "fills_gap_median_hours",
         "fills_gap_p95_hours",
         "fills_gap_p99_hours",
+        "fills_gap_time_weighted_mean_hours",
         "loss_profit_ratio",
         "peak_recovery_days_equity_usd",
         "peak_recovery_hours_equity_usd",
@@ -4732,6 +4742,7 @@ def test_gpu_dual_multicoin_metric_gate_does_not_narrow_single_side():
             "fills_gap_median_hours",
             "fills_gap_p95_hours",
             "fills_gap_p99_hours",
+            "fills_gap_time_weighted_mean_hours",
             "loss_profit_ratio",
             "peak_recovery_days_equity_usd",
             "peak_recovery_hours_equity_usd",

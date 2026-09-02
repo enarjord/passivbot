@@ -43,6 +43,7 @@ DEFAULT_OBJECTIVE_GOALS = {
     "fills_gap_median_hours": "min",
     "fills_gap_p95_hours": "min",
     "fills_gap_p99_hours": "min",
+    "fills_gap_time_weighted_mean_hours": "min",
     "fills_per_day": "max",
     "fills_per_day_close": "max",
     "fills_per_day_entry": "max",

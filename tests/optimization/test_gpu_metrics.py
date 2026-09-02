@@ -1103,9 +1103,13 @@ def test_fill_gap_summary_metric_surface_is_supported():
         "fills_gap_median_hours",
         "fills_gap_p95_hours",
         "fills_gap_p99_hours",
+        "fills_gap_time_weighted_mean_hours",
     }
     _assert_proxy_surface_partition(metrics)
-    assert metrics & set(SUPPORTED_METRICS) == {"fills_gap_p95_hours"}
+    assert metrics & set(SUPPORTED_METRICS) == {
+        "fills_gap_p95_hours",
+        "fills_gap_time_weighted_mean_hours",
+    }
 
 
 def test_fill_gap_summary_without_fills_uses_whole_active_span():
@@ -1144,6 +1148,7 @@ def test_fill_gap_histogram_is_conservative_for_interpolated_percentiles():
     assert metrics["fills_gap_median_hours"].item() >= 1.0
     assert metrics["fills_gap_p95_hours"].item() >= 1.9
     assert metrics["fills_gap_p99_hours"].item() >= 1.98
+    assert metrics["fills_gap_time_weighted_mean_hours"].item() >= 1.5
 
 
 def test_fill_gap_float32_bin_decode_never_understates_boundary_samples():
@@ -1194,6 +1199,20 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
     assert metrics["fills_gap_median_hours"].item() == pytest.approx(1.0 / 60.0)
     assert metrics["fills_gap_p95_hours"].item() == pytest.approx(1.0 / 60.0)
     assert metrics["fills_gap_p99_hours"].item() == pytest.approx(1.0 / 60.0)
+
+
+def test_fill_gap_time_weighted_mean_uses_exact_boundary_gaps():
+    out = {
+        "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
+        "first_fill_ts": torch.tensor([3_600_000.0]),
+        "last_fill_ts": torch.tensor([3_600_000.0]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([7_200_000.0]),
+    }
+
+    metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=60_000))
+
+    assert metrics["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(1.0)
 
 
 def _entry_interval_output(gaps):
@@ -2288,6 +2307,7 @@ def test_completion_is_zero_when_no_equity_sample_exists():
             "fills_gap_median_hours",
             "fills_gap_p95_hours",
             "fills_gap_p99_hours",
+            "fills_gap_time_weighted_mean_hours",
         },
     )
 
@@ -2300,6 +2320,7 @@ def test_completion_is_zero_when_no_equity_sample_exists():
         "fills_gap_median_hours",
         "fills_gap_p95_hours",
         "fills_gap_p99_hours",
+        "fills_gap_time_weighted_mean_hours",
     ):
         assert metrics[name].item() == 0.0
 

@@ -564,6 +564,7 @@ def test_expand_analysis_keeps_rust_fill_activity_metrics_shared():
         "fills_gap_median_hours": 1.0,
         "fills_gap_p95_hours": 1.9,
         "fills_gap_p99_hours": 1.98,
+        "fills_gap_time_weighted_mean_hours": 1.5,
         "fills_per_day": 12.0,
         "fills_per_day_close": 6.0,
         "fills_per_day_entry": 6.0,

@@ -108,6 +108,7 @@ fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMet
     analysis.fills_gap_median_hours = metrics.fills_gap_median_hours;
     analysis.fills_gap_p95_hours = metrics.fills_gap_p95_hours;
     analysis.fills_gap_p99_hours = metrics.fills_gap_p99_hours;
+    analysis.fills_gap_time_weighted_mean_hours = metrics.fills_gap_time_weighted_mean_hours;
     analysis.fills_per_day = metrics.fills_per_day;
     analysis.fills_per_day_close = metrics.fills_per_day_close;
     analysis.fills_per_day_entry = metrics.fills_per_day_entry;

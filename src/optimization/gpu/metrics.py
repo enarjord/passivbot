@@ -129,6 +129,7 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     "fills_entry_per_close",
     "fills_gap_longest_days",
     "fills_gap_p95_hours",
+    "fills_gap_time_weighted_mean_hours",
     "fills_per_day",
     "fills_per_day_per_position_slot",
     "fills_top_symbol_share",
@@ -262,6 +263,7 @@ _FILL_GAP_HISTOGRAM_METRICS = {
     "fills_gap_median_hours",
     "fills_gap_p95_hours",
     "fills_gap_p99_hours",
+    "fills_gap_time_weighted_mean_hours",
 }
 _HARD_STOP_LIFECYCLE_METRICS = HARD_STOP_LIFECYCLE_METRICS
 _HARD_STOP_PANIC_LOSS_METRICS = HARD_STOP_PANIC_LOSS_METRICS
@@ -708,11 +710,21 @@ def _fill_gap_metrics(out, run):
         counts > 0, values, torch.zeros_like(values)
     )
     mean = (weighted_values * counts.to(values.dtype)).sum(dim=1) / total
+    span_hours = span_ms / 3_600_000.0
+    time_weighted_mean = torch.where(
+        span_hours > 0.0,
+        (
+            weighted_values.square() * counts.to(values.dtype)
+        ).sum(dim=1)
+        / span_hours.clamp(min=1.0e-12),
+        torch.zeros_like(span_hours),
+    )
     return {
         "fills_gap_mean_hours": mean,
         "fills_gap_median_hours": _weighted_percentile(values, counts, 0.50),
         "fills_gap_p95_hours": _weighted_percentile(values, counts, 0.95),
         "fills_gap_p99_hours": _weighted_percentile(values, counts, 0.99),
+        "fills_gap_time_weighted_mean_hours": time_weighted_mean,
     }
 
 
