@@ -61,6 +61,7 @@ def _context(
     unstuck_threshold=0.0,
     max_realized_loss_pct=1.0,
     hsl_enabled=False,
+    hedge_mode=False,
 ):
     return {
         "active": active,
@@ -71,7 +72,9 @@ def _context(
         "hsl_enabled_global": hsl_enabled,
         "hsl_enabled_override_symbols": [],
         "hsl_signal_mode": "coin",
+        "hedge_mode": hedge_mode,
         "coin_strategy_override_symbols": [],
+        "coin_context_override_descriptions": [],
         "max_realized_loss_pct": max_realized_loss_pct,
         "position_exposure_enforcer_enabled": enforcer_enabled,
         "position_exposure_enforcer_threshold": enforcer_threshold,
@@ -383,9 +386,11 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
         },
         "coin_overrides": {
             "XRP": {
+                "live": {"forced_mode_long": "manual"},
                 "bot": {
                     "long": {
                         "hsl": {"enabled": True},
+                        "risk": {"entry_cooldown_minutes": 9.0},
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_pct": 0.2}
@@ -405,11 +410,18 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     assert context["hsl_enabled_override_symbols"] == ["XRP"]
     assert context["hsl_signal_mode"] == "coin"
     assert context["coin_strategy_override_symbols"] == ["XRP"]
+    assert context["coin_context_override_descriptions"] == [
+        "DOGE (bot.long.hsl)",
+        "XRP (bot.long.hsl, bot.long.risk, live.forced_mode_long)",
+    ]
 
 
 def test_overview_marks_hsl_runtime_paths_and_coin_override_omission():
     context = _context(hsl_enabled=True)
     context["coin_strategy_override_symbols"] = ["XRP"]
+    context["coin_context_override_descriptions"] = [
+        "XRP (bot.long.risk, live.forced_mode_long)"
+    ]
     result = trailing_inspect.build_overview(
         sources={"long": {"params": _params(), "context": context}},
         parameter_source="test config",
@@ -424,7 +436,38 @@ def test_overview_marks_hsl_runtime_paths_and_coin_override_omission():
     comments = " ".join(side["classification"]["overall_comments"])
     assert "offline config report cannot know the live HSL tier" in comments
     assert "explicitly omitted from these tables" in comments
+    assert "non-strategy runtime overrides are also omitted" in comments
     assert "XRP" in comments
+
+
+@pytest.mark.parametrize("forced_mode", ("panic", "manual"))
+def test_hsl_runtime_precedes_static_forced_mode_labels(forced_mode):
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(
+                    hsl_enabled=True,
+                    forced_mode=forced_mode,
+                    enforcer_enabled=True,
+                    enforcer_threshold=0.4,
+                ),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+        volatility_scenarios=(("normal", 0.0, 0.0),),
+        exposure_ratios=(0.5,),
+    )
+
+    side = result["sides"]["long"]
+    entry_path = trailing_inspect._scenario_rows(side, "entry")[0][-1]
+    close_path = trailing_inspect._scenario_rows(side, "close")[0][-1]
+    assert entry_path == f"HSL-dependent / {forced_mode} fallback blocks entry"
+    assert close_path == f"WEL-first / HSL-dependent / {forced_mode} fallback"
+    comments = " ".join(side["classification"]["overall_comments"])
+    assert "HSL runtime state has precedence" in comments
+    assert "Both tables below are dormant" not in comments
 
 
 def test_extract_side_context_translates_invalid_forced_mode_to_value_error():
@@ -555,7 +598,7 @@ def test_overview_marks_closes_account_dependent_when_total_enforcer_enabled():
     assert "total-exposure enforcer is enabled at 85% of side TWEL" in report
     assert "policy 'reduce_overweight'" in report
     assert "TWEL-dependent" in report
-    assert "may append a TWEL repair close" in report
+    assert "may contribute a TWEL repair candidate" in report
     assert "requires full same-side portfolio state" in report
 
 
@@ -615,6 +658,8 @@ def test_overview_separates_initial_entry_and_describes_close_qty_basis():
     assert "RE-ENTRY / ADD" in report
     assert "reaches at least 80% of the calculated initial-entry quantity" in report
     assert "below that 80% boundary, it submits a partial initial entry" in report
+    assert "one-way mode" in report
+    assert "permit only one initial side" in report
     assert "Both initial paths bypass trailing threshold/retracement" in report
     assert "allowed full-position size × 25.00%" in report
     assert "adds any current position size above that allowed full size" in report
@@ -845,10 +890,10 @@ def test_overview_explains_passive_entry_ladder_and_cooldown(cooldown, expected)
     assert expected in comments
 
 
-def test_overview_explains_nonpositive_passive_threshold_emits_one_touch_rung():
+def test_overview_qualifies_negative_passive_threshold_touch_clamp():
     params = _params()
     params["entry"]["retracement_base_pct"] = 0.0
-    params["entry"]["threshold_base_pct"] = 0.0
+    params["entry"]["threshold_base_pct"] = -0.1
     result = trailing_inspect.build_overview(
         sources={"long": {"params": params, "context": _context(cooldown=0.0)}},
         parameter_source="test config",
@@ -856,7 +901,9 @@ def test_overview_explains_nonpositive_passive_threshold_emits_one_touch_rung():
     )
 
     comments = " ".join(result["sides"]["long"]["classification"]["entry_comments"])
-    assert "Only one market-touch rung is emitted" in comments
+    assert "only one market-touch rung when" in comments
+    assert "if that clamp does not bind" in comments
+    assert "cannot know which case applies" in comments
     assert "full recursive entry ladder simultaneously" not in comments
 
 
@@ -925,9 +972,35 @@ def test_overview_sizing_description_matches_current_position_formula():
     )
 
     comments = " ".join(result["sides"]["long"]["classification"]["overall_comments"])
-    assert "current absolute position size × 1.5 or initial-entry quantity" in comments
+    assert "current absolute position size × 1.5" in comments
+    assert "initial exposure slice converted to quantity at the re-entry order price" in comments
+    assert "lower re-entry price therefore produces a larger quantity floor" in comments
     assert "minimum-quantity, rounding, and exposure-cropping rules" in comments
     assert "previous fill" not in comments
+
+
+def test_overview_explains_protective_reducer_consolidation():
+    result = trailing_inspect.build_overview(
+        sources={
+            "long": {
+                "params": _params(),
+                "context": _context(
+                    enforcer_enabled=True,
+                    total_enforcer=True,
+                    unstuck_enabled=True,
+                    unstuck_close_pct=0.1,
+                    unstuck_loss_allowance_pct=0.02,
+                ),
+            }
+        },
+        parameter_source="test config",
+        price_anchor=100.0,
+    )
+
+    report = trailing_inspect.render_overview(result)
+    assert "at most one protective reducer per coin and position side" in report
+    assert "Panic has precedence" in report
+    assert "largest loss-admissible candidate" in report
 
 
 def test_volatility_sensitivity_includes_retracement_changes():

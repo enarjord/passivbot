@@ -176,15 +176,24 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         ) from exc
     coin_overrides = _require_mapping(config.get("coin_overrides", {}), "coin_overrides")
     coin_strategy_override_symbols: list[str] = []
+    coin_context_override_descriptions: list[str] = []
     hsl_enabled_override_symbols: list[str] = []
     for symbol, raw_override in coin_overrides.items():
         override = _require_mapping(raw_override, f"coin_overrides.{symbol}")
+        context_paths: list[str] = []
+        override_live = override.get("live", {})
+        if isinstance(override_live, Mapping) and f"forced_mode_{pside}" in override_live:
+            context_paths.append(f"live.forced_mode_{pside}")
         override_bot = override.get("bot", {})
         if not isinstance(override_bot, Mapping):
             continue
         override_side = override_bot.get(pside, {})
         if not isinstance(override_side, Mapping):
             continue
+        for group, value in override_side.items():
+            if group == "strategy" or value is None or value == {}:
+                continue
+            context_paths.append(f"bot.{pside}.{group}")
         override_strategies = override_side.get("strategy", {})
         if isinstance(override_strategies, Mapping):
             strategy_override = override_strategies.get(STRATEGY_KIND, {})
@@ -197,6 +206,10 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             and bool(hsl_override.get("enabled", hsl.get("enabled", False)))
         ):
             hsl_enabled_override_symbols.append(str(symbol))
+        if context_paths:
+            coin_context_override_descriptions.append(
+                f"{symbol} ({', '.join(sorted(context_paths))})"
+            )
     hsl_enabled_global = bool(hsl.get("enabled", False))
     return {
         "active": total_wallet_exposure_limit > 0.0 and n_positions > 0,
@@ -207,7 +220,9 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
         "hsl_enabled_global": hsl_enabled_global,
         "hsl_enabled_override_symbols": sorted(hsl_enabled_override_symbols),
         "hsl_signal_mode": str(live.get("hsl_signal_mode", "unknown")),
+        "hedge_mode": bool(live.get("hedge_mode", False)),
         "coin_strategy_override_symbols": sorted(coin_strategy_override_symbols),
+        "coin_context_override_descriptions": sorted(coin_context_override_descriptions),
         "max_realized_loss_pct": _finite_float(
             live.get("max_realized_loss_pct", 1.0), "live.max_realized_loss_pct"
         ),
@@ -704,11 +719,19 @@ def _classify_side(
     cooldown = context["entry_cooldown_minutes"] if context else None
     if not entry_trailing:
         if cooldown == 0.0:
-            if entry["threshold_pct"] <= 0.0:
+            if entry["threshold_pct"] == 0.0:
                 entry_comments.append(
                     "Trailing entries are disabled, entry cooldown is zero, and the passive threshold "
-                    "is non-positive: Rust clamps the first add to current bid/ask, then stops because "
-                    "the next simulated rung duplicates that price. Only one market-touch rung is emitted."
+                    "is zero: the first add remains at the position price, and the next simulated rung "
+                    "duplicates it, so Rust emits one at-position rung."
+                )
+            elif entry["threshold_pct"] < 0.0:
+                entry_comments.append(
+                    "Trailing entries are disabled, entry cooldown is zero, and the passive threshold "
+                    "is negative. Rust emits only one market-touch rung when min(reference, bid) for a "
+                    "long or max(reference, ask) for a short clamps the first add to the current touch; "
+                    "if that clamp does not bind, recursive simulation may produce distinct ladder rungs. "
+                    "The overview has no current bid/ask, so it cannot know which case applies."
                 )
             else:
                 entry_comments.append(
@@ -818,6 +841,13 @@ def _classify_side(
                 f"{context['total_wallet_exposure_limit'] * 100.0:.2f}% across "
                 f"{context['n_positions']} configured position slot(s)."
             )
+        elif context.get("hsl_enabled", False):
+            overall.append(
+                f"Global forced mode {forced_mode!r} is the fallback for this config, but HSL runtime "
+                "state has precedence. ORANGE or RED may replace that static mode with graceful-stop, "
+                "tp-only, or panic behavior, so the table paths remain HSL-dependent rather than wholly "
+                "dormant."
+            )
         elif forced_mode == "panic":
             overall.append(
                 "Global forced mode 'panic' supersedes trailing_martingale: Rust emits an "
@@ -859,8 +889,10 @@ def _classify_side(
             )
         overall.append(
             "Each add starts from the greater of current absolute position size × "
-            f"{context['entry_double_down_factor']:.4g} or initial-entry quantity, before "
-            "minimum-quantity, rounding, and exposure-cropping rules."
+            f"{context['entry_double_down_factor']:.4g} or the configured initial exposure slice "
+            "converted to quantity at the re-entry order price, before minimum-quantity, rounding, "
+            "and exposure-cropping rules. A lower re-entry price therefore produces a larger quantity "
+            "floor for the same exposure slice."
         )
         passive_full_close = (
             not close_trailing
@@ -883,7 +915,10 @@ def _classify_side(
             )
         if context.get("position_exposure_enforcer_enabled", False):
             enforcer_threshold = context.get("position_exposure_enforcer_threshold", 0.0)
-            if context["active"] and forced_mode not in {"panic", "manual"}:
+            if context["active"] and (
+                forced_mode not in {"panic", "manual"}
+                or context.get("hsl_enabled", False)
+            ):
                 overall.append(
                     "Position-exposure enforcement is enabled at "
                     f"{enforcer_threshold * 100.0:g}% WE / effective WEL. CLOSE rows above that "
@@ -906,12 +941,15 @@ def _classify_side(
         if context.get("total_exposure_enforcer_enabled", False):
             twel_threshold = context.get("total_exposure_enforcer_threshold", 0.0)
             twel_policy = context.get("total_exposure_enforcer_policy", "unknown")
-            if context["active"] and forced_mode not in {"panic", "manual"}:
+            if context["active"] and (
+                forced_mode not in {"panic", "manual"}
+                or context.get("hsl_enabled", False)
+            ):
                 overall.append(
                     "The account-wide total-exposure enforcer is enabled at "
                     f"{twel_threshold * 100.0:g}% of side TWEL with policy {twel_policy!r}. CLOSE "
-                    "rows are account-dependent: Rust may append a TWEL repair close to the selected "
-                    "position alongside its strategy close, based on the full same-side portfolio."
+                    "rows are account-dependent: Rust may contribute a TWEL repair candidate for the "
+                    "selected position alongside its strategy close, based on the full same-side portfolio."
                 )
             else:
                 overall.append(
@@ -924,7 +962,7 @@ def _classify_side(
                 f"{context['unstuck_close_pct'] * 100.0:g}%, loss allowance "
                 f"{context['unstuck_loss_allowance_pct'] * 100.0:g}%, and position threshold "
                 f"{context['unstuck_threshold'] * 100.0:g}%. CLOSE rows are unstuck-dependent: "
-                "Rust may append one globally selected unstuck close based on realized PnL and "
+                "Rust may contribute a globally selected unstuck candidate based on realized PnL and "
                 "portfolio/position state."
             )
         elif context.get("unstuck_enabled", False):
@@ -953,6 +991,29 @@ def _classify_side(
                 "replace strategy closes with panic closes at RED, or leave the strategy path unchanged. "
                 "An offline config report cannot know the live HSL tier."
             )
+        if (
+            context.get("position_exposure_enforcer_enabled", False)
+            or context.get("total_exposure_enforcer_enabled", False)
+            or _unstuck_active(context)
+        ):
+            overall.append(
+                "Protective close paths are candidates, not additive orders: finalization retains at "
+                "most one protective reducer per coin and position side. Panic has precedence; otherwise "
+                "Rust selects the largest loss-admissible candidate, which may coexist with ordinary "
+                "strategy closes after aggregate close quantity is capped."
+            )
+        if not context.get("hedge_mode", False):
+            overall.append(
+                "One-way mode is configured. When both sides are flat and eligible for the same coin, "
+                "Rust permits only one initial side, selected by relative EMA-band trigger distance "
+                "with a long-side tie break; the other initial entry is blocked."
+            )
+        else:
+            overall.append(
+                "Hedge mode is requested by the config, but effective hedge mode also requires exchange "
+                "support. A one-way-only connector still activates the initial-side arbitration described "
+                "below."
+            )
         coin_strategy_override_symbols = context.get("coin_strategy_override_symbols", ())
         if coin_strategy_override_symbols:
             overall.append(
@@ -961,6 +1022,17 @@ def _classify_side(
                 + ". They are explicitly omitted from these tables, which show only the global "
                 "bot-side parameters; the listed coins may have different effective thresholds, "
                 "retracements, and prices at runtime."
+            )
+        coin_context_override_descriptions = context.get(
+            "coin_context_override_descriptions", ()
+        )
+        if coin_context_override_descriptions:
+            overall.append(
+                "Coin-specific non-strategy runtime overrides are also omitted from the global table "
+                "context: "
+                + "; ".join(coin_context_override_descriptions)
+                + ". Those coins may therefore use different forced modes, cooldowns, risk enforcement, "
+                "exposure limits, or unstuck behavior than the runtime-path labels shown here."
             )
     else:
         overall.append(
@@ -1065,8 +1137,10 @@ def build_overview(
                 enforcer_enabled = bool(
                     context
                     and context["active"]
-                    and context.get("forced_mode", "normal")
-                    not in {"panic", "manual"}
+                    and (
+                        context.get("forced_mode", "normal") not in {"panic", "manual"}
+                        or context.get("hsl_enabled", False)
+                    )
                     and context.get("position_exposure_enforcer_enabled", False)
                 )
                 enforcer_threshold = (
@@ -1337,9 +1411,10 @@ def _scenario_runtime_path(
         if not context["active"]:
             return "side disabled"
         forced_mode = context.get("forced_mode", "normal")
-        if forced_mode in {"panic", "manual"}:
+        hsl_enabled = context.get("hsl_enabled", False)
+        if forced_mode in {"panic", "manual"} and not hsl_enabled:
             return f"{forced_mode} dormant"
-        if kind == "entry" and forced_mode == "tp_only":
+        if kind == "entry" and forced_mode == "tp_only" and not hsl_enabled:
             return "tp_only blocked"
     if kind == "entry":
         if payload.get("inactive_reason") in {
@@ -1354,6 +1429,13 @@ def _scenario_runtime_path(
         qualifiers = []
         if context.get("hsl_enabled", False):
             qualifiers.append("HSL-dependent")
+            if context.get("forced_mode", "normal") != "normal":
+                forced_mode = context["forced_mode"]
+                qualifiers.append(
+                    f"{forced_mode} fallback blocks entry"
+                    if forced_mode in {"panic", "manual", "tp_only"}
+                    else f"{forced_mode} fallback"
+                )
         if context.get("total_exposure_entry_gate_enabled", False):
             qualifiers.append("portfolio-dependent")
         return " / ".join(qualifiers) if qualifiers else "re-entry"
@@ -1364,6 +1446,8 @@ def _scenario_runtime_path(
         qualifiers.append("WEL-first")
     if context.get("hsl_enabled", False):
         qualifiers.append("HSL-dependent")
+        if context.get("forced_mode", "normal") != "normal":
+            qualifiers.append(f"{context['forced_mode']} fallback")
     if context.get("total_exposure_enforcer_enabled", False):
         qualifiers.append("TWEL-dependent")
     if _unstuck_active(context):
@@ -1503,8 +1587,10 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "* Order ref is Rust's analytical emitted-order reference after both conditions pass; "
             "the live price is also constrained by bid/ask, tick rounding, sizing, exposure caps, and EMA gating.",
             "* Re-entry/add rows apply only after the position reaches at least 80% of the calculated "
-            "initial-entry quantity. While flat, Rust submits the normal initial entry; below that 80% "
-            "boundary, it submits a partial initial entry. Both initial paths bypass trailing "
+            "initial-entry quantity. While flat, an eligible side may submit the normal initial entry; "
+            "below that 80% boundary, it submits a partial initial entry. In one-way mode, if both sides "
+            "are flat and eligible for the same coin, Rust uses EMA-band distance to permit only one "
+            "initial side. Both initial paths bypass trailing "
             "threshold/retracement and use the initial bid/ask price, optionally pushed farther from "
             "market by the configured initial-entry EMA gate.",
             "* A RE-ENTRY / ADD row marked 'exposure-capped' emits no entry: passive entries stop at "
@@ -1525,10 +1611,13 @@ def render_overview(result: Mapping[str, Any]) -> str:
             "running high, which a positive-priced market cannot satisfy.",
             "* 'HSL-dependent' means the configured equity hard stop may block entries or replace "
             "strategy closes according to live drawdown state that this offline report cannot observe.",
+            "* WEL, TWEL, unstuck, and panic protective paths are competing reducer candidates. "
+            "Finalization keeps at most one per coin and position side rather than summing their "
+            "quantities; panic wins, otherwise the largest loss-admissible candidate is selected.",
             "* A CLOSE runtime path containing 'TWEL-dependent' may coexist with an account-wide "
             "repair close. Which position is reduced and by how much requires full same-side portfolio state.",
-            "* 'unstuck-dependent' means a globally selected auto-unstuck close may coexist when its "
-            "realized-PnL allowance, EMA gate, and position conditions pass.",
+            "* 'unstuck-dependent' means auto-unstuck may become the selected protective reducer when "
+            "its realized-PnL allowance, EMA gate, and position conditions pass.",
             "* 'PnL-gated' means the realized-loss batch gate may remove losing strategy or protective "
             "closes after projected PnL and fees are evaluated against account-wide allowance.",
             "* 'context unknown' is used for strategy-default reports without a config; no claim is "
