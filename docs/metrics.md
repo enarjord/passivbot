@@ -7,10 +7,40 @@ BTC collateral. Metrics without a suffix are currency-agnostic (e.g., position c
 expressed as percentages/ratios.
 
 ## Core growth metrics
+
 - `gain`: Terminal equity divided by starting equity, where terminal equity is the mean of the
   last up to three daily equity values.
 - `adg`: Average daily gain derived from that smoothed terminal equity (`gain.powf(1 / n_days) - 1`).
 - `adg_w`: Mean of `adg` computed on the trailing 10% slices (full run, last half, last third, …).
+- `adg_rolling_hmean_strategy_eq`: Path-sensitive growth on collateral-agnostic strategy equity.
+  For each automatic horizon `h`, it computes every complete rolling growth factor
+  `G(t,h) = equity(t) / equity(t-h)`, then calculates
+  `R(h) = harmonic_mean(G(t,h))^(1/h) - 1`. The final metric is the geometric mean of
+  `1 + R(h)`, minus one, so each horizon contributes equally in daily log-growth space. The automatic
+  horizons retain roughly 48, 16, and 8 non-overlapping-window equivalents and are capped at 30,
+  90, and 180 days; histories of about four years or more therefore use exactly 30/90/180 days.
+  The harmonic mean makes persistently weak windows matter more than isolated windfalls. Keep
+  terminal `adg_strategy_eq` as a separate objective because overlapping rolling windows give the
+  ends of the backtest less coverage than its middle.
+- `adg_time_integrated_strategy_eq`: Dailyized area under log strategy equity relative to its
+  starting value: `exp(2 * trapezoid_sum(log(equity/start)) / days^2) - 1`. It equals ordinary ADG
+  on a perfectly exponential curve, rewards gains that arrive earlier, and penalizes equity that
+  spends much of the run below its start. Use it together with terminal ADG: an early windfall
+  followed by deterioration can still have positive area.
+- `positive_gain_participation_strategy_eq`: Effective participation of positive daily log gains,
+  normalized to `[0, 1]`: `(sum(p)^2) / (N * sum(p^2))`, where
+  `p = max(log(equity(t) / equity(t-1)), 0)`. If positive gain is spread equally across `k` of `N`
+  daily intervals, the score is `k / N`; concentration in a few unusually large positive days
+  lowers it further. The metric deliberately ignores negative returns, leaving their magnitude and
+  duration to Sortino and drawdown objectives, and should be paired with a gain objective so tiny
+  frequent gains cannot win on participation alone.
+
+For example, over 240 daily intervals, equal positive gains on all 240 days score `1.0`; equal
+positive gains on 120, 24, or one day score `0.5`, `0.1`, or about `0.0042`. Unequal gains reduce
+the score further. Two curves can therefore finish at the same equity while participation strongly
+prefers the one whose gains were broadly shared. Rolling-harmonic ADG asks a different question:
+whether growth remains sound across many possible 30/90/180-day start and end points.
+
 - `adg_pnl`: Collateral-agnostic daily PnL ratio. For each day, sum all `pnl` and divide by that
   day’s last recorded `usd_total_balance`, then average those daily ratios across the run.
 - `adg_pnl_w`: Weighted version of `adg_pnl` using the same 10-slice trailing averaging as `adg_w`.

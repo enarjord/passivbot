@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added rolling-harmonic ADG, time-integrated ADG, and positive-gain-participation strategy-equity
+  metrics to exact backtest analysis and CPU/GPU optimizer scoring.
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
   analysis boundaries, providing smoother selection pressure against long no-fill periods than a

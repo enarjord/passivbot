@@ -1707,6 +1707,11 @@ fn run_backtest_core<'py>(
             strategy.short.peak_recovery_days_strategy_eq;
         analysis_usd.gain_strategy_eq = strategy.overall.gain_strategy_eq;
         analysis_usd.adg_strategy_eq = strategy.overall.adg_strategy_eq;
+        analysis_usd.adg_rolling_hmean_strategy_eq = strategy.overall.adg_rolling_hmean_strategy_eq;
+        analysis_usd.adg_time_integrated_strategy_eq =
+            strategy.overall.adg_time_integrated_strategy_eq;
+        analysis_usd.positive_gain_participation_strategy_eq =
+            strategy.overall.positive_gain_participation_strategy_eq;
         analysis_usd.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
         analysis_usd.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
         analysis_usd.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;
@@ -1803,6 +1808,11 @@ fn run_backtest_core<'py>(
             strategy.short.peak_recovery_days_strategy_eq;
         analysis_btc.gain_strategy_eq = strategy.overall.gain_strategy_eq;
         analysis_btc.adg_strategy_eq = strategy.overall.adg_strategy_eq;
+        analysis_btc.adg_rolling_hmean_strategy_eq = strategy.overall.adg_rolling_hmean_strategy_eq;
+        analysis_btc.adg_time_integrated_strategy_eq =
+            strategy.overall.adg_time_integrated_strategy_eq;
+        analysis_btc.positive_gain_participation_strategy_eq =
+            strategy.overall.positive_gain_participation_strategy_eq;
         analysis_btc.mdg_strategy_eq = strategy.overall.mdg_strategy_eq;
         analysis_btc.sharpe_ratio_strategy_eq = strategy.overall.sharpe_ratio_strategy_eq;
         analysis_btc.sortino_ratio_strategy_eq = strategy.overall.sortino_ratio_strategy_eq;

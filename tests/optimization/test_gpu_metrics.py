@@ -19,6 +19,7 @@ from optimization.gpu.metrics import (
     _fill_activity_metrics,
     _entry_interval_metrics,
     _fill_gap_metrics,
+    _gain_quality_metrics,
     _hard_stop_lifecycle_metrics,
     _hard_stop_panic_loss_metrics,
     _strategy_eq_recovery_distribution_metrics,
@@ -645,6 +646,98 @@ def test_zero_variance_sharpe_and_sortino_match_rust_zero_contract():
 
     assert sharpe.item() == 0.0
     assert sortino.item() == 0.0
+
+
+def test_gain_quality_metrics_distinguish_steady_early_and_late_gain():
+    day_count = 241
+    ordinal = torch.arange(day_count, dtype=torch.float64)
+    steady = 100.0 * torch.pow(2.0, ordinal / (day_count - 1))
+    early = torch.full((day_count,), 200.0, dtype=torch.float64)
+    early[0] = 100.0
+    late = torch.full((day_count,), 100.0, dtype=torch.float64)
+    late[-1] = 200.0
+    day_eq = torch.stack((steady, early, late))
+    active = torch.ones_like(day_eq, dtype=torch.bool)
+
+    metrics = _gain_quality_metrics(
+        day_eq,
+        active,
+        {
+            "adg_rolling_hmean_strategy_eq",
+            "adg_time_integrated_strategy_eq",
+            "positive_gain_participation_strategy_eq",
+        },
+    )
+
+    rolling = metrics["adg_rolling_hmean_strategy_eq"]
+    integrated = metrics["adg_time_integrated_strategy_eq"]
+    participation = metrics["positive_gain_participation_strategy_eq"]
+    expected_daily_rate = math.expm1(math.log(2.0) / (day_count - 1))
+    assert rolling[0].item() == pytest.approx(expected_daily_rate)
+    assert integrated[0].item() == pytest.approx(expected_daily_rate)
+    assert participation[0].item() == pytest.approx(1.0)
+    assert rolling[0] > rolling[2]
+    assert participation[0] > participation[2]
+    assert integrated[1] > integrated[0] > integrated[2]
+
+
+@pytest.mark.parametrize(
+    ("n_intervals", "horizons"),
+    [(240, [7, 15, 30]), (1_500, [30, 90, 180])],
+)
+def test_rolling_hmean_adg_matches_manual_automatic_horizons(n_intervals, horizons):
+    ordinal = np.arange(n_intervals + 1, dtype=float)
+    log_equity = math.log(100.0) + 0.0003 * ordinal + 0.03 * np.sin(ordinal / 17.0)
+    equity = np.exp(log_equity)
+    expected_daily_logs = []
+    for horizon in horizons:
+        inverse_log_growth = log_equity[:-horizon] - log_equity[horizon:]
+        log_harmonic_growth = math.log(len(inverse_log_growth)) - np.logaddexp.reduce(
+            inverse_log_growth
+        )
+        expected_daily_logs.append(log_harmonic_growth / horizon)
+    expected = math.expm1(float(np.mean(expected_daily_logs)))
+
+    metrics = _gain_quality_metrics(
+        torch.tensor(equity, dtype=torch.float64).unsqueeze(0),
+        torch.ones((1, n_intervals + 1), dtype=torch.bool),
+        {"adg_rolling_hmean_strategy_eq"},
+    )
+
+    assert metrics["adg_rolling_hmean_strategy_eq"].item() == pytest.approx(expected)
+
+
+def test_gain_quality_metrics_compact_missing_days_and_fail_closed():
+    day_eq = torch.tensor(
+        [
+            [100.0, 0.0, 101.0, 101.0, 102.01],
+            [100.0, 0.0, 101.0, -1.0, 102.01],
+        ],
+        dtype=torch.float64,
+    )
+    active = torch.tensor(
+        [
+            [True, False, True, True, True],
+            [True, False, True, True, True],
+        ]
+    )
+
+    metrics = _gain_quality_metrics(
+        day_eq,
+        active,
+        {
+            "adg_rolling_hmean_strategy_eq",
+            "adg_time_integrated_strategy_eq",
+            "positive_gain_participation_strategy_eq",
+        },
+    )
+
+    assert metrics["positive_gain_participation_strategy_eq"][
+        0
+    ].item() == pytest.approx(2.0 / 3.0)
+    assert metrics["adg_rolling_hmean_strategy_eq"][1].item() == -1.0
+    assert metrics["adg_time_integrated_strategy_eq"][1].item() == -1.0
+    assert metrics["positive_gain_participation_strategy_eq"][1].item() == 0.0
 
 
 def test_daily_pnl_metrics_match_rust_fill_day_contract():
@@ -2299,8 +2392,10 @@ def test_completion_is_zero_when_no_equity_sample_exists():
         run,
         {"ts0": 0.0, "n": 3},
         needed={
+            "adg_rolling_hmean_strategy_eq",
             "adg_strategy_eq",
             "adg_strategy_eq_w",
+            "adg_time_integrated_strategy_eq",
             "backtest_completion_ratio",
             "fills_gap_longest_days",
             "fills_gap_mean_hours",
@@ -2308,12 +2403,16 @@ def test_completion_is_zero_when_no_equity_sample_exists():
             "fills_gap_p95_hours",
             "fills_gap_p99_hours",
             "fills_gap_time_weighted_mean_hours",
+            "positive_gain_participation_strategy_eq",
         },
     )
 
     assert metrics["backtest_completion_ratio"].item() == 0.0
     assert metrics["adg_strategy_eq"].item() == 0.0
     assert metrics["adg_strategy_eq_w"].item() == 0.0
+    assert metrics["adg_rolling_hmean_strategy_eq"].item() == 0.0
+    assert metrics["adg_time_integrated_strategy_eq"].item() == 0.0
+    assert metrics["positive_gain_participation_strategy_eq"].item() == 0.0
     assert metrics["fills_gap_longest_days"].item() == 0.0
     for name in (
         "fills_gap_mean_hours",

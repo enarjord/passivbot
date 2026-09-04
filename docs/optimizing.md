@@ -1532,6 +1532,9 @@ over all exchanges before scoring.
 | `mdg`, `mdg_w` | Median Daily Gain and its recency-biased counterpart |
 | `gain` | Final balance gain (end/start ratio) |
 | `adg_strategy_eq`, `adg_strategy_eq_w` | Collateral-agnostic geometric growth on the synthetic strategy-equity curve |
+| `adg_rolling_hmean_strategy_eq` | Harmonic mean of automatic rolling 30/90/180-day-equivalent strategy-equity growth windows, dailyized and combined in log space. Higher values reward growth that survives many start/end windows; retain terminal ADG alongside it. |
+| `adg_time_integrated_strategy_eq` | Dailyized area under log strategy equity. Higher values reward earlier sustained growth; retain terminal ADG alongside it. |
+| `positive_gain_participation_strategy_eq` | Normalized effective participation of positive daily log gains. Higher values mean gains are distributed across more days instead of concentrated in windfalls; pair it with a gain objective. |
 | `mdg_strategy_eq`, `mdg_strategy_eq_w` | Median-day version of the same strategy-equity growth family |
 | `*_per_exposure_{long,short}` | Above metrics divided by the configured exposure limit per side |
 

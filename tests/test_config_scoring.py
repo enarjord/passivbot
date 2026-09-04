@@ -46,6 +46,12 @@ def test_default_objective_goal_recognizes_fill_activity_metrics():
     assert default_objective_goal("backtest_completion_ratio") == "max"
 
 
+def test_default_objective_goal_recognizes_gain_quality_metrics():
+    assert default_objective_goal("adg_rolling_hmean_strategy_eq") == "max"
+    assert default_objective_goal("adg_time_integrated_strategy_eq") == "max"
+    assert default_objective_goal("positive_gain_participation_strategy_eq") == "max"
+
+
 def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
     assert default_objective_goal("drawdown_worst_strategy_eq_long") == "min"
     assert default_objective_goal("drawdown_worst_strategy_eq_short") == "min"

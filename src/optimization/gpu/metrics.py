@@ -95,8 +95,10 @@ BTC_ACCOUNT_METRICS = frozenset(
 # still emit the normal complete metric set; this list governs only which
 # metrics may guide Metal screening or proxy-side limits.
 _GPU_PROXY_METRIC_CANDIDATES = (
+    "adg_rolling_hmean_strategy_eq",
     "adg_strategy_eq",
     "adg_strategy_eq_w",
+    "adg_time_integrated_strategy_eq",
     "backtest_completion_ratio",
     "calmar_ratio_strategy_eq",
     "calmar_ratio_strategy_eq_w",
@@ -158,6 +160,7 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     "position_held_hours_mean",
     "position_held_hours_max",
     "positions_held_per_day",
+    "positive_gain_participation_strategy_eq",
     "position_unchanged_days_max",
     "position_unchanged_hours_max",
     "peak_recovery_hours_strategy_eq_long",
@@ -431,6 +434,141 @@ def _smoothed_gain_adg(day_eq, active):
 
 def _smoothed_adg(day_eq, active):
     return _smoothed_gain_adg(day_eq, active)[1]
+
+
+def _gain_quality_metrics(day_eq, active, requested):
+    """Reduce compact daily closes into path-sensitive gain-quality metrics."""
+
+    names = {
+        "adg_rolling_hmean_strategy_eq",
+        "adg_time_integrated_strategy_eq",
+        "positive_gain_participation_strategy_eq",
+    }
+    requested = set(requested) & names
+    if not requested:
+        return {}
+
+    batch_size, day_count = day_eq.shape
+    zeros = torch.zeros(batch_size, dtype=day_eq.dtype, device=day_eq.device)
+    if day_count < 2:
+        return {name: zeros for name in requested}
+
+    indices = (
+        torch.arange(day_count, device=day_eq.device)
+        .unsqueeze(0)
+        .expand(batch_size, day_count)
+    )
+    counts = active.sum(dim=1)
+    compact_order = torch.argsort(
+        torch.where(active, indices, indices + day_count), dim=1
+    )
+    compact_eq = day_eq.gather(1, compact_order)
+    compact_active = indices < counts.unsqueeze(1)
+    valid_equity = (
+        (~compact_active | (torch.isfinite(compact_eq) & (compact_eq > 0.0)))
+        .all(dim=1)
+        & (counts >= 2)
+    )
+    safe_eq = torch.where(
+        compact_active & (compact_eq > 0.0) & torch.isfinite(compact_eq),
+        compact_eq,
+        torch.ones_like(compact_eq),
+    )
+    log_eq = safe_eq.log()
+    n_intervals = (counts - 1).clamp(min=1)
+    result = {}
+
+    if "positive_gain_participation_strategy_eq" in requested:
+        adjacent = compact_active[:, :-1] & compact_active[:, 1:]
+        positive = torch.where(
+            adjacent,
+            (log_eq[:, 1:] - log_eq[:, :-1]).clamp(min=0.0),
+            torch.zeros_like(log_eq[:, 1:]),
+        )
+        positive_sum = positive.sum(dim=1)
+        positive_squares_sum = (positive * positive).sum(dim=1)
+        participation = torch.where(
+            valid_equity & (positive_squares_sum > torch.finfo(day_eq.dtype).eps),
+            positive_sum * positive_sum
+            / (
+                n_intervals.to(day_eq.dtype)
+                * positive_squares_sum.clamp(min=torch.finfo(day_eq.dtype).eps)
+            ),
+            zeros,
+        )
+        result["positive_gain_participation_strategy_eq"] = participation
+
+    if "adg_time_integrated_strategy_eq" in requested:
+        relative_log_eq = log_eq - log_eq[:, :1]
+        trapezoid_weights = compact_active.to(day_eq.dtype)
+        trapezoid_weights[:, 0] *= 0.5
+        last_indices = (counts - 1).clamp(min=0)
+        last_weights = trapezoid_weights.gather(1, last_indices.unsqueeze(1))
+        trapezoid_weights.scatter_(1, last_indices.unsqueeze(1), last_weights * 0.5)
+        area = (relative_log_eq * trapezoid_weights).sum(dim=1)
+        daily_log_growth = 2.0 * area / n_intervals.to(day_eq.dtype).square()
+        result["adg_time_integrated_strategy_eq"] = torch.where(
+            valid_equity,
+            torch.expm1(daily_log_growth),
+            torch.where(counts >= 2, torch.full_like(zeros, -1.0), zeros),
+        )
+
+    if "adg_rolling_hmean_strategy_eq" in requested:
+        daily_log_growth_sum = zeros.clone()
+        horizon_count = torch.zeros_like(counts)
+        prior_horizons = []
+        for effective_count, minimum, maximum in (
+            (48, 7, 30),
+            (16, 14, 90),
+            (8, 30, 180),
+        ):
+            horizon = torch.div(n_intervals, effective_count, rounding_mode="floor")
+            horizon = horizon.clamp(min=minimum, max=maximum)
+            horizon = torch.minimum(horizon, n_intervals)
+            include = torch.div(n_intervals, horizon, rounding_mode="floor") >= 8
+            for prior in prior_horizons:
+                include &= horizon != prior
+            prior_horizons.append(horizon)
+
+            end_indices = indices
+            start_indices = (end_indices - horizon.unsqueeze(1)).clamp(min=0)
+            window_mask = (
+                include.unsqueeze(1)
+                & (end_indices >= horizon.unsqueeze(1))
+                & (end_indices < counts.unsqueeze(1))
+            )
+            log_growth = log_eq - log_eq.gather(1, start_indices)
+            inverse_log_growth = torch.where(
+                window_mask, -log_growth, torch.full_like(log_growth, float("-inf"))
+            )
+            window_count = window_mask.sum(dim=1).clamp(min=1)
+            log_harmonic_growth = (
+                window_count.to(day_eq.dtype).log()
+                - torch.logsumexp(inverse_log_growth, dim=1)
+            )
+            daily_log_growth_sum += torch.where(
+                include,
+                log_harmonic_growth / horizon.to(day_eq.dtype),
+                zeros,
+            )
+            horizon_count += include.to(horizon_count.dtype)
+
+        fallback = (
+            log_eq.gather(1, (counts - 1).clamp(min=0).unsqueeze(1)).squeeze(1)
+            - log_eq[:, 0]
+        ) / n_intervals.to(day_eq.dtype)
+        rolling_daily_log_growth = torch.where(
+            horizon_count > 0,
+            daily_log_growth_sum / horizon_count.clamp(min=1).to(day_eq.dtype),
+            fallback,
+        )
+        result["adg_rolling_hmean_strategy_eq"] = torch.where(
+            valid_equity,
+            torch.expm1(rolling_daily_log_growth),
+            torch.where(counts >= 2, torch.full_like(zeros, -1.0), zeros),
+        )
+
+    return result
 
 
 def _equity_shape_metrics(day_eq, active):
@@ -1963,6 +2101,9 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     }
 
     gain, adg = _smoothed_gain_adg(day_end_eq, active)
+    gain_quality_metrics = _gain_quality_metrics(
+        day_end_eq, active, requested_sources
+    )
     daily_changes, change_mask = _pct_change(day_end_eq, active)
     mdg = _masked_median(daily_changes, change_mask)
     omega = _omega_ratio(daily_changes, change_mask)
@@ -2309,6 +2450,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
     objectives.update(weighted_daily_series_metrics)
     objectives.update(weighted_pnl_metrics)
     objectives.update(equity_shape_metrics)
+    objectives.update(gain_quality_metrics)
     for name, (source, side) in _USD_PER_EXPOSURE_METRICS.items():
         if name not in requested:
             continue
