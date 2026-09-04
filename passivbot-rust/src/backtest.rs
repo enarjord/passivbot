@@ -522,6 +522,9 @@ pub struct HardStopMetrics {
 pub struct StrategyEquityMetrics {
     pub gain_strategy_eq: f64,
     pub adg_strategy_eq: f64,
+    pub adg_rolling_hmean_strategy_eq: f64,
+    pub adg_time_integrated_strategy_eq: f64,
+    pub positive_gain_participation_strategy_eq: f64,
     pub mdg_strategy_eq: f64,
     pub sharpe_ratio_strategy_eq: f64,
     pub sortino_ratio_strategy_eq: f64,
@@ -5636,6 +5639,9 @@ impl<'a> Backtest<'a> {
             StrategyEquityMetrics {
                 gain_strategy_eq: equity_metrics.gain,
                 adg_strategy_eq: equity_metrics.adg,
+                adg_rolling_hmean_strategy_eq: equity_metrics.adg_rolling_hmean,
+                adg_time_integrated_strategy_eq: equity_metrics.adg_time_integrated,
+                positive_gain_participation_strategy_eq: equity_metrics.positive_gain_participation,
                 mdg_strategy_eq: equity_metrics.mdg,
                 sharpe_ratio_strategy_eq: equity_metrics.sharpe_ratio,
                 sortino_ratio_strategy_eq: equity_metrics.sortino_ratio,
@@ -9277,6 +9283,14 @@ mod tests {
             (strategy_metrics.overall.gain_strategy_eq - ((100.0 + 90.0 + 75.0) / 3.0 / 100.0))
                 .abs()
                 < 1e-12
+        );
+        assert!(strategy_metrics.overall.adg_rolling_hmean_strategy_eq < 0.0);
+        assert!(strategy_metrics.overall.adg_time_integrated_strategy_eq < 0.0);
+        assert_eq!(
+            strategy_metrics
+                .overall
+                .positive_gain_participation_strategy_eq,
+            0.0
         );
         assert!((hs_metrics.triggers_per_year - 547.875).abs() < 1e-12);
         assert!((hs_metrics.restarts_per_year - 182.625).abs() < 1e-12);

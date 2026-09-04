@@ -62,7 +62,10 @@ fn select_contiguous_fill_suffix(
 pub struct EquitySeriesMetrics {
     pub gain: f64,
     pub adg: f64,
+    pub adg_rolling_hmean: f64,
+    pub adg_time_integrated: f64,
     pub mdg: f64,
+    pub positive_gain_participation: f64,
     pub sharpe_ratio: f64,
     pub sortino_ratio: f64,
     pub omega_ratio: f64,
@@ -405,7 +408,10 @@ pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquityS
         .collect();
 
     let (gain, adg) = smoothed_terminal_geometric_gain_and_adg(&daily_eqs);
+    let adg_rolling_hmean = calc_rolling_hmean_adg(&daily_eqs);
+    let adg_time_integrated = calc_time_integrated_adg(&daily_eqs);
     let mdg = median(&daily_eqs_pct_change);
+    let positive_gain_participation = calc_positive_gain_participation(&daily_eqs);
     let (sharpe_ratio, sortino_ratio) = calc_sharpe_and_sortino(&daily_eqs_mins_pct_change, adg);
     let (gains_sum, losses_sum) =
         daily_eqs_pct_change
@@ -422,7 +428,10 @@ pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquityS
     EquitySeriesMetrics {
         gain,
         adg,
+        adg_rolling_hmean,
+        adg_time_integrated,
         mdg,
+        positive_gain_participation,
         sharpe_ratio,
         sortino_ratio,
         omega_ratio,
@@ -1808,6 +1817,111 @@ pub fn smoothed_terminal_geometric_gain_and_adg(daily_eqs: &[f64]) -> (f64, f64)
     (gain, gain.powf(1.0 / n_days) - 1.0)
 }
 
+/// Chooses up to three deterministic rolling-growth horizons from the number of complete
+/// daily intervals. Shorter histories shrink the horizons to retain approximately 48, 16,
+/// and 8 non-overlapping window equivalents; histories of four years or more settle on the
+/// fixed 30, 90, and 180 day horizons.
+fn automatic_rolling_growth_horizons(n_intervals: usize) -> Vec<usize> {
+    if n_intervals == 0 {
+        return Vec::new();
+    }
+    let mut horizons = Vec::with_capacity(3);
+    for (effective_count, minimum, maximum) in
+        [(48_usize, 7_usize, 30_usize), (16, 14, 90), (8, 30, 180)]
+    {
+        let horizon = (n_intervals / effective_count)
+            .clamp(minimum, maximum)
+            .min(n_intervals);
+        if n_intervals / horizon >= 8 && !horizons.contains(&horizon) {
+            horizons.push(horizon);
+        }
+    }
+    if horizons.is_empty() {
+        horizons.push(n_intervals);
+    }
+    horizons
+}
+
+/// Robust daily growth from harmonic means of every complete rolling equity-growth window.
+/// Each automatically selected horizon contributes equally in daily log-growth space.
+pub fn calc_rolling_hmean_adg(daily_eqs: &[f64]) -> f64 {
+    if daily_eqs.len() < 2
+        || daily_eqs
+            .iter()
+            .any(|&equity| equity <= 0.0 || !equity.is_finite())
+    {
+        return if daily_eqs.len() < 2 { 0.0 } else { -1.0 };
+    }
+    let n_intervals = daily_eqs.len() - 1;
+    let horizons = automatic_rolling_growth_horizons(n_intervals);
+    let log_equities: Vec<f64> = daily_eqs.iter().map(|equity| equity.ln()).collect();
+    let mut daily_log_growth_sum = 0.0;
+    for &horizon in &horizons {
+        let inverse_log_growths: Vec<f64> = (horizon..daily_eqs.len())
+            .map(|end| log_equities[end - horizon] - log_equities[end])
+            .collect();
+        let max_log = inverse_log_growths
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let log_sum_exp = max_log
+            + inverse_log_growths
+                .iter()
+                .map(|value| (*value - max_log).exp())
+                .sum::<f64>()
+                .ln();
+        let log_harmonic_growth = (inverse_log_growths.len() as f64).ln() - log_sum_exp;
+        daily_log_growth_sum += log_harmonic_growth / horizon as f64;
+    }
+    (daily_log_growth_sum / horizons.len() as f64).exp_m1()
+}
+
+/// Fraction of daily observations effectively contributing positive log-equity growth.
+/// This is the inverse-Herfindahl participation ratio normalized to [0, 1].
+pub fn calc_positive_gain_participation(daily_eqs: &[f64]) -> f64 {
+    if daily_eqs.len() < 2
+        || daily_eqs
+            .iter()
+            .any(|&equity| equity <= 0.0 || !equity.is_finite())
+    {
+        return 0.0;
+    }
+    let mut positive_sum = 0.0;
+    let mut positive_squares_sum = 0.0;
+    for values in daily_eqs.windows(2) {
+        let positive_growth = (values[1] / values[0]).ln().max(0.0);
+        positive_sum += positive_growth;
+        positive_squares_sum += positive_growth * positive_growth;
+    }
+    if positive_squares_sum <= f64::EPSILON {
+        0.0
+    } else {
+        positive_sum * positive_sum / ((daily_eqs.len() - 1) as f64 * positive_squares_sum)
+    }
+}
+
+/// Dailyized area under log equity relative to its start. The factor of two makes this equal
+/// ordinary geometric ADG for a perfectly exponential equity curve.
+pub fn calc_time_integrated_adg(daily_eqs: &[f64]) -> f64 {
+    if daily_eqs.len() < 2
+        || daily_eqs
+            .iter()
+            .any(|&equity| equity <= 0.0 || !equity.is_finite())
+    {
+        return if daily_eqs.len() < 2 { 0.0 } else { -1.0 };
+    }
+    let start_log = daily_eqs[0].ln();
+    let mut previous = 0.0;
+    let mut area = 0.0;
+    for &equity in &daily_eqs[1..] {
+        let current = equity.ln() - start_log;
+        area += (previous + current) * 0.5;
+        previous = current;
+    }
+    let duration = (daily_eqs.len() - 1) as f64;
+    (2.0 * area / duration.powi(2)).exp_m1()
+}
+
 /// Calculates average volume per day as a percentage of balance.
 /// For each fill: abs(qty) * price / balance_at_fill
 pub fn calc_avg_volume_pct_per_day(fills: &[Fill]) -> f64 {
@@ -2466,6 +2580,50 @@ mod tests {
 
         assert!((gain - expected_gain).abs() < 1e-12);
         assert!((adg - expected_adg).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_gain_quality_metrics_match_constant_exponential_growth() {
+        let daily_rate = 0.01_f64;
+        let daily_eqs: Vec<f64> = (0..=240)
+            .map(|day| 100.0 * (1.0 + daily_rate).powi(day))
+            .collect();
+
+        assert!((calc_rolling_hmean_adg(&daily_eqs) - daily_rate).abs() < 1e-12);
+        assert!((calc_time_integrated_adg(&daily_eqs) - daily_rate).abs() < 1e-12);
+        assert!((calc_positive_gain_participation(&daily_eqs) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_gain_quality_metrics_distinguish_when_equal_terminal_gain_arrives() {
+        let n_days = 240_usize;
+        let steady: Vec<f64> = (0..=n_days)
+            .map(|day| 100.0 * 2.0_f64.powf(day as f64 / n_days as f64))
+            .collect();
+        let mut early = vec![200.0; n_days + 1];
+        early[0] = 100.0;
+        let mut late = vec![100.0; n_days + 1];
+        late[n_days] = 200.0;
+
+        assert!(calc_rolling_hmean_adg(&steady) > calc_rolling_hmean_adg(&late));
+        assert!(
+            calc_positive_gain_participation(&steady) > calc_positive_gain_participation(&late)
+        );
+        assert!(calc_time_integrated_adg(&early) > calc_time_integrated_adg(&steady));
+        assert!(calc_time_integrated_adg(&steady) > calc_time_integrated_adg(&late));
+    }
+
+    #[test]
+    fn test_positive_gain_participation_is_effective_positive_day_fraction() {
+        let daily_eqs = vec![100.0, 101.0, 101.0, 102.01, 102.01];
+        assert!((calc_positive_gain_participation(&daily_eqs) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_automatic_rolling_growth_horizons_are_deterministic_and_scale_with_history() {
+        assert_eq!(automatic_rolling_growth_horizons(1_500), vec![30, 90, 180]);
+        assert_eq!(automatic_rolling_growth_horizons(240), vec![7, 15, 30]);
+        assert_eq!(automatic_rolling_growth_horizons(30), vec![30]);
     }
 
     #[test]
