@@ -18,7 +18,8 @@ All notable user-facing changes will be documented in this file.
   sending account snapshots, while preserving the dashboard and originless native clients.
 
 - Wrapped config documents now strip persisted `hsl_accept_incomplete_history` overrides before
-  normalization, so the HSL coverage waiver remains an explicit per-run CLI choice after reload.
+  normalization and apply CLI overrides to the wrapped payload, so the HSL coverage waiver remains
+  an explicit per-run CLI choice after reload.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the

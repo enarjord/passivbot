@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from config.load import (  # noqa: E402
     load_input_config,
     load_prepared_config,
+    prepare_config,
     strip_persisted_hsl_incomplete_history_override,
 )
 
@@ -124,3 +125,32 @@ def test_serialized_per_run_override_is_stripped_when_wrapped_and_reloaded(tmp_p
     path.write_text(json.dumps({"config": source}))
     reloaded = load_prepared_config(str(path), verbose=False, log_info=False)
     assert reloaded["live"]["hsl_accept_incomplete_history"] is False
+
+
+@pytest.mark.parametrize("persisted_waiver", [False, True])
+def test_wrapped_config_applies_explicit_cli_waiver_before_preparation(
+    tmp_path, persisted_waiver
+):
+    from config.schema import get_template_config
+    from config_utils import update_config_with_args
+
+    config = get_template_config()
+    config["live"]["hsl_accept_incomplete_history"] = persisted_waiver
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"config": config}))
+    source, base_path, raw = load_input_config(str(path), log_info=False)
+    update_config_with_args(
+        source,
+        SimpleNamespace(**{"live.hsl_accept_incomplete_history": True, "live.leverage": 3}),
+        allowed_keys={"live.hsl_accept_incomplete_history", "live.leverage"},
+    )
+
+    prepared = prepare_config(
+        source, base_config_path=base_path, raw_snapshot=raw,
+        live_only=True, target="live", verbose=False,
+    )
+
+    assert prepared["live"]["hsl_accept_incomplete_history"] is True
+    assert prepared["live"]["leverage"] == 3
+    assert not raw["config"]["live"].get("hsl_accept_incomplete_history", False)
+    assert "live" not in source

@@ -2242,6 +2242,8 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
 def update_config_with_args(
     config, args, verbose=False, allowed_keys: Optional[set[str]] = None
 ):
+    if detect_flavor(config, get_template_config()) == "nested_current":
+        config = config["config"]
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
