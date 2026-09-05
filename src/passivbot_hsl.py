@@ -1487,10 +1487,17 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
         return 0.0, 0.0
     lookback_ms = self._equity_hard_stop_lookback_ms()
     start_ms = None if lookback_ms is None else int(timestamp_ms) - int(lookback_ms)
+    reset_events = _equity_hard_stop_coin_events_after_reset(
+        self._pnls_manager.get_events(), pside, symbol, reset_timestamp_ms,
+        qty_step=_hsl_qty_step_for_symbol(self, symbol),
+    )
     if reset_timestamp_ms is not None:
-        start_ms = int(reset_timestamp_ms) if start_ms is None else max(start_ms, int(reset_timestamp_ms))
+        reset_start = min(
+            [int(reset_timestamp_ms), *map(_equity_hard_stop_fill_timestamp_ms, reset_events)]
+        )
+        start_ms = reset_start if start_ms is None else max(start_ms, reset_start)
     events = []
-    for event in self._pnls_manager.get_events():
+    for event in reset_events:
         if _equity_hard_stop_fill_pside(event) != pside:
             continue
         if _equity_hard_stop_fill_symbol(event) != symbol:
@@ -2054,6 +2061,58 @@ def _equity_hard_stop_order_fill_cohorts(fill_events):
             else:
                 known_sizes[pair] = size + qty if action == "increase" else size - qty
     return ordered, ambiguous
+
+
+def _equity_hard_stop_coin_events_after_reset(
+    fill_events, pside, symbol, reset_timestamp_ms, *, qty_step=0.0
+):
+    """Retain the proven tail after a flatten, including same-millisecond re-entry."""
+    events = [
+        event
+        for event in fill_events
+        if _equity_hard_stop_fill_pside(event) == pside
+        and _equity_hard_stop_fill_symbol(event) == symbol
+    ]
+    if reset_timestamp_ms is None:
+        return events
+    reset_ts = int(reset_timestamp_ms)
+    boundary_ts = reset_ts - 1
+    cohort = [
+        event for event in events if _equity_hard_stop_fill_timestamp_ms(event) == boundary_ts
+    ]
+    if len(cohort) > 1 and {_equity_hard_stop_fill_action(event) for event in cohort} == {
+        "increase",
+        "decrease",
+    }:
+        ordered, ambiguous = _equity_hard_stop_order_fill_cohorts(events)
+        if ambiguous:
+            raise AuthoritativeSurfaceUnavailable(
+                "hsl_episode_boundaries", f"{pside}:{symbol} reset fill cohort is ambiguous"
+            )
+        size = 0.0
+        last_boundary_index = None
+        epsilon = _hsl_flat_epsilon(qty_step)
+        for index, event in enumerate(ordered):
+            event_ts = _equity_hard_stop_fill_timestamp_ms(event)
+            if event_ts > boundary_ts:
+                break
+            qty = _equity_hard_stop_fill_replay_qty(event)
+            action = _equity_hard_stop_fill_action(event)
+            if qty is None or action not in {"increase", "decrease"}:
+                break
+            previous_size = size
+            if action == "decrease" and qty > size + epsilon:
+                break
+            size = size + qty if action == "increase" else max(0.0, size - qty)
+            if event_ts == boundary_ts and previous_size > epsilon and size <= epsilon:
+                last_boundary_index = index
+        if last_boundary_index is None:
+            raise AuthoritativeSurfaceUnavailable(
+                "hsl_episode_boundaries",
+                f"{pside}:{symbol} reset fill cohort cannot prove flatten",
+            )
+        return ordered[last_boundary_index + 1 :]
+    return [event for event in events if _equity_hard_stop_fill_timestamp_ms(event) >= reset_ts]
 
 
 def _equity_hard_stop_coin_replay_events(
@@ -5701,12 +5760,10 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
             ):
                 continue
             reset_ts = state.get("pnl_reset_timestamp_ms")
-            scope_events = [
-                event
-                for event in events
-                if reset_ts is None or _equity_hard_stop_fill_timestamp_ms(event) >= int(reset_ts)
-            ]
             qty_step = _hsl_qty_step_for_symbol(self, symbol)
+            scope_events = _equity_hard_stop_coin_events_after_reset(
+                events, pside, symbol, reset_ts, qty_step=qty_step
+            )
             replay, ambiguous = _equity_hard_stop_coin_replay_events(
                 scope_events, pside, symbol, qty_step=qty_step
             )

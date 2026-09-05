@@ -14439,6 +14439,10 @@ class Passivbot:
                     "c_mult": float(self.c_mults.get(symbol, 1.0)),
                 }
             )
+            if fill.get("raw"):
+                # Exact tied-fill replay requires the exchange's position-chain
+                # evidence, not the locally reconstructed position annotation.
+                out[-1]["raw"] = fill["raw"]
         return sorted(out, key=lambda x: x["timestamp"])
 
     async def get_balance_equity_history(

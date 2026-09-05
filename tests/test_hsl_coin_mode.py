@@ -5500,3 +5500,51 @@ def test_hsl_tied_cycle_requires_raw_chain_and_known_pre_cohort_size():
     ordered, ambiguous = hsl._equity_hard_stop_order_fill_cohorts([initial, *cohort])
     assert not ambiguous
     assert [event["action"] for event in ordered] == ["increase", "decrease", "increase"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_cohort", [False, True])
+async def test_coin_reset_retains_proven_same_millisecond_reentry_fee(reverse_cohort):
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    initial = dict(timestamp=60_000, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0)
+    cohort = []
+    for action, before, pnl, fee in [("decrease", 1.0, -10.0, 0.0), ("increase", 0.0, 0.0, -1.0)]:
+        event = dict(
+            timestamp=180_500,
+            symbol="A",
+            pside="long",
+            action=action,
+            qty=1.0,
+            pnl=pnl,
+            fee_paid=fee,
+        )
+        event["raw"] = [
+            {
+                "data": {
+                    "side": "sell" if action == "decrease" else "buy",
+                    "amount": 1.0,
+                    "price": 1.0,
+                    "info": {"startPosition": str(before)},
+                }
+            }
+        ]
+        cohort.append(event)
+    bot._pnls_manager = make_fake_pnls_manager(
+        [initial, *(reversed(cohort) if reverse_cohort else cohort)]
+    )
+    state = bot._hsl_coin_state("long", "A")
+    state["pnl_reset_timestamp_ms"] = 180_501
+    bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long", "A", 180_500, 990.0, 0.0, 0.0, 0.0, latch_red=False
+    )
+    for _ in range(2):
+        assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+            bot, 240_000, 989.0
+        )
+        assert state["pnl_reset_timestamp_ms"] == 180_501
+        assert bot._equity_hard_stop_coin_realized_pnl_peak_last(
+            "long", "A", 240_000, 180_501
+        ) == (0.0, -1.0)

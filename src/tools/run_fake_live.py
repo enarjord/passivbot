@@ -23,6 +23,7 @@ from config.runtime_compile import compile_runtime_config
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
 from live.event_bus import LiveEvent, LiveEventContext, LiveEventPipeline
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from logging_setup import configure_logging
 import passivbot as passivbot_mod
 from passivbot import setup_bot, shutdown_bot
@@ -677,6 +678,23 @@ async def _run_fake_bot(
 
 
 async def _run_fake_cycle(bot):
+    try:
+        return await _run_fake_cycle_ready(bot)
+    except AuthoritativeSurfaceUnavailable as exc:
+        if exc.surface != "hsl_episode_boundaries":
+            raise
+        # Match the live loop: unknown held-episode evidence defers shared ordinary
+        # planning, while an independently latched RED scope keeps supervision.
+        if bot._equity_hard_stop_signal_mode() == "coin":
+            if bot._equity_hard_stop_coin_red_active():
+                await bot._equity_hard_stop_run_coin_red_supervisor()
+                return {"red_supervisor": True, "mode": "coin"}
+        elif _fake_active_red_psides(bot):
+            return await _run_fake_red_supervisor_step(bot)
+        return {"updated": False, "hsl_ready": False}
+
+
+async def _run_fake_cycle_ready(bot):
     if not await bot.update_pos_oos_pnls_ohlcvs():
         return {"updated": False}
     if bot._equity_hard_stop_enabled():

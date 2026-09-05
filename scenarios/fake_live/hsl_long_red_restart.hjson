@@ -29,8 +29,7 @@
       {
         id: "11"
         order: "11"
-        // Distinct timestamps prove the boot flatten/re-entry execution order.
-        timestamp: "2026-01-01T00:00:59.999Z"
+        timestamp: "2026-01-01T00:01:00Z"
         symbol: "BTC/USDT:USDT"
         position_side: long
         side: sell
@@ -39,6 +38,7 @@
         pnl: 100.0
         reduceOnly: true
         clientOrderId: initial_take_profit_boot
+        info: {startPosition: "5.0"}
       }
       {
         id: "12"
@@ -51,6 +51,7 @@
         price: 100.0
         pnl: 0.0
         clientOrderId: reentry_boot
+        info: {startPosition: "0.0"}
       }
     ]
   }
