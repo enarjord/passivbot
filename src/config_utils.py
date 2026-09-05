@@ -2239,9 +2239,16 @@ def recursive_config_update(config, key, value, path=None, verbose=False):
     )
 
 
+def effective_config_payload(config: dict) -> dict:
+    """Return the supported payload without discarding wrapper provenance."""
+    return config["config"] if detect_flavor(config, {}) == "nested_current" else config
+
+
 def update_config_with_args(
     config, args, verbose=False, allowed_keys: Optional[set[str]] = None
 ):
+    transform_root = config
+    config = effective_config_payload(config)
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
@@ -2275,7 +2282,7 @@ def update_config_with_args(
         details = {"keys": changed_keys}
         if diffs:
             details["diffs"] = diffs
-        record_transform(config, "update_config_with_args", details)
+        record_transform(transform_root, "update_config_with_args", details)
 
 
 def get_template_config():

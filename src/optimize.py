@@ -101,6 +101,7 @@ from config_utils import (
     add_config_arguments,
     project_template_config_for_cli,
     update_config_with_args,
+    effective_config_payload,
     recursive_config_update,
     merge_negative_cli_values,
     clean_config,
@@ -3398,16 +3399,13 @@ async def main():
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
-    existing_limits = deepcopy(source_config.get("optimize", {}).get("limits"))
+    existing_limits = deepcopy(effective_config_payload(source_config).get("optimize", {}).get("limits"))
     update_config_with_args(source_config, args, verbose=True, allowed_keys=allowed_config_keys)
     cli_limits_override = _resolve_cli_limits_override(args, existing_limits=existing_limits)
     if cli_limits_override is not None:
-        recursive_config_update(
-            source_config,
-            "optimize.limits",
-            cli_limits_override,
-            verbose=True,
-        )
+        update_config_with_args(source_config,
+                                argparse.Namespace(**{"optimize.limits": cli_limits_override}),
+                                verbose=True, allowed_keys={"optimize.limits"})
     config = prepare_config(
         source_config,
         base_config_path=base_config_path,
