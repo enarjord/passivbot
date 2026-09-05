@@ -20,6 +20,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    unrealized-PnL availability. Multiple boundaries inside one replay minute retain their exact
    fill order, realized PnL, fees, and account balance at each boundary. Missing price replay may
    defer drawdown evaluation, but it must not hide an episode boundary.
+   Coin boundary balance reverses all account PnL/fees strictly after the boundary timestamp and
+   the proven same-pair fill tail within that timestamp. Other pairs at the same timestamp remain
+   included in the account timestamp cohort, matching the incremental live convention.
    Mixed-action fills sharing a millisecond require an unambiguous exchange-provided position
    chain; list order and locally reconstructed position annotations are not ordering evidence.
    Each proven fill boundary evaluates its final risk sample. Distinct boundaries in the same

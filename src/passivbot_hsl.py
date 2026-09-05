@@ -4336,6 +4336,18 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 f"get_balance_equity_history()['fill_events'] must be a list, got {type(fill_events).__name__}"
             )
         fill_events_by_pair = _equity_hard_stop_index_coin_fill_events(fill_events)
+        account_fill_events = sorted(fill_events, key=_equity_hard_stop_fill_timestamp_ms)
+        account_fill_timestamps = [
+            _equity_hard_stop_fill_timestamp_ms(event) for event in account_fill_events
+        ]
+        account_realized_prefix = [0.0]
+        for event in account_fill_events:
+            delta = float(_equity_hard_stop_event_value(event, "pnl", 0.0) or 0.0)
+            delta += _equity_hard_stop_fee_cost(event)
+            cumulative = account_realized_prefix[-1] + delta
+            if not math.isfinite(cumulative):
+                raise ValueError("coin HSL boundary account PnL and fees must be finite")
+            account_realized_prefix.append(cumulative)
 
         compact_replay = history.get("hsl_coin_compact_replay")
         timeline = history.get("timeline")
@@ -5300,11 +5312,29 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             boundary_abs_realized = (
                                 row_start_abs_realized + realized_delta_at_flatten
                             )
-                            boundary_balance = (
-                                row_balance
-                                - row_realized_delta
-                                + realized_delta_at_flatten
+                            # Minute balance includes every account fill in that
+                            # minute. Undo all later timestamps, then the proven
+                            # same-pair tail after this exact flatten. Other pairs
+                            # at F remain in its timestamp cohort, as in live replay.
+                            account_after = bisect.bisect_right(
+                                account_fill_timestamps, flatten_ts
                             )
+                            account_row_end = bisect.bisect_left(
+                                account_fill_timestamps, source_sample_ts + 60_000
+                            )
+                            later_account_delta = (
+                                account_realized_prefix[account_row_end]
+                                - account_realized_prefix[account_after]
+                            )
+                            tied_pair_delta = 0.0
+                            tail_index = flatten_index + 1
+                            while (
+                                tail_index < len(replay_events)
+                                and replay_events[tail_index][0] == flatten_ts
+                            ):
+                                tied_pair_delta += replay_events[tail_index][3]
+                                tail_index += 1
+                            boundary_balance = row_balance - later_account_delta - tied_pair_delta
                             peak_realized, window_last_realized = rolling_realized_at(
                                 flatten_ts, boundary_abs_realized
                             )
