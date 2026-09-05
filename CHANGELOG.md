@@ -24,8 +24,10 @@ All notable user-facing changes will be documented in this file.
 
 - External NumPy candle files no longer permit pickle objects, and local archive extraction
   explicitly filters unsafe paths and links on every supported Python version.
+
 - Fill accounting now preserves explicitly reported zero fees and fully resolved zero-sum fee
-  lists. Non-quote fee conversion refreshes expired ticker quotes and retries temporary lookup
+  lists while retaining missing or malformed amounts for fallback accounting, including after
+  fill coalescing. Non-quote fee conversion refreshes expired ticker quotes and retries temporary lookup
   failures, preventing stale conversion rates or permanent fallback fees during long-running bots.
 
 - The monitor relay rejects foreign or malformed browser WebSocket origins before reading or

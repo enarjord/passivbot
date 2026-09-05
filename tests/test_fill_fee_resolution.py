@@ -200,3 +200,129 @@ async def test_nonfinite_quote_does_not_become_a_converted_fee(tmp_path, clock, 
     api.price = price
     fills = manager(tmp_path, api)
     assert await fills._fee_conversion_rate("BNB", "USDT", clock.ms) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_is_old", [True, False], ids=["old-fill-first", "new-fill-first"])
+async def test_fill_specific_quote_rejection_does_not_poison_pair_cache(
+    tmp_path, clock, first_is_old
+):
+    api = TickerApi(clock)
+    # Each timestamp is individually within the age limit relative to now;
+    # the old fill and the quote are too far apart from each other.
+    api.quote_age_ms = -2000
+    fills = manager(tmp_path, api, max_age_ms=10_000)
+    fee = {"currency": "BNB", "cost": 0.001}
+    old = fill(fee, clock.ms - 9000, "old")
+    recent = fill(fee, clock.ms, "recent")
+    batch = [old, recent] if first_is_old else [recent, old]
+    await fills._apply_fee_policy_to_batch(batch)
+
+    assert old["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+    assert recent["fee_source"] == fem.FEE_SOURCE_REPORTED_CONVERTED
+    assert recent["fee_paid"] == pytest.approx(-0.3)
+    # A following current fill still reuses the pair's positive quote.
+    subsequent = fill(fee, clock.ms, "subsequent")
+    await fills._apply_fee_policy_to_batch([subsequent])
+    assert subsequent["fee_paid"] == pytest.approx(-0.3)
+    assert api.calls == (1 if first_is_old else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_cost", [None, "", "invalid", "nan", "inf", False])
+@pytest.mark.parametrize("valid_first", [True, False], ids=["valid-first", "invalid-first"])
+async def test_coalescing_preserves_unresolved_fee_through_refresh_and_reload(
+    tmp_path, clock, invalid_cost, valid_first
+):
+    invalid = fill({"currency": "USDT", "cost": invalid_cost}, clock.ms, "invalid")
+    valid = fill({"currency": "USDT", "cost": 0}, clock.ms, "valid")
+    rows = [valid, invalid] if valid_first else [invalid, valid]
+    coalesced = fem._coalesce_events(rows)
+    assert len(coalesced) == 1
+    api = TickerApi(clock)
+    fills = manager(tmp_path, api, coalesced)
+    await fills.refresh()
+    event = fills.get_events()[0]
+    assert event.fee_source == fem.FEE_SOURCE_FALLBACK_PCT
+    assert event.fee_paid == pytest.approx(-0.4)
+    assert fills.get_pnl_sum() == pytest.approx(3.6)
+    reloaded = manager(tmp_path, api)
+    await reloaded.ensure_loaded()
+    assert reloaded.get_events()[0].fee_source == fem.FEE_SOURCE_FALLBACK_PCT
+    assert reloaded.get_pnl_sum() == pytest.approx(3.6)
+
+
+@pytest.mark.asyncio
+async def test_coalescing_preserves_missing_cost_and_explicit_zero_distinction(tmp_path, clock):
+    api = TickerApi(clock)
+    rows = fem._coalesce_events(
+        [
+            fill({"currency": "USDT"}, clock.ms, "missing"),
+            fill({"currency": "USDT", "cost": 0}, clock.ms + 1, "zero"),
+        ]
+    )
+    fills = manager(tmp_path, api, rows)
+    await fills.refresh()
+    events = {event.id: event for event in fills.get_events()}
+    assert events["missing"].fee_source == fem.FEE_SOURCE_FALLBACK_PCT
+    assert events["missing"].fee_paid == pytest.approx(-0.2)
+    assert events["zero"].fee_source == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert events["zero"].fee_paid == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exchange", ["bybit", "okx"])
+@pytest.mark.parametrize("cost", [None, "", "invalid", "nan", "inf", False, 0.0])
+async def test_exchange_fee_producers_preserve_unknown_vs_zero_after_coalescing(
+    tmp_path, clock, exchange, cost
+):
+    api = TickerApi(clock)
+    if exchange == "bybit":
+        row = fem.BybitFetcher._normalize_trade(
+            {
+                "id": "trade",
+                "timestamp": clock.ms,
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "amount": 1.0,
+                "price": 1000.0,
+                "pnl": 2.0,
+                "fee": {"currency": "USDT", "cost": cost},
+                "info": {"closedSize": 1.0},
+            }
+        )
+    else:
+        row = fem.OkxFetcher(api)._normalize_fill(
+            {
+                "tradeId": "trade",
+                "ts": clock.ms,
+                "instId": "BTC-USDT-SWAP",
+                "side": "sell",
+                "fillSz": 1.0,
+                "fillPx": 1000.0,
+                "fillPnl": 2.0,
+                "posSide": "long",
+                "feeCcy": "USDT",
+                "fee": cost,
+            }
+        )
+    fills = manager(tmp_path, api, fem._coalesce_events([row]))
+    await fills.refresh()
+    event = fills.get_events()[0]
+    exact_zero = isinstance(cost, float) and cost == 0.0
+    assert event.fee_source == (
+        fem.FEE_SOURCE_REPORTED_QUOTE if exact_zero else fem.FEE_SOURCE_FALLBACK_PCT
+    )
+    assert event.fee_paid == pytest.approx(0.0 if exact_zero else -0.2)
+    assert fills.get_pnl_sum() == pytest.approx(2.0 if exact_zero else 1.8)
+
+
+@pytest.mark.parametrize("cost", [None, "", "invalid", "nan", "inf", False])
+def test_bybit_overlap_fee_normalization_does_not_fabricate_zero(cost):
+    fee = fem.FillEventsManager._extract_bybit_fee_from_trade_row(
+        {"fee": {"currency": "USDT", "cost": cost}}
+    )
+    coalesced = fem._coalesce_events([fill(fee, 1_700_000_000_000)])
+    fee_paid, metadata = fem._normalize_fee_paid_from_payload(coalesced[0])
+    assert fee_paid == pytest.approx(-0.2)
+    assert metadata["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
