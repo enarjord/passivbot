@@ -6418,7 +6418,7 @@ class HyperliquidFetcher(BaseFetcher):
         price = float(trade.get("price") or info.get("px") or 0.0)
         pnl = float(trade.get("pnl") or info.get("closedPnl") or 0.0)
         fee = trade.get("fee")
-        if fee is None:
+        if fee is None or (isinstance(fee, (dict, list, tuple)) and not fee):
             fee = {"currency": info.get("feeToken"), "cost": info.get("fee")}
         client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
         direction = str(info.get("dir", "")).lower()

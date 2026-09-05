@@ -9030,3 +9030,14 @@ async def test_hyperliquid_unknown_component_fee_requires_cache_quarantine(tmp_p
     assert quarantine is not None
     assert Path(quarantine).exists()
     assert FillEventCache(tmp_path).load() == []
+
+
+@pytest.mark.parametrize("wrapper,expected", [({}, -0.25), ([], -0.25), (None, -0.25), (0, 0.0), ({"currency": "USDC", "cost": 0}, 0.0)])
+def test_hyperliquid_empty_fee_wrapper_uses_native_amount_without_replacing_zero(wrapper, expected):
+    trade = {"id": "native-fee", "timestamp": 1700000000000,
+             "symbol": "BTC/USDC:USDC", "side": "buy", "amount": 1, "price": 1000,
+             "fee": wrapper, "info": {"feeToken": "USDC", "fee": "0.25", "dir": "Open Long"}}
+    event = HyperliquidFetcher._normalize_trade(trade)
+    paid, metadata = fem._normalize_fee_paid_from_payload(event, quote_currency="USDC")
+    assert paid == pytest.approx(expected)
+    assert metadata["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
