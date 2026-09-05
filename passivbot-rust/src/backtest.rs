@@ -2271,7 +2271,51 @@ impl<'a> Backtest<'a> {
         self.liquidated
     }
 
+    fn validate_candle_coverage(&self) -> Result<(), String> {
+        let n_timesteps = self.hlcvs.shape()[0];
+        for idx in 0..self.n_coins {
+            // Empty declared ranges represent symbols absent for this dataset.
+            if let (Some(&first), Some(&last)) = (
+                self.backtest_params.first_valid_indices.get(idx),
+                self.backtest_params.last_valid_indices.get(idx),
+            ) {
+                if first >= n_timesteps || last < first {
+                    continue;
+                }
+            }
+            if let Some((first, last)) = self.coin_valid_range(idx) {
+                for k in first..=last {
+                    for field in [HIGH, LOW, CLOSE] {
+                        if !self.hlcvs_value(k, idx, field).is_finite() {
+                            return Err(format!(
+                                    "backtest requires contiguous finite H/L/C within each valid range: coin {} index {} candle {} field {}",
+                                    self.backtest_params.coins[idx], idx, k, field,
+                                ));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_held_position_valuation(&self, k: usize) -> Result<(), String> {
+        for idx in 0..self.n_coins {
+            if self.positions.long[idx].size == 0.0 && self.positions.short[idx].size == 0.0 {
+                continue;
+            }
+            if !self.coin_is_valid_at(idx, k) || !self.hlcvs_value(k, idx, CLOSE).is_finite() {
+                return Err(format!(
+                    "missing held-position valuation candle: coin {} index {} candle {}",
+                    self.backtest_params.coins[idx], idx, k,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<(Vec<Fill>, Equities), String> {
+        self.validate_candle_coverage()?;
         let n_timesteps = self.hlcvs.shape()[0];
 
         // --- register first & last valid candle for every coin ---
@@ -2291,6 +2335,7 @@ impl<'a> Backtest<'a> {
             .max(self.first_timestamp_ms);
         for k in 1..(n_timesteps - 1) {
             self.current_step = k;
+            self.validate_held_position_valuation(k)?;
             for idx in 0..self.n_coins {
                 if !self.trade_activation_logged[idx] && self.coin_is_tradeable_at(idx, k) {
                     self.trade_activation_logged[idx] = true;
@@ -6412,7 +6457,7 @@ mod tests {
     }
 
     #[test]
-    fn all_nan_hlc_gap_is_not_valid_or_tradeable() {
+    fn missing_candles_reject_held_valuation_and_preserve_unheld_boundaries() {
         let mut values = vec![1.0; 3 * 4];
         values[4] = f64::NAN;
         values[5] = f64::NAN;
@@ -6470,9 +6515,17 @@ mod tests {
         assert!(bt.coin_is_valid_at(0, 2));
 
         bt.positions.long[0] = Position {
-            size: 1.0,
-            price: 1.0,
+            size: 100.0,
+            price: 2.0,
         };
+        assert_eq!(bt.current_usd_equity_at(0), 900.0);
+        assert_eq!(bt.current_usd_equity_at(2), 900.0);
+        let error = bt.run().err().expect("missing candle must reject backtest");
+        assert!(error.contains("contiguous finite H/L/C"), "{error}");
+        assert!(error.contains("candle 1"), "{error}");
+        assert!(bt.equities.timestamps_ms.is_empty());
+        assert!(bt.validate_held_position_valuation(1).is_err());
+
         let input = bt.build_orchestrator_input_iter(1, None, None, 0..1);
         assert!(!input.symbols[0].tradable);
         assert_ne!(
@@ -6480,6 +6533,21 @@ mod tests {
             Some(orchestrator::TradingMode::Panic),
             "an internal data gap must not be mistaken for a delist"
         );
+        // Missing rows outside the declared listing window are permitted while flat.
+        bt.positions.long[0] = Position::default();
+        bt.coin_first_valid_idx[0] = 2;
+        bt.coin_last_valid_idx[0] = 2;
+        assert!(bt.validate_candle_coverage().is_ok());
+        assert!(bt.validate_held_position_valuation(1).is_ok());
+        bt.coin_first_valid_idx[0] = 0;
+        bt.coin_last_valid_idx[0] = 0;
+        assert!(bt.validate_candle_coverage().is_ok());
+        assert!(bt.validate_held_position_valuation(1).is_ok());
+        bt.positions.short[0] = Position {
+            size: -100.0,
+            price: 2.0,
+        };
+        assert!(bt.validate_held_position_valuation(1).is_err());
     }
 
     #[test]
