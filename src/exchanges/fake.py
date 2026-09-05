@@ -582,6 +582,8 @@ class FakeCCXTClient:
                 "contractMultiplier": self._c_mult(symbol),
             },
         }
+        if "startPosition" in info:
+            boot_fill["info"]["startPosition"] = info["startPosition"]
         self.realized_pnl += float(boot_fill["pnl"])
         self.realized_fees += fee_cost
         self.fills.append(boot_fill)

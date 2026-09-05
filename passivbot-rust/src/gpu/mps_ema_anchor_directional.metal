@@ -1436,6 +1436,19 @@ inline void passivbot_single_coin_impl(
             }
         }
 
+        if (long_close_fill && long_side.psize <= 0.0f) {
+            prepare_coin_hsl_rolling_signal(
+                long_hsl, long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                long_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                realized_pnl_cumsum_long
+            );
+            if (finish_hsl_scoped_episode_at_flat(
+                    long_hsl, &short_hsl, false, short_side.psize > 0.0f,
+                    balance, starting_balance, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_long, kf, interval_ms
+                )) reset_hsl_rolling_pnl_window(long_rolling_pnl);
+        }
+
         bool long_entry_fill = valid && alive && long_enabled
             && long_side.entry_qty > 0.0f
             && (long_side.entry_market
@@ -1559,6 +1572,19 @@ inline void passivbot_single_coin_impl(
             }
         }
 
+        if (short_close_fill && short_side.psize <= 0.0f) {
+            prepare_coin_hsl_rolling_signal(
+                short_hsl, short_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                short_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                realized_pnl_cumsum_short
+            );
+            if (finish_hsl_scoped_episode_at_flat(
+                    short_hsl, &long_hsl, false, long_side.psize > 0.0f,
+                    balance, starting_balance, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_short, kf, interval_ms
+                )) reset_hsl_rolling_pnl_window(short_rolling_pnl);
+        }
+
         bool short_entry_fill = valid && alive && short_enabled
             && short_side.entry_qty > 0.0f
             && (short_side.entry_market
@@ -1622,6 +1648,19 @@ inline void passivbot_single_coin_impl(
                 long_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_long,
                 loss_sum_long, held_max_min, held_sum_min, held_count, day_volume
             );
+            if (forced_long_close) {
+                prepare_coin_hsl_rolling_signal(
+                    long_hsl, long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    long_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                    realized_pnl_cumsum_long
+                );
+                if (finish_hsl_scoped_episode_at_flat(
+                        long_hsl, &short_hsl, false, short_side.psize > 0.0f,
+                        balance, starting_balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_long, kf, interval_ms
+                    )) reset_hsl_rolling_pnl_window(long_rolling_pnl);
+            }
+
             float long_unrealized = long_side.psize > 0.0f
                 ? long_side.psize * c_mult * (close - long_side.pprice)
                 : 0.0f;
@@ -1638,6 +1677,19 @@ inline void passivbot_single_coin_impl(
                 short_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_short,
                 loss_sum_short, held_max_min, held_sum_min, held_count, day_volume
             );
+            if (forced_short_close) {
+                prepare_coin_hsl_rolling_signal(
+                    short_hsl, short_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    short_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                    realized_pnl_cumsum_short
+                );
+                if (finish_hsl_scoped_episode_at_flat(
+                        short_hsl, &long_hsl, false, long_side.psize > 0.0f,
+                        balance, starting_balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_short, kf, interval_ms
+                    )) reset_hsl_rolling_pnl_window(short_rolling_pnl);
+            }
+
             long_close_fill = long_close_fill || forced_long_close;
             short_close_fill = short_close_fill || forced_short_close;
             forced_delist_closed_any = forced_long_close || forced_short_close;

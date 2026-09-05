@@ -302,6 +302,7 @@ def _make_mock_pbr():
             tier_ratio_yellow,
             tier_ratio_orange,
             latch_red=True,
+            at_fill_boundary=False,
         ):
             current_minute = int(timestamp_ms) // 60_000
             alpha = 2.0 / (ema_span_minutes + 1.0)
@@ -4416,10 +4417,20 @@ async def test_hsl_cooldown_normal_resets_runtime_and_clears_halt(monkeypatch):
         lambda pside: removed.__setitem__("count", removed["count"] + 1),
     )
 
+    import passivbot_hsl
+
+    async def replay_restart(target, pside, symbol=None):
+        target._equity_hard_stop_reset_after_restart(pside)
+        target._equity_hard_stop_remove_latch_file(pside)
+        return True
+
+    replay = AsyncMock(side_effect=replay_restart)
+    monkeypatch.setattr(passivbot_hsl, "_equity_hard_stop_replay_live_restart", replay)
     changed = await bot._equity_hard_stop_handle_position_during_cooldown(
         "long", 150_000
     )
     assert changed is True
+    replay.assert_awaited_once_with(bot, "long")
     assert removed["count"] == 1
     assert state["halted"] is False
     assert state["cooldown_until_ms"] is None
@@ -5795,6 +5806,15 @@ async def test_pside_replay_red_episode_ordinary_flatten_latches_cooldown(monkey
     rows = _pside_parity_timeline()
     fills = [
         {
+            "timestamp": 1_000,
+            "symbol": "XMR/USDT:USDT",
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 105.0,
+            "pnl": 0.0,
+        },
+        {
             "timestamp": 195_000,
             "symbol": "XMR/USDT:USDT",
             "position_side": "long",
@@ -6238,13 +6258,23 @@ async def test_hard_stop_initialize_from_history_ignores_panic_marker_without_re
                 }
             ],
             "fill_events": [
-                _make_hsl_fill_event(
-                    121_500,
-                    symbol=symbol,
-                    pside="long",
-                    action="decrease",
-                    pb_order_type="close_panic_long",
-                )
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                },
+                {
+                    "timestamp": 121_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                    "pb_order_type": "close_panic_long",
+                },
             ],
         }
 
@@ -7235,10 +7265,20 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
             ],
             "fill_events": [
                 {
+                    "timestamp": 1_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                },
+                {
                     "timestamp": 121_500,
                     "symbol": symbol,
                     "pside": "long",
                     "action": "decrease",
+                    "qty": 1.0,
+                    "pnl": -20.0,
                     "pb_order_type": "close_panic_long",
                 },
                 {
@@ -7246,6 +7286,8 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
                     "symbol": symbol,
                     "pside": "long",
                     "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
                     "pb_order_type": "entry_initial_normal_long",
                 },
             ],
@@ -7265,6 +7307,11 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
     monkeypatch.setattr(bot, "get_exchange_time", lambda: 200_000)
     monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    # Current cumulative PnL must match the fill tape used to seed the intervention.
+    monkeypatch.setattr(
+        bot, "_equity_hard_stop_realized_pnl_now",
+        lambda pside=None: -20.0 if pside in (None, "long") else 0.0,
+    )
 
     await bot._equity_hard_stop_initialize_from_history()
 
@@ -7333,10 +7380,20 @@ async def test_hard_stop_initialize_from_history_unresolved_panic_residue_stays_
             ],
             "fill_events": [
                 {
+                    "timestamp": 1_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                },
+                {
                     "timestamp": 121_500,
                     "symbol": symbol,
                     "pside": "long",
                     "action": "decrease",
+                    "qty": 0.5,
+                    "pnl": -20.0,
                     "pb_order_type": "close_panic_long",
                 }
             ],

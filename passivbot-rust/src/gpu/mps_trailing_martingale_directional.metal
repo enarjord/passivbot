@@ -2764,6 +2764,19 @@ inline void passivbot_single_coin_impl(
             long_side.secondary_close_qty = 0.0f;
         }
 
+        if (long_close_fill && long_side.psize <= 0.0f) {
+            prepare_coin_hsl_rolling_signal(
+                long_hsl, long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                long_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                realized_pnl_cumsum_long
+            );
+            if (finish_hsl_scoped_episode_at_flat(
+                    long_hsl, &short_hsl, false, short_side.psize > 0.0f,
+                    balance, starting_balance, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_long, kf, interval_ms
+                )) reset_hsl_rolling_pnl_window(long_rolling_pnl);
+        }
+
         bool long_entry_passive_reachable = long_side.entry_qty > 0.0f
             && long_side.entry_ticks > low_nonfill_max_tick;
         long_entry_fill = valid && alive && long_enabled
@@ -3547,6 +3560,19 @@ inline void passivbot_single_coin_impl(
             short_side.secondary_close_qty = 0.0f;
         }
 
+        if (short_close_fill && short_side.psize <= 0.0f) {
+            prepare_coin_hsl_rolling_signal(
+                short_hsl, short_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                short_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                realized_pnl_cumsum_short
+            );
+            if (finish_hsl_scoped_episode_at_flat(
+                    short_hsl, &long_hsl, false, long_side.psize > 0.0f,
+                    balance, starting_balance, realized_pnl_cumsum_last,
+                    realized_pnl_cumsum_short, kf, interval_ms
+                )) reset_hsl_rolling_pnl_window(short_rolling_pnl);
+        }
+
         bool short_entry_passive_reachable = short_side.entry_qty > 0.0f
             && short_side.entry_ticks <= high_fill_max_tick;
         short_entry_fill = valid && alive && short_enabled
@@ -3736,6 +3762,19 @@ inline void passivbot_single_coin_impl(
                 long_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_long,
                 loss_sum_long, held_max_min, held_sum_min, held_count, day_volume
             );
+            if (forced_long_close) {
+                prepare_coin_hsl_rolling_signal(
+                    long_hsl, long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    long_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                    realized_pnl_cumsum_long
+                );
+                if (finish_hsl_scoped_episode_at_flat(
+                        long_hsl, &short_hsl, false, short_side.psize > 0.0f,
+                        balance, starting_balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_long, kf, interval_ms
+                    )) reset_hsl_rolling_pnl_window(long_rolling_pnl);
+            }
+
 #else
             bool forced_long_close = false;
 #endif
@@ -3760,6 +3799,19 @@ inline void passivbot_single_coin_impl(
                 short_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_short,
                 loss_sum_short, held_max_min, held_sum_min, held_count, day_volume
             );
+            if (forced_short_close) {
+                prepare_coin_hsl_rolling_signal(
+                    short_hsl, short_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
+                    short_rolling_base, rolling_capacity, int(kf), pnl_lookback_bars,
+                    realized_pnl_cumsum_short
+                );
+                if (finish_hsl_scoped_episode_at_flat(
+                        short_hsl, &long_hsl, false, long_side.psize > 0.0f,
+                        balance, starting_balance, realized_pnl_cumsum_last,
+                        realized_pnl_cumsum_short, kf, interval_ms
+                    )) reset_hsl_rolling_pnl_window(short_rolling_pnl);
+            }
+
 #else
             bool forced_short_close = false;
 #endif

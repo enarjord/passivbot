@@ -20,6 +20,15 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    unrealized-PnL availability. Multiple boundaries inside one replay minute retain their exact
    fill order, realized PnL, fees, and account balance at each boundary. Missing price replay may
    defer drawdown evaluation, but it must not hide an episode boundary.
+   Coin boundary balance reverses all account PnL/fees strictly after the boundary timestamp and
+   the proven same-pair fill tail within that timestamp. Other pairs at the same timestamp remain
+   included in the account timestamp cohort, matching the incremental live convention.
+   Mixed-action fills sharing a millisecond require an unambiguous exchange-provided position
+   chain; list order and locally reconstructed position annotations are not ordering evidence.
+   Each proven fill boundary evaluates its final risk sample. Distinct boundaries in the same
+   minute replace that minute's EMA sample from its prior baseline instead of advancing EMA time
+   again. Ordinary polling within the minute remains cached. A RED stop is recorded while flat,
+   before a later fill can reopen the scope; a RED-free reset seeds the next episode in that minute.
 5. Current flat state is not a timestamp. If the flattening fill is not yet available, live
    finalization and cooldown anchoring defer visibly while protective entry blocking remains active;
    they never substitute the current time. Cooldown re-panic finalization must replay fills from a
@@ -27,6 +36,11 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 6. Restart reconstruction uses exchange state, fill/PnL history, candles where required, config, and
    current time. Local latch files are diagnostics, not authority. Restart always reconstructs from
    authoritative exchange-derived inputs; no persisted replay state participates in the decision.
+   Live normal interventions and cooldown expiry use that same reconstruction before releasing a
+   halt, retaining entry fees and losses before the next observation. A proven RED stop follows the
+   same restart rules regardless of closing order type; terminal no-restart takes precedence.
+   Same-millisecond normal interventions require the validated fill-chain order and use its
+   cumulative PnL prefix so closing losses are excluded while entry fees survive subsequent polls.
 7. `bot.{pside}.hsl.panic_close_order_type = "market"` is an explicit protective execution
    override when HSL is enabled. Rust may emit that side's `close_panic_*` as a market order even
    when `live.market_orders_allowed = false`; the live flag gates non-panic market execution and
@@ -64,8 +78,21 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 ## Failure Semantics
 
 Incomplete fill coverage follows `../error_contract.md`. A required episode boundary is unavailable
-until supported by fill evidence. The affected HSL scope remains protective and retries after an
-authoritative refresh; unrelated scopes remain available.
+until supported by fill evidence. Startup replay validates all enabled scope tapes before replacing
+existing protective state. The affected HSL scope remains protective and retries after an
+authoritative refresh. Flat scopes pending startup price replay retain the existing per-pair
+create gate, leaving unrelated scopes available. Ambiguous required held-episode evidence defers
+ordinary shared-account planning: the startup gate runs after portfolio intent construction and
+cannot make a plan built from unknown HSL episode state authoritative. Independently ready,
+already-latched RED supervision and required panic protection for active cooldown positions still
+run during that deferral, using fresh protective account state and the configured execution pacing.
+Cancellation-only waves remove entries from terminal no-restart scopes and resting initials from
+flat cooldown scopes without constructing new intent or changing terminal state. Manual ownership
+begins only after a proven cooldown intervention and persists through
+later flat observations; before that intervention, fresh initials remain blocked. If current fill
+evidence cannot distinguish those cases, the cancellation wave refreshes the fill tail after its
+account observation and preserves manual orders if proof remains unavailable. Graceful-stop
+adds to held positions retain their policy semantics.
 
 ## Code And Tests
 

@@ -38,6 +38,7 @@
         pnl: 100.0
         reduceOnly: true
         clientOrderId: initial_take_profit_boot
+        info: {startPosition: "5.0"}
       }
       {
         id: "12"
@@ -50,6 +51,7 @@
         price: 100.0
         pnl: 0.0
         clientOrderId: reentry_boot
+        info: {startPosition: "0.0"}
       }
     ]
   }

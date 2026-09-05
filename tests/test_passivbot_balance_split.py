@@ -13481,3 +13481,41 @@ async def test_hyperliquid_normal_partial_fill_self_echo_invalidates_account(
     assert set(bot._authoritative_pending_confirmations) == (
         {"balance", "positions", "open_orders", "fills"} if has_fill else set()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latched", [False, True])
+async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protection(latched):
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_coin_initialized = True
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
+    bot._equity_hard_stop_signal_mode = lambda: "coin"
+    bot._equity_hard_stop_coin_red_active = lambda: latched
+    bot._equity_hard_stop_check = AsyncMock(
+        side_effect=AuthoritativeSurfaceUnavailable(
+            "hsl_episode_boundaries", "ambiguous fill cohort"
+        )
+    )
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.refresh_authoritative_state = AsyncMock(return_value=True)
+    bot.prepare_planning_universe = AsyncMock()
+    bot.execute_to_exchange = AsyncMock()
+
+    async def stop(*args, **kwargs):
+        bot.stop_signal_received = True
+
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
+    bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock(side_effect=stop)
+    assert await bot.run_execution_loop() is None
+    bot.prepare_planning_universe.assert_not_awaited()
+    bot.execute_to_exchange.assert_not_awaited()
+    assert bot._equity_hard_stop_run_coin_red_supervisor.await_count == int(latched)
+    assert bot._sleep_unless_shutdown.await_count == int(not latched)
