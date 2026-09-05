@@ -649,3 +649,59 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
             "wave": {"event_id": "ow_1"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_restart_after_mixed_create_results_omits_unclassified_eligibility(
+    monkeypatch,
+):
+    from types import MethodType, SimpleNamespace
+    from exchanges.ccxt_bot import CCXTBot
+    from passivbot_exceptions import RestartBotException
+
+    orders = [_initial("ADA/USDT:USDT"), _initial("BTC/USDT:USDT")]
+    for order in orders:
+        order["_planned_account_invalidation_generation"] = 0
+    trace = FreshEntryEligibilityTrace()
+    trace.record_ideal_orders(orders)
+    for order in orders:
+        trace.record_evaluated(order["symbol"], "long")
+    bot = _CreateBot(trace)
+    live_value = bot.live_value
+    bot.live_value = lambda key: (
+        2 if key == "max_n_creations_per_batch" else live_value(key)
+    )
+    bot.execute_order = MethodType(Passivbot.execute_order, bot)
+    bot.execute_orders = MethodType(CCXTBot.execute_orders, bot)
+    connector_calls = []
+
+    async def fail_create(**params):
+        connector_calls.append(params)
+        bot._account_invalidation_generation = 1
+        raise RuntimeError("connector write failed")
+
+    async def exhaust_error_budget(failures):
+        assert len(failures) == 1
+        raise RestartBotException("restart required")
+
+    bot.cca = SimpleNamespace(create_order=fail_create)
+    bot._handle_order_write_failures = exhaust_error_budget
+    emitted = []
+    monkeypatch.setattr(
+        Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        Passivbot,
+        "_emit_initial_entry_eligibility_event",
+        lambda *args, **kwargs: emitted.append(kwargs),
+    )
+
+    with pytest.raises(RestartBotException, match="restart required"):
+        await executor.execute_orders_parent(bot, orders)
+
+    assert len(connector_calls) == 1
+    assert emitted == []
+    assert bot._fresh_entry_eligibility_trace is None

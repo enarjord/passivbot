@@ -1130,7 +1130,8 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
-        _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
+        # Batch results were not classified; do not publish a partial cycle trace.
+        bot._fresh_entry_eligibility_trace = None
         raise
     except Exception as exc:
         for idx, order in enumerate(orders):

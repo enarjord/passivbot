@@ -321,6 +321,7 @@ async def test_fake_client_request_log_counts_order_writes():
     bot.user = "fake_01"
     bot.bot_id = "fake_bot"
     bot.cca = client
+    bot.open_orders = {}
     bot._build_order_params = lambda _order: {
         "positionSide": "LONG",
         "clientOrderId": "pb-test",
@@ -348,6 +349,7 @@ async def test_fake_client_request_log_counts_order_writes():
     assert summary["by_method"]["cancel_order"] == 1
     assert summary["by_category"]["order_write"] == 2
     assert [event_type for event_type, _kwargs in emitted] == [
+        "execution.create_sent",
         "execution.create_connector_call_started",
         "execution.cancel_connector_call_started",
     ]
