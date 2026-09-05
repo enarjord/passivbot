@@ -99,11 +99,12 @@ def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
             "fills_active_days_ratio",
             "fills_active_symbols_count",
             "fills_analysis_duration_days",
+            "n_days",
             "fills_top_symbol_share",
         },
     )
 
-    assert metrics["fills_analysis_duration_days"].item() == 1.0
+    assert metrics["n_days"].item() == metrics["fills_analysis_duration_days"].item() == 1.0
     assert metrics["fills_active_days_ratio"].item() == 1.0
     assert metrics["fills_active_symbols_count"].item() == 1.0
     assert metrics["fills_top_symbol_share"].item() == 1.0

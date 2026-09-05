@@ -3863,6 +3863,8 @@ class TestResultRecorder:
         }
 
         individual.evaluation_metrics = {
+            "effective_start_date": "2024-01-02T00:00:00Z",
+            "effective_end_date": "2024-01-03T00:00:00Z",
             "objectives": objectives,
             "constraint_violation": 0.0,
         }
@@ -3888,6 +3890,7 @@ class TestResultRecorder:
             pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
+            assert saved["metrics"]["effective_start_date"] == "2024-01-02T00:00:00Z"
             strategy_kind = saved["live"]["strategy_kind"]
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]

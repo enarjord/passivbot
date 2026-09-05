@@ -6,6 +6,30 @@ This page documents the main backtest metrics exposed by `passivbot-rust`. Value
 BTC collateral. Metrics without a suffix are currency-agnostic (e.g., position counts) or already
 expressed as percentages/ratios.
 
+## Effective backtest period
+
+- `n_days`: Elapsed days between the first and last actual equity-analysis timestamps,
+  including idle periods. This excludes pre-analysis warmup and reflects early termination.
+  It is not a count of days with fills or a per-coin coverage measure.
+  `fills_analysis_duration_days` remains available with the same value; both names work in
+  scoring and metric lookup, including older result files.
+- `effective_start_date` and `effective_end_date`: Those actual boundaries as UTC ISO timestamps.
+  Empty equity histories have null dates and zero duration; a single timestamp has equal dates
+  and zero duration. Dates are output metadata and are never averaged or used as scoring metrics.
+
+Standalone backtests retain the flat `analysis.json` and also embed structured results in
+`config.json` under `metrics`, matching Pareto members: duration is at `metrics.stats.n_days`
+(`mean`, `min`, `max`, `std`, `median`), and dates are directly under `metrics` when all evaluation
+windows match. `metrics.exchanges.<exchange>` preserves each exchange's dates.
+
+Suites use `suite_metrics.metrics.n_days` for duration statistics and per-scenario values.
+Dates are at `suite_metrics.scenarios.<label>` and its `exchanges.<exchange>` entries;
+shared dates appear directly under `suite_metrics` only when all windows match.
+Suite backtests also save a root `config.json` containing `suite_metrics` alongside
+`suite_summary.json`. Each output config contains fresh results, replacing prior `metrics` and
+`suite_metrics` blocks. `config.original.json`, when present, remains the input snapshot.
+Requested config dates and detailed dataset coverage in the manifest retain their existing roles.
+
 ## Core growth metrics
 - `gain`: Terminal equity divided by starting equity, where terminal equity is the mean of the
   last up to three daily equity values.

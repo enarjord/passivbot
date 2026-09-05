@@ -764,6 +764,8 @@ def test_post_process_writes_original_config_for_dataset_override(tmp_path, monk
         "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
         "live": {"approved_coins": {"long": ["BTC"], "short": []}},
         "_original_backtest_config": original_config,
+        "metrics": {"stale": True},
+        "suite_metrics": {"stale": True},
     }
 
     bt.post_process(
@@ -781,6 +783,9 @@ def test_post_process_writes_original_config_for_dataset_override(tmp_path, monk
     assert dumped_by_name["config.original.json"]["backtest"]["coins"]["binance"] == ["ETH"]
     assert dumped_by_name["config.original.json"]["live"]["approved_coins"]["long"] == ["ETH"]
     assert dumped_by_name["config.json"]["backtest"]["coins"]["binance"] == ["BTC"]
+    assert dumped_by_name["config.json"]["metrics"]["stats"]["gain_usd"]["mean"] == 1.0
+    assert "suite_metrics" not in dumped_by_name["config.json"]
+    assert "metrics" not in dumped_by_name["config.original.json"]
 
 
 def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
@@ -1187,3 +1192,23 @@ def test_create_forager_hard_stop_drawdown_figure_labels_coin_mode_max_drawdown(
     assert "hard_stop_drawdown" in figs
     assert "Long Coin HSL Max Drawdown" in axes[0].titles
     assert "Max Coin Drawdown" in axes[0].ylabels
+
+
+@pytest.mark.parametrize("columns", [1, 4])
+@pytest.mark.parametrize("count", [0, 1, 3])
+def test_analysis_period_uses_actual_equity_timestamps(columns, count):
+    timestamps = np.array([1704153600000, 1704196800000, 1704240000000])[:count]
+    equities = np.ones((count, columns))
+    equities[:, 0] = timestamps
+    duration = 1.0 if count == 3 else 0.0
+    result = expand_analysis(
+        {"fills_analysis_duration_days": duration}, {}, None, equities,
+        {"bot": {"long": {}, "short": {}},
+         "backtest": {"start_date": "2020-01-01", "end_date": "2025-01-01"}},
+    )
+    assert result["n_days"] == result["fills_analysis_duration_days"] == duration
+    assert result["effective_start_date"] == ("2024-01-02T00:00:00Z" if count else None)
+    assert result["effective_end_date"] == (
+        "2024-01-03T00:00:00Z" if count == 3 else
+        "2024-01-02T00:00:00Z" if count else None
+    )

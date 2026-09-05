@@ -74,6 +74,7 @@ SHARED_METRICS = {
     "fills_active_days_ratio",
     "fills_active_symbols_count",
     "fills_analysis_duration_days",
+    "n_days",
     "fills_count",
     "fills_count_close",
     "fills_count_entry",
@@ -205,6 +206,7 @@ ANALYSIS_SHARED_KEYS = SHARED_METRICS | {
 STAT_SUFFIXES = ("min", "max", "mean", "std", "median")
 
 METRIC_ALIASES = {
+    "fills_analysis_duration_days": "n_days",
     "gain_strategy_pnl_rebased": "gain_strategy_eq",
     "adg_strategy_pnl_rebased": "adg_strategy_eq",
     "mdg_strategy_pnl_rebased": "mdg_strategy_eq",

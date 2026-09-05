@@ -235,6 +235,7 @@ _WEIGHTED_PNL_METRICS = {
 
 _FILL_ACTIVITY_METRICS = {
     "fills_analysis_duration_days",
+    "n_days",
     "fills_active_days_count",
     "fills_active_days_ratio",
     "fills_active_symbols_count",
@@ -1249,6 +1250,7 @@ def _fill_activity_metrics(out: dict, run, requested: set[str]) -> dict:
         / duration_days.ceil().clamp(min=1.0),
         "fills_active_symbols_count": fills_active_symbols_count,
         "fills_analysis_duration_days": duration_days,
+        "n_days": duration_days,
         "fills_count": fill_count,
         "fills_count_close": fills_count_close,
         "fills_count_entry": fills_count_entry,

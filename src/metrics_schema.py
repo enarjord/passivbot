@@ -8,6 +8,32 @@ import numpy as np
 
 from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, canonical_metric_name
 
+PERIOD_KEYS = ("effective_start_date", "effective_end_date")
+
+
+def evaluation_period(payload: Mapping[str, Any]) -> dict:
+    """Non-aggregatable evaluation boundaries, kept separate from numeric stats."""
+    return {key: payload[key] for key in PERIOD_KEYS if key in payload}
+
+
+def shared_evaluation_period(payloads: Mapping[str, Mapping[str, Any]]) -> dict:
+    periods = [evaluation_period(value) for value in payloads.values()]
+    if periods and all(period == periods[0] for period in periods):
+        return periods[0]
+    return {}
+
+
+def attach_result_metrics(config: dict, *, metrics=None, suite_metrics=None) -> dict:
+    """Replace prior evaluation output on an already sanitized config copy."""
+    config.pop("metrics", None)
+    config.pop("suite_metrics", None)
+    if metrics is not None:
+        config["metrics"] = metrics
+    if suite_metrics is not None:
+        config["suite_metrics"] = suite_metrics
+    return config
+
+
 MetricStats = Dict[str, float]
 ScenarioMetrics = Dict[str, Dict[str, MetricStats]]
 KNOWN_ANALYSIS_METRICS = set(ANALYSIS_SHARED_KEYS) | set(CURRENCY_METRICS)
@@ -89,7 +115,11 @@ def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[st
             values.append(_safe_float(raw_value))
         stats[metric] = _build_stats(values)
 
-    return {"stats": stats}
+    payload = {"stats": stats, **shared_evaluation_period(analyses)}
+    periods = {label: evaluation_period(analysis) for label, analysis in analyses.items()}
+    if any(periods.values()):
+        payload["exchanges"] = periods
+    return payload
 
 
 def flatten_metric_stats(stats: Mapping[str, MetricStats], *, prefix: str = "") -> Dict[str, float]:
@@ -151,4 +181,14 @@ def merge_suite_payload(
     payload: Dict[str, Any] = {"metrics": suite_metrics}
     if scenario_metrics:
         payload["scenario_labels"] = list(scenario_metrics.keys())
+        periods = {
+            label: {
+                **evaluation_period(metrics),
+                **({"exchanges": metrics["exchanges"]} if "exchanges" in metrics else {}),
+            }
+            for label, metrics in scenario_metrics.items()
+        }
+        if any(periods.values()):
+            payload["scenarios"] = periods
+        payload.update(shared_evaluation_period(scenario_metrics))
     return payload

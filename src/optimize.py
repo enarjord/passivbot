@@ -1765,7 +1765,7 @@ class Evaluator:
                 individual,
             )
         metrics_payload = {
-            "stats": aggregate_stats,
+            **scenario_metrics,
             "objectives": raw_objectives,
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
