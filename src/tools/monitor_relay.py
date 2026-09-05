@@ -41,6 +41,10 @@ def _parse_args() -> argparse.Namespace:
         help="Bind port for the relay server.",
     )
     parser.add_argument(
+        "--allowed-origin", action="append", default=[],
+        help="Additional browser-facing HTTP origin, e.g. https://monitor.example.com; repeatable.",
+    )
+    parser.add_argument(
         "--poll-interval-ms",
         type=int,
         default=250,
@@ -70,11 +74,16 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     configure_logging(args.log_level.upper())
+    hosts = {"127.0.0.1", "localhost", "[::1]"}
+    if args.host not in {"0.0.0.0", "::"}:
+        hosts.add(f"[{args.host}]" if ":" in args.host and not args.host.startswith("[") else args.host)
+    allowed_origins = [f"http://{host}:{args.port}" for host in sorted(hosts)] + args.allowed_origin
     app = create_monitor_relay_app(
         monitor_root=args.monitor_root,
         poll_interval_ms=args.poll_interval_ms,
         subscriber_queue_size=args.queue_size,
         ws_replay_limit=args.ws_replay_limit,
+        allowed_origins=allowed_origins,
     )
     logging.info(
         "[monitor-relay] serving monitor_root=%s host=%s port=%s poll_interval_ms=%s ws_replay_limit=%s",

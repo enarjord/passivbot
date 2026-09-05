@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -610,6 +611,36 @@ class MonitorRelay:
 
 
 RELAY_APP_KEY = web.AppKey("monitor_relay", MonitorRelay)
+ORIGINS_APP_KEY = web.AppKey("monitor_allowed_origins", frozenset)
+
+
+def _monitor_origin(value: str) -> tuple[str, str, int]:
+    origin = urlsplit(value)
+    if (
+        value != value.strip() or any(ch in value for ch in "\r\n\t")
+        or origin.scheme not in {"http", "https"} or not origin.hostname
+        or origin.username is not None or origin.password is not None
+        or origin.path or origin.query or origin.fragment
+    ):
+        raise ValueError("expected an HTTP origin with no path or credentials")
+    port = origin.port
+    return origin.scheme, origin.hostname, port if port is not None else (443 if origin.scheme == "https" else 80)
+
+
+@web.middleware
+async def _validate_monitor_host(request: web.Request, handler):
+    # Also protect HTTP snapshots from DNS rebinding. Never derive trust from
+    # Host or forwarded headers; compare against configured origin authorities.
+    try:
+        if len(request.headers.getall("Host", [])) != 1 or not any(
+            _monitor_origin(f"{scheme}://{request.host}") in request.app[ORIGINS_APP_KEY]
+            for scheme in ("http", "https")
+        ):
+            raise ValueError("unapproved host")
+    except ValueError as exc:
+        raise web.HTTPForbidden(text="Monitor host is not allowed") from exc
+    return await handler(request)
+
 
 
 def _relay_from_app(app: web.Application) -> MonitorRelay:
@@ -667,6 +698,13 @@ async def _handle_dashboard_asset(request: web.Request) -> web.Response:
 
 
 async def _handle_ws(request: web.Request) -> web.StreamResponse:
+    origins = request.headers.getall("Origin", [])
+    if origins:
+        try:
+            if len(origins) != 1 or _monitor_origin(origins[0]) not in request.app[ORIGINS_APP_KEY]:
+                raise ValueError("unapproved origin")
+        except ValueError as exc:
+            raise web.HTTPForbidden(text="WebSocket origin is not allowed") from exc
     relay = _relay_from_app(request.app)
     exchange = request.query.get("exchange")
     user = request.query.get("user")
@@ -723,6 +761,7 @@ def create_monitor_relay_app(
     poll_interval_ms: int = 250,
     subscriber_queue_size: int = 1000,
     ws_replay_limit: int = 50,
+    allowed_origins: list[str] | None = None,
 ) -> web.Application:
     relay = MonitorRelay(
         monitor_root=monitor_root,
@@ -730,7 +769,13 @@ def create_monitor_relay_app(
         subscriber_queue_size=subscriber_queue_size,
         ws_replay_limit=ws_replay_limit,
     )
-    app = web.Application()
+    if allowed_origins is None:
+        allowed_origins = ["http://127.0.0.1:8765", "http://localhost:8765", "http://[::1]:8765"]
+    origins = frozenset(_monitor_origin(origin) for origin in allowed_origins)
+    if not origins:
+        raise ValueError("at least one monitor origin must be allowed")
+    app = web.Application(middlewares=[_validate_monitor_host])
+    app[ORIGINS_APP_KEY] = origins
     app[RELAY_APP_KEY] = relay
     app.router.add_get("/health", _handle_health)
     app.router.add_get("/snapshot", _handle_snapshot)
