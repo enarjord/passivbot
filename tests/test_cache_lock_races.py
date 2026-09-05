@@ -200,3 +200,28 @@ def test_non_integer_legacy_pid_cannot_prove_dead_owner(tmp_path, monkeypatch, p
         cache.prepare_materialized_run(tmp_path, "new-run")
     assert json.loads((legacy / cache.OP_LOCK_FILENAME).read_text()) == owner
     assert not (tmp_path / "new-run").exists()
+
+
+def test_unrepresentable_legacy_pid_has_actionable_recovery(tmp_path):
+    legacy = tmp_path / cache.OP_LOCK_DIRNAME
+    legacy.mkdir()
+    owner = {"hostname": cache._hostname(), "pid": 10**100}
+    (legacy / cache.OP_LOCK_FILENAME).write_text(json.dumps(owner))
+    with pytest.raises(RuntimeError, match="Stop all workers using the previous lock protocol"):
+        cache.prepare_materialized_run(tmp_path, "new-run")
+    assert json.loads((legacy / cache.OP_LOCK_FILENAME).read_text()) == owner
+    assert not (tmp_path / "new-run").exists()
+
+
+def test_confirmed_dead_legacy_migration_survives_pid_reuse(tmp_path, monkeypatch):
+    legacy = tmp_path / cache.OP_LOCK_DIRNAME
+    legacy.mkdir()
+    owner = {"hostname": cache._hostname(), "pid": 12345}
+    (legacy / cache.OP_LOCK_FILENAME).write_text(json.dumps(owner))
+    monkeypatch.setattr(cache, "_process_exists", lambda _pid: False)
+    with cache.materialized_operation_lock(tmp_path):
+        assert not legacy.exists()
+    monkeypatch.setattr(cache, "_process_exists", lambda _pid: True)
+    with cache.materialized_operation_lock(tmp_path):
+        assert not legacy.exists()
+    assert cache.materialized_operation_lock_path(tmp_path).is_file()

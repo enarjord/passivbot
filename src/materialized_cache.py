@@ -136,17 +136,25 @@ def materialized_operation_lock(output_root: str | Path):
         if legacy.exists():
             owner = _read_lock(legacy / OP_LOCK_FILENAME) or {}
             pid = owner.get("pid")
-            if type(pid) is not int:
-                pid = 0
+            unknown_or_active = True
+            if type(pid) is int and pid > 0 and owner.get("hostname") == _hostname():
+                try:
+                    unknown_or_active = _process_exists(pid)
+                except OverflowError:
+                    # Unrepresentable PIDs cannot establish a dead owner.
+                    pass
             # Missing metadata can mean an older worker paused between mkdir
             # and publishing its PID. Elapsed time does not prove it is dead.
-            if pid <= 0 or owner.get("hostname") != _hostname() or _process_exists(pid):
+            if unknown_or_active:
                 raise RuntimeError(
                     f"legacy materialized cache operation ownership is unknown or active: {legacy}. "
                     "Stop all workers using the previous lock protocol; after confirming none "
                     "remain, remove only this legacy lock directory and retry. "
                     f"Do not remove {OP_LOCK_FILE}."
                 )
+            # Complete the confirmed-dead migration before a later PID reuse
+            # can make this obsolete record appear active again.
+            shutil.rmtree(legacy)
         yield
 
 
