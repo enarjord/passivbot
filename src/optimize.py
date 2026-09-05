@@ -201,6 +201,12 @@ from optimization.config_adapter import (
     resolve_optimization_bound_path,
 )
 from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
+from optimization.evaluation_contract import (
+    CONTRACT_KEY,
+    CONTRACT_CACHE_KEY,
+    build_evaluation_contract,
+    recorded_evaluation_contract,
+)
 from optimization.warmup import (
     build_optimizer_data_config,
     build_optimizer_vector_config,
@@ -725,6 +731,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
     anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
+    entry[CONTRACT_KEY] = recorded_evaluation_contract(evaluator_config)
     if anchor_meta is not None:
         entry["optimizer_anchor"] = anchor_meta
     entry = optimizer_overrides(overrides_list, entry, None)
@@ -754,72 +761,74 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
     new_bot = config.get("bot", config) or {}
-    old_live = entry.get("live") or {}
-    new_live = config.get("live") or {}
 
     mismatches = []
     is_suite_result = entry.get("suite_metrics") is not None
-    old_bt_compare = _resume_subset(
-        old_bt,
-        {
-            "reducer",
-            "balance_sample_divider",
-            "btc_collateral_cap",
-            "btc_collateral_ltv_cap",
-            "candle_interval_minutes",
-            "coins",
-            "dynamic_wel_by_tradability",
-            "end_date",
-            "exchanges",
-            "filter_by_min_effective_cost",
-            "liquidation_threshold",
-            "maker_fee_override",
-            "market_order_slippage_pct",
-            "scenarios",
-            "start_date",
-            "starting_balance",
-            "suite_enabled",
-            "taker_fee_override",
-            "volume_normalization",
-        },
-    )
-    new_bt_compare = _resume_subset(new_bt, old_bt_compare.keys())
+    backtest_keys = {
+        "reducer",
+        "balance_sample_divider",
+        "btc_collateral_cap",
+        "btc_collateral_ltv_cap",
+        "candle_interval_minutes",
+        "coins",
+        "coin_sources",
+        "dynamic_wel_by_tradability",
+        "end_date",
+        "exchanges",
+        "filter_by_min_effective_cost",
+        "gap_tolerance_ohlcvs_minutes",
+        "hlcvs_data_override_mode",
+        "liquidation_threshold",
+        "maker_fee_override",
+        "market_order_slippage_pct",
+        "market_settings",
+        "scenarios",
+        "start_date",
+        "starting_balance",
+        "suite_enabled",
+        "taker_fee_override",
+        "volume_normalization",
+    }
+    old_bt_compare = _resume_subset(old_bt, backtest_keys)
+    new_bt_compare = _resume_subset(new_bt, backtest_keys)
     if is_suite_result:
         # Suite result entries omit top-level backtest.coins because the
         # scenario list is the source of truth for per-scenario coins.
         if old_bt_compare.get("coins") is None:
             new_bt_compare.pop("coins", None)
-    _append_resume_section_mismatches(mismatches, "backtest", old_bt_compare, new_bt_compare)
-
-    old_opt_compare = _resume_subset(
-        old_opt,
-        {
-            "backend",
-            "bounds",
-            "compress_results_file",
-            "crossover_eta",
-            "crossover_probability",
-            "enable_overrides",
-            "fixed_params",
-            "fixed_runtime_overrides",
-            "limits",
-            "mutation_eta",
-            "mutation_indpb",
-            "mutation_probability",
-            "offspring_multiplier",
-            "objective_scenario",
-            "population_size",
-            "gpu",
-            "pymoo",
-            "round_to_n_significant_digits",
-            "scoring",
-        },
+    _append_resume_section_mismatches(
+        mismatches, "backtest", old_bt_compare, new_bt_compare
     )
+
+    optimize_keys = {
+        "backend",
+        "bounds",
+        "compress_results_file",
+        "crossover_eta",
+        "crossover_probability",
+        "enable_overrides",
+        "fixed_params",
+        "fixed_runtime_overrides",
+        "limits",
+        "mutation_eta",
+        "mutation_indpb",
+        "mutation_probability",
+        "offspring_multiplier",
+        "objective_scenario",
+        "population_size",
+        "gpu",
+        "pymoo",
+        "round_to_n_significant_digits",
+        "scoring",
+    }
+    old_opt_compare = _resume_subset(old_opt, optimize_keys)
     # Objective source changes invalidate checkpoint fitness, including resumes
     # from artifacts written before objective_scenario existed.
     old_opt_compare.setdefault("objective_scenario", None)
-    new_opt_compare = _resume_subset(new_opt, old_opt_compare.keys())
-    _append_resume_section_mismatches(mismatches, "optimize", old_opt_compare, new_opt_compare)
+    new_opt_compare = _resume_subset(new_opt, optimize_keys)
+    _append_resume_section_mismatches(
+        mismatches, "optimize", old_opt_compare, new_opt_compare
+    )
 
     for side in ["long", "short"]:
         old_en = old_bot.get(side, {}).get("enabled", True)
@@ -827,9 +836,32 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if old_en != new_en:
             mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
 
-    for key in ["approved_coins", "ignored_coins"]:
-        if old_live.get(key) != new_live.get(key):
-            mismatches.append(f"  - live.{key}: changed")
+    stored_contract = entry.get(CONTRACT_KEY)
+    if stored_contract is not None and (
+        not isinstance(stored_contract, dict) or stored_contract.get("version") != 1
+    ):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: unsupported or malformed snapshot"
+        )
+        return mismatches
+    if stored_contract is None and (
+        entry.get("optimizer_anchor") is not None or get_anchor_plan(config)
+    ):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: legacy anchored results lack fixed-anchor "
+            "policy evidence; start a fresh run to record a verifiable evaluation contract"
+        )
+    else:
+        old_contract = (
+            stored_contract
+            if stored_contract is not None
+            else build_evaluation_contract(entry)
+        )
+        new_contract = build_evaluation_contract(config)
+        _append_resume_section_mismatches(
+            mismatches, "evaluation", old_contract, new_contract
+        )
+
     return mismatches
 
 
@@ -3710,6 +3742,8 @@ async def main():
         duplicate_counter["total"] = 0
         duplicate_counter["resolved"] = 0
         duplicate_counter["reused"] = 0
+
+        config[CONTRACT_CACHE_KEY] = build_evaluation_contract(config)
 
         # Initialize evaluator with shared memory references
         evaluator = Evaluator(

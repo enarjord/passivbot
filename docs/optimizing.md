@@ -1,5 +1,14 @@
 # Optimizing
 
+Optimizer resume reuses checkpoint fitness only when its fixed evaluation contract matches the
+current run. This includes backtest execution and data policies, backtest-consumed live settings,
+fixed bot parameters, resolved coin overrides, and all fixed fine-tune anchor values. Candidate
+vector values and machine-local settings such as worker count and output paths are excluded.
+New result records include a machine-independent `optimizer_evaluation_contract` snapshot.
+Older ordinary results are checked from their recorded config; older anchored results without
+this snapshot must start a fresh run because the other anchors' fixed policy cannot be proven.
+Moving an override file without changing its resolved values does not change this contract.
+
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
 The canonical defaults live in `src/config/schema.py`. The example config

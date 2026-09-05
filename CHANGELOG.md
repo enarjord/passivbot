@@ -23,6 +23,11 @@ All notable user-facing changes will be documented in this file.
   missing data no longer removes their unrealized PnL from equity or risk samples. Unheld
   symbols may retain unavailable rows outside their listing windows.
 
+- Optimizer resume rejects changed fixed evaluation inputs, including HSL signal mode, resolved
+  coin overrides, fixed bot policy, and fine-tune anchors, before reusing saved fitness. New
+  results record the fixed evaluation contract; older anchored results lacking that evidence
+  must start a fresh run. Candidate values and machine-local settings remain independent.
+
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
   partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that
   completes on its final allowed request remains valid.
