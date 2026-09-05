@@ -259,3 +259,20 @@ explicitly in `backtest.exchanges` when you want them included.
 ## Exchange Name Conventions
 
 Cache paths and output directories use standard exchange names (e.g., `binance`, `bybit`, `gateio`, `kucoin`). CCXT-specific IDs such as `binanceusdm`, `bybitusdt`, and `kucoinfutures` are only used internally when communicating with exchange APIs. Always use the short names in your configuration files and external OHLCV source directories.
+
+## Materialized scratch cache locks
+
+Backtests and optimizers serialize scratch allocation and pruning with the persistent
+`.materialized.op.flock` file in their materialized cache directory. Do not delete this file:
+processes holding an older inode would otherwise stop excluding new owners. The operating system
+releases ownership when a worker exits, including after an abnormal exit.
+
+When upgrading from the previous `.materialized.op.lock` directory protocol, stop all older
+backtest and optimizer workers before starting the updated version against the same cache.
+Concurrent workers using different lock protocols are unsupported. A legacy lock with a confirmed
+dead local PID does not block the updated version. An active, foreign, missing, or malformed owner
+record is preserved and produces an actionable error. Missing metadata may belong to a worker
+paused while creating its lock, so an age limit cannot safely establish that ownership has ended.
+After confirming that every older worker has stopped, remove only the legacy
+`.materialized.op.lock` directory named in the error and retry. Keep the new `.materialized.op.flock`
+file and existing active run directories intact.

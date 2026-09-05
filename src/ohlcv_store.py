@@ -113,6 +113,15 @@ class OhlcvStore:
         status: str = "open",
     ) -> MonthChunkPaths:
         paths = self.month_paths(exchange, timeframe, symbol, year, month)
+        with self._chunk_write_lock(paths):
+            return self._ensure_month_unlocked(exchange, timeframe, symbol, year, month, status=status)
+
+    def _ensure_month_unlocked(
+        self, exchange: str, timeframe: str, symbol: str, year: int, month: int,
+        *, status: str = "open",
+    ) -> MonthChunkPaths:
+        """Initialize and register a chunk while its write lock is held."""
+        paths = self.month_paths(exchange, timeframe, symbol, year, month)
         n_rows = rows_in_month(year, month, timeframe)
         if not paths.body_path.exists():
             body = np.lib.format.open_memmap(
@@ -238,8 +247,9 @@ class OhlcvStore:
             grouped.setdefault(month_key_for_ts(int(ts_ms)), []).append(idx)
 
         for (year, month), indices in grouped.items():
-            paths = self.ensure_month(exchange, timeframe, symbol, year, month, status=status)
+            paths = self.month_paths(exchange, timeframe, symbol, year, month)
             with self._chunk_write_lock(paths):
+                self._ensure_month_unlocked(exchange, timeframe, symbol, year, month, status=status)
                 self._invalidate_verified_checksum_cache(paths.body_path)
                 body = np.load(paths.body_path, mmap_mode="r+")
                 valid = np.load(paths.valid_path, mmap_mode="r+")

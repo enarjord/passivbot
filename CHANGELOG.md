@@ -12,6 +12,12 @@ All notable user-facing changes will be documented in this file.
   Standalone artifacts preserve non-finite diagnostics separately from finite metric statistics.
   Saved suite configs retain the effective exchange defaults from external suite overrides.
 
+- Concurrent OHLCV writers now lock monthly initialization through catalog publication, preserving
+  both candle bodies and validity masks. Materialized scratch allocation and pruning use a persistent
+  advisory lock, preventing simultaneous owners while owner metadata is being initialized.
+  Stop older backtest/optimizer workers before sharing their cache with the new lock protocol;
+  ambiguous legacy locks require explicit cleanup after those workers have stopped.
+
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
   partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that
   completes on its final allowed request remains valid.
