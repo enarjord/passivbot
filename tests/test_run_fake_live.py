@@ -1758,3 +1758,55 @@ async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
     assert remote_summary["by_method"]["fetch_ohlcv"] >= 1
 
     assert any(entry["kind"] == "ccxt_fetch_ohlcv" for entry in candle_fetches)
+
+
+@pytest.mark.fake_live
+@pytest.mark.parametrize('declared', [False, True])
+def test_fake_boot_fill_preserves_only_explicit_position_chain_evidence(declared):
+    scenario = _scenario()
+    fill = {
+        'id': '1', 'timestamp': '2026-01-01T00:00:00Z',
+        'symbol': 'BTC/USDT:USDT', 'position_side': 'long', 'side': 'sell',
+        'amount': 1.0, 'price': 100.0,
+    }
+    if declared:
+        fill['info'] = {'startPosition': '1.0'}
+    scenario['account']['fills'] = [fill]
+    client = FakeCCXTClient(scenario, quote='USDT')
+    info = client.fills[0]['info']
+    assert ('startPosition' in info) is declared
+    if declared:
+        assert info['startPosition'] == '1.0'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latched", [False, True])
+async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
+    monkeypatch, latched
+):
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+    from unittest.mock import AsyncMock
+
+    calls = []
+
+    async def unavailable(bot):
+        raise AuthoritativeSurfaceUnavailable("hsl_episode_boundaries", "fill tape pending")
+
+    async def supervise():
+        calls.append("supervisor")
+
+    monkeypatch.setattr(run_fake_live_module, "_run_fake_cycle_ready", unavailable)
+    bot = SimpleNamespace(
+        _run_halted_hsl_protection_if_active=AsyncMock(return_value=False),
+        _equity_hard_stop_signal_mode=lambda: "coin",
+        _equity_hard_stop_coin_red_active=lambda: latched,
+        _equity_hard_stop_run_coin_red_supervisor=supervise,
+    )
+    result = await run_fake_live_module._run_fake_cycle(bot)
+    assert calls == (["supervisor"] if latched else [])
+    assert result == (
+        {"red_supervisor": True, "mode": "coin"}
+        if latched
+        else {"updated": False, "hsl_ready": False}
+    )

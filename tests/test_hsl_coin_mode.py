@@ -4727,3 +4727,1165 @@ async def test_coin_hsl_check_tp_only_orange_blocks_flat_initial_entries():
         bot._runtime_forced_modes["long"][flat_symbol]
         == "tp_only_with_active_entry_cancellation"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reentry,extra_episode", [(False, False), (True, False), (True, True)])
+async def test_live_coin_hsl_resets_red_free_fill_episode_before_next_sample(
+    reentry, extra_episode
+):
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    symbol = "A"
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.hsl["long"]["red_threshold"] = 0.15
+    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample("long", symbol, 120_000, 1000.0, -50.0)
+    state = bot._hsl_coin_state("long", symbol)
+    state["no_restart_peak_strategy_equity"] = 1.25
+    events.append(
+        {
+            "timestamp": 180_500,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": -100.0,
+        }
+    )
+    if reentry:
+        events.append(
+            {
+                "timestamp": 180_600,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            }
+        )
+    else:
+        bot.positions[symbol]["long"]["size"] = 0.0
+    if extra_episode:
+        events.extend(
+            [
+                {
+                    "timestamp": 180_700,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "pnl": -20.0,
+                },
+                {
+                    "timestamp": 180_800,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                    "fee_paid": -1.0,
+                },
+            ]
+        )
+    final_balance = 879.0 if extra_episode else 900.0
+    bot.get_raw_balance = lambda: final_balance
+    bot.get_exchange_time = lambda: 240_000
+
+    async def upnl(*args):
+        return -50.0 if reentry else 0.0
+
+    bot._calc_upnl_sum_strict = upnl
+    metrics = (await bot._equity_hard_stop_check_coin())[f"long:{symbol}"]
+    assert state["pnl_reset_timestamp_ms"] == (180_701 if extra_episode else 180_501)
+    assert state["no_restart_peak_strategy_equity"] == 1.25
+    assert metrics["realized_pnl"] == (-1.0 if extra_episode else 0.0)
+    expected_drawdown = (51.0 if extra_episode else 50.0) / final_balance if reentry else 0.0
+    assert metrics["drawdown_raw"] == pytest.approx(expected_drawdown)
+    assert metrics["tier"] != "red"
+    assert not state["halted"]
+    runtime = state["runtime"]
+    assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+        bot, 300_000, final_balance
+    )
+    assert state["runtime"] is runtime
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "delayed,closing_loss,tied", [(True, 100.0, False), (False, 300.0, False), (False, 100.0, True)]
+)
+async def test_live_coin_boundary_uses_canonical_replay_for_delayed_or_red_fill(
+    delayed, closing_loss, tied
+):
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    symbol = "A"
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.hsl["long"]["red_threshold"] = 0.15
+    bot.positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample(
+        "long", symbol, 240_000 if delayed else 120_000, 1000.0, 0.0
+    )
+    events.append(
+        {
+            "timestamp": 180_500,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": -closing_loss,
+        }
+    )
+    if tied:
+        events.append(
+            {
+                "timestamp": 180_500,
+                "symbol": symbol,
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            }
+        )
+        bot.positions[symbol]["long"]["size"] = 1.0
+    replays = []
+
+    async def replay():
+        replays.append(True)
+
+    bot._equity_hard_stop_initialize_coin_from_history = replay
+    if tied:
+        with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="ambiguous boundaries"):
+            await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+                bot, 300_000, 1000.0 - closing_loss
+            )
+        assert not replays
+        return
+    rebuilt = await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+        bot, 300_000, 1000.0 - closing_loss
+    )
+    assert rebuilt is True
+    assert replays == [True]
+    # Replay owns resetting/finalizing this episode, not the ordinary fast path.
+    assert bot._hsl_coin_state("long", symbol)["pnl_reset_timestamp_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_live_coin_boundary_does_not_guess_from_incomplete_fill_sizes():
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample("long", symbol, 120_000, 1000.0, 0.0)
+    events.append(
+        {
+            "timestamp": 180_500,
+            "symbol": symbol,
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": -10.0,
+        }
+    )
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="does not match position"):
+        await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, 240_000, 990.0)
+    assert bot._hsl_coin_state("long", symbol)["pnl_reset_timestamp_ms"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("initialized", [False, True])
+async def test_live_coin_boundary_waits_for_background_replay_owner(initialized):
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = initialized
+    bot._equity_hard_stop_coin_protective_ready = True
+    bot._equity_hard_stop_coin_replay_ready_pairs = {("long", "A")}
+    bot._equity_hard_stop_coin_replay_pending_pairs = {("long", "Z")}
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    release = asyncio.Event()
+    bot._equity_hard_stop_coin_replay_task = asyncio.create_task(release.wait())
+    reads = []
+    bot._pnls_manager = make_fake_pnls_manager([])
+    bot._pnls_manager.get_events = lambda: reads.append(True) or []
+    try:
+        assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+            bot, 300_000, 1000.0
+        )
+        assert reads == []
+        release.set()
+        await bot._equity_hard_stop_coin_replay_task
+        # A failed partial reconstruction must also retain its ownership barrier.
+        assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+            bot, 300_000, 1000.0
+        )
+        assert reads == ([True] if initialized else [])
+    finally:
+        release.set()
+        await bot._equity_hard_stop_coin_replay_task
+
+
+@pytest.mark.asyncio
+async def test_delayed_live_coin_boundary_is_not_replayed_again_after_reconstruction():
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.hsl["long"]["red_threshold"] = 0.5
+    bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_500,
+            "symbol": "A",
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": -100.0,
+        },
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample("long", "A", 240_000, 900.0, 0.0)
+    bot.get_raw_balance = lambda: 900.0
+    bot.get_exchange_time = lambda: 300_000
+    replays = []
+
+    async def history(current_balance=None, **kwargs):
+        replays.append(True)
+        return {
+            "timeline": [
+                {
+                    "timestamp": ts,
+                    "balance": 1000.0 + pnl,
+                    "realized_pnl": pnl,
+                    "realized_pnl_by_coin_pside": {"A": {"long": pnl, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {"A": {"long": 0.0, "short": 0.0}},
+                }
+                for ts, pnl in [
+                    (60_000, 0.0),
+                    (120_000, 0.0),
+                    (180_000, 0.0),
+                    (240_000, -100.0),
+                ]
+            ],
+            "panic_flatten_events": [],
+            "fill_events": events,
+        }
+
+    bot.get_balance_equity_history = history
+    assert await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+        bot, 300_000, 900.0
+    )
+    assert bot._hsl_coin_state("long", "A")["pnl_reset_timestamp_ms"] == 180_501
+    assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+        bot, 360_000, 900.0
+    )
+    assert replays == [True]
+
+
+def _make_aggregate_episode_bot(
+    signal_mode, *, closing_loss=100.0, other_side_held=False
+):
+    bot = make_coin_bot()
+    bot.config["live"]["hsl_signal_mode"] = signal_mode
+    for name in (
+        "_equity_hard_stop_runtime_initialized",
+        "_equity_hard_stop_log_status",
+    ):
+        setattr(bot, name, MethodType(getattr(Passivbot, name), bot))
+    bot._equity_hard_stop_status_log_interval_ms = 60_000
+    bot.hsl["long"]["red_threshold"] = 0.15
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_500,
+            "symbol": "A",
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": -closing_loss,
+        },
+        {
+            "timestamp": 180_600,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+            "fee_paid": -1.0,
+        },
+    ]
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    if other_side_held:
+        events.append(
+            {
+                "timestamp": 90_000,
+                "symbol": "B",
+                "pside": "short",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            }
+        )
+        bot.positions["B"] = {"long": {"size": 0.0}, "short": {"size": 1.0}}
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot.get_raw_balance = lambda: 1000.0 + sum(
+        event.get("pnl", 0.0) + event.get("fee_paid", 0.0) for event in events
+    )
+    bot.get_exchange_time = lambda: 300_000
+    bot._equity_hard_stop_realized_pnl_now = lambda pside=None: sum(
+        event.get("pnl", 0.0) + event.get("fee_paid", 0.0)
+        for event in events
+        if pside is None or event["pside"] == pside
+    )
+
+    async def upnl(pside=None, symbol=None):
+        return (
+            -50.0
+            if pside in (None, "long") and bot.positions["A"]["long"]["size"]
+            else 0.0
+        )
+
+    async def history(current_balance=None, **kwargs):
+        rows = []
+        for ts in (60_000, 120_000, 180_000, 240_000):
+            realized = sum(
+                event.get("pnl", 0.0) + event.get("fee_paid", 0.0)
+                for event in events
+                if event["timestamp"] < ts + 60_000
+            )
+            long_size = sum(
+                event["qty"] * (1 if event["action"] == "increase" else -1)
+                for event in events
+                if event["pside"] == "long" and event["timestamp"] < ts + 60_000
+            )
+            rows.append(
+                {
+                    "timestamp": ts,
+                    "balance": 1000.0 + realized,
+                    "realized_pnl": realized,
+                    "realized_pnl_long": realized,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": (
+                        0.0 if ts == 60_000 or long_size == 0.0 else -50.0
+                    ),
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": long_size == 0.0 and not other_side_held,
+                    "is_flat_long": long_size == 0.0,
+                    "is_flat_short": not other_side_held,
+                }
+            )
+        return {"timeline": rows, "fill_events": events, "panic_flatten_events": []}
+
+    bot._calc_upnl_sum_strict = upnl
+    bot.get_balance_equity_history = history
+    return bot
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize("late", [False, True])
+async def test_live_aggregate_episode_resets_at_fill_before_same_minute_reentry(
+    signal_mode, late
+):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot._equity_hard_stop_apply_sample(
+        "long", 60_000, 1000.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    bot._equity_hard_stop_apply_sample(
+        "long",
+        240_000 if late else 120_000,
+        1000.0,
+        0.0,
+        0.0,
+        -50.0,
+        unrealized_pnl_total=-50.0,
+    )
+    bot._hsl_state("long")["no_restart_peak_strategy_equity"] = 1234.0
+    result = await hsl._equity_hard_stop_check(bot)
+    if late:
+        assert result is None
+        result = await hsl._equity_hard_stop_check(bot)
+    state = bot._hsl_state("long")
+    assert state["pnl_reset_timestamp_ms"] == 180_501
+    if not late:
+        assert state["no_restart_peak_strategy_equity"] == 1234.0
+    assert result["long"]["drawdown_raw"] == pytest.approx(51.0 / 900.0)
+    assert result["long"]["tier"] != "red"
+    runtime = state["runtime"]
+    assert not await hsl._equity_hard_stop_refresh_live_scope_episode_boundaries(
+        bot, 360_000, 899.0
+    )
+    assert state["runtime"] is runtime
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_aggregate_replay_uses_whole_scope_for_fill_boundary(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, other_side_held=True)
+    bot.hsl["long"]["red_threshold"] = 0.5
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    if signal_mode == "pside":
+        assert state["pnl_reset_timestamp_ms"] == 180_501
+        assert state["last_metrics"]["drawdown_raw"] == pytest.approx(51.0 / 900.0)
+    else:
+        assert state["pnl_reset_timestamp_ms"] is None
+        assert state["last_metrics"]["drawdown_raw"] == pytest.approx(151.0 / 1000.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_aggregate_final_fill_red_enters_cooldown_before_reentry(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=300.0)
+    bot._equity_hard_stop_apply_sample(
+        "long", 60_000, 1000.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    assert await hsl._equity_hard_stop_check(bot) is None
+    state = bot._hsl_state("long")
+    assert state["halted"]
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 180_500
+    assert state["cooldown_until_ms"] == 180_500 + 300_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize(
+    "layout", ["flat", "two_episodes", "gap", "tail"]
+)
+async def test_aggregate_replay_retains_each_fill_boundary_and_fee(signal_mode, layout):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    events = bot._pnls_manager.get_events()
+    expected_reset = 180_501
+    expected_drawdown = 51.0 / 900.0
+    if layout == "flat":
+        events.pop()
+        bot.positions["A"]["long"]["size"] = 0.0
+        expected_drawdown = 0.0
+    elif layout == "two_episodes":
+        events.extend(
+            [
+                {
+                    "timestamp": 180_700,
+                    "symbol": "A",
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "pnl": -20.0,
+                },
+                {
+                    "timestamp": 180_800,
+                    "symbol": "A",
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                    "fee_paid": -1.0,
+                },
+            ]
+        )
+        expected_reset = 180_701
+        expected_drawdown = 51.0 / 879.0
+    if layout in {"gap", "tail"}:
+        original_history = bot.get_balance_equity_history
+
+        async def history(**kwargs):
+            result = await original_history(**kwargs)
+            result["timeline"] = [
+                row
+                for row in result["timeline"]
+                if row["timestamp"] != 180_000
+                and (layout != "tail" or row["timestamp"] != 240_000)
+            ]
+            return result
+
+        bot.get_balance_equity_history = history
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = bot._hsl_state("long")
+    assert state["pnl_reset_timestamp_ms"] == expected_reset
+    assert state["last_metrics"]["drawdown_raw"] == pytest.approx(expected_drawdown)
+    assert not state["halted"]
+    assert not await hsl._equity_hard_stop_refresh_live_scope_episode_boundaries(
+        bot, 360_000, bot.get_raw_balance()
+    )
+
+
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize(
+    "actions",
+    [
+        ["increase", "decrease", "decrease"],
+        ["decrease", "increase", "decrease"],
+    ],
+)
+def test_hsl_unordered_cohort_cannot_fabricate_intermediate_flat(signal_mode, actions):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot.positions["A"]["long"]["size"] = 0.0
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        }
+    ]
+    events.extend(
+        {
+            "timestamp": 180_500,
+            "symbol": "A",
+            "pside": "long",
+            "action": action,
+            "qty": 1.0,
+            "pnl": 0.0,
+        }
+        for action in actions
+    )
+    assert (
+        hsl._equity_hard_stop_scope_flatten_samples(
+            bot,
+            events,
+            "long",
+            signal_mode,
+            240_000,
+            1000.0,
+            0.0,
+            {"long": 0.0, "short": 0.0},
+        )
+        is None
+    )
+    _, ambiguous = hsl._equity_hard_stop_coin_replay_events(events, "long", "A")
+    assert ambiguous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_aggregate_incomplete_fill_tape_defers_without_sampling_old_episode(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot._equity_hard_stop_apply_sample(
+        "long", 120_000, 1000.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    state = bot._hsl_state("long")
+    original_metrics = state["last_metrics"]
+    bot._pnls_manager.get_events().pop(0)  # retained history begins with an over-close
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="cannot prove"):
+        await hsl._equity_hard_stop_check(bot)
+    assert state["last_metrics"] is original_metrics
+    assert state["pnl_reset_timestamp_ms"] is None
+    assert not state["runtime"].red_latched()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_aggregate_shifted_minute_rejects_unproven_panic_marker(signal_mode, caplog):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events.pop()  # fully flat tape ending at its non-minute-aligned close
+    events[-1]["pb_order_type"] = "close_panic_long"
+    bot.positions["A"]["long"]["size"] = 0.0
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        result["panic_flatten_events"] = [
+            {
+                "timestamp": 180_500,
+                "minute_timestamp": 180_000,
+                "pside": "long",
+                "symbol": "A",
+            }
+        ]
+        return result
+
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    assert not state["halted"]
+    assert state["last_stop_event"] is None
+    assert state["pnl_reset_timestamp_ms"] == 180_501
+    assert "ignored historical panic marker without reconstructed RED" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_second_distinct_same_minute_flatten_can_first_trigger_red(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events.extend(
+        [
+            {
+                "timestamp": 180_700,
+                "symbol": "A",
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+                "pnl": -300.0,
+            },
+            {
+                "timestamp": 180_800,
+                "symbol": "A",
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+        ]
+    )
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    assert state["halted"]
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 180_700
+    assert state["cooldown_until_ms"] == 480_700
+
+
+@pytest.mark.asyncio
+async def test_live_coin_reset_seeds_flat_minute_before_next_ema_step():
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.hsl["long"]["red_threshold"] = 0.5
+    bot.hsl["long"]["ema_span_minutes"] = 3.0
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_500,
+            "symbol": "A",
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_600,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample("long", "A", 120_000, 1000.0, 0.0)
+    assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+        bot, 240_000, 1000.0
+    )
+    metrics = bot._equity_hard_stop_apply_coin_sample("long", "A", 240_000, 1000.0, -100.0)
+    assert metrics["elapsed_minutes"] == 1
+    assert metrics["drawdown_ema"] == pytest.approx(0.05)
+
+
+def test_hsl_tied_cohort_uses_raw_position_chain_instead_of_input_order():
+    cohort = []
+    for action, qty, before in [
+        ("decrease", 3.0, 3.0),
+        ("increase", 2.0, 1.0),
+        ("decrease", 1.0, 2.0),
+    ]:
+        side = "sell" if action == "decrease" else "buy"
+        cohort.append(
+            {
+                "timestamp": 180_500,
+                "symbol": "A",
+                "pside": "long",
+                "action": action,
+                "qty": qty,
+                "pnl": 0.0,
+                "raw": [
+                    {
+                        "data": {
+                            "side": side,
+                            "amount": qty,
+                            "price": 1.0,
+                            "info": {"startPosition": str(before)},
+                        }
+                    }
+                ],
+            }
+        )
+    ordered, ambiguous = hsl._equity_hard_stop_order_fill_cohorts(cohort)
+    assert not ambiguous
+    assert [event["qty"] for event in ordered] == [1.0, 2.0, 3.0]
+
+
+def test_hsl_tied_cycle_requires_raw_chain_and_known_pre_cohort_size():
+    initial = {
+        "timestamp": 60_000,
+        "symbol": "A",
+        "pside": "long",
+        "action": "increase",
+        "qty": 1.0,
+        "pnl": 0.0,
+    }
+    cohort = []
+    for action, before in [("increase", 0.0), ("decrease", 1.0)]:
+        side = "sell" if action == "decrease" else "buy"
+        cohort.append(
+            {
+                "timestamp": 180_500,
+                "symbol": "A",
+                "pside": "long",
+                "action": action,
+                "qty": 1.0,
+                "pnl": 0.0,
+                "raw": [
+                    {
+                        "data": {
+                            "side": side,
+                            "amount": 1.0,
+                            "price": 1.0,
+                            "info": {"startPosition": str(before)},
+                        }
+                    }
+                ],
+            }
+        )
+    _, ambiguous_without_initial = hsl._equity_hard_stop_order_fill_cohorts(cohort)
+    assert ambiguous_without_initial
+    ordered, ambiguous = hsl._equity_hard_stop_order_fill_cohorts([initial, *cohort])
+    assert not ambiguous
+    assert [event["action"] for event in ordered] == ["increase", "decrease", "increase"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_cohort", [False, True])
+async def test_coin_reset_retains_proven_same_millisecond_reentry_fee(reverse_cohort):
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    initial = dict(timestamp=60_000, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0)
+    cohort = []
+    for action, before, pnl, fee in [("decrease", 1.0, -10.0, 0.0), ("increase", 0.0, 0.0, -1.0)]:
+        event = dict(
+            timestamp=180_500,
+            symbol="A",
+            pside="long",
+            action=action,
+            qty=1.0,
+            pnl=pnl,
+            fee_paid=fee,
+        )
+        event["raw"] = [
+            {
+                "data": {
+                    "side": "sell" if action == "decrease" else "buy",
+                    "amount": 1.0,
+                    "price": 1.0,
+                    "info": {"startPosition": str(before)},
+                }
+            }
+        ]
+        cohort.append(event)
+    bot._pnls_manager = make_fake_pnls_manager(
+        [initial, *(reversed(cohort) if reverse_cohort else cohort)]
+    )
+    state = bot._hsl_coin_state("long", "A")
+    state["pnl_reset_timestamp_ms"] = 180_501
+    bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long", "A", 180_500, 990.0, 0.0, 0.0, 0.0, latch_red=False
+    )
+    for _ in range(2):
+        assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+            bot, 240_000, 989.0
+        )
+        assert state["pnl_reset_timestamp_ms"] == 180_501
+        assert bot._equity_hard_stop_coin_realized_pnl_peak_last(
+            "long", "A", 240_000, 180_501
+        ) == (0.0, -1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize("latched", [False, True])
+async def test_aggregate_startup_unavailable_preserves_existing_protective_state(
+    signal_mode, latched
+):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot._equity_hard_stop_apply_sample(
+        "long", 60_000, 1000.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    bot._equity_hard_stop_apply_sample(
+        "long",
+        120_000,
+        1000.0,
+        0.0,
+        0.0,
+        -300.0 if latched else 0.0,
+        unrealized_pnl_total=-300.0 if latched else 0.0,
+    )
+    state = bot._hsl_state("long")
+    previous_metrics = state["last_metrics"]
+    assert state["runtime"].red_latched() is latched
+    bot._pnls_manager.get_events().pop(0)
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="cannot prove"):
+        await bot._equity_hard_stop_initialize_from_history()
+    assert state["last_metrics"] is previous_metrics
+    assert state["runtime"].red_latched() is latched
+    assert state["last_stop_event"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_rejected_panic_marker_cannot_finalize_reopened_episode(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events[1]["timestamp"] = 239_999
+    events[1]["pb_order_type"] = "close_panic_long"
+    events[2]["timestamp"] = 239_999
+    for event, before in [(events[1], 1.0), (events[2], 0.0)]:
+        event["raw"] = [
+            {
+                "data": {
+                    "side": "sell" if event["action"] == "decrease" else "buy",
+                    "amount": 1.0,
+                    "price": 1.0,
+                    "info": {"startPosition": str(before)},
+                }
+            }
+        ]
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        for row in result["timeline"]:
+            if row["timestamp"] == 180_000:
+                row["unrealized_pnl_long"] = -300.0
+        result["panic_flatten_events"] = [
+            {"timestamp": 239_999, "minute_timestamp": 180_000, "pside": "long", "symbol": "A"}
+        ]
+        return result
+
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    assert state["last_stop_event"] is None
+    assert not state["halted"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_minute_end_flatten_does_not_mask_next_price_sample(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events[1]["timestamp"] = 239_999
+    events[2]["timestamp"] = 240_001
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        for row in result["timeline"]:
+            if row["timestamp"] == 240_000:
+                row["unrealized_pnl_long"] = -300.0
+        return result
+
+    bot.get_balance_equity_history = history
+    samples = []
+    original_apply = bot._equity_hard_stop_apply_sample
+
+    def apply(*args, **kwargs):
+        result = original_apply(*args, **kwargs)
+        samples.append(result)
+        return result
+
+    bot._equity_hard_stop_apply_sample = apply
+    await bot._equity_hard_stop_initialize_from_history()
+    next_minute_samples = [row for row in samples if row["timestamp_ms"] == 240_000]
+    assert len(next_minute_samples) == 1
+    assert next_minute_samples[0]["tier"] == "red"
+    assert next_minute_samples[0]["drawdown_raw"] > 0.29
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("policy", ["panic", "manual", "tp_only", "graceful_stop", "normal"])
+async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(signal_mode, policy):
+    from unittest.mock import AsyncMock, MagicMock
+
+    fixture = make_coin_bot(policy=policy)
+    bot = Passivbot.__new__(Passivbot)
+    bot.__dict__.update(vars(fixture))
+    for name, value in list(vars(bot).items()):
+        if isinstance(value, MethodType) and value.__self__ is fixture:
+            setattr(bot, name, MethodType(value.__func__, bot))
+    bot.config["live"]["hsl_signal_mode"] = signal_mode
+    bot.config["live"]["execution_delay_seconds"] = 0.25
+    bot.hsl["short"]["enabled"] = True
+    bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 1.0}}}
+    state = bot._hsl_coin_state("short", "A") if signal_mode == "coin" else bot._hsl_state("short")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 600_000
+    assert not state["cooldown_repanic_reset_pending"]
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_runtime_initialized = lambda _pside: True
+    bot._equity_hard_stop_cooldown_log_interval_ms = 60_000
+    bot._equity_hard_stop_handle_position_during_cooldown = MethodType(
+        hsl._equity_hard_stop_handle_position_during_cooldown, bot
+    )
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.refresh_authoritative_state = AsyncMock(return_value=True)
+    bot._equity_hard_stop_check = AsyncMock(
+        side_effect=hsl.AuthoritativeSurfaceUnavailable(
+            "hsl_episode_boundaries", "unrelated long scope tape is ambiguous"
+        )
+    )
+    bot.prepare_planning_universe = AsyncMock()
+    bot.execute_to_exchange = AsyncMock()
+    bot._run_latched_hsl_supervisor_if_active = MethodType(
+        Passivbot._run_latched_hsl_supervisor_if_active, bot
+    )
+    bot._run_halted_hsl_protection_if_active = MethodType(
+        Passivbot._run_halted_hsl_protection_if_active, bot
+    )
+    calls = []
+
+    async def refresh():
+        calls.append("refresh")
+        return True
+
+    async def protective_plan():
+        calls.append("plan")
+        return [], [
+            {
+                "symbol": "A",
+                "position_side": "short",
+                "side": "buy",
+                "reduce_only": True,
+                "qty": bot.positions["A"]["short"]["size"],
+            }
+        ]
+
+    async def execute(cancels, creates, *, configure_creations):
+        calls.append("execute")
+        assert not cancels and not configure_creations
+        assert creates[0]["reduce_only"] is True
+        assert state["cooldown_repanic_reset_pending"]
+        bot.positions["A"]["short"]["size"] -= 0.5
+        if bot.positions["A"]["short"]["size"] == 0.0:
+            bot.stop_signal_received = True
+
+    async def stop(seconds, *, stage):
+        if stage == "hsl_cooldown_protection":
+            calls.append("pace")
+            assert seconds == 0.25
+        else:
+            bot.stop_signal_received = True
+
+    bot.refresh_protective_authoritative_state = AsyncMock(side_effect=refresh)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(side_effect=protective_plan)
+    bot.execute_order_plan_to_exchange = AsyncMock(side_effect=execute)
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
+    await Passivbot.run_execution_loop(bot)
+    bot.prepare_planning_universe.assert_not_awaited()
+    bot.execute_to_exchange.assert_not_awaited()
+    if policy == "panic":
+        assert calls == [
+            "refresh",
+            "plan",
+            "execute",
+            "pace",
+            "refresh",
+            "plan",
+            "execute",
+            "pace",
+        ]
+        assert bot.positions["A"]["short"]["size"] == 0.0
+        assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
+        assert state["cooldown_repanic_since_ms"] == 180_000
+    else:
+        assert "execute" not in calls
+        assert not state["cooldown_repanic_reset_pending"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_by", ["pending_replay", "account_refresh", "expired_cooldown"])
+async def test_deferred_cooldown_protection_requires_ready_scope_and_fresh_account(blocked_by):
+    from unittest.mock import AsyncMock
+
+    bot = make_coin_bot(policy="panic")
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    state = bot._hsl_coin_state("long", "A")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 120_000 if blocked_by == "expired_cooldown" else 600_000
+    bot._equity_hard_stop_coin_initialized = False
+    bot._equity_hard_stop_coin_protective_ready = True
+    bot._equity_hard_stop_coin_replay_ready_pairs = (
+        set() if blocked_by == "pending_replay" else {("long", "A")}
+    )
+    bot.refresh_protective_authoritative_state = AsyncMock(
+        return_value=blocked_by != "account_refresh"
+    )
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock()
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    assert not await Passivbot._run_halted_hsl_protection_if_active(bot)
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    bot.execute_order_plan_to_exchange.assert_not_awaited()
+    assert not state["cooldown_repanic_reset_pending"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_cooldown_empty_protective_wave_is_paced():
+    from unittest.mock import AsyncMock
+
+    bot = make_coin_bot(policy="panic")
+    bot.config["live"]["execution_delay_seconds"] = 0.75
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_cooldown_log_interval_ms = 60_000
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    state = bot._hsl_coin_state("long", "A")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 600_000
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot._sleep_unless_shutdown = AsyncMock()
+    for _ in range(2):
+        assert await Passivbot._run_halted_hsl_protection_if_active(bot)
+    assert bot._sleep_unless_shutdown.await_count == 2
+    bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
+    assert state["cooldown_repanic_since_ms"] == 180_000
+    assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize(
+    "policy,prior_intervention",
+    [(policy, False) for policy in ["panic", "manual", "tp_only", "graceful_stop", "normal"]]
+    + [("manual", True), ("manual", None)],
+)
+@pytest.mark.parametrize("held", [False, True])
+async def test_deferred_cooldown_cancels_entries_by_scope_policy(
+    signal_mode, policy, prior_intervention, held, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    bot = make_coin_bot(policy=policy)
+    bot.config["live"].update(hsl_signal_mode=signal_mode, execution_delay_seconds=0.25)
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_cooldown_log_interval_ms = 60_000
+    bot._equity_hard_stop_handle_position_during_cooldown = MethodType(
+        hsl._equity_hard_stop_handle_position_during_cooldown, bot
+    )
+    bot._canonical_open_order_reduce_only = MethodType(
+        Passivbot._canonical_open_order_reduce_only, bot
+    )
+    bot.positions = {"A": {"long": {"size": 0.0}}, "B": {"long": {"size": float(held)}}}
+    for symbol in ("A", "B"):
+        state = bot._hsl_coin_state("long", symbol) if signal_mode == "coin" else bot._hsl_state("long")
+        state["halted"] = True
+        state["cooldown_until_ms"] = 600_000
+    def intervention_evidence(_bot, pside, symbol=None):
+        if prior_intervention is None:
+            return None
+        return prior_intervention or (held and (signal_mode != "coin" or symbol == "B"))
+
+    monkeypatch.setattr(hsl, "_equity_hard_stop_manual_cooldown_intervention", intervention_evidence)
+    bot.open_orders = {
+        symbol: [
+            {"id": f"{symbol}-entry", "symbol": symbol, "position_side": "long", "reduce_only": False},
+            {"id": f"{symbol}-close", "symbol": symbol, "position_side": "long", "reduce_only": True},
+            {"id": f"{symbol}-other", "symbol": symbol, "position_side": "short", "reduce_only": False},
+            {"id": f"{symbol}-unknown", "symbol": symbol, "position_side": "long"},
+        ]
+        for symbol in ("A", "B")
+    }
+    snapshot = object()
+    bot._current_planning_snapshot = snapshot
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    # The panic planner may already select the held entry; the combined wave must deduplicate it.
+    panic_cancels = [bot.open_orders["B"][0]] if held and policy == "panic" else []
+    panic_creates = [{"symbol": "B", "position_side": "long", "reduce_only": True}] if panic_cancels else []
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(
+        return_value=(panic_cancels, panic_creates)
+    )
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot._sleep_unless_shutdown = AsyncMock()
+    expected = set()
+    if policy == "manual":
+        if prior_intervention is False:
+            if not held or signal_mode == "coin":
+                expected.add("A-entry")
+            if not held:
+                expected.add("B-entry")
+    else:
+        if not (held and policy == "normal" and signal_mode != "coin"):
+            expected.add("A-entry")
+        if not held or policy in {"panic", "tp_only"}:
+            expected.add("B-entry")
+    did_work = await Passivbot._run_halted_hsl_protection_if_active(bot)
+    assert did_work is bool(expected)
+    if expected:
+        args = bot.execute_order_plan_to_exchange.await_args
+        cancels, creates = args.args
+        assert {order["id"] for order in cancels} == expected
+        assert len(cancels) == len(expected)
+        assert creates == panic_creates
+        assert args.kwargs == {"configure_creations": False}
+        bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage="hsl_cooldown_protection")
+    else:
+        bot.execute_order_plan_to_exchange.assert_not_awaited()
+    if not panic_creates:
+        bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+        assert bot._current_planning_snapshot is snapshot
+    assert bot.positions["B"]["long"]["size"] == float(held)

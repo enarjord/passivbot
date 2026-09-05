@@ -302,6 +302,7 @@ def _make_mock_pbr():
             tier_ratio_yellow,
             tier_ratio_orange,
             latch_red=True,
+            at_fill_boundary=False,
         ):
             current_minute = int(timestamp_ms) // 60_000
             alpha = 2.0 / (ema_span_minutes + 1.0)
@@ -5795,6 +5796,15 @@ async def test_pside_replay_red_episode_ordinary_flatten_latches_cooldown(monkey
     rows = _pside_parity_timeline()
     fills = [
         {
+            "timestamp": 1_000,
+            "symbol": "XMR/USDT:USDT",
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 105.0,
+            "pnl": 0.0,
+        },
+        {
             "timestamp": 195_000,
             "symbol": "XMR/USDT:USDT",
             "position_side": "long",
@@ -6238,13 +6248,23 @@ async def test_hard_stop_initialize_from_history_ignores_panic_marker_without_re
                 }
             ],
             "fill_events": [
-                _make_hsl_fill_event(
-                    121_500,
-                    symbol=symbol,
-                    pside="long",
-                    action="decrease",
-                    pb_order_type="close_panic_long",
-                )
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                },
+                {
+                    "timestamp": 121_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                    "pb_order_type": "close_panic_long",
+                },
             ],
         }
 
@@ -7235,10 +7255,20 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
             ],
             "fill_events": [
                 {
+                    "timestamp": 1_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                },
+                {
                     "timestamp": 121_500,
                     "symbol": symbol,
                     "pside": "long",
                     "action": "decrease",
+                    "qty": 1.0,
+                    "pnl": -20.0,
                     "pb_order_type": "close_panic_long",
                 },
                 {
@@ -7246,6 +7276,8 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
                     "symbol": symbol,
                     "pside": "long",
                     "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
                     "pb_order_type": "entry_initial_normal_long",
                 },
             ],
@@ -7333,10 +7365,20 @@ async def test_hard_stop_initialize_from_history_unresolved_panic_residue_stays_
             ],
             "fill_events": [
                 {
+                    "timestamp": 1_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "pnl": 0.0,
+                },
+                {
                     "timestamp": 121_500,
                     "symbol": symbol,
                     "pside": "long",
                     "action": "decrease",
+                    "qty": 0.5,
+                    "pnl": -20.0,
                     "pb_order_type": "close_panic_long",
                 }
             ],

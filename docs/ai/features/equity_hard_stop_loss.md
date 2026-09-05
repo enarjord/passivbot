@@ -20,6 +20,12 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    unrealized-PnL availability. Multiple boundaries inside one replay minute retain their exact
    fill order, realized PnL, fees, and account balance at each boundary. Missing price replay may
    defer drawdown evaluation, but it must not hide an episode boundary.
+   Mixed-action fills sharing a millisecond require an unambiguous exchange-provided position
+   chain; list order and locally reconstructed position annotations are not ordering evidence.
+   Each proven fill boundary evaluates its final risk sample. Distinct boundaries in the same
+   minute replace that minute's EMA sample from its prior baseline instead of advancing EMA time
+   again. Ordinary polling within the minute remains cached. A RED stop is recorded while flat,
+   before a later fill can reopen the scope; a RED-free reset seeds the next episode in that minute.
 5. Current flat state is not a timestamp. If the flattening fill is not yet available, live
    finalization and cooldown anchoring defer visibly while protective entry blocking remains active;
    they never substitute the current time. Cooldown re-panic finalization must replay fills from a
@@ -64,8 +70,19 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 ## Failure Semantics
 
 Incomplete fill coverage follows `../error_contract.md`. A required episode boundary is unavailable
-until supported by fill evidence. The affected HSL scope remains protective and retries after an
-authoritative refresh; unrelated scopes remain available.
+until supported by fill evidence. Startup replay validates all enabled scope tapes before replacing
+existing protective state. The affected HSL scope remains protective and retries after an
+authoritative refresh. Flat scopes pending startup price replay retain the existing per-pair
+create gate, leaving unrelated scopes available. Ambiguous required held-episode evidence defers
+ordinary shared-account planning: the startup gate runs after portfolio intent construction and
+cannot make a plan built from unknown HSL episode state authoritative. Independently ready,
+already-latched RED supervision and required panic protection for active cooldown positions still
+run during that deferral, using fresh protective account state and the configured execution pacing.
+Cooldown cancellation-only waves also remove resting initials from flat scopes without constructing
+new intent. Manual ownership begins only after a proven cooldown intervention and persists through
+later flat observations; before that intervention, fresh initials remain blocked. If current fill
+evidence cannot distinguish those cases, the cancellation wave preserves manual orders. Graceful-stop
+adds to held positions retain their policy semantics.
 
 ## Code And Tests
 

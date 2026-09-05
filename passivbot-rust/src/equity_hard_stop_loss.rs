@@ -74,6 +74,9 @@ pub struct HardStopState {
     pub initialized: bool,
     pub last_minute: Option<u64>,
     pub cached_step: Option<HardStopStep>,
+    // Baseline for replacing this minute's sample at exact fill boundaries.
+    pub minute_start_ema: f64,
+    pub minute_elapsed: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -380,6 +383,22 @@ pub fn step_with_peak_strategy_equity_latch(
     timestamp_ms: u64,
     latch_red: bool,
 ) -> Result<HardStopStep, String> {
+    step_with_peak_strategy_equity_at_boundary(
+        state, config, equity, peak_strategy_equity, timestamp_ms, latch_red, false,
+    )
+}
+
+/// Exact fill boundaries replace the current minute's sample without advancing
+/// the EMA clock twice. Ordinary polling retains its cached-minute semantics.
+pub fn step_with_peak_strategy_equity_at_boundary(
+    state: &mut HardStopState,
+    config: HardStopConfig,
+    equity: f64,
+    peak_strategy_equity: f64,
+    timestamp_ms: u64,
+    latch_red: bool,
+    at_fill_boundary: bool,
+) -> Result<HardStopStep, String> {
     config.validate()?;
     if !equity.is_finite() || equity <= 0.0 {
         return Err("equity must be finite and > 0".to_string());
@@ -418,7 +437,11 @@ pub fn step_with_peak_strategy_equity_latch(
             elapsed_minutes: 0,
         };
         state.cached_step = Some(step);
-        return Ok(step);
+        state.minute_start_ema = 0.0;
+        state.minute_elapsed = 0;
+        if !at_fill_boundary {
+            return Ok(step);
+        }
     }
 
     let last_minute = state
@@ -431,7 +454,7 @@ pub fn step_with_peak_strategy_equity_latch(
         ));
     }
     let elapsed_minutes = current_minute - last_minute;
-    if elapsed_minutes == 0 {
+    if elapsed_minutes == 0 && !at_fill_boundary {
         let mut step = state
             .cached_step
             .ok_or_else(|| "initialized hard-stop state missing cached_step".to_string())?;
@@ -448,8 +471,15 @@ pub fn step_with_peak_strategy_equity_latch(
 
     state.peak_strategy_equity = peak_strategy_equity;
     let drawdown_raw = (1.0 - (equity / state.peak_strategy_equity.max(f64::EPSILON))).max(0.0);
-    let decay = (1.0 - alpha).powf(elapsed_minutes as f64);
-    state.drawdown_ema = drawdown_raw + (state.drawdown_ema - drawdown_raw) * decay;
+    if elapsed_minutes > 0 {
+        state.minute_start_ema = state.drawdown_ema;
+        state.minute_elapsed = elapsed_minutes;
+    }
+    // A freshly primed episode has no elapsed bucket yet. Its first exact
+    // boundary supplies that bucket's signal; subsequent boundaries replace it.
+    let sample_minutes = state.minute_elapsed.max(1);
+    let decay = (1.0 - alpha).powf(sample_minutes as f64);
+    state.drawdown_ema = drawdown_raw + (state.minute_start_ema - drawdown_raw) * decay;
     // Effective trigger metric: min(raw, EMA).
     // Prevents false RED after recovery (stale EMA) and flash-crash bottom exits (raw spike).
     let drawdown_score = drawdown_raw.min(state.drawdown_ema);
@@ -498,6 +528,49 @@ pub fn step_with_peak_strategy_equity_latch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distinct_fill_boundaries_replace_one_minute_ema_sample() {
+        let config = HardStopConfig {
+            red_threshold: 0.15,
+            ema_span_minutes: 3.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let mut state = HardStopState::default();
+        step_with_peak_strategy_equity_latch(&mut state, config, 1.0, 1.0, 60_000, false).unwrap();
+        let first = step_with_peak_strategy_equity_at_boundary(
+            &mut state, config, 0.8, 1.0, 90_000, false, true,
+        ).unwrap();
+        assert!((first.drawdown_ema - 0.1).abs() < 1e-12);
+        let second = step_with_peak_strategy_equity_at_boundary(
+            &mut state, config, 0.6, 1.0, 95_000, false, true,
+        ).unwrap();
+        // Replace alpha*raw (0.2), rather than compound another step (0.25).
+        assert!((second.drawdown_raw - 0.4).abs() < 1e-12);
+        assert!((second.drawdown_ema - 0.2).abs() < 1e-12);
+        assert_eq!(second.elapsed_minutes, 0);
+        assert!(second.red_active_now);
+        assert!(state.red_seen_in_episode);
+        let polling = step_with_peak_strategy_equity_latch(
+            &mut state, config, 1.0, 1.0, 96_000, false,
+        ).unwrap();
+        assert_eq!(polling.drawdown_raw, second.drawdown_raw);
+        assert_eq!(polling.drawdown_ema, second.drawdown_ema);
+        let recovered = step_with_peak_strategy_equity_at_boundary(
+            &mut state, config, 1.0, 1.0, 97_000, false, true,
+        ).unwrap();
+        assert_eq!(recovered.drawdown_ema, 0.0);
+        assert!(!recovered.red_active_now);
+        assert!(state.red_seen_in_episode);
+        let normal = step_with_peak_strategy_equity_latch(
+            &mut state, config, 0.8, 1.0, 120_000, false,
+        ).unwrap();
+        assert!((normal.drawdown_ema - 0.1).abs() < 1e-12);
+        let boundary = step_with_peak_strategy_equity_at_boundary(
+            &mut state, config, 0.6, 1.0, 125_000, false, true,
+        ).unwrap();
+        assert!((boundary.drawdown_ema - 0.2).abs() < 1e-12);
+    }
 
     #[test]
     fn red_active_now_splits_from_seen_and_latch() {

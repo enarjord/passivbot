@@ -2262,9 +2262,6 @@ class Passivbot:
         pb_hsl._equity_hard_stop_handle_position_during_cooldown
     )
     _equity_hard_stop_reset_after_restart = pb_hsl._equity_hard_stop_reset_after_restart
-    _equity_hard_stop_replay_from_boundary = (
-        pb_hsl._equity_hard_stop_replay_from_boundary
-    )
     _equity_hard_stop_refresh_halted_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_refresh_halted_runtime_forced_modes
     )
@@ -6113,6 +6110,111 @@ class Passivbot:
         await asyncio.sleep(1.0)
         return True
 
+    async def _run_halted_hsl_protection_if_active(self) -> bool:
+        """Protect proven cooldown scopes while unrelated episode evidence is unavailable."""
+        coin_mode = self._equity_hard_stop_signal_mode() == "coin"
+        scopes = []
+        if coin_mode:
+            initialized = bool(getattr(self, "_equity_hard_stop_coin_initialized", False))
+            ready_pairs = getattr(self, "_equity_hard_stop_coin_replay_ready_pairs", set())
+            for pside, states in getattr(self, "_equity_hard_stop_coin", {}).items():
+                for symbol, state in states.items():
+                    if (
+                        state["halted"]
+                        and self._equity_hard_stop_enabled(pside, symbol=symbol)
+                        and (initialized or (pside, symbol) in ready_pairs)
+                    ):
+                        scopes.append((pside, symbol, state))
+        else:
+            scopes = [
+                (pside, None, self._hsl_state(pside))
+                for pside in self._hsl_psides()
+                if self._equity_hard_stop_enabled(pside) and self._hsl_state(pside)["halted"]
+            ]
+        if not scopes:
+            return False
+        if not await self.refresh_protective_authoritative_state():
+            return False
+        now_ms = int(self.get_exchange_time())
+        panic_needed = False
+        cooldown_entry_cancels = []
+        policy = self._equity_hard_stop_cooldown_position_policy()
+        for pside, symbol, state in scopes:
+            cooldown_until_ms = state["cooldown_until_ms"]
+            if state["no_restart_latched"] or (
+                not state["cooldown_repanic_reset_pending"]
+                and (cooldown_until_ms is None or now_ms >= cooldown_until_ms)
+            ):
+                continue
+            symbols = [symbol] if coin_mode else self._equity_hard_stop_position_symbols(pside)
+            symbols = [
+                candidate
+                for candidate in symbols
+                if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
+            ]
+            if symbols and coin_mode:
+                await self._equity_hard_stop_handle_coin_position_during_cooldown(
+                    pside, symbol, now_ms
+                )
+                panic_needed |= bool(
+                    state["halted"]
+                    and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
+                )
+            elif symbols:
+                await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
+                panic_needed |= bool(
+                    state["halted"]
+                    and any(
+                        self._equity_hard_stop_halted_mode(pside, item) == "panic"
+                        for item in symbols
+                    )
+                )
+            # Flat cooldown scopes still prohibit initials. Held normal scopes
+            # may have resumed above; graceful_stop preserves their existing adds.
+            if not state["halted"]:
+                continue
+            if policy == "manual" and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
+                self, pside, symbol=symbol
+            ) is not False:
+                # Only complete fill evidence proving no intervention permits
+                # cancellation; manual ownership or unavailable evidence preserves orders.
+                continue
+            for order_symbol, orders in self.open_orders.items():
+                if coin_mode and order_symbol != symbol:
+                    continue
+                if (
+                    policy in {"normal", "graceful_stop"}
+                    and not state["cooldown_unresolved_residue"]
+                    and self._equity_hard_stop_has_open_position_symbol(pside, order_symbol)
+                ):
+                    continue
+                cooldown_entry_cancels.extend(
+                    dict(order)
+                    for order in orders
+                    if order.get("position_side") == pside
+                    and self._canonical_open_order_reduce_only(order) is False
+                )
+        if not panic_needed and not cooldown_entry_cancels:
+            return False
+        # Only the existing panic planner can produce protective closes. A
+        # cancellation-only wave must not construct or freshen ordinary intent.
+        to_cancel, to_create = (
+            await self.calc_protective_panic_orders_to_cancel_and_create()
+            if panic_needed
+            else ([], [])
+        )
+        cancel_keys = {(order["symbol"], order["id"]) for order in to_cancel}
+        for order in cooldown_entry_cancels:
+            key = (order["symbol"], order["id"])
+            if key not in cancel_keys:
+                to_cancel.append(order)
+                cancel_keys.add(key)
+        await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+        await self._sleep_unless_shutdown(
+            float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
+        )
+        return True
+
     async def _run_latched_hsl_supervisor_if_active(
         self, *, cycle_id: object, loop_timings_ms: dict[str, int]
     ) -> bool:
@@ -6356,7 +6458,27 @@ class Passivbot:
                     )
                     break
                 if self._equity_hard_stop_enabled():
-                    await self._equity_hard_stop_check()
+                    try:
+                        await self._equity_hard_stop_check()
+                    except state_refresh.AuthoritativeSurfaceUnavailable as exc:
+                        if exc.surface != "hsl_episode_boundaries":
+                            raise
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="hsl_episode_boundaries_unavailable",
+                            data={"reason": exc.reason},
+                        )
+                        if not (
+                            await self._run_halted_hsl_protection_if_active()
+                            or await self._run_latched_hsl_supervisor_if_active(
+                                cycle_id=cycle_id,
+                                loop_timings_ms=loop_timings_ms,
+                            )
+                        ):
+                            await self._sleep_unless_shutdown(
+                                0.5, stage="hsl_episode_boundaries_retry"
+                            )
+                        continue
                     if await self._run_latched_hsl_supervisor_if_active(
                         cycle_id=cycle_id,
                         loop_timings_ms=loop_timings_ms,
@@ -14422,6 +14544,10 @@ class Passivbot:
                     "c_mult": float(self.c_mults.get(symbol, 1.0)),
                 }
             )
+            if fill.get("raw"):
+                # Exact tied-fill replay requires the exchange's position-chain
+                # evidence, not the locally reconstructed position annotation.
+                out[-1]["raw"] = fill["raw"]
         return sorted(out, key=lambda x: x["timestamp"])
 
     async def get_balance_equity_history(
