@@ -495,7 +495,26 @@ fn analyze_backtest_basic(
     timestamps_ms: &[u64],
     exposures_series: &[f64],
 ) -> Analysis {
-    if fills.is_empty() {
+    let Some(first_fill) = fills.first() else {
+        return Analysis::default();
+    };
+    analyze_backtest_basic_with_starting_balance(
+        fills,
+        equities,
+        timestamps_ms,
+        exposures_series,
+        first_fill.usd_total_balance,
+    )
+}
+
+fn analyze_backtest_basic_with_starting_balance(
+    fills: &[Fill],
+    equities: &[f64],
+    timestamps_ms: &[u64],
+    exposures_series: &[f64],
+    starting_balance: f64,
+) -> Analysis {
+    if equities.is_empty() {
         return Analysis::default();
     }
     // Calculate daily equities
@@ -690,7 +709,7 @@ fn analyze_backtest_basic(
     // Calculate equity-balance differences
     let mut bal_eq = Vec::with_capacity(equities.len());
     let mut fill_iter = fills.iter().peekable();
-    let mut last_balance = fills[0].usd_total_balance;
+    let mut last_balance = starting_balance;
 
     for (i, &equity) in equities.iter().enumerate() {
         while let Some(fill) = fill_iter.peek() {
@@ -1101,7 +1120,7 @@ pub fn analyze_backtest(
 ) -> Analysis {
     let mut analysis = analyze_backtest_basic(fills, equities, timestamps_ms, exposures_series);
 
-    if fills.len() <= 1 {
+    if fills.is_empty() || equities.is_empty() {
         return analysis;
     }
 
@@ -1144,15 +1163,28 @@ pub fn analyze_backtest(
             &[]
         };
 
+        // Equity continues changing even without another fill. Carry the
+        // last actual balance into the suffix; do not invent a trade merely
+        // to make equity/balance metrics evaluable.
         let subset_analysis = match select_contiguous_fill_suffix(fills, subset_start_ts, start_idx)
         {
-            FillSuffixSelection::Empty => break,
-            FillSuffixSelection::Contiguous(fill_start_idx) => analyze_backtest_basic(
-                &fills[fill_start_idx..],
+            FillSuffixSelection::Empty => analyze_backtest_basic_with_starting_balance(
+                &[],
                 subset_equities,
                 subset_timestamps,
                 subset_exposures,
+                fills.last().unwrap().usd_total_balance,
             ),
+            FillSuffixSelection::Contiguous(fill_start_idx) => {
+                let balance = fills[fill_start_idx.saturating_sub(1)].usd_total_balance;
+                analyze_backtest_basic_with_starting_balance(
+                    &fills[fill_start_idx..],
+                    subset_equities,
+                    subset_timestamps,
+                    subset_exposures,
+                    balance,
+                )
+            }
             FillSuffixSelection::NonContiguous => {
                 let subset_fills: Vec<Fill> = fills
                     .iter()
@@ -1161,14 +1193,20 @@ pub fn analyze_backtest(
                     })
                     .cloned()
                     .collect();
-                if subset_fills.is_empty() {
-                    break;
-                }
-                analyze_backtest_basic(
+                let balance = fills
+                    .iter()
+                    .rev()
+                    .find(|fill| {
+                        !fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
+                    })
+                    .unwrap_or(&fills[0])
+                    .usd_total_balance;
+                analyze_backtest_basic_with_starting_balance(
                     &subset_fills,
                     subset_equities,
                     subset_timestamps,
                     subset_exposures,
+                    balance,
                 )
             }
         };
@@ -1176,81 +1214,86 @@ pub fn analyze_backtest(
     }
 
     // Compute weighted metrics as the mean of subset analyses
-    analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / 10.0;
-    analysis.adg_pnl_w = subset_analyses.iter().map(|a| a.adg_pnl).sum::<f64>() / 10.0;
-    analysis.mdg_pnl_w = subset_analyses.iter().map(|a| a.mdg_pnl).sum::<f64>() / 10.0;
-    analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / 10.0;
-    analysis.sharpe_ratio_w = subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / 10.0;
-    analysis.sortino_ratio_w = subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / 10.0;
+    let subset_count = subset_analyses.len() as f64;
+    analysis.adg_w = subset_analyses.iter().map(|a| a.adg).sum::<f64>() / subset_count;
+    analysis.adg_pnl_w = subset_analyses.iter().map(|a| a.adg_pnl).sum::<f64>() / subset_count;
+    analysis.mdg_pnl_w = subset_analyses.iter().map(|a| a.mdg_pnl).sum::<f64>() / subset_count;
+    analysis.mdg_w = subset_analyses.iter().map(|a| a.mdg).sum::<f64>() / subset_count;
+    analysis.sharpe_ratio_w =
+        subset_analyses.iter().map(|a| a.sharpe_ratio).sum::<f64>() / subset_count;
+    analysis.sortino_ratio_w =
+        subset_analyses.iter().map(|a| a.sortino_ratio).sum::<f64>() / subset_count;
     analysis.sharpe_ratio_pnl_w = subset_analyses
         .iter()
         .map(|a| a.sharpe_ratio_pnl)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.sortino_ratio_pnl_w = subset_analyses
         .iter()
         .map(|a| a.sortino_ratio_pnl)
         .sum::<f64>()
-        / 10.0;
-    analysis.omega_ratio_w = subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / 10.0;
-    analysis.calmar_ratio_w = subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / 10.0;
+        / subset_count;
+    analysis.omega_ratio_w =
+        subset_analyses.iter().map(|a| a.omega_ratio).sum::<f64>() / subset_count;
+    analysis.calmar_ratio_w =
+        subset_analyses.iter().map(|a| a.calmar_ratio).sum::<f64>() / subset_count;
     analysis.sterling_ratio_w = subset_analyses
         .iter()
         .map(|a| a.sterling_ratio)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.loss_profit_ratio_w = subset_analyses
         .iter()
         .map(|a| a.loss_profit_ratio)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.paper_loss_ratio_w = subset_analyses
         .iter()
         .map(|a| a.paper_loss_ratio)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.paper_loss_mean_ratio_w = subset_analyses
         .iter()
         .map(|a| a.paper_loss_mean_ratio)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.exposure_ratio_w = subset_analyses
         .iter()
         .map(|a| a.exposure_ratio)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.exposure_mean_ratio_w = subset_analyses
         .iter()
         .map(|a| a.exposure_mean_ratio)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.equity_choppiness_w = subset_analyses
         .iter()
         .map(|a| a.equity_choppiness)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.equity_jerkiness_w = subset_analyses
         .iter()
         .map(|a| a.equity_jerkiness)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.exponential_fit_error_w = subset_analyses
         .iter()
         .map(|a| a.exponential_fit_error)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
     analysis.volume_pct_per_day_avg_w = subset_analyses
         .iter()
         .map(|a| a.volume_pct_per_day_avg)
         .sum::<f64>()
-        / 10.0;
+        / subset_count;
 
     analysis.positions_held_per_day_w = subset_analyses
         .iter()
         .map(|a| a.positions_held_per_day)
         .sum::<f64>()
-        / 10.0;
-    analysis.win_rate_w = subset_analyses.iter().map(|a| a.win_rate).sum::<f64>() / 10.0;
+        / subset_count;
+    analysis.win_rate_w = subset_analyses.iter().map(|a| a.win_rate).sum::<f64>() / subset_count;
 
     // Compute high-exposure duration metrics per side:
     // Mean and max continuous duration (hours) where twe exceeded the
@@ -1689,6 +1732,12 @@ fn calc_peak_recovery_hours(
             peak_ts = ts;
         }
     }
+    let final_ts = if use_timestamps {
+        *timestamps_ms.unwrap().last().unwrap()
+    } else {
+        fallback_timestamp_ms(series.len() - 1)
+    };
+    max_duration_ms = max_duration_ms.max(final_ts.saturating_sub(peak_ts));
     (max_duration_ms as f64) / MS_PER_HOUR as f64
 }
 
@@ -2507,4 +2556,74 @@ mod tests {
         assert!(analysis_usd.liquidated);
         assert!(analysis_btc.liquidated);
     }
+    #[test]
+    fn weighted_equity_metrics_include_fill_free_losing_suffixes() {
+        let timestamps: Vec<u64> = (0..30)
+            .map(|i| 1_704_067_200_000 + i * MS_PER_DAY)
+            .collect();
+        let equities: Vec<f64> = (0..30).map(|i| 10000.0 - 100.0 * i as f64).collect();
+        let mut first = make_fill(0, 0.1);
+        first.timestamp_ms = timestamps[0];
+        first.usd_total_balance = 10000.0;
+        let mut second = first.clone();
+        second.index = 1;
+        second.timestamp_ms = timestamps[1];
+        let analysis = analyze_backtest(&[first.clone(), second], &equities, &timestamps, &[]);
+        assert_eq!(analysis.equity_choppiness, 1.0);
+        assert_eq!(analysis.equity_choppiness_w, 1.0);
+        // Explicit daily-window reference: every suffix ends at the same
+        // three-day mean, but each has its own initial equity and duration.
+        let starts = [0, 15, 20, 23, 24, 25, 26, 26, 27, 27];
+        let expected = starts
+            .iter()
+            .map(|&start| (7200.0 / equities[start]).powf(1.0 / (30 - start) as f64) - 1.0)
+            .sum::<f64>()
+            / starts.len() as f64;
+        assert!((analysis.adg_w - expected).abs() < 1e-12);
+        let single_fill = analyze_backtest(&[first], &equities, &timestamps, &[]);
+        assert_eq!(single_fill.equity_choppiness_w, 1.0);
+        assert!((single_fill.adg_w - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fill_free_suffix_uses_last_actual_balance_without_inventing_fills() {
+        let analysis = analyze_backtest_basic_with_starting_balance(
+            &[],
+            &[900.0, 800.0, 700.0],
+            &[0, MS_PER_DAY, 2 * MS_PER_DAY],
+            &[0.4; 3],
+            1000.0,
+        );
+        assert!((analysis.equity_balance_diff_neg_max - 0.3).abs() < 1e-12);
+        assert!((analysis.paper_loss_ratio - analysis.adg / 0.3).abs() < 1e-12);
+        assert!((analysis.exposure_ratio - analysis.adg / 0.4).abs() < 1e-12);
+        assert_eq!(analysis.volume_pct_per_day_avg, 0.0);
+        assert_eq!(analysis.win_rate, 0.0);
+    }
+
+    #[test]
+    fn equity_peak_recovery_includes_unrecovered_tail_and_timestamp_fallback() {
+        let timestamps = [
+            0,
+            MS_PER_HOUR,
+            2 * MS_PER_HOUR,
+            3 * MS_PER_HOUR,
+            4 * MS_PER_HOUR,
+        ];
+        assert_eq!(
+            calc_peak_recovery_hours(&[100.0, 90.0, 80.0, 70.0, 60.0], Some(&timestamps), false),
+            4.0
+        );
+        assert_eq!(
+            calc_peak_recovery_hours(&[100.0, 110.0, 90.0, 80.0, 70.0], Some(&timestamps), false),
+            3.0
+        );
+        assert_eq!(
+            calc_peak_recovery_hours(&[100.0, 90.0, 80.0], None, false),
+            2.0 / 60.0
+        );
+        assert_eq!(calc_peak_recovery_hours(&[], None, false), 0.0);
+        assert_eq!(calc_peak_recovery_hours(&[100.0], None, false), 0.0);
+    }
+
 }

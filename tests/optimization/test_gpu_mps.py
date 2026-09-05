@@ -5892,6 +5892,34 @@ def _multicoin_exposure_fixture(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mps_equity_recovery_includes_unrecovered_final_tail(strategy_kind, side):
+    count = 32
+    final_multiplier = 0.7 if side == "long" else 1.3
+    closes = np.column_stack([
+        np.linspace(initial, initial * final_multiplier, count)
+        for initial in (100.0, 120.0)
+    ])
+    runner, row = _multicoin_exposure_fixture(
+        strategy_kind, side, count=count, closes=closes,
+        highs=closes if side == "long" else closes * 1.01,
+        lows=closes * 0.99 if side == "long" else closes,
+    )
+    output = runner.run(np.asarray([row], dtype=np.float64))
+    torch.mps.synchronize()
+
+    assert output["fill_count"].item() > 0.0
+    # Every mark after the first is below the account's initial equity peak.
+    # The still-open drawdown must span the complete recorded equity interval.
+    duration = output["last_eq_ts"] - output["first_eq_ts"]
+    assert duration.item() > 0.0
+    assert output["account_recovery_max_ms"].item() == duration.item()
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
 def test_mps_runner_profile_distinguishes_cold_warm_and_disabled(strategy_kind):
     runner, row = _multicoin_exposure_fixture(strategy_kind, "long")
     second_runner, _row = _multicoin_exposure_fixture(strategy_kind, "long")
@@ -12499,6 +12527,9 @@ def test_mps_recovery_captures_early_post_fill_liquidation_endpoint():
         ],
     )
     assert recovery[0, 3].item() > 0.0
+    assert output["account_recovery_max_ms"][0].item() == (
+        output["last_eq_ts"][0] - output["first_eq_ts"][0]
+    ).item()
 
 
 @pytest.mark.skipif(

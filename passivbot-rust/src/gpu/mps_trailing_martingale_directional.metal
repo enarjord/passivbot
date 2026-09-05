@@ -4541,6 +4541,11 @@ inline void passivbot_single_coin_impl(
     scalars[so + 54] = pnl_recovery_max_min * interval_ms;
     scalars[so + 55] = held_sum_min * interval_ms;
     scalars[so + 56] = held_count;
+    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        account_recovery_max_min = fmax(
+            account_recovery_max_min, last_eq_k - account_peak_k
+        );
+    }
     scalars[so + 57] = account_recovery_max_min * interval_ms;
     scalars[so + 58] = profit_sum_long;
     scalars[so + 59] = loss_sum_long;
