@@ -14,8 +14,14 @@ import sync_tar
 def test_extract_archive_rejects_members_escaping_destination(tmp_path, kind):
     archive = tmp_path / "input.tar.gz"
     destination = tmp_path / "output"
+    destination.mkdir()
+    (destination / "existing.txt").write_text("keep this")
     escaped = tmp_path / "escaped"
     with tarfile.open(archive, "w:gz") as output:
+        for name in ("existing.txt", "new.txt"):
+            regular = tarfile.TarInfo(name)
+            regular.size = 7
+            output.addfile(regular, io.BytesIO(b"changed"))
         member = tarfile.TarInfo("../escaped" if kind == "parent_path" else "link")
         if kind == "parent_path":
             member.size = 7
@@ -29,6 +35,8 @@ def test_extract_archive_rejects_members_escaping_destination(tmp_path, kind):
         sync_tar.extract_archive(archive, destination)
 
     assert not escaped.exists()
+    assert (destination / "existing.txt").read_text() == "keep this"
+    assert not (destination / "new.txt").exists()
     assert not (destination / "link").is_symlink()
 
 
