@@ -27,7 +27,9 @@ All notable user-facing changes will be documented in this file.
   coin overrides, fixed bot policy, and fine-tune anchors, before reusing saved fitness. New
   results record the fixed evaluation contract; older anchored results lacking that evidence
   must start a fresh run. Data-source selectors are checked; candidate values and CPU worker
-  count may vary, while the existing strict GPU settings comparison remains in force.
+  count may vary, while the existing strict GPU settings comparison remains in force. All
+  backends persist effective suite filters and concrete dates, and CPU evaluations apply resolved
+  override files before recording their evaluation contract.
 
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
   partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that

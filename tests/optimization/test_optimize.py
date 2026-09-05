@@ -830,9 +830,10 @@ def test_active_suite_scenario_labels_use_canonical_fallbacks():
     ) is None
 
 
-def test_materialize_gpu_suite_run_contract_persists_external_and_filtered_suite():
+@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+def test_materialize_suite_run_contract_persists_external_and_filtered_suite(backend):
     config = optimize.get_template_config()
-    config["optimize"]["backend"] = "gpu"
+    config["optimize"]["backend"] = backend
     config["backtest"]["suite_enabled"] = False
     suite_cfg = {
         "enabled": True,
@@ -842,7 +843,7 @@ def test_materialize_gpu_suite_run_contract_persists_external_and_filtered_suite
         "volume_normalization": False,
     }
 
-    optimize._materialize_gpu_suite_run_contract(config, suite_cfg)
+    optimize._materialize_suite_run_contract(config, suite_cfg)
 
     assert config["backtest"]["suite_enabled"] is True
     assert config["backtest"]["scenarios"] == suite_cfg["scenarios"]
@@ -853,12 +854,10 @@ def test_materialize_gpu_suite_run_contract_persists_external_and_filtered_suite
     assert config["backtest"]["scenarios"][0]["coins"] == ["ETH"]
 
 
-def test_materialize_gpu_suite_run_contract_does_not_change_cpu_config():
+def test_materialize_suite_run_contract_updates_cpu_config():
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "pymoo"
-    before = deepcopy(config["backtest"])
-
-    optimize._materialize_gpu_suite_run_contract(
+    optimize._materialize_suite_run_contract(
         config,
         {
             "enabled": True,
@@ -869,7 +868,9 @@ def test_materialize_gpu_suite_run_contract_does_not_change_cpu_config():
         },
     )
 
-    assert config["backtest"] == before
+    assert config["backtest"]["suite_enabled"] is True
+    assert config["backtest"]["scenarios"] == [{"label": "stress", "coins": ["ETH"]}]
+    assert config["backtest"]["exchanges"] == ["bybit"]
 
 
 def test_gpu_preparation_preflight_is_additive_to_cpu_backends(monkeypatch):
@@ -974,9 +975,10 @@ def test_gpu_preparation_preflight_rejects_fixed_strategy_switch():
         optimize._run_gpu_preparation_preflight(config, {"enabled": False})
 
 
-def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():
+@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+def test_materialize_resolved_suite_dates_replaces_dynamic_tokens(backend):
     config = optimize.get_template_config()
-    config["optimize"]["backend"] = "gpu"
+    config["optimize"]["backend"] = backend
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [
         {"label": "rolling", "start_date": "2026-01-01", "end_date": "now"}
@@ -999,7 +1001,7 @@ def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():
         },
     )
 
-    optimize._materialize_resolved_gpu_suite_dates(config, [context])
+    optimize._materialize_resolved_suite_dates(config, [context])
 
     assert config["backtest"]["scenarios"] == [
         {
@@ -1010,7 +1012,7 @@ def test_materialize_resolved_gpu_suite_dates_replaces_dynamic_tokens():
     ]
 
 
-def test_materialize_resolved_gpu_suite_dates_rejects_inconsistent_prepared_dates():
+def test_materialize_resolved_suite_dates_rejects_inconsistent_prepared_dates():
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
     config["backtest"]["suite_enabled"] = True
@@ -1034,12 +1036,13 @@ def test_materialize_resolved_gpu_suite_dates_rejects_inconsistent_prepared_date
     )
 
     with pytest.raises(RuntimeError, match="inconsistent prepared requested_start_date"):
-        optimize._materialize_resolved_gpu_suite_dates(config, [context])
+        optimize._materialize_resolved_suite_dates(config, [context])
 
 
-def test_materialized_gpu_suite_dates_make_rollover_resume_incompatible():
+@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+def test_materialized_suite_dates_make_rollover_resume_incompatible(backend):
     previous = optimize.get_template_config()
-    previous["optimize"]["backend"] = "gpu"
+    previous["optimize"]["backend"] = backend
     previous["backtest"]["suite_enabled"] = True
     previous["backtest"]["scenarios"] = [
         {"label": "rolling", "start_date": "now", "end_date": "2026-08-20"}
@@ -1059,10 +1062,10 @@ def test_materialized_gpu_suite_dates_make_rollover_resume_incompatible():
             },
         )
 
-    optimize._materialize_resolved_gpu_suite_dates(
+    optimize._materialize_resolved_suite_dates(
         previous, [prepared_context("2026-08-17T00:00:00")]
     )
-    optimize._materialize_resolved_gpu_suite_dates(
+    optimize._materialize_resolved_suite_dates(
         current, [prepared_context("2026-08-18T00:00:00")]
     )
     previous["suite_metrics"] = {"scenario_labels": ["rolling"]}
@@ -1072,14 +1075,14 @@ def test_materialized_gpu_suite_dates_make_rollover_resume_incompatible():
     assert any("backtest.scenarios" in mismatch for mismatch in mismatches)
 
 
-def test_materialize_resolved_gpu_suite_dates_rejects_context_count_mismatch():
+def test_materialize_resolved_suite_dates_rejects_context_count_mismatch():
     config = optimize.get_template_config()
     config["optimize"]["backend"] = "gpu"
     config["backtest"]["suite_enabled"] = True
     config["backtest"]["scenarios"] = [{"label": "base"}]
 
     with pytest.raises(RuntimeError, match="prepared scenario count"):
-        optimize._materialize_resolved_gpu_suite_dates(config, [])
+        optimize._materialize_resolved_suite_dates(config, [])
 
 
 def test_validate_optimizer_limit_suite_mode_rejects_named_scenario_early():
@@ -5233,14 +5236,14 @@ def test_resume_config_mismatches_allows_machine_local_optimizer_settings():
     entry["optimize"]["pareto_max_size"] = 1000
     entry["optimize"]["write_all_results"] = True
     entry["backtest"]["base_dir"] = "/old/backtests"
-    entry["backtest"]["ohlcv_source_dir"] = "/old/ohlcvs"
+    entry["backtest"]["ohlcv_source_dir"] = "/input/ohlcvs"
     entry["backtest"]["visible_metrics"] = ["adg_strategy_eq"]
     config = deepcopy(entry)
     config["optimize"]["n_cpus"] = 8
     config["optimize"]["pareto_max_size"] = 250
     config["optimize"]["write_all_results"] = False
     config["backtest"]["base_dir"] = "/new/backtests"
-    config["backtest"]["ohlcv_source_dir"] = "/new/ohlcvs"
+    # Input dataset selectors remain unchanged; they are validated separately.
     config["backtest"]["visible_metrics"] = ["drawdown_worst_strategy_eq"]
 
     assert optimize._resume_config_mismatches(entry, config) == []

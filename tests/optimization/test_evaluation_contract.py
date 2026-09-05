@@ -256,13 +256,18 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
     )
 
 
-@pytest.mark.parametrize("key,old_value,new_value", [
-    ("market_settings_sources", {"BTC": "binance"}, {"BTC": "bybit"}),
-    ("ohlcv_source_dir", "dataset-a", "dataset-b"),
-    ("hlcvs_data_dir", "prepared-a", "prepared-b"),
-])
+@pytest.mark.parametrize(
+    "key,old_value,new_value",
+    [
+        ("market_settings_sources", {"BTC": "binance"}, {"BTC": "bybit"}),
+        ("ohlcv_source_dir", "dataset-a", "dataset-b"),
+        ("hlcvs_data_dir", "prepared-a", "prepared-b"),
+    ],
+)
 @pytest.mark.parametrize("record_snapshot", [False, True])
-def test_resume_rejects_changed_data_source_selectors(tmp_path, key, old_value, new_value, record_snapshot):
+def test_resume_rejects_changed_data_source_selectors(
+    tmp_path, key, old_value, new_value, record_snapshot
+):
     import msgpack
     from optimize import _resume_config_mismatches, _validate_resume_results
 
@@ -286,3 +291,173 @@ def test_gpu_runtime_settings_retain_documented_strict_resume_comparison():
     old = _record(config)
     config["optimize"]["gpu"]["exact_workers"] = 987
     assert any("gpu" in item for item in _resume_config_mismatches(old, config))
+
+
+@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("token", ["now", "today", "", None])
+def test_prepared_dynamic_end_date_rollover_rejects_saved_fitness(
+    monkeypatch, backend, token
+):
+    import utils
+    from config import prepare_config
+    from optimize import _resume_config_mismatches
+
+    config = _config()
+    config["optimize"]["backend"] = backend
+    config["backtest"]["end_date"] = token
+    monkeypatch.setattr(
+        utils, "utc_ms", lambda: utils.date_to_ts("2026-08-21T12:00:00")
+    )
+    previous = prepare_config(deepcopy(config), verbose=False)
+    old = _record(previous)
+    assert previous["backtest"]["end_date"] == "2026-08-19"
+    assert (
+        _resume_config_mismatches(old, prepare_config(deepcopy(config), verbose=False))
+        == []
+    )
+    monkeypatch.setattr(
+        utils, "utc_ms", lambda: utils.date_to_ts("2026-08-22T12:00:00")
+    )
+    current = prepare_config(deepcopy(config), verbose=False)
+    assert current["backtest"]["end_date"] == "2026-08-20"
+    assert any(
+        "backtest.end_date" in item for item in _resume_config_mismatches(old, current)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+async def test_main_resolves_override_file_before_cpu_candidate_and_rust_payload(
+    tmp_path, monkeypatch, backend
+):
+    import numpy as np
+    import optimize
+
+    config = _config()
+    config["optimize"].update(backend=backend, limits=[])
+    config["backtest"].update(exchanges=["binance"], filter_by_min_effective_cost=False)
+    config["live"].update(approved_coins={"long": ["BTC"], "short": []})
+    config["coin_overrides"] = {"BTC": {"override_config_path": "coin.json"}}
+    (tmp_path / "coin.json").write_text(
+        json.dumps(
+            {
+                "bot": {"long": {"risk": {"entry_cooldown_minutes": 37.0}}},
+            }
+        )
+    )
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(path)])
+    real_execute = optimize.execute_backtest
+    observed = []
+
+    class EvaluatedOffline(BaseException):
+        pass
+
+    def execute_and_capture(payload, candidate):
+        assert payload.bot_params_list[0]["long"]["risk_entry_cooldown_minutes"] == 37.0
+        assert (
+            candidate["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
+                "entry_cooldown_minutes"
+            ]
+            == 37.0
+        )
+        observed.append(real_execute(payload, candidate))
+        raise EvaluatedOffline
+
+    async def evaluate_before_data_download(run_config, *args, **kwargs):
+        # Enter the real CPU candidate/evaluation path using only synthetic data,
+        # stopping before the CLI attempts market discovery or downloads.
+        run_config["backtest"]["coins"] = {"binance": ["BTC"]}
+        timestamps = 1704067200000 + np.arange(4, dtype=np.int64) * 60_000
+        candles = np.tile([101.0, 99.0, 100.0, 1.0], (4, 1, 1))
+        market = {
+            "BTC": {
+                "qty_step": 0.001,
+                "price_step": 0.01,
+                "min_qty": 0.001,
+                "min_cost": 1.0,
+                "c_mult": 1.0,
+                "maker": 0.0,
+                "taker": 0.0,
+                "exchange": "binance",
+                "first_valid_index": 0,
+                "last_valid_index": 3,
+            }
+        }
+        evaluator = optimize.Evaluator(
+            hlcvs_specs={"binance": None},
+            btc_usd_specs={},
+            msss={"binance": market},
+            config=run_config,
+            timestamps={"binance": timestamps},
+        )
+        evaluator.shared_hlcvs_np["binance"] = candles
+        evaluator.shared_btc_np["binance"] = np.full(4, 50_000.0)
+        vector = optimize.config_to_individual(run_config, evaluator.bounds)
+        evaluator.evaluate(vector, [])
+
+    monkeypatch.setattr(optimize, "execute_backtest", execute_and_capture)
+    monkeypatch.setattr(
+        optimize, "format_approved_ignored_coins", evaluate_before_data_download
+    )
+    with pytest.raises(EvaluatedOffline):
+        await optimize.main()
+    assert len(observed) == 1
+
+
+@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("token", ["now", "today"])
+def test_prepared_cpu_suite_date_rollover_rejects_saved_fitness(
+    monkeypatch, backend, token
+):
+    import utils
+    from types import SimpleNamespace
+    from config import prepare_config
+    from optimize import (
+        _materialize_suite_run_contract,
+        _materialize_resolved_suite_dates,
+        _resume_config_mismatches,
+    )
+    from suite_runner import apply_scenario, build_scenarios
+
+    config = _config()
+    config["optimize"]["backend"] = backend
+    suite = {
+        "enabled": True,
+        "exchanges": ["binance"],
+        "scenarios": [
+            {"label": "rolling", "start_date": "2026-08-01", "end_date": token},
+        ],
+    }
+
+    def prepared_on(day):
+        monkeypatch.setattr(utils, "utc_ms", lambda: utils.date_to_ts(day))
+        run = prepare_config(deepcopy(config), verbose=False)
+        _materialize_suite_run_contract(run, suite)
+        scenarios, _ = build_scenarios(suite, base_exchanges=["binance"])
+        raw, _ = apply_scenario(
+            run, scenarios[0], ["BTC"], [], ["binance"], {"BTC"}, quiet=True
+        )
+        prepared = prepare_config(raw, verbose=False)
+        metadata = {
+            f"requested_{key}": prepared["backtest"][key]
+            for key in ("start_date", "end_date")
+        }
+        _materialize_resolved_suite_dates(
+            run,
+            [
+                SimpleNamespace(
+                    label="rolling", msss={"binance": {"__meta__": metadata}}
+                )
+            ],
+        )
+        return run
+
+    old = _record(prepared_on("2026-08-21T12:00:00"))
+    assert _resume_config_mismatches(old, prepared_on("2026-08-21T18:00:00")) == []
+    current = prepared_on("2026-08-22T12:00:00")
+    assert old["backtest"]["end_date"] == current["backtest"]["end_date"]
+    assert any(
+        "backtest.scenarios" in item for item in _resume_config_mismatches(old, current)
+    )

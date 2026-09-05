@@ -13,6 +13,10 @@ New result records include a machine-independent `optimizer_evaluation_contract`
 Older ordinary results are checked from their recorded config; older anchored results without
 this snapshot must start a fresh run because the other anchors' fixed policy cannot be proven.
 Moving an override file without changing its resolved values does not change this contract.
+Override files are resolved before CPU candidate evaluation and snapshotting. Every backend records
+the effective external suite and scenario filter, with prepared concrete scenario dates. Dynamic
+end-date tokens (`now`, `today`, empty, or null) resolve during config preparation; a later resolved
+cutoff requires a fresh run instead of reusing scores from the earlier window.
 
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 

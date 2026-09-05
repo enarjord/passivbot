@@ -73,6 +73,7 @@ from cli_utils import (
     help_all_requested,
 )
 from config import compile_runtime_config, load_input_config, load_prepared_config, prepare_config
+from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -3108,17 +3109,15 @@ def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | N
     return [scenario.label for scenario in scenarios]
 
 
-def _materialize_gpu_suite_run_contract(
+def _materialize_suite_run_contract(
     config: Dict[str, Any], suite_cfg: Mapping[str, Any]
 ) -> None:
-    """Persist the effective external/filterable suite in the GPU run config."""
+    """Persist the effective external/filterable suite for every optimizer backend."""
 
-    if config.get("optimize", {}).get("backend") != "gpu" or not suite_cfg.get(
-        "enabled"
-    ):
-        return
     backtest = config.setdefault("backtest", {})
-    backtest["suite_enabled"] = True
+    backtest["suite_enabled"] = bool(suite_cfg.get("enabled"))
+    if not backtest["suite_enabled"]:
+        return
     for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
         if key in suite_cfg:
             backtest[key] = deepcopy(suite_cfg[key])
@@ -3153,19 +3152,17 @@ def _run_gpu_preparation_preflight(
     validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
 
 
-def _materialize_resolved_gpu_suite_dates(
+def _materialize_resolved_suite_dates(
     config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
 ) -> None:
     """Replace dynamic suite date tokens with the prepared concrete dates."""
 
-    if config.get("optimize", {}).get("backend") != "gpu" or not config.get(
-        "backtest", {}
-    ).get("suite_enabled"):
+    if not config.get("backtest", {}).get("suite_enabled"):
         return
     scenarios = config["backtest"].get("scenarios") or []
     if len(scenarios) != len(scenario_contexts):
         raise RuntimeError(
-            "GPU suite run contract does not match prepared scenario count: "
+            "Optimizer suite run contract does not match prepared scenario count: "
             f"{len(scenarios)} != {len(scenario_contexts)}"
         )
     resolved_scenarios = []
@@ -3181,11 +3178,11 @@ def _materialize_resolved_gpu_suite_dates(
             }
             if not prepared_values:
                 raise RuntimeError(
-                    f"GPU suite scenario {ctx.label!r} has no prepared {meta_key}"
+                    f"Optimizer suite scenario {ctx.label!r} has no prepared {meta_key}"
                 )
             if len(prepared_values) != 1:
                 raise RuntimeError(
-                    f"GPU suite scenario {ctx.label!r} has inconsistent prepared "
+                    f"Optimizer suite scenario {ctx.label!r} has inconsistent prepared "
                     f"{meta_key} values: {sorted(prepared_values)}"
                 )
             resolved[key] = prepared_values.pop()
@@ -3447,6 +3444,7 @@ async def main():
         verbose=False,
         raw_snapshot=raw_snapshot,
     )
+    config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
@@ -3486,7 +3484,7 @@ async def main():
         )
         suite_cfg["enabled"] = bool(args.suite)
 
-    _materialize_gpu_suite_run_contract(config, suite_cfg)
+    _materialize_suite_run_contract(config, suite_cfg)
     active_suite_scenario_labels = _active_suite_scenario_labels(suite_cfg)
     _validate_optimizer_limit_suite_mode(
         config,
@@ -3580,7 +3578,7 @@ async def main():
             )
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
-            _materialize_resolved_gpu_suite_dates(config, scenario_contexts)
+            _materialize_resolved_suite_dates(config, scenario_contexts)
             logging.info("Optimizer suite enabled with %d scenario(s)", len(scenario_contexts))
             first_ctx = scenario_contexts[0]
             hlcvs_specs = first_ctx.hlcvs_specs
