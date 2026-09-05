@@ -813,7 +813,11 @@ fn analyze_backtest_basic_with_starting_balance(
             (profit, loss + fill.pnl.abs())
         }
     });
-    let loss_profit_ratio = calc_loss_profit_ratio(total_loss, total_profit);
+    let loss_profit_ratio = if fills.is_empty() {
+        0.0
+    } else {
+        calc_loss_profit_ratio(total_loss, total_profit)
+    };
 
     let (long_profit, long_loss, short_profit, short_loss) =
         fills
@@ -2633,6 +2637,19 @@ mod tests {
             assert!((actual.exposure_ratio_w - expected.exposure_ratio_w).abs() < 1e-12);
             assert!((actual.exposure_mean_ratio_w - expected.exposure_mean_ratio_w).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn profitable_run_keeps_zero_weighted_loss_ratio_with_fill_free_tails() {
+        let mut fills = [make_fill(0, 0.4), make_fill(1, 0.4)];
+        for fill in &mut fills {
+            fill.pnl = 10.0;
+        }
+        let equities: Vec<f64> = (0..30).map(|i| 10000.0 + 10.0 * i as f64).collect();
+        let timestamps: Vec<u64> = (0..30).map(|i| i * MS_PER_DAY).collect();
+        let result = analyze_backtest(&fills, &equities, &timestamps, &[0.4; 30]);
+        assert_eq!(result.loss_profit_ratio, 0.0);
+        assert_eq!(result.loss_profit_ratio_w, 0.0);
     }
 
     #[test]
