@@ -18,6 +18,11 @@ All notable user-facing changes will be documented in this file.
   Stop older backtest/optimizer workers before sharing their cache with the new lock protocol;
   ambiguous legacy locks require explicit cleanup after those workers have stopped.
 
+- Backtests reject non-finite H/L/C inside declared valid candle windows, including all-NaN
+  gaps in direct or prepared datasets. Held positions require an available valuation candle;
+  missing data no longer removes their unrealized PnL from equity or risk samples. Unheld
+  symbols may retain unavailable rows outside their listing windows.
+
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
   partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that
   completes on its final allowed request remains valid.
