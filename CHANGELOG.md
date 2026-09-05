@@ -34,6 +34,11 @@ All notable user-facing changes will be documented in this file.
   plan when a private fill update arrives. Partial-fill updates also invalidate account state when
   they match a recently created order.
 
+- Backtest weighted equity metrics now include fill-free trailing windows and carry the last
+  actual balance into their equity-versus-balance calculations, preventing open losing positions
+  from receiving artificially favorable scores. Equity peak-recovery metrics now include an
+  unrecovered drawdown through the final sample.
+
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
   analysis boundaries, providing smoother selection pressure against long no-fill periods than a

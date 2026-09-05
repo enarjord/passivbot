@@ -877,6 +877,7 @@ def _weighted_subset_context(
         )
         subsets.append(
             active & (day_ids.unsqueeze(0) >= subset_start_day.unsqueeze(1))
+            & (subset_start_step <= last_eq_steps).unsqueeze(1)
         )
         subset_start_steps.append(subset_start_step)
         subset_start_timestamps.append(subset_start_ts)
@@ -930,7 +931,8 @@ def _weighted_adg(
         total += torch.where(
             eligible, _smoothed_adg(day_eq, subset), torch.zeros_like(total)
         )
-    return total / 10.0
+    count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
+    return total / count.clamp(min=1).to(total.dtype)
 
 
 WEIGHTED_STRATEGY_EQ_METRICS = {
@@ -982,7 +984,7 @@ def _weighted_daily_series_metrics(
         first_timestamp,
         interval_ms,
     )
-    fill_eligible = fill_count.to(torch.float64) > 1.0
+    fill_eligible = fill_count.to(torch.float64) > 0.0
     timestamp_origin = float(first_timestamp)
     finite_last_fill = torch.isfinite(last_fill_ts)
     relative_last_fill_ms = torch.where(
@@ -993,11 +995,9 @@ def _weighted_daily_series_metrics(
     last_fill_steps = torch.floor(
         relative_last_fill_ms / float(interval_ms) + 0.5
     ).to(torch.long)
-    # Unlike weighted equity-return metrics, Rust's weighted shape and volume
-    # analysis admits a one-sample equity run when it has multiple fills. The
-    # full-run analysis contributes one tenth, then the first empty suffix ends
-    # the loop. Only finite, ordered timestamps and one active sample are
-    # required here.
+    # Equity-only suffixes remain evaluable after the last fill. The full
+    # run still needs actual fill evidence, and empty sample windows do not
+    # contribute to the denominator.
     eligible = (
         fill_eligible
         & torch.isfinite(first_eq_ts)
@@ -1026,9 +1026,7 @@ def _weighted_daily_series_metrics(
     for subset_index, (subset, subset_start_step, subset_start_ts) in enumerate(
         zip(subsets, subset_start_steps, subset_start_timestamps)
     ):
-        subset_eligible = (
-            eligible & finite_last_fill & (last_fill_steps >= subset_start_step)
-        )
+        subset_eligible = eligible & subset.any(dim=1)
         if "volume_pct_per_day_avg_w" in requested:
             if subset_index == 0:
                 volume_fill_mask = day_has_fill & subset
@@ -1060,7 +1058,8 @@ def _weighted_daily_series_metrics(
                 torch.zeros_like(totals["volume_pct_per_day_avg_w"]),
             )
             totals["volume_pct_per_day_avg_w"] += torch.where(
-                subset_eligible & (fill_days > 0),
+                subset_eligible & finite_last_fill
+                & (last_fill_steps >= subset_start_step) & (fill_days > 0),
                 value,
                 torch.zeros_like(value),
             )
@@ -1071,10 +1070,9 @@ def _weighted_daily_series_metrics(
                 totals[name] += torch.where(
                     subset_eligible, value, torch.zeros_like(value)
                 )
-    result = {name: value / 10.0 for name, value in totals.items()}
-    # analyze_backtest returns early for zero or one fill. Preserve the custom
-    # Analysis defaults for weighted shape metrics; weighted volume defaults
-    # to zero.
+    count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
+    result = {name: value / count.clamp(min=1).to(value.dtype) for name, value in totals.items()}
+    # Preserve the exact no-fill Analysis defaults.
     for name in shape_names:
         result[name] = torch.where(
             fill_eligible, result[name], torch.ones_like(result[name])
@@ -1160,7 +1158,8 @@ def _weighted_strategy_eq_metrics(
             totals[name] += torch.where(
                 eligible, value, torch.zeros_like(value)
             )
-    return {name: value / 10.0 for name, value in totals.items()}
+    count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
+    return {name: value / count.clamp(min=1).to(value.dtype) for name, value in totals.items()}
 
 
 def _daily_pnl_stats(day_net_pnl, day_last_fill_balance, mask):
@@ -1325,7 +1324,7 @@ def _weighted_pnl_metrics(
     fill_count = torch.where(
         active, day_fill_count, torch.zeros_like(day_fill_count)
     )
-    eligible = fill_count.sum(dim=1) > 1.0
+    eligible = fill_count.sum(dim=1) > 0.0
     totals = {
         name: torch.zeros(
             day_net_pnl.shape[0],
@@ -1354,7 +1353,8 @@ def _weighted_pnl_metrics(
             totals[name] += torch.where(
                 include, values[name], torch.zeros_like(values[name])
             )
-    return {name: value / 10.0 for name, value in totals.items()}
+    count = torch.stack([subset.any(dim=1) for subset in subsets]).sum(dim=0)
+    return {name: value / count.clamp(min=1).to(value.dtype) for name, value in totals.items()}
 
 
 def _hard_stop_lifecycle_metrics(out: dict, run) -> dict:
@@ -1622,6 +1622,12 @@ def _daily_peak_recovery_ms(day_end_eq, active):
         peak_day = torch.where(
             new_high, torch.full_like(peak_day, day), peak_day
         )
+        # Count the still-unrecovered interval through every valid sample.
+        recovery_days = torch.where(
+            valid & started,
+            torch.maximum(recovery_days, (day - peak_day).to(day_end_eq.dtype)),
+            recovery_days,
+        )
         started |= valid
     return torch.where(
         started,
@@ -1852,7 +1858,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "mdg_w_per_exposure_short_btc",
     }:
         wanted_safe_weighted_sources.add("mdg_strategy_eq_w")
-    enough_fills = out["fill_count"].to(torch.float64) > 1.0
+    enough_fills = out["fill_count"].to(torch.float64) > 0.0
     if wanted_safe_weighted_sources:
         safe_weighted = _weighted_strategy_eq_metrics(
             day_end_btc,

@@ -75,7 +75,7 @@ def test_btc_daily_peak_recovery_matches_non_strict_rust_contract():
 
     recovery = _daily_peak_recovery_ms(day_end, active) / 86_400_000.0
 
-    assert recovery.tolist() == [2.0, 0.0]
+    assert recovery.tolist() == [2.0, 3.0]
 
 
 def test_fill_activity_ratio_recovers_integer_steps_at_whole_day_boundary():
@@ -859,7 +859,8 @@ def test_weighted_daily_series_metrics_match_rust_suffix_contract():
     )
 
 
-def test_weighted_daily_series_metrics_preserve_sparse_fill_rust_defaults():
+@pytest.mark.parametrize("fill_count", [0.0, 1.0])
+def test_weighted_daily_series_metrics_evaluate_single_fill_run(fill_count):
     day_end = torch.tensor([[100.0, 101.0]], dtype=torch.float64)
     requested = set(
         [
@@ -875,7 +876,7 @@ def test_weighted_daily_series_metrics_preserve_sparse_fill_rust_defaults():
         torch.tensor([[0.5, 0.0]], dtype=torch.float64),
         torch.tensor([[True, False]]),
         torch.ones_like(day_end, dtype=torch.bool),
-        torch.tensor([1.0]),
+        torch.tensor([fill_count]),
         torch.tensor([0.0]),
         torch.tensor([0.0]),
         torch.tensor([86_400_000.0]),
@@ -885,12 +886,19 @@ def test_weighted_daily_series_metrics_preserve_sparse_fill_rust_defaults():
     )
 
     assert set(metrics) == requested
-    assert metrics["volume_pct_per_day_avg_w"].item() == 0.0
-    for name in requested - {"volume_pct_per_day_avg_w"}:
-        assert metrics[name].item() == 1.0
+    if fill_count == 0:
+        assert metrics["volume_pct_per_day_avg_w"].item() == 0.0
+        for name in requested - {"volume_pct_per_day_avg_w"}:
+            assert metrics[name].item() == 1.0
+    else:
+        # Three nonempty windows: the full run and two one-sample suffixes.
+        assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.5 / 3)
+        assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(1.0 / 3)
+        assert metrics["equity_jerkiness_w_usd"].item() == 0.0
+        assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
 
 
-def test_weighted_daily_series_metrics_keep_one_sample_full_run_tenth():
+def test_weighted_daily_series_metrics_average_only_nonempty_windows():
     requested = {
         "equity_choppiness_w_usd",
         "equity_jerkiness_w_usd",
@@ -915,8 +923,30 @@ def test_weighted_daily_series_metrics_keep_one_sample_full_run_tenth():
     assert metrics["equity_choppiness_w_usd"].item() == 0.0
     assert metrics["equity_jerkiness_w_usd"].item() == 0.0
     assert math.isinf(metrics["exponential_fit_error_w_usd"].item())
-    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.05)
+    assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.5)
 
+
+
+def test_weighted_metrics_include_fill_free_losing_tail():
+    day_ms = 86_400_000
+    equities = torch.arange(10000.0, 7000.0, -100.0, dtype=torch.float64).unsqueeze(0)
+    active = torch.ones_like(equities, dtype=torch.bool)
+    first_ts = torch.tensor([0.0], dtype=torch.float64)
+    last_ts = torch.tensor([29.0 * day_ms], dtype=torch.float64)
+    adg = _weighted_adg(equities, active, first_ts, last_ts, 0.0, day_ms)
+    shape = _weighted_daily_series_metrics(
+        equities, torch.zeros_like(equities), torch.zeros_like(active), active,
+        torch.tensor([2.0]), torch.tensor([float(day_ms)]), first_ts, last_ts,
+        0.0, day_ms, {"equity_choppiness_w_usd"},
+    )
+    starts = [0, 15, 20, 23, 24, 25, 26, 26, 27, 27]
+    expected = np.mean([
+        (7200.0 / equities[0, start].item()) ** (1.0 / (30 - start)) - 1.0
+        for start in starts
+    ])
+    assert adg.item() == pytest.approx(expected, abs=1e-12)
+    assert shape["equity_choppiness_w_usd"].item() == 1.0
+    assert (_daily_peak_recovery_ms(equities, active) / 3_600_000).item() == 696.0
 
 def test_weighted_volume_excludes_ambiguous_intraday_cutoff_day():
     metrics = _weighted_daily_series_metrics(
@@ -985,9 +1015,8 @@ def test_weighted_suffix_admission_uses_integer_candle_steps():
         {"equity_choppiness_w_usd"},
     )
 
-    # Linear full and half-window daily series both have choppiness 1.0;
-    # Rust admits both and stops at the next suffix, for a weighted 0.2.
-    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(0.2)
+    # Every nonempty linear suffix contributes, including those after the last fill.
+    assert metrics["equity_choppiness_w_usd"].item() == pytest.approx(1.0)
 
 
 def test_weighted_subsets_normalize_relative_timestamps_to_unix_origin():
@@ -1900,7 +1929,8 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     assert zero_exposure["gain_per_exposure_short_usd"].item() == 0.0
 
 
-def test_btc_account_metrics_use_prepared_daily_price_context():
+@pytest.mark.parametrize("fill_count", [1.0, 3.0])
+def test_btc_account_metrics_use_prepared_daily_price_context(fill_count):
     day_end = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
     out = {
         "day_end_eq": day_end,
@@ -1908,7 +1938,7 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         "day_max_dd": torch.zeros_like(day_end),
         "day_volume": torch.zeros_like(day_end),
         "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
-        "fill_count": torch.tensor([3.0]),
+        "fill_count": torch.tensor([fill_count]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
@@ -1930,6 +1960,8 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         "gain_btc",
         "gain_per_exposure_long_btc",
         "peak_recovery_days_equity_btc",
+        "adg_w_btc",
+        "adg_w_per_exposure_long_btc",
     }
     btc_day_end = np.array([10.0, 10.0, 20.0])
 
@@ -1961,6 +1993,10 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         expected_gain.item() / 1.25
     )
     assert metrics["peak_recovery_days_equity_btc"].item() == 1.0
+    assert metrics["adg_w_btc"].item() < 0.0
+    assert metrics["adg_w_per_exposure_long_btc"].item() == pytest.approx(
+        metrics["adg_w_btc"].item() / 1.25
+    )
 
 
 def test_btc_account_metrics_fail_closed_without_price_context():

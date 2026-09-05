@@ -74,6 +74,9 @@ and more stable across collateral caps.
 - `exposure_mean_ratio`: `adg` divided by the mean absolute recorded wallet exposure.
 
 Weighted `_w` variants use the same trailing-slice averaging as the rest of the `_w` metrics.
+Equity-based metrics include every nonempty trailing equity slice even when no new fills occur;
+equity-versus-balance calculations carry the last actual fill balance into each slice. Fill-only
+statistics remain zero for a slice without fills. Short runs average the available nonempty slices.
 
 ## Drawdown and tail metrics
 - `drawdown_worst`: Maximum absolute drawdown over the equity curve.
@@ -100,7 +103,8 @@ Weighted `_w` variants use the same trailing-slice averaging as the rest of the 
   gaps `g`; the metric is `sum(g^2) / sum(g)`. A randomly selected moment is therefore weighted by
   the length of the gap containing it, so long droughts contribute more strongly than clustered
   fills. A zero-fill run equals the full analysis duration.
-- `peak_recovery_hours_equity`: Longest time to make a new high on the equity curve.
+- `peak_recovery_hours_equity`: Longest equity peak-to-recovery interval, including an unrecovered
+  tail from the last peak to the final equity sample.
 - `peak_recovery_days_equity`: Same equity recovery duration converted to days.
 - `peak_recovery_hours_pnl`: Same calculation on cumulative realized PnL.
 - `peak_recovery_days_pnl`: Same realized-PnL recovery duration converted to days.
