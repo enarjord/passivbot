@@ -13,10 +13,13 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from config.load import (  # noqa: E402
     load_input_config,
+    load_prepared_config,
     strip_persisted_hsl_incomplete_history_override,
 )
 
@@ -77,3 +80,47 @@ def test_cli_override_survives_because_it_is_applied_after_load(tmp_path):
         source, args, allowed_keys={"live.hsl_accept_incomplete_history"}
     )
     assert source["live"]["hsl_accept_incomplete_history"] is True
+
+
+@pytest.mark.parametrize("shape", ["current", "live_only", "nested_current"])
+def test_prepared_config_cannot_restore_persisted_override(tmp_path, caplog, shape):
+    from config.schema import get_template_config
+
+    config = get_template_config()
+    config["live"]["hsl_accept_incomplete_history"] = True
+    if shape == "live_only":
+        config = {key: config[key] for key in ("config_version", "bot", "live")}
+    document = {"config": config} if shape == "nested_current" else config
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(document))
+
+    with caplog.at_level(logging.CRITICAL):
+        prepared = load_prepared_config(
+            str(path), live_only=True, target="live", verbose=False, log_info=False
+        )
+
+    assert prepared["live"]["hsl_accept_incomplete_history"] is False
+    source, _, raw = load_input_config(str(path), log_info=False)
+    for snapshot in (source, raw):
+        effective = snapshot["config"] if shape == "nested_current" else snapshot
+        assert "hsl_accept_incomplete_history" not in effective["live"]
+    assert "per-run CLI-only" in caplog.text
+
+
+def test_serialized_per_run_override_is_stripped_when_wrapped_and_reloaded(tmp_path):
+    from config.schema import get_template_config
+    from config_utils import update_config_with_args
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(get_template_config()))
+    source, _, _ = load_input_config(str(path), log_info=False)
+    update_config_with_args(
+        source,
+        SimpleNamespace(**{"live.hsl_accept_incomplete_history": True}),
+        allowed_keys={"live.hsl_accept_incomplete_history"},
+    )
+    assert source["live"]["hsl_accept_incomplete_history"] is True
+
+    path.write_text(json.dumps({"config": source}))
+    reloaded = load_prepared_config(str(path), verbose=False, log_info=False)
+    assert reloaded["live"]["hsl_accept_incomplete_history"] is False
