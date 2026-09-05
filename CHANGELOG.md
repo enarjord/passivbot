@@ -28,6 +28,11 @@ All notable user-facing changes will be documented in this file.
   normalization and apply CLI overrides to the wrapped payload, so the HSL coverage waiver remains
   an explicit per-run CLI choice after reload.
 
+- Live order creation now rechecks account invalidation after exchange configuration and quote
+  refreshes and immediately before each connector call, preventing orders based on a superseded
+  plan when a private fill update arrives. Partial-fill updates also invalidate account state when
+  they match a recently created order.
+
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
   analysis boundaries, providing smoother selection pressure against long no-fill periods than a

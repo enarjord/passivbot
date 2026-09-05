@@ -71,6 +71,7 @@ class PlanningSnapshot:
     market_snapshots: tuple[PlanningMarketSnapshot, ...]
     market_snapshot_max_age_ms: int
     completed_candle_signature: Any
+    account_invalidation_generation: int = 0
     snapshot_id: str = ""
     data_packets: tuple[DataPacketMetadata, ...] = ()
 
@@ -88,6 +89,7 @@ class PlanningSnapshot:
         market_snapshots: Mapping[str, MarketSnapshot],
         market_snapshot_max_age_ms: int,
         data_packets: Mapping[str, DataPacketMetadata] | None = None,
+        account_invalidation_generation: int = 0,
     ) -> "PlanningSnapshot":
         ordered_symbols = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
         required = tuple(sorted(dict.fromkeys(str(surface) for surface in required_surfaces)))
@@ -112,6 +114,7 @@ class PlanningSnapshot:
             if data_packets is not None and surface in data_packets
         )
         snapshot_payload = {
+            "account_invalidation_generation": int(account_invalidation_generation),
             "ts_ms": int(ts_ms),
             "exchange": str(exchange),
             "user": str(user),
@@ -125,6 +128,7 @@ class PlanningSnapshot:
             "data_packets": [packet.to_dict() for packet in packet_rows],
         }
         return cls(
+            account_invalidation_generation=int(account_invalidation_generation),
             ts_ms=int(ts_ms),
             exchange=str(exchange),
             user=str(user),
@@ -187,6 +191,7 @@ class PlanningSnapshot:
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "account_invalidation_generation": self.account_invalidation_generation,
             "ts_ms": self.ts_ms,
             "exchange": self.exchange,
             "user": self.user,
