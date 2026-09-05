@@ -133,11 +133,21 @@ def materialized_operation_lock(output_root: str | Path):
         timeout=OP_LOCK_TIMEOUT_SECONDS, check_interval=OP_LOCK_POLL_SECONDS,
     ):
         legacy = root / OP_LOCK_DIRNAME
-        if legacy.exists() and (
-            _read_lock(legacy / OP_LOCK_FILENAME) is None
-            or _lock_is_active(legacy / OP_LOCK_FILENAME)
-        ):
-            raise RuntimeError(f"legacy materialized cache operation may be active: {legacy}")
+        if legacy.exists():
+            owner = _read_lock(legacy / OP_LOCK_FILENAME) or {}
+            try:
+                pid = int(owner.get("pid"))
+            except (TypeError, ValueError):
+                pid = 0
+            # Missing metadata can mean an older worker paused between mkdir
+            # and publishing its PID. Elapsed time does not prove it is dead.
+            if pid <= 0 or owner.get("hostname") != _hostname() or _process_exists(pid):
+                raise RuntimeError(
+                    f"legacy materialized cache operation ownership is unknown or active: {legacy}. "
+                    "Stop all workers using the previous lock protocol; after confirming none "
+                    "remain, remove only this legacy lock directory and retry. "
+                    f"Do not remove {OP_LOCK_FILE}."
+                )
         yield
 
 

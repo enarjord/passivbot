@@ -2,10 +2,15 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 from pathlib import Path
 import os
+import json
+import multiprocessing
+import shutil
+import time
 import subprocess
 import sys
 
 import numpy as np
+import pytest
 
 import materialized_cache as cache
 from ohlcv_catalog import OhlcvCatalog
@@ -102,3 +107,81 @@ def test_operation_lock_survives_owner_exit_without_replacing_inode(tmp_path):
     with cache.materialized_operation_lock(tmp_path):
         assert path.stat().st_ino == inode
     assert path.stat().st_ino == inode
+
+
+def _contending_process(root, start, iterations):
+    # Separate processes must exclude each other even before run-owner metadata
+    # exists. O_EXCL makes overlapping critical sections an immediate failure.
+    start.wait(10)
+    root = Path(root)
+    marker = root / "critical-section"
+    for _ in range(iterations):
+        with cache.materialized_operation_lock(root):
+            fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                with (root / "owners.log").open("a") as output:
+                    output.write(f"{os.getpid()}\n")
+                time.sleep(0.005)
+            finally:
+                os.close(fd)
+                marker.unlink()
+
+
+def test_spawned_operation_owners_exclude_each_other(tmp_path):
+    context = multiprocessing.get_context("spawn")
+    start = context.Event()
+    workers = [context.Process(target=_contending_process, args=(str(tmp_path), start, 8)) for _ in range(4)]
+    for worker in workers:
+        worker.start()
+    start.set()
+    try:
+        for worker in workers:
+            worker.join(15)
+            assert worker.exitcode == 0
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.terminate()
+                worker.join(5)
+    owners = (tmp_path / "owners.log").read_text().splitlines()
+    assert len(owners) == 32
+    assert len(set(owners)) == 4
+    assert cache.materialized_operation_lock_path(tmp_path).is_file()
+
+
+@pytest.mark.parametrize("metadata", [None, "invalid-json", {}, {"pid": "invalid"}, {"pid": 0}])
+def test_unknown_legacy_owner_is_preserved_with_actionable_recovery(tmp_path, metadata):
+    legacy = tmp_path / cache.OP_LOCK_DIRNAME
+    legacy.mkdir()
+    if metadata is not None:
+        text = metadata if isinstance(metadata, str) else json.dumps(metadata)
+        (legacy / cache.OP_LOCK_FILENAME).write_text(text)
+    with pytest.raises(RuntimeError, match="Stop all workers using the previous lock protocol"):
+        cache.prepare_materialized_run(tmp_path, "new-run")
+    assert legacy.is_dir()
+    assert not (tmp_path / "new-run").exists()
+    # Explicit operator cleanup is safe only after all old workers have stopped.
+    shutil.rmtree(legacy)
+    assert cache.prepare_materialized_run(tmp_path, "new-run").is_dir()
+
+
+@pytest.mark.parametrize("host,pid", [("local", "live"), ("foreign-host", "dead")])
+def test_active_or_foreign_legacy_owner_is_never_reclaimed(tmp_path, host, pid, monkeypatch):
+    legacy = tmp_path / cache.OP_LOCK_DIRNAME
+    legacy.mkdir()
+    owner = {"hostname": cache._hostname() if host == "local" else host,
+             "pid": os.getpid() if pid == "live" else 12345}
+    (legacy / cache.OP_LOCK_FILENAME).write_text(json.dumps(owner))
+    if pid == "dead":
+        monkeypatch.setattr(cache, "_process_exists", lambda _pid: False)
+    with pytest.raises(RuntimeError, match="ownership is unknown or active"):
+        cache.prune_materialized_cache(tmp_path)
+    assert json.loads((legacy / cache.OP_LOCK_FILENAME).read_text()) == owner
+
+
+def test_confirmed_dead_local_legacy_owner_does_not_block(tmp_path, monkeypatch):
+    legacy = tmp_path / cache.OP_LOCK_DIRNAME
+    legacy.mkdir()
+    (legacy / cache.OP_LOCK_FILENAME).write_text(json.dumps({"hostname": cache._hostname(), "pid": 12345}))
+    monkeypatch.setattr(cache, "_process_exists", lambda _pid: False)
+    assert cache.prepare_materialized_run(tmp_path, "new-run").is_dir()
