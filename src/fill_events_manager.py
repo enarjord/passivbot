@@ -166,16 +166,16 @@ def _merge_fee_lists(
 
 
 def _fee_entries(fees: object) -> List[Dict[str, object]]:
-    if not fees:
+    if fees is None or isinstance(fees, bool):
         return []
     if isinstance(fees, dict):
-        return [fees]
+        return [fees] if fees else []
     if isinstance(fees, (int, float, str)) and not isinstance(fees, bool):
         try:
             cost = float(fees)
         except (TypeError, ValueError):
             return []
-        if cost != 0.0:
+        if math.isfinite(cost):
             return [{"cost": cost}]
         return []
     try:
@@ -233,6 +233,18 @@ def _fee_entry_signed_fee_paid(fee: Dict[str, object]) -> float:
 
 def _fee_entry_currency(fee: Dict[str, object]) -> str:
     return str(fee.get("currency") or fee.get("code") or fee.get("feeCoin") or "").strip().upper()
+
+
+def _fee_entry_has_reported_amount(fee: Dict[str, object]) -> bool:
+    """Distinguish a finite reported amount, including zero, from a missing fee."""
+    for key in ("fee_paid", "totalFee", "fee", "totalDeductionFee", "cost"):
+        value = fee.get(key)
+        if (key == "fee_paid" and key in fee) or value not in (None, ""):
+            try:
+                return not isinstance(value, bool) and math.isfinite(float(value))
+            except (TypeError, ValueError, OverflowError):
+                return False
+    return False
 
 
 def _quote_currency_from_symbol(symbol: object) -> str:
@@ -356,10 +368,13 @@ def _normalize_fee_paid_from_payload(
         converted_total = 0.0
         saw_quote = False
         saw_converted = False
+        saw_ticker_conversion = False
+        unresolved_amount = False
         for entry in entries:
-            signed = _fee_entry_signed_fee_paid(entry)
-            if signed == 0.0:
+            if not _fee_entry_has_reported_amount(entry):
+                unresolved_amount = True
                 continue
+            signed = _fee_entry_signed_fee_paid(entry)
             currency = _fee_entry_currency(entry)
             if not fee_currency and currency:
                 fee_currency = currency
@@ -368,21 +383,22 @@ def _normalize_fee_paid_from_payload(
                 saw_quote = True
                 continue
             rate = conversion_rates.get(currency)
-            if rate is None:
+            if signed == 0.0:
+                # A zero balance impact needs no price conversion.
+                saw_converted = True
+                continue
+            if rate is None or not math.isfinite(float(rate)) or float(rate) <= 0.0:
                 unresolved_non_quote = True
                 continue
             converted_total += signed * float(rate)
             saw_converted = True
-        if converted_total != 0.0 and not unresolved_non_quote:
+            saw_ticker_conversion = True
+        if (saw_quote or saw_converted) and not (unresolved_amount or unresolved_non_quote):
             fee_paid = converted_total
-            if saw_converted and not saw_quote:
+            if saw_converted:
                 fee_source = FEE_SOURCE_REPORTED_CONVERTED
                 fee_quality = FEE_QUALITY_CONVERTED
-                conversion_source = "ticker"
-            elif saw_converted:
-                fee_source = FEE_SOURCE_REPORTED_CONVERTED
-                fee_quality = FEE_QUALITY_CONVERTED
-                conversion_source = "ticker"
+                conversion_source = "ticker" if saw_ticker_conversion else "zero_amount"
             else:
                 fee_source = FEE_SOURCE_REPORTED_QUOTE
                 fee_quality = FEE_QUALITY_EXACT
@@ -3512,7 +3528,8 @@ class FillEventsManager:
             if self.runtime_identity
             else {}
         )
-        self._fee_conversion_cache: Dict[Tuple[str, str], Optional[float]] = {}
+        # Pair -> (rate or failed lookup, fetch time, quote timestamp).
+        self._fee_conversion_cache: Dict[Tuple[str, str], Tuple[Optional[float], int, int]] = {}
         self._fee_warning_reported_ids: set[str] = set()
         self._events: List[FillEvent] = []
         self._loaded = False
@@ -3553,11 +3570,24 @@ class FillEventsManager:
             return None
         cache_key = (fee_currency, quote_currency)
         if cache_key in self._fee_conversion_cache:
-            return self._fee_conversion_cache[cache_key]
+            rate, fetched_at_ms, quote_ts = self._fee_conversion_cache[cache_key]
+            age_ms = now_ms - fetched_at_ms
+            if rate is None:
+                # Failed lookups should recover promptly without retrying every fill.
+                retry_ms = min(self.fee_conversion_max_age_ms, 60_000)
+                if 0 <= age_ms < retry_ms:
+                    return None
+            elif (
+                0 <= age_ms <= self.fee_conversion_max_age_ms
+                and abs(now_ms - quote_ts) <= self.fee_conversion_max_age_ms
+                and (fill_ts <= 0 or abs(quote_ts - int(fill_ts)) <= self.fee_conversion_max_age_ms)
+            ):
+                return rate
+            self._fee_conversion_cache.pop(cache_key, None)
         api = getattr(self.fetcher, "api", None)
         fetch_ticker = getattr(api, "fetch_ticker", None)
         if fetch_ticker is None:
-            self._fee_conversion_cache[cache_key] = None
+            self._fee_conversion_cache[cache_key] = (None, now_ms, 0)
             return None
         symbols = [
             f"{fee_currency}/{quote_currency}",
@@ -3592,10 +3622,9 @@ class FillEventsManager:
             if not isinstance(ticker, dict):
                 continue
             ticker_ts = int(ticker.get("timestamp") or 0)
-            if (
-                ticker_ts > 0
-                and fill_ts > 0
-                and abs(ticker_ts - int(fill_ts)) > self.fee_conversion_max_age_ms
+            quote_ts = ticker_ts if ticker_ts > 0 else now_ms
+            if abs(now_ms - quote_ts) > self.fee_conversion_max_age_ms or (
+                fill_ts > 0 and abs(quote_ts - int(fill_ts)) > self.fee_conversion_max_age_ms
             ):
                 continue
             for key in ("last", "close", "mark", "bid", "ask"):
@@ -3603,10 +3632,10 @@ class FillEventsManager:
                     rate = float(ticker.get(key) or 0.0)
                 except Exception:
                     rate = 0.0
-                if rate > 0.0:
-                    self._fee_conversion_cache[cache_key] = rate
+                if math.isfinite(rate) and rate > 0.0:
+                    self._fee_conversion_cache[cache_key] = (rate, now_ms, quote_ts)
                     return rate
-        self._fee_conversion_cache[cache_key] = None
+        self._fee_conversion_cache[cache_key] = (None, now_ms, 0)
         return None
 
     async def _apply_fee_policy_to_batch(self, batch: List[Dict[str, object]]) -> None:
@@ -3620,6 +3649,7 @@ class FillEventsManager:
         symbol_counts: Dict[str, int] = defaultdict(int)
         reason_counts: Dict[str, int] = defaultdict(int)
         examples = []
+        batch_rates: Dict[Tuple[str, str, int], Optional[float]] = {}
         for raw in batch:
             quote = _quote_currency_from_symbol(raw.get("symbol"))
             conversion_rates: Dict[str, float] = {}
@@ -3627,11 +3657,12 @@ class FillEventsManager:
                 currency = _fee_entry_currency(entry)
                 if not currency or currency == quote:
                     continue
-                rate = await self._fee_conversion_rate(
-                    currency,
-                    quote,
-                    int(raw.get("timestamp") or 0),
-                )
+                if _fee_entry_has_reported_amount(entry) and _fee_entry_signed_fee_paid(entry) == 0.0:
+                    continue
+                key = (currency, quote, int(raw.get("timestamp") or 0))
+                if key not in batch_rates:
+                    batch_rates[key] = await self._fee_conversion_rate(*key)
+                rate = batch_rates[key]
                 if rate is not None:
                     conversion_rates[currency] = rate
             meta = self._apply_fee_policy(raw, conversion_rates=conversion_rates)
