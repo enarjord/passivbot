@@ -200,6 +200,8 @@ struct HslState {
     float slot_count;
     bool initialized;
     float drawdown_ema;
+    float last_sample_k;
+    float sampled_drawdown_raw;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float drawdown_ema_max;
 #endif
@@ -521,6 +523,8 @@ inline HslState load_hsl(
     h.slot_count = fmax(round(params[ho + 10]), 1.0f);
     h.initialized = false;
     h.drawdown_ema = 0.0f;
+    h.last_sample_k = -1.0f;
+    h.sampled_drawdown_raw = 0.0f;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = 0.0f;
 #endif
@@ -701,13 +705,19 @@ inline void update_hsl_from_signal(
     float drawdown_raw = signal.drawdown_raw;
     float strategy_equity = signal.strategy_equity;
     float peak_strategy_equity = signal.peak_strategy_equity;
-    if (!h.initialized) {
-        h.initialized = true;
-        h.drawdown_ema = 0.0f;
-        h.tier = 0;
-        return;
+    if (h.last_sample_k != kf) {
+        h.last_sample_k = kf;
+        h.sampled_drawdown_raw = drawdown_raw;
+        if (!h.initialized) {
+            h.initialized = true;
+            h.drawdown_ema = 0.0f;
+            h.tier = 0;
+            return;
+        }
+        h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
+    } else {
+        drawdown_raw = h.sampled_drawdown_raw;
     }
-    h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = fmax(h.drawdown_ema_max, fabs(h.drawdown_ema));
 #endif
@@ -837,6 +847,63 @@ inline void update_hsl(
     );
 }
 
+// A real closing fill samples its final fee-inclusive drawdown before an ordinary
+// episode reset. RED finalization remains owned by the normal end-of-bar update.
+inline bool finish_hsl_episode_at_flat(
+    thread HslState& h,
+    float balance,
+    float starting_balance,
+    float realized_pnl,
+    float kf,
+    float interval_ms
+) {
+    if (!h.enabled || h.halted || h.no_restart_latched || h.red_latched) return false;
+    HslSignal signal;
+    if (!derive_hsl_signal(h, balance, starting_balance, realized_pnl, 0.0f, signal)) {
+        return false;
+    }
+    // Suppress flat confirmation here: the normal controller owns that transition.
+    update_hsl_from_signal(h, signal, realized_pnl, true, false, kf, interval_ms);
+    if (h.red_latched) return false;
+    h.initialized = false;
+    h.drawdown_ema = 0.0f;
+    h.last_sample_k = -1.0f;
+    h.sampled_drawdown_raw = 0.0f;
+    h.peak_strategy_pnl = -INFINITY;
+    h.coin_realized_baseline = realized_pnl;
+    h.coin_realized_peak = 0.0f;
+    h.tier = 0;
+    h.red_active_now = false;
+    h.flat_confirmations = 0;
+    h.current_red_start_k = -1.0f;
+    return true;
+}
+
+inline bool finish_hsl_scoped_episode_at_flat(
+    thread HslState& h,
+    thread HslState* opposite_hsl,
+    bool scope_has_position,
+    bool opposite_has_position,
+    float balance,
+    float starting_balance,
+    float realized_total,
+    float realized_scope,
+    float kf,
+    float interval_ms
+) {
+    const bool unified = h.signal_mode == HSL_SIGNAL_UNIFIED;
+    if (scope_has_position || (unified && opposite_has_position)) return false;
+    bool reset = finish_hsl_episode_at_flat(
+        h, balance, starting_balance, unified ? realized_total : realized_scope, kf, interval_ms
+    );
+    if (unified && opposite_hsl != nullptr) {
+        finish_hsl_episode_at_flat(
+            *opposite_hsl, balance, starting_balance, realized_total, kf, interval_ms
+        );
+    }
+    return reset;
+}
+
 inline void update_one_side_hsl(
     thread HslState& hsl,
     float balance,
@@ -922,6 +989,8 @@ inline void try_restart_hsl(thread HslState& h, float kf, float current_equity) 
 #endif
     h.initialized = false;
     h.drawdown_ema = 0.0f;
+    h.last_sample_k = -1.0f;
+    h.sampled_drawdown_raw = 0.0f;
     h.peak_strategy_pnl = -INFINITY;
     h.tier = 0;
     h.red_latched = false;
