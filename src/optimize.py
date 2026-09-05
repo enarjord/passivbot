@@ -73,6 +73,7 @@ from cli_utils import (
     help_all_requested,
 )
 from config import compile_runtime_config, load_input_config, load_prepared_config, prepare_config
+from config.overrides import parse_overrides
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.param_paths import resolve_bound_selectors, require_existing_config_path
@@ -201,6 +202,17 @@ from optimization.config_adapter import (
     resolve_optimization_bound_path,
 )
 from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
+from optimization.prepared_dataset_identity import (
+    PREPARED_DATASET_KEY,
+    build_prepared_dataset_identity,
+)
+from optimization.evaluation_contract import (
+    CONTRACT_KEY,
+    CONTRACT_CACHE_KEY,
+    build_evaluation_contract,
+    has_unresolved_override_files,
+    recorded_evaluation_contract,
+)
 from optimization.warmup import (
     build_optimizer_data_config,
     build_optimizer_vector_config,
@@ -725,6 +737,7 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
     anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
+    entry[CONTRACT_KEY] = recorded_evaluation_contract(evaluator_config)
     if anchor_meta is not None:
         entry["optimizer_anchor"] = anchor_meta
     entry = optimizer_overrides(overrides_list, entry, None)
@@ -754,72 +767,77 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
     new_bot = config.get("bot", config) or {}
-    old_live = entry.get("live") or {}
-    new_live = config.get("live") or {}
 
     mismatches = []
     is_suite_result = entry.get("suite_metrics") is not None
-    old_bt_compare = _resume_subset(
-        old_bt,
-        {
-            "reducer",
-            "balance_sample_divider",
-            "btc_collateral_cap",
-            "btc_collateral_ltv_cap",
-            "candle_interval_minutes",
-            "coins",
-            "dynamic_wel_by_tradability",
-            "end_date",
-            "exchanges",
-            "filter_by_min_effective_cost",
-            "liquidation_threshold",
-            "maker_fee_override",
-            "market_order_slippage_pct",
-            "scenarios",
-            "start_date",
-            "starting_balance",
-            "suite_enabled",
-            "taker_fee_override",
-            "volume_normalization",
-        },
-    )
-    new_bt_compare = _resume_subset(new_bt, old_bt_compare.keys())
+    backtest_keys = {
+        "reducer",
+        "balance_sample_divider",
+        "btc_collateral_cap",
+        "btc_collateral_ltv_cap",
+        "candle_interval_minutes",
+        "coins",
+        "coin_sources",
+        "dynamic_wel_by_tradability",
+        "end_date",
+        "exchanges",
+        "filter_by_min_effective_cost",
+        "gap_tolerance_ohlcvs_minutes",
+        "hlcvs_data_override_mode",
+        "liquidation_threshold",
+        "maker_fee_override",
+        "market_order_slippage_pct",
+        "market_settings",
+        "market_settings_sources",
+        "ohlcv_source_dir",
+        "hlcvs_data_dir",
+        "scenarios",
+        "start_date",
+        "starting_balance",
+        "suite_enabled",
+        "taker_fee_override",
+        "volume_normalization",
+    }
+    old_bt_compare = _resume_subset(old_bt, backtest_keys)
+    new_bt_compare = _resume_subset(new_bt, backtest_keys)
     if is_suite_result:
         # Suite result entries omit top-level backtest.coins because the
         # scenario list is the source of truth for per-scenario coins.
         if old_bt_compare.get("coins") is None:
             new_bt_compare.pop("coins", None)
-    _append_resume_section_mismatches(mismatches, "backtest", old_bt_compare, new_bt_compare)
-
-    old_opt_compare = _resume_subset(
-        old_opt,
-        {
-            "backend",
-            "bounds",
-            "compress_results_file",
-            "crossover_eta",
-            "crossover_probability",
-            "enable_overrides",
-            "fixed_params",
-            "fixed_runtime_overrides",
-            "limits",
-            "mutation_eta",
-            "mutation_indpb",
-            "mutation_probability",
-            "offspring_multiplier",
-            "objective_scenario",
-            "population_size",
-            "gpu",
-            "pymoo",
-            "round_to_n_significant_digits",
-            "scoring",
-        },
+    _append_resume_section_mismatches(
+        mismatches, "backtest", old_bt_compare, new_bt_compare
     )
+
+    optimize_keys = {
+        "backend",
+        "bounds",
+        "compress_results_file",
+        "crossover_eta",
+        "crossover_probability",
+        "enable_overrides",
+        "fixed_params",
+        "fixed_runtime_overrides",
+        "limits",
+        "mutation_eta",
+        "mutation_indpb",
+        "mutation_probability",
+        "offspring_multiplier",
+        "objective_scenario",
+        "population_size",
+        "gpu",
+        "pymoo",
+        "round_to_n_significant_digits",
+        "scoring",
+    }
+    old_opt_compare = _resume_subset(old_opt, optimize_keys)
     # Objective source changes invalidate checkpoint fitness, including resumes
     # from artifacts written before objective_scenario existed.
     old_opt_compare.setdefault("objective_scenario", None)
-    new_opt_compare = _resume_subset(new_opt, old_opt_compare.keys())
-    _append_resume_section_mismatches(mismatches, "optimize", old_opt_compare, new_opt_compare)
+    new_opt_compare = _resume_subset(new_opt, optimize_keys)
+    _append_resume_section_mismatches(
+        mismatches, "optimize", old_opt_compare, new_opt_compare
+    )
 
     for side in ["long", "short"]:
         old_en = old_bot.get(side, {}).get("enabled", True)
@@ -827,9 +845,38 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if old_en != new_en:
             mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
 
-    for key in ["approved_coins", "ignored_coins"]:
-        if old_live.get(key) != new_live.get(key):
-            mismatches.append(f"  - live.{key}: changed")
+    stored_contract = entry.get(CONTRACT_KEY)
+    if stored_contract is not None and (
+        not isinstance(stored_contract, dict) or stored_contract.get("version") != 1
+    ):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: unsupported or malformed snapshot"
+        )
+        return mismatches
+    if stored_contract is None and has_unresolved_override_files(entry):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: legacy results reference unresolved coin "
+            "override files and lack historical policy evidence; start a fresh run"
+        )
+        return mismatches
+    if stored_contract is None or not stored_contract.get("implementation"):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: historical evaluator implementation "
+            "cannot be proven; start a fresh run to record its identity"
+        )
+    if stored_contract is None and (
+        entry.get("optimizer_anchor") is not None or get_anchor_plan(config)
+    ):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: legacy anchored results lack fixed-anchor "
+            "policy evidence; start a fresh run to record a verifiable evaluation contract"
+        )
+    if stored_contract is not None:
+        new_contract = config.get(CONTRACT_CACHE_KEY) or build_evaluation_contract(config)
+        _append_resume_section_mismatches(
+            mismatches, "evaluation", stored_contract, new_contract
+        )
+
     return mismatches
 
 
@@ -942,7 +989,7 @@ def _gpu_checkpoint_allows_empty_results(
     except Exception:
         return False
     plan = checkpoint.get("seed_bootstrap_plan")
-    return bool(
+    allowed = bool(
         not checkpoint.get("seed_bootstrap_complete", True)
         and int(checkpoint.get("seed_exact_done", -1)) == 0
         and int(checkpoint.get("exact_done", -1)) == 0
@@ -951,6 +998,13 @@ def _gpu_checkpoint_allows_empty_results(
         and plan.get("starting_vectors")
         and plan.get("effective_mode") in {"exact", "screened"}
     )
+
+    if allowed and checkpoint.get(CONTRACT_KEY) != build_evaluation_contract(config):
+        raise ValueError(
+            "GPU checkpoint historical evaluation contract cannot be proven or changed; "
+            "start a fresh run"
+        )
+    return allowed
 
 
 def _validate_resume_results(
@@ -973,6 +1027,7 @@ def _validate_resume_results(
             return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
 
+    config = {**config, CONTRACT_CACHE_KEY: build_evaluation_contract(config)}
     previous_evals = 0
     previous_data = {}
     try:
@@ -992,16 +1047,15 @@ def _validate_resume_results(
                         f"{results_filename}"
                     )
                 previous_data = deep_updated(previous_data, entry)
-                if previous_evals == 1:
-                    mismatches = _resume_config_mismatches(entry, config)
-                    if mismatches:
-                        mismatch_str = "\n".join(mismatches)
-                        raise ValueError(
-                            f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
-                            f"Mismatches detected:\n{mismatch_str}\n\n"
-                            f"Resuming with a changed configuration would corrupt optimization scores.\n"
-                            f"Please restore the original config or start a fresh run.\n"
-                        )
+                mismatches = _resume_config_mismatches(previous_data, config)
+                if mismatches:
+                    mismatch_str = "\n".join(mismatches)
+                    raise ValueError(
+                        f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                        f"Mismatches detected at result {previous_evals}:\n{mismatch_str}\n\n"
+                        f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                        f"Please restore the original config or start a fresh run.\n"
+                    )
     except msgpack.exceptions.UnpackException as exc:
         raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
     except ValueError:
@@ -3073,17 +3127,15 @@ def _active_suite_scenario_labels(suite_cfg: Mapping[str, Any]) -> list[str] | N
     return [scenario.label for scenario in scenarios]
 
 
-def _materialize_gpu_suite_run_contract(
+def _materialize_suite_run_contract(
     config: Dict[str, Any], suite_cfg: Mapping[str, Any]
 ) -> None:
-    """Persist the effective external/filterable suite in the GPU run config."""
+    """Persist the effective external/filterable suite for every optimizer backend."""
 
-    if config.get("optimize", {}).get("backend") != "gpu" or not suite_cfg.get(
-        "enabled"
-    ):
-        return
     backtest = config.setdefault("backtest", {})
-    backtest["suite_enabled"] = True
+    backtest["suite_enabled"] = bool(suite_cfg.get("enabled"))
+    if not backtest["suite_enabled"]:
+        return
     for key in ("scenarios", "reducer", "exchanges", "volume_normalization"):
         if key in suite_cfg:
             backtest[key] = deepcopy(suite_cfg[key])
@@ -3118,25 +3170,25 @@ def _run_gpu_preparation_preflight(
     validate_gpu_preparation_scope(effective_config, normalized_suite_cfg)
 
 
-def _materialize_resolved_gpu_suite_dates(
+def _materialize_resolved_suite_dates(
     config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
 ) -> None:
-    """Replace dynamic suite date tokens with the prepared concrete dates."""
+    """Persist concrete dates and the resolved policy used by prepared scenarios."""
 
-    if config.get("optimize", {}).get("backend") != "gpu" or not config.get(
-        "backtest", {}
-    ).get("suite_enabled"):
+    if not config.get("backtest", {}).get("suite_enabled"):
         return
     scenarios = config["backtest"].get("scenarios") or []
     if len(scenarios) != len(scenario_contexts):
         raise RuntimeError(
-            "GPU suite run contract does not match prepared scenario count: "
+            "Optimizer suite run contract does not match prepared scenario count: "
             f"{len(scenarios)} != {len(scenario_contexts)}"
         )
     resolved_scenarios = []
     for scenario, ctx in zip(scenarios, scenario_contexts):
         resolved = deepcopy(scenario)
         resolved["label"] = ctx.label
+        if scenario.get("overrides"):
+            resolved["overrides"] = deepcopy(ctx.overrides)
         for key in ("start_date", "end_date"):
             meta_key = f"requested_{key}"
             prepared_values = {
@@ -3146,11 +3198,11 @@ def _materialize_resolved_gpu_suite_dates(
             }
             if not prepared_values:
                 raise RuntimeError(
-                    f"GPU suite scenario {ctx.label!r} has no prepared {meta_key}"
+                    f"Optimizer suite scenario {ctx.label!r} has no prepared {meta_key}"
                 )
             if len(prepared_values) != 1:
                 raise RuntimeError(
-                    f"GPU suite scenario {ctx.label!r} has inconsistent prepared "
+                    f"Optimizer suite scenario {ctx.label!r} has inconsistent prepared "
                     f"{meta_key} values: {sorted(prepared_values)}"
                 )
             resolved[key] = prepared_values.pop()
@@ -3412,6 +3464,7 @@ async def main():
         verbose=False,
         raw_snapshot=raw_snapshot,
     )
+    config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
@@ -3451,7 +3504,7 @@ async def main():
         )
         suite_cfg["enabled"] = bool(args.suite)
 
-    _materialize_gpu_suite_run_contract(config, suite_cfg)
+    _materialize_suite_run_contract(config, suite_cfg)
     active_suite_scenario_labels = _active_suite_scenario_labels(suite_cfg)
     _validate_optimizer_limit_suite_mode(
         config,
@@ -3545,7 +3598,7 @@ async def main():
             )
             if not scenario_contexts:
                 raise ValueError("Suite configuration produced no scenarios.")
-            _materialize_resolved_gpu_suite_dates(config, scenario_contexts)
+            _materialize_resolved_suite_dates(config, scenario_contexts)
             logging.info("Optimizer suite enabled with %d scenario(s)", len(scenario_contexts))
             first_ctx = scenario_contexts[0]
             hlcvs_specs = first_ctx.hlcvs_specs
@@ -3656,6 +3709,14 @@ async def main():
                         array_manager=array_manager,
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
+        config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
+            config=config,
+            hlcvs_specs=hlcvs_specs,
+            btc_usd_specs=btc_usd_specs,
+            msss=msss,
+            timestamps=timestamps_dict,
+            scenario_contexts=scenario_contexts,
+        )
         exchanges = backtest_exchanges
         exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")
@@ -3710,6 +3771,8 @@ async def main():
         duplicate_counter["total"] = 0
         duplicate_counter["resolved"] = 0
         duplicate_counter["reused"] = 0
+
+        config[CONTRACT_CACHE_KEY] = build_evaluation_contract(config)
 
         # Initialize evaluator with shared memory references
         evaluator = Evaluator(

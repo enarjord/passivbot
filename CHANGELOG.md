@@ -23,6 +23,14 @@ All notable user-facing changes will be documented in this file.
   missing data no longer removes their unrealized PnL from equity or risk samples. Unheld
   symbols may retain unavailable rows outside their listing windows.
 
+- Optimizer resume validates fixed policy, resolved coin and scenario overrides, prepared candle
+  and market-setting content, transitive evaluator Python sources/dependency versions, and the
+  verified Rust source and binary
+  before reusing fitness. Every reconstructed result and GPU seed checkpoint carries matching
+  evidence; legacy results without historical identities require a fresh run. Candidate values
+  and CPU worker counts may vary, while complete GPU settings and rebuilt Rust binaries remain
+  strict resume inputs. Suite dates and override files are resolved before evaluation and recording.
+
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
   partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that
   completes on its final allowed request remains valid.
