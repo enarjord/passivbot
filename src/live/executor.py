@@ -975,6 +975,48 @@ async def execute_order_plan(
             order_wave["deferred_create"] += max(
                 0, before_capacity - len(to_create_mod)
             )
+        snapshot = getattr(bot, "_current_planning_snapshot", None)
+        planned_generation = int(
+            getattr(snapshot, "account_invalidation_generation", 0) or 0
+        )
+        current_generation = int(
+            getattr(bot, "_account_invalidation_generation", 0) or 0
+        )
+        if to_create_mod and current_generation != planned_generation:
+            # Configuration and quote reads above can yield to private fill updates.
+            # Their account-wide invalidation supersedes every ordinary planned create.
+            blocked = [
+                order
+                for order in to_create_mod
+                if not _is_dedicated_protective_market_panic(
+                    bot, order, configure_creations=configure_creations
+                )
+            ]
+            blocked_ids = {id(order) for order in blocked}
+            to_create_mod = [
+                order for order in to_create_mod if id(order) not in blocked_ids
+            ]
+            if blocked:
+                if order_wave is not None:
+                    order_wave["skipped_create"] += len(blocked)
+                _record_fresh_entry_orders(
+                    bot, "record_blocked_orders", blocked, "state_change_detected"
+                )
+                passivbot_cls._emit_execution_create_filter_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                    status="skipped",
+                    reason_code=ReasonCodes.STATE_CHANGE_DETECTED,
+                    order_count=len(blocked),
+                    symbols=_symbols_from_orders(blocked),
+                    wave=order_wave,
+                    message="create orders skipped because account state changed after planning",
+                    data={"blocked_symbols_count": len(set(_symbols_from_orders(blocked)))},
+                )
+                logging.info(
+                    "[order] account state changed after planning; skipped %d creates until refresh and replanning",
+                    len(blocked),
+                )
         if to_create_mod:
             res = None
             try:

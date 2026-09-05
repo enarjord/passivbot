@@ -897,6 +897,10 @@ def mark_account_critical_state_dirty(
     level: int = logging.DEBUG,
 ) -> None:
     """Force a coherent account-state refresh before the next execution cycle."""
+    # Separate external account invalidations from intentional order-write confirmations.
+    bot._account_invalidation_generation = int(
+        getattr(bot, "_account_invalidation_generation", 0) or 0
+    ) + 1
     min_epoch = int(bot._ensure_freshness_ledger().epoch) + 1
     bot._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
     bot.execution_scheduled = True

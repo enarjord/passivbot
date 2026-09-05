@@ -256,6 +256,9 @@ def build_staged_planning_snapshot(
     if not isinstance(data_packets, dict):
         data_packets = {}
     snapshot = PlanningSnapshot.capture(
+        account_invalidation_generation=int(
+            getattr(bot, "_account_invalidation_generation", 0) or 0
+        ),
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
         user=str(bot.config_get(["live", "user"]) or ""),
@@ -321,6 +324,9 @@ def build_protective_planning_snapshot(
     if not isinstance(data_packets, dict):
         data_packets = {}
     snapshot = PlanningSnapshot.capture(
+        account_invalidation_generation=int(
+            getattr(bot, "_account_invalidation_generation", 0) or 0
+        ),
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
         user=str(bot.config_get(["live", "user"]) or ""),

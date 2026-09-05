@@ -458,3 +458,94 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
     assert bot.configured == [[stable["symbol"], far_churn["symbol"]]]
     assert bot.created == [stable]
     assert far_churn["_churn_gate_reason"] == "allowance_exhausted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dirty_stage", ["before_execution", "configuration", "market_refresh"])
+async def test_account_invalidation_after_planning_defers_all_ordinary_creates(
+    execution_shell, monkeypatch, dirty_stage
+):
+    from types import SimpleNamespace
+    from live import reconciler
+    from live.freshness import FreshnessLedger
+
+    wave, events = execution_shell
+    bot = _PlanBot()
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = (
+        lambda surfaces, **kwargs: bot.confirmations.append(set(surfaces))
+    )
+    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
+    desired = _order("desired")
+
+    def invalidate():
+        # A different symbol's fill still changes account balance/exposure.
+        reconciler.mark_account_critical_state_dirty(
+            bot, reason="order_ws_fill", symbols=["ETH/USDT:USDT"], source="order_ws"
+        )
+
+    async def configure(symbols):
+        if dirty_stage == "configuration":
+            invalidate()
+        return set(symbols)
+
+    async def market_refresh(_bot, orders):
+        if dirty_stage == "market_refresh":
+            invalidate()
+        return orders
+
+    bot.update_exchange_configs = configure
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh)
+    if dirty_stage == "before_execution":
+        invalidate()
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.created == []
+    assert wave["skipped_create"] == 1
+    assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+    assert any(event["reason_code"] == ReasonCodes.STATE_CHANGE_DETECTED for event in events)
+
+    # A newly planned authoritative cohort may trade again; invalidations do not latch.
+    bot._current_planning_snapshot.account_invalidation_generation = (
+        bot._account_invalidation_generation
+    )
+    bot.update_exchange_configs = _PlanBot.update_exchange_configs.__get__(bot)
+
+    async def fresh_market(_bot, orders):
+        return orders
+
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", fresh_market)
+    await executor.execute_order_plan(bot, [], [desired])
+    assert bot.created == [desired]
+
+
+@pytest.mark.asyncio
+async def test_account_invalidation_preserves_dedicated_market_panic_bypass(
+    execution_shell, monkeypatch
+):
+    from types import SimpleNamespace
+    from live import reconciler
+    from live.freshness import FreshnessLedger
+
+    bot = _PlanBot()
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = (
+        lambda surfaces, **kwargs: bot.confirmations.append(set(surfaces))
+    )
+    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
+    desired = _order("panic", execution_type="market", panic=True)
+
+    async def market_refresh(_bot, orders):
+        reconciler.mark_account_critical_state_dirty(
+            bot, reason="order_ws_fill", symbols=[desired["symbol"]], source="order_ws"
+        )
+        return orders
+
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh)
+    await executor.execute_order_plan(bot, [], [desired], configure_creations=False)
+    assert bot.created == [desired]

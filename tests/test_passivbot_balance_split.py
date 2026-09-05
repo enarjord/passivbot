@@ -7575,10 +7575,12 @@ def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
         )
     }
 
+    bot._account_invalidation_generation = 7
     snapshot = pb_mod.planning_gates.build_protective_planning_snapshot(
         bot, [symbol], snapshots
     )
 
+    assert snapshot.account_invalidation_generation == 7
     assert set(snapshot.required_surfaces) == {
         "balance",
         "positions",
@@ -9161,7 +9163,11 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     bot._record_authoritative_surface("completed_candles", candle_signature)
     bot._record_market_snapshot_surface([symbol], snapshots)
 
+    bot._account_invalidation_generation = 7
     planning_snapshot = bot._build_staged_planning_snapshot([symbol], snapshots)
+    bot._account_invalidation_generation = 8
+
+    assert planning_snapshot.account_invalidation_generation == 7
 
     assert planning_snapshot is not None
     assert planning_snapshot.symbols == (symbol,)
