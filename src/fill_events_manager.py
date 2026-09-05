@@ -134,21 +134,10 @@ def _day_key(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
-def _merge_fee_lists(
-    fees_a: Optional[Sequence], fees_b: Optional[Sequence]
-) -> Optional[List[Dict[str, object]]]:
-    def to_list(fees):
-        if not fees:
-            return []
-        if isinstance(fees, dict):
-            return [fees]
-        return list(fees)
-
+def _merge_fee_lists(fees_a: object, fees_b: object) -> Optional[List[Dict[str, object]]]:
     merged: Dict[str, Dict[str, object]] = {}
-    unresolved: List[Dict[str, object]] = []
-    for entry in to_list(fees_a) + to_list(fees_b):
-        if not isinstance(entry, dict):
-            continue
+    preserved: List[Dict[str, object]] = []
+    for entry in _fee_entries(fees_a) + _fee_entries(fees_b):
         # Do not turn missing or malformed amounts into an authoritative zero.
         # Keep these entries visible to the fee policy, including when other
         # same-currency components have usable amounts.
@@ -163,35 +152,37 @@ def _merge_fee_lists(
             or not math.isfinite(cost)
             or not _fee_entry_has_reported_amount(entry)
         ):
-            unresolved.append(dict(entry))
+            preserved.append(dict(entry))
             continue
-        currency = str(entry.get("currency") or entry.get("code") or "")
+        if set(entry) - {"cost", "currency", "code"}:
+            # Signed fields, rebates and rates determine cashflow independently
+            # of cost. Retain those components instead of inheriting only the
+            # first component's sign metadata after summing costs.
+            preserved.append(dict(entry))
+            continue
+        currency = _fee_entry_currency(entry)
         if currency not in merged:
             merged[currency] = dict(entry)
             merged[currency]["cost"] = cost
         else:
             merged[currency]["cost"] += cost
-    result = [dict(value) for value in merged.values()] + unresolved
+    result = [dict(value) for value in merged.values()] + preserved
     return result or None
 
 
 def _fee_entries(fees: object) -> List[Dict[str, object]]:
-    if fees is None or isinstance(fees, bool):
+    if fees is None:
         return []
     if isinstance(fees, dict):
         return [fees] if fees else []
-    if isinstance(fees, (int, float, str)) and not isinstance(fees, bool):
-        try:
-            cost = float(fees)
-        except (TypeError, ValueError):
-            return []
-        if math.isfinite(cost):
-            return [{"cost": cost}]
-        return []
+    if isinstance(fees, (int, float, str, bool)):
+        # Preserve both explicit zero and unusable scalar evidence. The amount
+        # validator decides whether this is reported accounting or a fallback.
+        return [{"cost": fees}]
     try:
-        return [entry for entry in list(fees) if isinstance(entry, dict)]
-    except Exception:
-        return []
+        return [entry if isinstance(entry, dict) else {"cost": entry} for entry in fees]
+    except TypeError:
+        return [{"cost": fees}]
 
 
 def _fee_cost(fees: Optional[Sequence]) -> float:
@@ -255,6 +246,23 @@ def _fee_entry_has_reported_amount(fee: Dict[str, object]) -> bool:
             except (TypeError, ValueError, OverflowError):
                 return False
     return False
+
+
+def _reported_fee_amounts_by_currency(
+    entries: Sequence[Dict[str, object]],
+) -> Tuple[Dict[str, float], bool]:
+    """Net only finite reported cashflows; retain whether any component is unknown."""
+    amounts = defaultdict(float)
+    unresolved = False
+    for entry in entries:
+        if not _fee_entry_has_reported_amount(entry):
+            unresolved = True
+            continue
+        currency = _fee_entry_currency(entry)
+        amounts[currency] += _fee_entry_signed_fee_paid(entry)
+        if not math.isfinite(amounts[currency]):
+            unresolved = True
+    return amounts, unresolved
 
 
 def _quote_currency_from_symbol(symbol: object) -> str:
@@ -358,6 +366,24 @@ def _normalize_fee_paid_from_payload(
 
     payload_fee_source = str(payload.get("fee_source") or "")
     payload_fee_quality = str(payload.get("fee_quality") or "")
+    if payload_fee_source == FEE_SOURCE_FALLBACK_PCT and entries:
+        # Current-contract caches can contain a fallback chosen before explicit
+        # zero amounts were recognized. Upgrade only newly resolved evidence;
+        # preserve an unresolved historical fallback and its original policy.
+        candidate = dict(payload)
+        for key in ("fee_paid", "fee_source", "fee_quality", "pnl_contract"):
+            candidate.pop(key, None)
+        resolved_paid, resolved_meta = _normalize_fee_paid_from_payload(
+            candidate,
+            fee_pct_fallback=fee_pct_fallback,
+            fee_pct_sanity_abs_max=fee_pct_sanity_abs_max,
+            quote_currency=quote,
+            conversion_rates=conversion_rates,
+        )
+        if resolved_meta["fee_source"] in (
+            FEE_SOURCE_REPORTED_QUOTE, FEE_SOURCE_REPORTED_CONVERTED
+        ):
+            return resolved_paid, resolved_meta
     recheck_existing_fee = payload_fee_quality == FEE_QUALITY_SANITY_REPLACED and bool(entries)
     trusted_fee_paid = (
         "fee_paid" in payload
@@ -379,13 +405,8 @@ def _normalize_fee_paid_from_payload(
         saw_quote = False
         saw_converted = False
         saw_ticker_conversion = False
-        unresolved_amount = False
-        for entry in entries:
-            if not _fee_entry_has_reported_amount(entry):
-                unresolved_amount = True
-                continue
-            signed = _fee_entry_signed_fee_paid(entry)
-            currency = _fee_entry_currency(entry)
+        amounts, unresolved_amount = _reported_fee_amounts_by_currency(entries)
+        for currency, signed in amounts.items():
             if not fee_currency and currency:
                 fee_currency = currency
             if not currency or (quote and currency == quote):
@@ -1147,6 +1168,15 @@ def _hyperliquid_coalesced_reconciliation_failure(
     if parent_qty is None or any(qty is None for qty in child_qtys):
         return "signed_qty"
 
+    for component in (event, *children):
+        entries = _fee_entries(component.get("fees")) + _fee_entries(component.get("fee"))
+        # The general extractor is deliberately provisional for ingestion; an
+        # aggregate proof instead requires every reported component to be known.
+        if any(not _fee_entry_has_reported_amount(entry) for entry in entries):
+            return "accounting"
+        if not entries and not _fee_entry_has_reported_amount(component):
+            return "accounting"
+
     try:
         parent_pnl = float(event.get("pnl") or 0.0)
         child_pnl = sum(float(child.get("pnl") or 0.0) for child in children)
@@ -1412,7 +1442,9 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
             aggregated[key]["pnl_status"] = _payload_pnl_status(ev)
             aggregated[key]["pnl_source"] = _payload_pnl_source(ev)
             aggregated[key]["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason") or "")
-            aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
+            aggregated[key]["fees"] = _merge_fee_lists(
+                _fee_entries(ev.get("fees")) or [{"cost": None}], None
+            )
             aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
                 ev.get("qty", 0.0)
@@ -1436,7 +1468,9 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 agg["pnl_source"] = _payload_pnl_source(ev)
                 if ev.get("pnl_synthetic_reason"):
                     agg["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason"))
-            agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
+            agg["fees"] = _merge_fee_lists(
+                agg.get("fees"), _fee_entries(ev.get("fees")) or [{"cost": None}]
+            )
             agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
                 ev.get("price", 0.0)
@@ -3594,17 +3628,21 @@ class FillEventsManager:
                 retry_ms = min(self.fee_conversion_max_age_ms, 60_000)
                 if 0 <= age_ms < retry_ms:
                     return None
+                self._fee_conversion_cache.pop(cache_key, None)
             elif (
                 0 <= age_ms <= self.fee_conversion_max_age_ms
                 and abs(now_ms - quote_ts) <= self.fee_conversion_max_age_ms
-                and (fill_ts <= 0 or abs(quote_ts - int(fill_ts)) <= self.fee_conversion_max_age_ms)
             ):
-                return rate
-            self._fee_conversion_cache.pop(cache_key, None)
+                if fill_ts <= 0 or abs(quote_ts - int(fill_ts)) <= self.fee_conversion_max_age_ms:
+                    return rate
+                # This quote is still useful for other fills. A failed attempt
+                # to find one suitable for this timestamp must not evict it.
+            else:
+                self._fee_conversion_cache.pop(cache_key, None)
         api = getattr(self.fetcher, "api", None)
         fetch_ticker = getattr(api, "fetch_ticker", None)
         if fetch_ticker is None:
-            self._fee_conversion_cache[cache_key] = (None, now_ms, 0)
+            self._fee_conversion_cache.setdefault(cache_key, (None, now_ms, 0))
             return None
         symbols = [
             f"{fee_currency}/{quote_currency}",
@@ -3677,11 +3715,11 @@ class FillEventsManager:
         for raw in batch:
             quote = _quote_currency_from_symbol(raw.get("symbol"))
             conversion_rates: Dict[str, float] = {}
-            for entry in _fee_entries(raw.get("fees")) + _fee_entries(raw.get("fee")):
-                currency = _fee_entry_currency(entry)
-                if not currency or currency == quote:
-                    continue
-                if _fee_entry_has_reported_amount(entry) and _fee_entry_signed_fee_paid(entry) == 0.0:
+            amounts, _ = _reported_fee_amounts_by_currency(
+                _fee_entries(raw.get("fees")) + _fee_entries(raw.get("fee"))
+            )
+            for currency, signed in amounts.items():
+                if not currency or currency == quote or signed == 0.0:
                     continue
                 key = (currency, quote, int(raw.get("timestamp") or 0))
                 if key not in batch_rates:
@@ -6379,7 +6417,9 @@ class HyperliquidFetcher(BaseFetcher):
         qty = abs(float(trade.get("amount") or info.get("sz") or 0.0))
         price = float(trade.get("price") or info.get("px") or 0.0)
         pnl = float(trade.get("pnl") or info.get("closedPnl") or 0.0)
-        fee = trade.get("fee") or {"currency": info.get("feeToken"), "cost": info.get("fee")}
+        fee = trade.get("fee")
+        if fee is None:
+            fee = {"currency": info.get("feeToken"), "cost": info.get("fee")}
         client_order_id = trade.get("clientOrderId") or info.get("cloid") or info.get("clOrdId") or ""
         direction = str(info.get("dir", "")).lower()
         if "short" in direction:

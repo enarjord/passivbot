@@ -88,7 +88,7 @@ def manager(tmp_path, api, rows=(), max_age_ms=86_400_000):
         ),
         (
             [{"currency": "BNB", "cost": 0.001}, {"currency": "BNB", "cost": -0.001}],
-            1,
+            0,
             fem.FEE_SOURCE_REPORTED_CONVERTED,
         ),
         (
@@ -326,3 +326,100 @@ def test_bybit_overlap_fee_normalization_does_not_fabricate_zero(cost):
     fee_paid, metadata = fem._normalize_fee_paid_from_payload(coalesced[0])
     assert fee_paid == pytest.approx(-0.2)
     assert metadata["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scalar", [0, 0.0, "0"])
+async def test_scalar_zero_survives_coalescing_refresh_and_reload(tmp_path, clock, scalar):
+    rows = fem._coalesce_events([fill(scalar, clock.ms, str(i)) for i in range(2)])
+    api = TickerApi(clock)
+    fills = manager(tmp_path, api, rows)
+    await fills.refresh()
+    assert fills.get_events()[0].fee_source == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert fills.get_pnl_sum() == pytest.approx(4.0)
+    reloaded = manager(tmp_path, api)
+    await reloaded.ensure_loaded()
+    assert reloaded.get_pnl_sum() == pytest.approx(4.0)
+    assert reloaded.get_events()[0].fee_paid == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fees", [
+    0, {"currency": "USDT", "cost": 0},
+    [{"currency": "USDT", "cost": 0.1}, {"currency": "USDT", "cost": -0.1}],
+    {"currency": "BNB", "cost": 0},
+    [{"currency": "BNB", "cost": 0.1}, {"currency": "BNB", "cost": -0.1}],
+])
+async def test_loading_current_contract_repairs_old_zero_fee_fallback(tmp_path, clock, fees):
+    # A historical row outside ticker and recent-fill overlap must recover
+    # directly from its retained source amounts, without a network refetch.
+    payload = fill(fees, clock.ms - 365 * 86_400_000)
+    payload.update(fee_paid=-0.2, fee_source=fem.FEE_SOURCE_FALLBACK_PCT,
+                   fee_quality=fem.FEE_QUALITY_FALLBACK, pnl_contract=fem.PNL_CONTRACT_CURRENT,
+                   raw=[{"source": "fetch_my_trades", "data": {"id": "close"}}])
+    cache = fem.FillEventCache(tmp_path)
+    # Write the old representation directly: from_dict now repairs it itself.
+    import json
+    day = fem._day_key(payload["timestamp"])
+    (tmp_path / f"{day}.json").write_text(json.dumps([payload]))
+    cache.save_metadata({"pnl_contract": fem.PNL_CONTRACT_CURRENT})
+    api = TickerApi(clock)
+    loaded = manager(tmp_path, api)
+    await loaded.ensure_loaded()
+    assert loaded.get_pnl_sum() == pytest.approx(2.0)
+    assert loaded.get_events()[0].fee_paid == 0.0
+    persisted = cache.load()[0]
+    assert persisted.fee_source != fem.FEE_SOURCE_FALLBACK_PCT
+    assert persisted.fee_paid == 0.0
+    assert api.calls == 0
+
+
+def test_unresolved_historical_fallback_keeps_its_original_amount():
+    payload = fill({"currency": "BNB", "cost": 1.0}, 1)
+    payload.update(fee_paid=-0.7, fee_source=fem.FEE_SOURCE_FALLBACK_PCT,
+                   fee_quality=fem.FEE_QUALITY_FALLBACK, pnl_contract=fem.PNL_CONTRACT_CURRENT)
+    paid, meta = fem._normalize_fee_paid_from_payload(payload, fee_pct_fallback=0.0001)
+    assert paid == -0.7
+    assert meta["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+
+
+@pytest.mark.asyncio
+async def test_unsuitable_fill_failed_refetch_preserves_fresh_pair_quote(tmp_path, clock):
+    api = TickerApi(clock)
+    api.quote_age_ms = -2000
+    fills = manager(tmp_path, api, max_age_ms=10_000)
+    assert await fills._fee_conversion_rate("BNB", "USDT", clock.ms) == 300.0
+    api.failed = True
+    fee = {"currency": "BNB", "cost": 0.001}
+    old = fill(fee, clock.ms - 9000, "old")
+    recent = fill(fee, clock.ms, "recent")
+    await fills._apply_fee_policy_to_batch([old, recent])
+    assert old["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+    assert recent["fee_source"] == fem.FEE_SOURCE_REPORTED_CONVERTED
+    assert recent["fee_paid"] == pytest.approx(-0.3)
+    assert api.calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", [None, {}, "bad", False, ["NaN"]])
+async def test_coalescing_retains_unknown_fee_beside_reported_zero(tmp_path, clock, missing):
+    rows = fem._coalesce_events([fill(missing, clock.ms, "unknown"), fill(0, clock.ms, "zero")])
+    fills = manager(tmp_path, TickerApi(clock), rows)
+    await fills.refresh()
+    assert fills.get_events()[0].fee_source == fem.FEE_SOURCE_FALLBACK_PCT
+    assert fills.get_pnl_sum() == pytest.approx(3.6)
+
+
+@pytest.mark.asyncio
+async def test_coalesced_offsetting_fee_rate_signs_need_no_conversion(tmp_path, clock):
+    rows = fem._coalesce_events([
+        fill({"currency": "BNB", "cost": 0.001, "rate": 0.0001}, clock.ms, "paid"),
+        fill({"currency": "BNB", "cost": 0.001, "rate": -0.0001}, clock.ms, "rebate"),
+    ])
+    api = TickerApi(clock)
+    fills = manager(tmp_path, api, rows)
+    await fills.refresh()
+    assert fills.get_events()[0].fee_paid == 0.0
+    assert fills.get_events()[0].fee_source == fem.FEE_SOURCE_REPORTED_CONVERTED
+    assert fills.get_pnl_sum() == 4.0
+    assert api.calls == 0
