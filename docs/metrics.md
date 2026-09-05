@@ -12,7 +12,8 @@ expressed as percentages/ratios.
   including idle periods. This excludes pre-analysis warmup and reflects early termination.
   It is not a count of days with fills or a per-coin coverage measure.
   `fills_analysis_duration_days` remains available with the same value; both names work in
-  scoring and metric lookup, including older result files.
+  exact/CPU scoring and metric lookup, including older result files. Both remain excluded from
+  GPU proxy scoring and proxy-side limits, while computed diagnostic values stay available.
 - `effective_start_date` and `effective_end_date`: Those actual boundaries as UTC ISO timestamps.
   Empty equity histories have null dates and zero duration; a single timestamp has equal dates
   and zero duration. Dates are output metadata and are never averaged or used as scoring metrics.
@@ -26,8 +27,9 @@ Suites use `suite_metrics.metrics.n_days` for duration statistics and per-scenar
 Dates are at `suite_metrics.scenarios.<label>` and its `exchanges.<exchange>` entries;
 shared dates appear directly under `suite_metrics` only when all windows match.
 Suite backtests also save a root `config.json` containing `suite_metrics` alongside
-`suite_summary.json`. Each output config contains fresh results, replacing prior `metrics` and
-`suite_metrics` blocks. `config.original.json`, when present, remains the input snapshot.
+`suite_summary.json`, preserving effective suite exchange defaults for repeat runs. Both duration
+spellings use the same configured suite reducer. Each output config contains fresh results,
+replacing prior `metrics` and `suite_metrics` blocks. `config.original.json`, when present, remains the input snapshot.
 Requested config dates and detailed dataset coverage in the manifest retain their existing roles.
 
 ## Core growth metrics

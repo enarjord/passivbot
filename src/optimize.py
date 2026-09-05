@@ -2344,7 +2344,7 @@ class SuiteEvaluator:
                         ignored_coins=None,
                     ),
                     per_exchange={},
-                    metrics={"stats": combined_metrics.get("stats", {})},
+                    metrics=combined_metrics,
                     elapsed_seconds=0.0,
                     output_path=None,
                 )

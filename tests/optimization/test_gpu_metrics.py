@@ -438,6 +438,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "fills_active_days_ratio",
         "fills_active_symbols_count",
         "fills_analysis_duration_days",
+        "n_days",
         "fills_count",
         "fills_count_close",
         "fills_count_entry",
@@ -464,6 +465,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         needed=requested,
     )
 
+    assert metrics["n_days"].tolist() == metrics["fills_analysis_duration_days"].tolist()
     assert set(metrics) == requested
     _assert_proxy_surface_partition(requested)
     assert metrics["fills_analysis_duration_days"].tolist() == pytest.approx(
@@ -2360,3 +2362,11 @@ def test_completion_uses_raw_requested_start_before_available_history():
     )
 
     assert metrics["backtest_completion_ratio"].item() == pytest.approx(1442.0 / 1443.0)
+
+
+@pytest.mark.parametrize("name", ["n_days", "fills_analysis_duration_days"])
+def test_duration_aliases_preserve_exact_only_gpu_metric_policy(name):
+    with pytest.raises(ValueError, match="exact Rust backtests and analysis"):
+        validate_gpu_metric_names([name])
+    assert {"n_days", "fills_analysis_duration_days"} <= GPU_EXACT_ONLY_METRICS
+    assert "n_days" not in SUPPORTED_METRICS

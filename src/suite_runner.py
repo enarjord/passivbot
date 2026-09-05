@@ -1916,9 +1916,10 @@ def reduce_metrics(
             "std": float(np.std(arr)),
             "median": float(np.median(arr)),
         }
-        mode = reducer_cfg.get(metric)
-        if mode is None and "_" in metric:
-            base = metric.rsplit("_", 1)[0]
+        canonical_metric = canonicalize_metric_name(metric)
+        mode = reducer_cfg.get(canonical_metric)
+        if mode is None and "_" in canonical_metric:
+            base = canonical_metric.rsplit("_", 1)[0]
             mode = reducer_cfg.get(base)
         mode = str(mode or default_mode).lower()
         if mode == "mean":
@@ -2160,6 +2161,7 @@ async def run_backtest_suite_async(
     )
     saved_config["backtest"].update(
         suite_enabled=True,
+        exchanges=deepcopy(suite_cfg.get("exchanges") or base_exchanges),
         scenarios=deepcopy(suite_cfg["scenarios"]),
         reducer=deepcopy(reducer_cfg),
     )

@@ -59,6 +59,7 @@ GPU_EXACT_ONLY_METRICS = frozenset(
         "equity_balance_diff_pos_mean_usd",
         "fills_active_days_count",
         "fills_analysis_duration_days",
+        "n_days",
         "fills_count",
         "fills_count_close",
         "fills_count_entry",

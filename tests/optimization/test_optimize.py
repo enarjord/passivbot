@@ -4785,13 +4785,23 @@ class TestEvaluator:
             return_value=(None, None, {"liquidated": False}),
         ), patch(
             "tools.iterative_backtester.combine_analyses",
-            return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
+            return_value={
+                "stats": {"adg_pnl_w": {"mean": 0.1}},
+                "exchanges": {
+                    "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
+                    "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
+                },
+            },
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
             )
 
         assert objectives == (-0.1,)
+        assert metrics["suite_metrics"]["scenarios"]["test"]["exchanges"] == {
+            "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
+            "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
+        }
         assert penalty == 0.0
         assert metrics["constraint_violation"] == 0.0
         assert compile_cfg.call_count == 1
