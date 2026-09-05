@@ -78,6 +78,11 @@ ordinary shared-account planning: the startup gate runs after portfolio intent c
 cannot make a plan built from unknown HSL episode state authoritative. Independently ready,
 already-latched RED supervision and required panic protection for active cooldown positions still
 run during that deferral, using fresh protective account state and the configured execution pacing.
+Cooldown cancellation-only waves also remove resting initials from flat scopes without constructing
+new intent. Manual ownership begins only after a proven cooldown intervention and persists through
+later flat observations; before that intervention, fresh initials remain blocked. If current fill
+evidence cannot distinguish those cases, the cancellation wave preserves manual orders. Graceful-stop
+adds to held positions retain their policy semantics.
 
 ## Code And Tests
 

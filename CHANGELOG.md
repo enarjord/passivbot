@@ -71,7 +71,9 @@ All notable user-facing changes will be documented in this file.
   drawdown, while preserving RED-triggered cooldowns and persistent no-restart limits. Closing
   fills that first trigger RED finalize before same-step re-entry. Ambiguous required episode
   evidence defers startup replay and ordinary planning while already-latched RED supervision and
-  panic protection for active cooldown positions remain available.
+  panic protection for active cooldown positions remain available. Resting cooldown entries are
+  cancelled according to the configured policy, preserving orders after a proven manual-policy
+  intervention and graceful-stop adds to held positions. Normal-policy restart overrides replay later exact episode boundaries.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the

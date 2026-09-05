@@ -5805,3 +5805,87 @@ async def test_deferred_cooldown_empty_protective_wave_is_paced():
     bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
     assert state["cooldown_repanic_since_ms"] == 180_000
     assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize(
+    "policy,prior_intervention",
+    [(policy, False) for policy in ["panic", "manual", "tp_only", "graceful_stop", "normal"]]
+    + [("manual", True), ("manual", None)],
+)
+@pytest.mark.parametrize("held", [False, True])
+async def test_deferred_cooldown_cancels_entries_by_scope_policy(
+    signal_mode, policy, prior_intervention, held, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    bot = make_coin_bot(policy=policy)
+    bot.config["live"].update(hsl_signal_mode=signal_mode, execution_delay_seconds=0.25)
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_cooldown_log_interval_ms = 60_000
+    bot._equity_hard_stop_handle_position_during_cooldown = MethodType(
+        hsl._equity_hard_stop_handle_position_during_cooldown, bot
+    )
+    bot._canonical_open_order_reduce_only = MethodType(
+        Passivbot._canonical_open_order_reduce_only, bot
+    )
+    bot.positions = {"A": {"long": {"size": 0.0}}, "B": {"long": {"size": float(held)}}}
+    for symbol in ("A", "B"):
+        state = bot._hsl_coin_state("long", symbol) if signal_mode == "coin" else bot._hsl_state("long")
+        state["halted"] = True
+        state["cooldown_until_ms"] = 600_000
+    def intervention_evidence(_bot, pside, symbol=None):
+        if prior_intervention is None:
+            return None
+        return prior_intervention or (held and (signal_mode != "coin" or symbol == "B"))
+
+    monkeypatch.setattr(hsl, "_equity_hard_stop_manual_cooldown_intervention", intervention_evidence)
+    bot.open_orders = {
+        symbol: [
+            {"id": f"{symbol}-entry", "symbol": symbol, "position_side": "long", "reduce_only": False},
+            {"id": f"{symbol}-close", "symbol": symbol, "position_side": "long", "reduce_only": True},
+            {"id": f"{symbol}-other", "symbol": symbol, "position_side": "short", "reduce_only": False},
+            {"id": f"{symbol}-unknown", "symbol": symbol, "position_side": "long"},
+        ]
+        for symbol in ("A", "B")
+    }
+    snapshot = object()
+    bot._current_planning_snapshot = snapshot
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    # The panic planner may already select the held entry; the combined wave must deduplicate it.
+    panic_cancels = [bot.open_orders["B"][0]] if held and policy == "panic" else []
+    panic_creates = [{"symbol": "B", "position_side": "long", "reduce_only": True}] if panic_cancels else []
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(
+        return_value=(panic_cancels, panic_creates)
+    )
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot._sleep_unless_shutdown = AsyncMock()
+    expected = set()
+    if policy == "manual":
+        if prior_intervention is False:
+            if not held or signal_mode == "coin":
+                expected.add("A-entry")
+            if not held:
+                expected.add("B-entry")
+    else:
+        if not (held and policy == "normal" and signal_mode != "coin"):
+            expected.add("A-entry")
+        if not held or policy in {"panic", "tp_only"}:
+            expected.add("B-entry")
+    did_work = await Passivbot._run_halted_hsl_protection_if_active(bot)
+    assert did_work is bool(expected)
+    if expected:
+        args = bot.execute_order_plan_to_exchange.await_args
+        cancels, creates = args.args
+        assert {order["id"] for order in cancels} == expected
+        assert len(cancels) == len(expected)
+        assert creates == panic_creates
+        assert args.kwargs == {"configure_creations": False}
+        bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage="hsl_cooldown_protection")
+    else:
+        bot.execute_order_plan_to_exchange.assert_not_awaited()
+    if not panic_creates:
+        bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+        assert bot._current_planning_snapshot is snapshot
+    assert bot.positions["B"]["long"]["size"] == float(held)

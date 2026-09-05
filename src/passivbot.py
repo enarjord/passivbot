@@ -2262,9 +2262,6 @@ class Passivbot:
         pb_hsl._equity_hard_stop_handle_position_during_cooldown
     )
     _equity_hard_stop_reset_after_restart = pb_hsl._equity_hard_stop_reset_after_restart
-    _equity_hard_stop_replay_from_boundary = (
-        pb_hsl._equity_hard_stop_replay_from_boundary
-    )
     _equity_hard_stop_refresh_halted_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_refresh_halted_runtime_forced_modes
     )
@@ -6140,6 +6137,8 @@ class Passivbot:
             return False
         now_ms = int(self.get_exchange_time())
         panic_needed = False
+        cooldown_entry_cancels = []
+        policy = self._equity_hard_stop_cooldown_position_policy()
         for pside, symbol, state in scopes:
             cooldown_until_ms = state["cooldown_until_ms"]
             if state["no_restart_latched"] or (
@@ -6153,10 +6152,7 @@ class Passivbot:
                 for candidate in symbols
                 if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
             ]
-            if not symbols:
-                # Fill-confirmed cooldown finalization retains its existing owner.
-                continue
-            if coin_mode:
+            if symbols and coin_mode:
                 await self._equity_hard_stop_handle_coin_position_during_cooldown(
                     pside, symbol, now_ms
                 )
@@ -6164,7 +6160,7 @@ class Passivbot:
                     state["halted"]
                     and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
                 )
-            else:
+            elif symbols:
                 await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
                 panic_needed |= bool(
                     state["halted"]
@@ -6173,11 +6169,46 @@ class Passivbot:
                         for item in symbols
                     )
                 )
-        if not panic_needed:
+            # Flat cooldown scopes still prohibit initials. Held normal scopes
+            # may have resumed above; graceful_stop preserves their existing adds.
+            if not state["halted"]:
+                continue
+            if policy == "manual" and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
+                self, pside, symbol=symbol
+            ) is not False:
+                # Only complete fill evidence proving no intervention permits
+                # cancellation; manual ownership or unavailable evidence preserves orders.
+                continue
+            for order_symbol, orders in self.open_orders.items():
+                if coin_mode and order_symbol != symbol:
+                    continue
+                if (
+                    policy in {"normal", "graceful_stop"}
+                    and not state["cooldown_unresolved_residue"]
+                    and self._equity_hard_stop_has_open_position_symbol(pside, order_symbol)
+                ):
+                    continue
+                cooldown_entry_cancels.extend(
+                    dict(order)
+                    for order in orders
+                    if order.get("position_side") == pside
+                    and self._canonical_open_order_reduce_only(order) is False
+                )
+        if not panic_needed and not cooldown_entry_cancels:
             return False
-        # The existing protective planner admits only panic cancels/reduce-only
-        # closes, with its own fresh-account and submit-boundary checks.
-        to_cancel, to_create = await self.calc_protective_panic_orders_to_cancel_and_create()
+        # Only the existing panic planner can produce protective closes. A
+        # cancellation-only wave must not construct or freshen ordinary intent.
+        to_cancel, to_create = (
+            await self.calc_protective_panic_orders_to_cancel_and_create()
+            if panic_needed
+            else ([], [])
+        )
+        cancel_keys = {(order["symbol"], order["id"]) for order in to_cancel}
+        for order in cooldown_entry_cancels:
+            key = (order["symbol"], order["id"])
+            if key not in cancel_keys:
+                to_cancel.append(order)
+                cancel_keys.add(key)
         await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
         await self._sleep_unless_shutdown(
             float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
