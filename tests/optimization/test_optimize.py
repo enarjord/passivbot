@@ -5089,6 +5089,7 @@ def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
         "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
         "suite_metrics": {"scenario_labels": ["base"]},
     }
+    entry[optimize.CONTRACT_KEY] = optimize.build_evaluation_contract(entry)
     config = deepcopy(entry)
     config["backtest"]["coins"] = {"binance": ["XMR"]}
 
@@ -5168,7 +5169,7 @@ def test_resume_config_mismatches_plain_result_still_rejects_coin_change():
 
 
 def _resume_validation_entry():
-    return {
+    entry = {
         "backtest": {
             "start_date": "2024-01-01",
             "end_date": "2024-01-10",
@@ -5188,6 +5189,9 @@ def _resume_validation_entry():
             "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
         },
     }
+
+    entry[optimize.CONTRACT_KEY] = optimize.build_evaluation_contract(entry)
+    return entry
 
 
 def _write_msgpack_entries(path: Path, entries: list[dict]) -> None:
@@ -5294,6 +5298,7 @@ def test_validate_resume_results_allows_empty_gpu_seed_bootstrap_checkpoint(
     results_path.write_bytes(b"")
     checkpoint_path = tmp_path / "checkpoint.pkl"
     checkpoint = {
+        optimize.CONTRACT_KEY: optimize.build_evaluation_contract(config),
         "seed_bootstrap_complete": False,
         "seed_exact_done": 0,
         "exact_done": 0,

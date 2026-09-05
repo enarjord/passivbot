@@ -50,7 +50,7 @@ def test_resume_ignores_candidate_values_but_rejects_fixed_bot_policy():
     from optimize import _resume_config_mismatches
 
     config = _config()
-    old = deepcopy(config)  # Legacy ordinary artifacts remain supported.
+    old = _record(config)
     old["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 37.0
     assert _resume_config_mismatches(old, config) == []
     config["bot"]["long"]["hsl"]["enabled"] = not config["bot"]["long"]["hsl"][
@@ -274,7 +274,12 @@ def test_resume_rejects_changed_data_source_selectors(
     config = _config()
     config["backtest"][key] = old_value
     old = _record(config) if record_snapshot else deepcopy(config)
-    assert _resume_config_mismatches(old, config) == []
+    if record_snapshot:
+        assert _resume_config_mismatches(old, config) == []
+    else:
+        assert any(
+            "historical evaluator" in x for x in _resume_config_mismatches(old, config)
+        )
     old["metrics"] = {"objectives": {"w_0": -1.0}}
     (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
     config["backtest"][key] = new_value
@@ -491,6 +496,118 @@ def test_legacy_file_override_results_require_historical_policy_evidence(
     )
     with pytest.raises(ValueError, match="critical parameters have changed"):
         _validate_resume_results(str(tmp_path), current)
-    # Fully resolved ordinary legacy records remain provable without reading a file.
+    # Resolving config values still cannot prove a legacy evaluator implementation.
     old["coin_overrides"] = deepcopy(current["coin_overrides"])
-    assert _resume_config_mismatches(old, current) == []
+    assert any(
+        "historical evaluator" in x for x in _resume_config_mismatches(old, current)
+    )
+
+
+def test_resume_requires_matching_historical_implementation_identity(monkeypatch):
+    import optimization.evaluation_contract as contracts
+    from optimize import _resume_config_mismatches
+
+    config = _config()
+    old = _record(config)
+    assert _resume_config_mismatches(old, config) == []
+    changed = deepcopy(old[CONTRACT_KEY]["implementation"])
+    changed["python_source_sha256"] = "changed-evaluator"
+    monkeypatch.setattr(
+        contracts, "evaluation_implementation_identity", lambda: changed
+    )
+    assert any(
+        "evaluation.implementation" in x for x in _resume_config_mismatches(old, config)
+    )
+    old[CONTRACT_KEY].pop("implementation")
+    assert any(
+        "historical evaluator" in x for x in _resume_config_mismatches(old, config)
+    )
+    old.pop(CONTRACT_KEY)
+    assert any(
+        "historical evaluator" in x for x in _resume_config_mismatches(old, config)
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["fixed_policy", "implementation", "remove_contract", "remove_implementation"],
+)
+def test_resume_checks_each_reconstructed_record_contract(tmp_path, change):
+    import msgpack
+    from opt_utils import generate_incremental_diff
+    from optimize import _validate_resume_results
+
+    config = _config()
+    first = _record(config)
+    second = deepcopy(first)
+    if change == "fixed_policy":
+        second["live"]["hsl_signal_mode"] = "pside"
+        second[CONTRACT_KEY] = build_evaluation_contract(second)
+    elif change == "implementation":
+        second[CONTRACT_KEY]["implementation"][
+            "rust_artifact_sha256"
+        ] = "other-artifact"
+    elif change == "remove_contract":
+        second.pop(CONTRACT_KEY)
+    else:
+        second[CONTRACT_KEY].pop("implementation")
+    packer = msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(
+        packer.pack(first) + packer.pack(generate_incremental_diff(first, second))
+    )
+    with pytest.raises(ValueError, match="Mismatches detected at result 2"):
+        _validate_resume_results(str(tmp_path), config)
+
+
+def test_uniform_compressed_contract_history_allows_candidate_changes(tmp_path):
+    import msgpack
+    from opt_utils import generate_incremental_diff
+    from optimize import _validate_resume_results
+
+    config = _config()
+    first = _record(config)
+    second = deepcopy(first)
+    second["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 37.0
+    second["metrics"] = {"objectives": {"w_0": 0.5}}
+    packer = msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(
+        packer.pack(first) + packer.pack(generate_incremental_diff(first, second))
+    )
+    state = {}
+    assert _validate_resume_results(str(tmp_path), config, resume_state=state) == 2
+    assert state["previous_data"] == second
+
+
+@pytest.mark.parametrize("change", ["missing", "implementation", "prepared_data"])
+def test_empty_gpu_seed_scores_require_the_same_evaluation_identity(tmp_path, change):
+    import pickle
+    from optimize import _validate_resume_results
+
+    config = _config()
+    config["optimize"]["backend"] = "gpu"
+    config["_optimizer_prepared_dataset_identity"] = {"version": 1, "digest": "data"}
+    stored = build_evaluation_contract(config)
+    if change == "missing":
+        stored = None
+    elif change == "implementation":
+        stored["implementation"]["rust_artifact_sha256"] = "older-artifact"
+    else:
+        stored["prepared_data"] = {"version": 1, "digest": "older-data"}
+    checkpoint = {
+        CONTRACT_KEY: stored,
+        "seed_bootstrap_complete": False,
+        "seed_exact_done": 0,
+        "exact_done": 0,
+        "seed_bootstrap_contract": {"version": 1},
+        "seed_bootstrap_plan": {
+            "effective_mode": "screened",
+            "starting_vectors": [[0.1]],
+            "screen_complete": True,
+            "proxy_objectives": [[0.5]],
+        },
+    }
+    (tmp_path / "all_results.bin").write_bytes(b"")
+    path = tmp_path / "checkpoint.pkl"
+    path.write_bytes(pickle.dumps(checkpoint))
+    with pytest.raises(ValueError, match="historical evaluation contract"):
+        _validate_resume_results(str(tmp_path), config, checkpoint_path=str(path))

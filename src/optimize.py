@@ -202,6 +202,10 @@ from optimization.config_adapter import (
     resolve_optimization_bound_path,
 )
 from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
+from optimization.prepared_dataset_identity import (
+    PREPARED_DATASET_KEY,
+    build_prepared_dataset_identity,
+)
 from optimization.evaluation_contract import (
     CONTRACT_KEY,
     CONTRACT_CACHE_KEY,
@@ -855,6 +859,11 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "override files and lack historical policy evidence; start a fresh run"
         )
         return mismatches
+    if stored_contract is None or not stored_contract.get("implementation"):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: historical evaluator implementation "
+            "cannot be proven; start a fresh run to record its identity"
+        )
     if stored_contract is None and (
         entry.get("optimizer_anchor") is not None or get_anchor_plan(config)
     ):
@@ -862,15 +871,10 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             "  - optimizer_evaluation_contract: legacy anchored results lack fixed-anchor "
             "policy evidence; start a fresh run to record a verifiable evaluation contract"
         )
-    else:
-        old_contract = (
-            stored_contract
-            if stored_contract is not None
-            else build_evaluation_contract(entry)
-        )
-        new_contract = build_evaluation_contract(config)
+    if stored_contract is not None:
+        new_contract = config.get(CONTRACT_CACHE_KEY) or build_evaluation_contract(config)
         _append_resume_section_mismatches(
-            mismatches, "evaluation", old_contract, new_contract
+            mismatches, "evaluation", stored_contract, new_contract
         )
 
     return mismatches
@@ -985,7 +989,7 @@ def _gpu_checkpoint_allows_empty_results(
     except Exception:
         return False
     plan = checkpoint.get("seed_bootstrap_plan")
-    return bool(
+    allowed = bool(
         not checkpoint.get("seed_bootstrap_complete", True)
         and int(checkpoint.get("seed_exact_done", -1)) == 0
         and int(checkpoint.get("exact_done", -1)) == 0
@@ -994,6 +998,13 @@ def _gpu_checkpoint_allows_empty_results(
         and plan.get("starting_vectors")
         and plan.get("effective_mode") in {"exact", "screened"}
     )
+
+    if allowed and checkpoint.get(CONTRACT_KEY) != build_evaluation_contract(config):
+        raise ValueError(
+            "GPU checkpoint historical evaluation contract cannot be proven or changed; "
+            "start a fresh run"
+        )
+    return allowed
 
 
 def _validate_resume_results(
@@ -1016,6 +1027,7 @@ def _validate_resume_results(
             return 0
         raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
 
+    config = {**config, CONTRACT_CACHE_KEY: build_evaluation_contract(config)}
     previous_evals = 0
     previous_data = {}
     try:
@@ -1035,16 +1047,15 @@ def _validate_resume_results(
                         f"{results_filename}"
                     )
                 previous_data = deep_updated(previous_data, entry)
-                if previous_evals == 1:
-                    mismatches = _resume_config_mismatches(entry, config)
-                    if mismatches:
-                        mismatch_str = "\n".join(mismatches)
-                        raise ValueError(
-                            f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
-                            f"Mismatches detected:\n{mismatch_str}\n\n"
-                            f"Resuming with a changed configuration would corrupt optimization scores.\n"
-                            f"Please restore the original config or start a fresh run.\n"
-                        )
+                mismatches = _resume_config_mismatches(previous_data, config)
+                if mismatches:
+                    mismatch_str = "\n".join(mismatches)
+                    raise ValueError(
+                        f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                        f"Mismatches detected at result {previous_evals}:\n{mismatch_str}\n\n"
+                        f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                        f"Please restore the original config or start a fresh run.\n"
+                    )
     except msgpack.exceptions.UnpackException as exc:
         raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
     except ValueError:
@@ -3698,6 +3709,14 @@ async def main():
                         array_manager=array_manager,
                         preserve_internal_nan_gaps=allow_internal_nan_gaps,
                     )
+        config[PREPARED_DATASET_KEY] = build_prepared_dataset_identity(
+            config=config,
+            hlcvs_specs=hlcvs_specs,
+            btc_usd_specs=btc_usd_specs,
+            msss=msss,
+            timestamps=timestamps_dict,
+            scenario_contexts=scenario_contexts,
+        )
         exchanges = backtest_exchanges
         exchanges_fname = "combined" if len(backtest_exchanges) > 1 else "_".join(exchanges)
         date_fname = ts_to_date(utc_ms())[:19].replace(":", "_")

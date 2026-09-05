@@ -7,6 +7,7 @@ from config.param_paths import resolve_optimizer_key_path
 from config_utils import clean_config
 from optimization.config_adapter import _flatten_bounds_for_config
 from optimization.fine_tune_anchors import get_anchor_plan
+from optimization.evaluation_implementation import evaluation_implementation_identity
 from optimization.warmup import _apply_config_overrides
 from optimizer_overrides import optimizer_overrides
 
@@ -109,6 +110,8 @@ def build_evaluation_contract(config: dict) -> dict:
         }
     return {
         "version": 1,
+        "implementation": deepcopy(evaluation_implementation_identity()),
+        "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),
         "bot": effective.get("bot", {}),
         "live": {
             key: effective["live"][key]
