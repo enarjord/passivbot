@@ -185,3 +185,18 @@ def test_confirmed_dead_local_legacy_owner_does_not_block(tmp_path, monkeypatch)
     (legacy / cache.OP_LOCK_FILENAME).write_text(json.dumps({"hostname": cache._hostname(), "pid": 12345}))
     monkeypatch.setattr(cache, "_process_exists", lambda _pid: False)
     assert cache.prepare_materialized_run(tmp_path, "new-run").is_dir()
+
+
+@pytest.mark.parametrize("pid", [999999999.5, 999999999.0, True, False, "999999999"])
+def test_non_integer_legacy_pid_cannot_prove_dead_owner(tmp_path, monkeypatch, pid):
+    legacy = tmp_path / cache.OP_LOCK_DIRNAME
+    legacy.mkdir()
+    owner = {"hostname": cache._hostname(), "pid": pid}
+    (legacy / cache.OP_LOCK_FILENAME).write_text(json.dumps(owner))
+    def unexpected_probe(_pid):
+        pytest.fail("Malformed owner PID must not be probed as a process")
+    monkeypatch.setattr(cache, "_process_exists", unexpected_probe)
+    with pytest.raises(RuntimeError, match="ownership is unknown or active"):
+        cache.prepare_materialized_run(tmp_path, "new-run")
+    assert json.loads((legacy / cache.OP_LOCK_FILENAME).read_text()) == owner
+    assert not (tmp_path / "new-run").exists()

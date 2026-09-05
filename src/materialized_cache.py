@@ -135,9 +135,8 @@ def materialized_operation_lock(output_root: str | Path):
         legacy = root / OP_LOCK_DIRNAME
         if legacy.exists():
             owner = _read_lock(legacy / OP_LOCK_FILENAME) or {}
-            try:
-                pid = int(owner.get("pid"))
-            except (TypeError, ValueError):
+            pid = owner.get("pid")
+            if type(pid) is not int:
                 pid = 0
             # Missing metadata can mean an older worker paused between mkdir
             # and publishing its PID. Elapsed time does not prove it is dead.
