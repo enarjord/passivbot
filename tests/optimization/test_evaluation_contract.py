@@ -254,3 +254,35 @@ def test_real_anchored_candidate_record_preserves_other_anchor_policy():
         "evaluation.anchors" in item
         for item in _resume_config_mismatches(entry, config)
     )
+
+
+@pytest.mark.parametrize("key,old_value,new_value", [
+    ("market_settings_sources", {"BTC": "binance"}, {"BTC": "bybit"}),
+    ("ohlcv_source_dir", "dataset-a", "dataset-b"),
+    ("hlcvs_data_dir", "prepared-a", "prepared-b"),
+])
+@pytest.mark.parametrize("record_snapshot", [False, True])
+def test_resume_rejects_changed_data_source_selectors(tmp_path, key, old_value, new_value, record_snapshot):
+    import msgpack
+    from optimize import _resume_config_mismatches, _validate_resume_results
+
+    config = _config()
+    config["backtest"][key] = old_value
+    old = _record(config) if record_snapshot else deepcopy(config)
+    assert _resume_config_mismatches(old, config) == []
+    old["metrics"] = {"objectives": {"w_0": -1.0}}
+    (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
+    config["backtest"][key] = new_value
+    assert any(key in item for item in _resume_config_mismatches(old, config))
+    with pytest.raises(ValueError, match="critical parameters have changed"):
+        _validate_resume_results(str(tmp_path), config)
+
+
+def test_gpu_runtime_settings_retain_documented_strict_resume_comparison():
+    from optimize import _resume_config_mismatches
+
+    config = _config()
+    config["optimize"]["backend"] = "gpu"
+    old = _record(config)
+    config["optimize"]["gpu"]["exact_workers"] = 987
+    assert any("gpu" in item for item in _resume_config_mismatches(old, config))

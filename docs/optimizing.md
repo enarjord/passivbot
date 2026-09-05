@@ -3,7 +3,12 @@
 Optimizer resume reuses checkpoint fitness only when its fixed evaluation contract matches the
 current run. This includes backtest execution and data policies, backtest-consumed live settings,
 fixed bot parameters, resolved coin overrides, and all fixed fine-tune anchor values. Candidate
-vector values and machine-local settings such as worker count and output paths are excluded.
+vector values, `optimize.n_cpus`, and output paths are excluded. The shared resume check still
+compares the complete `optimize.gpu` mapping, including GPU worker and hardware-sizing controls;
+changing those controls currently requires a fresh run. Dataset selectors
+`backtest.market_settings_sources`, `backtest.ohlcv_source_dir`, and `backtest.hlcvs_data_dir`
+are compared as configured. Moving input directories therefore requires a fresh run even when
+contents match; input paths are data selectors, not excluded output paths.
 New result records include a machine-independent `optimizer_evaluation_contract` snapshot.
 Older ordinary results are checked from their recorded config; older anchored results without
 this snapshot must start a fresh run because the other anchors' fixed policy cannot be proven.
