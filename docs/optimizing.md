@@ -11,11 +11,15 @@ are compared as configured. Moving input directories therefore requires a fresh 
 contents match; input paths are data selectors, not excluded output paths.
 New result records include an `optimizer_evaluation_contract` snapshot. It binds fitness to
 content hashes of the prepared candles, BTC prices, timestamps, selected scenario slices, and
-market settings, plus evaluator Python sources and the verified loaded Rust source and artifact.
+market settings, plus the evaluator's transitive local Python imports, Python version, imported
+package/dependency versions, and the verified loaded Rust source and artifact.
 Changing a prepared input in place therefore requires a fresh run even when its directory is unchanged.
 Rust artifact identity is deliberately strict: rebuilding the binary can require a fresh run even
-from unchanged sources. Changes to unrelated docs, tests, or live connectors do not alter the
-Python evaluator identity. Hashing happens once during preparation with bounded memory use.
+from unchanged sources. The source identity follows imports conservatively, including imports
+inside optional branches; an unresolvable dynamic import includes all local Python sources. Docs,
+tests, and unrelated installed packages are excluded. Changes to an imported dependency can require
+a fresh run even when the affected branch was not used. Hashing happens once during preparation
+with bounded memory use.
 Legacy results without historical evaluator and prepared-data evidence require a fresh run;
 current files or current code cannot establish how their scores were produced. Every reconstructed
 result in a compressed stream is validated, and GPU seed checkpoints carry the same evidence before

@@ -24,7 +24,8 @@ All notable user-facing changes will be documented in this file.
   symbols may retain unavailable rows outside their listing windows.
 
 - Optimizer resume validates fixed policy, resolved coin and scenario overrides, prepared candle
-  and market-setting content, evaluator Python sources, and the verified Rust source and binary
+  and market-setting content, transitive evaluator Python sources/dependency versions, and the
+  verified Rust source and binary
   before reusing fitness. Every reconstructed result and GPU seed checkpoint carries matching
   evidence; legacy results without historical identities require a fresh run. Candidate values
   and CPU worker counts may vary, while complete GPU settings and rebuilt Rust binaries remain
