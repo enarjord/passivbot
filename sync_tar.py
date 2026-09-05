@@ -89,7 +89,11 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     print(f"Extracting {archive_path} into {destination} ...")
     with tarfile.open(archive_path, "r:gz") as tf:
-        tf.extractall(destination)
+        # Reject a later unsafe member before earlier members can overwrite an
+        # existing destination. Keep the extraction-time filter as well.
+        for member in tf.getmembers():
+            tarfile.data_filter(member, str(destination))
+        tf.extractall(destination, filter="data")
     print("Extraction complete.")
 
 

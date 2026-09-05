@@ -1,9 +1,55 @@
 from __future__ import annotations
 
 import argparse
+import io
+import tarfile
 from pathlib import Path
 
+import pytest
+
 import sync_tar
+
+
+@pytest.mark.parametrize("kind", ["parent_path", "symlink", "hardlink"])
+def test_extract_archive_rejects_members_escaping_destination(tmp_path, kind):
+    archive = tmp_path / "input.tar.gz"
+    destination = tmp_path / "output"
+    destination.mkdir()
+    (destination / "existing.txt").write_text("keep this")
+    escaped = tmp_path / "escaped"
+    with tarfile.open(archive, "w:gz") as output:
+        for name in ("existing.txt", "new.txt"):
+            regular = tarfile.TarInfo(name)
+            regular.size = 7
+            output.addfile(regular, io.BytesIO(b"changed"))
+        member = tarfile.TarInfo("../escaped" if kind == "parent_path" else "link")
+        if kind == "parent_path":
+            member.size = 7
+            output.addfile(member, io.BytesIO(b"payload"))
+        else:
+            member.type = tarfile.SYMTYPE if kind == "symlink" else tarfile.LNKTYPE
+            member.linkname = "../escaped"
+            output.addfile(member)
+
+    with pytest.raises(tarfile.FilterError):
+        sync_tar.extract_archive(archive, destination)
+
+    assert not escaped.exists()
+    assert (destination / "existing.txt").read_text() == "keep this"
+    assert not (destination / "new.txt").exists()
+    assert not (destination / "link").is_symlink()
+
+
+def test_extract_archive_roundtrips_regular_data(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "data.txt").write_text("sample data")
+    archive = tmp_path / "input.tar.gz"
+    sync_tar.create_archive(source, archive)
+
+    sync_tar.extract_archive(archive, tmp_path / "output")
+
+    assert (tmp_path / "output" / "source" / "data.txt").read_text() == "sample data"
 
 
 def test_resolve_pull_destination_uses_parent_for_globbed_destination(tmp_path):
