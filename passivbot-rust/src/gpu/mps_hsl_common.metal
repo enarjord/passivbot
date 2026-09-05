@@ -202,6 +202,9 @@ struct HslState {
     float drawdown_ema;
     float last_sample_k;
     float sampled_drawdown_raw;
+    float sample_start_drawdown_ema;
+    float sample_elapsed_minutes;
+    float sample_interval_ms;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     float drawdown_ema_max;
 #endif
@@ -525,6 +528,9 @@ inline HslState load_hsl(
     h.drawdown_ema = 0.0f;
     h.last_sample_k = -1.0f;
     h.sampled_drawdown_raw = 0.0f;
+    h.sample_start_drawdown_ema = 0.0f;
+    h.sample_elapsed_minutes = 0.0f;
+    h.sample_interval_ms = 60000.0f;
 #if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
     h.drawdown_ema_max = 0.0f;
 #endif
@@ -700,21 +706,36 @@ inline void update_hsl_from_signal(
     bool has_position,
     bool has_blocking_orders,
     float kf,
-    float interval_ms
+    float interval_ms,
+    bool at_fill_boundary = false
 ) {
     float drawdown_raw = signal.drawdown_raw;
     float strategy_equity = signal.strategy_equity;
     float peak_strategy_equity = signal.peak_strategy_equity;
-    if (h.last_sample_k != kf) {
+    if (h.halted) return;
+    if (interval_ms > 0.0f) h.sample_interval_ms = interval_ms;
+    interval_ms = h.sample_interval_ms;
+    const bool new_minute = h.last_sample_k != kf;
+    if (new_minute) {
+        h.sample_start_drawdown_ema = h.drawdown_ema;
+        h.sample_elapsed_minutes = h.last_sample_k < 0.0f ? 0.0f
+            : fmax((kf - h.last_sample_k) * interval_ms / 60000.0f, 0.0f);
         h.last_sample_k = kf;
-        h.sampled_drawdown_raw = drawdown_raw;
         if (!h.initialized) {
             h.initialized = true;
             h.drawdown_ema = 0.0f;
+            h.sample_start_drawdown_ema = 0.0f;
+            h.sampled_drawdown_raw = drawdown_raw;
             h.tier = 0;
-            return;
+            if (!at_fill_boundary) return;
         }
-        h.drawdown_ema = fma(h.alpha, drawdown_raw - h.drawdown_ema, h.drawdown_ema);
+    }
+    if (new_minute || at_fill_boundary) {
+        h.sampled_drawdown_raw = drawdown_raw;
+        // Distinct closing fills replace this minute's sample, without taking
+        // another EMA time step. Ordinary repeated reads remain cached.
+        float decay = pow(1.0f - h.alpha, fmax(h.sample_elapsed_minutes, 1.0f));
+        h.drawdown_ema = fma(h.sample_start_drawdown_ema - drawdown_raw, decay, drawdown_raw);
     } else {
         drawdown_raw = h.sampled_drawdown_raw;
     }
@@ -848,7 +869,7 @@ inline void update_hsl(
 }
 
 // A real closing fill samples its final fee-inclusive drawdown before an ordinary
-// episode reset. RED finalization remains owned by the normal end-of-bar update.
+// episode reset. Proven-flat RED boundaries finalize before later fills can reopen.
 inline bool finish_hsl_episode_at_flat(
     thread HslState& h,
     float balance,
@@ -857,19 +878,28 @@ inline bool finish_hsl_episode_at_flat(
     float kf,
     float interval_ms
 ) {
-    if (!h.enabled || h.halted || h.no_restart_latched || h.red_latched) return false;
+    if (!h.enabled || h.halted || h.no_restart_latched) return false;
     HslSignal signal;
     if (!derive_hsl_signal(h, balance, starting_balance, realized_pnl, 0.0f, signal)) {
         return false;
     }
-    // Suppress flat confirmation here: the normal controller owns that transition.
-    update_hsl_from_signal(h, signal, realized_pnl, true, false, kf, interval_ms);
-    if (h.red_latched) return false;
-    h.initialized = false;
+    // A complete closing fill is exact flat evidence. Record both confirmation
+    // transitions now so resting same-bar entries cannot erase the stop anchor.
+    h.flat_confirmations = 0;
+    update_hsl_from_signal(h, signal, realized_pnl, false, false, kf, interval_ms, true);
+    if (h.red_latched) {
+        update_hsl_from_signal(h, signal, realized_pnl, false, false, kf, interval_ms);
+        return false;
+    }
+    // Prime the next episode at the exact flat baseline. Another closing fill
+    // in this minute must include its entry fee and closing loss in its signal.
+    h.initialized = true;
     h.drawdown_ema = 0.0f;
-    h.last_sample_k = -1.0f;
+    h.last_sample_k = kf;
     h.sampled_drawdown_raw = 0.0f;
-    h.peak_strategy_pnl = -INFINITY;
+    h.sample_start_drawdown_ema = 0.0f;
+    h.sample_elapsed_minutes = 0.0f;
+    h.peak_strategy_pnl = realized_pnl;
     h.coin_realized_baseline = realized_pnl;
     h.coin_realized_peak = 0.0f;
     h.tier = 0;
@@ -991,6 +1021,8 @@ inline void try_restart_hsl(thread HslState& h, float kf, float current_equity) 
     h.drawdown_ema = 0.0f;
     h.last_sample_k = -1.0f;
     h.sampled_drawdown_raw = 0.0f;
+    h.sample_start_drawdown_ema = 0.0f;
+    h.sample_elapsed_minutes = 0.0f;
     h.peak_strategy_pnl = -INFINITY;
     h.tier = 0;
     h.red_latched = false;

@@ -4877,6 +4877,13 @@ async def test_live_coin_boundary_uses_canonical_replay_for_delayed_or_red_fill(
         replays.append(True)
 
     bot._equity_hard_stop_initialize_coin_from_history = replay
+    if tied:
+        with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="ambiguous boundaries"):
+            await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+                bot, 300_000, 1000.0 - closing_loss
+            )
+        assert not replays
+        return
     rebuilt = await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
         bot, 300_000, 1000.0 - closing_loss
     )
@@ -4914,10 +4921,8 @@ async def test_live_coin_boundary_does_not_guess_from_incomplete_fill_sizes():
             "pnl": -10.0,
         }
     )
-    assert (
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="does not match position"):
         await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, 240_000, 990.0)
-        is False
-    )
     assert bot._hsl_coin_state("long", symbol)["pnl_reset_timestamp_ms"] is None
 
 
@@ -5191,7 +5196,7 @@ async def test_aggregate_final_fill_red_enters_cooldown_before_reentry(signal_mo
 @pytest.mark.asyncio
 @pytest.mark.parametrize("signal_mode", ["pside", "unified"])
 @pytest.mark.parametrize(
-    "layout", ["flat", "two_episodes", "tied_episodes", "gap", "tail"]
+    "layout", ["flat", "two_episodes", "gap", "tail"]
 )
 async def test_aggregate_replay_retains_each_fill_boundary_and_fee(signal_mode, layout):
     bot = _make_aggregate_episode_bot(signal_mode)
@@ -5202,7 +5207,7 @@ async def test_aggregate_replay_retains_each_fill_boundary_and_fee(signal_mode, 
         events.pop()
         bot.positions["A"]["long"]["size"] = 0.0
         expected_drawdown = 0.0
-    elif layout in {"two_episodes", "tied_episodes"}:
+    elif layout == "two_episodes":
         events.extend(
             [
                 {
@@ -5226,10 +5231,6 @@ async def test_aggregate_replay_retains_each_fill_boundary_and_fee(signal_mode, 
         )
         expected_reset = 180_701
         expected_drawdown = 51.0 / 879.0
-        if layout == "tied_episodes":
-            for event in events[1:]:
-                event["timestamp"] = 180_500
-            expected_reset = 180_501
     if layout in {"gap", "tail"}:
         original_history = bot.get_balance_equity_history
 
@@ -5254,3 +5255,248 @@ async def test_aggregate_replay_retains_each_fill_boundary_and_fee(signal_mode, 
     assert not await hsl._equity_hard_stop_refresh_live_scope_episode_boundaries(
         bot, 360_000, bot.get_raw_balance()
     )
+
+
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize(
+    "actions",
+    [
+        ["increase", "decrease", "decrease"],
+        ["decrease", "increase", "decrease"],
+    ],
+)
+def test_hsl_unordered_cohort_cannot_fabricate_intermediate_flat(signal_mode, actions):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot.positions["A"]["long"]["size"] = 0.0
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        }
+    ]
+    events.extend(
+        {
+            "timestamp": 180_500,
+            "symbol": "A",
+            "pside": "long",
+            "action": action,
+            "qty": 1.0,
+            "pnl": 0.0,
+        }
+        for action in actions
+    )
+    assert (
+        hsl._equity_hard_stop_scope_flatten_samples(
+            bot,
+            events,
+            "long",
+            signal_mode,
+            240_000,
+            1000.0,
+            0.0,
+            {"long": 0.0, "short": 0.0},
+        )
+        is None
+    )
+    _, ambiguous = hsl._equity_hard_stop_coin_replay_events(events, "long", "A")
+    assert ambiguous
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_aggregate_incomplete_fill_tape_defers_without_sampling_old_episode(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot._equity_hard_stop_apply_sample(
+        "long", 120_000, 1000.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    state = bot._hsl_state("long")
+    original_metrics = state["last_metrics"]
+    bot._pnls_manager.get_events().pop(0)  # retained history begins with an over-close
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="cannot prove"):
+        await hsl._equity_hard_stop_check(bot)
+    assert state["last_metrics"] is original_metrics
+    assert state["pnl_reset_timestamp_ms"] is None
+    assert not state["runtime"].red_latched()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_aggregate_shifted_minute_rejects_unproven_panic_marker(signal_mode, caplog):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events.pop()  # fully flat tape ending at its non-minute-aligned close
+    events[-1]["pb_order_type"] = "close_panic_long"
+    bot.positions["A"]["long"]["size"] = 0.0
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        result["panic_flatten_events"] = [
+            {
+                "timestamp": 180_500,
+                "minute_timestamp": 180_000,
+                "pside": "long",
+                "symbol": "A",
+            }
+        ]
+        return result
+
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    assert not state["halted"]
+    assert state["last_stop_event"] is None
+    assert state["pnl_reset_timestamp_ms"] == 180_501
+    assert "ignored historical panic marker without reconstructed RED" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_second_distinct_same_minute_flatten_can_first_trigger_red(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events.extend(
+        [
+            {
+                "timestamp": 180_700,
+                "symbol": "A",
+                "pside": "long",
+                "action": "decrease",
+                "qty": 1.0,
+                "pnl": -300.0,
+            },
+            {
+                "timestamp": 180_800,
+                "symbol": "A",
+                "pside": "long",
+                "action": "increase",
+                "qty": 1.0,
+                "pnl": 0.0,
+            },
+        ]
+    )
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    assert state["halted"]
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 180_700
+    assert state["cooldown_until_ms"] == 480_700
+
+
+@pytest.mark.asyncio
+async def test_live_coin_reset_seeds_flat_minute_before_next_ema_step():
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
+    bot.hsl["long"]["red_threshold"] = 0.5
+    bot.hsl["long"]["ema_span_minutes"] = 3.0
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    events = [
+        {
+            "timestamp": 60_000,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_500,
+            "symbol": "A",
+            "pside": "long",
+            "action": "decrease",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": 180_600,
+            "symbol": "A",
+            "pside": "long",
+            "action": "increase",
+            "qty": 1.0,
+            "pnl": 0.0,
+        },
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample("long", "A", 120_000, 1000.0, 0.0)
+    assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+        bot, 240_000, 1000.0
+    )
+    metrics = bot._equity_hard_stop_apply_coin_sample("long", "A", 240_000, 1000.0, -100.0)
+    assert metrics["elapsed_minutes"] == 1
+    assert metrics["drawdown_ema"] == pytest.approx(0.05)
+
+
+def test_hsl_tied_cohort_uses_raw_position_chain_instead_of_input_order():
+    cohort = []
+    for action, qty, before in [
+        ("decrease", 3.0, 3.0),
+        ("increase", 2.0, 1.0),
+        ("decrease", 1.0, 2.0),
+    ]:
+        side = "sell" if action == "decrease" else "buy"
+        cohort.append(
+            {
+                "timestamp": 180_500,
+                "symbol": "A",
+                "pside": "long",
+                "action": action,
+                "qty": qty,
+                "pnl": 0.0,
+                "raw": [
+                    {
+                        "data": {
+                            "side": side,
+                            "amount": qty,
+                            "price": 1.0,
+                            "info": {"startPosition": str(before)},
+                        }
+                    }
+                ],
+            }
+        )
+    ordered, ambiguous = hsl._equity_hard_stop_order_fill_cohorts(cohort)
+    assert not ambiguous
+    assert [event["qty"] for event in ordered] == [1.0, 2.0, 3.0]
+
+
+def test_hsl_tied_cycle_requires_raw_chain_and_known_pre_cohort_size():
+    initial = {
+        "timestamp": 60_000,
+        "symbol": "A",
+        "pside": "long",
+        "action": "increase",
+        "qty": 1.0,
+        "pnl": 0.0,
+    }
+    cohort = []
+    for action, before in [("increase", 0.0), ("decrease", 1.0)]:
+        side = "sell" if action == "decrease" else "buy"
+        cohort.append(
+            {
+                "timestamp": 180_500,
+                "symbol": "A",
+                "pside": "long",
+                "action": action,
+                "qty": 1.0,
+                "pnl": 0.0,
+                "raw": [
+                    {
+                        "data": {
+                            "side": side,
+                            "amount": 1.0,
+                            "price": 1.0,
+                            "info": {"startPosition": str(before)},
+                        }
+                    }
+                ],
+            }
+        )
+    _, ambiguous_without_initial = hsl._equity_hard_stop_order_fill_cohorts(cohort)
+    assert ambiguous_without_initial
+    ordered, ambiguous = hsl._equity_hard_stop_order_fill_cohorts([initial, *cohort])
+    assert not ambiguous
+    assert [event["action"] for event in ordered] == ["increase", "decrease", "increase"]

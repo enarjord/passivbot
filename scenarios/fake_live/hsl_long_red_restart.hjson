@@ -29,7 +29,8 @@
       {
         id: "11"
         order: "11"
-        timestamp: "2026-01-01T00:01:00Z"
+        // Distinct timestamps prove the boot flatten/re-entry execution order.
+        timestamp: "2026-01-01T00:00:59.999Z"
         symbol: "BTC/USDT:USDT"
         position_side: long
         side: sell

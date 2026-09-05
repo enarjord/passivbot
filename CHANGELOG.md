@@ -68,7 +68,9 @@ All notable user-facing changes will be documented in this file.
 - Equity Hard Stop Loss now resets RED-free episodes at the fill that flattens the configured
   coin, position-side, or unified scope, including a re-entry in the same minute. Live replay,
   exact backtests, and Apple MPS screening retain closing PnL and fees before resetting episode
-  drawdown, while preserving RED-triggered cooldowns and persistent no-restart limits.
+  drawdown, while preserving RED-triggered cooldowns and persistent no-restart limits. Closing
+  fills that first trigger RED finalize before same-step re-entry. Ambiguous required episode
+  evidence defers ordinary planning while already-latched RED supervision remains available.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the

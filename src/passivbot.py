@@ -6356,7 +6356,24 @@ class Passivbot:
                     )
                     break
                 if self._equity_hard_stop_enabled():
-                    await self._equity_hard_stop_check()
+                    try:
+                        await self._equity_hard_stop_check()
+                    except state_refresh.AuthoritativeSurfaceUnavailable as exc:
+                        if exc.surface != "hsl_episode_boundaries":
+                            raise
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="hsl_episode_boundaries_unavailable",
+                            data={"reason": exc.reason},
+                        )
+                        if not await self._run_latched_hsl_supervisor_if_active(
+                            cycle_id=cycle_id,
+                            loop_timings_ms=loop_timings_ms,
+                        ):
+                            await self._sleep_unless_shutdown(
+                                0.5, stage="hsl_episode_boundaries_retry"
+                            )
+                        continue
                     if await self._run_latched_hsl_supervisor_if_active(
                         cycle_id=cycle_id,
                         loop_timings_ms=loop_timings_ms,

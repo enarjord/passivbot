@@ -302,6 +302,7 @@ def _make_mock_pbr():
             tier_ratio_yellow,
             tier_ratio_orange,
             latch_red=True,
+            at_fill_boundary=False,
         ):
             current_minute = int(timestamp_ms) // 60_000
             alpha = 2.0 / (ema_span_minutes + 1.0)

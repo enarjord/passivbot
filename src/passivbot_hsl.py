@@ -9,6 +9,7 @@ import os
 import time
 import traceback
 from collections import deque
+from itertools import groupby
 from typing import Any, Iterable, Optional
 
 import passivbot_rust as pbr
@@ -25,7 +26,12 @@ from config.coerce import (
     normalize_hsl_signal_mode,
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
-from fill_events_manager import signed_fee_paid_from_payload
+from fill_events_manager import (
+    signed_fee_paid_from_payload,
+    _hyperliquid_fill_position_chain,
+    _unique_position_chain_order,
+)
+from live.state_refresh import AuthoritativeSurfaceUnavailable
 from live.diagnostic_safety import bounded_exception_type as _bounded_hsl_exception_type
 from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
 from passivbot_exceptions import FatalBotException, RestartBotException
@@ -1532,6 +1538,7 @@ def _equity_hard_stop_apply_sample(
     unrealized_pnl_total: Optional[float] = None,
     *,
     latch_red: bool = True,
+    at_fill_boundary: bool = False,
 ) -> dict:
     if not math.isfinite(balance) or balance <= 0.0:
         raise ValueError(f"balance must be finite and > 0, got {balance}")
@@ -1566,7 +1573,7 @@ def _equity_hard_stop_apply_sample(
             and str(last_metrics.get("tier")) == "red"
             and not self._equity_hard_stop_runtime_red_latched(pside)
         )
-        if same_inputs and not needs_latching_replay_red:
+        if same_inputs and not needs_latching_replay_red and not at_fill_boundary:
             cached = dict(last_metrics)
             cached["changed"] = False
             cached["elapsed_minutes"] = 0
@@ -1602,6 +1609,7 @@ def _equity_hard_stop_apply_sample(
         tier_ratio_yellow=ratio_yellow,
         tier_ratio_orange=ratio_orange,
         latch_red=bool(latch_red),
+        at_fill_boundary=bool(at_fill_boundary),
     )
     if not isinstance(step, dict):
         raise TypeError(
@@ -1648,6 +1656,7 @@ def _equity_hard_stop_apply_coin_sample(
     current_upnl: float,
     *,
     latch_red: bool = True,
+    at_fill_boundary: bool = False,
 ) -> dict:
     peak_realized, last_realized = self._equity_hard_stop_coin_realized_pnl_peak_last(
         pside,
@@ -1664,6 +1673,7 @@ def _equity_hard_stop_apply_coin_sample(
         last_realized,
         current_upnl,
         latch_red=latch_red,
+        at_fill_boundary=at_fill_boundary,
     )
 
 
@@ -1678,6 +1688,7 @@ def _equity_hard_stop_apply_coin_metrics_sample(
     current_upnl: float,
     *,
     latch_red: bool = True,
+    at_fill_boundary: bool = False,
 ) -> dict:
     if not math.isfinite(balance) or balance <= 0.0:
         raise ValueError(f"balance must be finite and > 0, got {balance}")
@@ -1735,7 +1746,7 @@ def _equity_hard_stop_apply_coin_metrics_sample(
             and str(last_metrics.get("tier")) == "red"
             and not bool(state["runtime"].red_latched())
         )
-        if same_inputs and not needs_latching_replay_red:
+        if same_inputs and not needs_latching_replay_red and not at_fill_boundary:
             cached = dict(last_metrics)
             cached["changed"] = False
             cached["elapsed_minutes"] = 0
@@ -1752,6 +1763,7 @@ def _equity_hard_stop_apply_coin_metrics_sample(
         tier_ratio_yellow=ratio_yellow,
         tier_ratio_orange=ratio_orange,
         latch_red=bool(latch_red),
+        at_fill_boundary=bool(at_fill_boundary),
     )
     if not isinstance(step, dict):
         raise TypeError(
@@ -1984,11 +1996,75 @@ def _hsl_compact_sparse_replay_indices(
     return np.flatnonzero(selected).astype(np.int64)
 
 
+def _equity_hard_stop_order_fill_cohorts(fill_events):
+    """Order tied mixed-action fills only with exchange-provided position chains."""
+    ordered = []
+    ambiguous = False
+    known_sizes = {}
+    for _ts, cohort_iter in groupby(
+        sorted(fill_events, key=_equity_hard_stop_fill_timestamp_ms),
+        key=_equity_hard_stop_fill_timestamp_ms,
+    ):
+        cohort = list(cohort_iter)
+        actions = {_equity_hard_stop_fill_action(event) for event in cohort}
+        if len(cohort) > 1 and actions == {"increase", "decrease"}:
+            pairs = {
+                (_equity_hard_stop_fill_pside_optional(event), _equity_hard_stop_fill_symbol(event))
+                for event in cohort
+            }
+            chains = [
+                _hyperliquid_fill_position_chain(event if isinstance(event, dict) else vars(event))
+                for event in cohort
+            ]
+            chain_order = (
+                _unique_position_chain_order(chains)
+                if len(pairs) == 1 and all(chain is not None for chain in chains)
+                else None
+            )
+            if (
+                chain_order is None
+                and len(pairs) == 1
+                and all(chain is not None for chain in chains)
+            ):
+                pair = next(iter(pairs))
+                if pair in known_sizes:
+                    # An extra graph edge anchors a cycle to the independently
+                    # reconstructed pre-cohort size; it is not a synthetic fill.
+                    anchored = _unique_position_chain_order([(-1.0, known_sizes[pair]), *chains])
+                    if anchored is not None and anchored[0] == 0:
+                        chain_order = [index - 1 for index in anchored[1:]]
+            if chain_order is None:
+                ambiguous = True
+            else:
+                cohort = [cohort[index] for index in chain_order]
+        ordered.extend(cohort)
+        for event in cohort:
+            pair = (
+                _equity_hard_stop_fill_pside_optional(event),
+                _equity_hard_stop_fill_symbol(event),
+            )
+            action = _equity_hard_stop_fill_action(event)
+            qty = _equity_hard_stop_fill_replay_qty(event)
+            if qty is None or action not in {"increase", "decrease"}:
+                known_sizes.pop(pair, None)
+                continue
+            size = known_sizes.get(pair, 0.0)
+            if action == "decrease" and qty > size:
+                known_sizes.pop(pair, None)
+            else:
+                known_sizes[pair] = size + qty if action == "increase" else size - qty
+    return ordered, ambiguous
+
+
 def _equity_hard_stop_coin_replay_events(
     fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
 ) -> tuple[list[tuple[int, str, float, float]], bool]:
     replay_events: list[tuple[int, str, float, float]] = []
-    ambiguous = False
+    fill_events, ambiguous = _equity_hard_stop_order_fill_cohorts([
+        event for event in fill_events
+        if _equity_hard_stop_fill_pside(event) == pside
+        and _equity_hard_stop_fill_symbol(event) == symbol
+    ])
     replay_size = 0.0
     flat_epsilon = _hsl_flat_epsilon(qty_step)
     for event in fill_events:
@@ -3161,15 +3237,27 @@ def _equity_hard_stop_scope_flatten_samples(
     balance,
     realized_total,
     realized_by_pside,
-) -> list[dict]:
+) -> Optional[list[dict]]:
     """Reconstruct exact scope-flat samples from a complete, position-matching fill tape."""
     events = sorted(
-        (
-            event
-            for event in fill_events
-            if _equity_hard_stop_fill_timestamp_ms(event) <= now_ms
-        ),
+        (event for event in fill_events if _equity_hard_stop_fill_timestamp_ms(event) <= now_ms),
         key=_equity_hard_stop_fill_timestamp_ms,
+    )
+    scoped_events = [
+        event
+        for event in events
+        if signal_mode == "unified" or _equity_hard_stop_fill_pside_optional(event) == pside
+    ]
+    ordered_scope, ambiguous = _equity_hard_stop_order_fill_cohorts(scoped_events)
+    if ambiguous:
+        return None
+    # Keep account-wide PnL ordering consistent with the proven scoped chain.
+    scope_order = {id(event): index for index, event in enumerate(ordered_scope)}
+    events.sort(
+        key=lambda event: (
+            _equity_hard_stop_fill_timestamp_ms(event),
+            scope_order.get(id(event), -1),
+        )
     )
     deltas = [
         float(_equity_hard_stop_event_value(event, "pnl", 0.0) or 0.0)
@@ -3207,13 +3295,13 @@ def _equity_hard_stop_scope_flatten_samples(
             or qty is None
             or qty <= 0.0
         ):
-            return []
+            return None
         pair = (side, symbol)
         epsilon = _hsl_flat_epsilon(_hsl_qty_step_for_symbol(self, symbol))
         size = sizes.get(pair, 0.0)
         was_nonflat = nonflat_pairs > 0
         if action == "decrease" and qty > size + epsilon:
-            return []
+            return None
         next_size = size + qty if action == "increase" else max(0.0, size - qty)
         sizes[pair] = 0.0 if next_size <= epsilon else next_size
         nonflat_pairs += int(sizes[pair] > 0.0) - int(size > 0.0)
@@ -3226,8 +3314,7 @@ def _equity_hard_stop_scope_flatten_samples(
             }
             for sample_side in self._hsl_psides():
                 sample[f"realized_pnl_{sample_side}"] = (
-                    float(realized_by_pside[sample_side])
-                    - remaining_by_pside[sample_side]
+                    float(realized_by_pside[sample_side]) - remaining_by_pside[sample_side]
                 )
                 if signal_mode == "unified" or sample_side == pside:
                     sample[f"unrealized_pnl_{sample_side}"] = 0.0
@@ -3242,22 +3329,18 @@ def _equity_hard_stop_scope_flatten_samples(
         epsilon = _hsl_flat_epsilon(_hsl_qty_step_for_symbol(self, pair[1]))
         actual = current_sizes.get(pair, 0.0)
         if abs(sizes.get(pair, 0.0) - actual) > max(epsilon, actual * 1e-12):
-            return []
+            return None
     return samples
 
 
 def _equity_hard_stop_scope_replay_rows(timeline, boundaries):
     """Place exact fill boundaries before their minute's final price sample."""
-    valid_rows = [
-        row for row in timeline if isinstance(row, dict) and "timestamp" in row
-    ]
+    valid_rows = [row for row in timeline if isinstance(row, dict) and "timestamp" in row]
     if not valid_rows:
         yield from timeline
         return
     first_minute = int(valid_rows[0]["timestamp"]) // 60_000
-    boundaries = [
-        row for row in boundaries if int(row["timestamp"]) // 60_000 >= first_minute
-    ]
+    boundaries = [row for row in boundaries if int(row["timestamp"]) // 60_000 >= first_minute]
     cursor = 0
     for row in timeline:
         if not isinstance(row, dict) or "timestamp" not in row:
@@ -3265,18 +3348,14 @@ def _equity_hard_stop_scope_replay_rows(timeline, boundaries):
             continue
         minute = int(row["timestamp"]) // 60_000
         last_boundary = None
-        while (
-            cursor < len(boundaries)
-            and int(boundaries[cursor]["timestamp"]) // 60_000 <= minute
-        ):
+        while cursor < len(boundaries) and int(boundaries[cursor]["timestamp"]) // 60_000 <= minute:
             last_boundary = boundaries[cursor]
             cursor += 1
             yield last_boundary
         if last_boundary is not None:
             row = dict(row)
-            row["timestamp"] = max(
-                int(row["timestamp"]), int(last_boundary["timestamp"]) + 1
-            )
+            row["_hsl_source_minute_timestamp"] = int(row["timestamp"])
+            row["timestamp"] = max(int(row["timestamp"]), int(last_boundary["timestamp"]) + 1)
         yield row
     yield from boundaries[cursor:]
 
@@ -3306,8 +3385,7 @@ async def _equity_hard_stop_refresh_live_scope_episode_boundaries(self, ts_ms, b
     signal_mode = self._equity_hard_stop_signal_mode()
     realized_total = self._equity_hard_stop_realized_pnl_now()
     realized_by_pside = {
-        side: self._equity_hard_stop_realized_pnl_now(side)
-        for side in self._hsl_psides()
+        side: self._equity_hard_stop_realized_pnl_now(side) for side in self._hsl_psides()
     }
     for pside in self._hsl_psides():
         state = self._hsl_state(pside)
@@ -3328,6 +3406,10 @@ async def _equity_hard_stop_refresh_live_scope_episode_boundaries(self, ts_ms, b
             realized_total,
             realized_by_pside,
         )
+        if boundaries is None:
+            raise AuthoritativeSurfaceUnavailable(
+                "hsl_episode_boundaries", f"{pside} fill tape cannot prove episode boundaries"
+            )
         reset_ts = state.get("pnl_reset_timestamp_ms")
         for row in boundaries:
             boundary_ts = int(row["timestamp"])
@@ -3344,6 +3426,7 @@ async def _equity_hard_stop_refresh_live_scope_episode_boundaries(self, ts_ms, b
                 float(row[f"realized_pnl_{pside}"]),
                 0.0,
                 unrealized_pnl_total=0.0 if signal_mode == "unified" else None,
+                at_fill_boundary=True,
             )
             if metrics["red_seen_in_episode"]:
                 await self._equity_hard_stop_initialize_from_history()
@@ -3505,7 +3588,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             )
             scope_was_nonflat = False
             prev_recorded_ts: Optional[int] = None
-            for row in _equity_hard_stop_scope_replay_rows(timeline, scope_boundaries):
+            for row in _equity_hard_stop_scope_replay_rows(timeline, scope_boundaries or []):
                 if not isinstance(row, dict):
                     continue
                 required = ("timestamp", "balance", "realized_pnl")
@@ -3540,6 +3623,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     row_unrealized_pside,
                     unrealized_pnl_total=row_upnl_total,
                     latch_red=False,
+                    at_fill_boundary=bool(row.get("_hsl_scope_flatten_fill")),
                 )
                 n_rows[pside] += 1
                 row_flat = row.get(scope_flat_key)
@@ -3553,7 +3637,18 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     scope_was_nonflat = not row_flat
                 row_prev_recorded_ts = prev_recorded_ts
                 prev_recorded_ts = ts
-                panic_flatten_marker = panic_flatten_events_by_key.get((pside, ts))
+                panic_flatten_marker = panic_flatten_events_by_key.get(
+                    (
+                        pside,
+                        int(row.get(
+                            "_hsl_source_minute_timestamp",
+                            ts // 60_000 * 60_000 if row.get("_hsl_scope_flatten_fill") else ts,
+                        )),
+                    )
+                )
+                if row.get("_hsl_scope_flatten_fill") and panic_flatten_marker is not None:
+                    if int(panic_flatten_marker["timestamp"]) != ts:
+                        panic_flatten_marker = None
                 stop_ts: Optional[int] = None
                 stop_source = "panic_fill_flatten"
                 if panic_flatten_marker is not None:
@@ -3571,9 +3666,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                             float(current_metrics["drawdown_score"]),
                             float(current_metrics["red_threshold"]),
                         )
-                        continue
-                    stop_ts = marker_ts
-                elif scope_flattened_this_row:
+                    else:
+                        stop_ts = marker_ts
+                if stop_ts is None and scope_flattened_this_row:
                     if bool(current_metrics.get("red_seen_in_episode")):
                         # B2.1: the episode crossed RED and ended by an ordinary
                         # (non-panic) scope-flattening fill; cooldown/no-restart
@@ -4732,6 +4827,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                 window_last_realized,
                                 0.0,
                                 latch_red=False,
+                                at_fill_boundary=True,
                             )
                             applied_rows += 1
                             rows += 1
@@ -4781,6 +4877,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             )
                             state = self._hsl_coin_state(pside, symbol)
                             reset_rolling_window()
+                            self._equity_hard_stop_apply_coin_metrics_sample(
+                                pside, symbol, flatten_ts, boundary_balance,
+                                0.0, 0.0, 0.0, latch_red=False,
+                            )
                             logging.info(
                                 "[risk] HSL[%s:%s] replay reset current episode after flat fill | flat_ts=%s",
                                 pside,
@@ -5611,7 +5711,9 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                 scope_events, pside, symbol, qty_step=qty_step
             )
             if ambiguous:
-                continue
+                raise AuthoritativeSurfaceUnavailable(
+                    "hsl_episode_boundaries", f"{pside}:{symbol} fill tape has ambiguous boundaries"
+                )
             epsilon = _hsl_flat_epsilon(qty_step)
             size = 0.0
             boundaries = []
@@ -5623,7 +5725,11 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
             current_size = abs(
                 float((self.positions or {}).get(symbol, {}).get(pside, {}).get("size", 0.0))
             )
-            if not boundaries or abs(size - current_size) > max(epsilon, current_size * 1e-12):
+            if abs(size - current_size) > max(epsilon, current_size * 1e-12):
+                raise AuthoritativeSurfaceUnavailable(
+                    "hsl_episode_boundaries", f"{pside}:{symbol} fill tape does not match position"
+                )
+            if not boundaries:
                 continue
             for flatten_ts in boundaries:
                 last_sample_ts = int((state["last_metrics"] or {}).get("timestamp_ms", 0))
@@ -5653,7 +5759,7 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                     for event in later_events
                 )
                 metrics = self._equity_hard_stop_apply_coin_sample(
-                    pside, symbol, flatten_ts, boundary_balance, 0.0
+                    pside, symbol, flatten_ts, boundary_balance, 0.0, at_fill_boundary=True
                 )
                 if metrics["red_seen_in_episode"]:
                     await self._equity_hard_stop_initialize_coin_from_history()
@@ -5661,7 +5767,10 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                 state["pnl_reset_timestamp_ms"] = flatten_ts + 1
                 self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
                 state = self._hsl_coin_state(pside, symbol)
-                self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, flatten_ts + 1)
+                self._equity_hard_stop_apply_coin_metrics_sample(
+                    pside, symbol, flatten_ts, boundary_balance, 0.0, 0.0, 0.0,
+                    latch_red=False,
+                )
                 logging.info(
                     "[risk] HSL[%s:%s] reset current episode after ordinary flat fill | flat_ts=%s",
                     pside,

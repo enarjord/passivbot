@@ -15464,14 +15464,16 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
     ).run(rows)
     torch.mps.synchronize()
 
-    assert output["hsl_triggers_long"][0].item() == (
-        0.0 if signal_mode == "unified" else 1.0
+    # EMA closes can briefly flatten the entire account before a resting entry
+    # reopens the other side in the same bar. That exact boundary now finalizes
+    # the enabled controller even though the final position snapshot is held.
+    enabled_side_triggers = (
+        0.0 if signal_mode == "unified" and strategy_kind == "trailing_martingale" else 1.0
     )
+    assert output["hsl_triggers_long"][0].item() == enabled_side_triggers
     assert output["hsl_triggers_short"][0].item() == 0.0
     assert output["hsl_triggers_long"][1].item() == 0.0
-    assert output["hsl_triggers_short"][1].item() == (
-        0.0 if signal_mode == "unified" else 1.0
-    )
+    assert output["hsl_triggers_short"][1].item() == enabled_side_triggers
     assert output["hsl_triggers_long"][2].item() == 1.0
     assert output["hsl_triggers_short"][2].item() == 1.0
     assert output["hsl_trigger_drawdown_count"][2].item() == 2.0
