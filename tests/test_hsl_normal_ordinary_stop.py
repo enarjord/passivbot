@@ -235,3 +235,93 @@ async def test_normal_branching_tied_stops_do_not_guess_intervention_prefix(
         else:
             with pytest.raises(AuthoritativeSurfaceUnavailable):
                 await _replay(bot, mode)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("residue", [0.001, 0.01])
+@pytest.mark.parametrize("pside", ["long", "short"])
+async def test_coin_tied_intervention_uses_symbol_flat_tolerance(
+    reverse, residue, pside
+):
+    from test_hsl_tied_intervention_evidence import _fill
+
+    bot = _normal_after_red_bot("coin")
+    bot.qty_steps = {"A": 0.01}
+    events = bot._pnls_manager.get_events()
+    events[:] = [
+        _fill("open", 60_000, 0.0, 1.0, pside=pside),
+        _fill("stop", 180_500, 1.0, residue, pnl=-300.0, pside=pside),
+        _fill("entry", 180_500, residue, residue + 1.0, fee=-1.0, pside=pside),
+    ]
+    if reverse:
+        events[1:] = reversed(events[1:])
+    if pside == "short":
+        bot.hsl["short"] = dict(bot.hsl["long"])
+        bot.hsl["long"]["enabled"] = False
+    bot.positions = {
+        "A": {
+            side: {
+                "size": (
+                    (1.0 + residue) * (1 if side == "long" else -1)
+                    if side == pside
+                    else 0.0
+                )
+            }
+            for side in ("long", "short")
+        }
+    }
+
+    async def history(**kwargs):
+        rows = []
+        for ts in (60_000, 120_000, 180_000, 240_000):
+            realized = sum(
+                e["pnl"] + e["fee_paid"] for e in events if e["timestamp"] < ts + 60_000
+            )
+            rows.append(
+                dict(
+                    timestamp=ts,
+                    balance=1000.0 + realized,
+                    realized_pnl=realized,
+                    realized_pnl_long=realized if pside == "long" else 0.0,
+                    realized_pnl_short=realized if pside == "short" else 0.0,
+                    unrealized_pnl_long=0.0,
+                    unrealized_pnl_short=0.0,
+                    realized_pnl_by_coin_pside={
+                        "A": {
+                            side: realized if side == pside else 0.0
+                            for side in ("long", "short")
+                        }
+                    },
+                    unrealized_pnl_by_coin_pside={"A": {"long": 0.0, "short": 0.0}},
+                    is_flat=False,
+                    is_flat_long=pside != "long",
+                    is_flat_short=pside != "short",
+                )
+            )
+        return dict(timeline=rows, fill_events=events, panic_flatten_events=[])
+
+    bot.get_balance_equity_history = history
+    stop = next(event for event in events if event["id"] == "stop")
+    stop["pb_order_type"] = f"close_panic_{pside}"
+    inferred = bot._equity_hard_stop_infer_coin_replay_contract(
+        pside, "A", events, 300_900
+    )
+    assert inferred["intervention_entry_ts"] == (180_500 if residue < 0.005 else None)
+    stop.pop("pb_order_type")
+    for _ in range(2):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+        state = bot._hsl_coin_state(pside, "A")
+        if residue < 0.005:
+            assert not state["halted"]
+            assert state["last_metrics"]["tier"] == "green"
+            assert state["last_metrics"]["realized_pnl"] == pytest.approx(-1.0)
+            current = bot._equity_hard_stop_apply_coin_sample(
+                pside, "A", 360_900, 699.0, 0.0
+            )
+            assert current["realized_pnl"] == pytest.approx(-1.0)
+            assert current["drawdown_raw"] == pytest.approx(1.0 / 699.0)
+        else:
+            assert state["runtime"].red_latched()
+            assert state["pnl_reset_timestamp_ms"] is None
+            assert bot._runtime_forced_modes[pside]["A"] == "panic"

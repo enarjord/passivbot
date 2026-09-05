@@ -809,6 +809,7 @@ def _equity_hard_stop_intervention_entry_timestamp(
     stop_ms: int,
     cooldown_until_ms: Optional[int],
     symbol: Optional[str] = None,
+    qty_step: float = 0.0,
 ) -> Optional[int]:
     """Find the first canonical non-panic increase after a particular stop."""
     fill_events = list(fill_events)
@@ -838,6 +839,7 @@ def _equity_hard_stop_intervention_entry_timestamp(
             stop_ms=stop_ms,
             cooldown_until_ms=cooldown_until_ms,
             symbol=symbol,
+            qty_step=qty_step,
         )
         if evidence is not None:
             return evidence["entry_timestamp_ms"]
@@ -853,6 +855,7 @@ def _equity_hard_stop_intervention_entry_evidence(
     cooldown_until_ms: Optional[int],
     symbol: Optional[str] = None,
     stop_index: Optional[int] = None,
+    qty_step: float = 0.0,
 ) -> Optional[dict[str, Any]]:
     """Locate entry after a proven scoped flatten, including a tied fill cohort.
 
@@ -871,7 +874,7 @@ def _equity_hard_stop_intervention_entry_evidence(
         )
     ]
     ordered, ambiguous, flatten_indices = _equity_hard_stop_order_fill_cohorts(
-        scoped, include_flatten_indices=True
+        scoped, include_flatten_indices=True, qty_step=qty_step
     )
     if ambiguous:
         return None
@@ -1086,6 +1089,7 @@ def _equity_hard_stop_infer_coin_replay_contract(
         None if latest_panic_ts is None else _equity_hard_stop_intervention_entry_timestamp(
             fill_events, psides={pside}, stop_ms=latest_panic_ts,
             cooldown_until_ms=cooldown_until_ms, symbol=symbol,
+            qty_step=_hsl_qty_step_for_symbol(self, symbol),
         )
     )
     active_cooldown_now = cooldown_until_ms is not None and now_ms < cooldown_until_ms
@@ -2194,7 +2198,9 @@ def _hsl_compact_sparse_replay_indices(
     return np.flatnonzero(selected).astype(np.int64)
 
 
-def _equity_hard_stop_order_fill_cohorts(fill_events, *, include_flatten_indices=False):
+def _equity_hard_stop_order_fill_cohorts(
+    fill_events, *, include_flatten_indices=False, qty_step=0.0
+):
     """Order tied mixed-action fills only with exchange-provided position chains."""
     ordered = []
     ambiguous = False
@@ -2202,6 +2208,7 @@ def _equity_hard_stop_order_fill_cohorts(fill_events, *, include_flatten_indices
     flatten_indices = []
     sizes_complete = True
     nonflat_pairs = 0
+    proof_epsilon = _hsl_flat_epsilon(qty_step)
     for _ts, cohort_iter in groupby(
         sorted(fill_events, key=_equity_hard_stop_fill_timestamp_ms),
         key=_equity_hard_stop_fill_timestamp_ms,
@@ -2256,13 +2263,13 @@ def _equity_hard_stop_order_fill_cohorts(fill_events, *, include_flatten_indices
                 known_sizes.pop(pair, None)
                 # Keep ordering's original size cache behavior; optional flat
                 # evidence uses the same arithmetic tolerance as HSL replay.
-                if qty - size > _hsl_flat_epsilon():
+                if qty - size > proof_epsilon:
                     sizes_complete = False
             else:
                 known_sizes[pair] = size + qty if action == "increase" else size - qty
             if include_flatten_indices and sizes_complete:
-                nonflat_pairs += int(known_sizes.get(pair, 0.0) > _hsl_flat_epsilon()) - int(
-                    size > _hsl_flat_epsilon()
+                nonflat_pairs += int(known_sizes.get(pair, 0.0) > proof_epsilon) - int(
+                    size > proof_epsilon
                 )
                 if was_nonflat and nonflat_pairs == 0:
                     flatten_indices.append(len(ordered) - len(cohort) + offset)
@@ -5360,7 +5367,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                 entry = _equity_hard_stop_intervention_entry_evidence(
                                     pair_fill_events, psides={pside}, symbol=symbol,
                                     stop_ms=stop_ts, cooldown_until_ms=state["cooldown_until_ms"],
-                                    stop_index=flatten_index,
+                                    stop_index=flatten_index, qty_step=qty_step,
                                 )
                                 if entry is None or entry["entry_timestamp_ms"] > now_ms:
                                     break
