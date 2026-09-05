@@ -654,6 +654,7 @@ class TestCCXTBotConnectorCallEvents:
         bot.user = "binance_01"
         bot.bot_id = "bot-1"
         bot.cca = CCA()
+        bot.open_orders = {}
         bot._build_order_params = lambda _order: {"postOnly": True}
         bot._live_event_current_cycle_id = "cy_3"
         bot._execution_connector_call_context = {
@@ -670,8 +671,9 @@ class TestCCXTBotConnectorCallEvents:
         result = await bot.execute_order(order)
 
         assert result == {"id": "oid-1", "status": "open"}
-        assert [marker[0] for marker in markers] == ["event", "connector"]
-        _, event_type, event = markers[0]
+        assert [marker[0] for marker in markers] == ["event", "event", "connector"]
+        assert markers[0][1] == EventTypes.EXECUTION_CREATE_SENT
+        _, event_type, event = markers[1]
         assert event_type == EventTypes.EXECUTION_CREATE_CONNECTOR_CALL_STARTED
         assert event["reason_code"] == ReasonCodes.CONNECTOR_CALL_STARTED
         assert event["order_wave_id"] == "ow_3"

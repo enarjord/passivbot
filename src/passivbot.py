@@ -21605,7 +21605,7 @@ class Passivbot:
         """
         return {}
 
-    async def execute_order(self, order: dict) -> dict:
+    async def execute_order(self, order: dict) -> dict | executor.DeferredOrderCreation:
         """Place a single order via the exchange client."""
         params = {
             "symbol": order["symbol"],
@@ -21615,6 +21615,16 @@ class Passivbot:
             "price": order["price"],
             "params": self._build_order_params(order),
         }
+        planned_generation = order.get("_planned_account_invalidation_generation")
+        if (
+            planned_generation is not None
+            and planned_generation
+            != int(getattr(self, "_account_invalidation_generation", 0) or 0)
+            and not order.get("_dedicated_protective_market_panic", False)
+        ):
+            return executor.DeferredOrderCreation()
+        # No await between this per-order admission and entering the connector.
+        executor.record_create_connector_admission(self, order)
         self._emit_execution_connector_call_started_event(
             order=order,
             action="create",
