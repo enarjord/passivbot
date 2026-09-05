@@ -1044,13 +1044,29 @@ async def test_hsl_replay_scenarios_run_end_to_end(
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
-async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
+async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path, monkeypatch):
     """Keep the checked-in offline smoke command and its assertions executable as written."""
     import passivbot_rust as pbr
 
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
+    import passivbot_hsl as hsl
+
+    original_restart = hsl._equity_hard_stop_replay_live_restart
+    restart_fill_evidence = []
+
+    async def checked_restart(bot, pside, symbol=None):
+        # Simulation dates can precede wall-clock cache refresh watermarks.
+        # The real backend closing fill must still reach the canonical manager
+        # before the completed cooldown is reconstructed.
+        cached = bot._pnls_manager.get_events()
+        restart_fill_evidence.append((len(cached), len(bot.cca.fills)))
+        assert len(cached) == len(bot.cca.fills) == 4
+        assert any("panic" in event.pb_order_type and event.pnl == -15.0 for event in cached)
+        return await original_restart(bot, pside, symbol)
+
+    monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", checked_restart)
     user = f"fake_hsl_documented_{tmp_path.name}"
     _cleanup_fake_user_state(user)
     try:
@@ -1066,6 +1082,7 @@ async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
             snapshot_each_step=False,
         )
         assert await _async_main(args) == 0
+        assert restart_fill_evidence
     finally:
         _cleanup_fake_user_state(user)
 

@@ -3066,7 +3066,7 @@ async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown
     assert state["last_metrics"]["realized_pnl"] == pytest.approx(0.0)
     assert state["last_metrics"]["unrealized_pnl"] == pytest.approx(-1.0)
     assert state["last_metrics"]["tier"] == "green"
-    assert state["pnl_reset_timestamp_ms"] is None
+    assert state["pnl_reset_timestamp_ms"] == current_entry_ts // 60_000 * 60_000
 
 
 @pytest.mark.asyncio
@@ -5654,9 +5654,11 @@ async def test_minute_end_flatten_does_not_mask_next_price_sample(signal_mode):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("signal_mode", ["coin", "pside", "unified"])
 @pytest.mark.parametrize("policy", ["panic", "manual", "tp_only", "graceful_stop", "normal"])
-async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(signal_mode, policy):
+async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(signal_mode, policy, monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
 
+    # This loop test models unavailable replay; the live-restart suite supplies history.
+    monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", AsyncMock(return_value=False))
     fixture = make_coin_bot(policy=policy)
     bot = Passivbot.__new__(Passivbot)
     bot.__dict__.update(vars(fixture))
@@ -5820,6 +5822,15 @@ async def test_deferred_cooldown_cancels_entries_by_scope_policy(
 ):
     from unittest.mock import AsyncMock
 
+    async def ready_restart(target, pside, symbol=None):
+        if symbol is None:
+            target._equity_hard_stop_reset_after_restart(pside)
+        else:
+            target._equity_hard_stop_reset_coin_after_restart(pside, symbol)
+        return True
+
+    # Isolate cancellation admission from the separately tested canonical replay.
+    monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", ready_restart)
     bot = make_coin_bot(policy=policy)
     bot.config["live"].update(hsl_signal_mode=signal_mode, execution_delay_seconds=0.25)
     bot._equity_hard_stop_coin_initialized = True
@@ -5853,6 +5864,7 @@ async def test_deferred_cooldown_cancels_entries_by_scope_policy(
     snapshot = object()
     bot._current_planning_snapshot = snapshot
     bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.update_pnls = AsyncMock(return_value=False)
     # The panic planner may already select the held entry; the combined wave must deduplicate it.
     panic_cancels = [bot.open_orders["B"][0]] if held and policy == "panic" else []
     panic_creates = [{"symbol": "B", "position_side": "long", "reduce_only": True}] if panic_cancels else []

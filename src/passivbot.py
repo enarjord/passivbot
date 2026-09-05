@@ -6139,9 +6139,44 @@ class Passivbot:
         panic_needed = False
         cooldown_entry_cancels = []
         policy = self._equity_hard_stop_cooldown_position_policy()
+        if policy == "manual" and any(
+            not state["no_restart_latched"]
+            and (
+                state["cooldown_repanic_reset_pending"]
+                or (state["cooldown_until_ms"] is not None and now_ms < state["cooldown_until_ms"])
+            )
+            and any(
+                order.get("position_side") == pside
+                and self._canonical_open_order_reduce_only(order) is False
+                for order_symbol, orders in self.open_orders.items()
+                if symbol is None or order_symbol == symbol
+                for order in orders
+            )
+            and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
+                self, pside, symbol=symbol
+            ) is None
+            for pside, symbol, state in scopes
+        ):
+            # Absence needs a successful fill tail after the account observation.
+            # A failed/degraded refresh leaves the proof unknown; it must not
+            # suppress independently ready protection in other scopes.
+            ledger = getattr(self, "freshness_ledger", None)
+            epoch = int(getattr(ledger, "epoch", 0))
+            generation = int(getattr(self, "_account_invalidation_generation", 0) or 0)
+            await self.update_pnls(source="hsl_cooldown_protection")
+            pending = getattr(self, "_authoritative_pending_confirmations", {})
+            if (
+                int(getattr(ledger, "epoch", 0)) != epoch
+                or int(getattr(self, "_account_invalidation_generation", 0) or 0) != generation
+                or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
+            ):
+                if not await self.refresh_protective_authoritative_state():
+                    return False
+            now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:
             cooldown_until_ms = state["cooldown_until_ms"]
-            if state["no_restart_latched"] or (
+            terminal = bool(state["no_restart_latched"])
+            if not terminal and (
                 not state["cooldown_repanic_reset_pending"]
                 and (cooldown_until_ms is None or now_ms >= cooldown_until_ms)
             ):
@@ -6152,7 +6187,7 @@ class Passivbot:
                 for candidate in symbols
                 if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
             ]
-            if symbols and coin_mode:
+            if symbols and coin_mode and not terminal:
                 await self._equity_hard_stop_handle_coin_position_during_cooldown(
                     pside, symbol, now_ms
                 )
@@ -6160,7 +6195,7 @@ class Passivbot:
                     state["halted"]
                     and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
                 )
-            elif symbols:
+            elif symbols and not terminal:
                 await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
                 panic_needed |= bool(
                     state["halted"]
@@ -6172,10 +6207,22 @@ class Passivbot:
             # Flat cooldown scopes still prohibit initials. Held normal scopes
             # may have resumed above; graceful_stop preserves their existing adds.
             if not state["halted"]:
+                # Canonical restart may already prove RED in the new episode.
+                # Keep that current risk in this wave even when another scope
+                # supplies cancellation-only work.
+                panic_needed |= bool(
+                    symbols
+                    and state["runtime"].red_latched()
+                    and (state["last_metrics"] or {}).get("red_active_now", False)
+                )
                 continue
-            if policy == "manual" and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
-                self, pside, symbol=symbol
-            ) is not False:
+            if (
+                not terminal
+                and policy == "manual"
+                and pb_hsl._equity_hard_stop_manual_cooldown_intervention(
+                    self, pside, symbol=symbol
+                ) is not False
+            ):
                 # Only complete fill evidence proving no intervention permits
                 # cancellation; manual ownership or unavailable evidence preserves orders.
                 continue
@@ -6183,7 +6230,8 @@ class Passivbot:
                 if coin_mode and order_symbol != symbol:
                     continue
                 if (
-                    policy in {"normal", "graceful_stop"}
+                    not terminal
+                    and policy in {"normal", "graceful_stop"}
                     and not state["cooldown_unresolved_residue"]
                     and self._equity_hard_stop_has_open_position_symbol(pside, order_symbol)
                 ):

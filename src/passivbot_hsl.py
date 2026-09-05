@@ -4,12 +4,14 @@ import asyncio
 import json
 import logging
 import bisect
+import copy
 import math
 import os
 import time
 import traceback
 from collections import deque
 from itertools import groupby
+from types import MethodType
 from typing import Any, Iterable, Optional
 
 import passivbot_rust as pbr
@@ -32,6 +34,7 @@ from fill_events_manager import (
     _unique_position_chain_order,
 )
 from live.state_refresh import AuthoritativeSurfaceUnavailable
+from live.freshness import ACCOUNT_SURFACES
 from live.diagnostic_safety import bounded_exception_type as _bounded_hsl_exception_type
 from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
 from passivbot_exceptions import FatalBotException, RestartBotException
@@ -2555,10 +2558,16 @@ def _equity_hard_stop_activate_coin_red_from_metrics(
 def _equity_hard_stop_prime_coin_runtime_for_replay(
     self, pside: str, symbol: str, first_sample_ts_ms: int
 ) -> None:
-    state = self._hsl_coin_state(pside, symbol)
+    _equity_hard_stop_prime_runtime_for_replay(self, pside, first_sample_ts_ms, symbol=symbol)
+
+
+def _equity_hard_stop_prime_runtime_for_replay(
+    self, pside: str, first_sample_ts_ms: int, *, symbol: Optional[str] = None
+) -> None:
+    state = self._hsl_coin_state(pside, symbol) if symbol is not None else self._hsl_state(pside)
     if state["runtime"].initialized():
         return
-    cfg = _equity_hard_stop_config(self, pside, symbol)
+    cfg = _equity_hard_stop_config(self, pside, symbol) if symbol is not None else self.hsl[pside]
     baseline_ts_ms = max(0, int(first_sample_ts_ms) - 60_000)
     step = state["runtime"].apply_sample(
         timestamp_ms=baseline_ts_ms,
@@ -3087,6 +3096,135 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
     return True
 
 
+async def _equity_hard_stop_replay_live_restart(
+    self, pside: str, symbol: Optional[str] = None
+) -> bool:
+    """Publish a completed canonical replay without clearing live protection while awaiting it."""
+    background = getattr(self, "_equity_hard_stop_coin_replay_task", None)
+    if getattr(self, "_hsl_live_restart_replay_active", False) or (
+        background is not None and not background.done()
+    ):
+        return False
+    mode = self._equity_hard_stop_signal_mode()
+    sides = self._hsl_psides() if mode == "unified" else (pside,)
+    ledger = getattr(self, "freshness_ledger", None)
+    observation = (
+        int(getattr(ledger, "epoch", 0)),
+        int(getattr(self, "_account_invalidation_generation", 0) or 0),
+    )
+    staged = copy.copy(self)
+    # Production methods bind to the staged receiver. Preserve that property
+    # for injected instance methods as well (including the offline harness).
+    rebound_methods = []
+    for name, value in vars(self).items():
+        if isinstance(value, MethodType) and value.__self__ is self:
+            setattr(staged, name, MethodType(value.__func__, staged))
+            rebound_methods.append(name)
+    staged.positions = copy.deepcopy(self.positions)
+    staged.open_orders = copy.deepcopy(self.open_orders)
+    staged._equity_hard_stop = {
+        side: staged._equity_hard_stop_make_state() for side in self._hsl_psides()
+    }
+    staged._equity_hard_stop_coin = {side: {} for side in self._hsl_psides()}
+    staged._runtime_forced_modes = {side: {} for side in self._hsl_psides()}
+    staged._equity_hard_stop_coin_initialized = False
+    staged._equity_hard_stop_coin_replay_ready_event = asyncio.Event()
+    staged._equity_hard_stop_coin_replay_task = None
+    staged._live_event_pipeline = None
+    staged._emit_live_event = lambda *args, **kwargs: None
+    staged._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    latch_operations = []
+    staged._equity_hard_stop_write_latch = (
+        lambda side, payload, symbol=None: latch_operations.append(
+            ("write", side, symbol, dict(payload))
+        )
+    )
+    staged._equity_hard_stop_remove_latch_file = lambda side, symbol=None: latch_operations.append(
+        ("remove", side, symbol, None)
+    )
+    self._hsl_live_restart_replay_active = True
+    try:
+        try:
+            if mode == "coin":
+                result = await staged._equity_hard_stop_initialize_coin_from_history()
+            else:
+                result = await staged._equity_hard_stop_initialize_from_history()
+            if result is False:
+                return False
+        except AuthoritativeSurfaceUnavailable:
+            return False
+        background = getattr(self, "_equity_hard_stop_coin_replay_task", None)
+        if observation != (
+            int(getattr(getattr(self, "freshness_ledger", None), "epoch", 0)),
+            int(getattr(self, "_account_invalidation_generation", 0) or 0),
+        ) or (background is not None and not background.done()):
+            return False
+        pending = getattr(self, "_authoritative_pending_confirmations", {}) or {}
+        if any(int(pending.get(surface, 0)) > observation[0] for surface in ACCOUNT_SURFACES):
+            return False
+        if mode == "coin":
+            if not getattr(staged, "_equity_hard_stop_coin_initialized", False) or (
+                (pside, symbol)
+                not in getattr(staged, "_equity_hard_stop_coin_replay_ready_pairs", set())
+            ):
+                return False
+            replacements = [(pside, staged._hsl_coin_state(pside, symbol))]
+        else:
+            replacements = [(side, staged._hsl_state(side)) for side in sides]
+        for side, replacement in replacements:
+            old = self._hsl_coin_state(side, symbol) if mode == "coin" else self._hsl_state(side)
+            if old["no_restart_latched"] and not replacement["no_restart_latched"]:
+                return False
+            if (
+                self._equity_hard_stop_enabled(side)
+                and not replacement["halted"]
+                and (
+                    not replacement["runtime"].initialized()
+                    or not isinstance(replacement["last_metrics"], dict)
+                )
+            ):
+                return False
+        # No awaits below: existing scope references and independent scopes
+        # remain valid when the ready replacement becomes visible.
+        for side, replacement in replacements:
+            old = self._hsl_coin_state(side, symbol) if mode == "coin" else self._hsl_state(side)
+            replacement["no_restart_peak_strategy_equity"] = max(
+                float(old.get("no_restart_peak_strategy_equity", 0.0) or 0.0),
+                float(replacement.get("no_restart_peak_strategy_equity", 0.0) or 0.0),
+            )
+            # A bounded replay may begin after the preceding stop. Absence
+            # from that window does not erase its already-confirmed diagnostic.
+            if replacement["last_stop_event"] is None:
+                replacement["last_stop_event"] = old.get("last_stop_event")
+            old.clear()
+            old.update(replacement)
+            if mode == "coin":
+                forced = self._runtime_forced_modes.setdefault(side, {})
+                forced.pop(symbol, None)
+                if symbol in staged._runtime_forced_modes.get(side, {}):
+                    forced[symbol] = staged._runtime_forced_modes[side][symbol]
+                ready = set(
+                    getattr(self, "_equity_hard_stop_coin_replay_ready_pairs", set()) or set()
+                )
+                self._equity_hard_stop_coin_replay_ready_pairs = ready | {(side, symbol)}
+            else:
+                self._runtime_forced_modes[side] = dict(staged._runtime_forced_modes.get(side, {}))
+        for operation, side, coin, payload in latch_operations:
+            if side not in sides or (mode == "coin" and coin != symbol):
+                continue
+            if operation == "write":
+                self._equity_hard_stop_write_latch(side, payload, symbol=coin)
+            else:
+                self._equity_hard_stop_remove_latch_file(side, symbol=coin)
+        return True
+    finally:
+        self._hsl_live_restart_replay_active = False
+        # Bound test/harness methods form cycles. Release staging on this
+        # thread; Rust HSL objects must not be collected by a worker thread.
+        for name in rebound_methods:
+            vars(staged).pop(name, None)
+
+
 async def _equity_hard_stop_handle_position_during_cooldown(self, pside: str, now_ms: int) -> bool:
     state = self._hsl_state(pside)
     if not state["halted"] or state["no_restart_latched"]:
@@ -3138,13 +3276,7 @@ async def _equity_hard_stop_handle_position_during_cooldown(self, pside: str, no
     state["cooldown_intervention_active"] = True
 
     if policy == "normal":
-        self._equity_hard_stop_reset_after_restart(pside)
-        self._equity_hard_stop_remove_latch_file(pside)
-        logging.critical(
-            "[risk] HSL[%s] operator override during RED cooldown: resumed normal operation and reset drawdown tracker",
-            pside,
-        )
-        return True
+        return await _equity_hard_stop_replay_live_restart(self, pside)
 
     if policy == "panic":
         if not state["cooldown_repanic_reset_pending"]:
@@ -3224,15 +3356,7 @@ async def _equity_hard_stop_handle_coin_position_during_cooldown(
     state["cooldown_intervention_active"] = True
 
     if policy == "normal":
-        self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
-        self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
-        logging.critical(
-            "[risk] HSL[%s:%s] operator override during RED cooldown: resumed normal operation "
-            "and reset drawdown tracker",
-            pside,
-            symbol,
-        )
-        return True
+        return await _equity_hard_stop_replay_live_restart(self, pside, symbol)
 
     if policy == "panic":
         if not state["cooldown_repanic_reset_pending"]:
@@ -3354,8 +3478,10 @@ def _equity_hard_stop_scope_flatten_samples(
     balance,
     realized_total,
     realized_by_pside,
+    *,
+    include_entry_seeds: bool = False,
 ) -> Optional[list[dict]]:
-    """Reconstruct exact scope-flat samples from a complete, position-matching fill tape."""
+    """Reconstruct exact flat/override baselines from a position-matching fill tape."""
     events = sorted(
         (event for event in fill_events if _equity_hard_stop_fill_timestamp_ms(event) <= now_ms),
         key=_equity_hard_stop_fill_timestamp_ms,
@@ -3422,16 +3548,22 @@ def _equity_hard_stop_scope_flatten_samples(
         next_size = size + qty if action == "increase" else max(0.0, size - qty)
         sizes[pair] = 0.0 if next_size <= epsilon else next_size
         nonflat_pairs += int(sizes[pair] > 0.0) - int(size > 0.0)
-        if was_nonflat and nonflat_pairs == 0:
+        entry_seed = not was_nonflat and action == "increase" and include_entry_seeds
+        if (was_nonflat and nonflat_pairs == 0) or entry_seed:
+            # Prime a restarted episode from its flat state before the entry's
+            # fees, so a close later in this same minute retains its loss.
+            entry_delta = delta if entry_seed else 0.0
             sample = {
                 "timestamp": _equity_hard_stop_fill_timestamp_ms(event),
-                "balance": float(balance) - remaining_total,
-                "realized_pnl": float(realized_total) - remaining_total,
-                "_hsl_scope_flatten_fill": True,
+                "balance": float(balance) - remaining_total - entry_delta,
+                "realized_pnl": float(realized_total) - remaining_total - entry_delta,
+                "_hsl_scope_entry_seed" if entry_seed else "_hsl_scope_flatten_fill": True,
             }
             for sample_side in self._hsl_psides():
                 sample[f"realized_pnl_{sample_side}"] = (
-                    float(realized_by_pside[sample_side]) - remaining_by_pside[sample_side]
+                    float(realized_by_pside[sample_side])
+                    - remaining_by_pside[sample_side]
+                    - (entry_delta if sample_side == side else 0.0)
                 )
                 if signal_mode == "unified" or sample_side == pside:
                     sample[f"unrealized_pnl_{sample_side}"] = 0.0
@@ -3466,9 +3598,11 @@ def _equity_hard_stop_scope_replay_rows(timeline, boundaries):
         minute = int(row["timestamp"]) // 60_000
         last_boundary = None
         while cursor < len(boundaries) and int(boundaries[cursor]["timestamp"]) // 60_000 <= minute:
-            last_boundary = boundaries[cursor]
+            boundary = boundaries[cursor]
             cursor += 1
-            yield last_boundary
+            if not boundary.get("_hsl_scope_entry_seed"):
+                last_boundary = boundary
+            yield boundary
         if last_boundary is not None:
             row = dict(row)
             row["_hsl_source_minute_timestamp"] = int(row["timestamp"])
@@ -3657,6 +3791,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     side: self._equity_hard_stop_realized_pnl_now(side)
                     for side in self._hsl_psides()
                 },
+                include_entry_seeds=True,
             )
             if boundaries is None:
                 raise AuthoritativeSurfaceUnavailable(
@@ -3674,35 +3809,6 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             replay_timeline = timeline
             scope_boundaries = scope_boundaries_by_pside[pside]
             ignored_panic_marker_timestamps: set[int] = set()
-            if contract["intervention_entry_ts"] is not None and contract["policy"] == "normal":
-                entry_ts = int(contract["intervention_entry_ts"])
-                self._equity_hard_stop_reset_after_restart(pside)
-                # Normal intervention starts a new replay window, but every
-                # later exact flatten still uses the canonical episode loop.
-                # Minute rows represent the minute's final state; pre-entry
-                # fill boundaries and panic markers must not enter that window.
-                replay_timeline = [
-                    row for row in timeline
-                    if isinstance(row, dict)
-                    and "timestamp" in row
-                    and int(row["timestamp"]) >= entry_ts // 60_000 * 60_000
-                ]
-                scope_boundaries = [
-                    row for row in scope_boundaries if int(row["timestamp"]) >= entry_ts
-                ]
-                ignored_panic_marker_timestamps.update(
-                    int(marker["timestamp"])
-                    for (marker_pside, _), marker in panic_flatten_events_by_key.items()
-                    if marker_pside == pside and int(marker["timestamp"]) < entry_ts
-                )
-                if contract["latest_panic_ts"] is not None:
-                    ignored_panic_marker_timestamps.add(int(contract["latest_panic_ts"]))
-                self._equity_hard_stop_remove_latch_file(pside)
-                logging.critical(
-                    "[risk] HSL[%s] reconstructed operator override during RED cooldown from exchange-derived history | entry_ts=%s policy=normal",
-                    pside,
-                    entry_ts,
-                )
             scope_flat_key = "is_flat" if signal_mode == "unified" else f"is_flat_{pside}"
             scope_fill_ts = sorted(
                 _equity_hard_stop_fill_timestamp_ms(fill)
@@ -3712,9 +3818,63 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             )
             scope_was_nonflat = False
             prev_recorded_ts: Optional[int] = None
+            seeded_entry_ts: Optional[int] = None
             for row in _equity_hard_stop_scope_replay_rows(replay_timeline, scope_boundaries):
                 if not isinstance(row, dict):
                     continue
+                if row.get("_hsl_scope_entry_seed"):
+                    entry_ts = int(row["timestamp"])
+                    if entry_ts > now_ms:
+                        break
+                    replayed_normal_override = (
+                        contract["policy"] == "normal"
+                        and state["halted"]
+                        and not state["no_restart_latched"]
+                        and state["last_stop_event"] is not None
+                        and state["cooldown_until_ms"] is not None
+                        and int(state["last_stop_event"]["stop_event_timestamp_ms"])
+                        < entry_ts < state["cooldown_until_ms"]
+                    )
+                    expired_cooldown = (
+                        state["halted"]
+                        and not state["no_restart_latched"]
+                        and state["cooldown_until_ms"] is not None
+                        and entry_ts >= state["cooldown_until_ms"]
+                    )
+                    if expired_cooldown or replayed_normal_override:
+                        if replayed_normal_override:
+                            ignored_panic_marker_timestamps.add(
+                                int(state["last_stop_event"]["stop_event_timestamp_ms"])
+                            )
+                        self._equity_hard_stop_reset_after_restart(pside)
+                    else:
+                        continue
+                    # Seed the rolling baseline at entry, and prime Rust in
+                    # the preceding bucket. Entry is not an extra EMA sample.
+                    strategy_pnl = float(
+                        row["realized_pnl"] if signal_mode == "unified"
+                        else row[f"realized_pnl_{pside}"]
+                    )
+                    lookback_ms = self._equity_hard_stop_lookback_ms()
+                    state["strategy_pnl_peak"].update(
+                        int(row["timestamp"]),
+                        strategy_pnl,
+                        int(lookback_ms) if lookback_ms is not None else (2**64 - 1),
+                    )
+                    _equity_hard_stop_prime_runtime_for_replay(self, pside, int(row["timestamp"]))
+                    seeded_entry_ts = entry_ts
+                    continue
+                if (
+                    seeded_entry_ts is not None
+                    and "timestamp" in row
+                    and int(row["timestamp"]) < seeded_entry_ts
+                    and int(row["timestamp"]) // 60_000 == seeded_entry_ts // 60_000
+                ):
+                    row = dict(row)
+                    row["_hsl_source_minute_timestamp"] = int(row["timestamp"])
+                    row["timestamp"] = min(
+                        seeded_entry_ts + 1, (seeded_entry_ts // 60_000 + 1) * 60_000 - 1
+                    )
                 required = ("timestamp", "balance", "realized_pnl")
                 if signal_mode == "pside":
                     required += (f"realized_pnl_{pside}", f"unrealized_pnl_{pside}")
@@ -4538,23 +4698,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 replay_start_boundary_ts = bounded_held_replay_starts.get(
                     (pside, symbol)
                 )
-                if contract["intervention_entry_ts"] is not None and contract["policy"] == "normal":
-                    intervention_boundary_ts = int(contract["intervention_entry_ts"])
-                    replay_start_boundary_ts = (
-                        intervention_boundary_ts
-                        if replay_start_boundary_ts is None
-                        else max(replay_start_boundary_ts, intervention_boundary_ts)
-                    )
-                    self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
-                    self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
-                    state = self._hsl_coin_state(pside, symbol)
-                    logging.critical(
-                        "[risk] HSL[%s:%s] reconstructed operator override during RED cooldown "
-                        "from exchange-derived history | entry_ts=%s policy=normal",
-                        pside,
-                        symbol,
-                        replay_start_boundary_ts,
-                    )
                 window_points: deque[tuple[int, float]] = deque()
                 window_max_points: deque[tuple[int, float]] = deque()
                 window_base_realized = 0.0
@@ -4570,10 +4713,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     symbol,
                     qty_step=qty_step,
                 )
-                if (
-                    replay_start_boundary_ts is not None
-                    and (pside, symbol) in bounded_held_replay_starts
-                ):
+                if replay_start_boundary_ts is not None:
+                    # The current/live sample must use the same fill boundary
+                    # as retained replay rows, including the entry's fees.
+                    state["pnl_reset_timestamp_ms"] = int(replay_start_boundary_ts)
                     # Pair realized values are cumulative across the replay
                     # record window. Discarded closed episodes must therefore
                     # become the current episode's baseline rather than leaking
@@ -4679,6 +4822,13 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 replay_size = 0.0
                 flat_epsilon = _hsl_flat_epsilon(qty_step)
                 ignored_panic_marker_timestamps: set[int] = set()
+                if replay_start_boundary_ts is not None:
+                    ignored_panic_marker_timestamps.update(
+                        int(marker["timestamp"])
+                        for (marker_side, marker_symbol, _), marker in latest_panic_by_coin_minute.items()
+                        if marker_side == pside and marker_symbol == symbol
+                        and int(marker["timestamp"]) < replay_start_boundary_ts
+                    )
 
                 def replay_transitions_at(
                     row_ts_ms: int,
@@ -4837,6 +4987,92 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 background_replay = bool(
                     self._equity_hard_stop_coin_protective_ready
                 )
+                def finalize_replay_stop(metrics, stop_ts, stop_source, stop_abs_realized, realized_pnl_total):
+                    nonlocal state, reset_baseline_realized
+                    stop_drawdown_raw = float(metrics["drawdown_raw"])
+                    finalization = self._equity_hard_stop_red_episode_finalization(
+                        pside,
+                        {
+                            "equity": float(metrics["equity"]),
+                            "peak_strategy_equity": float(metrics["peak_strategy_equity"]),
+                            "drawdown_ema": float(metrics["drawdown_ema"]),
+                        },
+                        stop_ts,
+                        symbol=symbol,
+                    )
+                    no_restart_latched = bool(finalization["no_restart_latched"])
+                    cooldown_until_ms = finalization["cooldown_until_ms"]
+                    state["last_stop_event"] = self._equity_hard_stop_build_latch_payload(
+                        pside,
+                        symbol=symbol,
+                        stop_event_timestamp_ms=stop_ts,
+                        balance=float(metrics["balance"]),
+                        realized_pnl_total=realized_pnl_total,
+                        realized_pnl=float(metrics["realized_pnl"]),
+                        unrealized_pnl=float(metrics["unrealized_pnl"]),
+                        strategy_pnl=float(metrics["strategy_pnl"]),
+                        peak_strategy_pnl=float(metrics["peak_strategy_pnl"]),
+                        strategy_equity=float(metrics["strategy_equity"]),
+                        peak_strategy_equity=float(metrics["peak_strategy_equity"]),
+                        trigger_peak_strategy_equity=float(metrics["peak_strategy_equity"]),
+                        drawdown_raw=stop_drawdown_raw,
+                        drawdown_ema=float(metrics["drawdown_ema"]),
+                        drawdown_score=float(metrics["drawdown_score"]),
+                        no_restart_latched=no_restart_latched,
+                        cooldown_until_ms=cooldown_until_ms,
+                        no_restart_peak_strategy_equity=float(
+                            finalization["no_restart_peak_strategy_equity"]
+                        ),
+                        no_restart_drawdown_raw=float(
+                            finalization["no_restart_drawdown_raw"]
+                        ),
+                    )
+                    state["pnl_reset_timestamp_ms"] = stop_ts + 1
+                    state["pending_red_since_ms"] = None
+                    reset_baseline_realized = stop_abs_realized
+                    reset_rolling_window()
+                    if no_restart_latched:
+                        state["halted"] = True
+                        state["no_restart_latched"] = True
+                        state["cooldown_until_ms"] = None
+                        self._equity_hard_stop_write_latch(
+                            pside, state["last_stop_event"], symbol=symbol
+                        )
+                        self._equity_hard_stop_set_coin_runtime_forced_mode(
+                            pside, symbol, "graceful_stop"
+                        )
+                        logging.critical(
+                            "[risk] HSL[%s:%s] reconstructed terminal coin RED stop from exchange-derived history | "
+                            "stop_ts=%s drawdown_raw=%.6f source=%s",
+                            pside,
+                            symbol,
+                            stop_ts,
+                            stop_drawdown_raw,
+                            stop_source,
+                        )
+                        return
+                    state["halted"] = True
+                    state["no_restart_latched"] = False
+                    state["cooldown_until_ms"] = cooldown_until_ms
+                    self._equity_hard_stop_write_latch(
+                        pside, state["last_stop_event"], symbol=symbol
+                    )
+                    if cooldown_until_ms is not None and now_ms < cooldown_until_ms:
+                        self._equity_hard_stop_set_coin_runtime_forced_mode(
+                            pside, symbol, "graceful_stop"
+                        )
+                        logging.critical(
+                            "[risk] HSL[%s:%s] reconstructed active coin RED cooldown from exchange-derived history | "
+                            "remaining_time=%s source=%s",
+                            pside,
+                            symbol,
+                            _equity_hard_stop_format_remaining_time(
+                                (cooldown_until_ms - now_ms) / 1000.0
+                            ),
+                            stop_source,
+                        )
+                        return
+
                 yield_rows = (
                     _HSL_COIN_REPLAY_BACKGROUND_YIELD_ROWS
                     if background_replay
@@ -4871,11 +5107,15 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             scanned_rows,
                             pair_started_s,
                         )
+                    source_sample_ts = ts
                     if replay_start_boundary_ts is not None and ts < replay_start_boundary_ts:
-                        # Advance fill-derived size state while intentionally
-                        # discarding pre-boundary episode transitions.
-                        replay_transitions_at(ts)
-                        continue
+                        if ts + _HSL_REPLAY_INTERVAL_MS <= replay_start_boundary_ts:
+                            # Advance size through discarded complete minutes.
+                            replay_transitions_at(ts)
+                            continue
+                        # Keep the intervention minute's later fills and price
+                        # sample while excluding earlier episode boundaries.
+                        ts = int(replay_start_boundary_ts)
                     if state["halted"]:
                         cooldown_until_ms = state["cooldown_until_ms"]
                         if (
@@ -4905,7 +5145,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         replay_position_size,
                         flatten_boundaries,
                         row_realized_delta,
-                    ) = replay_transitions_at(ts)
+                    ) = replay_transitions_at(source_sample_ts)
+                    if replay_start_boundary_ts is not None:
+                        flatten_boundaries = [
+                            boundary for boundary in flatten_boundaries
+                            if int(boundary[0]) >= replay_start_boundary_ts
+                        ]
                     replay_is_nonflat = replay_position_size > flat_epsilon
                     if not has_realized:
                         if source_row is not None:
@@ -4924,15 +5169,21 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         )
                     abs_realized = float(realized_value)
                     seen_coin_timeline_fields = True
-                    marker = latest_panic_by_coin_minute.get((pside, symbol, ts))
+                    marker = latest_panic_by_coin_minute.get((pside, symbol, source_sample_ts))
+                    if marker is not None and int(marker["timestamp"]) in ignored_panic_marker_timestamps:
+                        marker = None
                     metrics = None
                     stop_ts = None
                     stop_source = None
                     stop_abs_realized = abs_realized
+                    stop_finalized = False
+                    row_resumed_normal = False
 
                     if flatten_boundaries and not replay_ambiguous:
                         row_start_abs_realized = abs_realized - row_realized_delta
                         for flatten_ts, realized_delta_at_flatten in flatten_boundaries:
+                            if replay_start_boundary_ts is not None and flatten_ts < replay_start_boundary_ts:
+                                continue
                             boundary_abs_realized = (
                                 row_start_abs_realized + realized_delta_at_flatten
                             )
@@ -4994,7 +5245,38 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                     else "red_episode_flatten"
                                 )
                                 stop_abs_realized = boundary_abs_realized
-                                break
+                                if contract["policy"] != "normal":
+                                    break
+                                finalize_replay_stop(metrics, stop_ts, stop_source, stop_abs_realized, row_realized_pnl)
+                                stop_finalized = True
+                                if state["no_restart_latched"]:
+                                    break
+                                entry_ts = _equity_hard_stop_intervention_entry_timestamp(
+                                    pair_fill_events, psides={pside}, symbol=symbol,
+                                    stop_ms=stop_ts, cooldown_until_ms=state["cooldown_until_ms"],
+                                )
+                                if entry_ts is None or entry_ts > now_ms:
+                                    break
+                                # A normal intervention follows this proven RED
+                                # flatten regardless of its exchange order type.
+                                replay_start_boundary_ts = int(entry_ts)
+                                contract["intervention_entry_ts"] = int(entry_ts)
+                                state["pnl_reset_timestamp_ms"] = int(entry_ts)
+                                reset_baseline_realized = sum(
+                                    float(delta) for event_ts, _, _, delta in replay_events
+                                    if int(event_ts) < entry_ts
+                                )
+                                self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
+                                self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
+                                state = self._hsl_coin_state(pside, symbol)
+                                reset_rolling_window()
+                                self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, entry_ts)
+                                ignored_panic_marker_timestamps.add(stop_ts)
+                                marker = None
+                                stop_ts = None
+                                stop_finalized = False
+                                row_resumed_normal = True
+                                continue
 
                             # RED-free episodes still end at every zero
                             # crossing. Reset before evaluating a later
@@ -5017,7 +5299,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                 int(flatten_ts),
                             )
                         if stop_ts is None:
-                            continue
+                            if not row_resumed_normal or source_sample_ts + _HSL_REPLAY_INTERVAL_MS <= replay_start_boundary_ts:
+                                continue
+                            ts = max(ts, replay_start_boundary_ts)
+                            peak_realized, window_last_realized = rolling_realized_at(ts, abs_realized)
                     else:
                         peak_realized, window_last_realized = rolling_realized_at(
                             ts, abs_realized
@@ -5079,88 +5364,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                 float(metrics["red_threshold"]),
                             )
                             continue
-                    stop_drawdown_raw = float(metrics["drawdown_raw"])
-                    finalization = self._equity_hard_stop_red_episode_finalization(
-                        pside,
-                        {
-                            "equity": float(metrics["equity"]),
-                            "peak_strategy_equity": float(metrics["peak_strategy_equity"]),
-                            "drawdown_ema": float(metrics["drawdown_ema"]),
-                        },
-                        stop_ts,
-                        symbol=symbol,
-                    )
-                    no_restart_latched = bool(finalization["no_restart_latched"])
-                    cooldown_until_ms = finalization["cooldown_until_ms"]
-                    state["last_stop_event"] = self._equity_hard_stop_build_latch_payload(
-                        pside,
-                        symbol=symbol,
-                        stop_event_timestamp_ms=stop_ts,
-                        balance=float(metrics["balance"]),
-                        realized_pnl_total=row_realized_pnl,
-                        realized_pnl=float(metrics["realized_pnl"]),
-                        unrealized_pnl=float(metrics["unrealized_pnl"]),
-                        strategy_pnl=float(metrics["strategy_pnl"]),
-                        peak_strategy_pnl=float(metrics["peak_strategy_pnl"]),
-                        strategy_equity=float(metrics["strategy_equity"]),
-                        peak_strategy_equity=float(metrics["peak_strategy_equity"]),
-                        trigger_peak_strategy_equity=float(metrics["peak_strategy_equity"]),
-                        drawdown_raw=stop_drawdown_raw,
-                        drawdown_ema=float(metrics["drawdown_ema"]),
-                        drawdown_score=float(metrics["drawdown_score"]),
-                        no_restart_latched=no_restart_latched,
-                        cooldown_until_ms=cooldown_until_ms,
-                        no_restart_peak_strategy_equity=float(
-                            finalization["no_restart_peak_strategy_equity"]
-                        ),
-                        no_restart_drawdown_raw=float(
-                            finalization["no_restart_drawdown_raw"]
-                        ),
-                    )
-                    state["pnl_reset_timestamp_ms"] = stop_ts + 1
-                    state["pending_red_since_ms"] = None
-                    reset_baseline_realized = stop_abs_realized
-                    reset_rolling_window()
-                    if no_restart_latched:
-                        state["halted"] = True
-                        state["no_restart_latched"] = True
-                        state["cooldown_until_ms"] = None
-                        self._equity_hard_stop_write_latch(
-                            pside, state["last_stop_event"], symbol=symbol
-                        )
-                        self._equity_hard_stop_set_coin_runtime_forced_mode(
-                            pside, symbol, "graceful_stop"
-                        )
-                        logging.critical(
-                            "[risk] HSL[%s:%s] reconstructed terminal coin RED stop from exchange-derived history | "
-                            "stop_ts=%s drawdown_raw=%.6f source=%s",
-                            pside,
-                            symbol,
-                            stop_ts,
-                            stop_drawdown_raw,
-                            stop_source,
-                        )
+                    if not stop_finalized:
+                        finalize_replay_stop(metrics, stop_ts, stop_source, stop_abs_realized, row_realized_pnl)
+                    if state["no_restart_latched"]:
                         break
-                    state["halted"] = True
-                    state["no_restart_latched"] = False
-                    state["cooldown_until_ms"] = cooldown_until_ms
-                    self._equity_hard_stop_write_latch(
-                        pside, state["last_stop_event"], symbol=symbol
-                    )
-                    if cooldown_until_ms is not None and now_ms < cooldown_until_ms:
-                        self._equity_hard_stop_set_coin_runtime_forced_mode(
-                            pside, symbol, "graceful_stop"
-                        )
-                        logging.critical(
-                            "[risk] HSL[%s:%s] reconstructed active coin RED cooldown from exchange-derived history | "
-                            "remaining_time=%s source=%s",
-                            pside,
-                            symbol,
-                            _equity_hard_stop_format_remaining_time(
-                                (cooldown_until_ms - now_ms) / 1000.0
-                            ),
-                            stop_source,
-                        )
+                    if state["cooldown_until_ms"] is not None and now_ms < state["cooldown_until_ms"]:
                         continue
                     self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
                     self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
@@ -5568,9 +5776,11 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
         if not self._equity_hard_stop_enabled(pside):
             continue
         state = self._hsl_state(pside)
+        replay_complete = False
         if state["halted"]:
             if await self._equity_hard_stop_handle_position_during_cooldown(pside, ts_ms):
                 state = self._hsl_state(pside)
+                replay_complete = True
             if state["halted"]:
                 cooldown_until_ms = state["cooldown_until_ms"]
                 if (
@@ -5579,8 +5789,12 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
                     and cooldown_until_ms is not None
                     and ts_ms >= cooldown_until_ms
                 ):
-                    self._equity_hard_stop_reset_after_restart(pside)
-                    self._equity_hard_stop_remove_latch_file(pside)
+                    if not await _equity_hard_stop_replay_live_restart(self, pside):
+                        continue
+                    state = self._hsl_state(pside)
+                    replay_complete = True
+                    if state["halted"]:
+                        continue
                     logging.info("[risk] HSL[%s] RED cooldown elapsed; trading resumed", pside)
                     _emit_hsl_event(
                         self,
@@ -5596,9 +5810,11 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
                 else:
                     self._equity_hard_stop_log_cooldown_status(pside, ts_ms)
                     continue
-        prev_latched = self._equity_hard_stop_runtime_red_latched(pside)
+        prev_latched = False if replay_complete else self._equity_hard_stop_runtime_red_latched(pside)
         prev_tier = self._equity_hard_stop_runtime_tier(pside)
-        metrics = self._equity_hard_stop_apply_sample(
+        # The replay already sampled its current account observation. Do not
+        # overwrite that result with the older pre-await check inputs.
+        metrics = state["last_metrics"] if replay_complete else self._equity_hard_stop_apply_sample(
             pside,
             ts_ms,
             float(balance),
@@ -5945,11 +6161,13 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
             if partial_replay and (pside, symbol) not in ready_pairs:
                 continue
             state = self._hsl_coin_state(pside, symbol)
+            replay_complete = False
             if state["halted"]:
                 if await self._equity_hard_stop_handle_coin_position_during_cooldown(
                     pside, symbol, ts_ms
                 ):
                     state = self._hsl_coin_state(pside, symbol)
+                    replay_complete = True
                 if state["halted"]:
                     cooldown_until_ms = state["cooldown_until_ms"]
                     if (
@@ -5958,8 +6176,12 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                         and cooldown_until_ms is not None
                         and ts_ms >= cooldown_until_ms
                     ):
-                        self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
-                        self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
+                        if not await _equity_hard_stop_replay_live_restart(self, pside, symbol):
+                            continue
+                        state = self._hsl_coin_state(pside, symbol)
+                        replay_complete = True
+                        if state["halted"]:
+                            continue
                         logging.info(
                             "[risk] HSL[%s:%s] RED cooldown elapsed; trading resumed",
                             pside,
@@ -5986,9 +6208,9 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                                     pside, symbol, "graceful_stop"
                                 )
                         continue
-            prev_latched = bool(state["runtime"].red_latched())
+            prev_latched = False if replay_complete else bool(state["runtime"].red_latched())
             prev_tier = str(state["runtime"].tier())
-            metrics = self._equity_hard_stop_apply_coin_sample(
+            metrics = state["last_metrics"] if replay_complete else self._equity_hard_stop_apply_coin_sample(
                 pside,
                 symbol,
                 ts_ms,

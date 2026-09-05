@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+from types import MethodType
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -468,6 +469,19 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
         bot.get_exchange_time = lambda: int(fake_client.now_ms)
+        update_pnls = getattr(bot, "update_pnls", None)
+        if isinstance(update_pnls, MethodType):
+            original_update_pnls = update_pnls.__func__
+
+            async def update_fake_pnls(self, *, source="direct", since_ms=None):
+                # Cache refresh watermarks use wall time, while scenarios can
+                # replay any date. Fetch the finite fake tape explicitly so a
+                # wall-clock overlap cannot skip scenario closing fills.
+                return await original_update_pnls(
+                    self, source=source, since_ms=0 if since_ms is None else since_ms
+                )
+
+            bot.update_pnls = MethodType(update_fake_pnls, bot)
         if hasattr(bot, "cm"):
             bot.cm._now_ms_callback = lambda: int(fake_client.now_ms)
 

@@ -73,7 +73,12 @@ All notable user-facing changes will be documented in this file.
   evidence defers startup replay and ordinary planning while already-latched RED supervision and
   panic protection for active cooldown positions remain available. Resting cooldown entries are
   cancelled according to the configured policy, preserving orders after a proven manual-policy
-  intervention and graceful-stop adds to held positions. Normal-policy restart overrides replay later exact episode boundaries.
+  intervention and graceful-stop adds to held positions. Terminal no-restart scopes also cancel
+  resting entries. Normal-policy restart overrides and cooldown expiry retain the new episode's
+  baseline and entry fees before replaying later exact boundaries; live and restart paths retain
+  losses incurred before the next observation. Proven ordinary RED closes and panic closes follow
+  the same restart rules, with terminal no-restart protection taking precedence. Offline fake-live
+  scenarios retain complete fill history when their simulated dates differ from wall time.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the

@@ -33,6 +33,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 6. Restart reconstruction uses exchange state, fill/PnL history, candles where required, config, and
    current time. Local latch files are diagnostics, not authority. Restart always reconstructs from
    authoritative exchange-derived inputs; no persisted replay state participates in the decision.
+   Live normal interventions and cooldown expiry use that same reconstruction before releasing a
+   halt, retaining entry fees and losses before the next observation. A proven RED stop follows the
+   same restart rules regardless of closing order type; terminal no-restart takes precedence.
 7. `bot.{pside}.hsl.panic_close_order_type = "market"` is an explicit protective execution
    override when HSL is enabled. Rust may emit that side's `close_panic_*` as a market order even
    when `live.market_orders_allowed = false`; the live flag gates non-panic market execution and
@@ -78,10 +81,12 @@ ordinary shared-account planning: the startup gate runs after portfolio intent c
 cannot make a plan built from unknown HSL episode state authoritative. Independently ready,
 already-latched RED supervision and required panic protection for active cooldown positions still
 run during that deferral, using fresh protective account state and the configured execution pacing.
-Cooldown cancellation-only waves also remove resting initials from flat scopes without constructing
-new intent. Manual ownership begins only after a proven cooldown intervention and persists through
+Cancellation-only waves remove entries from terminal no-restart scopes and resting initials from
+flat cooldown scopes without constructing new intent or changing terminal state. Manual ownership
+begins only after a proven cooldown intervention and persists through
 later flat observations; before that intervention, fresh initials remain blocked. If current fill
-evidence cannot distinguish those cases, the cancellation wave preserves manual orders. Graceful-stop
+evidence cannot distinguish those cases, the cancellation wave refreshes the fill tail after its
+account observation and preserves manual orders if proof remains unavailable. Graceful-stop
 adds to held positions retain their policy semantics.
 
 ## Code And Tests

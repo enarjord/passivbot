@@ -4417,10 +4417,20 @@ async def test_hsl_cooldown_normal_resets_runtime_and_clears_halt(monkeypatch):
         lambda pside: removed.__setitem__("count", removed["count"] + 1),
     )
 
+    import passivbot_hsl
+
+    async def replay_restart(target, pside, symbol=None):
+        target._equity_hard_stop_reset_after_restart(pside)
+        target._equity_hard_stop_remove_latch_file(pside)
+        return True
+
+    replay = AsyncMock(side_effect=replay_restart)
+    monkeypatch.setattr(passivbot_hsl, "_equity_hard_stop_replay_live_restart", replay)
     changed = await bot._equity_hard_stop_handle_position_during_cooldown(
         "long", 150_000
     )
     assert changed is True
+    replay.assert_awaited_once_with(bot, "long")
     assert removed["count"] == 1
     assert state["halted"] is False
     assert state["cooldown_until_ms"] is None
@@ -7297,6 +7307,11 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
     monkeypatch.setattr(bot, "get_exchange_time", lambda: 200_000)
     monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    # Current cumulative PnL must match the fill tape used to seed the intervention.
+    monkeypatch.setattr(
+        bot, "_equity_hard_stop_realized_pnl_now",
+        lambda pside=None: -20.0 if pside in (None, "long") else 0.0,
+    )
 
     await bot._equity_hard_stop_initialize_from_history()
 

@@ -7,8 +7,8 @@ def _normal_override_history(signal_mode, *, closing_loss=100.0, same_minute=Fal
     bot = _make_aggregate_episode_bot(signal_mode, closing_loss=closing_loss)
     bot._equity_hard_stop_cooldown_position_policy = lambda: "normal"
     events = bot._pnls_manager.get_events()
-    panic_ts = 60_500 if same_minute else 30_500
-    events[0]["timestamp"] = 60_600 if same_minute else 60_000
+    panic_ts = 60_500 if same_minute else 90_500
+    events[0]["timestamp"] = 60_600 if same_minute else 120_000
     events[:0] = [
         dict(timestamp=10_000, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0),
         dict(
@@ -25,6 +25,13 @@ def _normal_override_history(signal_mode, *, closing_loss=100.0, same_minute=Fal
 
     async def history(**kwargs):
         result = await original_history(**kwargs)
+        # The first held episode has an observed zero-loss sample before its stop.
+        result["timeline"].insert(0, dict(
+            timestamp=0, balance=1000.0, realized_pnl=0.0,
+            realized_pnl_long=0.0, realized_pnl_short=0.0,
+            unrealized_pnl_long=0.0, unrealized_pnl_short=0.0,
+            is_flat=False, is_flat_long=False, is_flat_short=True,
+        ))
         result["panic_flatten_events"] = [
             dict(
                 timestamp=panic_ts,
@@ -52,7 +59,10 @@ async def test_normal_cooldown_override_replays_later_ordinary_episode_reset(
         await bot._equity_hard_stop_initialize_from_history()
         state = bot._hsl_state("long")
         assert not state["halted"]
-        assert state["last_stop_event"] is None
+        if ema_span == 1.0:
+            assert state["last_stop_event"]["stop_event_timestamp_ms"] == (60_500 if same_minute else 90_500)
+        else:
+            assert state["last_stop_event"] is None
         assert state["pnl_reset_timestamp_ms"] == 180_501
         metrics = state["last_metrics"]
         assert metrics["peak_strategy_equity"] == pytest.approx(600.0)
@@ -69,6 +79,9 @@ async def test_normal_cooldown_override_still_finalizes_new_red_at_exact_fill(
     signal_mode, same_minute
 ):
     bot = _normal_override_history(signal_mode, closing_loss=300.0, same_minute=same_minute)
+    # End at this RED close; a later normal-policy entry starts another episode.
+    bot._pnls_manager.get_events().pop()
+    bot.positions["A"]["long"]["size"] = 0.0
     await bot._equity_hard_stop_initialize_from_history()
     state = bot._hsl_state("long")
     assert state["halted"]
@@ -114,8 +127,8 @@ async def test_normal_override_without_later_flatten_keeps_its_new_episode(signa
     await bot._equity_hard_stop_initialize_from_history()
     state = bot._hsl_state("long")
     assert not state["halted"]
-    assert state["last_stop_event"] is None
-    assert state["pnl_reset_timestamp_ms"] is None
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 60_500
+    assert state["pnl_reset_timestamp_ms"] == 60_501
     assert state["last_metrics"]["drawdown_raw"] == pytest.approx(50.0 / 700.0)
 
 
@@ -311,3 +324,105 @@ def test_manual_ownership_reads_canonical_fill_objects():
     ]
     bot, state, symbol = _manual_ownership_bot("coin", events)
     assert hsl._equity_hard_stop_manual_cooldown_intervention(bot, "long", symbol) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize("ema_span", [1.0, 5.0])
+@pytest.mark.parametrize("multiple_episodes", [False, True])
+async def test_normal_override_seeds_before_same_minute_closing_loss(
+    signal_mode, ema_span, multiple_episodes
+):
+    bot = _normal_override_history(signal_mode, closing_loss=350.0, same_minute=True)
+    bot.hsl["long"]["ema_span_minutes"] = ema_span
+    events = bot._pnls_manager.get_events()
+    events[3]["timestamp"] = 60_700
+    events[4]["timestamp"] = 60_800
+    if multiple_episodes:
+        events[3]["pnl"] = -10.0
+        events.extend(
+            [
+                dict(
+                    timestamp=60_900,
+                    symbol="A",
+                    pside="long",
+                    action="decrease",
+                    qty=1.0,
+                    pnl=-350.0,
+                ),
+                dict(
+                    timestamp=61_000, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0
+                ),
+            ]
+        )
+    # Keep earlier ordinary reentry, but end at the closing RED under test.
+    events.pop()
+    bot.positions["A"]["long"]["size"] = 0.0
+    stop_ts = 60_900 if multiple_episodes else 60_700
+    expected_raw = 351.0 / 690.0 if multiple_episodes else 350.0 / 700.0
+    for _ in range(2):
+        await bot._equity_hard_stop_initialize_from_history()
+        state = bot._hsl_state("long")
+        assert state["halted"]
+        stop = state["last_stop_event"]
+        assert stop["stop_event_timestamp_ms"] == stop_ts
+        assert stop["drawdown_raw"] == pytest.approx(expected_raw)
+        assert stop["drawdown_ema"] == pytest.approx(expected_raw * 2.0 / (ema_span + 1.0))
+        assert state["cooldown_until_ms"] == stop_ts + 300_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize("entry_fee", [0.0, -1.0])
+@pytest.mark.parametrize("ema_span", [1.0, 5.0])
+@pytest.mark.parametrize("multiple_episodes", [False, True])
+async def test_expired_cooldown_seeds_before_same_minute_closing_loss(
+    signal_mode, entry_fee, ema_span, multiple_episodes
+):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=300.0)
+    bot.hsl["long"]["cooldown_minutes_after_red"] = 1.0
+    bot.hsl["long"]["restart_after_red_policy"] = "always"
+    bot.hsl["long"]["ema_span_minutes"] = ema_span
+    bot.hsl["long"]["red_threshold"] = 0.08
+    events = bot._pnls_manager.get_events()
+    events[2].update(timestamp=240_600, fee_paid=entry_fee)
+    events.extend(
+        [
+            dict(
+                timestamp=240_700, symbol="A", pside="long", action="decrease", qty=1.0, pnl=-200.0
+            ),
+            dict(timestamp=240_800, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0),
+        ]
+    )
+    expected_peak = 700.0
+    stop_ts = 240_700
+    if multiple_episodes:
+        events[3]["pnl"] = -10.0
+        events[4]["fee_paid"] = entry_fee
+        events.extend(
+            [
+                dict(
+                    timestamp=240_900,
+                    symbol="A",
+                    pside="long",
+                    action="decrease",
+                    qty=1.0,
+                    pnl=-200.0,
+                ),
+                dict(
+                    timestamp=241_000, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0
+                ),
+            ]
+        )
+        expected_peak = 690.0 + entry_fee
+        stop_ts = 240_900
+    expected_raw = (200.0 - entry_fee) / expected_peak
+    for _ in range(2):
+        await bot._equity_hard_stop_initialize_from_history()
+        state = bot._hsl_state("long")
+        assert state["halted"]
+        stop = state["last_stop_event"]
+        assert stop["stop_event_timestamp_ms"] == stop_ts
+        assert stop["drawdown_raw"] == pytest.approx(expected_raw)
+        assert stop["drawdown_ema"] == pytest.approx(expected_raw * 2.0 / (ema_span + 1.0))
+        assert state["cooldown_until_ms"] == stop_ts + 60_000
