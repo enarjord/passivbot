@@ -11,6 +11,9 @@ All notable user-facing changes will be documented in this file.
 - OKX now reads all pending-order pages before reconciling the account, preventing duplicate
   orders when more than 100 orders are open. Failed or stalled pagination rejects the snapshot.
 
+- External NumPy candle files no longer permit pickle objects, and local archive extraction
+  explicitly filters unsafe paths and links on every supported Python version.
+
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
   analysis boundaries, providing smoother selection pressure against long no-fill periods than a
