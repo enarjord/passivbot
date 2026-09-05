@@ -811,6 +811,8 @@ def _equity_hard_stop_intervention_entry_timestamp(
     symbol: Optional[str] = None,
 ) -> Optional[int]:
     """Find the first canonical non-panic increase after a particular stop."""
+    fill_events = list(fill_events)
+    has_tied_entry = False
     timestamps = []
     for event in fill_events:
         if _equity_hard_stop_fill_pside_optional(event) not in psides:
@@ -818,15 +820,100 @@ def _equity_hard_stop_intervention_entry_timestamp(
         if symbol is not None and _equity_hard_stop_fill_symbol(event) != symbol:
             continue
         timestamp = _equity_hard_stop_fill_timestamp_ms(event)
-        if timestamp <= stop_ms or (
+        if timestamp < stop_ms or (
             cooldown_until_ms is not None and timestamp >= cooldown_until_ms
         ):
             continue
         if _equity_hard_stop_fill_action(event) == "increase" and "panic" not in str(
             _equity_hard_stop_event_value(event, "pb_order_type", "")
         ):
-            timestamps.append(timestamp)
+            if timestamp == stop_ms:
+                has_tied_entry = True
+            else:
+                timestamps.append(timestamp)
+    if has_tied_entry:
+        evidence = _equity_hard_stop_intervention_entry_evidence(
+            fill_events,
+            psides=psides,
+            stop_ms=stop_ms,
+            cooldown_until_ms=cooldown_until_ms,
+            symbol=symbol,
+        )
+        if evidence is not None:
+            return evidence["entry_timestamp_ms"]
+    # Timestamp-separated entries retain the existing inference contract.
     return min(timestamps, default=None)
+
+
+def _equity_hard_stop_intervention_entry_evidence(
+    fill_events: Iterable[Any],
+    *,
+    psides: set[str],
+    stop_ms: int,
+    cooldown_until_ms: Optional[int],
+    symbol: Optional[str] = None,
+    stop_index: Optional[int] = None,
+) -> Optional[dict[str, Any]]:
+    """Locate entry after a proven scoped flatten, including a tied fill cohort.
+
+    Indices refer to the scoped canonical ordering. An explicit index selects
+    a particular proven flatten; timestamp-only callers require a unique
+    flatten at that timestamp. An index never bypasses ambiguous ordering.
+    """
+    scoped = [
+        event
+        for event in fill_events
+        if _equity_hard_stop_fill_pside_optional(event) in psides
+        and (symbol is None or _equity_hard_stop_fill_symbol(event) == symbol)
+        and (
+            cooldown_until_ms is None
+            or _equity_hard_stop_fill_timestamp_ms(event) < cooldown_until_ms
+        )
+    ]
+    ordered, ambiguous, flatten_indices = _equity_hard_stop_order_fill_cohorts(
+        scoped, include_flatten_indices=True
+    )
+    if ambiguous:
+        return None
+    candidates = [
+        index
+        for index in flatten_indices
+        if _equity_hard_stop_fill_timestamp_ms(ordered[index]) == stop_ms
+    ]
+    if stop_index is None:
+        if len(candidates) != 1:
+            return None
+        stop_index = candidates[0]
+    elif stop_index not in candidates:
+        return None
+    prefix = 0.0
+    stop_prefix = None
+    for index, event in enumerate(ordered):
+        if (
+            index > stop_index
+            and _equity_hard_stop_fill_action(event) == "increase"
+            and ("panic" not in str(_equity_hard_stop_event_value(event, "pb_order_type", "")))
+        ):
+            return {
+                "entry_timestamp_ms": _equity_hard_stop_fill_timestamp_ms(event),
+                "entry_event": event,
+                "entry_index": index,
+                "stop_event": ordered[stop_index],
+                "stop_index": stop_index,
+                "realized_before_entry": prefix,
+                "realized_at_stop": stop_prefix,
+                "ordered_events": ordered,
+            }
+        delta = float(_equity_hard_stop_event_value(event, "pnl", 0.0) or 0.0)
+        delta += _equity_hard_stop_fee_cost(event)
+        if not math.isfinite(delta):
+            raise ValueError("HSL intervention prefix requires finite realized PnL and fees")
+        prefix += delta
+        if not math.isfinite(prefix):
+            raise ValueError("HSL intervention prefix must remain finite")
+        if index == stop_index:
+            stop_prefix = prefix
+    return None
 
 
 def _equity_hard_stop_manual_cooldown_intervention(
@@ -2107,11 +2194,14 @@ def _hsl_compact_sparse_replay_indices(
     return np.flatnonzero(selected).astype(np.int64)
 
 
-def _equity_hard_stop_order_fill_cohorts(fill_events):
+def _equity_hard_stop_order_fill_cohorts(fill_events, *, include_flatten_indices=False):
     """Order tied mixed-action fills only with exchange-provided position chains."""
     ordered = []
     ambiguous = False
     known_sizes = {}
+    flatten_indices = []
+    sizes_complete = True
+    nonflat_pairs = 0
     for _ts, cohort_iter in groupby(
         sorted(fill_events, key=_equity_hard_stop_fill_timestamp_ms),
         key=_equity_hard_stop_fill_timestamp_ms,
@@ -2149,7 +2239,8 @@ def _equity_hard_stop_order_fill_cohorts(fill_events):
             else:
                 cohort = [cohort[index] for index in chain_order]
         ordered.extend(cohort)
-        for event in cohort:
+        for offset, event in enumerate(cohort):
+            was_nonflat = nonflat_pairs > 0
             pair = (
                 _equity_hard_stop_fill_pside_optional(event),
                 _equity_hard_stop_fill_symbol(event),
@@ -2158,12 +2249,25 @@ def _equity_hard_stop_order_fill_cohorts(fill_events):
             qty = _equity_hard_stop_fill_replay_qty(event)
             if qty is None or action not in {"increase", "decrease"}:
                 known_sizes.pop(pair, None)
+                sizes_complete = False
                 continue
             size = known_sizes.get(pair, 0.0)
             if action == "decrease" and qty > size:
                 known_sizes.pop(pair, None)
+                # Keep ordering's original size cache behavior; optional flat
+                # evidence uses the same arithmetic tolerance as HSL replay.
+                if qty - size > _hsl_flat_epsilon():
+                    sizes_complete = False
             else:
                 known_sizes[pair] = size + qty if action == "increase" else size - qty
+            if include_flatten_indices and sizes_complete:
+                nonflat_pairs += int(known_sizes.get(pair, 0.0) > _hsl_flat_epsilon()) - int(
+                    size > _hsl_flat_epsilon()
+                )
+                if was_nonflat and nonflat_pairs == 0:
+                    flatten_indices.append(len(ordered) - len(cohort) + offset)
+    if include_flatten_indices:
+        return ordered, ambiguous, flatten_indices
     return ordered, ambiguous
 
 
@@ -3826,6 +3930,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     entry_ts = int(row["timestamp"])
                     if entry_ts > now_ms:
                         break
+                    # These seeds follow exact fills in validated chain order;
+                    # equality means a proven post-stop entry in the same cohort.
                     replayed_normal_override = (
                         contract["policy"] == "normal"
                         and state["halted"]
@@ -3833,7 +3939,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         and state["last_stop_event"] is not None
                         and state["cooldown_until_ms"] is not None
                         and int(state["last_stop_event"]["stop_event_timestamp_ms"])
-                        < entry_ts < state["cooldown_until_ms"]
+                        <= entry_ts < state["cooldown_until_ms"]
                     )
                     expired_cooldown = (
                         state["halted"]
@@ -4832,11 +4938,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
                 def replay_transitions_at(
                     row_ts_ms: int,
-                ) -> tuple[float, list[tuple[int, float]], float]:
+                ) -> tuple[float, list[tuple[int, float, int]], float]:
                     nonlocal replay_event_idx, replay_size
                     boundary_ts_ms = int(row_ts_ms) + 60_000
                     realized_delta = 0.0
-                    flatten_boundaries: list[tuple[int, float]] = []
+                    flatten_boundaries: list[tuple[int, float, int]] = []
                     while replay_event_idx < len(replay_events):
                         event_ts, action, qty, event_realized_delta = replay_events[
                             replay_event_idx
@@ -4855,7 +4961,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                 # aggregate realized value be split at the
                                 # exact episode boundary.
                                 flatten_boundaries.append(
-                                    (int(event_ts), float(realized_delta))
+                                    (int(event_ts), float(realized_delta), replay_event_idx)
                                 )
                         replay_event_idx += 1
                     return (
@@ -5181,7 +5287,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
                     if flatten_boundaries and not replay_ambiguous:
                         row_start_abs_realized = abs_realized - row_realized_delta
-                        for flatten_ts, realized_delta_at_flatten in flatten_boundaries:
+                        for flatten_ts, realized_delta_at_flatten, flatten_index in flatten_boundaries:
                             if replay_start_boundary_ts is not None and flatten_ts < replay_start_boundary_ts:
                                 continue
                             boundary_abs_realized = (
@@ -5251,21 +5357,24 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                                 stop_finalized = True
                                 if state["no_restart_latched"]:
                                     break
-                                entry_ts = _equity_hard_stop_intervention_entry_timestamp(
+                                entry = _equity_hard_stop_intervention_entry_evidence(
                                     pair_fill_events, psides={pside}, symbol=symbol,
                                     stop_ms=stop_ts, cooldown_until_ms=state["cooldown_until_ms"],
+                                    stop_index=flatten_index,
                                 )
-                                if entry_ts is None or entry_ts > now_ms:
+                                if entry is None or entry["entry_timestamp_ms"] > now_ms:
                                     break
+                                entry_ts = int(entry["entry_timestamp_ms"])
                                 # A normal intervention follows this proven RED
                                 # flatten regardless of its exchange order type.
                                 replay_start_boundary_ts = int(entry_ts)
                                 contract["intervention_entry_ts"] = int(entry_ts)
-                                state["pnl_reset_timestamp_ms"] = int(entry_ts)
-                                reset_baseline_realized = sum(
-                                    float(delta) for event_ts, _, _, delta in replay_events
-                                    if int(event_ts) < entry_ts
+                                # A tied entry uses the existing fill-derived
+                                # reset tail for subsequent live samples too.
+                                state["pnl_reset_timestamp_ms"] = (
+                                    stop_ts + 1 if entry_ts == stop_ts else entry_ts
                                 )
+                                reset_baseline_realized = float(entry["realized_before_entry"])
                                 self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
                                 self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
                                 state = self._hsl_coin_state(pside, symbol)

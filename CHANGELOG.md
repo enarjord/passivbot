@@ -77,7 +77,8 @@ All notable user-facing changes will be documented in this file.
   resting entries. Normal-policy restart overrides and cooldown expiry retain the new episode's
   baseline and entry fees before replaying later exact boundaries; live and restart paths retain
   losses incurred before the next observation. Proven ordinary RED closes and panic closes follow
-  the same restart rules, with terminal no-restart protection taking precedence. Offline fake-live
+  the same restart rules, including proven same-millisecond interventions, with terminal no-restart
+  protection taking precedence. Offline fake-live
   scenarios retain complete fill history when their simulated dates differ from wall time.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.

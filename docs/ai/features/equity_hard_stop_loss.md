@@ -36,6 +36,8 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    Live normal interventions and cooldown expiry use that same reconstruction before releasing a
    halt, retaining entry fees and losses before the next observation. A proven RED stop follows the
    same restart rules regardless of closing order type; terminal no-restart takes precedence.
+   Same-millisecond normal interventions require the validated fill-chain order and use its
+   cumulative PnL prefix so closing losses are excluded while entry fees survive subsequent polls.
 7. `bot.{pside}.hsl.panic_close_order_type = "market"` is an explicit protective execution
    override when HSL is enabled. Rust may emit that side's `close_panic_*` as a market order even
    when `live.market_orders_allowed = false`; the live flag gates non-panic market execution and

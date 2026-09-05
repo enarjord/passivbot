@@ -101,3 +101,137 @@ async def test_normal_entry_cannot_release_terminal_ordinary_red_stop(
     state = await _replay(bot, mode)
     assert state["halted"] and state["no_restart_latched"]
     assert state["last_stop_event"]["stop_event_timestamp_ms"] == 180_500
+
+
+def _tie_normal_stop_entry(bot, reverse=False, evidence=True):
+    events = bot._pnls_manager.get_events()
+    for event, before in zip(events[1:3], [1.0, 0.0]):
+        event["timestamp"] = 180_500
+        if evidence:
+            event["raw"] = [
+                {
+                    "data": {
+                        "side": "sell" if event["action"] == "decrease" else "buy",
+                        "amount": event["qty"],
+                        "price": 1.0,
+                        "info": {"startPosition": str(before)},
+                    }
+                }
+            ]
+    if reverse:
+        events[1:3] = reversed(events[1:3])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("panic_marker", [False, True])
+async def test_normal_tied_stop_entry_preserves_fee_after_restart_and_current_poll(
+    mode, reverse, panic_marker
+):
+    bot = _normal_after_red_bot(mode, panic_marker=panic_marker)
+    _tie_normal_stop_entry(bot, reverse)
+    for _ in range(2):
+        state = await _replay(bot, mode)
+        assert not state["halted"]
+        assert state["last_metrics"]["tier"] == "green"
+        raw = state["last_metrics"]["drawdown_raw"]
+        assert 0 < raw < 0.002
+        if mode == "coin":
+            current = bot._equity_hard_stop_apply_coin_sample(
+                "long", "A", 360_900, 699.0, 0.0
+            )
+            assert current["realized_pnl"] == pytest.approx(-1.0)
+        else:
+            current = bot._equity_hard_stop_apply_sample(
+                "long", 360_900, 699.0, -301.0, -301.0, 0.0, unrealized_pnl_total=0.0
+            )
+        assert current["drawdown_raw"] == pytest.approx(raw)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_normal_tied_stop_entry_cannot_release_terminal_scope(mode, reverse):
+    bot = _normal_after_red_bot(mode, terminal=True)
+    _tie_normal_stop_entry(bot, reverse)
+    state = await _replay(bot, mode)
+    assert state["halted"] and state["no_restart_latched"]
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 180_500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+async def test_normal_tied_stop_entry_requires_exchange_ordering_evidence(mode):
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+    bot = _normal_after_red_bot(mode)
+    _tie_normal_stop_entry(bot, evidence=False)
+    if mode == "coin":
+        state = await _replay(bot, mode)
+        assert state["runtime"].red_latched()
+        assert state["pnl_reset_timestamp_ms"] is None
+        assert bot._runtime_forced_modes["long"]["A"] == "panic"
+    else:
+        with pytest.raises(AuthoritativeSurfaceUnavailable):
+            await _replay(bot, mode)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_normal_branching_tied_stops_do_not_guess_intervention_prefix(
+    mode, reverse
+):
+    bot = _normal_after_red_bot(mode)
+    events = bot._pnls_manager.get_events()
+    events[2]["qty"] = 2.0
+    events.extend(
+        [
+            dict(
+                timestamp=180_500,
+                symbol="A",
+                pside="long",
+                action="decrease",
+                qty=2.0,
+                pnl=-150.0,
+            ),
+            dict(
+                timestamp=180_500,
+                symbol="A",
+                pside="long",
+                action="increase",
+                qty=3.0,
+                pnl=0.0,
+                fee_paid=-2.0,
+            ),
+        ]
+    )
+    for event, before in zip(events[1:], [1.0, 0.0, 2.0, 0.0]):
+        event["timestamp"] = 180_500
+        event["raw"] = [
+            {
+                "data": {
+                    "side": "sell" if event["action"] == "decrease" else "buy",
+                    "amount": event["qty"],
+                    "price": 1.0,
+                    "info": {"startPosition": str(before)},
+                }
+            }
+        ]
+    if reverse:
+        events[1:] = reversed(events[1:])
+    bot.positions["A"]["long"]["size"] = 3.0
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+    # Repeated exits from zero do not have a unique successor in the existing
+    # exchange-chain proof. Never pick an entry or PnL prefix from list order.
+    for _ in range(2):
+        if mode == "coin":
+            state = await _replay(bot, mode)
+            assert state["runtime"].red_latched()
+            assert state["pnl_reset_timestamp_ms"] is None
+            assert bot._runtime_forced_modes["long"]["A"] == "panic"
+        else:
+            with pytest.raises(AuthoritativeSurfaceUnavailable):
+                await _replay(bot, mode)
