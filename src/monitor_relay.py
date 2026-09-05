@@ -8,6 +8,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from aiohttp import web
 
@@ -667,6 +668,31 @@ async def _handle_dashboard_asset(request: web.Request) -> web.Response:
 
 
 async def _handle_ws(request: web.Request) -> web.StreamResponse:
+    # Browsers can open cross-origin WebSockets even when ordinary HTTP reads
+    # are blocked by same-origin policy. Check before loading account data.
+    origins = request.headers.getall("Origin", [])
+    if origins:
+        try:
+            if len(origins) != 1:
+                raise ValueError("multiple origins")
+            origin = urlsplit(origins[0])
+            target = urlsplit(f"{request.scheme}://{request.host}")
+            if (
+                origin.scheme not in {"http", "https"}
+                or not origin.hostname
+                or origin.username is not None
+                or origin.password is not None
+                or origin.path
+                or origin.query
+                or origin.fragment
+                or origin.scheme != target.scheme
+                or origin.hostname != target.hostname
+                or (origin.port or (443 if origin.scheme == "https" else 80))
+                != (target.port or (443 if target.scheme == "https" else 80))
+            ):
+                raise ValueError("cross-origin websocket")
+        except ValueError as exc:
+            raise web.HTTPForbidden(text="WebSocket origin is not allowed") from exc
     relay = _relay_from_app(request.app)
     exchange = request.query.get("exchange")
     user = request.query.get("user")

@@ -6,6 +6,7 @@
 2. The monitor root on disk remains the source of truth; the relay is a network view over that data.
 3. WebSocket clients must receive a snapshot first, then live-forward event/history messages.
 4. Relay failures must stay contained to the relay process and must not require bot-process changes.
+5. Browser WebSocket requests must have the relay's own HTTP origin before any monitor data is loaded or sent. Originless native clients remain supported; this check is not authentication.
 
 ## Non-Obvious Details
 
