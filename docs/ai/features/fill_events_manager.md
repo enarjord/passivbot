@@ -13,6 +13,17 @@
    non-quote fee converted by a fresh ticker, reported fee rate, then
    `live.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
    against `live.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
+   Explicit finite zero fees and fully resolved zero-sum fee lists are authoritative amounts.
+   Loading a cached fallback or rate estimate rechecks retained amounts and persists a resolved fee;
+   unresolved historical estimates retain their original policy. Same-currency offsetting
+   fees need no ticker when their net amount is zero.
+   Coalescing preserves missing or malformed fee amounts for fallback resolution.
+   A zero non-quote fee needs no ticker and records `fee_conversion_source=zero_amount`.
+   Cached conversion quotes remain subject to `live.fee_conversion_max_age_ms` against the
+   current time, fetch time, and each fill timestamp. Failed conversion lookups retry after
+   at most one minute, bounded further by that same configured age. A batch reuses an identical
+   pair/fill-time lookup, including an unavailable result. A quote rejected only for one fill
+   timestamp must not create a pair-wide failed lookup.
 6. Do not mix legacy/missing-contract cache rows with current rows. Repair or
    rebuild legacy fill-event caches before using trading-critical accounting.
 7. Newly discovered fills may carry immutable `provenance` with attribution

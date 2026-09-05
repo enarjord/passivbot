@@ -33,6 +33,13 @@ All notable user-facing changes will be documented in this file.
 - External NumPy candle files no longer permit pickle objects, and local archive extraction
   explicitly filters unsafe paths and links on every supported Python version.
 
+- Fill accounting now preserves explicitly reported zero fees and fully resolved zero-sum fee
+  lists while retaining missing or malformed amounts for fallback accounting, including after
+  fill coalescing and reload of older cached fee estimates. Non-quote fee conversion refreshes
+  expired ticker quotes and retries temporary lookup failures without discarding a fresh quote
+  because another fill cannot use it. Legacy Hyperliquid aggregates with unknown component fees
+  require cache repair instead of silently omitting those fees from reconciliation.
+
 - The monitor relay rejects foreign or malformed browser WebSocket origins before reading or
   sending account snapshots, while preserving the dashboard and originless native clients.
 

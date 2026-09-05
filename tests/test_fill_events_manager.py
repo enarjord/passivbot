@@ -8624,6 +8624,7 @@ def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
             "qty": qty,
             "price": price,
             "pnl": -0.343558 if side == "sell" else 0.0,
+            "fees": {"currency": "USDC", "cost": 0.0},
             "raw": [
                 {
                     "source": "fetch_my_trades",
@@ -8634,6 +8635,7 @@ def _hyperliquid_same_millisecond_events() -> List[Dict[str, object]]:
                         "side": side,
                         "amount": qty,
                         "price": price,
+                        "fee": {"currency": "USDC", "cost": 0.0},
                         "info": {
                             "tid": trade_id,
                             "side": side,
@@ -8846,6 +8848,9 @@ def test_expand_hyperliquid_coalesced_event_restores_component_boundaries():
     "mismatch",
     [
         "component_ids",
+        "component_fee_nan",
+        "component_fee_invalid",
+        "component_fee_missing",
         "source_ids",
         "signed_qty",
         "pnl",
@@ -8893,6 +8898,12 @@ def test_expand_hyperliquid_coalesced_event_rejects_unreconciled_aggregate(
         aggregate["pnl"] = 1.0
     elif mismatch == "fees":
         aggregate["fee_paid"] = -1.0
+    elif mismatch.startswith("component_fee_"):
+        value = {"component_fee_nan": "nan", "component_fee_invalid": "bad", "component_fee_missing": None}[mismatch]
+        aggregate["raw"][0]["data"]["fee"]["cost"] = value
+        # Match the old permissive sum exactly: one unknown fee was omitted.
+        aggregate["fee_paid"] /= 2
+        mismatch = "accounting"
     elif mismatch == "malformed_component":
         aggregate["raw"][0]["data"]["amount"] = "invalid"
     elif mismatch == "component_price":
@@ -8995,3 +9006,38 @@ def test_order_same_timestamp_fills_keeps_distinct_timestamps_untouched():
     order_same_timestamp_fills(events)
 
     assert [ev["id"] for ev in events] == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid_cost", [None, "bad", "NaN", "Infinity"])
+async def test_hyperliquid_unknown_component_fee_requires_cache_quarantine(tmp_path, invalid_cost):
+    first = deepcopy(_hyperliquid_same_millisecond_events()[0])
+    first["id"] = first["raw"][0]["data"]["id"] = "first"
+    first["raw"][0]["data"]["info"]["tid"] = "first"
+    second = deepcopy(first)
+    second["id"] = second["raw"][0]["data"]["id"] = "second"
+    second["raw"][0]["data"]["info"]["tid"] = "second"
+    first["client_order_id"] = second["client_order_id"] = ""
+    aggregate = fem._coalesce_events([first, second])[0]
+    aggregate["raw"][0]["data"]["fee"]["cost"] = invalid_cost
+    cache = FillEventCache(tmp_path)
+    cache.save([FillEvent.from_dict(aggregate)])
+    manager = FillEventsManager(exchange="hyperliquid", user="test",
+                               fetcher=_StaticFetcher([]), cache_path=tmp_path)
+    with pytest.raises(FillEventCacheContractError, match="quarantine and rebuild.*accounting"):
+        await manager.ensure_loaded()
+    quarantine = manager.quarantine_cache_for_rebuild(reason="unreconciled_hyperliquid_aggregate")
+    assert quarantine is not None
+    assert Path(quarantine).exists()
+    assert FillEventCache(tmp_path).load() == []
+
+
+@pytest.mark.parametrize("wrapper,expected", [({}, -0.25), ([], -0.25), (None, -0.25), (0, 0.0), ({"currency": "USDC", "cost": 0}, 0.0)])
+def test_hyperliquid_empty_fee_wrapper_uses_native_amount_without_replacing_zero(wrapper, expected):
+    trade = {"id": "native-fee", "timestamp": 1700000000000,
+             "symbol": "BTC/USDC:USDC", "side": "buy", "amount": 1, "price": 1000,
+             "fee": wrapper, "info": {"feeToken": "USDC", "fee": "0.25", "dir": "Open Long"}}
+    event = HyperliquidFetcher._normalize_trade(trade)
+    paid, metadata = fem._normalize_fee_paid_from_payload(event, quote_currency="USDC")
+    assert paid == pytest.approx(expected)
+    assert metadata["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
