@@ -90,13 +90,15 @@
       long.halted: false
       long.no_restart_latched: false
       long.last_stop_event.auto_restart_eligible: true
-      long.last_stop_event.drawdown_raw: {min: 0.001, max: 0.002}
+      // Zero exchange fees leave no fallback-fee residual in the finalized flat snapshot.
+      long.last_stop_event.drawdown_raw: 0.0
     }
     summary_paths: {
       step_count: 4
       last.step_index: 5
     }
     log_contains: [
+      "drawdown_raw=0.075000 drawdown_ema=0.075000 drawdown_score=0.075000"
       "RED stop finalized (auto-restart eligible)"
       "RED cooldown elapsed; trading resumed"
     ]
