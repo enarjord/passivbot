@@ -650,12 +650,33 @@ async def test_account_invalidation_rechecked_inside_each_connector_task(
         )
         for i in range(2)
     ]
+    from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
+
+    trace = FreshEntryEligibilityTrace()
+    if not order_kind.endswith("panic"):
+        for order in orders:
+            order["pb_order_type"] = "entry_initial_normal_long"
+    trace.record_ideal_orders(orders)
+    trace.record_evaluated(orders[0]["symbol"], "long")
+    bot._fresh_entry_eligibility_trace = trace
+    eligibility = []
+    monkeypatch.setattr(
+        Passivbot, "_emit_initial_entry_eligibility_event",
+        lambda _bot, *, data, wave=None: eligibility.append(data),
+    )
     await executor.execute_order_plan(
         bot, [], orders, configure_creations=not dedicated_panic
     )
 
     expected_calls = 2 if dedicated_panic else int(invalidate_at == "first_connector")
     assert len(calls) == expected_calls
+    assert len(eligibility) == 1
+    assert sum(row["eligible_count"] for row in eligibility[0]["records"]) == (
+        0 if order_kind.endswith("panic") else expected_calls
+    )
+    assert sum(
+        event["event_type"] == EventTypes.EXECUTION_CREATE_SENT for event in order_events
+    ) == expected_calls
     assert len(bot._order_churn_gate_state.action_attempt_timestamps) == expected_calls
     assert sum(
         call.kwargs.get("status") == "submitted" for call in recorded_orders.call_args_list

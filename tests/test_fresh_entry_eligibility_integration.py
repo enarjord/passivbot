@@ -226,9 +226,21 @@ class _CreateBot:
     def _resolve_pb_order_type(self, order):
         return str(order.get("pb_order_type") or "unknown")
 
+    def _build_order_params(self, _order):
+        return {}
+
+    def _emit_execution_connector_call_started_event(self, **_kwargs):
+        return None
+
     async def execute_orders(self, orders):
+        from types import SimpleNamespace
+
+        async def create_order(**_params):
+            return {"id": "created"}
+
+        self.cca = SimpleNamespace(create_order=create_order)
         self.submitted = list(orders)
-        return [{"id": "created", **order} for order in orders]
+        return [await Passivbot.execute_order(self, order) for order in orders]
 
     def did_create_order(self, _result):
         return True

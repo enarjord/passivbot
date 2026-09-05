@@ -21624,8 +21624,7 @@ class Passivbot:
         ):
             return executor.DeferredOrderCreation()
         # No await between this per-order admission and entering the connector.
-        self._record_emitted_order_custom_id(order, status="submitted")
-        self._record_order_churn_allowance_attempts(1, action_kind="create")
+        executor.record_create_connector_admission(self, order)
         self._emit_execution_connector_call_started_event(
             order=order,
             action="create",

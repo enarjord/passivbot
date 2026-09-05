@@ -1067,6 +1067,30 @@ async def execute_order_plan(
         return to_cancel, to_create
 
 
+def record_create_connector_admission(bot, order: dict) -> None:
+    """Record submission only once the per-order account-generation guard admits it."""
+    passivbot_cls = _pb_attr("Passivbot")
+    context = getattr(bot, "_execution_connector_call_context", None) or {}
+    wave = context.get("wave")
+    index = next(
+        (idx for idx, candidate in enumerate(context.get("orders", [])) if candidate is order),
+        None,
+    )
+    passivbot_cls._record_emitted_order_custom_id(bot, order, status="submitted")
+    passivbot_cls._record_order_churn_allowance_attempts(bot, 1, action_kind="create")
+    passivbot_cls._emit_execution_order_event(
+        bot,
+        event_type=EventTypes.EXECUTION_CREATE_SENT,
+        order=order,
+        action="create",
+        status="started",
+        reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
+        index=index,
+        wave=wave,
+    )
+    _record_fresh_entry_orders(bot, "record_eligible_orders", [order])
+
+
 async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of orders after throttling and bookkeeping."""
     passivbot_cls = _pb_attr("Passivbot")
@@ -1097,19 +1121,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "post")
     wave = getattr(bot, "_order_wave_in_progress", None)
-    for idx, order in enumerate(orders):
-        passivbot_cls._emit_execution_order_event(
-            bot,
-            event_type=EventTypes.EXECUTION_CREATE_SENT,
-            order=order,
-            action="create",
-            status="started",
-            reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
-            index=idx,
-            wave=wave,
-        )
-    _record_fresh_entry_orders(bot, "record_eligible_orders", orders)
-    _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
     connector_call_context = {
         "action": "create",
         "orders": orders,
@@ -1119,6 +1130,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
+        _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
         raise
     except Exception as exc:
         for idx, order in enumerate(orders):
@@ -1143,6 +1155,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 reason=ReasonCodes.EXCHANGE_EXCEPTION,
                 error=exc,
             )
+        _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
         raise
     finally:
         if (
@@ -1172,6 +1185,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 status="create_response_missing",
                 reason="empty_response",
             )
+        _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
         return []
     if len(orders) != len(res):
         for idx, order in enumerate(orders):
@@ -1201,6 +1215,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 len(orders),
                 len(res),
             )
+        _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
         return []
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
@@ -1313,6 +1328,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         bot._health_orders_placed += len(to_return)
         _request_authoritative_confirmation(bot, passivbot_cls, {"open_orders"})
+    _emit_fresh_entry_eligibility(bot, passivbot_cls, wave)
     return to_return
 
 

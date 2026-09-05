@@ -13427,3 +13427,57 @@ def test_shared_ccxt_partial_fill_self_echo_invalidates_account(
     assert set(bot._authoritative_pending_confirmations) == (
         {"balance", "positions", "open_orders", "fills"} if has_fill else set()
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {"filled": 0.25},
+        {"filled": 0.0, "remaining": 0.75},
+        {"filled": 0.0, "remaining": 1.0},
+    ],
+)
+async def test_hyperliquid_normal_partial_fill_self_echo_invalidates_account(
+    monkeypatch, progress
+):
+    from types import SimpleNamespace
+    from exchanges.hyperliquid import HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.execution_scheduled = False
+    bot.stop_websocket = False
+    bot._authoritative_pending_confirmations = {}
+    _set_authoritative_epoch_state(bot, epoch=7)
+    bot.state_change_detected_by_symbol = set()
+    bot._hl_note_ws_symbols_for_dex_scope = lambda _orders: None
+    now_ms = 1_000_000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    order = {
+        "symbol": "BTC/USDC:USDC",
+        "side": "buy",
+        "amount": 1.0,
+        "price": 100.0,
+        "status": "open",
+        "reduceOnly": False,
+        "info": {"reduceOnly": False},
+        **progress,
+    }
+    bot.recent_order_executions = [
+        {**order, "position_side": "long", "qty": 1.0, "execution_timestamp": now_ms}
+    ]
+
+    async def watch_orders():
+        bot.stop_websocket = True
+        return [order]
+
+    bot.ccp = SimpleNamespace(watch_orders=watch_orders)
+    await bot.watch_orders()
+
+    assert order["position_side"] == "long"
+    assert "_pb_order_semantics_source" not in order
+    has_fill = progress.get("remaining") != 1.0
+    assert getattr(bot, "_account_invalidation_generation", 0) == int(has_fill)
+    assert set(bot._authoritative_pending_confirmations) == (
+        {"balance", "positions", "open_orders", "fills"} if has_fill else set()
+    )
