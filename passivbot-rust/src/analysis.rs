@@ -504,6 +504,8 @@ fn analyze_backtest_basic(
         timestamps_ms,
         exposures_series,
         first_fill.usd_total_balance,
+        first_fill.twe_net,
+        0,
     )
 }
 
@@ -513,6 +515,8 @@ fn analyze_backtest_basic_with_starting_balance(
     timestamps_ms: &[u64],
     exposures_series: &[f64],
     starting_balance: f64,
+    starting_exposure: f64,
+    index_offset: usize,
 ) -> Analysis {
     if equities.is_empty() {
         return Analysis::default();
@@ -716,7 +720,7 @@ fn analyze_backtest_basic_with_starting_balance(
             let fill_precedes_sample = if use_timestamps && fill.timestamp_ms > 0 {
                 fill.timestamp_ms <= timestamps_ms[i]
             } else {
-                fill.index <= i
+                fill.index <= index_offset + i
             };
             if fill_precedes_sample {
                 last_balance = fill.usd_total_balance;
@@ -762,6 +766,8 @@ fn analyze_backtest_basic_with_starting_balance(
             .filter(|value| value.is_finite())
             .map(f64::abs)
             .collect()
+    } else if fills.is_empty() {
+        vec![starting_exposure.abs()]
     } else {
         fills
             .iter()
@@ -1174,6 +1180,8 @@ pub fn analyze_backtest(
                 subset_timestamps,
                 subset_exposures,
                 fills.last().unwrap().usd_total_balance,
+                fills.last().unwrap().twe_net,
+                start_idx,
             ),
             FillSuffixSelection::Contiguous(fill_start_idx) => {
                 let balance = fills[fill_start_idx.saturating_sub(1)].usd_total_balance;
@@ -1183,6 +1191,8 @@ pub fn analyze_backtest(
                     subset_timestamps,
                     subset_exposures,
                     balance,
+                    fills[fill_start_idx.saturating_sub(1)].twe_net,
+                    start_idx,
                 )
             }
             FillSuffixSelection::NonContiguous => {
@@ -1193,20 +1203,21 @@ pub fn analyze_backtest(
                     })
                     .cloned()
                     .collect();
-                let balance = fills
+                let previous_fill = fills
                     .iter()
                     .rev()
                     .find(|fill| {
                         !fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
                     })
-                    .unwrap_or(&fills[0])
-                    .usd_total_balance;
+                    .unwrap_or(&fills[0]);
                 analyze_backtest_basic_with_starting_balance(
                     &subset_fills,
                     subset_equities,
                     subset_timestamps,
                     subset_exposures,
-                    balance,
+                    previous_fill.usd_total_balance,
+                    previous_fill.twe_net,
+                    start_idx,
                 )
             }
         };
@@ -2284,16 +2295,7 @@ mod tests {
         let start = 1_740_000_000_000_u64;
         let fills = vec![
             make_trade_fill(100, start, "BTC", 0.0, 0.1, 0.1, 100.0, true),
-            make_trade_fill(
-                102,
-                start + 2 * 60_000,
-                "BTC",
-                -10.0,
-                -0.1,
-                0.0,
-                90.0,
-                true,
-            ),
+            make_trade_fill(102, start + 2 * 60_000, "BTC", -10.0, -0.1, 0.0, 90.0, true),
         ];
         let equities = vec![100.0, 90.0, 95.0];
         let timestamps = vec![start, start + 60_000, start + 2 * 60_000];
@@ -2593,12 +2595,44 @@ mod tests {
             &[0, MS_PER_DAY, 2 * MS_PER_DAY],
             &[0.4; 3],
             1000.0,
+            0.4,
+            0,
         );
         assert!((analysis.equity_balance_diff_neg_max - 0.3).abs() < 1e-12);
         assert!((analysis.paper_loss_ratio - analysis.adg / 0.3).abs() < 1e-12);
         assert!((analysis.exposure_ratio - analysis.adg / 0.4).abs() < 1e-12);
         assert_eq!(analysis.volume_pct_per_day_avg, 0.0);
         assert_eq!(analysis.win_rate, 0.0);
+    }
+
+    #[test]
+    fn suffix_index_fallback_applies_fills_at_their_original_offset() {
+        let mut fill = make_fill(15, 0.4);
+        fill.usd_total_balance = 1000.0;
+        let equities = [900.0; 15];
+        let analysis = analyze_backtest_basic_with_starting_balance(
+            &[fill],
+            &equities,
+            &[],
+            &[0.4; 15],
+            2000.0,
+            0.4,
+            15,
+        );
+        assert!((analysis.equity_balance_diff_neg_max - 0.1).abs() < 1e-12);
+    }
+
+    #[test]
+    fn weighted_fill_derived_exposure_is_carried_into_empty_suffixes() {
+        let fills = [make_fill(0, 0.4)];
+        let equities: Vec<f64> = (0..30).map(|i| 10000.0 - 100.0 * i as f64).collect();
+        let timestamps: Vec<u64> = (0..30).map(|i| i * MS_PER_DAY).collect();
+        let expected = analyze_backtest(&fills, &equities, &timestamps, &[0.4; 30]);
+        for exposures in [&[][..], &[0.4][..]] {
+            let actual = analyze_backtest(&fills, &equities, &timestamps, exposures);
+            assert!((actual.exposure_ratio_w - expected.exposure_ratio_w).abs() < 1e-12);
+            assert!((actual.exposure_mean_ratio_w - expected.exposure_mean_ratio_w).abs() < 1e-12);
+        }
     }
 
     #[test]
@@ -2625,5 +2659,4 @@ mod tests {
         assert_eq!(calc_peak_recovery_hours(&[], None, false), 0.0);
         assert_eq!(calc_peak_recovery_hours(&[100.0], None, false), 0.0);
     }
-
 }

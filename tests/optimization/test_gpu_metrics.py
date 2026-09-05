@@ -1926,7 +1926,8 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
     assert zero_exposure["gain_per_exposure_short_usd"].item() == 0.0
 
 
-def test_btc_account_metrics_use_prepared_daily_price_context():
+@pytest.mark.parametrize("fill_count", [1.0, 3.0])
+def test_btc_account_metrics_use_prepared_daily_price_context(fill_count):
     day_end = torch.tensor([[100.0, 110.0, 90.0]], dtype=torch.float64)
     out = {
         "day_end_eq": day_end,
@@ -1934,7 +1935,7 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         "day_max_dd": torch.zeros_like(day_end),
         "day_volume": torch.zeros_like(day_end),
         "day_has_fill": torch.ones_like(day_end, dtype=torch.bool),
-        "fill_count": torch.tensor([3.0]),
+        "fill_count": torch.tensor([fill_count]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
@@ -1956,6 +1957,8 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         "gain_btc",
         "gain_per_exposure_long_btc",
         "peak_recovery_days_equity_btc",
+        "adg_w_btc",
+        "adg_w_per_exposure_long_btc",
     }
     btc_day_end = np.array([10.0, 10.0, 20.0])
 
@@ -1987,6 +1990,10 @@ def test_btc_account_metrics_use_prepared_daily_price_context():
         expected_gain.item() / 1.25
     )
     assert metrics["peak_recovery_days_equity_btc"].item() == 1.0
+    assert metrics["adg_w_btc"].item() < 0.0
+    assert metrics["adg_w_per_exposure_long_btc"].item() == pytest.approx(
+        metrics["adg_w_btc"].item() / 1.25
+    )
 
 
 def test_btc_account_metrics_fail_closed_without_price_context():

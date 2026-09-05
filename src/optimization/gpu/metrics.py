@@ -1856,7 +1856,7 @@ def _btc_account_metrics(out: dict, run, data: dict, requested) -> dict:
         "mdg_w_per_exposure_short_btc",
     }:
         wanted_safe_weighted_sources.add("mdg_strategy_eq_w")
-    enough_fills = out["fill_count"].to(torch.float64) > 1.0
+    enough_fills = out["fill_count"].to(torch.float64) > 0.0
     if wanted_safe_weighted_sources:
         safe_weighted = _weighted_strategy_eq_metrics(
             day_end_btc,
