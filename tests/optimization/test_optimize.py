@@ -472,6 +472,36 @@ class TestNormalizeOptionalBoolFlag:
         assert result == ["--suite=true", "custom_value"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("flags,expected", [
+    (["--clear-limits"], []),
+    (["--limit", "adg > 0.0008"], ["drawdown_worst_usd", "adg_usd"]),
+    (["--clear-limits", "--limit", "adg > 0.0008"], ["adg_usd"]),
+])
+async def test_optimizer_cli_applies_special_limits_before_preparation(
+    tmp_path, monkeypatch, wrapped, flags, expected
+):
+    config = optimize.get_template_config()
+    config["optimize"]["limits"] = [{"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.3}]
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps({"config": config} if wrapped else config))
+    original_prepare = optimize.prepare_config
+
+    class PreparedOnly(Exception):
+        pass
+
+    def capture_prepared(source, **kwargs):
+        prepared = original_prepare(source, **kwargs)
+        assert [entry["metric"] for entry in prepared["optimize"]["limits"]] == expected
+        raise PreparedOnly
+
+    monkeypatch.setattr(optimize, "prepare_config", capture_prepared)
+    monkeypatch.setattr(optimize.sys, "argv", ["passivbot optimize", str(path), *flags])
+    with pytest.raises(PreparedOnly):
+        await optimize.main()
+
+
 class TestResolveCliLimitsOverride:
     def test_returns_none_when_no_limit_flags_present(self):
         args = argparse.Namespace(**{"optimize.limits": None, "limit_entries": None, "clear_limits": False})
