@@ -154,3 +154,20 @@ def test_wrapped_config_applies_explicit_cli_waiver_before_preparation(
     assert prepared["live"]["leverage"] == 3
     assert not raw["config"]["live"].get("hsl_accept_incomplete_history", False)
     assert "live" not in source
+    assert any(step.get("step") == "update_config_with_args"
+               for step in prepared["_transform_log"])
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_cli_overrides_do_not_load_strategy_metadata(monkeypatch, wrapped):
+    import config_utils
+
+    def unavailable():
+        raise AssertionError("override processing must not load Rust metadata")
+
+    monkeypatch.setattr(config_utils, "get_template_config", unavailable)
+    payload = {"bot": {}, "live": {"leverage": 1}, "backtest": {}, "optimize": {}}
+    source = {"config": payload} if wrapped else payload
+    config_utils.update_config_with_args(source, SimpleNamespace(**{"live.leverage": 3}))
+    assert payload["live"]["leverage"] == 3
+    assert source["_transform_log"][-1]["step"] == "update_config_with_args"
