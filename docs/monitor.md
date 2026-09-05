@@ -19,10 +19,13 @@ python src/tools/monitor_relay.py --monitor-root monitor
 
 Default bind address is `127.0.0.1:8765`.
 
-Browser WebSocket connections must come from the relay's own origin (scheme, host, and port).
-Native clients without an `Origin` header remain supported. The relay does not authenticate
-clients; keep it on a trusted interface or behind authenticated access. A reverse proxy must
-preserve the browser-facing host and configure the application's scheme consistently.
+Browser WebSocket connections must use an allowed origin (scheme, host, and port). By default,
+the relay allows localhost, loopback addresses, and the configured bind host on its bind port.
+For an authenticated HTTPS reverse proxy, add `--allowed-origin https://monitor.example.com`
+and preserve the public `Host` header. Repeat this option for additional public origins.
+Forwarded headers do not grant trust. HTTP requests also require an allowed host to prevent
+DNS rebinding. Native clients without an `Origin` header remain supported on allowed hosts.
+The relay does not authenticate clients; keep it on a trusted interface or behind authenticated access.
 
 The relay is intended to be a single long-running process per repo checkout:
 

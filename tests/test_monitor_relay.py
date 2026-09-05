@@ -118,7 +118,8 @@ async def test_websocket_allows_same_origin_dashboard_and_originless_clients(
     tmp_path, monkeypatch, host, origin
 ):
     _make_monitor_root(tmp_path)
-    app = create_monitor_relay_app(monitor_root=str(tmp_path / "monitor"))
+    app = create_monitor_relay_app(monitor_root=str(tmp_path / "monitor"),
+                                   allowed_origins=[origin or f"http://{host}"])
     fake_ws = FakeWebSocket(close_after_messages=1)
     monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
     headers = {"Host": host}
@@ -127,6 +128,42 @@ async def test_websocket_allows_same_origin_dashboard_and_originless_clients(
     response = await _handle_ws(make_mocked_request("GET", "/ws", app=app, headers=headers))
     assert response is fake_ws
     assert fake_ws.messages[0]["type"] == "snapshot"
+
+
+@pytest.mark.asyncio
+async def test_dns_rebinding_host_and_origin_do_not_authorize_monitor_data(tmp_path):
+    app = create_monitor_relay_app(monitor_root=str(tmp_path))
+    request = make_mocked_request("GET", "/ws", app=app, headers={
+        "Host": "attacker.example:8765", "Origin": "http://attacker.example:8765"})
+    with pytest.raises(web.HTTPForbidden):
+        await _handle_ws(request)
+
+    async def must_not_read_data(request):
+        raise AssertionError("untrusted Host reached an HTTP data handler")
+
+    with pytest.raises(web.HTTPForbidden):
+        await monitor_relay._validate_monitor_host(request, must_not_read_data)
+
+
+@pytest.mark.asyncio
+async def test_configured_external_https_origin_works_through_http_proxy(tmp_path, monkeypatch):
+    _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(tmp_path / "monitor"),
+                                   allowed_origins=["https://monitor.example"])
+    fake_ws = FakeWebSocket(close_after_messages=1)
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    request = make_mocked_request("GET", "/ws", app=app, headers={
+        "Host": "monitor.example", "Origin": "https://monitor.example"})
+    assert request.scheme == "http"
+    response = await monitor_relay._validate_monitor_host(request, _handle_ws)
+    assert response is fake_ws
+    assert fake_ws.messages[0]["type"] == "snapshot"
+
+
+@pytest.mark.parametrize("origin", ["*", "null", "http://host/path", "http://user@host", "http://host:bad"])
+def test_invalid_configured_origin_fails_startup(tmp_path, origin):
+    with pytest.raises(ValueError):
+        create_monitor_relay_app(monitor_root=str(tmp_path), allowed_origins=[origin])
 
 
 @pytest.mark.asyncio
