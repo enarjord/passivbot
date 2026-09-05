@@ -3414,7 +3414,12 @@ def _equity_hard_stop_scope_replay_rows(timeline, boundaries):
         if last_boundary is not None:
             row = dict(row)
             row["_hsl_source_minute_timestamp"] = int(row["timestamp"])
-            row["timestamp"] = max(int(row["timestamp"]), int(last_boundary["timestamp"]) + 1)
+            # A boundary at :59.999 must not consume the following minute's
+            # cache slot before that minute's actual price sample arrives.
+            row["timestamp"] = max(
+                int(row["timestamp"]),
+                min(int(last_boundary["timestamp"]) + 1, (minute + 1) * 60_000 - 1),
+            )
         yield row
     yield from boundaries[cursor:]
 
@@ -3505,7 +3510,6 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             phase=prev_phase, stage="equity_hard_stop_initialize_from_history"
         )
     try:
-        self._equity_hard_stop_reset_state()
         signal_mode = self._equity_hard_stop_signal_mode()
         if signal_mode not in ("unified", "pside"):
             raise ValueError(
@@ -3579,6 +3583,30 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             pside: float(await self._calc_upnl_sum_strict(pside)) for pside in self._hsl_psides()
         }
         current_upnl_total = float(sum(current_upnl_by_pside.values()))
+        scope_boundaries_by_pside = {}
+        for pside in self._hsl_psides():
+            if not self._equity_hard_stop_enabled(pside):
+                continue
+            boundaries = _equity_hard_stop_scope_flatten_samples(
+                self,
+                fill_events,
+                pside,
+                signal_mode,
+                now_ms,
+                current_balance,
+                current_realized_total,
+                {
+                    side: self._equity_hard_stop_realized_pnl_now(side)
+                    for side in self._hsl_psides()
+                },
+            )
+            if boundaries is None:
+                raise AuthoritativeSurfaceUnavailable(
+                    "hsl_episode_boundaries", f"{pside} fill tape cannot prove episode boundaries"
+                )
+            scope_boundaries_by_pside[pside] = boundaries
+        # Validate every enabled scope before replacing existing protective state.
+        self._equity_hard_stop_reset_state()
         n_rows = {pside: 0 for pside in self._hsl_psides()}
         for pside in self._hsl_psides():
             if not self._equity_hard_stop_enabled(pside):
@@ -3632,22 +3660,10 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 if signal_mode == "unified"
                 or _equity_hard_stop_fill_pside(fill) == pside
             )
-            scope_boundaries = _equity_hard_stop_scope_flatten_samples(
-                self,
-                fill_events,
-                pside,
-                signal_mode,
-                now_ms,
-                current_balance,
-                current_realized_total,
-                {
-                    side: self._equity_hard_stop_realized_pnl_now(side)
-                    for side in self._hsl_psides()
-                },
-            )
+            scope_boundaries = scope_boundaries_by_pside[pside]
             scope_was_nonflat = False
             prev_recorded_ts: Optional[int] = None
-            for row in _equity_hard_stop_scope_replay_rows(timeline, scope_boundaries or []):
+            for row in _equity_hard_stop_scope_replay_rows(timeline, scope_boundaries):
                 if not isinstance(row, dict):
                     continue
                 required = ("timestamp", "balance", "realized_pnl")
@@ -3705,6 +3721,11 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         )),
                     )
                 )
+                if (
+                    panic_flatten_marker is not None
+                    and int(panic_flatten_marker["timestamp"]) in ignored_panic_marker_timestamps
+                ):
+                    panic_flatten_marker = None
                 if row.get("_hsl_scope_flatten_fill") and panic_flatten_marker is not None:
                     if int(panic_flatten_marker["timestamp"]) != ts:
                         panic_flatten_marker = None

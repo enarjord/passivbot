@@ -70,7 +70,8 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 ## Failure Semantics
 
 Incomplete fill coverage follows `../error_contract.md`. A required episode boundary is unavailable
-until supported by fill evidence. The affected HSL scope remains protective and retries after an
+until supported by fill evidence. Startup replay validates all enabled scope tapes before replacing
+existing protective state. The affected HSL scope remains protective and retries after an
 authoritative refresh. Flat scopes pending startup price replay retain the existing per-pair
 create gate, leaving unrelated scopes available. Ambiguous required held-episode evidence defers
 ordinary shared-account planning: the startup gate runs after portfolio intent construction and

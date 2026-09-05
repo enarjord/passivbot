@@ -5548,3 +5548,104 @@ async def test_coin_reset_retains_proven_same_millisecond_reentry_fee(reverse_co
         assert bot._equity_hard_stop_coin_realized_pnl_peak_last(
             "long", "A", 240_000, 180_501
         ) == (0.0, -1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+@pytest.mark.parametrize("latched", [False, True])
+async def test_aggregate_startup_unavailable_preserves_existing_protective_state(
+    signal_mode, latched
+):
+    bot = _make_aggregate_episode_bot(signal_mode)
+    bot._equity_hard_stop_apply_sample(
+        "long", 60_000, 1000.0, 0.0, 0.0, 0.0, unrealized_pnl_total=0.0
+    )
+    bot._equity_hard_stop_apply_sample(
+        "long",
+        120_000,
+        1000.0,
+        0.0,
+        0.0,
+        -300.0 if latched else 0.0,
+        unrealized_pnl_total=-300.0 if latched else 0.0,
+    )
+    state = bot._hsl_state("long")
+    previous_metrics = state["last_metrics"]
+    assert state["runtime"].red_latched() is latched
+    bot._pnls_manager.get_events().pop(0)
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="cannot prove"):
+        await bot._equity_hard_stop_initialize_from_history()
+    assert state["last_metrics"] is previous_metrics
+    assert state["runtime"].red_latched() is latched
+    assert state["last_stop_event"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_rejected_panic_marker_cannot_finalize_reopened_episode(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events[1]["timestamp"] = 239_999
+    events[1]["pb_order_type"] = "close_panic_long"
+    events[2]["timestamp"] = 239_999
+    for event, before in [(events[1], 1.0), (events[2], 0.0)]:
+        event["raw"] = [
+            {
+                "data": {
+                    "side": "sell" if event["action"] == "decrease" else "buy",
+                    "amount": 1.0,
+                    "price": 1.0,
+                    "info": {"startPosition": str(before)},
+                }
+            }
+        ]
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        for row in result["timeline"]:
+            if row["timestamp"] == 180_000:
+                row["unrealized_pnl_long"] = -300.0
+        result["panic_flatten_events"] = [
+            {"timestamp": 239_999, "minute_timestamp": 180_000, "pside": "long", "symbol": "A"}
+        ]
+        return result
+
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state("long")
+    assert state["last_stop_event"] is None
+    assert not state["halted"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_minute_end_flatten_does_not_mask_next_price_sample(signal_mode):
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events[1]["timestamp"] = 239_999
+    events[2]["timestamp"] = 240_001
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        for row in result["timeline"]:
+            if row["timestamp"] == 240_000:
+                row["unrealized_pnl_long"] = -300.0
+        return result
+
+    bot.get_balance_equity_history = history
+    samples = []
+    original_apply = bot._equity_hard_stop_apply_sample
+
+    def apply(*args, **kwargs):
+        result = original_apply(*args, **kwargs)
+        samples.append(result)
+        return result
+
+    bot._equity_hard_stop_apply_sample = apply
+    await bot._equity_hard_stop_initialize_from_history()
+    next_minute_samples = [row for row in samples if row["timestamp_ms"] == 240_000]
+    assert len(next_minute_samples) == 1
+    assert next_minute_samples[0]["tier"] == "red"
+    assert next_minute_samples[0]["drawdown_raw"] > 0.29
