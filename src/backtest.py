@@ -64,7 +64,7 @@ from config.access import (
     require_live_value,
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
-from metrics_schema import attach_result_metrics, build_scenario_metrics
+from metrics_schema import attach_result_metrics, build_standalone_metrics
 from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_restart_after_red_policy, normalize_hsl_signal_mode
 from config.overrides import parse_overrides
@@ -2930,7 +2930,7 @@ def post_process(
         )
     else:
         sanitized_config = sanitize_prepared_config_for_dump(config)
-    attach_result_metrics(sanitized_config, metrics=build_scenario_metrics({exchange: analysis}))
+    attach_result_metrics(sanitized_config, metrics=build_standalone_metrics(analysis, exchange))
     dump_config(sanitized_config, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")

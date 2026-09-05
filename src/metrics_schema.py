@@ -122,6 +122,29 @@ def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[st
     return payload
 
 
+def build_standalone_metrics(analysis: Mapping[str, Any], exchange: str) -> Dict[str, Any]:
+    """Persist standalone diagnostics without applying optimizer scoring validation."""
+    period = evaluation_period(analysis)
+    payload = {
+        "stats": {
+            metric: _build_stats([value])
+            for metric, value in analysis.items()
+            if _is_number(value)
+        },
+        **period,
+    }
+    if period:
+        payload["exchanges"] = {exchange: period}
+    diagnostics = {
+        metric: str(float(value))
+        for metric, value in analysis.items()
+        if _is_numeric_value(value) and not _is_number(value)
+    }
+    if diagnostics:
+        payload["nonfinite_diagnostics"] = diagnostics
+    return payload
+
+
 def flatten_metric_stats(stats: Mapping[str, MetricStats], *, prefix: str = "") -> Dict[str, float]:
     """Convert structured stats to the legacy flat format used by scoring/limits."""
 

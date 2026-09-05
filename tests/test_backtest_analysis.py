@@ -1212,3 +1212,47 @@ def test_analysis_period_uses_actual_equity_timestamps(columns, count):
         "2024-01-03T00:00:00Z" if count == 3 else
         "2024-01-02T00:00:00Z" if count else None
     )
+
+
+def test_post_process_persists_artifacts_with_infinite_diagnostic(tmp_path, monkeypatch):
+    import json
+    from copy import deepcopy
+
+    fdf = pd.DataFrame(columns=["coin", "pnl"])
+    bal_eq = pd.DataFrame({"balance": [1000.0, 1000.0], "equity": [1000.0, 1000.0]})
+    monkeypatch.setattr(bt, "process_forager_fills", lambda *args, **kwargs: (fdf, {}, bal_eq))
+    monkeypatch.setattr(bt, "sanitize_prepared_config_for_dump", deepcopy)
+    monkeypatch.setattr(bt, "dump_backtest_dataset_metadata", lambda *args, **kwargs: None)
+    plot_calls = []
+    monkeypatch.setattr(
+        bt, "create_forager_balance_figures",
+        lambda *args, **kwargs: plot_calls.append("balance") or {},
+    )
+    monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: plot_calls.append("save"))
+    config = {
+        "disable_plotting": ["twe", "pnl", "hard_stop", "coin_fills"],
+        "backtest": {"balance_sample_divider": 60, "coins": {"binance": ["BTC"]}},
+        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "live": {},
+    }
+    bt.post_process(
+        config=config,
+        hlcvs=np.zeros((2, 1, 3), dtype=np.float64),
+        fills=[],
+        equities_array=np.array([[1704067200000, 1000.0, 1000.0], [1704240000000, 1000.0, 1000.0]]),
+        btc_usd_prices=np.array([]),
+        analysis={"gain_usd": 1.0, "n_days": 2.0, "equity_choppiness": float("inf"),
+                  "effective_start_date": "2024-01-01T00:00:00Z",
+                  "effective_end_date": "2024-01-03T00:00:00Z"},
+        results_path=str(tmp_path), exchange="binance",
+    )
+    result_dir = next(tmp_path.iterdir())
+    raw = json.loads((result_dir / "analysis.json").read_text())
+    saved = json.loads((result_dir / "config.json").read_text())
+    assert np.isinf(raw["equity_choppiness"])
+    assert saved["metrics"]["stats"]["n_days"]["mean"] == 2.0
+    assert saved["metrics"]["nonfinite_diagnostics"]["equity_choppiness"] == "inf"
+    assert saved["metrics"]["effective_end_date"] == "2024-01-03T00:00:00Z"
+    assert (result_dir / "fills.csv").exists()
+    assert (result_dir / "balance_and_equity.csv.gz").exists()
+    assert plot_calls == ["balance", "save"]

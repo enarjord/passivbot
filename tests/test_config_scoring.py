@@ -260,3 +260,15 @@ def test_scoring_reducer_override_requires_effective_suite_scenario():
             default_scenario="base",
             reducer_cfg={"default": "mean"},
         )
+
+
+@pytest.mark.parametrize("metric", ["n_days", "fills_analysis_duration_days"])
+def test_duration_aliases_load_with_default_max_objective(metric):
+    from config import prepare_config
+    from config_utils import get_template_config
+
+    config = get_template_config()
+    config["optimize"]["scoring"] = [metric]
+    prepared = prepare_config(config, verbose=False)
+    assert prepared["optimize"]["scoring"] == [{"metric": "n_days", "goal": "max"}]
+    assert default_objective_goal(metric) == "max"

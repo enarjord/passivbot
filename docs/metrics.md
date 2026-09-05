@@ -11,12 +11,18 @@ expressed as percentages/ratios.
 - `n_days`: Elapsed days between the first and last actual equity-analysis timestamps,
   including idle periods. This excludes pre-analysis warmup and reflects early termination.
   It is not a count of days with fills or a per-coin coverage measure.
-  `fills_analysis_duration_days` remains available with the same value; both names work in
-  exact/CPU scoring and metric lookup, including older result files. Both remain excluded from
-  GPU proxy scoring and proxy-side limits, while computed diagnostic values stay available.
+  `fills_analysis_duration_days` remains available with the same value; both names default to
+  maximizing duration and work in exact/CPU scoring and metric lookup, including older result files.
+  Both remain excluded from GPU proxy scoring and proxy-side limits, while computed diagnostic
+  values stay available.
 - `effective_start_date` and `effective_end_date`: Those actual boundaries as UTC ISO timestamps.
   Empty equity histories have null dates and zero duration; a single timestamp has equal dates
   and zero duration. Dates are output metadata and are never averaged or used as scoring metrics.
+
+Standalone result configs keep finite values in `metrics.stats` and encode undefined numeric
+diagnostics as strings (`"inf"`, `"-inf"`, or `"nan"`) in `metrics.nonfinite_diagnostics`. The raw
+`analysis.json` remains unchanged, and fills and plots still persist. Optimizer and suite scoring
+continue to reject non-finite metric values.
 
 Standalone backtests retain the flat `analysis.json` and also embed structured results in
 `config.json` under `metrics`, matching Pareto members: duration is at `metrics.stats.n_days`

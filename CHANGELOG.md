@@ -8,7 +8,8 @@ All notable user-facing changes will be documented in this file.
   existing metrics payloads, preserving per-exchange and per-scenario windows. Saved backtest
   configs include current `metrics` or `suite_metrics`; `fills_analysis_duration_days` remains
   available as a compatibility alias with the same exact/CPU scoring, suite reducer, and GPU
-  exact-only policy.
+  exact-only policy. Both duration names default to maximizing duration in shorthand scoring.
+  Standalone artifacts preserve non-finite diagnostics separately from finite metric statistics.
   Saved suite configs retain the effective exchange defaults from external suite overrides.
 
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking

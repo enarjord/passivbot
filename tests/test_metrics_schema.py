@@ -99,3 +99,18 @@ def test_result_metrics_replace_previous_run_and_roundtrip(tmp_path):
     suite = {"scenarios": {"base": {"effective_start_date": None}}}
     dump_config(attach_result_metrics(config, suite_metrics=suite), str(tmp_path / "config.json"))
     assert json.loads((tmp_path / "config.json").read_text()) == {"suite_metrics": suite}
+
+
+@pytest.mark.parametrize("value", [float("inf"), float("-inf"), float("nan")])
+def test_standalone_nonfinite_diagnostics_do_not_weaken_optimizer_validation(value):
+    import json
+    from metrics_schema import build_standalone_metrics
+
+    analysis = {"equity_choppiness": value, "effective_start_date": "2024-01-01T00:00:00Z"}
+    payload = build_standalone_metrics(analysis, "binance")
+    assert payload["stats"] == {}
+    assert payload["nonfinite_diagnostics"] == {"equity_choppiness": str(value)}
+    json.dumps(payload, allow_nan=False)
+    assert payload["exchanges"]["binance"]["effective_start_date"] == analysis["effective_start_date"]
+    with pytest.raises(MetricAggregationError, match="non-finite metric"):
+        build_scenario_metrics({"binance": analysis})
