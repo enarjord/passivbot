@@ -595,17 +595,35 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
     bot = _CreateBot(FreshEntryEligibilityTrace())
     bot._order_churn_gate_state = OrderChurnGateState()
 
-    async def fail_batch(_orders):
+    from types import SimpleNamespace
+
+    async def fail_create(**_params):
         raise RuntimeError("ambiguous connector failure")
 
+    async def fail_batch(orders):
+        return [await Passivbot.execute_order(bot, order) for order in orders]
+
+    bot.cca = SimpleNamespace(create_order=fail_create)
+    bot._build_order_params = lambda _order: {}
+    bot._record_emitted_order_custom_id = lambda *args, **kwargs: None
+    bot._record_order_churn_allowance_attempts = (
+        lambda count, **kwargs: Passivbot._record_order_churn_allowance_attempts(
+            bot, count, **kwargs
+        )
+    )
+    bot._emit_execution_connector_call_started_event = lambda **kwargs: None
     bot.execute_orders = fail_batch
     bot.add_to_recent_order_executions = lambda _order: None
     emitted = []
     bot._emit_order_churn_actions_accounted_event = lambda **kwargs: emitted.append(
         kwargs
     )
-    monkeypatch.setattr(Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None)
-    monkeypatch.setattr(Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None
+    )
 
     with pytest.raises(RuntimeError, match="ambiguous connector failure"):
         await executor.execute_orders_parent(bot, [order])

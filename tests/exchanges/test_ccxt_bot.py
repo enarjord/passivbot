@@ -654,6 +654,7 @@ class TestCCXTBotConnectorCallEvents:
         bot.user = "binance_01"
         bot.bot_id = "bot-1"
         bot.cca = CCA()
+        bot.open_orders = {}
         bot._build_order_params = lambda _order: {"postOnly": True}
         bot._live_event_current_cycle_id = "cy_3"
         bot._execution_connector_call_context = {

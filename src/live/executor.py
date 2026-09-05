@@ -16,6 +16,10 @@ from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
 
 
+class DeferredOrderCreation:
+    """An order deliberately withheld before the exchange connector was called."""
+
+
 def _passivbot_module():
     module = sys.modules.get("passivbot")
     if module is None:
@@ -573,6 +577,10 @@ async def execute_order_plan(
 ):
     """Execute a precomputed order plan against the exchange."""
     passivbot_cls = _pb_attr("Passivbot")
+    snapshot = getattr(bot, "_current_planning_snapshot", None)
+    planned_generation = int(
+        getattr(snapshot, "account_invalidation_generation", 0) or 0
+    )
     order_wave = passivbot_cls._begin_order_wave(bot, to_cancel, to_create)
     cancel_first_barrier = (
         bool(to_cancel)
@@ -975,10 +983,6 @@ async def execute_order_plan(
             order_wave["deferred_create"] += max(
                 0, before_capacity - len(to_create_mod)
             )
-        snapshot = getattr(bot, "_current_planning_snapshot", None)
-        planned_generation = int(
-            getattr(snapshot, "account_invalidation_generation", 0) or 0
-        )
         current_generation = int(
             getattr(bot, "_account_invalidation_generation", 0) or 0
         )
@@ -1018,6 +1022,13 @@ async def execute_order_plan(
                     len(blocked),
                 )
         if to_create_mod:
+            for order in to_create_mod:
+                order["_planned_account_invalidation_generation"] = planned_generation
+                order["_dedicated_protective_market_panic"] = (
+                    _is_dedicated_protective_market_panic(
+                        bot, order, configure_creations=configure_creations
+                    )
+                )
             res = None
             try:
                 create_started_ms = _utc_ms()
@@ -1072,9 +1083,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()
     )
     for order in orders:
-        passivbot_cls._record_emitted_order_custom_id(
-            bot, order, emitted_ts=emitted_ts, status="submitted"
-        )
         bot.log_order_action(
             order,
             "posting order",
@@ -1108,9 +1116,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         "wave": wave,
     }
     bot._execution_connector_call_context = connector_call_context
-    _pb_attr("Passivbot")._record_order_churn_allowance_attempts(
-        bot, len(orders), action_kind="create"
-    )
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
@@ -1199,6 +1204,23 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         return []
     to_return = []
     for idx, (ex, order) in enumerate(zip(res, orders)):
+        if isinstance(ex, DeferredOrderCreation):
+            if wave is not None:
+                wave["skipped_create"] = wave.get("skipped_create", 0) + 1
+            _record_fresh_entry_orders(
+                bot, "record_blocked_orders", [order], "state_change_detected"
+            )
+            passivbot_cls._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                status="skipped",
+                reason_code=ReasonCodes.STATE_CHANGE_DETECTED,
+                order_count=1,
+                symbols=[order["symbol"]],
+                wave=wave,
+                message="create order skipped because account state changed before connector call",
+            )
+            continue
         if not bot.did_create_order(ex):
             if isinstance(ex, Exception):
                 reason_code = "result_exception"

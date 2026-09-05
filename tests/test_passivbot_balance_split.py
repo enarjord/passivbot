@@ -13364,3 +13364,66 @@ def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     assert bot._balance_composition["reason"] == "raw_only_refresh"
     assert bot._balance_composition["asset_balances"] == []
     assert bot._balance_composition is not composition
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {"filled": 0.25},
+        {"filled": None, "remaining": 0.75},
+        {"filled": 0.0, "remaining": 1.0},
+    ],
+)
+@pytest.mark.parametrize(
+    "venue, class_name",
+    [
+        ("ccxt_bot", "CCXTBot"),
+        ("bybit", "BybitBot"),
+        ("gateio", "GateIOBot"),
+        ("okx", "OKXBot"),
+        ("bitunix", "BitunixBot"),
+        ("weex", "WeexBot"),
+        ("binance", "BinanceBot"),
+        ("kucoin", "KucoinBot"),
+    ],
+)
+def test_shared_ccxt_partial_fill_self_echo_invalidates_account(
+    monkeypatch, progress, venue, class_name
+):
+    from importlib import import_module
+
+    bot_class = getattr(import_module(f"exchanges.{venue}"), class_name)
+    bot = bot_class.__new__(bot_class)
+    bot.execution_scheduled = False
+    bot._authoritative_pending_confirmations = {}
+    _set_authoritative_epoch_state(bot, epoch=7)
+    bot.state_change_detected_by_symbol = set()
+    now_ms = 1_000_000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 1.0,
+        "price": 100.0,
+        "status": "open",
+        "reduceOnly": False,
+        "info": {
+            "positionSide": "LONG",
+            "posSide": "long",
+            "positionIdx": 1,
+            "reduceOnly": False,
+        },
+        **progress,
+    }
+    normalized = bot._normalize_order_update(order)
+    bot.recent_order_executions = [{**normalized, "execution_timestamp": now_ms}]
+    bot.handle_order_update([normalized])
+
+    has_fill = progress.get("remaining") != 1.0
+    assert getattr(bot, "_account_invalidation_generation", 0) == int(has_fill)
+    assert bot.state_change_detected_by_symbol == (
+        {order["symbol"]} if has_fill else set()
+    )
+    assert set(bot._authoritative_pending_confirmations) == (
+        {"balance", "positions", "open_orders", "fills"} if has_fill else set()
+    )
