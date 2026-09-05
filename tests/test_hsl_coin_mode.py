@@ -5649,3 +5649,159 @@ async def test_minute_end_flatten_does_not_mask_next_price_sample(signal_mode):
     assert len(next_minute_samples) == 1
     assert next_minute_samples[0]["tier"] == "red"
     assert next_minute_samples[0]["drawdown_raw"] > 0.29
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("policy", ["panic", "manual", "tp_only", "graceful_stop", "normal"])
+async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(signal_mode, policy):
+    from unittest.mock import AsyncMock, MagicMock
+
+    fixture = make_coin_bot(policy=policy)
+    bot = Passivbot.__new__(Passivbot)
+    bot.__dict__.update(vars(fixture))
+    for name, value in list(vars(bot).items()):
+        if isinstance(value, MethodType) and value.__self__ is fixture:
+            setattr(bot, name, MethodType(value.__func__, bot))
+    bot.config["live"]["hsl_signal_mode"] = signal_mode
+    bot.config["live"]["execution_delay_seconds"] = 0.25
+    bot.hsl["short"]["enabled"] = True
+    bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 1.0}}}
+    state = bot._hsl_coin_state("short", "A") if signal_mode == "coin" else bot._hsl_state("short")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 600_000
+    assert not state["cooldown_repanic_reset_pending"]
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_runtime_initialized = lambda _pside: True
+    bot._equity_hard_stop_cooldown_log_interval_ms = 60_000
+    bot._equity_hard_stop_handle_position_during_cooldown = MethodType(
+        hsl._equity_hard_stop_handle_position_during_cooldown, bot
+    )
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.refresh_authoritative_state = AsyncMock(return_value=True)
+    bot._equity_hard_stop_check = AsyncMock(
+        side_effect=hsl.AuthoritativeSurfaceUnavailable(
+            "hsl_episode_boundaries", "unrelated long scope tape is ambiguous"
+        )
+    )
+    bot.prepare_planning_universe = AsyncMock()
+    bot.execute_to_exchange = AsyncMock()
+    bot._run_latched_hsl_supervisor_if_active = MethodType(
+        Passivbot._run_latched_hsl_supervisor_if_active, bot
+    )
+    bot._run_halted_hsl_protection_if_active = MethodType(
+        Passivbot._run_halted_hsl_protection_if_active, bot
+    )
+    calls = []
+
+    async def refresh():
+        calls.append("refresh")
+        return True
+
+    async def protective_plan():
+        calls.append("plan")
+        return [], [
+            {
+                "symbol": "A",
+                "position_side": "short",
+                "side": "buy",
+                "reduce_only": True,
+                "qty": bot.positions["A"]["short"]["size"],
+            }
+        ]
+
+    async def execute(cancels, creates, *, configure_creations):
+        calls.append("execute")
+        assert not cancels and not configure_creations
+        assert creates[0]["reduce_only"] is True
+        assert state["cooldown_repanic_reset_pending"]
+        bot.positions["A"]["short"]["size"] -= 0.5
+        if bot.positions["A"]["short"]["size"] == 0.0:
+            bot.stop_signal_received = True
+
+    async def stop(seconds, *, stage):
+        if stage == "hsl_cooldown_protection":
+            calls.append("pace")
+            assert seconds == 0.25
+        else:
+            bot.stop_signal_received = True
+
+    bot.refresh_protective_authoritative_state = AsyncMock(side_effect=refresh)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(side_effect=protective_plan)
+    bot.execute_order_plan_to_exchange = AsyncMock(side_effect=execute)
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
+    await Passivbot.run_execution_loop(bot)
+    bot.prepare_planning_universe.assert_not_awaited()
+    bot.execute_to_exchange.assert_not_awaited()
+    if policy == "panic":
+        assert calls == [
+            "refresh",
+            "plan",
+            "execute",
+            "pace",
+            "refresh",
+            "plan",
+            "execute",
+            "pace",
+        ]
+        assert bot.positions["A"]["short"]["size"] == 0.0
+        assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
+        assert state["cooldown_repanic_since_ms"] == 180_000
+    else:
+        assert "execute" not in calls
+        assert not state["cooldown_repanic_reset_pending"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_by", ["pending_replay", "account_refresh", "expired_cooldown"])
+async def test_deferred_cooldown_protection_requires_ready_scope_and_fresh_account(blocked_by):
+    from unittest.mock import AsyncMock
+
+    bot = make_coin_bot(policy="panic")
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    state = bot._hsl_coin_state("long", "A")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 120_000 if blocked_by == "expired_cooldown" else 600_000
+    bot._equity_hard_stop_coin_initialized = False
+    bot._equity_hard_stop_coin_protective_ready = True
+    bot._equity_hard_stop_coin_replay_ready_pairs = (
+        set() if blocked_by == "pending_replay" else {("long", "A")}
+    )
+    bot.refresh_protective_authoritative_state = AsyncMock(
+        return_value=blocked_by != "account_refresh"
+    )
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock()
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    assert not await Passivbot._run_halted_hsl_protection_if_active(bot)
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    bot.execute_order_plan_to_exchange.assert_not_awaited()
+    assert not state["cooldown_repanic_reset_pending"]
+
+
+@pytest.mark.asyncio
+async def test_deferred_cooldown_empty_protective_wave_is_paced():
+    from unittest.mock import AsyncMock
+
+    bot = make_coin_bot(policy="panic")
+    bot.config["live"]["execution_delay_seconds"] = 0.75
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_cooldown_log_interval_ms = 60_000
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    state = bot._hsl_coin_state("long", "A")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 600_000
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot._sleep_unless_shutdown = AsyncMock()
+    for _ in range(2):
+        assert await Passivbot._run_halted_hsl_protection_if_active(bot)
+    assert bot._sleep_unless_shutdown.await_count == 2
+    bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
+    assert state["cooldown_repanic_since_ms"] == 180_000
+    assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}

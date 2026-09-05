@@ -685,6 +685,8 @@ async def _run_fake_cycle(bot):
             raise
         # Match the live loop: unknown held-episode evidence defers shared ordinary
         # planning, while an independently latched RED scope keeps supervision.
+        if await bot._run_halted_hsl_protection_if_active():
+            return {"cooldown_supervisor": True}
         if bot._equity_hard_stop_signal_mode() == "coin":
             if bot._equity_hard_stop_coin_red_active():
                 await bot._equity_hard_stop_run_coin_red_supervisor()

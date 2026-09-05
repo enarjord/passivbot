@@ -4397,6 +4397,11 @@ impl<'a> Backtest<'a> {
             } else {
                 self.update_hard_stop_state_pside_at_boundary(k, pside, true)?;
             }
+            let flat_strategy_pnl = if unified {
+                self.pnl_cumsum_running_net
+            } else {
+                self.pnl_cumsum_running_net_pside[pside]
+            };
             let runtime = if coin_mode {
                 &mut self.hard_stop_coin[pside][idx]
             } else {
@@ -4409,6 +4414,14 @@ impl<'a> Backtest<'a> {
             runtime.tier = ehsl::HardStopTier::Green;
             runtime.red_active_now = false;
             runtime.rolling_peak_strategy_pnl.clear();
+            if !coin_mode {
+                // Keep the proven flat baseline before any same-bar re-entry
+                // fees or closing loss can become the queue's first sample.
+                runtime.rolling_peak_strategy_pnl.push_back((
+                    self.first_timestamp_ms + k as u64 * self.interval_ms,
+                    flat_strategy_pnl,
+                ));
+            }
             runtime.flat_confirmations = 0;
             runtime.pending_stop = None;
             runtime.current_red_start_ms = None;
@@ -6864,7 +6877,10 @@ mod tests {
 
     #[test]
     fn ordinary_flatten_respects_pside_and_unified_scope() {
-        for mode in ["pside", "unified"] {
+        for (mode, closing_side) in [
+            ("pside", LONG), ("pside", SHORT),
+            ("unified", LONG), ("unified", SHORT),
+        ] {
             let hlcvs = Array3::from_shape_vec((3, 2, 4), vec![1.0; 3 * 2 * 4]).unwrap();
             let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
             let mut bp_pair = BotParamsPair::default();
@@ -6969,15 +6985,54 @@ mod tests {
                 .unwrap();
             for pside in [LONG, SHORT] {
                 assert!(bt.hard_stop_pside[pside].state.is_none());
-                assert!(bt.hard_stop_pside[pside]
-                    .rolling_peak_strategy_pnl
-                    .is_empty());
+                let expected_baseline = if mode == "unified" {
+                    bt.pnl_cumsum_running_net
+                } else {
+                    bt.pnl_cumsum_running_net_pside[pside]
+                };
+                assert_eq!(
+                    bt.hard_stop_pside[pside].rolling_peak_strategy_pnl,
+                    VecDeque::from([(60_000, expected_baseline)])
+                );
                 assert_eq!(
                     bt.hard_stop_pside[pside].no_restart_peak_strategy_equity,
                     1200.0
                 );
             }
             assert_eq!(bt.hard_stop_n_triggers, 0);
+
+            // A second complete episode in this bar must retain the first
+            // flatten's PnL baseline, including entry and closing fees.
+            let fee_exec = OrderFillExecution { fee_rate: 0.001, ..exec };
+            if closing_side == LONG {
+                let entry = Order {
+                    qty: 500.0, price: 1.0,
+                    order_type: OrderType::EntryInitialNormalLong,
+                };
+                bt.process_entry_fill_long(1, 0, &entry, fee_exec);
+                bt.process_close_fill_long(
+                    1, 0, &Order { qty: -500.0, ..close },
+                    OrderFillExecution { price: 0.5, ..fee_exec },
+                ).unwrap();
+            } else {
+                let entry = Order {
+                    qty: -500.0, price: 1.0,
+                    order_type: OrderType::EntryInitialNormalShort,
+                };
+                bt.process_entry_fill_short(1, 0, &entry, fee_exec);
+                bt.process_close_fill_short(
+                    1, 0, &Order { qty: 500.0, ..close_short },
+                    OrderFillExecution { price: 1.5, ..fee_exec },
+                ).unwrap();
+            }
+            let runtime = &bt.hard_stop_pside[closing_side];
+            assert!(runtime.halted, "second same-bar loss must trigger RED in {mode}");
+            let stop = runtime.last_stop.unwrap();
+            assert_eq!(stop.timestamp_ms, 60_000);
+            let episode_loss = if closing_side == LONG { 250.75 } else { 251.25 };
+            let peak_equity = if mode == "unified" || closing_side == LONG { 998.0 } else { 1000.0 };
+            assert!((stop.drawdown_raw - episode_loss / peak_equity).abs() < 1e-12);
+            assert_eq!(bt.hard_stop_n_triggers, if mode == "unified" { 2 } else { 1 });
         }
     }
 

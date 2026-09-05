@@ -1786,6 +1786,8 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
 ):
     from live.state_refresh import AuthoritativeSurfaceUnavailable
 
+    from unittest.mock import AsyncMock
+
     calls = []
 
     async def unavailable(bot):
@@ -1796,6 +1798,7 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
 
     monkeypatch.setattr(run_fake_live_module, "_run_fake_cycle_ready", unavailable)
     bot = SimpleNamespace(
+        _run_halted_hsl_protection_if_active=AsyncMock(return_value=False),
         _equity_hard_stop_signal_mode=lambda: "coin",
         _equity_hard_stop_coin_red_active=lambda: latched,
         _equity_hard_stop_run_coin_red_supervisor=supervise,

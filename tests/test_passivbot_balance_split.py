@@ -13494,6 +13494,7 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     bot.state_change_detected_by_symbol = set()
     bot.debug_mode = True
     bot._equity_hard_stop_coin_initialized = True
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
     bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
     bot._equity_hard_stop_signal_mode = lambda: "coin"
     bot._equity_hard_stop_coin_red_active = lambda: latched

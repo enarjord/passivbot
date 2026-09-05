@@ -6113,6 +6113,77 @@ class Passivbot:
         await asyncio.sleep(1.0)
         return True
 
+    async def _run_halted_hsl_protection_if_active(self) -> bool:
+        """Protect proven cooldown scopes while unrelated episode evidence is unavailable."""
+        coin_mode = self._equity_hard_stop_signal_mode() == "coin"
+        scopes = []
+        if coin_mode:
+            initialized = bool(getattr(self, "_equity_hard_stop_coin_initialized", False))
+            ready_pairs = getattr(self, "_equity_hard_stop_coin_replay_ready_pairs", set())
+            for pside, states in getattr(self, "_equity_hard_stop_coin", {}).items():
+                for symbol, state in states.items():
+                    if (
+                        state["halted"]
+                        and self._equity_hard_stop_enabled(pside, symbol=symbol)
+                        and (initialized or (pside, symbol) in ready_pairs)
+                    ):
+                        scopes.append((pside, symbol, state))
+        else:
+            scopes = [
+                (pside, None, self._hsl_state(pside))
+                for pside in self._hsl_psides()
+                if self._equity_hard_stop_enabled(pside) and self._hsl_state(pside)["halted"]
+            ]
+        if not scopes:
+            return False
+        if not await self.refresh_protective_authoritative_state():
+            return False
+        now_ms = int(self.get_exchange_time())
+        panic_needed = False
+        for pside, symbol, state in scopes:
+            cooldown_until_ms = state["cooldown_until_ms"]
+            if state["no_restart_latched"] or (
+                not state["cooldown_repanic_reset_pending"]
+                and (cooldown_until_ms is None or now_ms >= cooldown_until_ms)
+            ):
+                continue
+            symbols = [symbol] if coin_mode else self._equity_hard_stop_position_symbols(pside)
+            symbols = [
+                candidate
+                for candidate in symbols
+                if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
+            ]
+            if not symbols:
+                # Fill-confirmed cooldown finalization retains its existing owner.
+                continue
+            if coin_mode:
+                await self._equity_hard_stop_handle_coin_position_during_cooldown(
+                    pside, symbol, now_ms
+                )
+                panic_needed |= bool(
+                    state["halted"]
+                    and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
+                )
+            else:
+                await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
+                panic_needed |= bool(
+                    state["halted"]
+                    and any(
+                        self._equity_hard_stop_halted_mode(pside, item) == "panic"
+                        for item in symbols
+                    )
+                )
+        if not panic_needed:
+            return False
+        # The existing protective planner admits only panic cancels/reduce-only
+        # closes, with its own fresh-account and submit-boundary checks.
+        to_cancel, to_create = await self.calc_protective_panic_orders_to_cancel_and_create()
+        await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+        await self._sleep_unless_shutdown(
+            float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
+        )
+        return True
+
     async def _run_latched_hsl_supervisor_if_active(
         self, *, cycle_id: object, loop_timings_ms: dict[str, int]
     ) -> bool:
@@ -6366,9 +6437,12 @@ class Passivbot:
                             reason_code="hsl_episode_boundaries_unavailable",
                             data={"reason": exc.reason},
                         )
-                        if not await self._run_latched_hsl_supervisor_if_active(
-                            cycle_id=cycle_id,
-                            loop_timings_ms=loop_timings_ms,
+                        if not (
+                            await self._run_halted_hsl_protection_if_active()
+                            or await self._run_latched_hsl_supervisor_if_active(
+                                cycle_id=cycle_id,
+                                loop_timings_ms=loop_timings_ms,
+                            )
                         ):
                             await self._sleep_unless_shutdown(
                                 0.5, stage="hsl_episode_boundaries_retry"

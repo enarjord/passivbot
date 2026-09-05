@@ -76,7 +76,8 @@ authoritative refresh. Flat scopes pending startup price replay retain the exist
 create gate, leaving unrelated scopes available. Ambiguous required held-episode evidence defers
 ordinary shared-account planning: the startup gate runs after portfolio intent construction and
 cannot make a plan built from unknown HSL episode state authoritative. Independently ready,
-already-latched RED supervision still runs during that deferral.
+already-latched RED supervision and required panic protection for active cooldown positions still
+run during that deferral, using fresh protective account state and the configured execution pacing.
 
 ## Code And Tests
 

@@ -70,8 +70,8 @@ All notable user-facing changes will be documented in this file.
   exact backtests, and Apple MPS screening retain closing PnL and fees before resetting episode
   drawdown, while preserving RED-triggered cooldowns and persistent no-restart limits. Closing
   fills that first trigger RED finalize before same-step re-entry. Ambiguous required episode
-  evidence defers startup replay and ordinary planning while already-latched RED supervision remains
-  available.
+  evidence defers startup replay and ordinary planning while already-latched RED supervision and
+  panic protection for active cooldown positions remain available.
 
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
