@@ -206,6 +206,7 @@ from optimization.evaluation_contract import (
     CONTRACT_KEY,
     CONTRACT_CACHE_KEY,
     build_evaluation_contract,
+    has_unresolved_override_files,
     recorded_evaluation_contract,
 )
 from optimization.warmup import (
@@ -846,6 +847,12 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
     ):
         mismatches.append(
             "  - optimizer_evaluation_contract: unsupported or malformed snapshot"
+        )
+        return mismatches
+    if stored_contract is None and has_unresolved_override_files(entry):
+        mismatches.append(
+            "  - optimizer_evaluation_contract: legacy results reference unresolved coin "
+            "override files and lack historical policy evidence; start a fresh run"
         )
         return mismatches
     if stored_contract is None and (
@@ -3155,7 +3162,7 @@ def _run_gpu_preparation_preflight(
 def _materialize_resolved_suite_dates(
     config: Dict[str, Any], scenario_contexts: Sequence[ScenarioEvalContext]
 ) -> None:
-    """Replace dynamic suite date tokens with the prepared concrete dates."""
+    """Persist concrete dates and the resolved policy used by prepared scenarios."""
 
     if not config.get("backtest", {}).get("suite_enabled"):
         return
@@ -3169,6 +3176,8 @@ def _materialize_resolved_suite_dates(
     for scenario, ctx in zip(scenarios, scenario_contexts):
         resolved = deepcopy(scenario)
         resolved["label"] = ctx.label
+        if scenario.get("overrides"):
+            resolved["overrides"] = deepcopy(ctx.overrides)
         for key in ("start_date", "end_date"):
             meta_key = f"requested_{key}"
             prepared_values = {

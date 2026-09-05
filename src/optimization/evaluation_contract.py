@@ -44,6 +44,25 @@ def _remove_path(config, path):
         node.pop(path[-1], None)
 
 
+def has_unresolved_override_files(config: dict) -> bool:
+    """Legacy file references cannot establish the policy used for saved fitness."""
+
+    def contains_file(value):
+        if isinstance(value, dict):
+            return any(
+                (str(key).split(".")[-1] == "override_config_path" and bool(item))
+                or contains_file(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, list):
+            return any(contains_file(item) for item in value)
+        return False
+
+    return contains_file(config.get("coin_overrides", {})) or contains_file(
+        config.get("backtest", {}).get("scenarios", [])
+    )
+
+
 def build_evaluation_contract(config: dict) -> dict:
     """Retain fixed policy while excluding values owned by the candidate vector."""
     effective = clean_config(config)

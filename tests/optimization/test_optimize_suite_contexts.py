@@ -491,3 +491,113 @@ async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeyp
             suite_cfg,
             shared_array_manager=_NoSharedArrayManager(),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", ["deap", "pymoo", "gpu"])
+async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contract(
+    tmp_path, monkeypatch, backend
+):
+    import json
+    from copy import deepcopy
+    from optimize import (
+        SuiteEvaluator,
+        _materialize_suite_run_contract,
+        _materialize_resolved_suite_dates,
+        _resume_config_mismatches,
+        build_backtest_payload,
+        execute_backtest,
+    )
+    from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
+
+    _stub_market_identity_validation(monkeypatch)
+    config = get_template_config()
+    config["optimize"]["backend"] = backend
+    config["backtest"].update(
+        start_date="2024-01-01",
+        end_date="2024-01-02",
+        exchanges=["binance"],
+        suite_enabled=True,
+    )
+    config["live"]["approved_coins"] = {"long": ["HYPE"], "short": ["HYPE"]}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    path = tmp_path / "scenario-coin.json"
+    config["backtest"]["scenarios"] = [
+        {
+            "label": "file-policy",
+            "overrides": {
+                "coin_overrides": {"HYPE": {"override_config_path": str(path)}}
+            },
+        }
+    ]
+    dataset = _make_lazy_dataset(
+        coin_exchange={"HYPE": "binance"}, available_exchanges=["binance"]
+    )
+    dataset.mss["HYPE"].update(
+        qty_step=0.001,
+        price_step=0.01,
+        min_qty=0.001,
+        min_cost=1.0,
+        c_mult=1.0,
+        maker=0.0,
+        taker=0.0,
+    )
+
+    async def noop(*args, **kwargs):
+        return None
+
+    async def datasets(*args, **kwargs):
+        return {"combined": dataset}
+
+    monkeypatch.setattr(optimize_suite, "load_markets", noop)
+    monkeypatch.setattr(optimize_suite, "format_approved_ignored_coins", noop)
+    monkeypatch.setattr(optimize_suite, "prepare_master_datasets", datasets)
+
+    async def prepare(value):
+        path.write_text(
+            json.dumps({"bot": {"long": {"risk": {"entry_cooldown_minutes": value}}}})
+        )
+        run = deepcopy(config)
+        suite = optimize_suite.extract_suite_config(run, suite_override=None)
+        _materialize_suite_run_contract(run, suite)
+        contexts, _ = await optimize_suite.prepare_suite_contexts(
+            run, suite, shared_array_manager=_NoSharedArrayManager()
+        )
+        _materialize_resolved_suite_dates(run, contexts)
+        return run, contexts[0]
+
+    previous, old_ctx = await prepare(37.0)
+    old = {**deepcopy(previous), CONTRACT_KEY: build_evaluation_contract(previous)}
+    path = tmp_path / "relocated-scenario-coin.json"
+    config["backtest"]["scenarios"][0]["overrides"]["coin_overrides"]["HYPE"][
+        "override_config_path"
+    ] = str(path)
+    unchanged, _ = await prepare(37.0)
+    assert _resume_config_mismatches(old, unchanged) == []
+    current, _ = await prepare(71.0)
+    assert any(
+        "backtest.scenarios" in x for x in _resume_config_mismatches(old, current)
+    )
+    assert "override_config_path" not in json.dumps(old["backtest"]["scenarios"])
+    # A prepared run uses its frozen policy even after the source file changes/disappears.
+    path.unlink()
+    evaluator = object.__new__(SuiteEvaluator)
+    candidate = evaluator.build_scenario_candidate_config(previous, old_ctx)
+    assert (
+        candidate["coin_overrides"]["HYPE"]["bot"]["long"]["risk"][
+            "entry_cooldown_minutes"
+        ]
+        == 37.0
+    )
+    exchange = old_ctx.exchanges[0]
+    payload = build_backtest_payload(
+        dataset.hlcvs,
+        old_ctx.msss[exchange],
+        candidate,
+        exchange,
+        dataset.btc_usd_prices,
+        dataset.timestamps,
+        metrics_only=True,
+    )
+    assert payload.bot_params_list[0]["long"]["risk_entry_cooldown_minutes"] == 37.0
+    execute_backtest(payload, candidate)

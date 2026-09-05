@@ -29,7 +29,9 @@ All notable user-facing changes will be documented in this file.
   must start a fresh run. Data-source selectors are checked; candidate values and CPU worker
   count may vary, while the existing strict GPU settings comparison remains in force. All
   backends persist effective suite filters and concrete dates, and CPU evaluations apply resolved
-  override files before recording their evaluation contract.
+  override files before recording their evaluation contract. Scenario file overrides are frozen in
+  both candidate policy and resume evidence; legacy results with unresolved file references require
+  a fresh run when their historical policy cannot be proven.
 
 - Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
   partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that

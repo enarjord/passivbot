@@ -461,3 +461,36 @@ def test_prepared_cpu_suite_date_rollover_rejects_saved_fitness(
     assert any(
         "backtest.scenarios" in item for item in _resume_config_mismatches(old, current)
     )
+
+
+@pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("file_present", [False, True])
+def test_legacy_file_override_results_require_historical_policy_evidence(
+    tmp_path, backend, file_present
+):
+    import msgpack
+    from config.overrides import parse_overrides
+    from optimize import _resume_config_mismatches, _validate_resume_results
+
+    config = _config()
+    config["optimize"]["backend"] = backend
+    patch = {"bot": {"long": {"risk": {"entry_cooldown_minutes": 37.0}}}}
+    path = tmp_path / "coin.json"
+    if file_present:
+        path.write_text(json.dumps(patch))
+    config["coin_overrides"] = {"BTC": patch}
+    current = parse_overrides(config, verbose=False)
+    old = deepcopy(config)
+    old["coin_overrides"] = {"BTC": {"override_config_path": str(path)}}
+    old["metrics"] = {"objectives": {"w_0": -1.0}}
+    (tmp_path / "all_results.bin").write_bytes(msgpack.packb(old, use_bin_type=True))
+    mismatches = _resume_config_mismatches(old, current)
+    assert any(
+        "legacy results reference unresolved coin override files" in x
+        for x in mismatches
+    )
+    with pytest.raises(ValueError, match="critical parameters have changed"):
+        _validate_resume_results(str(tmp_path), current)
+    # Fully resolved ordinary legacy records remain provable without reading a file.
+    old["coin_overrides"] = deepcopy(current["coin_overrides"])
+    assert _resume_config_mismatches(old, current) == []

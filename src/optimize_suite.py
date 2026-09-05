@@ -280,6 +280,19 @@ async def prepare_suite_contexts(
             raise ValueError(f"Suite scenario {scenario.label} could not be prepared: {exc}") from exc
         scenario_config = format_config(scenario_config_raw, verbose=False)
         scenario_config = parse_overrides(scenario_config, verbose=False)
+        # Freeze the resolved patch in both candidate evaluation and resume evidence.
+        # Reapplying raw file references would discard preparation's resolved values.
+        scenario_overrides = deepcopy(scenario.overrides) if scenario.overrides else {}
+        coin_keys = [
+            key for key in scenario_overrides
+            if key == "coin_overrides" or key.startswith("coin_overrides.")
+        ]
+        if coin_keys:
+            for key in coin_keys:
+                scenario_overrides.pop(key)
+            scenario_overrides["coin_overrides"] = deepcopy(
+                scenario_config.get("coin_overrides", {})
+            )
         scenario_config.setdefault("backtest", {})
         scenario_config["backtest"]["coins"] = {}
 
@@ -370,7 +383,7 @@ async def prepare_suite_contexts(
                         shared_btc_np={},
                         attachments={"hlcvs": {}, "btc": {}},
                         coin_indices={dataset.exchange: coin_indices},
-                        overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                        overrides=deepcopy(scenario_overrides),
                         master_hlcvs_specs={dataset.exchange: dataset.hlcvs_spec},
                         master_btc_specs={dataset.exchange: dataset.btc_spec},
                         time_slice={dataset.exchange: (start_idx, end_idx)},
@@ -413,7 +426,7 @@ async def prepare_suite_contexts(
                         shared_btc_np={},
                         attachments={"hlcvs": {}, "btc": {}},
                         coin_indices={dataset.exchange: None},  # Already sliced
-                        overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                        overrides=deepcopy(scenario_overrides),
                         master_hlcvs_specs=None,
                         master_btc_specs=None,
                         time_slice=None,
@@ -532,7 +545,7 @@ async def prepare_suite_contexts(
                 shared_hlcvs_np={},
                 shared_btc_np={},
                 attachments={"hlcvs": {}, "btc": {}},
-                overrides=deepcopy(scenario.overrides) if scenario.overrides else {},
+                overrides=deepcopy(scenario_overrides),
                 master_hlcvs_specs=master_hlcvs_specs or None,
                 master_btc_specs=master_btc_specs or None,
                 time_slice=time_slice or None,
