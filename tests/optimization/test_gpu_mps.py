@@ -4460,14 +4460,19 @@ def test_mps_single_coin_invalid_tail_matches_forced_delist_boundary(
     if strategy_kind == "trailing_martingale":
         runner_kwargs["hsl_enabled"] = hsl_enabled
 
-    output = runner_cls(
+    runner = runner_cls(
         market,
         run,
         data,
         long_enabled=side == "long",
         short_enabled=side == "short",
         **runner_kwargs,
-    ).run(np.asarray([row + row], dtype=np.float64))
+    )
+    if not forced_delist:
+        with pytest.raises(ValueError, match="held-position valuation"):
+            runner.run(np.asarray([row + row], dtype=np.float64))
+        return
+    output = runner.run(np.asarray([row + row], dtype=np.float64))
     torch.mps.synchronize()
 
     size_key = "psize" if side == "long" else "short_psize"
@@ -4588,232 +4593,6 @@ def test_mps_single_coin_forced_delist_closes_both_hedged_sides(strategy_kind):
     assert output["loss_sum_long"].item() > 0.0
     assert output["profit_sum_short"].item() > 0.0
     assert output["hsl_panic_close_loss_sum"].item() > 0.0
-
-
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
-)
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("topology", ["long", "short", "fused"])
-def test_mps_single_coin_recovery_samples_internal_nan_candle(
-    strategy_kind, topology
-):
-    from optimization.gpu.mps_kernel import (
-        MpsEmaAnchorRunner,
-        MpsTrailingMartingaleRunner,
-    )
-
-    count = 123
-    invalid_index = 61
-    close = np.full(count, 100.0)
-    high = close.copy()
-    low = close.copy()
-    high[invalid_index] = np.nan
-    low[invalid_index] = np.nan
-    close[invalid_index] = np.nan
-    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
-    run = ProxyRun(
-        1_000.0,
-        1,
-        1,
-        int(timestamps[0]),
-        int(timestamps[0]),
-        int(timestamps[0]),
-        60_000,
-        0.05,
-        0,
-        count - 1,
-    )
-    data = build_mps_data(high, low, close, timestamps, run, market)
-    if strategy_kind == "ema_anchor":
-        row = _single_coin_param_row(
-            {
-                "base_qty_pct": 0.1,
-                "ema_span_0": 2.0,
-                "ema_span_1": 3.0,
-                "entry_double_down_factor": 0.0,
-                "offset": 0.5,
-                "offset_psize_weight": 0.0,
-                "offset_volatility_1h_weight": 0.0,
-                "offset_volatility_1m_weight": 0.0,
-                "offset_volatility_ema_span_1h": 2.0,
-                "offset_volatility_ema_span_1m": 2.0,
-                "entry_cooldown_minutes": 0.0,
-                "total_wallet_exposure_limit": 1.0,
-                "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
-                "twel_entry_gate_enabled": 1.0,
-                "twel_enforcer_threshold": 1.0,
-                "twel_enforcer_enabled": 0.0,
-            },
-            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
-        )
-        runner_cls = MpsEmaAnchorRunner
-        runner_kwargs = {}
-    else:
-        row = _tm_single_row(initial_ema_dist=0.5)
-        runner_cls = MpsTrailingMartingaleRunner
-        runner_kwargs = {"hsl_enabled": False}
-
-    sides = ("long", "short") if topology == "fused" else (topology,)
-    output = runner_cls(
-        market,
-        run,
-        data,
-        long_enabled="long" in sides,
-        short_enabled="short" in sides,
-        hedge_mode=topology == "fused",
-        recovery_distribution_enabled=True,
-        **runner_kwargs,
-    ).run(np.asarray([row + row], dtype=np.float64))
-    torch.mps.synchronize()
-
-    samples = output["strategy_eq_recovery_samples"][0].cpu().numpy()
-    assert samples[:3].tolist() == pytest.approx([1_000.0, 1_000.0, 1_000.0])
-    assert np.isnan(samples[3:]).all()
-    assert output["last_eq_ts"].item() == pytest.approx(121 * run.interval_ms)
-
-
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
-)
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-def test_mps_single_coin_internal_nan_candle_clears_pending_entry(strategy_kind):
-    from optimization.gpu.mps_kernel import (
-        MpsEmaAnchorRunner,
-        MpsTrailingMartingaleRunner,
-    )
-
-    count = 5
-    close = np.full(count, 100.0)
-    high = close.copy()
-    low = close.copy()
-    high[2] = np.nan
-    low[2] = np.nan
-    close[2] = np.nan
-    low[3] = 50.0
-    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
-    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
-    run = ProxyRun(
-        1_000.0,
-        1,
-        1,
-        int(timestamps[0]),
-        int(timestamps[0]),
-        int(timestamps[0]),
-        60_000,
-        0.05,
-        0,
-        count - 1,
-    )
-    data = build_mps_data(high, low, close, timestamps, run, market)
-    if strategy_kind == "ema_anchor":
-        side = _single_coin_param_row(
-            {
-                "base_qty_pct": 0.1,
-                "ema_span_0": 2.0,
-                "ema_span_1": 3.0,
-                "entry_double_down_factor": 0.0,
-                "offset": 0.1,
-                "offset_psize_weight": 0.0,
-                "offset_volatility_1h_weight": 0.0,
-                "offset_volatility_1m_weight": 0.0,
-                "offset_volatility_ema_span_1h": 2.0,
-                "offset_volatility_ema_span_1m": 2.0,
-                "entry_cooldown_minutes": 0.0,
-                "total_wallet_exposure_limit": 1.0,
-                "we_excess_allowance_pct": 0.0,
-                "we_excess_allowance_legacy_raw": 0.0,
-                "twel_entry_gate_enabled": 1.0,
-                "twel_enforcer_threshold": 1.0,
-                "twel_enforcer_enabled": 0.0,
-            },
-            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
-        )
-        runner_cls = MpsEmaAnchorRunner
-        runner_kwargs = {}
-    else:
-        side = _tm_single_row(initial_ema_dist=0.1)
-        runner_cls = MpsTrailingMartingaleRunner
-        runner_kwargs = {"hsl_enabled": False}
-
-    output = runner_cls(
-        market,
-        run,
-        data,
-        long_enabled=True,
-        short_enabled=False,
-        hedge_mode=False,
-        **runner_kwargs,
-    ).run(np.asarray([side + side], dtype=np.float64))
-    torch.mps.synchronize()
-
-    assert output["fill_count"].item() == 0.0
-
-
-@pytest.mark.skipif(
-    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
-)
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
-@pytest.mark.parametrize("topology", ["long", "short", "fused"])
-def test_mps_multicoin_recovery_samples_all_internal_nan_candle(
-    strategy_kind, topology
-):
-    count = 123
-    invalid_index = 61
-    closes = np.full((count, 2), 100.0)
-    highs = closes.copy()
-    lows = closes.copy()
-    if topology != "fused":
-        highs[3, :] = 101.0
-        lows[3, :] = 99.0
-    highs[invalid_index, :] = np.nan
-    lows[invalid_index, :] = np.nan
-    closes[invalid_index, :] = np.nan
-    fixture_side = topology if topology != "fused" else "long"
-    runner, row, run, data = _multicoin_exposure_fixture(
-        strategy_kind,
-        fixture_side,
-        count=count,
-        closes=closes,
-        highs=highs,
-        lows=lows,
-        recovery_distribution_enabled=True,
-        return_context=True,
-    )
-    if topology == "fused":
-        runner_cls = (
-            MpsEmaAnchorMulticoinFusedRunner
-            if strategy_kind == "ema_anchor"
-            else MpsTrailingMartingaleMulticoinFusedRunner
-        )
-        runner = runner_cls(
-            run,
-            data,
-            recovery_distribution_enabled=True,
-        )
-        params = row + row
-    else:
-        params = row
-
-    assert torch.isnan(data["bars"][invalid_index, :, 2]).all().item()
-    output = runner.run(np.asarray([params], dtype=np.float64))
-    torch.mps.synchronize()
-
-    samples = output["strategy_eq_recovery_samples"][0].cpu().numpy()
-    if topology == "fused":
-        assert output["fill_count"].item() == 0.0
-    else:
-        assert output["fill_count"].item() > 0.0
-        assert (
-            output["psize"].item() > 0.0
-            or output.get("short_psize", torch.zeros(1)).item() > 0.0
-        )
-    assert np.isfinite(samples[:3]).all()
-    assert samples[1] == pytest.approx(output["balance"].item())
-    assert np.isnan(samples[3:]).all()
-    assert output["last_eq_ts"].item() == pytest.approx(121 * run.interval_ms)
 
 
 @pytest.mark.skipif(
@@ -5515,6 +5294,12 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             "position_held_days_max",
         },
     )
+    if count < 1400:
+        with pytest.raises(ValueError, match="held-position valuation"):
+            proxy.evaluate([{}])
+        with pytest.raises(ValueError, match="held-position valuation"):
+            run_backtest(hlcvs, market_settings, config, "bybit", np.full(count, 50_000.0), timestamps)
+        return
     result = proxy.evaluate([{}])[0]
     exact_fills, _, exact_analysis = run_backtest(
         hlcvs,
@@ -6425,6 +6210,10 @@ def test_mps_multicoin_staggered_tail_keeps_balance_only_equity_and_hsl(
         params = np.asarray([row + short_row], dtype=np.float64)
     else:
         params = np.asarray([row], dtype=np.float64)
+    if not forced_delist:
+        with pytest.raises(ValueError, match="held-position valuation"):
+            runner.run(params)
+        return
     output = runner.run(params)
     torch.mps.synchronize()
 
@@ -6492,8 +6281,8 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
     closes = np.full((count, 2), 100.0)
     highs = closes.copy()
     lows = closes.copy()
-    highs[3, :] = 101.0
-    lows[3, :] = 99.0
+    # Keep positions flat: this test owns the equity/HSL clock across unavailable
+    # listing windows. Held invalid tails are rejected in the boundary tests.
     fixture_side = topology if topology != "fused" else "long"
     runner, row, run, data = _multicoin_exposure_fixture(
         strategy_kind,
@@ -6537,6 +6326,7 @@ def test_mps_multicoin_all_invalid_time_keeps_equity_and_hsl_clock(
     torch.mps.synchronize()
 
     assert output["balance"].item() > 0.0
+    assert output["fill_count"].item() == 0.0
     assert output["first_eq_ts"].item() == pytest.approx(
         expected_first_eq_index * run.interval_ms
     )
@@ -6607,12 +6397,17 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
     }.items():
         row[keys.index(key)] = value
 
+    # Exercise restart with the entire tail flat: the opposite side must not
+    # retain an unrelated profitable trailing position past its valid range.
+    long_row, short_row = list(row), list(row)
+    inactive_row = short_row if adverse_side == "long" else long_row
+    inactive_row[keys.index("total_wallet_exposure_limit")] = 0.0
     output = fused_runner_cls(
         run,
         data,
         long_coin_overrides=overrides,
         short_coin_overrides=overrides,
-    ).run(np.asarray([row + row], dtype=np.float64))
+    ).run(np.asarray([long_row + short_row], dtype=np.float64))
     torch.mps.synchronize()
 
     assert output[f"hsl_triggers_{adverse_side}"].item() == 1.0
@@ -6631,11 +6426,8 @@ def test_mps_multicoin_reselects_recovered_flat_candidate(
     import passivbot_rust
 
     closes = np.full((4, 2), 100.0)
-    closes[2, 0] = 0.0
     highs = np.full((4, 2), 101.0)
     lows = np.full((4, 2), 99.0)
-    highs[2, 0] = 0.0
-    lows[2, 0] = 0.0
     runner, row, _run, data = _multicoin_exposure_fixture(
         strategy_kind,
         side,
@@ -6645,6 +6437,8 @@ def test_mps_multicoin_reselects_recovered_flat_candidate(
         lows=lows,
         return_context=True,
     )
+    # Inject only into the isolated selection probe; public builders reject internal gaps.
+    data["bars"][2, 0, :3] = 0.0
     if strategy_kind == "ema_anchor":
         state_type = "EmaMulticoinSideState"
         config_type = "EmaMulticoinSideConfig"
@@ -6735,7 +6529,6 @@ def test_mps_tm_recursive_entry_twel_gate_does_not_expand_invalid_coin(
     last_valid_indices = (0, 2)
     if invalid_mode == "internal":
         last_valid_indices = (2, 2)
-        lows[1, 0] = 0.0
     runner, row, _run, data = _multicoin_exposure_fixture(
         "trailing_martingale",
         side,
@@ -6747,6 +6540,9 @@ def test_mps_tm_recursive_entry_twel_gate_does_not_expand_invalid_coin(
         market_orders_allowed=True,
         return_context=True,
     )
+    if invalid_mode == "internal":
+        # The isolated guard probe owns this malformed state, not the public builder.
+        data["bars"][1, 0, 1] = 0.0
     values = dict(zip(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS, row))
     values.update(
         {
@@ -6975,7 +6771,6 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     closes = np.full((3, 2), 100.0)
     last_valid_indices = (0, 2)
     if mark_case == "in_range_zero":
-        closes[1, 0] = 0.0
         last_valid_indices = (2, 2)
     runner, row, _run, data = _multicoin_exposure_fixture(
         strategy_kind,
@@ -6985,6 +6780,9 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
         last_valid_indices=last_valid_indices,
         return_context=True,
     )
+    if mark_case == "in_range_zero":
+        # Keep the narrow reducer test independent of input preflight.
+        data["bars"][1, 0, :3] = 0.0
     values = dict(zip(keys, row))
     values.update(
         {
@@ -19617,7 +19415,7 @@ def test_mps_ema_multicoin_loss_gate_blocks_fee_only_ordinary_close(side):
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_tm_multicoin_twel_repair_excludes_tailed_positions(side):
+def test_mps_tm_multicoin_rejects_held_tails_before_twel_repair(side):
     count = 7
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
@@ -19625,9 +19423,8 @@ def test_mps_tm_multicoin_twel_repair_excludes_tailed_positions(side):
     hlcvs[:, :, 1] = 99.0
     hlcvs[:, :, 2] = 100.0
     hlcvs[:, :, 3] = 100.0
-    # Coin zero tails after this close. It remains part of total exposure but
-    # is no longer a managed TWEL reducer candidate.
-    hlcvs[3, 0, :3] = [111.0, 109.0, 110.0]
+    # A still-held coin tail cannot be valued or hidden by a TWEL repair.
+    hlcvs[3, 0, :3] = [111.0, 89.0, 110.0]
     hlcvs[4:, 0, :] = 0.0
     # The still-tradable coin is adverse for long and favorable for short.
     hlcvs[4:, 1, :3] = [91.0, 89.0, 90.0]
@@ -19672,27 +19469,17 @@ def test_mps_tm_multicoin_twel_repair_excludes_tailed_positions(side):
             "twel_enforcer_enabled"
         )
     ] = 0.0
-    output = MpsTrailingMartingaleMulticoinRunner(
-        runs[1], data, side=side
-    ).run(np.asarray([baseline, repaired], dtype=np.float64))
-    torch.mps.synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    sizes = output[size_key].cpu().numpy()
-    if side == "long":
-        # Only the tailed coin holds a long position, so no reachable repair
-        # exists and the total size stays unchanged.
-        assert sizes[1] == pytest.approx(sizes[0])
-    else:
-        # The surviving short position receives the reachable reducer.
-        assert sizes[1] < sizes[0]
+    with pytest.raises(ValueError, match="held-position valuation"):
+        MpsTrailingMartingaleMulticoinRunner(
+            runs[1], data, side=side
+        ).run(np.asarray([baseline, repaired], dtype=np.float64))
 
 
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_ema_multicoin_twel_repair_excludes_tailed_positions(side):
+def test_mps_ema_multicoin_rejects_held_tails_before_twel_repair(side):
     count = 70
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     hlcvs = np.zeros((count, 2, 4), dtype=np.float64)
@@ -19700,9 +19487,8 @@ def test_mps_ema_multicoin_twel_repair_excludes_tailed_positions(side):
     hlcvs[:, :, 1] = 99.0
     hlcvs[:, :, 2] = 100.0
     hlcvs[:, :, 3] = 100.0
-    # Fill the wide-offset entries, then tail coin zero while coin one remains
-    # tradable. The tailed position stays in total exposure but cannot receive
-    # a reducer.
+    # Fill wide-offset entries, then lose coin zero coverage while coin one
+    # remains tradable. Both baseline and repair must reject unavailable valuation.
     hlcvs[62, 0, :3] = [140.0, 70.0, 130.0]
     hlcvs[62, 1, :3] = [130.0, 70.0, 90.0]
     hlcvs[63:, 0, :] = 0.0
@@ -19743,14 +19529,10 @@ def test_mps_ema_multicoin_twel_repair_excludes_tailed_positions(side):
     baseline[
         EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("twel_enforcer_enabled")
     ] = 0.0
-    output = MpsEmaAnchorMulticoinRunner(
-        runs[1], data, side=side
-    ).run(np.asarray([baseline, repaired], dtype=np.float64))
-    torch.mps.synchronize()
-
-    size_key = "psize" if side == "long" else "short_psize"
-    sizes = output[size_key].cpu().numpy()
-    assert sizes[1] < sizes[0]
+    with pytest.raises(ValueError, match="held-position valuation"):
+        MpsEmaAnchorMulticoinRunner(
+            runs[1], data, side=side
+        ).run(np.asarray([baseline, repaired], dtype=np.float64))
 
 
 @pytest.mark.skipif(

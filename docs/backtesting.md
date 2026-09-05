@@ -72,6 +72,13 @@ The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlc
 
 ## HLCV Data Contract
 
+Direct or prepared backtest inputs must contain finite high, low, and close prices throughout
+each symbol's declared valid window. Internal all-NaN gaps are rejected before simulation;
+missing prices never turn a held position's unrealized PnL into zero. Missing rows before a
+symbol's listing or after its declared end remain permitted while it is flat. A position still
+held when its valuation candle becomes unavailable rejects the run. These checks also apply to
+GPU preparation and do not replace the normal data materializer's gap repair policy.
+
 Without `backtest.ohlcv_source_dir`, backtest and optimize data preparation follows one
 deterministic order:
 

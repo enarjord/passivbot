@@ -2028,6 +2028,15 @@ inline void passivbot_single_coin_impl(
         const float high = bars[bo + 0];
         const float low = bars[bo + 1];
         const float close = bars[bo + 2];
+        // -2 is an invalid-valuation sentinel, never a liquidation result.
+        // Python rejects this candidate before decoding any metrics.
+        if (alive && (long_side.psize > 0.0f || short_side.psize > 0.0f)
+            && !(flags[fo + 0] != 0 && isfinite(high) && high > 0.0f
+                && isfinite(low) && low > 0.0f && isfinite(close) && close > 0.0f)) {
+            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
         const float log_range = bars[bo + 3];
         float hour_lr = bars[bo + 4];
@@ -4080,9 +4089,8 @@ inline void passivbot_single_coin_impl(
             }
         }
 
-        // Exact Rust keeps sampling account equity through a short invalid
-        // tail, but excludes positions whose coin is no longer valid.  Such a
-        // tail is non-tradable and therefore contributes balance-only equity.
+        // Held positions must remain inside their declared valid candle range.
+        // Missing held-position prices were rejected before this bar's fills.
         const bool after_valid_tail = k > last_valid;
         float long_unreal = valid && long_side.psize > 0.0f
             ? long_side.psize * c_mult * (close - long_side.pprice) : 0.0f;
@@ -4302,8 +4310,8 @@ inline void passivbot_single_coin_impl(
 #endif
         }
         // Exact Rust records an equity sample at every tracked timestamp.
-        // Invalid candles are non-tradable and contribute balance-only equity,
-        // just like the already-supported tail after last_valid.
+        // Unheld invalid tails remain non-tradable; held positions still require
+        // the finite prices checked at the start of the bar.
         bool active = eq_started && alive;
         if (active) {
             if (first_eq_k < 0.0f) first_eq_k = kf;

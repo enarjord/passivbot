@@ -3000,6 +3000,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float& day_fill_count = fills.day_fill_count;
 
     for (int k = 1; k < stop_k; ++k) {
+        if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
+            // The decoder rejects -2 as unavailable held-position valuation.
+            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+
         const int day_index = multicoin_utc_day_index(
             start_day_minute, k, interval_ms
         );
@@ -3180,10 +3186,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
             }
         }
         float equity = balance + unrealized;
-        // Exact Rust keeps advancing balance-only equity and HSL time once
-        // portfolio tracking starts, including declared all-invalid gaps and
-        // tails. Per-coin validity still blocks fills, orders, and unrealized
-        // PnL above.
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
         if (can_generate && alive
             && balance > 0.0f && equity > liquidation_floor) {
             int sampled_hsl_tier = 0;
@@ -3854,6 +3858,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float day_start_balance = account.balance;
 
     for (int k = 1; k < stop_k; ++k) {
+        if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings, k, C)
+            || held_positions_have_missing_prices(short_side.psize, bars, coin_settings, k, C))) {
+            // The decoder rejects -2 as unavailable held-position valuation.
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+
         const int day_index = multicoin_utc_day_index(
             start_day_minute, k, interval_ms
         );
@@ -4189,10 +4200,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
-        // Exact Rust keeps advancing balance-only equity and HSL time once
-        // portfolio tracking starts, including declared all-invalid gaps and
-        // tails. Per-coin validity still blocks fills, orders, and unrealized
-        // PnL above.
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
             && alive
             && joint_portfolio_can_generate(

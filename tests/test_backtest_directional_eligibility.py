@@ -169,3 +169,34 @@ def test_zero_wel_coin_override_disables_approved_side_entries():
     assert entry_pairs == {("LONGCOIN", "entry_ema_anchor_long")}
     params_by_coin = dict(zip(payload.backtest_params["coins"], payload.bot_params_list))
     assert params_by_coin["SHORTCOIN"]["short"]["entry_eligible"] is False
+
+
+@pytest.mark.parametrize("fields", [[0, 1, 2], [0], [1], [2]])
+def test_backtest_rejects_nonfinite_internal_candles(fields):
+    config = _ema_anchor_config(hedge_mode=True)
+    hlcvs, market_settings, btc_prices, timestamps = _synthetic_inputs()
+    hlcvs[20, 0, fields] = np.nan
+    with pytest.raises(ValueError, match="contiguous finite H/L/C.*candle 20"):
+        run_backtest(hlcvs, market_settings, config, "binance", btc_prices, timestamps)
+
+
+def test_backtest_accepts_unheld_listing_boundaries_but_rejects_held_missing_tail():
+    config = _ema_anchor_config(hedge_mode=True)
+    hlcvs, market_settings, btc_prices, timestamps = _synthetic_inputs()
+    market_settings["LONGCOIN"].update(first_valid_index=9, last_valid_index=20)
+    hlcvs[:9, 0, :] = np.nan
+    hlcvs[21:, 0, :] = np.nan
+    # Keep the other symbol active, proving the whole simulation can continue
+    # past this absent symbol's listing window while it has no position.
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    fills, _, _ = run_backtest(
+        hlcvs, market_settings, config, "binance", btc_prices, timestamps
+    )
+    assert len(fills) > 0
+    assert all(str(fill[2]) == "SHORTCOIN" for fill in fills)
+
+    config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.5
+    # Fill a long entry, but keep highs below its close order until data ends.
+    hlcvs[9:21, 0, 0] = 100.0
+    with pytest.raises(ValueError, match="missing held-position valuation candle.*candle 21"):
+        run_backtest(hlcvs, market_settings, config, "binance", btc_prices, timestamps)

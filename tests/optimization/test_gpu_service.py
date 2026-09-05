@@ -1761,11 +1761,12 @@ def test_gpu_multicoin_proxy_accepts_staggered_valid_gaps_and_ended_tails():
         _require_supported_multicoin_valid_tails(hlcvs, [99, 0], [98, 99])
 
 
-def test_gpu_multicoin_proxy_accepts_all_nan_candle_in_windows():
+def test_gpu_multicoin_proxy_rejects_all_nan_candle_in_windows():
     hlcvs = np.ones((100, 2, 4), dtype=np.float64)
     hlcvs[40, :, :3] = np.nan
 
-    _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
+    with pytest.raises(ValueError, match="contiguous.*candle_index=40"):
+        _require_supported_multicoin_valid_tails(hlcvs, [0, 0], [59, 99])
 
 
 def test_gpu_multicoin_proxy_rejects_all_nan_first_valid_candle():
@@ -1856,17 +1857,18 @@ def test_gpu_multicoin_hsl_requires_each_coin_to_have_contiguous_valid_candles()
     )
 
 
-def test_gpu_proxy_accepts_only_exact_balance_only_internal_gaps():
+def test_gpu_proxy_rejects_all_internal_gaps():
     hlcvs = np.ones((4, 2, 4), dtype=np.float64)
     hlcvs[2, 1, :3] = np.nan
 
-    _require_exact_safe_proxy_candles(
-        hlcvs,
-        exposure_eligible_coins=[True, True],
-        first_valid_indices=[0, 0],
-        last_valid_indices=[3, 3],
-        require_positive_high_low=True,
-    )
+    with pytest.raises(ValueError, match="all-NaN.*invalid candle at 2"):
+        _require_exact_safe_proxy_candles(
+            hlcvs,
+            exposure_eligible_coins=[True, True],
+            first_valid_indices=[0, 0],
+            last_valid_indices=[3, 3],
+            require_positive_high_low=True,
+        )
 
     hlcvs[2, 1, :3] = 0.0
     with pytest.raises(ValueError, match="coin index 1, invalid candle at 2"):
@@ -1899,7 +1901,7 @@ def test_gpu_proxy_accepts_only_exact_balance_only_internal_gaps():
         )
 
 
-def test_gpu_single_coin_accepts_nan_gap_but_rejects_zero_for_all_metrics():
+def test_gpu_single_coin_rejects_nan_gap_and_zero_for_all_metrics():
     hlcvs = np.ones((4, 1, 4), dtype=np.float64)
     hlcvs[2, 0, :3] = np.nan
     kwargs = {
@@ -1907,7 +1909,8 @@ def test_gpu_single_coin_accepts_nan_gap_but_rejects_zero_for_all_metrics():
         "last_valid_idx": 3,
     }
 
-    _require_no_unsafe_single_coin_candles(hlcvs, **kwargs)
+    with pytest.raises(ValueError, match="invalid candle at 2"):
+        _require_no_unsafe_single_coin_candles(hlcvs, **kwargs)
 
     hlcvs[2, 0, :3] = 0.0
     with pytest.raises(ValueError, match="invalid candle at 2"):
