@@ -3461,6 +3461,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
+    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        account_recovery_max_min = fmax(
+            account_recovery_max_min, last_eq_k - account_peak_k
+        );
+    }
     scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
     if (coin_hsl_mode) {
         write_one_side_coin_hsl_outputs(
@@ -4444,6 +4449,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         fills.pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
+    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        account_recovery_max_min = fmax(
+            account_recovery_max_min, last_eq_k - account_peak_k
+        );
+    }
     scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
     if (long_config.coin_hsl_mode) {
         write_dual_side_coin_hsl_outputs(
