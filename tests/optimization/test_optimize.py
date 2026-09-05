@@ -3893,6 +3893,8 @@ class TestResultRecorder:
         }
 
         individual.evaluation_metrics = {
+            "effective_start_date": "2024-01-02T00:00:00Z",
+            "effective_end_date": "2024-01-03T00:00:00Z",
             "objectives": objectives,
             "constraint_violation": 0.0,
         }
@@ -3918,6 +3920,7 @@ class TestResultRecorder:
             pareto_files = list((Path(tmpdir) / "pareto").glob("*.json"))
             assert len(pareto_files) == 1
             saved = json.loads(pareto_files[0].read_text())
+            assert saved["metrics"]["effective_start_date"] == "2024-01-02T00:00:00Z"
             strategy_kind = saved["live"]["strategy_kind"]
 
             assert saved["bot"]["long"]["risk"] == saved["bot"]["short"]["risk"]
@@ -4812,13 +4815,23 @@ class TestEvaluator:
             return_value=(None, None, {"liquidated": False}),
         ), patch(
             "tools.iterative_backtester.combine_analyses",
-            return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
+            return_value={
+                "stats": {"adg_pnl_w": {"mean": 0.1}},
+                "exchanges": {
+                    "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
+                    "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
+                },
+            },
         ):
             objectives, penalty, metrics, _ = unpack_evaluation_payload(
                 evaluator.evaluate(individual, [])
             )
 
         assert objectives == (-0.1,)
+        assert metrics["suite_metrics"]["scenarios"]["test"]["exchanges"] == {
+            "binance": {"effective_start_date": "2024-01-01T00:00:00Z"},
+            "bybit": {"effective_start_date": "2024-01-02T00:00:00Z"},
+        }
         assert penalty == 0.0
         assert metrics["constraint_violation"] == 0.0
         assert compile_cfg.call_count == 1

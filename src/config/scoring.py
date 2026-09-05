@@ -19,6 +19,7 @@ class ScenarioSelection(Enum):
 
 
 DEFAULT_OBJECTIVE_GOALS = {
+    "n_days": "max",
     "positions_held_per_day": "min",
     "positions_held_per_day_w": "min",
     "position_held_hours_mean": "min",

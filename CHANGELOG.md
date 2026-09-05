@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtest and optimizer results now expose `n_days` and effective UTC analysis dates in
+  existing metrics payloads, preserving per-exchange and per-scenario windows. Saved backtest
+  configs include current `metrics` or `suite_metrics`; `fills_analysis_duration_days` remains
+  available as a compatibility alias with the same exact/CPU scoring, suite reducer, and GPU
+  exact-only policy. Both duration names default to maximizing duration in shorthand scoring.
+  Standalone artifacts preserve non-finite diagnostics separately from finite metric statistics.
+  Saved suite configs retain the effective exchange defaults from external suite overrides.
+
 - Concurrent OHLCV writers now lock monthly initialization through catalog publication, preserving
   both candle bodies and validity masks. Materialized scratch allocation and pruning use a persistent
   advisory lock, preventing simultaneous owners while owner metadata is being initialized.

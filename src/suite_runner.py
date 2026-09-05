@@ -47,7 +47,8 @@ from utils import (
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
 from ohlcv_utils import align_and_aggregate_hlcvs
 from shared_arrays import SharedArraySpec
-from metrics_schema import flatten_metric_stats, merge_suite_payload
+from metrics_schema import attach_result_metrics, flatten_metric_stats, merge_suite_payload
+from config_utils import dump_config, sanitize_prepared_config_for_dump
 
 _SCENARIO_KEYS = frozenset(
     {
@@ -1520,9 +1521,6 @@ async def run_backtest_scenario(
     from tools.iterative_backtester import combine_analyses
 
     combined_metrics = combine_analyses(per_exchange)
-    combined_metrics = {
-        "stats": combined_metrics.get("stats", {}),
-    }
     elapsed = (utc_ms() - start_ts) / 1000.0
     return ScenarioResult(
         scenario=scenario,
@@ -1918,9 +1916,10 @@ def reduce_metrics(
             "std": float(np.std(arr)),
             "median": float(np.median(arr)),
         }
-        mode = reducer_cfg.get(metric)
-        if mode is None and "_" in metric:
-            base = metric.rsplit("_", 1)[0]
+        canonical_metric = canonicalize_metric_name(metric)
+        mode = reducer_cfg.get(canonical_metric)
+        if mode is None and "_" in canonical_metric:
+            base = canonical_metric.rsplit("_", 1)[0]
             mode = reducer_cfg.get(base)
         mode = str(mode or default_mode).lower()
         if mode == "mean":
@@ -2157,6 +2156,16 @@ async def run_backtest_suite_async(
         },
     }
     (suite_dir / "suite_summary.json").write_text(json.dumps(summary_payload, indent=2))
+    saved_config = attach_result_metrics(
+        sanitize_prepared_config_for_dump(config), suite_metrics=suite_metrics
+    )
+    saved_config["backtest"].update(
+        suite_enabled=True,
+        exchanges=deepcopy(suite_cfg.get("exchanges") or base_exchanges),
+        scenarios=deepcopy(suite_cfg["scenarios"]),
+        reducer=deepcopy(reducer_cfg),
+    )
+    dump_config(saved_config, str(suite_dir / "config.json"))
 
     return SuiteSummary(
         suite_id=suite_timestamp,
