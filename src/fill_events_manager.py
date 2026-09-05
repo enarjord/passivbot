@@ -6855,8 +6855,11 @@ class GateioFetcher(BaseFetcher):
             # Small delay to avoid rate limits
             await asyncio.sleep(0.15)
 
-        if fetch_count >= max_fetches:
-            logger.warning("GateioFetcher._fetch_trades: reached pagination cap (%d)", max_fetches)
+        else:
+            raise RuntimeError(
+                "GateioFetcher._fetch_trades: incomplete history after "
+                f"pagination cap ({max_fetches})"
+            )
 
         return list(collected.values())
 
@@ -7201,8 +7204,11 @@ class KucoinFetcher(BaseFetcher):
             else:
                 start_at = last_ts + 1
 
-        if fetch_count >= max_fetches:
-            logger.warning("KucoinFetcher._fetch_trades: reached pagination cap (%d)", max_fetches)
+        if start_at < until_ts:
+            raise RuntimeError(
+                "KucoinFetcher._fetch_trades: incomplete history after "
+                f"{fetch_count} fetches"
+            )
 
         return sorted(collected.values(), key=lambda ev: ev["timestamp"])
 
@@ -7250,9 +7256,10 @@ class KucoinFetcher(BaseFetcher):
             else:
                 start_at = last_ts + 1
 
-        if fetch_count >= max_fetches:
-            logger.warning(
-                "KucoinFetcher._fetch_positions_history: reached pagination cap (%d)", max_fetches
+        if start_at < until_ts:
+            raise RuntimeError(
+                "KucoinFetcher._fetch_positions_history: incomplete history after "
+                f"{fetch_count} fetches"
             )
 
         return sorted(results.values(), key=lambda x: x.get("lastUpdateTimestamp", 0))
