@@ -14,8 +14,8 @@
    `live.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
    against `live.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
    Explicit finite zero fees and fully resolved zero-sum fee lists are authoritative amounts.
-   Loading a cached fallback rechecks retained reported amounts and persists a newly resolved fee;
-   unresolved historical fallback amounts retain their original policy. Same-currency offsetting
+   Loading a cached fallback or rate estimate rechecks retained amounts and persists a resolved fee;
+   unresolved historical estimates retain their original policy. Same-currency offsetting
    fees need no ticker when their net amount is zero.
    Coalescing preserves missing or malformed fee amounts for fallback resolution.
    A zero non-quote fee needs no ticker and records `fee_conversion_source=zero_amount`.

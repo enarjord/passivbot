@@ -366,8 +366,8 @@ def _normalize_fee_paid_from_payload(
 
     payload_fee_source = str(payload.get("fee_source") or "")
     payload_fee_quality = str(payload.get("fee_quality") or "")
-    if payload_fee_source == FEE_SOURCE_FALLBACK_PCT and entries:
-        # Current-contract caches can contain a fallback chosen before explicit
+    if payload_fee_source in (FEE_SOURCE_FALLBACK_PCT, FEE_SOURCE_ESTIMATED_RATE) and entries:
+        # Current-contract caches can contain an estimate chosen before explicit
         # zero amounts were recognized. Upgrade only newly resolved evidence;
         # preserve an unresolved historical fallback and its original policy.
         candidate = dict(payload)

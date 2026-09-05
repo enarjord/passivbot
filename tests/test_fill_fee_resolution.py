@@ -350,12 +350,16 @@ async def test_scalar_zero_survives_coalescing_refresh_and_reload(tmp_path, cloc
     {"currency": "BNB", "cost": 0},
     [{"currency": "BNB", "cost": 0.1}, {"currency": "BNB", "cost": -0.1}],
 ])
-async def test_loading_current_contract_repairs_old_zero_fee_fallback(tmp_path, clock, fees):
+@pytest.mark.parametrize("old_source", [fem.FEE_SOURCE_FALLBACK_PCT, fem.FEE_SOURCE_ESTIMATED_RATE])
+async def test_loading_current_contract_repairs_old_zero_fee_fallback(tmp_path, clock, fees, old_source):
     # A historical row outside ticker and recent-fill overlap must recover
     # directly from its retained source amounts, without a network refetch.
+    if old_source == fem.FEE_SOURCE_ESTIMATED_RATE:
+        fees = [dict(entry, rate=0.0002) for entry in fem._fee_entries(fees)]
     payload = fill(fees, clock.ms - 365 * 86_400_000)
-    payload.update(fee_paid=-0.2, fee_source=fem.FEE_SOURCE_FALLBACK_PCT,
-                   fee_quality=fem.FEE_QUALITY_FALLBACK, pnl_contract=fem.PNL_CONTRACT_CURRENT,
+    payload.update(fee_paid=-0.2, fee_source=old_source,
+                   fee_quality=(fem.FEE_QUALITY_FALLBACK if old_source == fem.FEE_SOURCE_FALLBACK_PCT
+                                else fem.FEE_QUALITY_ESTIMATED), pnl_contract=fem.PNL_CONTRACT_CURRENT,
                    raw=[{"source": "fetch_my_trades", "data": {"id": "close"}}])
     cache = fem.FillEventCache(tmp_path)
     # Write the old representation directly: from_dict now repairs it itself.
@@ -369,18 +373,19 @@ async def test_loading_current_contract_repairs_old_zero_fee_fallback(tmp_path, 
     assert loaded.get_pnl_sum() == pytest.approx(2.0)
     assert loaded.get_events()[0].fee_paid == 0.0
     persisted = cache.load()[0]
-    assert persisted.fee_source != fem.FEE_SOURCE_FALLBACK_PCT
+    assert persisted.fee_source in (fem.FEE_SOURCE_REPORTED_QUOTE, fem.FEE_SOURCE_REPORTED_CONVERTED)
     assert persisted.fee_paid == 0.0
     assert api.calls == 0
 
 
-def test_unresolved_historical_fallback_keeps_its_original_amount():
+@pytest.mark.parametrize("old_source", [fem.FEE_SOURCE_FALLBACK_PCT, fem.FEE_SOURCE_ESTIMATED_RATE])
+def test_unresolved_historical_fallback_keeps_its_original_amount(old_source):
     payload = fill({"currency": "BNB", "cost": 1.0}, 1)
-    payload.update(fee_paid=-0.7, fee_source=fem.FEE_SOURCE_FALLBACK_PCT,
+    payload.update(fee_paid=-0.7, fee_source=old_source,
                    fee_quality=fem.FEE_QUALITY_FALLBACK, pnl_contract=fem.PNL_CONTRACT_CURRENT)
     paid, meta = fem._normalize_fee_paid_from_payload(payload, fee_pct_fallback=0.0001)
     assert paid == -0.7
-    assert meta["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+    assert meta["fee_source"] == old_source
 
 
 @pytest.mark.asyncio
