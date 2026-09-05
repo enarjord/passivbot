@@ -11,11 +11,13 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import portalocker
 
 
 LOCK_FILENAME = ".materialized.lock.json"
 OP_LOCK_DIRNAME = ".materialized.op.lock"
 OP_LOCK_FILENAME = "lock.json"
+OP_LOCK_FILE = ".materialized.op.flock"
 OP_LOCK_TIMEOUT_SECONDS = 30.0
 OP_LOCK_POLL_SECONDS = 0.05
 
@@ -117,38 +119,26 @@ def materialized_lock_path(run_root: str | Path) -> Path:
 
 
 def materialized_operation_lock_path(output_root: str | Path) -> Path:
-    return Path(output_root) / OP_LOCK_DIRNAME
-
-
-def _operation_lock_is_active(lock_dir: Path) -> bool:
-    return _lock_is_active(lock_dir / OP_LOCK_FILENAME)
+    return Path(output_root) / OP_LOCK_FILE
 
 
 @contextmanager
 def materialized_operation_lock(output_root: str | Path):
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
-    lock_dir = materialized_operation_lock_path(root)
-    deadline = time.monotonic() + OP_LOCK_TIMEOUT_SECONDS
-    acquired = False
-    while True:
-        try:
-            lock_dir.mkdir()
-            _write_lock(lock_dir / OP_LOCK_FILENAME)
-            acquired = True
-            break
-        except FileExistsError:
-            if not _operation_lock_is_active(lock_dir):
-                shutil.rmtree(lock_dir, ignore_errors=True)
-                continue
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"timed out waiting for materialized cache lock {lock_dir}")
-            time.sleep(OP_LOCK_POLL_SECONDS)
-    try:
+    # Keep the lock inode permanently: unlinking it can create simultaneous
+    # owners when another process has already opened the old inode.
+    with portalocker.Lock(
+        str(materialized_operation_lock_path(root)), mode="a",
+        timeout=OP_LOCK_TIMEOUT_SECONDS, check_interval=OP_LOCK_POLL_SECONDS,
+    ):
+        legacy = root / OP_LOCK_DIRNAME
+        if legacy.exists() and (
+            _read_lock(legacy / OP_LOCK_FILENAME) is None
+            or _lock_is_active(legacy / OP_LOCK_FILENAME)
+        ):
+            raise RuntimeError(f"legacy materialized cache operation may be active: {legacy}")
         yield
-    finally:
-        if acquired:
-            shutil.rmtree(lock_dir, ignore_errors=True)
 
 
 def create_materialized_lock(run_root: str | Path) -> Path:
