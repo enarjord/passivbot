@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `compose-coin-overrides --include-backtest-optimize` now retains the master's GPU optimizer
+  settings instead of rejecting multi-coin configs with static coin overrides. GPU-specific
+  compatibility checks still run when starting the optimizer.
+
 - Backtest and optimizer results now expose `n_days` and effective UTC analysis dates in
   existing metrics payloads, preserving per-exchange and per-scenario windows. Saved backtest
   configs include current `metrics` or `suite_metrics`; `fills_analysis_duration_days` remains
