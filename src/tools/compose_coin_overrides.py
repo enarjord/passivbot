@@ -526,16 +526,6 @@ def compose_configs(
 ) -> tuple[dict, CompositionReport]:
     if len(configs) < 2:
         raise ValueError("at least two single-coin configs are required")
-    if (
-        include_backtest_optimize
-        and str(configs[0].config.get("optimize", {}).get("backend", "")).casefold()
-        == "gpu"
-    ):
-        raise ValueError(
-            "--include-backtest-optimize cannot retain optimize.backend='gpu': the GPU "
-            "optimizer supports neither multi-coin datasets nor coin_overrides; select a "
-            "CPU optimizer backend in the master input"
-        )
     canonicalized_features = canonicalize_inactive_features(configs)
     master_source = configs[0]
     master = deepcopy(master_source.config)

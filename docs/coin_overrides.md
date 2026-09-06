@@ -227,8 +227,10 @@ gate and enforcer, so it is normalized only when both are disabled.
 By default the output omits `backtest` and `optimize`, producing a lean live config. Add
 `--include-backtest-optimize` to copy both sections from the master input, which makes the result
 directly usable for backtesting or fine-tuning inherited master parameters while the coin overrides
-remain fixed. A master using the single-coin-only `gpu` optimizer backend is rejected in this mode;
-select a CPU optimizer backend before composing. Existing output files are protected unless
+remain fixed. This also preserves `optimize.backend: gpu`: the GPU optimizer supports multi-coin
+EMA Anchor and Trailing Martingale configs with static coin overrides. GPU-specific scope checks
+remain the optimizer's responsibility; see [GPU support and limitations](optimizing.md).
+Existing output files are protected unless
 `--overwrite` is supplied.
 
 ## Common pitfalls
