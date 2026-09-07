@@ -144,6 +144,17 @@ def test_validate_visible_metrics_config_accepts_fill_activity_metrics():
     validate_visible_metrics_config(cfg)
 
 
+def test_validate_visible_metrics_config_accepts_gain_quality_metrics():
+    cfg = get_template_config()
+    cfg["backtest"]["visible_metrics"] = [
+        "adg_rolling_hmean_strategy_eq",
+        "adg_time_integrated_strategy_eq",
+        "positive_gain_participation_strategy_eq",
+    ]
+
+    validate_visible_metrics_config(cfg)
+
+
 def test_visible_metrics_exact_hsl_and_hard_stop_names_resolve():
     cfg = get_template_config()
     cfg["backtest"]["visible_metrics"] = [

@@ -20,6 +20,9 @@ All notable user-facing changes will be documented in this file.
   multi-coin baseline. The input directory determines the composed coin set; the master supplies
   global values and the baseline for generated overrides.
 
+- Added rolling-harmonic ADG, time-integrated ADG, and positive-gain-participation strategy-equity
+  metrics to exact backtest analysis and CPU/GPU optimizer scoring.
+
 - `compose-coin-overrides --include-backtest-optimize` now retains the master's GPU optimizer
   settings instead of rejecting multi-coin configs with static coin overrides. GPU-specific
   compatibility checks still run when starting the optimizer.
