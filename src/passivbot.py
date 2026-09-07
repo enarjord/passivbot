@@ -683,13 +683,15 @@ def _log_process_failure(
     *,
     action: str = "restart",
     failure_state: dict | None = None,
+    context: dict | None = None,
 ) -> None:
     current_bot = globals().get("bot")
-    context = (
-        getattr(current_bot, "_startup_failure_context", {})
-        if action != "cleanup"
-        else {}
-    )
+    if context is None:
+        context = (
+            getattr(current_bot, "_startup_failure_context", {})
+            if action != "cleanup"
+            else {}
+        )
     stage = context.get("stage", _bounded_runtime_stage(current_bot))
     incident_id = context.get("incident_id", "process")
     detail = _bounded_traceback_detail(exc)
@@ -22068,6 +22070,20 @@ async def shutdown_bot(bot):
 
 
 async def main():
+    """Keep failures before bot construction inside the bounded diagnostic boundary."""
+    global bot
+    bot = None
+    context = {"stage": "cli", "incident_id": f"process-{int(utc_ms())}"}
+    try:
+        await _run_live(context)
+    except Exception as exc:
+        # Pre-loop failures remain terminal. SystemExit prevents a second, raw
+        # interpreter traceback without changing the unsuccessful exit status.
+        _log_process_failure("passivbot startup error", exc, action="stop", context=context)
+        raise SystemExit(1) from None
+
+
+async def _run_live(startup_context: dict):
     """Entry point: parse CLI args, load config, and launch the bot lifecycle."""
     global bot
     raw_argv = sys.argv[1:]
@@ -22149,6 +22165,7 @@ async def main():
     cli_log_level = "debug" if args.verbose else args.log_level
     initial_log_level = resolve_log_level(cli_log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
+    startup_context["stage"] = "load_config"
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     update_config_with_args(
         source_config, args, verbose=True, allowed_keys=allowed_config_keys
@@ -22179,6 +22196,7 @@ async def main():
     if effective_log_level != initial_log_level or log_file_settings["log_file"]:
         configure_logging(debug=effective_log_level, **log_file_settings)
 
+    startup_context["stage"] = "custom_endpoints"
     custom_endpoints_cli = args.custom_endpoints
     live_section = config.get("live") if isinstance(config.get("live"), dict) else {}
     custom_endpoints_cfg = (
@@ -22240,14 +22258,17 @@ async def main():
         preloaded=preloaded_override,
     )
 
+    startup_context["stage"] = "load_user_info"
     user_info = load_user_info(live_user)
     # Reconfigure logging with exchange prefix now that we know the exchange
     exchange_prefix = user_info["exchange"]
     configure_logging(
         debug=effective_log_level, prefix=exchange_prefix, **log_file_settings
     )
+    startup_context["stage"] = "load_markets"
     await load_markets(user_info["exchange"], verbose=True)
 
+    startup_context["stage"] = "compile_config"
     config = parse_overrides(config, verbose=True)
     config = compile_runtime_config(config, runtime="live")
     cooldown_secs = 60
@@ -22255,9 +22276,12 @@ async def main():
     failure_state = {}
     while True:
 
+        startup_context["stage"] = "setup_bot"
+        bot = None
         bot = setup_bot(config)
         globals()["bot"] = bot
         bot._process_failure_state = failure_state
+        startup_context["stage"] = "bot_lifecycle"
         fatal_error = None
         try:
             await bot.start_bot()
@@ -22300,6 +22324,7 @@ async def main():
             break
 
         logging.info(f"restarting bot...")
+        startup_context["stage"] = "restart_cooldown"
         print()
         for z in range(cooldown_secs, -1, -1):
             if bot is not None and getattr(bot, "stop_signal_received", False):
@@ -22313,6 +22338,7 @@ async def main():
             )
             break
 
+        startup_context["stage"] = "restart_budget"
         restarts.append(utc_ms())
         restarts = [x for x in restarts if x > utc_ms() - 1000 * 60 * 60 * 24]
         max_restarts = int(require_live_value(bot.config, "max_n_restarts_per_day"))

@@ -733,6 +733,8 @@ An inactive market is not an absent market: retain its overrides and existing pr
 handling. Never drop exchange positions or open orders because their coin is unavailable in config;
 missing market metadata for such state remains an explicit failure. Approved-list filtering also
 applies when the eligible market set is empty.
+Connector-specific live-state hooks must run the shared base validation before any connector
+early return, including Hyperliquid unified-account support.
 
 ## General Guidance
 

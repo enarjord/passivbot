@@ -120,3 +120,25 @@ def test_skip_notice_is_bounded_and_omits_invalid_identifier_text(caplog):
     assert len(notice) < 240
     assert "SECRET" not in notice
     assert "INJECTED" not in notice
+
+
+@pytest.mark.parametrize("unified", [False, True])
+@pytest.mark.parametrize("surface", ["positions", "open_orders"])
+def test_hyperliquid_runs_shared_market_guard_before_connector_early_return(
+    unified, surface
+):
+    from exchanges.hyperliquid import HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot._hl_unified_enabled = unified
+    bot.markets_dict = {"AAA/USDC:USDC": {"active": True, "swap": True}}
+    bot.positions = {}
+    bot.open_orders = {}
+    symbol = "UNLISTED/USDC:USDC"
+    getattr(bot, surface)[symbol] = (
+        {"long": {"size": 1}, "short": {"size": 0}}
+        if surface == "positions"
+        else [{"id": "test"}]
+    )
+    with pytest.raises(KeyError, match="UNLISTED"):
+        bot._assert_supported_live_state()

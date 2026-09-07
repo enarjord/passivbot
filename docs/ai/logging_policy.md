@@ -41,6 +41,10 @@ authentication material must not be copied from its configured credential store 
   or raw exception text. A missing market key may be shown only when its syntax is bounded and
   it independently exists in the bot's market, override, position, or open-order map; arbitrary
   exception arguments are not safe merely because the exception is a built-in Python type.
+  This boundary includes configuration preparation, initial public metadata loading, and bot
+  construction before the restart loop. Failures there retain a nonzero terminal exit, with a
+  process incident ID and phase, rather than leaking a second interpreter traceback. CLI help,
+  argument-parser exits, and requested interruption retain their normal behavior.
 - Unexpected runtime incidents must retain a correlated, bounded frame chain in a private durable
   diagnostic event at normal logging levels. Frame diagnostics exclude exception text, locals, and
   source lines unless a producer has an explicitly reviewed sanitizer for those values; a rare
