@@ -768,6 +768,7 @@ def test_gpu_profile_temporal_dispatches_count_replayed_steps_once():
         "batch_size": 256, "dispatch_count": 8, "cold": True,
         "kernel_candidate_steps": 256 * 59_999, "temporal_chunk_bars": 8192,
         "max_dispatch_seconds": 4.0, "replay_state_bytes_per_candidate": 29_296,
+        "threads_per_threadgroup": 32,
     })
     profile = _new_gpu_proxy_profile(proxy, [{}] * 256, (runner,), coin_count=29,
                                      side_count=1)
@@ -777,6 +778,7 @@ def test_gpu_profile_temporal_dispatches_count_replayed_steps_once():
     assert profile["cold_dispatch_count"] == 1
     assert profile["warm_dispatch_count"] == 7
     assert profile["temporal_dispatches"][0]["max_dispatch_seconds"] == 4.0
+    assert profile["temporal_dispatches"][0]["threads_per_threadgroup"] == 32
 
 
 def test_gpu_profile_candidate_bars_use_truncated_effective_steps():

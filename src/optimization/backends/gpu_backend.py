@@ -4510,6 +4510,7 @@ def run_backend(
 
     if suite_enabled:
         scenario_proxy_groups = {}
+        prepared_mps_data = {}
         for item in suite_inputs:
             scenario_proxy = (
                 MpsMulticoinProxy
@@ -4528,6 +4529,10 @@ def run_backend(
                 ),
                 needed_metrics=needed_metrics,
                 interrupt_check=interrupt_check,
+                **(
+                    {"prepared_data_cache": prepared_mps_data}
+                    if item["coin_count"] > 1 else {}
+                ),
             )
             item["coin_override_contract"] = getattr(
                 scenario_proxy, "coin_override_contract", {}

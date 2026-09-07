@@ -831,13 +831,19 @@ dispatch cap would admit fewer than 512 candidates (or the requested batch size,
 Each dispatch processes at most 8,192 bars, shortening to 4,096 for a full 512-candidate batch,
 and stays within `max_dispatch_candidate_bars`; the
 runner synchronizes and checks interruption between dispatches. Up to 512 candidates can then
-advance together. Every candidate still processes its complete history, and exact Rust validation
+advance together, scheduled in groups of at most 32 threads to distribute independent replays
+across GPU cores. Every candidate still processes its complete history, and exact Rust validation
 remains authoritative. Shorter workloads and dual-side portfolios retain their existing dispatch
 path.
 
+Suite scenarios with identical candle contents, timelines, market settings, and prepared replay
+boundaries share their immutable MPS market tensors. Strategy parameters, output buffers, and replay
+state remain separate for every scenario. Reuse is logged during preparation and lasts only for
+that optimizer run; differing fees, validity windows, or candle contents require separate tensors.
+
 Temporal replay profiling includes `temporal_dispatches`, with chunk lengths, replay-state memory,
-and `max_dispatch_seconds`. These are portions of one replay; candidate-bar totals count each
-processed step once.
+`threads_per_threadgroup`, and `max_dispatch_seconds`. These are portions of one replay;
+candidate-bar totals count each processed step once.
 
 Set `PASSIVBOT_GPU_PROFILE=1` to emit structured `[gpu-profile]` JSON records. Profiling is disabled
 by default because its synchronization points deliberately trade throughput for trustworthy phase

@@ -5676,7 +5676,8 @@ def _multicoin_exposure_fixture(
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("features", [False, True])
-def test_tm_multicoin_temporal_replay_preserves_every_output(side, features):
+@pytest.mark.parametrize("batch_size", [3, 35])
+def test_tm_multicoin_temporal_replay_preserves_every_output(side, features, batch_size):
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
 
     count = 1513
@@ -5708,13 +5709,13 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(side, features):
     generic = MpsTrailingMartingaleMulticoinRunner(run, data, **kwargs)
     # Include empty and early-finished candidates alongside a full replay. The
     # boundary crosses activation, hours, UTC days, and HSL episodes.
-    params = np.asarray([row] * 3, dtype=np.float64)
-    ends = np.asarray([1, 123, count - 1], dtype=np.int32)
+    params = np.asarray([row] * batch_size, dtype=np.float64)
+    ends = np.resize(np.asarray([1, 123, count - 1], dtype=np.int32), batch_size)
     expected = generic.run(params, end_steps=ends)
     expected = {key: value.cpu().clone() if isinstance(value, torch.Tensor) else value
                 for key, value in expected.items()}
     chunked = MpsTrailingMartingaleMulticoinRunner(
-        run, data, max_dispatch_candidate_bars=3 * 2 * 47, **kwargs
+        run, data, max_dispatch_candidate_bars=batch_size * 2 * 47, **kwargs
     )
     for _ in range(2):
         actual = chunked.run(params, profile=True, end_steps=ends)
@@ -5727,6 +5728,7 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(side, features):
         assert chunked.last_profile["dispatch_count"] == 33
         assert chunked.last_profile["kernel_candidate_steps"] == int((ends - 1).sum())
         assert chunked.last_profile["temporal_chunk_bars"] == 47
+        assert chunked.last_profile["threads_per_threadgroup"] == min(batch_size, 32)
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
