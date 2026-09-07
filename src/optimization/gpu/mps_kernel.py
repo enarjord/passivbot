@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import logging
 import time
 
 import numpy as np
@@ -14,6 +15,8 @@ from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     GAP_BINS,
+    MPS_TM_MULTICOIN_CHUNK_BARS,
+    MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -947,6 +950,7 @@ def _trailing_martingale_multicoin_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
+    temporal_chunking: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -965,6 +969,10 @@ def _trailing_martingale_multicoin_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
+    if temporal_chunking:
+        if "#if PASSIVBOT_TM_MULTICOIN_CHUNKED" not in source:
+            raise RuntimeError("MPS source is missing the multicoin replay-state contract")
+        source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
     return torch.mps.compile_shader(source)
 
 
@@ -2527,7 +2535,16 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
+        max_dispatch_candidate_bars: int | None = None,
+        interrupt_check=None,
     ):
+        if max_dispatch_candidate_bars is not None and max_dispatch_candidate_bars <= 0:
+            raise ValueError("max_dispatch_candidate_bars must be positive")
+        self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
+        self.interrupt_check = interrupt_check or (lambda: None)
+        self._replay_state_bytes = None
+        self._replay_states = {}
+        self._last_temporal_dispatch = None
         super().__init__(
             run,
             data,
@@ -2584,6 +2601,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
+            self.max_dispatch_candidate_bars is not None,
         )
 
     def _dispatch(
@@ -2632,10 +2650,76 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         )
         if self.recovery_distribution_enabled:
             kernel_args += (recovery_samples,)
-        library.passivbot_trailing_martingale_multicoin(
-            *kernel_args,
-            threads=(batch_size, 1, 1),
+        if self.max_dispatch_candidate_bars is None:
+            library.passivbot_trailing_martingale_multicoin(
+                *kernel_args, threads=(batch_size, 1, 1)
+            )
+            return
+        chunk_bars = min(
+            MPS_TM_MULTICOIN_CHUNK_BARS,
+            MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // batch_size,
+            self.max_dispatch_candidate_bars // (batch_size * self.n_coins),
         )
+        if chunk_bars < 1:
+            raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
+        if self._replay_state_bytes is None:
+            size = torch.empty(1, dtype=torch.int32, device="mps")
+            library.passivbot_tm_multicoin_replay_state_bytes(size, threads=1)
+            self._replay_state_bytes = int(size.item())
+        if batch_size not in self._replay_states:
+            self._replay_states = {
+                batch_size: torch.empty(
+                    (batch_size, self._replay_state_bytes),
+                    dtype=torch.uint8, device="mps",
+                )
+            }
+        replay_states = self._replay_states[batch_size]
+        stop_k = int(end_steps.max().item())
+        dispatch_count = 0
+        max_dispatch_seconds = 0.0
+        replay_started = time.perf_counter()
+        next_progress = replay_started + 30.0
+        for begin_k in range(1, max(2, stop_k), chunk_bars):
+            self.interrupt_check()
+            replay_range = torch.tensor(
+                [begin_k, min(begin_k + chunk_bars, stop_k)],
+                dtype=torch.int32, device="mps",
+            )
+            started = time.perf_counter()
+            library.passivbot_trailing_martingale_multicoin(
+                *kernel_args, replay_states, replay_range,
+                threads=(batch_size, 1, 1),
+            )
+            # Bound queued work as well as each command, and make Ctrl+C visible
+            # between temporal chunks even when profiling is disabled.
+            torch.mps.synchronize()
+            dispatch_count += 1
+            max_dispatch_seconds = max(
+                max_dispatch_seconds, time.perf_counter() - started
+            )
+            now = time.perf_counter()
+            completed_k = min(begin_k + chunk_bars, stop_k)
+            if now >= next_progress and completed_k < stop_k:
+                logging.info(
+                    "GPU temporal replay progress | candidates=%d bars=%d/%d elapsed=%.1fs",
+                    batch_size, completed_k - 1, stop_k - 1, now - replay_started,
+                )
+                next_progress = now + 30.0
+        self.interrupt_check()
+        self._last_temporal_dispatch = {
+            "dispatch_count": dispatch_count,
+            "temporal_chunk_bars": chunk_bars,
+            "max_dispatch_seconds": max_dispatch_seconds,
+            "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
+            "replay_state_bytes_per_candidate": self._replay_state_bytes,
+        }
+
+    def run(self, params, *, profile=False, end_steps=None):
+        self._last_temporal_dispatch = None
+        output = super().run(params, profile=profile, end_steps=end_steps)
+        if profile and self._last_temporal_dispatch is not None:
+            self.last_profile.update(self._last_temporal_dispatch)
+        return output
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps)

@@ -5768,6 +5768,61 @@ kernel void passivbot_trailing_martingale_multicoin_fused(
     );
 }
 
+// A temporal dispatch boundary preserves the entire candidate replay. Output
+// finalization runs only at its actual end step; partial chunks never become scores.
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+struct TrailingMartingaleMulticoinReplayState {
+    TrailingMartingaleMulticoinSideState side;
+    JointPortfolioAccount account;
+    TrailingMartingaleMulticoinFillState fills;
+    float fills_active_days_count;
+    int last_active_fill_day;
+    bool alive;
+    bool equity_started;
+    bool min_cost_exact_open_uncertain;
+    float run_peak;
+    float max_dd;
+    float total_wallet_exposure_max;
+    float total_wallet_exposure_mean;
+    float total_wallet_exposure_samples;
+    float first_fill_k;
+    float last_fill_k;
+    float gap_max_min;
+    float last_high_k;
+    float recovery_max_min;
+    float account_peak;
+    float account_peak_k;
+    float account_recovery_max_min;
+    float first_eq_k;
+    float last_eq_k;
+    int liquidation_day;
+    float hsl_tier_samples_total;
+    float hsl_tier_samples_yellow;
+    float hsl_tier_samples_orange;
+    float hsl_tier_samples_red;
+    int current_day;
+    bool day_touched;
+    float day_end;
+    float day_min;
+    float day_dd;
+    float day_has_fill;
+    float day_min_balance;
+    float day_start_balance;
+#if PASSIVBOT_BTC_RISK_ENABLED
+    BtcRiskState btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    EquityBalanceDiffState equity_balance_diff_state;
+#endif
+#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+    int recovery_start_k;
+#endif
+};
+kernel void passivbot_tm_multicoin_replay_state_bytes(device uint* result) {
+    result[0] = sizeof(TrailingMartingaleMulticoinReplayState);
+}
+#endif
+
 inline void passivbot_trailing_martingale_multicoin_impl(
     constant float* bars,
     constant int* fill_ticks,
@@ -5799,6 +5854,10 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    device TrailingMartingaleMulticoinReplayState* replay_states,
+    constant int* replay_range,
+#endif
     uint b,
     bool short_side
 ) {
@@ -5815,13 +5874,25 @@ inline void passivbot_trailing_martingale_multicoin_impl(
 #endif
     if (b >= uint(B)) return;
 #if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    if (replay_range[0] == 1)
+#endif
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
     );
 #endif
     const int stop_k = clamp(end_steps[b], 1, T - 1);
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    const int begin_k = replay_range[0];
+    const int chunk_stop_k = min(replay_range[1], stop_k);
+    if (begin_k >= stop_k && begin_k > 1) return;
+    if (begin_k > 1 && scalars[int(b) * SCALAR_COLS + 9] == -2.0f) return;
+#else
+    const int begin_k = 1;
+    const int chunk_stop_k = stop_k;
+#endif
     const bool collect_coin_fill_counts = run_settings[6] > 0.5f;
-    if (collect_coin_fill_counts) {
+    if (collect_coin_fill_counts && begin_k == 1) {
         for (int c = 0; c < C; ++c) {
             coin_fill_counts[int(b) * C + c] = 0.0f;
         }
@@ -5864,7 +5935,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     thread float* position_open_k = side.position_open_k;
     thread float* position_last_fill_k = side.position_last_fill_k;
     thread float* coin_realized_pnl = side.coin_realized_pnl;
-    for (int j = 0; j < GAP_BINS; ++j) {
+    for (int j = 0; begin_k == 1 && j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
 
@@ -5935,7 +6006,57 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float day_start_balance = balance;
     thread float& day_fill_count = fills.day_fill_count;
 
-    for (int k = 1; k < stop_k; ++k) {
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    if (begin_k > 1) {
+        side = replay_states[b].side;
+        account = replay_states[b].account;
+        fills = replay_states[b].fills;
+        fills_active_days_count = replay_states[b].fills_active_days_count;
+        last_active_fill_day = replay_states[b].last_active_fill_day;
+        alive = replay_states[b].alive;
+        equity_started = replay_states[b].equity_started;
+        min_cost_exact_open_uncertain = replay_states[b].min_cost_exact_open_uncertain;
+        run_peak = replay_states[b].run_peak;
+        max_dd = replay_states[b].max_dd;
+        total_wallet_exposure_max = replay_states[b].total_wallet_exposure_max;
+        total_wallet_exposure_mean = replay_states[b].total_wallet_exposure_mean;
+        total_wallet_exposure_samples = replay_states[b].total_wallet_exposure_samples;
+        first_fill_k = replay_states[b].first_fill_k;
+        last_fill_k = replay_states[b].last_fill_k;
+        gap_max_min = replay_states[b].gap_max_min;
+        last_high_k = replay_states[b].last_high_k;
+        recovery_max_min = replay_states[b].recovery_max_min;
+        account_peak = replay_states[b].account_peak;
+        account_peak_k = replay_states[b].account_peak_k;
+        account_recovery_max_min = replay_states[b].account_recovery_max_min;
+        first_eq_k = replay_states[b].first_eq_k;
+        last_eq_k = replay_states[b].last_eq_k;
+        liquidation_day = replay_states[b].liquidation_day;
+        hsl_tier_samples_total = replay_states[b].hsl_tier_samples_total;
+        hsl_tier_samples_yellow = replay_states[b].hsl_tier_samples_yellow;
+        hsl_tier_samples_orange = replay_states[b].hsl_tier_samples_orange;
+        hsl_tier_samples_red = replay_states[b].hsl_tier_samples_red;
+        current_day = replay_states[b].current_day;
+        day_touched = replay_states[b].day_touched;
+        day_end = replay_states[b].day_end;
+        day_min = replay_states[b].day_min;
+        day_dd = replay_states[b].day_dd;
+        day_has_fill = replay_states[b].day_has_fill;
+        day_min_balance = replay_states[b].day_min_balance;
+        day_start_balance = replay_states[b].day_start_balance;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_risk = replay_states[b].btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff_state = replay_states[b].equity_balance_diff_state;
+#endif
+#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+        recovery_start_k = replay_states[b].recovery_start_k;
+#endif
+    }
+#endif
+
+    for (int k = begin_k; k < chunk_stop_k; ++k) {
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
             scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
@@ -6315,6 +6436,57 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         }
     }
 
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    if (chunk_stop_k < stop_k) {
+        replay_states[b].side = side;
+        replay_states[b].account = account;
+        replay_states[b].fills = fills;
+        replay_states[b].fills_active_days_count = fills_active_days_count;
+        replay_states[b].last_active_fill_day = last_active_fill_day;
+        replay_states[b].alive = alive;
+        replay_states[b].equity_started = equity_started;
+        replay_states[b].min_cost_exact_open_uncertain = min_cost_exact_open_uncertain;
+        replay_states[b].run_peak = run_peak;
+        replay_states[b].max_dd = max_dd;
+        replay_states[b].total_wallet_exposure_max = total_wallet_exposure_max;
+        replay_states[b].total_wallet_exposure_mean = total_wallet_exposure_mean;
+        replay_states[b].total_wallet_exposure_samples = total_wallet_exposure_samples;
+        replay_states[b].first_fill_k = first_fill_k;
+        replay_states[b].last_fill_k = last_fill_k;
+        replay_states[b].gap_max_min = gap_max_min;
+        replay_states[b].last_high_k = last_high_k;
+        replay_states[b].recovery_max_min = recovery_max_min;
+        replay_states[b].account_peak = account_peak;
+        replay_states[b].account_peak_k = account_peak_k;
+        replay_states[b].account_recovery_max_min = account_recovery_max_min;
+        replay_states[b].first_eq_k = first_eq_k;
+        replay_states[b].last_eq_k = last_eq_k;
+        replay_states[b].liquidation_day = liquidation_day;
+        replay_states[b].hsl_tier_samples_total = hsl_tier_samples_total;
+        replay_states[b].hsl_tier_samples_yellow = hsl_tier_samples_yellow;
+        replay_states[b].hsl_tier_samples_orange = hsl_tier_samples_orange;
+        replay_states[b].hsl_tier_samples_red = hsl_tier_samples_red;
+        replay_states[b].current_day = current_day;
+        replay_states[b].day_touched = day_touched;
+        replay_states[b].day_end = day_end;
+        replay_states[b].day_min = day_min;
+        replay_states[b].day_dd = day_dd;
+        replay_states[b].day_has_fill = day_has_fill;
+        replay_states[b].day_min_balance = day_min_balance;
+        replay_states[b].day_start_balance = day_start_balance;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        replay_states[b].btc_risk = btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        replay_states[b].equity_balance_diff_state = equity_balance_diff_state;
+#endif
+#if defined(PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED)
+        replay_states[b].recovery_start_k = recovery_start_k;
+#endif
+        return;
+    }
+#endif
+
     if (day_touched && current_day >= 0 && current_day < D) {
         int output = (int(b) * D + current_day) * DAILY_COLS;
         daily[output + 0] = day_end;
@@ -6498,6 +6670,10 @@ kernel void passivbot_trailing_martingale_multicoin(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    device TrailingMartingaleMulticoinReplayState* replay_states,
+    constant int* replay_range,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     const bool short_side = run_settings[3] > 0.5f;
@@ -6519,6 +6695,9 @@ kernel void passivbot_trailing_martingale_multicoin(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+        replay_states, replay_range,
 #endif
         b, short_side
     );
@@ -6555,6 +6734,10 @@ kernel void passivbot_trailing_martingale_multicoin_long(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+    device TrailingMartingaleMulticoinReplayState* replay_states,
+    constant int* replay_range,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_trailing_martingale_multicoin_impl(
@@ -6575,6 +6758,9 @@ kernel void passivbot_trailing_martingale_multicoin_long(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#if PASSIVBOT_TM_MULTICOIN_CHUNKED
+        replay_states, replay_range,
 #endif
         b, false
     );

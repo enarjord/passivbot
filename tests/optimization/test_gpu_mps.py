@@ -5673,6 +5673,107 @@ def _multicoin_exposure_fixture(
     return runner, row
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("features", [False, True])
+def test_tm_multicoin_temporal_replay_preserves_every_output(side, features):
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+
+    count = 1513
+    steps = np.arange(count)
+    closes = np.column_stack([
+        base * (1 + 0.12 * np.sin(steps / 37.0 + coin))
+        for coin, base in enumerate((100.0, 120.0))
+    ])
+    _, row, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=count, closes=closes,
+        requested_start_index=31,
+        return_context=True,
+    )
+    if features:
+        for key, value in (
+            ("hsl_enabled", 1.0), ("hsl_signal_mode", 2.0),
+            ("hsl_red_threshold", 0.02), ("hsl_ema_span_minutes", 1.0),
+            ("hsl_cooldown_minutes_after_red", 3.0),
+        ):
+            row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
+    kwargs = dict(
+        side=side, collect_coin_fill_counts=True,
+        recovery_distribution_enabled=features, entry_interval_enabled=features,
+        hsl_ema_tail_enabled=features, hsl_raw_drawdown_enabled=features,
+        hsl_raw_tail_enabled=features, btc_risk_enabled=features,
+        equity_balance_diff_enabled=features,
+        btc_prices=30_000.0 + steps if features else None,
+    )
+    generic = MpsTrailingMartingaleMulticoinRunner(run, data, **kwargs)
+    # Include empty and early-finished candidates alongside a full replay. The
+    # boundary crosses activation, hours, UTC days, and HSL episodes.
+    params = np.asarray([row] * 3, dtype=np.float64)
+    ends = np.asarray([1, 123, count - 1], dtype=np.int32)
+    expected = generic.run(params, end_steps=ends)
+    expected = {key: value.cpu().clone() if isinstance(value, torch.Tensor) else value
+                for key, value in expected.items()}
+    chunked = MpsTrailingMartingaleMulticoinRunner(
+        run, data, max_dispatch_candidate_bars=3 * 2 * 47, **kwargs
+    )
+    for _ in range(2):
+        actual = chunked.run(params, profile=True, end_steps=ends)
+        assert actual.keys() == expected.keys()
+        for key, value in actual.items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+            else:
+                assert value == expected[key]
+        assert chunked.last_profile["dispatch_count"] == 33
+        assert chunked.last_profile["kernel_candidate_steps"] == int((ends - 1).sum())
+        assert chunked.last_profile["temporal_chunk_bars"] == 47
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+def test_tm_multicoin_temporal_replay_interrupt_does_not_leak_partial_state():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+
+    generic, row, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale", "long", return_context=True
+    )
+    matrix = np.asarray([row], dtype=np.float64)
+    expected = {key: value.cpu().clone() for key, value in generic.run(matrix).items()}
+    calls = 0
+
+    def interrupt():
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise InterruptedError("test interruption")
+
+    chunked = MpsTrailingMartingaleMulticoinRunner(
+        run, data, side="long", max_dispatch_candidate_bars=2 * 7,
+        interrupt_check=interrupt,
+    )
+    with pytest.raises(InterruptedError, match="test interruption"):
+        chunked.run(matrix)
+    chunked.interrupt_check = lambda: None
+    actual = chunked.run(matrix)
+    for key, value in actual.items():
+        torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+def test_tm_multicoin_temporal_replay_preserves_unavailable_valuation():
+    from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
+
+    generic, row, run, data = _multicoin_exposure_fixture(
+        "trailing_martingale", "long", count=64, last_valid_indices=(24, 63),
+        return_context=True,
+    )
+    chunked = MpsTrailingMartingaleMulticoinRunner(
+        run, data, side="long", max_dispatch_candidate_bars=2 * 7,
+    )
+    for runner in (generic, chunked):
+        with pytest.raises(ValueError, match="unavailable held-position valuation"):
+            runner.run(np.asarray([row], dtype=np.float64))
+
+
 @pytest.mark.skipif(
     not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
 )

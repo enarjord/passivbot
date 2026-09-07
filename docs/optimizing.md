@@ -825,6 +825,20 @@ MPS Metal integration and hybrid validation gates are specific to this implement
 
 #### Profiling Apple MPS optimization
 
+For long multi-coin Trailing Martingale datasets with one active side, MPS can retain each
+candidate's replay state between history chunks. This activates automatically when the full-history
+dispatch cap would admit fewer than 512 candidates (or the requested batch size, if smaller).
+Each dispatch processes at most 8,192 bars, shortening to 4,096 for a full 512-candidate batch,
+and stays within `max_dispatch_candidate_bars`; the
+runner synchronizes and checks interruption between dispatches. Up to 512 candidates can then
+advance together. Every candidate still processes its complete history, and exact Rust validation
+remains authoritative. Shorter workloads and dual-side portfolios retain their existing dispatch
+path.
+
+Temporal replay profiling includes `temporal_dispatches`, with chunk lengths, replay-state memory,
+and `max_dispatch_seconds`. These are portions of one replay; candidate-bar totals count each
+processed step once.
+
 Set `PASSIVBOT_GPU_PROFILE=1` to emit structured `[gpu-profile]` JSON records. Profiling is disabled
 by default because its synchronization points deliberately trade throughput for trustworthy phase
 boundaries.
@@ -880,6 +894,7 @@ passivbot tool gpu-proxy-benchmark --case tm-single-long-close-ladder
 passivbot tool gpu-proxy-benchmark --case tm-single-long-hsl
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overhead
 passivbot tool gpu-proxy-benchmark --case ema-multicoin-overrides
+passivbot tool gpu-proxy-benchmark --case tm-multicoin-overhead
 # Hold one candidate matrix constant while measuring dispatch chunking:
 passivbot tool gpu-proxy-benchmark --case ema-single-long \
   --candidates 4096 --dispatch-batch-size 1024

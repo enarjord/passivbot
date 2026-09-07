@@ -16,6 +16,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     ProxyMarket,
     ProxyRun,
+    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
@@ -30,6 +31,7 @@ CASES = (
     "tm-single-long-hsl",
     "ema-multicoin-overhead",
     "ema-multicoin-overrides",
+    "tm-multicoin-overhead",
 )
 SINGLE_COIN_CASES = frozenset(
     {
@@ -263,6 +265,7 @@ def _build_case(
         MpsEmaAnchorMulticoinRunner,
         MpsEmaAnchorRunner,
         MpsTrailingMartingaleRunner,
+        MpsTrailingMartingaleMulticoinRunner,
     )
     from optimization.gpu.metrics import compute_objectives
     from optimization.gpu.service import (
@@ -401,13 +404,24 @@ def _build_case(
         overrides[0, EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN] = 0.5
         if coins > 1:
             overrides[1, 0] = 0.04
-    runner = MpsEmaAnchorMulticoinRunner(
+    tm_multicoin = name == "tm-multicoin-overhead"
+    runner_cls = (
+        MpsTrailingMartingaleMulticoinRunner
+        if tm_multicoin else MpsEmaAnchorMulticoinRunner
+    )
+    param_keys = (
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+        if tm_multicoin else EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    )
+    runner = runner_cls(
         runs[0],
         data,
         side="long",
         coin_overrides=overrides,
+        **({"max_dispatch_candidate_bars": MAX_DISPATCH_CANDIDATE_BARS}
+           if tm_multicoin else {}),
     )
-    matrix = _parameter_matrix(EMA_ANCHOR_MULTICOIN_PARAM_KEYS, candidates, seed)
+    matrix = _parameter_matrix(param_keys, candidates, seed)
     proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
     proxy.batch_size = candidates
     proxy.dispatch_batch_size = dispatch_batch_size
@@ -419,12 +433,12 @@ def _build_case(
     proxy.run = runs[0]
     proxy.sides = ["long"]
     proxy.needed_metrics = needed_metrics
-    proxy.strategy_kind = "ema_anchor"
+    proxy.strategy_kind = "trailing_martingale" if tm_multicoin else "ema_anchor"
     proxy.entry_interval_enabled = False
     proxy.btc_analysis_enabled = False
     proxy.btc_risk_enabled = False
     proxy.equity_balance_diff_enabled = False
-    proxy.param_keys = EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+    proxy.param_keys = param_keys
     proxy.base_params = {"long": {key: base_values[key] for key in proxy.param_keys}}
     proxy.base_total_wallet_exposure_limits = {"long": 1.0, "short": 0.0}
     proxy.base_n_positions = {"long": 4.0, "short": 0.0}

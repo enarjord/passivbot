@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Apple MPS multi-coin Trailing Martingale optimization uses bounded history chunks when long
+  datasets would otherwise restrict candidate parallelism. Replays preserve their full strategy
+  and metric state between dispatches, retain the configured work limit, and check interruption
+  between chunks. Profiling reports temporal dispatch counts and maximum dispatch duration.
+
 - `compose-coin-overrides --override-params` pins selected groups or leaves using fine-tune-style
   dotted selectors, retaining equal values while unselected fields inherit the master. Custom
   selection takes precedence over lean/verbose mode and rejects selectors matching no allowed
