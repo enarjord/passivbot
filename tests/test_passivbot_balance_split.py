@@ -7575,10 +7575,12 @@ def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
         )
     }
 
+    bot._account_invalidation_generation = 7
     snapshot = pb_mod.planning_gates.build_protective_planning_snapshot(
         bot, [symbol], snapshots
     )
 
+    assert snapshot.account_invalidation_generation == 7
     assert set(snapshot.required_surfaces) == {
         "balance",
         "positions",
@@ -9161,7 +9163,11 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     bot._record_authoritative_surface("completed_candles", candle_signature)
     bot._record_market_snapshot_surface([symbol], snapshots)
 
+    bot._account_invalidation_generation = 7
     planning_snapshot = bot._build_staged_planning_snapshot([symbol], snapshots)
+    bot._account_invalidation_generation = 8
+
+    assert planning_snapshot.account_invalidation_generation == 7
 
     assert planning_snapshot is not None
     assert planning_snapshot.symbols == (symbol,)
@@ -13358,3 +13364,158 @@ def test_raw_only_balance_apply_replaces_stale_composition_with_unavailable():
     assert bot._balance_composition["reason"] == "raw_only_refresh"
     assert bot._balance_composition["asset_balances"] == []
     assert bot._balance_composition is not composition
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {"filled": 0.25},
+        {"filled": None, "remaining": 0.75},
+        {"filled": 0.0, "remaining": 1.0},
+    ],
+)
+@pytest.mark.parametrize(
+    "venue, class_name",
+    [
+        ("ccxt_bot", "CCXTBot"),
+        ("bybit", "BybitBot"),
+        ("gateio", "GateIOBot"),
+        ("okx", "OKXBot"),
+        ("bitunix", "BitunixBot"),
+        ("weex", "WeexBot"),
+        ("binance", "BinanceBot"),
+        ("kucoin", "KucoinBot"),
+    ],
+)
+def test_shared_ccxt_partial_fill_self_echo_invalidates_account(
+    monkeypatch, progress, venue, class_name
+):
+    from importlib import import_module
+
+    bot_class = getattr(import_module(f"exchanges.{venue}"), class_name)
+    bot = bot_class.__new__(bot_class)
+    bot.execution_scheduled = False
+    bot._authoritative_pending_confirmations = {}
+    _set_authoritative_epoch_state(bot, epoch=7)
+    bot.state_change_detected_by_symbol = set()
+    now_ms = 1_000_000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "amount": 1.0,
+        "price": 100.0,
+        "status": "open",
+        "reduceOnly": False,
+        "info": {
+            "positionSide": "LONG",
+            "posSide": "long",
+            "positionIdx": 1,
+            "reduceOnly": False,
+        },
+        **progress,
+    }
+    normalized = bot._normalize_order_update(order)
+    bot.recent_order_executions = [{**normalized, "execution_timestamp": now_ms}]
+    bot.handle_order_update([normalized])
+
+    has_fill = progress.get("remaining") != 1.0
+    assert getattr(bot, "_account_invalidation_generation", 0) == int(has_fill)
+    assert bot.state_change_detected_by_symbol == (
+        {order["symbol"]} if has_fill else set()
+    )
+    assert set(bot._authoritative_pending_confirmations) == (
+        {"balance", "positions", "open_orders", "fills"} if has_fill else set()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "progress",
+    [
+        {"filled": 0.25},
+        {"filled": 0.0, "remaining": 0.75},
+        {"filled": 0.0, "remaining": 1.0},
+    ],
+)
+async def test_hyperliquid_normal_partial_fill_self_echo_invalidates_account(
+    monkeypatch, progress
+):
+    from types import SimpleNamespace
+    from exchanges.hyperliquid import HyperliquidBot
+
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.execution_scheduled = False
+    bot.stop_websocket = False
+    bot._authoritative_pending_confirmations = {}
+    _set_authoritative_epoch_state(bot, epoch=7)
+    bot.state_change_detected_by_symbol = set()
+    bot._hl_note_ws_symbols_for_dex_scope = lambda _orders: None
+    now_ms = 1_000_000
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms)
+    order = {
+        "symbol": "BTC/USDC:USDC",
+        "side": "buy",
+        "amount": 1.0,
+        "price": 100.0,
+        "status": "open",
+        "reduceOnly": False,
+        "info": {"reduceOnly": False},
+        **progress,
+    }
+    bot.recent_order_executions = [
+        {**order, "position_side": "long", "qty": 1.0, "execution_timestamp": now_ms}
+    ]
+
+    async def watch_orders():
+        bot.stop_websocket = True
+        return [order]
+
+    bot.ccp = SimpleNamespace(watch_orders=watch_orders)
+    await bot.watch_orders()
+
+    assert order["position_side"] == "long"
+    assert "_pb_order_semantics_source" not in order
+    has_fill = progress.get("remaining") != 1.0
+    assert getattr(bot, "_account_invalidation_generation", 0) == int(has_fill)
+    assert set(bot._authoritative_pending_confirmations) == (
+        {"balance", "positions", "open_orders", "fills"} if has_fill else set()
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latched", [False, True])
+async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protection(latched):
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_coin_initialized = True
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
+    bot._equity_hard_stop_signal_mode = lambda: "coin"
+    bot._equity_hard_stop_coin_red_active = lambda: latched
+    bot._equity_hard_stop_check = AsyncMock(
+        side_effect=AuthoritativeSurfaceUnavailable(
+            "hsl_episode_boundaries", "ambiguous fill cohort"
+        )
+    )
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._emit_live_cycle_degraded = MagicMock()
+    bot.refresh_authoritative_state = AsyncMock(return_value=True)
+    bot.prepare_planning_universe = AsyncMock()
+    bot.execute_to_exchange = AsyncMock()
+
+    async def stop(*args, **kwargs):
+        bot.stop_signal_received = True
+
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
+    bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock(side_effect=stop)
+    assert await bot.run_execution_loop() is None
+    bot.prepare_planning_universe.assert_not_awaited()
+    bot.execute_to_exchange.assert_not_awaited()
+    assert bot._equity_hard_stop_run_coin_red_supervisor.await_count == int(latched)
+    assert bot._sleep_unless_shutdown.await_count == int(not latched)

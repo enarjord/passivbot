@@ -27,6 +27,7 @@ from optimization.backend_shared import (
 )
 from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
+from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
 from optimization.gpu.metric_registry import (
     reject_configured_exact_only_gpu_metrics,
@@ -4104,12 +4105,18 @@ def run_backend(
     reject_configured_exact_only_gpu_metrics(config)
     options = _resolve_options(config)
     validate_optimizer_effective_configs(config)
+    evaluation_contract = recorded_evaluation_contract(config)
     checkpoint = None
     if resume:
         if checkpoint_path is None or not os.path.isfile(checkpoint_path):
             raise FileNotFoundError(f"GPU checkpoint not found: {checkpoint_path}")
         with open(checkpoint_path, "rb") as file:
             checkpoint = pickle.load(file)
+        if checkpoint.get(CONTRACT_KEY) != evaluation_contract:
+            raise ValueError(
+                "GPU checkpoint historical evaluation contract cannot be proven or changed; "
+                "start a fresh run"
+            )
 
     shape = (
         optimization_shape
@@ -5079,6 +5086,7 @@ def run_backend(
                 ),
             }
         return {
+            CONTRACT_KEY: deepcopy(evaluation_contract),
             "signature": signature,
             "algorithm": algorithm,
             "generation": generation,

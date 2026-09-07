@@ -85,6 +85,88 @@ class FakeWebSocket:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("origin", [
+    "https://attacker.example", "http://localhost:9999", "null", "",
+    "http://localhost:8080@attacker.example", "http://localhost:8080/path",
+    "http://localhost:8080?query", "http://localhost:8080#fragment",
+    "http://localhost:bad", "http://user@localhost:8080", "https://localhost:8080",
+])
+async def test_websocket_rejects_foreign_or_invalid_origin_before_reading_data(tmp_path, origin):
+    app = create_monitor_relay_app(monitor_root=str(tmp_path / "missing"))
+    request = make_mocked_request("GET", "/ws", app=app,
+                                  headers={"Host": "localhost:8080", "Origin": origin})
+    with pytest.raises(web.HTTPForbidden):
+        await _handle_ws(request)
+
+
+@pytest.mark.asyncio
+async def test_websocket_rejects_multiple_origin_headers(tmp_path):
+    app = create_monitor_relay_app(monitor_root=str(tmp_path))
+    request = make_mocked_request("GET", "/ws", app=app, headers=[
+        ("Host", "localhost:8080"), ("Origin", "http://localhost:8080"),
+        ("Origin", "https://attacker.example")])
+    with pytest.raises(web.HTTPForbidden):
+        await _handle_ws(request)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host,origin", [
+    ("localhost:8080", "http://localhost:8080"), ("localhost", "http://localhost:80"),
+    ("[::1]:8080", "http://[::1]:8080"), ("localhost:8080", None),
+])
+async def test_websocket_allows_same_origin_dashboard_and_originless_clients(
+    tmp_path, monkeypatch, host, origin
+):
+    _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(tmp_path / "monitor"),
+                                   allowed_origins=[origin or f"http://{host}"])
+    fake_ws = FakeWebSocket(close_after_messages=1)
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    headers = {"Host": host}
+    if origin is not None:
+        headers["Origin"] = origin
+    response = await _handle_ws(make_mocked_request("GET", "/ws", app=app, headers=headers))
+    assert response is fake_ws
+    assert fake_ws.messages[0]["type"] == "snapshot"
+
+
+@pytest.mark.asyncio
+async def test_dns_rebinding_host_and_origin_do_not_authorize_monitor_data(tmp_path):
+    app = create_monitor_relay_app(monitor_root=str(tmp_path))
+    request = make_mocked_request("GET", "/ws", app=app, headers={
+        "Host": "attacker.example:8765", "Origin": "http://attacker.example:8765"})
+    with pytest.raises(web.HTTPForbidden):
+        await _handle_ws(request)
+
+    async def must_not_read_data(request):
+        raise AssertionError("untrusted Host reached an HTTP data handler")
+
+    with pytest.raises(web.HTTPForbidden):
+        await monitor_relay._validate_monitor_host(request, must_not_read_data)
+
+
+@pytest.mark.asyncio
+async def test_configured_external_https_origin_works_through_http_proxy(tmp_path, monkeypatch):
+    _make_monitor_root(tmp_path)
+    app = create_monitor_relay_app(monitor_root=str(tmp_path / "monitor"),
+                                   allowed_origins=["https://monitor.example"])
+    fake_ws = FakeWebSocket(close_after_messages=1)
+    monkeypatch.setattr(monitor_relay.web, "WebSocketResponse", lambda **_: fake_ws)
+    request = make_mocked_request("GET", "/ws", app=app, headers={
+        "Host": "monitor.example", "Origin": "https://monitor.example"})
+    assert request.scheme == "http"
+    response = await monitor_relay._validate_monitor_host(request, _handle_ws)
+    assert response is fake_ws
+    assert fake_ws.messages[0]["type"] == "snapshot"
+
+
+@pytest.mark.parametrize("origin", ["*", "null", "http://host/path", "http://user@host", "http://host:bad"])
+def test_invalid_configured_origin_fails_startup(tmp_path, origin):
+    with pytest.raises(ValueError):
+        create_monitor_relay_app(monitor_root=str(tmp_path), allowed_origins=[origin])
+
+
+@pytest.mark.asyncio
 async def test_monitor_relay_health_handler_reports_available_bots(tmp_path):
     monitor_root = _make_monitor_root(tmp_path)
     app = create_monitor_relay_app(monitor_root=str(monitor_root), poll_interval_ms=10)

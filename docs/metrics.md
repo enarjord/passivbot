@@ -6,6 +6,38 @@ This page documents the main backtest metrics exposed by `passivbot-rust`. Value
 BTC collateral. Metrics without a suffix are currency-agnostic (e.g., position counts) or already
 expressed as percentages/ratios.
 
+## Effective backtest period
+
+- `n_days`: Elapsed days between the first and last actual equity-analysis timestamps,
+  including idle periods. This excludes pre-analysis warmup and reflects early termination.
+  It is not a count of days with fills or a per-coin coverage measure.
+  `fills_analysis_duration_days` remains available with the same value; both names default to
+  maximizing duration and work in exact/CPU scoring and metric lookup, including older result files.
+  Both remain excluded from GPU proxy scoring and proxy-side limits, while computed diagnostic
+  values stay available.
+- `effective_start_date` and `effective_end_date`: Those actual boundaries as UTC ISO timestamps.
+  Empty equity histories have null dates and zero duration; a single timestamp has equal dates
+  and zero duration. Dates are output metadata and are never averaged or used as scoring metrics.
+
+Standalone result configs keep finite values in `metrics.stats` and encode undefined numeric
+diagnostics as strings (`"inf"`, `"-inf"`, or `"nan"`) in `metrics.nonfinite_diagnostics`. The raw
+`analysis.json` remains unchanged, and fills and plots still persist. Optimizer and suite scoring
+continue to reject non-finite metric values.
+
+Standalone backtests retain the flat `analysis.json` and also embed structured results in
+`config.json` under `metrics`, matching Pareto members: duration is at `metrics.stats.n_days`
+(`mean`, `min`, `max`, `std`, `median`), and dates are directly under `metrics` when all evaluation
+windows match. `metrics.exchanges.<exchange>` preserves each exchange's dates.
+
+Suites use `suite_metrics.metrics.n_days` for duration statistics and per-scenario values.
+Dates are at `suite_metrics.scenarios.<label>` and its `exchanges.<exchange>` entries;
+shared dates appear directly under `suite_metrics` only when all windows match.
+Suite backtests also save a root `config.json` containing `suite_metrics` alongside
+`suite_summary.json`, preserving effective suite exchange defaults for repeat runs. Both duration
+spellings use the same configured suite reducer. Each output config contains fresh results,
+replacing prior `metrics` and `suite_metrics` blocks. `config.original.json`, when present, remains the input snapshot.
+Requested config dates and detailed dataset coverage in the manifest retain their existing roles.
+
 ## Core growth metrics
 
 - `gain`: Terminal equity divided by starting equity, where terminal equity is the mean of the
@@ -72,6 +104,9 @@ and more stable across collateral caps.
 - `exposure_mean_ratio`: `adg` divided by the mean absolute recorded wallet exposure.
 
 Weighted `_w` variants use the same trailing-slice averaging as the rest of the `_w` metrics.
+Equity-based metrics include every nonempty trailing equity slice even when no new fills occur;
+equity-versus-balance calculations carry the last actual fill balance into each slice. Fill-only
+statistics remain zero for a slice without fills. Short runs average the available nonempty slices.
 
 ## Drawdown and tail metrics
 - `drawdown_worst`: Maximum absolute drawdown over the equity curve.
@@ -98,7 +133,8 @@ Weighted `_w` variants use the same trailing-slice averaging as the rest of the 
   gaps `g`; the metric is `sum(g^2) / sum(g)`. A randomly selected moment is therefore weighted by
   the length of the gap containing it, so long droughts contribute more strongly than clustered
   fills. A zero-fill run equals the full analysis duration.
-- `peak_recovery_hours_equity`: Longest time to make a new high on the equity curve.
+- `peak_recovery_hours_equity`: Longest equity peak-to-recovery interval, including an unrecovered
+  tail from the last peak to the final equity sample.
 - `peak_recovery_days_equity`: Same equity recovery duration converted to days.
 - `peak_recovery_hours_pnl`: Same calculation on cumulative realized PnL.
 - `peak_recovery_days_pnl`: Same realized-PnL recovery duration converted to days.

@@ -1042,7 +1042,21 @@ def strategy_eq_recovery_distribution_from_samples(
     return output * sample_interval_days
 
 
+def _require_available_held_valuation(scalars):
+    # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
+    # Metal writes -2 and returns immediately if a held coin has no price.
+    invalid = scalars[:, 9] == -2.0
+    if bool(invalid.any()):
+        rows = invalid.nonzero().flatten().cpu().tolist()
+        raise ValueError(
+            "MPS proxy unavailable held-position valuation: candle outside its declared "
+            "valid range or missing finite positive H/L/C; "
+            f"candidate rows {rows}"
+        )
+
+
 def _decode_outputs(daily, scalars, gaps) -> dict:
+    _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
     def timestamp_column(index: int):
@@ -1182,6 +1196,7 @@ def _decode_multicoin_fused_outputs(daily, scalars, gaps) -> dict:
 
 
 def _decode_directional_outputs(daily, scalars, gaps) -> dict:
+    _require_available_held_valuation(scalars)
     active_days = torch.isfinite(daily[:, :, 1]) & (daily[:, :, 1] < float("inf"))
 
     def timestamp_column(index: int):

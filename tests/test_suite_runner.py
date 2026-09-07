@@ -1130,3 +1130,64 @@ def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path
     np.testing.assert_array_equal(seen["plot_context"].timestamps, timestamps)
     np.testing.assert_array_equal(seen["plot_context"].hlcvs, hlcvs)
     assert seen["plot_context"].hard_stop_plot_data == {"sample": True}
+
+
+@pytest.mark.parametrize("reducer_name", ["n_days", "fills_analysis_duration_days"])
+def test_reduce_metrics_applies_one_policy_to_duration_aliases(reducer_name):
+    results = [
+        ScenarioResult(
+            scenario=SuiteScenario(str(days), None, None, None, None),
+            per_exchange={},
+            metrics={"stats": {
+                "n_days": {"mean": days},
+                "fills_analysis_duration_days": {"mean": days},
+            }},
+            elapsed_seconds=0.0, output_path=None,
+        )
+        for days in (1.0, 3.0)
+    ]
+    summary = reduce_metrics(results, {"default": "mean", reducer_name: "max"})
+    assert summary["aggregated"]["n_days"] == 3.0
+    assert summary["aggregated"]["fills_analysis_duration_days"] == 3.0
+
+
+def test_saved_suite_config_preserves_effective_exchange_defaults(monkeypatch, tmp_path):
+    import json
+    import suite_runner as suite
+    from config_utils import get_template_config
+
+    config = get_template_config()
+    config["backtest"]["exchanges"] = ["binance"]
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    suite_cfg = {"scenarios": [{"label": "external"}], "exchanges": ["bybit"]}
+
+    async def noop(*args, **kwargs):
+        pass
+
+    async def datasets(*args, **kwargs):
+        return {"bybit": SimpleNamespace(exchange="bybit", coins=["BTC"])}
+
+    observed = []
+
+    async def run_scenario(scenario, *args, **kwargs):
+        observed.append(scenario.exchanges)
+        return ScenarioResult(scenario, {}, {"stats": {}}, 0.0, None)
+
+    for name in ("load_markets", "format_approved_ignored_coins",
+                 "reject_cross_exchange_market_identifier_collisions"):
+        monkeypatch.setattr(suite, name, noop)
+    monkeypatch.setattr(suite, "validate_suite_side_coin_lists", lambda *a: None)
+    monkeypatch.setattr(suite, "_coalesce_master_coins", lambda coins, *a: coins)
+    monkeypatch.setattr(suite, "prepare_master_datasets", datasets)
+    monkeypatch.setattr(suite, "apply_scenario", lambda *a, **kw: (config, ["BTC"]))
+    monkeypatch.setattr(suite, "_compute_effective_coin_exchange", lambda *a: {"BTC": "bybit"})
+    monkeypatch.setattr(suite, "run_backtest_scenario", run_scenario)
+    asyncio.run(suite.run_backtest_suite_async(
+        config, suite_cfg, disable_plotting=True, suite_output_root=tmp_path,
+    ))
+    saved = json.loads((tmp_path / "config.json").read_text())
+    resumed, _ = build_scenarios(saved["backtest"], base_exchanges=saved["backtest"]["exchanges"])
+    assert observed == [["bybit"]]
+    assert resumed[0].exchanges == observed[0]
+    assert config["backtest"]["exchanges"] == ["binance"]

@@ -328,16 +328,45 @@ def test_qualified_identifier_venue_removes_ignored_alias(tmp_path: Path, monkey
     assert composed["live"]["ignored_coins"]["long"] == []
 
 
-def test_rejects_retaining_gpu_optimizer_for_composed_config(tmp_path: Path):
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+def test_retains_gpu_optimizer_with_coin_overrides(tmp_path: Path, strategy_kind: str):
     master = _single_coin_config("BTC")
+    other = _single_coin_config("ETH")
+    for config in (master, other):
+        config["live"]["strategy_kind"] = strategy_kind
     master["optimize"]["backend"] = "gpu"
+    master["optimize"]["iters"] = 123
+    master["backtest"]["start_date"] = "2021-01-01"
+    if strategy_kind == "ema_anchor":
+        master["bot"]["long"]["strategy"][strategy_kind]["offset"] = 0.01
+        other["bot"]["long"]["strategy"][strategy_kind]["offset"] = 0.02
+        expected_strategy = {"offset": 0.02}
+    else:
+        master["bot"]["long"]["strategy"][strategy_kind]["entry"]["initial_qty_pct"] = 0.01
+        other["bot"]["long"]["strategy"][strategy_kind]["entry"]["initial_qty_pct"] = 0.02
+        expected_strategy = {"entry": {"initial_qty_pct": 0.02}}
     _write(tmp_path / "a.json", master)
-    _write(tmp_path / "b.json", _single_coin_config("ETH"))
+    _write(tmp_path / "b.json", other)
 
     lean, _report = compose_directory(tmp_path)
     assert "optimize" not in lean
-    with pytest.raises(ValueError, match="optimize.backend='gpu'"):
-        compose_directory(tmp_path, include_backtest_optimize=True)
+    assert "backtest" not in lean
+
+    output = tmp_path / "composed.json"
+    assert main([str(tmp_path), str(output), "--include-backtest-optimize"]) == 0
+    composed = json.loads(output.read_text(encoding="utf-8"))
+    assert composed["optimize"]["backend"] == "gpu"
+    assert composed["optimize"]["gpu"] == master["optimize"]["gpu"]
+    assert composed["optimize"]["iters"] == 123
+    assert composed["backtest"]["start_date"] == "2021-01-01"
+    assert composed["live"]["approved_coins"]["long"] == ["BTC", "ETH"]
+    assert composed["bot"]["long"]["risk"]["n_positions"] == 2.0
+    assert composed["coin_overrides"] == {
+        "ETH": {"bot": {"long": {"strategy": {strategy_kind: expected_strategy}}}}
+    }
+    prepared = prepare_config(composed, verbose=False, log_config_transforms=False)
+    parse_overrides(prepared, verbose=False)
+    assert prepared["optimize"]["backend"] == "gpu"
 
 
 def test_cli_writes_sorted_config_and_protects_existing_output(tmp_path: Path, capsys):

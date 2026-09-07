@@ -57,6 +57,10 @@ make held positions wholly nontradable.
 
 ## Private Order Websocket Normalization
 
+Order rows proving fill progress (`filled > 0` or `remaining < amount`) request an authoritative
+account refresh even when their status remains open and they match a recent local creation.
+A creation acknowledgement may be a self-echo; fill progress invalidates the account-wide plan.
+
 Authoritative REST open-order reconciliation remains strict. Binance and KuCoin
 private websocket notifications for Passivbot-owned orders may omit native
 long/short metadata; only that hint path may recover `position_side`, only in

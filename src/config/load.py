@@ -13,10 +13,18 @@ def strip_persisted_hsl_incomplete_history_override(source: dict, config_path: s
     contract and must only ever be granted by the CLI flag of the current
     invocation; a value persisted in a config file is stripped here, before
     CLI overrides are applied, so it can never survive a restart."""
-    containers = [source]
-    live = source.get("live")
-    if isinstance(live, dict):
-        containers.append(live)
+    roots = [source]
+    # The supported nested_current document is unwrapped during normalization,
+    # after this per-run guard. Sanitize that root before taking raw snapshots.
+    wrapped = source.get("config")
+    if isinstance(wrapped, dict):
+        roots.append(wrapped)
+    containers = []
+    for root in roots:
+        containers.append(root)
+        live = root.get("live")
+        if isinstance(live, dict):
+            containers.append(live)
     for container in containers:
         if container.get("hsl_accept_incomplete_history"):
             logging.critical(

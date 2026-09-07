@@ -6,6 +6,89 @@ All notable user-facing changes will be documented in this file.
 
 - Added rolling-harmonic ADG, time-integrated ADG, and positive-gain-participation strategy-equity
   metrics to exact backtest analysis and CPU/GPU optimizer scoring.
+
+- `compose-coin-overrides --include-backtest-optimize` now retains the master's GPU optimizer
+  settings instead of rejecting multi-coin configs with static coin overrides. GPU-specific
+  compatibility checks still run when starting the optimizer.
+
+- Backtest and optimizer results now expose `n_days` and effective UTC analysis dates in
+  existing metrics payloads, preserving per-exchange and per-scenario windows. Saved backtest
+  configs include current `metrics` or `suite_metrics`; `fills_analysis_duration_days` remains
+  available as a compatibility alias with the same exact/CPU scoring, suite reducer, and GPU
+  exact-only policy. Both duration names default to maximizing duration in shorthand scoring.
+  Standalone artifacts preserve non-finite diagnostics separately from finite metric statistics.
+  Saved suite configs retain the effective exchange defaults from external suite overrides.
+
+- Concurrent OHLCV writers now lock monthly initialization through catalog publication, preserving
+  both candle bodies and validity masks. Materialized scratch allocation and pruning use a persistent
+  advisory lock, preventing simultaneous owners while owner metadata is being initialized.
+  Stop older backtest/optimizer workers before sharing their cache with the new lock protocol;
+  ambiguous legacy locks require explicit cleanup after those workers have stopped.
+
+- Backtests reject non-finite H/L/C inside declared valid candle windows, including all-NaN
+  gaps in direct or prepared datasets. Held positions require an available valuation candle;
+  missing data no longer removes their unrealized PnL from equity or risk samples. Unheld
+  symbols may retain unavailable rows outside their listing windows.
+
+- Optimizer resume validates fixed policy, resolved coin and scenario overrides, prepared candle
+  and market-setting content, transitive evaluator Python sources/dependency versions, and the
+  verified Rust source and binary
+  before reusing fitness. Every reconstructed result and GPU seed checkpoint carries matching
+  evidence; legacy results without historical identities require a fresh run. Candidate values
+  and CPU worker counts may vary, while complete GPU settings and rebuilt Rust binaries remain
+  strict resume inputs. Suite dates and override files are resolved before evaluation and recording.
+
+- Gate.io and KuCoin fill-history refreshes now reject unfinished pagination instead of marking
+  partial or failed fetches as complete coverage for realized-PnL risk checks. A traversal that
+  completes on its final allowed request remains valid.
+
+- OKX now reads all pending-order pages before reconciling the account, preventing duplicate
+  orders when more than 100 orders are open. Failed or stalled pagination rejects the snapshot.
+
+- External NumPy candle files no longer permit pickle objects, and local archive extraction
+  explicitly filters unsafe paths and links on every supported Python version.
+
+- Fill accounting now preserves explicitly reported zero fees and fully resolved zero-sum fee
+  lists while retaining missing or malformed amounts for fallback accounting, including after
+  fill coalescing and reload of older cached fee estimates. Non-quote fee conversion refreshes
+  expired ticker quotes and retries temporary lookup failures without discarding a fresh quote
+  because another fill cannot use it. Legacy Hyperliquid aggregates with unknown component fees
+  require cache repair instead of silently omitting those fees from reconciliation.
+
+- The monitor relay rejects foreign or malformed browser WebSocket origins before reading or
+  sending account snapshots, while preserving the dashboard and originless native clients.
+
+- Wrapped config documents now strip persisted `hsl_accept_incomplete_history` overrides before
+  normalization and apply CLI overrides to the wrapped payload, so the HSL coverage waiver remains
+  an explicit per-run CLI choice after reload.
+
+- Live order creation now rechecks account invalidation after exchange configuration and quote
+  refreshes and immediately before each connector call, preventing orders based on a superseded
+  plan when a private fill update arrives. Partial-fill updates also invalidate account state when
+  they match a recently created order.
+
+- Backtest weighted equity metrics now include fill-free trailing windows and carry the last
+  actual balance into their equity-versus-balance calculations, preventing open losing positions
+  from receiving artificially favorable scores. Equity peak-recovery metrics now include an
+  unrecovered drawdown through the final sample.
+
+- Equity Hard Stop Loss now resets RED-free episodes at the fill that flattens the configured
+  coin, position-side, or unified scope, including a re-entry in the same minute. Live replay,
+  exact backtests, and Apple MPS screening retain closing PnL and fees before resetting episode
+  drawdown, while preserving RED-triggered cooldowns and persistent no-restart limits. Closing
+  fills that first trigger RED finalize before same-step re-entry. Ambiguous required episode
+  evidence defers startup replay and ordinary planning while already-latched RED supervision and
+  panic protection for active cooldown positions remain available. Resting cooldown entries are
+  cancelled according to the configured policy, preserving orders after a proven manual-policy
+  intervention and graceful-stop adds to held positions. Terminal no-restart scopes also cancel
+  resting entries. Normal-policy restart overrides and cooldown expiry retain the new episode's
+  baseline and entry fees before replaying later exact boundaries; live and restart paths retain
+  losses incurred before the next observation. Proven ordinary RED closes and panic closes follow
+  the same restart rules, including proven same-millisecond interventions, with terminal no-restart
+  protection taking precedence. Coin replay uses the account balance at each boundary, excluding
+  later fills and fees on other symbols. Offline fake-live
+  scenarios retain complete fill history when their simulated dates differ from wall time.
+
 - Added `fills_gap_time_weighted_mean_hours` as an exact backtest and CPU/GPU optimizer metric.
   It minimizes `sum(gap_hours^2) / sum(gap_hours)` over unique portfolio fill timestamps and the
   analysis boundaries, providing smoother selection pressure against long no-fill periods than a

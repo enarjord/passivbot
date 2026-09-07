@@ -1,5 +1,36 @@
 # Optimizing
 
+Optimizer resume reuses checkpoint fitness only when its fixed evaluation contract matches the
+current run. This includes backtest execution and data policies, backtest-consumed live settings,
+fixed bot parameters, resolved coin overrides, and all fixed fine-tune anchor values. Candidate
+vector values, `optimize.n_cpus`, and output paths are excluded. The shared resume check still
+compares the complete `optimize.gpu` mapping, including GPU worker and hardware-sizing controls;
+changing those controls currently requires a fresh run. Dataset selectors
+`backtest.market_settings_sources`, `backtest.ohlcv_source_dir`, and `backtest.hlcvs_data_dir`
+are compared as configured. Moving input directories therefore requires a fresh run even when
+contents match; input paths are data selectors, not excluded output paths.
+New result records include an `optimizer_evaluation_contract` snapshot. It binds fitness to
+content hashes of the prepared candles, BTC prices, timestamps, selected scenario slices, and
+market settings, plus the evaluator's transitive local Python imports, Python version, imported
+package/dependency versions, and the verified loaded Rust source and artifact.
+Changing a prepared input in place therefore requires a fresh run even when its directory is unchanged.
+Rust artifact identity is deliberately strict: rebuilding the binary can require a fresh run even
+from unchanged sources. The source identity follows imports conservatively, including imports
+inside optional branches; an unresolvable dynamic import includes all local Python sources. Docs,
+tests, and unrelated installed packages are excluded. Changes to an imported dependency can require
+a fresh run even when the affected branch was not used. Hashing happens once during preparation
+with bounded memory use.
+Legacy results without historical evaluator and prepared-data evidence require a fresh run;
+current files or current code cannot establish how their scores were produced. Every reconstructed
+result in a compressed stream is validated, and GPU seed checkpoints carry the same evidence before
+reusing proxy scores. Importing starting candidate configs for fresh evaluation remains supported.
+Moving an override file without changing its resolved values does not change this contract.
+Override files are resolved before CPU candidate evaluation and snapshotting. Every backend records
+the effective external suite and scenario filter, with prepared concrete scenario dates and resolved
+per-scenario coin patches. Prepared candidates use those same frozen patches, so later file edits
+cannot change a running evaluation silently. Dynamic end-date tokens (`now`, `today`, empty, or null) resolve during config preparation; a later resolved
+cutoff requires a fresh run instead of reusing scores from the earlier window.
+
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
 The canonical defaults live in `src/config/schema.py`. The example config

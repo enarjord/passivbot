@@ -321,6 +321,7 @@ async def test_fake_client_request_log_counts_order_writes():
     bot.user = "fake_01"
     bot.bot_id = "fake_bot"
     bot.cca = client
+    bot.open_orders = {}
     bot._build_order_params = lambda _order: {
         "positionSide": "LONG",
         "clientOrderId": "pb-test",
@@ -348,6 +349,7 @@ async def test_fake_client_request_log_counts_order_writes():
     assert summary["by_method"]["cancel_order"] == 1
     assert summary["by_category"]["order_write"] == 2
     assert [event_type for event_type, _kwargs in emitted] == [
+        "execution.create_sent",
         "execution.create_connector_call_started",
         "execution.cancel_connector_call_started",
     ]
@@ -1042,13 +1044,29 @@ async def test_hsl_replay_scenarios_run_end_to_end(
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
-async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
+async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path, monkeypatch):
     """Keep the checked-in offline smoke command and its assertions executable as written."""
     import passivbot_rust as pbr
 
     if getattr(pbr, "__is_stub__", False):
         pytest.skip("requires real passivbot_rust extension")
 
+    import passivbot_hsl as hsl
+
+    original_restart = hsl._equity_hard_stop_replay_live_restart
+    restart_fill_evidence = []
+
+    async def checked_restart(bot, pside, symbol=None):
+        # Simulation dates can precede wall-clock cache refresh watermarks.
+        # The real backend closing fill must still reach the canonical manager
+        # before the completed cooldown is reconstructed.
+        cached = bot._pnls_manager.get_events()
+        restart_fill_evidence.append((len(cached), len(bot.cca.fills)))
+        assert len(cached) == len(bot.cca.fills) == 4
+        assert any("panic" in event.pb_order_type and event.pnl == -15.0 for event in cached)
+        return await original_restart(bot, pside, symbol)
+
+    monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", checked_restart)
     user = f"fake_hsl_documented_{tmp_path.name}"
     _cleanup_fake_user_state(user)
     try:
@@ -1064,6 +1082,7 @@ async def test_documented_hsl_restart_scenario_runs_unmodified(tmp_path):
             snapshot_each_step=False,
         )
         assert await _async_main(args) == 0
+        assert restart_fill_evidence
     finally:
         _cleanup_fake_user_state(user)
 
@@ -1756,3 +1775,55 @@ async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
     assert remote_summary["by_method"]["fetch_ohlcv"] >= 1
 
     assert any(entry["kind"] == "ccxt_fetch_ohlcv" for entry in candle_fetches)
+
+
+@pytest.mark.fake_live
+@pytest.mark.parametrize('declared', [False, True])
+def test_fake_boot_fill_preserves_only_explicit_position_chain_evidence(declared):
+    scenario = _scenario()
+    fill = {
+        'id': '1', 'timestamp': '2026-01-01T00:00:00Z',
+        'symbol': 'BTC/USDT:USDT', 'position_side': 'long', 'side': 'sell',
+        'amount': 1.0, 'price': 100.0,
+    }
+    if declared:
+        fill['info'] = {'startPosition': '1.0'}
+    scenario['account']['fills'] = [fill]
+    client = FakeCCXTClient(scenario, quote='USDT')
+    info = client.fills[0]['info']
+    assert ('startPosition' in info) is declared
+    if declared:
+        assert info['startPosition'] == '1.0'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("latched", [False, True])
+async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
+    monkeypatch, latched
+):
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+    from unittest.mock import AsyncMock
+
+    calls = []
+
+    async def unavailable(bot):
+        raise AuthoritativeSurfaceUnavailable("hsl_episode_boundaries", "fill tape pending")
+
+    async def supervise():
+        calls.append("supervisor")
+
+    monkeypatch.setattr(run_fake_live_module, "_run_fake_cycle_ready", unavailable)
+    bot = SimpleNamespace(
+        _run_halted_hsl_protection_if_active=AsyncMock(return_value=False),
+        _equity_hard_stop_signal_mode=lambda: "coin",
+        _equity_hard_stop_coin_red_active=lambda: latched,
+        _equity_hard_stop_run_coin_red_supervisor=supervise,
+    )
+    result = await run_fake_live_module._run_fake_cycle(bot)
+    assert calls == (["supervisor"] if latched else [])
+    assert result == (
+        {"red_supervisor": True, "mode": "coin"}
+        if latched
+        else {"updated": False, "hsl_ready": False}
+    )

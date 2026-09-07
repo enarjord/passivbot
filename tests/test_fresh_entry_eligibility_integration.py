@@ -226,9 +226,21 @@ class _CreateBot:
     def _resolve_pb_order_type(self, order):
         return str(order.get("pb_order_type") or "unknown")
 
+    def _build_order_params(self, _order):
+        return {}
+
+    def _emit_execution_connector_call_started_event(self, **_kwargs):
+        return None
+
     async def execute_orders(self, orders):
+        from types import SimpleNamespace
+
+        async def create_order(**_params):
+            return {"id": "created"}
+
+        self.cca = SimpleNamespace(create_order=create_order)
         self.submitted = list(orders)
-        return [{"id": "created", **order} for order in orders]
+        return [await Passivbot.execute_order(self, order) for order in orders]
 
     def did_create_order(self, _result):
         return True
@@ -595,17 +607,35 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
     bot = _CreateBot(FreshEntryEligibilityTrace())
     bot._order_churn_gate_state = OrderChurnGateState()
 
-    async def fail_batch(_orders):
+    from types import SimpleNamespace
+
+    async def fail_create(**_params):
         raise RuntimeError("ambiguous connector failure")
 
+    async def fail_batch(orders):
+        return [await Passivbot.execute_order(bot, order) for order in orders]
+
+    bot.cca = SimpleNamespace(create_order=fail_create)
+    bot._build_order_params = lambda _order: {}
+    bot._record_emitted_order_custom_id = lambda *args, **kwargs: None
+    bot._record_order_churn_allowance_attempts = (
+        lambda count, **kwargs: Passivbot._record_order_churn_allowance_attempts(
+            bot, count, **kwargs
+        )
+    )
+    bot._emit_execution_connector_call_started_event = lambda **kwargs: None
     bot.execute_orders = fail_batch
     bot.add_to_recent_order_executions = lambda _order: None
     emitted = []
     bot._emit_order_churn_actions_accounted_event = lambda **kwargs: emitted.append(
         kwargs
     )
-    monkeypatch.setattr(Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None)
-    monkeypatch.setattr(Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None
+    )
 
     with pytest.raises(RuntimeError, match="ambiguous connector failure"):
         await executor.execute_orders_parent(bot, [order])
@@ -619,3 +649,59 @@ async def test_connector_bound_create_attempt_is_counted_once_even_when_ambiguou
             "wave": {"event_id": "ow_1"},
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_restart_after_mixed_create_results_omits_unclassified_eligibility(
+    monkeypatch,
+):
+    from types import MethodType, SimpleNamespace
+    from exchanges.ccxt_bot import CCXTBot
+    from passivbot_exceptions import RestartBotException
+
+    orders = [_initial("ADA/USDT:USDT"), _initial("BTC/USDT:USDT")]
+    for order in orders:
+        order["_planned_account_invalidation_generation"] = 0
+    trace = FreshEntryEligibilityTrace()
+    trace.record_ideal_orders(orders)
+    for order in orders:
+        trace.record_evaluated(order["symbol"], "long")
+    bot = _CreateBot(trace)
+    live_value = bot.live_value
+    bot.live_value = lambda key: (
+        2 if key == "max_n_creations_per_batch" else live_value(key)
+    )
+    bot.execute_order = MethodType(Passivbot.execute_order, bot)
+    bot.execute_orders = MethodType(CCXTBot.execute_orders, bot)
+    connector_calls = []
+
+    async def fail_create(**params):
+        connector_calls.append(params)
+        bot._account_invalidation_generation = 1
+        raise RuntimeError("connector write failed")
+
+    async def exhaust_error_budget(failures):
+        assert len(failures) == 1
+        raise RestartBotException("restart required")
+
+    bot.cca = SimpleNamespace(create_order=fail_create)
+    bot._handle_order_write_failures = exhaust_error_budget
+    emitted = []
+    monkeypatch.setattr(
+        Passivbot, "_record_emitted_order_custom_id", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        Passivbot, "_emit_execution_order_event", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        Passivbot,
+        "_emit_initial_entry_eligibility_event",
+        lambda *args, **kwargs: emitted.append(kwargs),
+    )
+
+    with pytest.raises(RestartBotException, match="restart required"):
+        await executor.execute_orders_parent(bot, orders)
+
+    assert len(connector_calls) == 1
+    assert emitted == []
+    assert bot._fresh_entry_eligibility_trace is None

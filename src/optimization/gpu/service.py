@@ -1232,20 +1232,14 @@ def _require_supported_multicoin_valid_tails(
         (candle_indices >= np.asarray(starts, dtype=np.int64)[None, :])
         & (candle_indices <= np.asarray(tails, dtype=np.int64)[None, :])
     )
-    actual_coverage = np.any(within_declared_window & actual_valid, axis=1)
-    missing = np.flatnonzero(
-        np.any(within_declared_window, axis=1) & ~actual_coverage
-    )
-    for candle_index in missing:
-        declared = within_declared_window[candle_index]
-        raw_hlc = np.asarray(values[candle_index, declared, :3], dtype=np.float64)
-        if bool(np.all(np.isnan(raw_hlc))):
-            continue
+    missing = np.argwhere(within_declared_window & ~actual_valid)
+    if missing.size:
+        candle_index, coin = (int(value) for value in missing[0])
         raise ValueError(
-            "GPU multicoin proxy only supports an all-invalid internal candle "
-            "when every declared coin's raw H/L/C is NaN; infinities, finite but "
-            "non-positive or float32-unrepresentable values remain fail-closed; "
-            f"candle_index={int(candle_index)}, valid_windows={windows}"
+            "GPU multicoin proxy requires contiguous finite positive float32 H/L/C "
+            "inside every declared coin window; non-finite, finite but non-positive "
+            "or float32-unrepresentable values remain fail-closed; "
+            f"coin index {coin}, candle_index={candle_index}, valid_windows={windows}"
         )
 
 
@@ -1306,7 +1300,7 @@ def _require_exact_safe_proxy_candles(
     last_valid_indices,
     require_positive_high_low: bool,
 ) -> None:
-    """Allow exact balance-only gaps, but reject finite unmodeled prices."""
+    """Reject missing valuation inputs in each exposure-eligible coin window."""
 
     values = np.asarray(hlcvs)
     if values.ndim != 3 or values.shape[2] < 3:
@@ -1322,7 +1316,6 @@ def _require_exact_safe_proxy_candles(
         last = min(int(last_valid_indices[coin]), values.shape[0] - 1)
         if first > last:
             continue
-        raw_hlc = np.asarray(values[first : last + 1, coin, :3], dtype=np.float64)
         packed_hlc = packed[first : last + 1, coin]
         packed_valid = (
             np.all(np.isfinite(packed_hlc), axis=1)
@@ -1332,13 +1325,11 @@ def _require_exact_safe_proxy_candles(
             packed_valid &= (packed_hlc[:, 0] > 0.0) & (
                 packed_hlc[:, 1] > 0.0
             )
-        exact_balance_only = np.all(np.isnan(raw_hlc), axis=1)
-        unsafe = np.flatnonzero(~(packed_valid | exact_balance_only))
+        unsafe = np.flatnonzero(~packed_valid)
         if unsafe.size:
             candle_index = first + int(unsafe[0])
             raise ValueError(
-                "MPS proxy only supports internal "
-                "invalid candles whose raw H/L/C values are all NaN; "
+                "MPS proxy requires contiguous valid internal candles; all-NaN, "
                 "infinite, finite but non-positive, partially invalid, or float32-"
                 "unrepresentable prices remain fail-closed; "
                 f"coin index {coin}, invalid candle at {candle_index}"

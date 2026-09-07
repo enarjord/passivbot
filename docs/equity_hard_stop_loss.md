@@ -196,7 +196,8 @@ that is currently halted in RED cooldown.
    - treat the position as an explicit operator override
    - while that `pside` still has no open positions, the bot remains halted and will not open fresh initials on its own
    - clear the halt for that `pside`
-   - reset HSL drawdown tracking and rolling-peak state from the current live state
+   - reconstruct HSL drawdown and the rolling peak from the proven intervention entry, retaining its fees and subsequent losses
+   - retain the halt and required protection if the episode cannot yet be reconstructed from authoritative history
 3. `manual`
    - keep the original cooldown deadline
    - leave the position in `manual` mode and do not let the bot resume normal trading on that `pside`

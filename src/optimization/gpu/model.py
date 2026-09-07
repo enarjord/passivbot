@@ -853,6 +853,23 @@ def _maximum_effective_min_cost(prices, market: ProxyMarket) -> float:
     return float(encoded)
 
 
+def _require_contiguous_mps_hlc(high, low, close, run: ProxyRun, *, coin: int = 0):
+    """Reject missing valuation inputs before any packing or GPU allocation."""
+    first = max(0, int(run.first_valid_idx))
+    last = min(int(run.last_valid_idx), len(close) - 1)
+    if first > last:
+        return
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        packed = np.asarray([high[first:last + 1], low[first:last + 1], close[first:last + 1]], dtype=np.float32)
+    invalid = np.flatnonzero(~np.all(np.isfinite(packed) & (packed > 0.0), axis=0))
+    if invalid.size:
+        raise ValueError(
+            "MPS proxy requires contiguous finite positive float32 H/L/C between "
+            "first and last valid indices; "
+            f"coin index {coin}, invalid candle at {first + int(invalid[0])}"
+        )
+
+
 def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
     """Prepare immutable minute data and keep it resident on Apple MPS.
 
@@ -879,6 +896,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         raise ValueError("MPS price and timestamp arrays must have matching lengths")
     if len(close) < 3:
         raise ValueError("MPS proxy requires at least three candles")
+    _require_contiguous_mps_hlc(high, low, close, run)
 
     n = len(close)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -1004,10 +1022,13 @@ def build_mps_multicoin_data(
     if np.any(intervals != interval_ms):
         raise ValueError("MPS multicoin proxy requires a continuous candle timeline")
 
+    for coin, run in enumerate(runs):
+        _require_contiguous_mps_hlc(
+            values[:, coin, 0], values[:, coin, 1], values[:, coin, 2], run, coin=coin
+        )
     bars = np.ascontiguousarray(values[:, :, :4], dtype=np.float32)
-    # Preserve a non-finite close so portfolio-equity accumulation can mirror
-    # exact Rust by omitting that coin's unrealized PnL. Other non-finite
-    # fields use zero sentinels and remain blocked by candle validity.
+    # Unavailable listing/delisting tails remain outside the declared valid
+    # range. Internal missing H/L/C is rejected before reaching this packing.
     for field in (0, 1, 3):
         field_values = bars[:, :, field]
         field_values[~np.isfinite(field_values)] = 0.0

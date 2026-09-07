@@ -428,3 +428,25 @@ inline int joint_pside_hsl_global_tier(
 ) {
     return max(long_hsl.tier, short_hsl.tier);
 }
+
+// Unheld unavailable coins need no valuation. Held positions must remain
+// inside their declared range with finite positive H/L/C.
+inline bool held_positions_have_missing_prices(
+    thread const float* psize,
+    constant float* bars,
+    constant float* coin_settings,
+    int k,
+    int coin_count
+) {
+    for (int coin = 0; coin < coin_count; ++coin) {
+        if (!(psize[coin] > 0.0f)) continue;
+        int settings = coin * COIN_COLS;
+        if (k < int(coin_settings[settings + 6]) || k > int(coin_settings[settings + 7])) return true;
+        int offset = (k * coin_count + coin) * 4;
+        for (int field = 0; field < 3; ++field) {
+            float value = bars[offset + field];
+            if (!(isfinite(value) && value > 0.0f)) return true;
+        }
+    }
+    return false;
+}

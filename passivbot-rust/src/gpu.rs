@@ -848,7 +848,8 @@ mod tests {
         assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
         assert!(!source.contains("any_valid"));
-        assert!(source.contains("declared all-invalid gaps and"));
+        assert!(source.contains("held_positions_have_missing_prices("));
+        assert!(source.contains("scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;"));
         assert!(source.contains("update_ema_multicoin_dual_side_hsl("));
         assert!(source.contains("if (long_side.hsl.signal_mode != short_side.hsl.signal_mode)"));
         assert!(source.contains("update_joint_pside_hsl("));
@@ -1386,7 +1387,8 @@ mod tests {
         assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
         assert!(!source.contains("any_valid"));
-        assert!(source.contains("declared all-invalid gaps and"));
+        assert!(source.contains("held_positions_have_missing_prices("));
+        assert!(source.contains("scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;"));
         assert!(source.contains("update_tm_multicoin_dual_side_hsl("));
         assert!(source.contains("update_tm_multicoin_side_selection("));
         assert!(source.contains("generate_tm_multicoin_side_orders("));

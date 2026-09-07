@@ -61,6 +61,35 @@ class OKXBot(CCXTBot):
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
+    async def _do_fetch_open_orders(self, symbol: str = None) -> list:
+        """Read every pending-order page before exposing an account snapshot."""
+        orders = {}
+        cursor = None
+        for _ in range(1000):
+            params = {"paginate": False}
+            if cursor is not None:
+                params["after"] = str(cursor)
+            page = await self.cca.fetch_open_orders(symbol=symbol, limit=100, params=params)
+            if not isinstance(page, list) or len(page) > 100:
+                raise ValueError("OKX returned an invalid open-order page")
+            page_ids = []
+            for order in page:
+                order_id = order.get("id") if isinstance(order, dict) else None
+                if not isinstance(order_id, str) or not order_id.isdecimal():
+                    raise ValueError("OKX open order missing a numeric pagination ID")
+                page_ids.append(int(order_id))
+                orders.setdefault(order_id, order)
+            # CCXT sorts parsed orders by timestamp, so list position does not
+            # identify the oldest order. OKX's `after` cursor uses order IDs.
+            if page_ids:
+                next_cursor = min(page_ids)
+                if cursor is not None and next_cursor >= cursor:
+                    raise RuntimeError("OKX open-order pagination did not advance")
+                cursor = next_cursor
+            if len(page) < 100:
+                return list(orders.values())
+        raise RuntimeError("OKX open-order pagination exhausted before completion")
+
     def _get_position_side_for_order(self, order: dict) -> str:
         """OKX provides posSide in info."""
         info = order.get("info") or {}

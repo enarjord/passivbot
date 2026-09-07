@@ -458,3 +458,237 @@ async def test_capacity_selects_later_admissible_order_after_churn_deferral(
     assert bot.configured == [[stable["symbol"], far_churn["symbol"]]]
     assert bot.created == [stable]
     assert far_churn["_churn_gate_reason"] == "allowance_exhausted"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dirty_stage", ["before_execution", "configuration", "market_refresh"])
+async def test_account_invalidation_after_planning_defers_all_ordinary_creates(
+    execution_shell, monkeypatch, dirty_stage
+):
+    from types import SimpleNamespace
+    from live import reconciler
+    from live.freshness import FreshnessLedger
+
+    wave, events = execution_shell
+    bot = _PlanBot()
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = (
+        lambda surfaces, **kwargs: bot.confirmations.append(set(surfaces))
+    )
+    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
+    desired = _order("desired")
+
+    def invalidate():
+        # A different symbol's fill still changes account balance/exposure.
+        reconciler.mark_account_critical_state_dirty(
+            bot, reason="order_ws_fill", symbols=["ETH/USDT:USDT"], source="order_ws"
+        )
+
+    async def configure(symbols):
+        if dirty_stage == "configuration":
+            invalidate()
+        return set(symbols)
+
+    async def market_refresh(_bot, orders):
+        if dirty_stage == "market_refresh":
+            invalidate()
+        return orders
+
+    bot.update_exchange_configs = configure
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh)
+    if dirty_stage == "before_execution":
+        invalidate()
+
+    await executor.execute_order_plan(bot, [], [desired])
+
+    assert bot.created == []
+    assert wave["skipped_create"] == 1
+    assert bot.confirmations == [{"balance", "positions", "open_orders", "fills"}]
+    assert any(event["reason_code"] == ReasonCodes.STATE_CHANGE_DETECTED for event in events)
+
+    # A newly planned authoritative cohort may trade again; invalidations do not latch.
+    bot._current_planning_snapshot.account_invalidation_generation = (
+        bot._account_invalidation_generation
+    )
+    bot.update_exchange_configs = _PlanBot.update_exchange_configs.__get__(bot)
+
+    async def fresh_market(_bot, orders):
+        return orders
+
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", fresh_market)
+    await executor.execute_order_plan(bot, [], [desired])
+    assert bot.created == [desired]
+
+
+@pytest.mark.asyncio
+async def test_account_invalidation_preserves_dedicated_market_panic_bypass(
+    execution_shell, monkeypatch
+):
+    from types import SimpleNamespace
+    from live import reconciler
+    from live.freshness import FreshnessLedger
+
+    bot = _PlanBot()
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = (
+        lambda surfaces, **kwargs: bot.confirmations.append(set(surfaces))
+    )
+    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
+    desired = _order("panic", execution_type="market", panic=True)
+
+    async def market_refresh(_bot, orders):
+        reconciler.mark_account_critical_state_dirty(
+            bot, reason="order_ws_fill", symbols=[desired["symbol"]], source="order_ws"
+        )
+        return orders
+
+    monkeypatch.setattr(Passivbot, "_filter_fresh_market_snapshot_creations", market_refresh)
+    await executor.execute_order_plan(bot, [], [desired], configure_creations=False)
+    assert bot.created == [desired]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_route", ["ccxt", "base", "hyperliquid"])
+@pytest.mark.parametrize("invalidate_at", ["batch_yield", "first_connector"])
+@pytest.mark.parametrize("order_kind", ["entry", "market_entry", "normal_panic", "dedicated_panic"])
+async def test_account_invalidation_rechecked_inside_each_connector_task(
+    execution_shell, monkeypatch, batch_route, invalidate_at, order_kind
+):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from exchanges.ccxt_bot import CCXTBot
+    from exchanges.hyperliquid import HyperliquidBot
+    from live import reconciler
+    from live.freshness import FreshnessLedger
+
+    class Bot(_PlanBot, Passivbot):
+        execute_orders_parent = Passivbot.execute_orders_parent
+        _execute_order_and_record_ack = HyperliquidBot._execute_order_and_record_ack
+        did_create_order = Passivbot.did_create_order
+
+    _wave, filter_events = execution_shell
+    dedicated_panic = order_kind == "dedicated_panic"
+    bot = Bot()
+    bot._current_planning_snapshot = SimpleNamespace(account_invalidation_generation=0)
+    bot._order_churn_gate_state = OrderChurnGateState()
+    bot._health_orders_placed = 0
+    bot.get_exchange_time = lambda: 1_000_000
+    bot.live_value = lambda key: {
+        "max_n_creations_per_batch": 10,
+        "order_replacement_churn_gate_activation_count": 10,
+        "order_replacement_churn_gate_window_minutes": 10.0,
+        "order_replacement_churn_gate_market_dist_pct": 0.005,
+    }[key]
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    bot._ensure_freshness_ledger = lambda: ledger
+    bot._request_authoritative_confirmation = lambda surfaces, **kwargs: None
+    for name in (
+        "log_order_action",
+        "_log_order_action_summary",
+        "_log_market_execution_notice",
+        "add_to_recent_order_executions",
+        "add_new_order",
+        "_monitor_record_event",
+        "_monitor_order_payload",
+        "_emit_execution_connector_call_started_event",
+        "_schedule_forager_candidate_candle_refresh",
+    ):
+        setattr(bot, name, Mock())
+    recorded_orders = Mock()
+    monkeypatch.setattr(Passivbot, "_record_emitted_order_custom_id", recorded_orders)
+    order_events = []
+    monkeypatch.setattr(
+        Passivbot,
+        "_emit_execution_order_event",
+        lambda *args, **kwargs: order_events.append(kwargs),
+    )
+    failures = []
+
+    async def handle_failures(items):
+        failures.extend(items)
+
+    bot._handle_order_write_failures = handle_failures
+
+    def invalidate():
+        reconciler.mark_account_critical_state_dirty(
+            bot, reason="order_ws_fill", symbols=["ETH/USDT:USDT"], source="order_ws"
+        )
+
+    calls = []
+
+    async def create_order(**params):
+        calls.append(params)
+        if invalidate_at == "first_connector" and len(calls) == 1:
+            invalidate()
+        return {"id": str(len(calls)), "status": "open"}
+
+    bot.cca = SimpleNamespace(create_order=create_order)
+    route = {
+        "ccxt": CCXTBot.execute_orders,
+        "base": Passivbot.execute_orders,
+        "hyperliquid": HyperliquidBot.execute_orders,
+    }[batch_route]
+
+    async def execute_orders(orders):
+        # The coroutine is entered only after the executor's batch-level check.
+        if invalidate_at == "batch_yield":
+            asyncio.get_running_loop().call_soon(invalidate)
+        return await route(bot, orders)
+
+    bot.execute_orders = execute_orders
+    orders = [
+        _order(
+            str(i),
+            execution_type="limit" if order_kind == "entry" else "market",
+            panic=order_kind.endswith("panic"),
+        )
+        for i in range(2)
+    ]
+    from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
+
+    trace = FreshEntryEligibilityTrace()
+    if not order_kind.endswith("panic"):
+        for order in orders:
+            order["pb_order_type"] = "entry_initial_normal_long"
+    trace.record_ideal_orders(orders)
+    trace.record_evaluated(orders[0]["symbol"], "long")
+    bot._fresh_entry_eligibility_trace = trace
+    eligibility = []
+    monkeypatch.setattr(
+        Passivbot, "_emit_initial_entry_eligibility_event",
+        lambda _bot, *, data, wave=None: eligibility.append(data),
+    )
+    await executor.execute_order_plan(
+        bot, [], orders, configure_creations=not dedicated_panic
+    )
+
+    expected_calls = 2 if dedicated_panic else int(invalidate_at == "first_connector")
+    assert len(calls) == expected_calls
+    assert len(eligibility) == 1
+    assert sum(row["eligible_count"] for row in eligibility[0]["records"]) == (
+        0 if order_kind.endswith("panic") else expected_calls
+    )
+    assert sum(
+        event["event_type"] == EventTypes.EXECUTION_CREATE_SENT for event in order_events
+    ) == expected_calls
+    assert len(bot._order_churn_gate_state.action_attempt_timestamps) == expected_calls
+    assert sum(
+        call.kwargs.get("status") == "submitted" for call in recorded_orders.call_args_list
+    ) == expected_calls
+    assert failures == []
+    assert not any(
+        event["event_type"] == EventTypes.EXECUTION_AMBIGUOUS for event in order_events
+    )
+    assert (
+        sum(
+            event["event_type"] == EventTypes.EXECUTION_CREATE_SKIPPED
+            for event in filter_events
+        )
+        == 2 - expected_calls
+    )

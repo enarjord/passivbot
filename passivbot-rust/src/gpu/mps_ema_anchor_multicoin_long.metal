@@ -259,7 +259,9 @@ inline void record_ema_multicoin_close_fill(
     bool short_side,
     bool is_hsl_panic,
     bool collect_coin_fill_counts,
-    thread float& hsl_equity_before_fills
+    thread float& hsl_equity_before_fills,
+    thread HslState* opposite_hsl = nullptr,
+    bool opposite_has_position = false
 ) {
     const bool coin_hsl_mode =
         side.hsl.signal_mode == HSL_SIGNAL_COIN;
@@ -295,6 +297,27 @@ inline void record_ema_multicoin_close_fill(
     }
     if (collect_coin_fill_counts) {
         coin_fill_counts[candidate_index * coin_count + coin] += 1.0f;
+    }
+
+    // The caller applies the position reduction immediately after accounting.
+    // Test the pre-fill size so a complete close ends the episode before reentry.
+    if (qty >= side.psize[coin]) {
+        bool scope_has_position = false;
+        if (!coin_hsl_mode) {
+            for (int other_coin = 0; other_coin < coin_count; ++other_coin) {
+                if (other_coin != coin && side.psize[other_coin] > 0.0f) {
+                    scope_has_position = true;
+                }
+            }
+        }
+        thread HslState& controller = coin_hsl_mode ? side.coin_hsl[coin] : side.hsl;
+        float realized_scope = coin_hsl_mode ? side.coin_realized_pnl[coin]
+            : (short_side ? account.realized_pnl_short : account.realized_pnl_long);
+        finish_hsl_scoped_episode_at_flat(
+            controller, opposite_hsl, scope_has_position, opposite_has_position,
+            account.balance, account.balance - account.realized_pnl_total,
+            account.realized_pnl_total, realized_scope, float(k), 0.0f
+        );
     }
 }
 
@@ -2479,7 +2502,9 @@ inline bool process_ema_multicoin_side_fills(
     bool collect_coin_fill_counts,
     float market_order_slippage_pct,
     bool hsl_panic_market,
-    float hsl_equity_before_fills
+    float hsl_equity_before_fills,
+    thread HslState* opposite_hsl = nullptr,
+    bool opposite_has_position = false
 ) {
     thread HslState& hsl = side.hsl;
     thread HslState* coin_hsl = side.coin_hsl;
@@ -2584,7 +2609,7 @@ inline bool process_ema_multicoin_side_fills(
                 candidate_index, coin_count, c, k, pnl, net_pnl,
                 adjusted, pprice[c], close, c_mult, short_side,
                 is_hsl_panic, collect_coin_fill_counts,
-                hsl_equity_before_fills
+                hsl_equity_before_fills, opposite_hsl, opposite_has_position
             );
             float new_size = fmax(
                 round_step(psize[c] - adjusted, qty_step), 0.0f
@@ -2717,7 +2742,9 @@ inline bool force_close_ema_multicoin_delisted_position(
     bool short_side,
     bool collect_coin_fill_counts,
     float market_order_slippage_pct,
-    thread float& hsl_equity_before_close
+    thread float& hsl_equity_before_close,
+    thread HslState* opposite_hsl = nullptr,
+    bool opposite_has_position = false
 ) {
     if (!(side.psize[coin] > 0.0f && side.pprice[coin] > 0.0f)) {
         return false;
@@ -2747,7 +2774,8 @@ inline bool force_close_ema_multicoin_delisted_position(
         side, account, fills, coin_fill_counts,
         candidate_index, coin_count, coin, k, pnl, net_pnl,
         close_qty, position_price, close, c_mult, short_side,
-        true, collect_coin_fill_counts, hsl_equity_before_close
+        true, collect_coin_fill_counts, hsl_equity_before_close,
+        opposite_hsl, opposite_has_position
     );
     if (!coin_hsl_mode) {
         advance_coin_hsl_equity_after_close_fill(
@@ -2828,17 +2856,25 @@ inline bool force_close_ema_multicoin_delisted_fused(
     for (int c = 0; c < coin_count; ++c) {
         const int last_valid = int(coin_settings[c * COIN_COLS + 7]);
         if (k != last_valid || last_valid + 1400 >= timestep_count) continue;
+        bool short_has_position = false;
+        for (int other_coin = 0; other_coin < coin_count; ++other_coin) {
+            short_has_position = short_has_position || short_side.psize[other_coin] > 0.0f;
+        }
         const bool long_closed = force_close_ema_multicoin_delisted_position(
             long_side, account, fills, bars, coin_settings, coin_fill_counts,
             candidate_index, k, coin_count, c, false,
             collect_coin_fill_counts, market_order_slippage_pct,
-            hsl_equity_before_close
+            hsl_equity_before_close, &short_side.hsl, short_has_position
         );
+        bool long_has_position = false;
+        for (int other_coin = 0; other_coin < coin_count; ++other_coin) {
+            long_has_position = long_has_position || long_side.psize[other_coin] > 0.0f;
+        }
         const bool short_closed = force_close_ema_multicoin_delisted_position(
             short_side, account, fills, bars, coin_settings, coin_fill_counts,
             candidate_index, k, coin_count, c, true,
             collect_coin_fill_counts, market_order_slippage_pct,
-            hsl_equity_before_close
+            hsl_equity_before_close, &long_side.hsl, long_has_position
         );
         if (long_closed || short_closed) {
             clear_ema_multicoin_coin_orders(long_side, c);
@@ -3000,6 +3036,12 @@ inline void passivbot_ema_anchor_multicoin_impl(
     thread float& day_fill_count = fills.day_fill_count;
 
     for (int k = 1; k < stop_k; ++k) {
+        if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
+            // The decoder rejects -2 as unavailable held-position valuation.
+            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+
         const int day_index = multicoin_utc_day_index(
             start_day_minute, k, interval_ms
         );
@@ -3180,10 +3222,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
             }
         }
         float equity = balance + unrealized;
-        // Exact Rust keeps advancing balance-only equity and HSL time once
-        // portfolio tracking starts, including declared all-invalid gaps and
-        // tails. Per-coin validity still blocks fills, orders, and unrealized
-        // PnL above.
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
         if (can_generate && alive
             && balance > 0.0f && equity > liquidation_floor) {
             int sampled_hsl_tier = 0;
@@ -3461,6 +3501,11 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
+    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        account_recovery_max_min = fmax(
+            account_recovery_max_min, last_eq_k - account_peak_k
+        );
+    }
     scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
     if (coin_hsl_mode) {
         write_one_side_coin_hsl_outputs(
@@ -3849,6 +3894,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float day_start_balance = account.balance;
 
     for (int k = 1; k < stop_k; ++k) {
+        if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings, k, C)
+            || held_positions_have_missing_prices(short_side.psize, bars, coin_settings, k, C))) {
+            // The decoder rejects -2 as unavailable held-position valuation.
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+
         const int day_index = multicoin_utc_day_index(
             start_day_minute, k, interval_ms
         );
@@ -3899,7 +3951,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             bars, fill_ticks, coin_settings, long_coin_overrides,
             coin_fill_counts, int(b), k, C, false, alive,
             collect_coin_fill_counts, market_order_slippage_pct,
-            long_hsl_panic_market, long_hsl_equity_before_fills
+            long_hsl_panic_market, long_hsl_equity_before_fills,
+            &short_side.hsl, ema_multicoin_side_has_position(short_side, C)
         );
         float short_hsl_equity_before_fills = account.balance;
         short_hsl_equity_before_fills =
@@ -3917,7 +3970,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
             bars, fill_ticks, coin_settings, short_coin_overrides,
             coin_fill_counts, int(b), k, C, true, alive,
             collect_coin_fill_counts, market_order_slippage_pct,
-            short_hsl_panic_market, short_hsl_equity_before_fills
+            short_hsl_panic_market, short_hsl_equity_before_fills,
+            &long_side.hsl, ema_multicoin_side_has_position(long_side, C)
         );
         bool any_fill = long_fill || short_fill;
 
@@ -4184,10 +4238,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         float equity = joint_portfolio_equity(
             account, long_unrealized, short_unrealized
         );
-        // Exact Rust keeps advancing balance-only equity and HSL time once
-        // portfolio tracking starts, including declared all-invalid gaps and
-        // tails. Per-coin validity still blocks fills, orders, and unrealized
-        // PnL above.
+        // Held positions have valid valuation candles; unavailable tails are unheld.
+        // Missing held-position prices were rejected before this bar's fills.
         bool can_sample_hsl = (long_can_generate || short_can_generate)
             && alive
             && joint_portfolio_can_generate(
@@ -4444,6 +4496,11 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         fills.pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
+    if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
+        account_recovery_max_min = fmax(
+            account_recovery_max_min, last_eq_k - account_peak_k
+        );
+    }
     scalars[scalar_offset + 31] = account_recovery_max_min * interval_ms;
     if (long_config.coin_hsl_mode) {
         write_dual_side_coin_hsl_outputs(

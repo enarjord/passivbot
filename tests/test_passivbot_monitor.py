@@ -5129,12 +5129,22 @@ async def test_execute_orders_parent_records_order_opened_event():
         def _log_order_action_summary(self, *args, **kwargs):
             return None
 
+        def _build_order_params(self, _order):
+            return {}
+
+        def _emit_execution_connector_call_started_event(self, **_kwargs):
+            return None
+
         async def execute_orders(self, orders):
             context = self._execution_connector_call_context
             assert context["action"] == "create"
             assert context["orders"][0] is orders[0]
             assert context["wave"] is self._order_wave_in_progress
-            return [{"id": "abc123", **orders[0]}]
+            async def create_order(**_params):
+                return {"id": "abc123"}
+
+            self.cca = SimpleNamespace(create_order=create_order)
+            return [await pb_mod.Passivbot.execute_order(self, order) for order in orders]
 
         def did_create_order(self, executed):
             return True

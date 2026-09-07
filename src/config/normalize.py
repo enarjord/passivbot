@@ -50,20 +50,23 @@ def normalize_config(
     else:
         existing_log = []
     tracker = ConfigTransformTracker()
+    # Preserve explicit input values from the same payload that is normalized.
+    # Wrapper metadata stays on the outer document for provenance.
+    flavor = detect_flavor(config, {})
+    source_payload = config["config"] if flavor == "nested_current" else config
     optimize_suite_defined = (
-        isinstance(config.get("optimize"), dict) and "suite" in config["optimize"]
+        isinstance(source_payload.get("optimize"), dict) and "suite" in source_payload["optimize"]
     )
     raw_optimize_limits_present = (
-        isinstance(config.get("optimize"), dict) and "limits" in config["optimize"]
+        isinstance(source_payload.get("optimize"), dict) and "limits" in source_payload["optimize"]
     )
-    raw_optimize_limits = deepcopy(config.get("optimize", {}).get("limits"))
+    raw_optimize_limits = deepcopy(source_payload.get("optimize", {}).get("limits"))
     raw_optimize_snapshot = (
-        deepcopy(config.get("optimize")) if isinstance(config.get("optimize"), dict) else {}
+        deepcopy(source_payload.get("optimize")) if isinstance(source_payload.get("optimize"), dict) else {}
     )
-    coin_sources_input = deepcopy(config.get("backtest", {}).get("coin_sources"))
+    coin_sources_input = deepcopy(source_payload.get("backtest", {}).get("coin_sources"))
     live_coin_sources_input = {}
     template = get_template_config()
-    flavor = detect_flavor(config, template)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     if flavor == "nested_current" and isinstance(config.get("config"), dict):
         source_sections = set(config["config"])

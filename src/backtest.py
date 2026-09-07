@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 import sys
 import argparse
 from cli_utils import help_requested
@@ -63,6 +64,7 @@ from config.access import (
     require_live_value,
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
+from metrics_schema import attach_result_metrics, build_standalone_metrics
 from config.metrics import ANALYSIS_SHARED_KEYS
 from config.coerce import normalize_hsl_restart_after_red_policy, normalize_hsl_signal_mode
 from config.overrides import parse_overrides
@@ -2808,6 +2810,21 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
     if completion_ratio is not None:
         result["backtest_completion_ratio"] = completion_ratio
 
+    # Rust returns the actual equity timestamps even in metrics-only mode.
+    # Keep dates out of numeric aggregation and preserve the released duration key.
+    if "fills_analysis_duration_days" in result:
+        result["n_days"] = result["fills_analysis_duration_days"]
+    timestamps = np.asarray(equities_array) if equities_array is not None else np.empty((0, 1))
+    result["effective_start_date"] = (
+        datetime.fromtimestamp(int(timestamps[0, 0]) / 1000, timezone.utc)
+        .isoformat().replace("+00:00", "Z")
+        if len(timestamps) else None
+    )
+    result["effective_end_date"] = (
+        datetime.fromtimestamp(int(timestamps[-1, 0]) / 1000, timezone.utc)
+        .isoformat().replace("+00:00", "Z")
+        if len(timestamps) else None
+    )
     return result
 
 
@@ -2913,6 +2930,7 @@ def post_process(
         )
     else:
         sanitized_config = sanitize_prepared_config_for_dump(config)
+    attach_result_metrics(sanitized_config, metrics=build_standalone_metrics(analysis, exchange))
     dump_config(sanitized_config, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")

@@ -668,6 +668,9 @@ class HyperliquidBot(CCXTBot):
                         level=logging.DEBUG,
                     )
                 if normalized:
+                    for order in normalized:
+                        if self._hl_ws_order_has_fill_progress(order):
+                            order["_pb_order_update_requires_authoritative_refresh"] = True
                     self.handle_order_update(normalized)
             except asyncio.CancelledError:
                 break
