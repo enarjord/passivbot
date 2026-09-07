@@ -2295,6 +2295,24 @@ def update_config_with_args(
         if change:
             changed_keys.append(key)
             diffs.append(change)
+        # Supported flat risk leaves win during normalization, so synchronize an
+        # existing alias when the CLI explicitly overrides its grouped value.
+        path = key.split(".")
+        if (
+            len(path) == 4
+            and path[0] == "bot"
+            and path[1] in {"long", "short"}
+            and path[2] == "risk"
+            and path[3] in {"total_wallet_exposure_limit", "n_positions"}
+            and path[3] in config["bot"][path[1]]
+        ):
+            flat_key = f"bot.{path[1]}.{path[3]}"
+            flat_change = recursive_config_update(
+                config, flat_key, value, verbose=verbose
+            )
+            if flat_change:
+                changed_keys.append(flat_key)
+                diffs.append(flat_change)
     if changed_keys:
         details = {"keys": changed_keys}
         if diffs:

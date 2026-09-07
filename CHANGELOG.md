@@ -6,7 +6,12 @@ All notable user-facing changes will be documented in this file.
 
 - Restored `-ltwel`/`-stwel` and `-lnp`/`-snp` CLI shortcuts for long/short total wallet
   exposure limits and position counts in live and backtest commands. They now target the grouped
-  `bot.<side>.risk` fields and appear in command help.
+  `bot.<side>.risk` fields, take precedence over supported flat config aliases, and appear in
+  command help.
+
+- GPU suite optimization shares identical prepared MPS market tensors across scenarios, reducing
+  memory use and repeated preparation. Long-history single-side Trailing Martingale replays use
+  smaller threadgroups for higher throughput while retaining bounded, interruptible dispatches.
 
 - Apple MPS multi-coin Trailing Martingale optimization uses bounded history chunks when long
   datasets would otherwise restrict candidate parallelism. Replays preserve their full strategy
