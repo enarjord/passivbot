@@ -1316,7 +1316,7 @@ mod tests {
         assert!(source.contains("long_has_position || short_has_position"));
         assert!(source.contains("multicoin_min_cost_rejection_possible"));
         assert_eq!(
-            source.matches("bool min_cost_exact_open_uncertain").count(),
+            source.matches("bool min_cost_exact_open_uncertain =").count(),
             2
         );
         assert!(source.contains("never reuse the equity-derived liquidation floor"));

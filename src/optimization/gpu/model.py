@@ -9,6 +9,10 @@ import numpy as np
 GAP_BINS = 128
 GAP_MAX_MINUTES = 4_000_000.0
 MPS_MULTICOIN_MAX_COINS = 64
+# Bound both temporal launch duration and per-candidate replay-state allocation.
+MPS_TM_MULTICOIN_CHUNK_BARS = 8192
+MPS_TM_MULTICOIN_CHUNK_CANDIDATES = 512
+MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS = 2_097_152
 HSL_SIGNAL_MODES = {"unified", "pside", "coin"}
 
 

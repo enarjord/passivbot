@@ -29,6 +29,9 @@ from optimization.gpu.model import (
     GPU_STRATEGY_PARAM_KEYS,
     HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
+    MPS_TM_MULTICOIN_CHUNK_BARS,
+    MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
+    MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
@@ -340,8 +343,12 @@ def _add_gpu_runner_profile(
     if dispatch_specialization is not None:
         profile["dispatch_specializations"].append(dict(dispatch_specialization))
     profile["dispatch_count"] += dispatch_count
-    profile["cold_dispatch_count"] += dispatch_count if cold else 0
-    profile["warm_dispatch_count"] += 0 if cold else dispatch_count
+    cold_dispatches = (
+        int(cold) if "temporal_chunk_bars" in runner_profile
+        else dispatch_count if cold else 0
+    )
+    profile["cold_dispatch_count"] += cold_dispatches
+    profile["warm_dispatch_count"] += dispatch_count - cold_dispatches
     runner_steps = int(getattr(runner, "n", 0))
     if effective_candidate_steps is None:
         candidate_steps = batch_size * runner_steps
@@ -356,12 +363,20 @@ def _add_gpu_runner_profile(
         candidate_steps = int(
             np.clip(candidate_steps_array, 0, runner_steps).sum()
         )
+    # Temporal dispatches partition one replay; they do not repeat its history.
+    candidate_steps = int(runner_profile.get(
+        "kernel_candidate_steps", candidate_steps * dispatch_count
+    ))
     profile["kernel_candidate_bars"] += (
-        candidate_steps
-        * int(getattr(runner, "n_coins", 1))
-        * int(side_count)
-        * dispatch_count
+        candidate_steps * int(getattr(runner, "n_coins", 1)) * int(side_count)
     )
+    if "temporal_chunk_bars" in runner_profile:
+        profile.setdefault("temporal_dispatches", []).append({
+            key: runner_profile[key] for key in (
+                "dispatch_count", "temporal_chunk_bars", "max_dispatch_seconds",
+                "replay_state_bytes_per_candidate",
+            )
+        })
     timings = profile["timings_seconds"]
     timings["candidate_packing"] += float(
         runner_profile.get("cpu_pack_seconds", 0.0)
@@ -697,6 +712,39 @@ def _single_coin_candle_interval_minutes(backtest_params: dict) -> int:
             "integer >= 1"
         )
     return int(interval)
+
+
+def _mps_multicoin_dispatch_plan(
+    strategy_kind: str, requested_batch_size: int, *, n_bars: int, n_coins: int,
+    n_sides: int, max_candidate_bars: int,
+) -> tuple[bool, int, int]:
+    temporal_chunking = (
+        strategy_kind == "trailing_martingale"
+        and n_sides == 1
+        and n_bars > MPS_TM_MULTICOIN_CHUNK_BARS
+        and n_bars * n_coins * min(
+            requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+        ) > max_candidate_bars
+    )
+    dispatch_candidates = (
+        min(requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
+        if temporal_chunking else requested_batch_size
+    )
+    dispatch_history = (
+        min(
+            n_bars, MPS_TM_MULTICOIN_CHUNK_BARS,
+            MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS // dispatch_candidates,
+            max(1, max_candidate_bars // n_coins),
+        ) if temporal_chunking else n_bars
+    )
+    dispatch_batch_size = _mps_dispatch_batch_size(
+        dispatch_candidates,
+        n_bars=dispatch_history,
+        n_coins=n_coins,
+        n_sides=n_sides,
+        max_candidate_bars=max_candidate_bars,
+    )
+    return temporal_chunking, dispatch_batch_size, dispatch_history
 
 
 def _log_mps_dispatch_cap(
@@ -2896,21 +2944,29 @@ class MpsMulticoinProxy:
                 "MPS multicoin proxy requires one or two enabled sides"
             )
         self.sides = enabled_sides
-        self.dispatch_batch_size = _mps_dispatch_batch_size(
-            self.batch_size,
-            n_bars=len(values),
-            n_coins=coin_count,
-            n_sides=len(enabled_sides),
-            max_candidate_bars=self.max_dispatch_candidate_bars,
+        self.temporal_chunking, self.dispatch_batch_size, dispatch_history = (
+            _mps_multicoin_dispatch_plan(
+                self.strategy_kind, self.batch_size, n_bars=len(values),
+                n_coins=coin_count, n_sides=len(enabled_sides),
+                max_candidate_bars=self.max_dispatch_candidate_bars,
+            )
         )
-        _log_mps_dispatch_cap(
-            requested_batch_size=self.batch_size,
-            dispatch_batch_size=self.dispatch_batch_size,
-            n_bars=len(values),
-            n_coins=coin_count,
-            n_sides=len(enabled_sides),
-            max_candidate_bars=self.max_dispatch_candidate_bars,
-        )
+        if self.temporal_chunking:
+            logging.info(
+                "GPU MPS temporal replay | candidate_batch=%d chunk_bars<=%d "
+                "history_bars=%d coins=%d max_candidate_bars=%d",
+                self.dispatch_batch_size, dispatch_history, len(values), coin_count,
+                self.max_dispatch_candidate_bars,
+            )
+        else:
+            _log_mps_dispatch_cap(
+                requested_batch_size=self.batch_size,
+                dispatch_batch_size=self.dispatch_batch_size,
+                n_bars=len(values),
+                n_coins=coin_count,
+                n_sides=len(enabled_sides),
+                max_candidate_bars=self.max_dispatch_candidate_bars,
+            )
         self.shared_account_fused = len(self.sides) == 2
         self.shared_account_proxy_mode = (
             "shared-account-fused-tm-v1"
@@ -3349,6 +3405,9 @@ class MpsMulticoinProxy:
                     **common_runner_kwargs,
                 }
                 runner_kwargs["coin_overrides"] = per_side_coin_overrides[side]
+                if self.temporal_chunking:
+                    runner_kwargs["max_dispatch_candidate_bars"] = self.max_dispatch_candidate_bars
+                    runner_kwargs["interrupt_check"] = self.interrupt_check
                 self.runners[side] = runner_cls(
                     self.run,
                     self.data,

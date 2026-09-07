@@ -48,6 +48,7 @@ from optimization.gpu.service import (
     _hsl_params,
     _hsl_diagnostics_needed,
     _mps_dispatch_batch_size,
+    _mps_multicoin_dispatch_plan,
     _mps_strategy_eq_recovery_distribution,
     _new_gpu_dispatch_progress,
     _new_gpu_proxy_profile,
@@ -406,6 +407,27 @@ def test_single_coin_shader_topology_is_fail_closed(
     )
 
 
+@pytest.mark.parametrize("strategy,batch,bars,sides,cap,expected", [
+    ("trailing_martingale", 4096, 900000, 1, 1_000_000_000, (True, 512, 4096)),
+    ("trailing_martingale", 4096, 60000, 1, 1_000_000_000, (False, 574, 60000)),
+    ("trailing_martingale", 4096, 4320, 1, 1_000_000_000, (False, 4096, 4320)),
+    ("trailing_martingale", 16, 900000, 1, 1_000_000_000, (False, 16, 900000)),
+    ("trailing_martingale", 4096, 900000, 2, 1_000_000_000, (False, 19, 900000)),
+    ("ema_anchor", 4096, 900000, 1, 1_000_000_000, (False, 38, 900000)),
+    ("trailing_martingale", 4096, 900000, 1, 100, (True, 1, 3)),
+])
+def test_mps_multicoin_temporal_plan_preserves_work_limit(
+    strategy, batch, bars, sides, cap, expected
+):
+    result = _mps_multicoin_dispatch_plan(
+        strategy, batch, n_bars=bars, n_coins=29, n_sides=sides,
+        max_candidate_bars=cap,
+    )
+    assert result == expected
+    _, candidate_batch, history_chunk = result
+    assert candidate_batch * history_chunk * 29 * sides <= cap
+
+
 def test_mps_dispatch_batch_size_bounds_single_and_multicoin_work():
     n_bars = 1_923_175
 
@@ -737,6 +759,24 @@ def test_gpu_profile_candidate_bars_include_coin_and_side_topology():
 
     assert profile["candidate_bars"] == 1_600
     assert profile["kernel_candidate_bars"] == 1_600
+
+
+def test_gpu_profile_temporal_dispatches_count_replayed_steps_once():
+    proxy = SimpleNamespace(batch_size=256, dispatch_batch_size=256,
+                            strategy_kind="trailing_martingale")
+    runner = SimpleNamespace(n=60_000, n_coins=29, last_profile={
+        "batch_size": 256, "dispatch_count": 8, "cold": True,
+        "kernel_candidate_steps": 256 * 59_999, "temporal_chunk_bars": 8192,
+        "max_dispatch_seconds": 4.0, "replay_state_bytes_per_candidate": 29_296,
+    })
+    profile = _new_gpu_proxy_profile(proxy, [{}] * 256, (runner,), coin_count=29,
+                                     side_count=1)
+    _add_gpu_runner_profile(profile, runner)
+    assert profile["kernel_candidate_bars"] == 256 * 59_999 * 29
+    assert profile["dispatch_count"] == 8
+    assert profile["cold_dispatch_count"] == 1
+    assert profile["warm_dispatch_count"] == 7
+    assert profile["temporal_dispatches"][0]["max_dispatch_seconds"] == 4.0
 
 
 def test_gpu_profile_candidate_bars_use_truncated_effective_steps():

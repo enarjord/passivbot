@@ -7,6 +7,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
+    TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
 )
 from tools.gpu_proxy_benchmark import (
     HSL_PNL_LOOKBACK_BARS,
@@ -30,6 +31,7 @@ from tools.gpu_proxy_benchmark import (
         EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
         TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS,
         EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
+        TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS,
     ),
 )
 def test_gpu_proxy_benchmark_candidate_matrix_is_fixed_and_finite(keys):
