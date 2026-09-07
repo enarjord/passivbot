@@ -2971,6 +2971,19 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     assert secret not in str(exc_info.value)
     assert secret not in caplog.text
     assert "Traceback" not in caplog.text
+    # The outer lifecycle handler retains the failing phase even after cleanup
+    # observers have returned to idle, and correlates the visible traceback.
+    monkeypatch.setattr(passivbot_module, "bot", bot, raising=False)
+    bot._log_silence_watchdog_stage = "idle"
+    with caplog.at_level(logging.ERROR):
+        passivbot_module._log_process_failure(
+            "passivbot fatal error", exc_info.value, action="stop"
+        )
+    assert "stage=equity_hard_stop_initialize_coin_from_history" in caplog.text
+    assert f"incident_id={summary['incident_id']}" in caplog.text
+    assert "Traceback" in caplog.text
+    assert "cause: ValueError" in caplog.text
+    assert secret not in caplog.text
 
 
 def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):

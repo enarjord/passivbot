@@ -141,6 +141,7 @@ from logging_setup import (
 )
 from utils import (
     MarketIdentifierResolutionError,
+    UnknownMarketIdentifier,
     load_markets,
     coin_to_symbol,
     symbol_to_coin,
@@ -651,17 +652,99 @@ def _bounded_runtime_stage(bot: Any) -> str:
     return stage if re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", stage) else "unknown"
 
 
-def _log_process_failure(label: str, exc: BaseException) -> None:
+def _process_failure_key_context(exc: BaseException, current_bot: Any) -> str:
+    """Expose missing market keys only when independently known to this bot.
+
+    Arbitrary exception arguments can contain credentials, even for KeyError.
+    Membership in the market/override map plus symbol syntax provides context
+    without formatting an arbitrary exception value.
+    """
+    try:
+        if type(exc) is not KeyError or len(exc.args) != 1:
+            return ""
+        key = exc.args[0]
+        if type(key) is not str or not re.fullmatch(
+            r"[A-Za-z0-9_.:-]{1,64}/[A-Z0-9]{1,12}:[A-Z0-9]{1,12}", key
+        ):
+            return ""
+        if any(
+            key in getattr(current_bot, attr, {})
+            for attr in ("markets_dict", "coin_overrides", "positions", "open_orders")
+        ):
+            return f"missing_market_key={key}"
+    except Exception:
+        pass  # Optional diagnostic context must not replace the original failure.
+    return ""
+
+
+def _log_process_failure(
+    label: str,
+    exc: BaseException,
+    *,
+    action: str = "restart",
+    failure_state: dict | None = None,
+) -> None:
     current_bot = globals().get("bot")
+    context = (
+        getattr(current_bot, "_startup_failure_context", {})
+        if action != "cleanup"
+        else {}
+    )
+    stage = context.get("stage", _bounded_runtime_stage(current_bot))
+    incident_id = context.get("incident_id", "process")
+    detail = _bounded_traceback_detail(exc)
+    key_context = _process_failure_key_context(exc, current_bot)
+    signature = (
+        label,
+        action,
+        stage,
+        detail,
+        key_context,
+        bounded_exception_status(exc),
+        bounded_exception_code(exc),
+    )
+    now = time.monotonic()
+    if isinstance(exc, RestartBotException):
+        failure_state = None  # An intentional restart is not a failed-run incident.
+    if failure_state is not None:
+        if failure_state.get("signature") == signature:
+            failure_state["repeats"] += 1
+            if now - failure_state["last_summary"] < 300:
+                return
+            logging.error(
+                "%s | stage=%s action=%s repeated=%s incident_id=%s (traceback unchanged)",
+                label,
+                stage,
+                action,
+                failure_state["repeats"],
+                incident_id,
+            )
+            failure_state["last_summary"] = now
+            return
+        failure_state.update(signature=signature, repeats=0, last_summary=now)
     logging.error(
-        "%s | error_type=%s status=%s code=%s stage=%s origin=%s",
+        "%s | error_type=%s status=%s code=%s stage=%s origin=%s action=%s incident_id=%s %s",
         label,
         bounded_exception_type(exc),
         bounded_exception_status(exc) or "-",
         bounded_exception_code(exc) or "-",
-        _bounded_runtime_stage(current_bot),
+        stage,
         _bounded_traceback_origin(exc),
+        action,
+        incident_id,
+        key_context,
     )
+    if detail["frame_count"] and not isinstance(exc, RestartBotException):
+        lines = ["Traceback (bounded frames; no locals or raw exception text):"]
+        for item in detail["exceptions"]:
+            lines.append(f"  {item['relation']}: {item['error_type']}")
+            for frame in item["frames"]:
+                lines.append(
+                    f"    {frame['file']}:{frame['line']} in {frame['function']}"
+                )
+        if detail["truncated"]:
+            lines.append("  ... traceback truncated")
+        logging.error("%s", "\n".join(lines))
 
 
 def _log_startup_observer_failure(
@@ -2343,6 +2426,15 @@ class Passivbot:
 
     def _assert_supported_live_state(self) -> None:
         """Hook: exchange-specific startup/runtime validation for unsupported live state."""
+        # Config-only unavailable symbols may be skipped; exchange state cannot.
+        for symbol, sides in getattr(self, "positions", {}).items():
+            if symbol not in self.markets_dict and any(
+                side["size"] != 0 for side in sides.values()
+            ):
+                raise KeyError(symbol)
+        for symbol, orders in getattr(self, "open_orders", {}).items():
+            if orders and symbol not in self.markets_dict:
+                raise KeyError(symbol)
         dated_symbols = sorted(self._unsupported_dated_futures_symbols_in_live_state())
         if dated_symbols:
             raise FatalBotException(
@@ -3480,6 +3572,12 @@ class Passivbot:
 
             Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
+            failure_state = getattr(self, "_process_failure_state", None)
+            if failure_state:
+                logging.info(
+                    "[bot] recovered from previous run failure; trading startup ready"
+                )
+                failure_state.clear()
             ready_ts = utc_ms()
             ready_data = {"debug_mode": bool(self.debug_mode)}
             if live_event_debug_profiles:
@@ -3540,6 +3638,12 @@ class Passivbot:
                 "origin": _bounded_traceback_origin(exc),
                 "action": incident_action,
                 "cycle": incident_cycle,
+            }
+            self._startup_failure_context = {
+                "stage": (
+                    boot_stage if not self._bot_ready else _bounded_runtime_stage(self)
+                ),
+                "incident_id": incident_id,
             }
             self._monitor_record_event(
                 "error.bot",
@@ -4463,11 +4567,20 @@ class Passivbot:
         """Populate coin override map keyed by symbols for quick lookup."""
         resolved_coin_overrides = {}
         override_keys_by_symbol = {}
+        unavailable = []
         for key, value in self.config.get("coin_overrides", {}).items():
-            symbol = self.coin_to_symbol(key)
-            if not symbol:
+            try:
+                symbol = self.coin_to_symbol(key, verbose=False)
+            except UnknownMarketIdentifier:
+                unavailable.append(key)
                 continue
-            if symbol in resolved_coin_overrides and resolved_coin_overrides[symbol] != value:
+            if not symbol or symbol not in self.markets_dict:
+                unavailable.append(key)
+                continue
+            if (
+                symbol in resolved_coin_overrides
+                and resolved_coin_overrides[symbol] != value
+            ):
                 raise ValueError(
                     f"conflicting coin_overrides keys resolve to {symbol}: "
                     f"{override_keys_by_symbol[symbol]!r} and {key!r}"
@@ -4475,6 +4588,30 @@ class Passivbot:
             resolved_coin_overrides[symbol] = value
             override_keys_by_symbol.setdefault(symbol, key)
         self.coin_overrides = resolved_coin_overrides
+        skipped = tuple(sorted(unavailable))
+        if skipped != getattr(self, "_unavailable_coin_overrides", ()):
+            if skipped:
+                logging.info(
+                    "[config] skipping unavailable coin_overrides: exchange=%s count=%d coins=%s",
+                    self.exchange,
+                    len(skipped),
+                    self._log_symbols(
+                        [
+                            (
+                                (key if len(key) <= 32 else key[:29] + "...")
+                                if re.fullmatch(r"[A-Za-z0-9_./:-]{1,80}", key)
+                                else "[invalid identifier]"
+                            )
+                            for key in skipped
+                        ],
+                        limit=3,
+                    ),
+                )
+            else:
+                logging.info(
+                    "[config] all coin_overrides available: exchange=%s", self.exchange
+                )
+            self._unavailable_coin_overrides = skipped
         if self.coin_overrides:
             logging.debug(
                 "Initialized coin overrides for %s",
@@ -21546,7 +21683,7 @@ class Passivbot:
                             resolved_identifier_symbols[identifier] = symbol
                     symbols = {s for s in symbols if s}
                     eligible = getattr(self, "eligible_symbols", None)
-                    if eligible:
+                    if eligible is not None:
                         skipped = [sym for sym in symbols if sym not in eligible]
                         if skipped:
                             coin_list = ", ".join(
@@ -22115,23 +22252,29 @@ async def main():
     config = compile_runtime_config(config, runtime="live")
     cooldown_secs = 60
     restarts = []
+    failure_state = {}
     while True:
 
         bot = setup_bot(config)
         globals()["bot"] = bot
+        bot._process_failure_state = failure_state
         fatal_error = None
         try:
             await bot.start_bot()
         except FatalBotException as e:
             fatal_error = e
-            _log_process_failure("passivbot fatal error", e)
+            _log_process_failure(
+                "passivbot fatal error", e, action="stop", failure_state=failure_state
+            )
         except asyncio.CancelledError as e:
             if bot.stop_signal_received or getattr(bot, "_shutdown_in_progress", False):
                 logging.info("passivbot cancellation received during shutdown")
             else:
-                _log_process_failure("passivbot cancelled unexpectedly", e)
+                _log_process_failure(
+                    "passivbot cancelled unexpectedly", e, failure_state=failure_state
+                )
         except Exception as e:
-            _log_process_failure("passivbot error", e)
+            _log_process_failure("passivbot error", e, failure_state=failure_state)
         finally:
             try:
                 if bot.stop_signal_received or getattr(
@@ -22145,7 +22288,7 @@ async def main():
                 else:
                     await bot.cleanup_for_restart()
             except Exception as exc:
-                _log_process_failure("passivbot cleanup error", exc)
+                _log_process_failure("passivbot cleanup error", exc, action="cleanup")
             if bot is not None and getattr(bot, "_shutdown_in_progress", False):
                 logging.info(
                     "[%s] [shutdown] cleanup complete", getattr(bot, "exchange", "?")

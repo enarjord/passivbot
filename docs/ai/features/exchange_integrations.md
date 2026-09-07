@@ -720,6 +720,20 @@ Handling:
 
 Primary reference: [WEEX V3 trade-detail API](https://www.weex.com/api-doc/contract/Transaction_API/GetTradeDetails).
 
+## Unavailable Configured Live Markets
+
+Live coin overrides are resolved against the current exchange market snapshot before downstream
+mode or sizing lookups. Skip an unavailable market (including an exact identifier classified as
+`UnknownMarketIdentifier`) with a bounded notice on change, retaining the original config so the
+next market refresh can reconsider it. Do not synthesize an active market or change the shared
+resolver's historical/backtest behavior. Ambiguous identifiers, conflicting overrides, and other
+resolution failures still propagate; a failed refresh must not publish a partial override map.
+
+An inactive market is not an absent market: retain its overrides and existing protective-mode
+handling. Never drop exchange positions or open orders because their coin is unavailable in config;
+missing market metadata for such state remains an explicit failure. Approved-list filtering also
+applies when the eligible market set is empty.
+
 ## General Guidance
 
 1. Check raw exchange payloads when CCXT abstraction is insufficient.

@@ -35,8 +35,12 @@ authentication material must not be copied from its configured credential store 
 
 - Connector-local and structured execution events retain stable classifications, bounded context,
   and exception type—not raw responses, exception text, or tracebacks.
-- Outer process/startup failure logs may include a traceback in the protected developer text log
-  when needed for diagnosis, but should sanitize known request and credential material first.
+- Unexpected failures that abort startup or a running bot emit a bounded traceback at ERROR in
+  the console and text log. Reuse the diagnostic frame formatter: retain exception classes,
+  cause/context chains, file names, functions, and line numbers, without locals, source lines,
+  or raw exception text. A missing market key may be shown only when its syntax is bounded and
+  it independently exists in the bot's market, override, position, or open-order map; arbitrary
+  exception arguments are not safe merely because the exception is a built-in Python type.
 - Unexpected runtime incidents must retain a correlated, bounded frame chain in a private durable
   diagnostic event at normal logging levels. Frame diagnostics exclude exception text, locals, and
   source lines unless a producer has an explicitly reviewed sanitizer for those values; a rare
@@ -104,16 +108,22 @@ test values on both sides; the console sink must not invent a generic threshold 
 
 ### Incident Projection
 
-The normal console projects an incident as a bounded signature, not a traceback:
+Recoverable incidents use a bounded signature. Unexpected failures that abort a run additionally
+show diagnostic frames:
 
 1. Emit the first occurrence immediately with component, operation, exception class, status/code
    when safe, affected scope, action, and correlation id. Failed exchange writes may also include
    a bounded sanitized reason extracted from the exchange's structured error payload.
 2. Aggregate equivalent repeats and emit a compact count at most every five minutes. Emit recovery
    once when the condition clears.
-3. Keep sanitized tracebacks in the protected developer text/structured diagnostic path at normal
-   logging levels. A terminal outer-process failure may tell the operator where that detail was
-   retained, but must not dump it into the normal console.
+3. Keep bounded frame chains in the durable diagnostic path at normal logging levels. For an
+   unexpected run-aborting failure, also print the frame chain on the console, with the original
+   failing phase, stop/restart action, and the startup incident ID when available. Preserve phase
+   context before teardown changes observer state. Identical restart failures share suppression
+   across bot instances: print the first trace, then a repeat count at most every five minutes.
+   A changed failure prints immediately; successful startup clears suppression and reports recovery.
+   Expected restart control flow does not need a traceback. Do not change retry or stop policy
+   merely to improve diagnostics.
 
 Distinct safety transitions and distinct failed exchange writes are never coalesced merely to meet
 a volume target.

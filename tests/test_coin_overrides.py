@@ -52,7 +52,8 @@ def test_live_coin_overrides_reject_conflicting_aliases_for_one_market():
             "BTCUSDT": {"live": {"forced_mode_long": "panic"}},
         }
     }
-    bot.coin_to_symbol = lambda _coin: "BTC/USDT:USDT"
+    bot.markets_dict = {"BTC/USDT:USDT": {"active": True}}
+    bot.coin_to_symbol = lambda _coin, verbose=True: "BTC/USDT:USDT"
 
     with pytest.raises(ValueError, match="conflicting coin_overrides keys"):
         bot.init_coin_overrides()
@@ -69,7 +70,9 @@ def test_live_coin_overrides_refresh_is_atomic_on_resolution_failure():
         }
     }
 
-    def resolve(coin):
+    bot.markets_dict = {"BTC/USDT:USDT": {"active": True}}
+
+    def resolve(coin, verbose=True):
         if coin == "BTC":
             return "BTC/USDT:USDT"
         raise ValueError("unavailable override market")
