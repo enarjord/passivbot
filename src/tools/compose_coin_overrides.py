@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
-import tempfile
+import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -761,18 +762,31 @@ def write_config(config: dict, output_config: Path, *, overwrite: bool = False) 
             f"output config already exists: {output}; pass --overwrite to replace it"
         )
     output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destination_stat = output.stat() if overwrite else None
+    except FileNotFoundError:
+        destination_stat = None
     temporary = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=output.parent,
-            prefix=f".{output.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temporary = Path(handle.name)
+        candidate = output.parent / f".{output.name}.{uuid.uuid4().hex}.tmp"
+        # New configs use ordinary file-creation permissions, including umask
+        # and directory defaults. Replacements stay private until their
+        # destination's ownership and mode have been restored.
+        descriptor = os.open(
+            candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600 if destination_stat is not None else 0o666,
+        )
+        temporary = candidate
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(json_dumps_streamlined(config, indent=4, max_inline=72, sort_keys=True) + "\n")
+        if destination_stat is not None:
+            if os.name == "posix":
+                temporary_stat = temporary.stat()
+                if (temporary_stat.st_uid, temporary_stat.st_gid) != (
+                    destination_stat.st_uid, destination_stat.st_gid
+                ):
+                    os.chown(temporary, destination_stat.st_uid, destination_stat.st_gid)
+            os.chmod(temporary, stat.S_IMODE(destination_stat.st_mode))
         if overwrite:
             os.replace(temporary, output)
         else:

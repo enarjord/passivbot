@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from copy import deepcopy
 from pathlib import Path
 
@@ -619,6 +621,57 @@ def test_failed_output_replacement_preserves_existing_file(tmp_path: Path, monke
     with pytest.raises(OSError, match="simulated replacement failure"):
         compose_tool.write_config({"new": "content"}, output, overwrite=True)
     assert output.read_text() == "original content"
+    assert list(tmp_path.iterdir()) == [output]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission semantics")
+@pytest.mark.parametrize("mask", [0o022, 0o027, 0o077])
+def test_new_output_uses_normal_umask_permissions(tmp_path: Path, mask):
+    output = tmp_path / "new.json"
+    previous = os.umask(mask)
+    try:
+        compose_tool.write_config({"new": "content"}, output)
+    finally:
+        os.umask(previous)
+    assert stat.S_IMODE(output.stat().st_mode) == 0o666 & ~mask
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permission semantics")
+@pytest.mark.parametrize("mode", [0o600, 0o640, 0o644])
+def test_overwrite_preserves_output_permissions_and_ownership(tmp_path: Path, mode):
+    output = tmp_path / "existing.json"
+    output.write_text("original")
+    output.chmod(mode)
+    before = output.stat()
+    compose_tool.write_config({"new": "content"}, output, overwrite=True)
+    after = output.stat()
+    assert stat.S_IMODE(after.st_mode) == mode
+    assert (after.st_uid, after.st_gid) == (before.st_uid, before.st_gid)
+    assert json.loads(output.read_text()) == {"new": "content"}
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX ownership semantics")
+def test_failed_ownership_preservation_leaves_original_output(tmp_path: Path, monkeypatch):
+    output = tmp_path / "existing.json"
+    output.write_text("original")
+    real_stat = Path.stat
+
+    def foreign_owner(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path == output:
+            values = list(result)
+            values[4] += 1
+            return os.stat_result(values)
+        return result
+
+    def denied_chown(path, uid, gid):
+        raise PermissionError("cannot preserve output ownership")
+
+    monkeypatch.setattr(Path, "stat", foreign_owner)
+    monkeypatch.setattr(compose_tool.os, "chown", denied_chown)
+    with pytest.raises(PermissionError, match="cannot preserve output ownership"):
+        compose_tool.write_config({"new": "content"}, output, overwrite=True)
+    assert output.read_text() == "original"
     assert list(tmp_path.iterdir()) == [output]
 
 

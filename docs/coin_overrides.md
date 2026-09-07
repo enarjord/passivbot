@@ -293,7 +293,9 @@ the GPU allowlist.
 Existing output files are protected unless `--overwrite` is supplied. The selected master and
 recognized single-coin inputs cannot be used as the output path. Output is published atomically,
 so a failed write does not truncate an
-existing config. Keep output outside the input directory where practical: the specified output is
+existing config. New files use normal umask-controlled creation permissions. Replacements preserve
+the destination's permission bits and POSIX owner/group; if those cannot be restored, publication
+fails and the original file remains intact. Keep output outside the input directory where practical: the specified output is
 excluded from discovery, but other JSON/HJSON files in that directory are treated as inputs.
 
 ## Common pitfalls
