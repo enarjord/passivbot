@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Restored `-ltwel`/`-stwel` and `-lnp`/`-snp` CLI shortcuts for long/short total wallet
+  exposure limits and position counts in live and backtest commands. They now target the grouped
+  `bot.<side>.risk` fields and appear in command help.
+
 - Apple MPS multi-coin Trailing Martingale optimization uses bounded history chunks when long
   datasets would otherwise restrict candidate parallelism. Replays preserve their full strategy
   and metric state between dispatches, retain the configured work limit, and check interruption

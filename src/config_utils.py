@@ -1494,6 +1494,23 @@ RESERVED_CLI_ARGS = {
     },
 }
 
+# Keep these convenience aliases stable across config grouping changes.
+for _pside in ("long", "short"):
+    for _param, _acronym, _help in (
+        ("total_wallet_exposure_limit", "twel", "Total wallet exposure limit"),
+        ("n_positions", "np", "Target number of concurrent position slots"),
+    ):
+        _key = f"bot.{_pside}.risk.{_param}"
+        RESERVED_CLI_ARGS[_key] = {
+            "visible": [f"--{_key}", f"-{_pside[0]}{_acronym}"],
+            "hidden": [f"--{_key.replace('.', '_')}", f"-{_pside[0]}r{_acronym}"],
+            "type": float,
+            "metavar": "FLOAT",
+            "commands": {"live", "backtest"},
+            "group": {"live": "Behavior", "backtest": "Backtest Runtime"},
+            "help": f"{_help} for the {_pside} side.",
+        }
+
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 
 
