@@ -13,6 +13,10 @@ All notable user-facing changes will be documented in this file.
   without exposing raw exception payloads or locals. Repeated startup failures share traceback
   suppression across restarts, with periodic counts and a recovery notice after successful startup.
 
+- GPU suite optimization shares identical prepared MPS market tensors across scenarios, reducing
+  memory use and repeated preparation. Long-history single-side Trailing Martingale replays use
+  smaller threadgroups for higher throughput while retaining bounded, interruptible dispatches.
+
 - Apple MPS multi-coin Trailing Martingale optimization uses bounded history chunks when long
   datasets would otherwise restrict candidate parallelism. Replays preserve their full strategy
   and metric state between dispatches, retain the configured work limit, and check interruption

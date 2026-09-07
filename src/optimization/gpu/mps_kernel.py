@@ -2679,6 +2679,9 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         max_dispatch_seconds = 0.0
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
+        # One SIMD-width group distributes independent, state-heavy replays
+        # across GPU cores instead of packing the batch into a large group.
+        threads_per_threadgroup = min(batch_size, 32)
         for begin_k in range(1, max(2, stop_k), chunk_bars):
             self.interrupt_check()
             replay_range = torch.tensor(
@@ -2689,6 +2692,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             library.passivbot_trailing_martingale_multicoin(
                 *kernel_args, replay_states, replay_range,
                 threads=(batch_size, 1, 1),
+                group_size=(threads_per_threadgroup, 1, 1),
             )
             # Bound queued work as well as each command, and make Ctrl+C visible
             # between temporal chunks even when profiling is disabled.
@@ -2709,6 +2713,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         self._last_temporal_dispatch = {
             "dispatch_count": dispatch_count,
             "temporal_chunk_bars": chunk_bars,
+            "threads_per_threadgroup": threads_per_threadgroup,
             "max_dispatch_seconds": max_dispatch_seconds,
             "kernel_candidate_steps": int((end_steps - 1).clamp(min=0).sum().item()),
             "replay_state_bytes_per_candidate": self._replay_state_bytes,

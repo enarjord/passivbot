@@ -374,7 +374,7 @@ def _add_gpu_runner_profile(
         profile.setdefault("temporal_dispatches", []).append({
             key: runner_profile[key] for key in (
                 "dispatch_count", "temporal_chunk_bars", "max_dispatch_seconds",
-                "replay_state_bytes_per_candidate",
+                "replay_state_bytes_per_candidate", "threads_per_threadgroup",
             )
         })
     timings = profile["timings_seconds"]
@@ -2839,6 +2839,33 @@ def _build_single_coin_override_params(
     )
 
 
+def _prepared_multicoin_data(
+    values, timestamps, *, runs, markets, checkpoint_contract, cache=None,
+):
+    """Share immutable suite tensors only for identical validated packing inputs."""
+    candles = checkpoint_contract["hlcvs"]
+    timeline = checkpoint_contract["timestamps"]
+    key = (
+        tuple(checkpoint_contract["coins"]),
+        tuple(candles["shape"]), candles["dtype"], candles["sha256"],
+        timeline["count"], timeline["first"], timeline["last"], timeline["sha256"],
+        tuple(runs), tuple(markets),
+    )
+    if cache is not None and key in cache:
+        data = cache[key]
+        logging.info(
+            "GPU suite reusing prepared MPS market tensors | coins=%d bars=%d saved=%.2f GiB",
+            data["n_coins"], data["n"], data["invariant_bytes"] / 2**30,
+        )
+        return data
+    data = build_mps_multicoin_data(
+        values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
+    )
+    if cache is not None:
+        cache[key] = data
+    return data
+
+
 class MpsMulticoinProxy:
     """Batched multi-coin MPS proxy for the supported strategy topology."""
 
@@ -2855,6 +2882,7 @@ class MpsMulticoinProxy:
         needed_metrics,
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
+        prepared_data_cache: dict | None = None,
     ):
         try:
             import torch
@@ -3292,12 +3320,9 @@ class MpsMulticoinProxy:
             last_valid_indices=backtest_params["last_valid_indices"],
             require_positive_high_low=True,
         )
-        self.data = build_mps_multicoin_data(
-            values,
-            timestamps,
-            runs=runs,
-            markets=markets,
-            include_hourly_ranges=True,
+        self.data = _prepared_multicoin_data(
+            values, timestamps, runs=runs, markets=markets,
+            checkpoint_contract=self.checkpoint_contract, cache=prepared_data_cache,
         )
         self.metrics_data = {
             "ts0": self.data["ts0"],
