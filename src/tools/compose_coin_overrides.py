@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +12,7 @@ from typing import Any, Iterable
 
 from config.load import load_input_config, prepare_config
 from config.overrides import get_allowed_modifications, parse_overrides
+from config.param_paths import bound_path_matches_selector, resolve_dotted_config_path
 from config.schema import get_template_config
 from config_utils import clean_config
 from pure_funcs import sort_dict_keys
@@ -32,11 +35,15 @@ HYPERLIQUID_MARKET_PREFIXES = ("xyz:", "xyz-", "xyz_")
 
 
 @dataclass
-class SingleCoinConfig:
+class ConfigSource:
     path: Path
+    config: dict
+
+
+@dataclass
+class SingleCoinConfig(ConfigSource):
     coin: str
     approved_sides: frozenset[str]
-    config: dict
 
 
 @dataclass
@@ -49,13 +56,16 @@ class CompositionReport:
     account_wide_conflicts: dict[str, list[str]]
     override_leaf_counts: dict[str, int]
     included_backtest_optimize: bool
+    override_mode: str
+    override_params: list[str]
+    position_count_changes: dict[str, tuple[float, float]]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="passivbot tool compose-coin-overrides",
         description=(
-            "Compose a directory of single-coin configs into one config with minimal inline "
+            "Compose a directory of single-coin configs into one config with inline "
             "coin_overrides."
         ),
     )
@@ -70,8 +80,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Input config to use for master/global values. May be a filename in input_directory "
-            "or its path. Defaults to the alphabetically first input."
+            "Config to use for master/global values. May be a filename in input_directory "
+            "or a path to an external JSON/HJSON config. Defaults to the alphabetically first input."
         ),
     )
     parser.add_argument(
@@ -80,6 +90,26 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Include backtest and optimize sections from the master input. They are omitted by "
             "default for a lean live config."
+        ),
+    )
+    parser.add_argument(
+        "--override-mode",
+        choices=("lean", "verbose"),
+        default="lean",
+        help=(
+            "lean (default) emits only differences from the master and normalizes inactive "
+            "features; verbose pins every allowed per-coin value, including equal values "
+            "and inactive-feature settings. Global/account-wide values remain inherited."
+        ),
+    )
+    parser.add_argument(
+        "--override-params",
+        metavar="SELECTORS",
+        help=(
+            "Comma-separated groups or leaves to pin, e.g. "
+            "long.strategy,long.risk.entry_cooldown_minutes. Uses fine-tune path syntax. "
+            "Takes precedence over --override-mode: selected values are retained even "
+            "when equal to the master; all unselected fields inherit the master."
         ),
     )
     parser.add_argument(
@@ -99,6 +129,21 @@ def discover_config_paths(
             f"input directory does not exist or is not a directory: {directory}"
         )
     output_resolved = output_config.expanduser().resolve() if output_config is not None else None
+    if (
+        output_resolved is not None
+        and output_resolved.is_file()
+        and output_resolved.parent == directory
+        and output_resolved.suffix.lower() in CONFIG_SUFFIXES
+    ):
+        try:
+            load_single_coin_config(output_resolved)
+        except (ValueError, TypeError, KeyError):
+            # A composed or malformed previous output may be replaced with
+            # --overwrite. A valid single-coin source must never be excluded
+            # from discovery and then replaced by the composed result.
+            pass
+        else:
+            raise ValueError(f"output config must not overwrite a single-coin input: {output_resolved}")
     paths = sorted(
         (
             path.resolve()
@@ -129,12 +174,12 @@ def _side_coin_lists(config: dict, key: str, *, path: Path) -> dict[str, list[st
     return result
 
 
-def load_single_coin_config(path: Path) -> SingleCoinConfig:
+def _load_config_source(path: Path, *, role: str) -> ConfigSource:
     source, base_config_path, raw_snapshot = load_input_config(str(path), log_info=False)
     if not isinstance(source, dict):
         raise TypeError(f"{path}: configuration root must be an object")
     if source.get("coin_overrides"):
-        raise ValueError(f"{path}: single-coin input must not contain coin_overrides")
+        raise ValueError(f"{path}: {role} must not contain coin_overrides")
     prepared = prepare_config(
         source,
         base_config_path=base_config_path,
@@ -144,7 +189,12 @@ def load_single_coin_config(path: Path) -> SingleCoinConfig:
     )
     config = clean_config(prepared)
     if config.get("coin_overrides"):
-        raise ValueError(f"{path}: single-coin input must not contain coin_overrides")
+        raise ValueError(f"{path}: {role} must not contain coin_overrides")
+    return ConfigSource(path=path, config=config)
+
+
+def load_single_coin_config(path: Path) -> SingleCoinConfig:
+    config = _load_config_source(path, role="single-coin input").config
     approved = _side_coin_lists(config, "approved_coins", path=path)
     ignored = _side_coin_lists(config, "ignored_coins", path=path)
     approved_union = {coin for coins in approved.values() for coin in coins}
@@ -174,7 +224,7 @@ def load_single_coin_config(path: Path) -> SingleCoinConfig:
     return SingleCoinConfig(path=path, coin=coin, approved_sides=approved_sides, config=config)
 
 
-def _market_resolution_exchanges(configs: list[SingleCoinConfig]) -> tuple[str, ...]:
+def _market_resolution_exchanges(configs: list[ConfigSource]) -> tuple[str, ...]:
     exchanges = set()
     for item in configs:
         backtest = item.config.get("backtest", {})
@@ -255,10 +305,13 @@ def _identifiers_refer_to_same_market(
 
 
 def _validate_market_identifiers(
-    configs: list[SingleCoinConfig], exchanges: tuple[str, ...]
+    configs: list[ConfigSource],
+    exchanges: tuple[str, ...],
+    *,
+    keys: tuple[str, ...] = ("approved_coins", "ignored_coins"),
 ) -> None:
     for item in configs:
-        for key in ("approved_coins", "ignored_coins"):
+        for key in keys:
             for side, identifiers in item.config.get("live", {}).get(key, {}).items():
                 for identifier in identifiers:
                     try:
@@ -279,10 +332,10 @@ def _resolve_master_path(
         directory_candidate = input_directory.expanduser().resolve() / selected
         selected = directory_candidate if directory_candidate.exists() else selected.resolve()
     selected = selected.resolve()
-    if selected not in paths:
-        raise ValueError(
-            f"selected master config is not a JSON/HJSON input in {input_directory}: {selected}"
-        )
+    if not selected.is_file():
+        raise FileNotFoundError(f"selected master config does not exist or is not a file: {selected}")
+    if selected.suffix.lower() not in CONFIG_SUFFIXES:
+        raise ValueError(f"selected master config must be a JSON/HJSON file: {selected}")
     return selected, True
 
 
@@ -291,12 +344,19 @@ def load_single_coin_directory(
     *,
     output_config: Path | None = None,
     master_config: Path | None = None,
-) -> tuple[list[SingleCoinConfig], bool]:
+) -> tuple[list[SingleCoinConfig], ConfigSource, bool]:
     paths = discover_config_paths(input_directory, output_config=output_config)
     master_path, master_was_selected = _resolve_master_path(
         input_directory, paths, master_config
     )
+    if output_config is not None and output_config.expanduser().resolve() == master_path:
+        raise ValueError("output config must not overwrite the selected master config")
     configs = [load_single_coin_config(path) for path in paths]
+    master = next((item for item in configs if item.path == master_path), None)
+    external_master = master is None
+    if external_master:
+        master = _load_config_source(master_path, role="master config")
+    sources = [master, *(item for item in configs if item.path != master_path)]
     by_coin: dict[str, Path] = {}
     for item in configs:
         if item.coin in by_coin:
@@ -305,8 +365,10 @@ def load_single_coin_directory(
                 f"{by_coin[item.coin]} and {item.path}"
             )
         by_coin[item.coin] = item.path
-    resolution_exchanges = _market_resolution_exchanges(configs)
+    resolution_exchanges = _market_resolution_exchanges(sources)
     _validate_market_identifiers(configs, resolution_exchanges)
+    if external_master:
+        _validate_market_identifiers([master], resolution_exchanges, keys=("ignored_coins",))
     for index, item in enumerate(configs):
         for previous in configs[:index]:
             if _identifiers_refer_to_same_market(
@@ -317,24 +379,22 @@ def load_single_coin_directory(
                     f"{previous.coin} ({previous.path}) and {item.coin} ({item.path})"
                 )
     strategy_kinds = {
-        str(item.config.get("live", {}).get("strategy_kind")) for item in configs
+        str(item.config.get("live", {}).get("strategy_kind")) for item in sources
     }
     if len(strategy_kinds) != 1:
         raise ValueError(
-            "all single-coin configs must use the same live.strategy_kind; found "
+            "master and all single-coin configs must use the same live.strategy_kind; found "
             + ", ".join(sorted(strategy_kinds))
         )
     signal_modes = {
-        str(item.config.get("live", {}).get("hsl_signal_mode")) for item in configs
+        str(item.config.get("live", {}).get("hsl_signal_mode")) for item in sources
     }
     if len(signal_modes) != 1:
         raise ValueError(
-            "all single-coin configs must use the same live.hsl_signal_mode; found "
+            "master and all single-coin configs must use the same live.hsl_signal_mode; found "
             + ", ".join(sorted(signal_modes))
         )
-    master = next(item for item in configs if item.path == master_path)
-    ordered = [master, *(item for item in configs if item.path != master_path)]
-    return ordered, master_was_selected
+    return configs, master, master_was_selected
 
 
 def _get_path(config: dict, path: Iterable[str]) -> Any:
@@ -380,7 +440,7 @@ def _canonical_disabled_group(master: dict, side: str, group: str) -> dict:
     return result
 
 
-def canonicalize_inactive_features(configs: list[SingleCoinConfig]) -> list[str]:
+def canonicalize_inactive_features(configs: list[ConfigSource]) -> list[str]:
     master = configs[0].config
     actions: list[str] = []
     schema = get_template_config()
@@ -518,16 +578,65 @@ def _format_value(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _resolve_override_params(
+    selectors: str, configs: list[SingleCoinConfig], master: dict, policy: dict
+) -> tuple[set[tuple[str, ...]], list[str]]:
+    names = list(dict.fromkeys(part.strip() for part in selectors.split(",")))
+    if any(not name or any(not part.strip() for part in name.split(".")) for name in names):
+        raise ValueError("--override-params requires non-empty comma-separated path selectors")
+    eligible = {
+        path
+        for item in configs
+        for root in ("bot", "live")
+        for path, _value in _iter_leaves(item.config[root], (root,))
+        if _policy_allows(policy, path)
+    }
+    selected = set()
+    for name in names:
+        selector = resolve_dotted_config_path(master, name)
+        matches = {
+            path for path in eligible
+            if selector is not None and bound_path_matches_selector(path, selector)
+        }
+        if not matches:
+            raise ValueError(
+                f"--override-params selector {name!r} matches no overridable input fields; "
+                "check the path, active strategy, and coin-override policy"
+            )
+        selected.update(matches)
+    return selected, names
+
+
 def compose_configs(
     configs: list[SingleCoinConfig],
     *,
+    master_source: ConfigSource | None = None,
     include_backtest_optimize: bool = False,
     master_was_selected: bool = False,
+    override_mode: str = "lean",
+    override_params: str | None = None,
 ) -> tuple[dict, CompositionReport]:
+    if override_mode not in ("lean", "verbose"):
+        raise ValueError(f"override_mode must be lean or verbose; got {override_mode!r}")
     if len(configs) < 2:
         raise ValueError("at least two single-coin configs are required")
-    canonicalized_features = canonicalize_inactive_features(configs)
-    master_source = configs[0]
+    if master_source is None:
+        master_source = configs[0]
+    # Canonicalization is local to this composition, including when callers reuse
+    # the same loaded sources to compare lean and verbose output.
+    configs, master_source = deepcopy((configs, master_source))
+    sources = [master_source, *(item for item in configs if item.path != master_source.path)]
+    policy = get_allowed_modifications(hsl_signal_mode=master_source.config["live"]["hsl_signal_mode"])
+    selected_paths = None
+    selectors = []
+    if override_params is not None:
+        selected_paths, selectors = _resolve_override_params(
+            override_params, configs, master_source.config, policy
+        )
+    effective_mode = "custom" if selected_paths is not None else override_mode
+    canonicalized_features = (
+        canonicalize_inactive_features(sources) if effective_mode == "lean" else []
+    )
     master = deepcopy(master_source.config)
 
     approved = {
@@ -535,7 +644,8 @@ def compose_configs(
         for side in POSITION_SIDES
     }
     master["live"]["approved_coins"] = approved
-    resolution_exchanges = _market_resolution_exchanges(configs)
+    resolution_exchanges = _market_resolution_exchanges(sources)
+    position_count_changes = {}
     for side in POSITION_SIDES:
         master["live"]["ignored_coins"][side] = sorted(
             ignored
@@ -546,14 +656,17 @@ def compose_configs(
             )
         )
         if approved[side] and float(master["bot"][side]["risk"]["total_wallet_exposure_limit"]) > 0:
-            master["bot"][side]["risk"]["n_positions"] = float(len(approved[side]))
+            prior_count = float(master["bot"][side]["risk"]["n_positions"])
+            composed_count = float(len(approved[side]))
+            master["bot"][side]["risk"]["n_positions"] = composed_count
+            if prior_count != composed_count:
+                position_count_changes[side] = (prior_count, composed_count)
 
     if not include_backtest_optimize:
         master.pop("backtest", None)
         master.pop("optimize", None)
     master["coin_overrides"] = {}
 
-    policy = get_allowed_modifications(hsl_signal_mode=master["live"]["hsl_signal_mode"])
     conflicts: dict[str, list[str]] = {}
     skip_paths = {
         ("live", "approved_coins", "long"),
@@ -568,12 +681,16 @@ def compose_configs(
             master_leaves = dict(_iter_leaves(comparable_master[root], (root,)))
             source_leaves = dict(_iter_leaves(item.config[root], (root,)))
             for path in sorted(set(master_leaves) | set(source_leaves)):
-                if path in skip_paths or master_leaves.get(path) == source_leaves.get(path):
+                if path in skip_paths:
                     continue
+                equal = master_leaves.get(path) == source_leaves.get(path)
                 source_value = source_leaves.get(path)
                 if _policy_allows(policy, path):
-                    _set_path(patch, path, source_value)
-                else:
+                    if selected_paths is not None and path not in selected_paths:
+                        continue
+                    if path in source_leaves and (effective_mode != "lean" or not equal):
+                        _set_path(patch, path, source_value)
+                elif not equal:
                     description = (
                         f"{item.path.name}={_format_value(source_value)}; "
                         f"master={_format_value(master_leaves.get(path))}"
@@ -606,6 +723,9 @@ def compose_configs(
             coin: _count_leaves(patch) for coin, patch in master["coin_overrides"].items()
         },
         included_backtest_optimize=include_backtest_optimize,
+        override_mode=effective_mode,
+        override_params=selectors,
+        position_count_changes=position_count_changes,
     )
     return master, report
 
@@ -616,16 +736,21 @@ def compose_directory(
     output_config: Path | None = None,
     master_config: Path | None = None,
     include_backtest_optimize: bool = False,
+    override_mode: str = "lean",
+    override_params: str | None = None,
 ) -> tuple[dict, CompositionReport]:
-    configs, master_was_selected = load_single_coin_directory(
+    configs, master_source, master_was_selected = load_single_coin_directory(
         input_directory,
         output_config=output_config,
         master_config=master_config,
     )
     return compose_configs(
         configs,
+        master_source=master_source,
         include_backtest_optimize=include_backtest_optimize,
         master_was_selected=master_was_selected,
+        override_mode=override_mode,
+        override_params=override_params,
     )
 
 
@@ -636,10 +761,32 @@ def write_config(config: dict, output_config: Path, *, overwrite: bool = False) 
             f"output config already exists: {output}; pass --overwrite to replace it"
         )
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json_dumps_streamlined(config, indent=4, max_inline=72, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(json_dumps_streamlined(config, indent=4, max_inline=72, sort_keys=True) + "\n")
+        if overwrite:
+            os.replace(temporary, output)
+        else:
+            # Exclusive publication also protects a file created after the
+            # initial existence check, without exposing partially written JSON.
+            try:
+                os.link(temporary, output)
+            except FileExistsError as exc:
+                raise FileExistsError(
+                    f"output config already exists: {output}; pass --overwrite to replace it"
+                ) from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def print_report(report: CompositionReport, output_config: Path) -> None:
@@ -649,6 +796,11 @@ def print_report(report: CompositionReport, output_config: Path) -> None:
     )
     selection = "selected" if report.master_was_selected else "alphabetically first"
     print(f"Master source ({selection}): {report.master_path}")
+    print(f"Coin override mode: {report.override_mode}")
+    if report.override_params:
+        print(f"Pinned selectors: {', '.join(report.override_params)}")
+    for side, (before, after) in sorted(report.position_count_changes.items()):
+        print(f"Set bot.{side}.risk.n_positions: {before:g} -> {after:g} (approved coin count)")
     if report.included_backtest_optimize:
         print(f"Included backtest and optimize sections from: {report.master_path}")
     else:
@@ -681,6 +833,8 @@ def main(argv: list[str] | None = None) -> int:
             output_config=args.output_config,
             master_config=args.master_config,
             include_backtest_optimize=args.include_backtest_optimize,
+            override_mode=args.override_mode,
+            override_params=args.override_params,
         )
         write_config(config, args.output_config, overwrite=args.overwrite)
     except (OSError, TypeError, ValueError, KeyError) as exc:

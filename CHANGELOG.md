@@ -4,6 +4,22 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `compose-coin-overrides --override-params` pins selected groups or leaves using fine-tune-style
+  dotted selectors, retaining equal values while unselected fields inherit the master. Custom
+  selection takes precedence over lean/verbose mode and rejects selectors matching no allowed
+  input fields.
+
+- `compose-coin-overrides --override-mode verbose` pins all allowed per-coin values, including
+  values equal to the master and inactive-feature settings, so later master edits do not change
+  those values. The default `lean` mode retains minimal patches. Composition no longer mutates
+  caller-owned configs, rejects overwriting the selected master or a single-coin input, and publishes output
+  atomically with protection against concurrent file creation. Reports now show position-count
+  changes made during composition.
+
+- `compose-coin-overrides --master-config` accepts an external JSON/HJSON master, including a
+  multi-coin baseline. The input directory determines the composed coin set; the master supplies
+  global values and the baseline for generated overrides.
+
 - `compose-coin-overrides --include-backtest-optimize` now retains the master's GPU optimizer
   settings instead of rejecting multi-coin configs with static coin overrides. GPU-specific
   compatibility checks still run when starting the optimizer.

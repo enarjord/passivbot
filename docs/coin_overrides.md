@@ -198,7 +198,7 @@ Main config:
 ## Composing single-coin configs
 
 Use the offline composition tool to turn a directory of single-coin JSON/HJSON configs into one
-config with minimal inline patches:
+config with inline patches:
 
 ```bash
 passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
@@ -207,18 +207,71 @@ passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json
 Each input must validate as a current config, approve exactly one coin across its long/short lists,
 reject the `all` sentinel, and contain no existing `coin_overrides`, including in nested-current
 input. Files and coins are processed deterministically, with the alphabetically first filename
-supplying the master config by default. Pass `--master-config FILE` to select another input as the
-source of master/global values. The tool rejects input aliases that resolve to the same configured
+supplying the master config by default. Pass `--master-config FILE` to select another input or an
+external JSON/HJSON config as the source of master/global values. A relative path is checked in the
+input directory first, then relative to the working directory. An external master may be a
+multi-coin config; only the directory inputs contribute approved coins and generated overrides.
+The master must use the same strategy kind and HSL signal mode as the inputs and contain no
+existing `coin_overrides`, so composition does not silently discard or merge an existing override
+set. For example:
+
+```bash
+passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json \
+  --master-config path/to/master.json
+```
+
+The tool rejects input aliases that resolve to the same configured
 venue market, combines the per-side approved coin lists, removes approved market aliases from the
 master's ignored lists, and expands `n_positions` to the approved-coin count on active sides.
 Exchange-qualified identifiers contribute their explicit venue to alias resolution. Legal per-coin
-differences become overrides only when they differ from the master; differing account-wide or
+values are written according to `--override-mode`; differing account-wide or
 otherwise non-overridable values retain the master value and are listed in the command output.
 Exact market identifiers must resolve unambiguously through cached market metadata; unresolved
 exact approved or ignored identifiers, and identifiers resolving to different contracts across
 configured venues, fail validation instead of falling back to a lossy ticker guess.
 
-When HSL, auto unstuck, or a position/total-exposure enforcer is disabled in every input, parameters
+Choose how per-coin values are preserved:
+
+- `--override-mode lean` (default) writes only values that differ from the master. Omitted values
+  inherit future master edits, including for the input chosen as master.
+- `--override-mode verbose` writes every allowed per-coin value from each normalized input,
+  including values equal to the master, zero/false values, and inactive-feature settings. Every
+  input gets an override, including the master when it is an input. Later changes to those master
+  fields do not change the pinned coin values.
+
+Use `--override-params` to pin only selected groups or leaves. It takes precedence over either
+`--override-mode`: selected values are retained even when equal to the master, and every unselected
+field inherits the master. Custom selection skips inactive-feature canonicalization, preserving
+both the master's global settings and the selected source values.
+
+```bash
+passivbot tool compose-coin-overrides path/to/single_coins path/to/composed.json \
+  --master-config path/to/master.json --include-backtest-optimize \
+  --override-params long.strategy,long.risk.entry_cooldown_minutes
+```
+
+This pins each coin's long strategy and entry cooldown while inheriting the master's unstuck, HSL,
+short-side, and live settings. You may omit `--override-mode`; specifying `lean` or `verbose` with
+this selection produces the same patches.
+
+Selectors use the fine-tune dotted-path matcher: an optional `bot.` prefix, groups or individual
+leaves, full-segment prefix/suffix matching, and `*` as a one-segment wildcard. For example,
+`bot.long.strategy`, `long.strategy.entry.initial_qty_pct` (Trailing Martingale),
+`*.risk.entry_cooldown_minutes`, and `live.leverage` are valid selections. A bare leaf such as
+`entry_cooldown_minutes` selects both sides. Overlapping selectors are deduplicated. Group selectors
+include only fields allowed by the coin-override policy; `long.risk` does not override global
+exposure or position-count settings. Empty selectors and selectors matching no allowed input
+fields are errors, including typos, inactive-strategy paths, and HSL selectors outside coin mode.
+
+For example, append `--override-mode verbose` to preserve the per-coin parameters when editing the
+master afterward. This does not make each coin a standalone configuration: global values such as
+`total_wallet_exposure_limit`, `n_positions`, Forager settings, and the HSL signal mode remain
+shared. Runtime-derived wallet exposure is not automatically frozen. HSL fields can be pinned
+only in `coin` signal mode. Verbose mode also pins the disabled side, so its values survive a later
+global enablement change.
+
+In lean mode without custom selectors, when HSL, auto unstuck, or a position/total-exposure enforcer
+is disabled in the master and every single-coin input, parameters
 used only by that disabled feature are normalized before diffing. Optimized numeric fields use the
 lower bound from the master input and fixed fields use schema defaults, so inactive optimized values
 do not create noise in `coin_overrides`. The total-exposure threshold is shared by the TWEL entry
@@ -226,12 +279,22 @@ gate and enforcer, so it is normalized only when both are disabled.
 
 By default the output omits `backtest` and `optimize`, producing a lean live config. Add
 `--include-backtest-optimize` to copy both sections from the master input, which makes the result
-directly usable for backtesting or fine-tuning inherited master parameters while the coin overrides
-remain fixed. This also preserves `optimize.backend: gpu`: the GPU optimizer supports multi-coin
+usable for backtesting or fine-tuning inherited master parameters while explicit coin overrides
+remain fixed. In verbose and custom selection modes, pinned strategy fields also override optimizer
+candidate values; only inherited fields can change through master-parameter optimization.
+This also preserves `optimize.backend: gpu`: the GPU optimizer supports multi-coin
 EMA Anchor and Trailing Martingale configs with static coin overrides. GPU-specific scope checks
 remain the optimizer's responsibility; see [GPU support and limitations](optimizing.md).
-Existing output files are protected unless
-`--overwrite` is supplied.
+Verbose output may exceed that scope: the GPU backend currently rejects bot overrides on a
+disabled side and EMA Anchor position-exposure enforcer overrides, even when those values are
+inert. Composition preserves the requested values; it does not silently remove them to satisfy
+the GPU allowlist.
+
+Existing output files are protected unless `--overwrite` is supplied. The selected master and
+recognized single-coin inputs cannot be used as the output path. Output is published atomically,
+so a failed write does not truncate an
+existing config. Keep output outside the input directory where practical: the specified output is
+excluded from discovery, but other JSON/HJSON files in that directory are treated as inputs.
 
 ## Common pitfalls
 
