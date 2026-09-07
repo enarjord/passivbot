@@ -1494,6 +1494,23 @@ RESERVED_CLI_ARGS = {
     },
 }
 
+# Keep these convenience aliases stable across config grouping changes.
+for _pside in ("long", "short"):
+    for _param, _acronym, _help in (
+        ("total_wallet_exposure_limit", "twel", "Total wallet exposure limit"),
+        ("n_positions", "np", "Target number of concurrent position slots"),
+    ):
+        _key = f"bot.{_pside}.risk.{_param}"
+        RESERVED_CLI_ARGS[_key] = {
+            "visible": [f"--{_key}", f"-{_pside[0]}{_acronym}"],
+            "hidden": [f"--{_key.replace('.', '_')}", f"-{_pside[0]}r{_acronym}"],
+            "type": float,
+            "metavar": "FLOAT",
+            "commands": {"live", "backtest"},
+            "group": {"live": "Behavior", "backtest": "Backtest Runtime"},
+            "help": f"{_help} for the {_pside} side.",
+        }
+
 RESERVED_CLI_ARGS.update(OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS)
 
 
@@ -2278,6 +2295,24 @@ def update_config_with_args(
         if change:
             changed_keys.append(key)
             diffs.append(change)
+        # Supported flat risk leaves win during normalization, so synchronize an
+        # existing alias when the CLI explicitly overrides its grouped value.
+        path = key.split(".")
+        if (
+            len(path) == 4
+            and path[0] == "bot"
+            and path[1] in {"long", "short"}
+            and path[2] == "risk"
+            and path[3] in {"total_wallet_exposure_limit", "n_positions"}
+            and path[3] in config["bot"][path[1]]
+        ):
+            flat_key = f"bot.{path[1]}.{path[3]}"
+            flat_change = recursive_config_update(
+                config, flat_key, value, verbose=verbose
+            )
+            if flat_change:
+                changed_keys.append(flat_key)
+                diffs.append(flat_change)
     if changed_keys:
         details = {"keys": changed_keys}
         if diffs:

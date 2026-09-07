@@ -1848,6 +1848,141 @@ def test_backtest_help_all_describes_high_value_overrides():
     assert "Override backtest.dynamic_wel_by_tradability." not in help_text
 
 
+@pytest.mark.parametrize("command", ["live", "backtest"])
+@pytest.mark.parametrize("help_all", [False, True])
+@pytest.mark.parametrize(
+    "alias_style", ["legacy", "dotted", "underscored", "generated"]
+)
+def test_risk_cli_aliases_apply_to_grouped_config(command, help_all, alias_style):
+    config = project_template_config_for_cli(get_template_config(), command)
+    if command == "live":
+        config.pop("backtest")
+        config.pop("optimize")
+    parser = argparse.ArgumentParser(prog=command)
+    allowed_keys = add_config_arguments(
+        parser, config, command=command, help_all=help_all
+    )
+    argv = []
+    expected = {"long": (1.5, 6.0), "short": (0.75, 3.0)}
+    for pside, values in expected.items():
+        for (param, acronym), value in zip(
+            [("total_wallet_exposure_limit", "twel"), ("n_positions", "np")], values
+        ):
+            key = f"bot.{pside}.risk.{param}"
+            flag = {
+                "legacy": f"-{pside[0]}{acronym}",
+                "dotted": f"--{key}",
+                "underscored": f"--{key.replace('.', '_')}",
+                "generated": f"-{pside[0]}r{acronym}",
+            }[alias_style]
+            argv.extend([flag, str(value)])
+
+    target = deepcopy(config)
+    update_config_with_args(target, parser.parse_args(argv), allowed_keys=allowed_keys)
+
+    for pside, (twel, n_positions) in expected.items():
+        assert target["bot"][pside]["risk"]["total_wallet_exposure_limit"] == twel
+        assert target["bot"][pside]["risk"]["n_positions"] == n_positions
+        assert "total_wallet_exposure_limit" not in target["bot"][pside]
+        assert "n_positions" not in target["bot"][pside]
+    unchanged = deepcopy(target)
+    update_config_with_args(target, parser.parse_args([]), allowed_keys=allowed_keys)
+    assert target == unchanged
+
+
+@pytest.mark.parametrize("command", ["live", "backtest"])
+@pytest.mark.parametrize("source_shape", ["flat", "mixed"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("use_dotted", [False, True])
+@pytest.mark.parametrize("disable", [False, True])
+def test_risk_cli_overrides_survive_flat_alias_normalization(
+    command, source_shape, wrapped, use_dotted, disable
+):
+    source = get_template_config()
+    params = [("total_wallet_exposure_limit", "twel"), ("n_positions", "np")]
+    for pside in ("long", "short"):
+        for param, _ in params:
+            source["bot"][pside][param] = 9.0
+            if source_shape == "flat":
+                source["bot"][pside]["risk"].pop(param)
+    if wrapped:
+        source = {"config": source}
+    parser = argparse.ArgumentParser()
+    template = project_template_config_for_cli(get_template_config(), command)
+    allowed_keys = add_config_arguments(parser, template, command=command)
+    argv = []
+    expected = {
+        "long": (0.0, 0.0) if disable else (1.5, 6.0),
+        "short": (0.0, 0.0) if disable else (0.75, 3.0),
+    }
+    for pside, values in expected.items():
+        for (param, acronym), value in zip(params, values):
+            flag = (
+                f"--bot.{pside}.risk.{param}" if use_dotted else f"-{pside[0]}{acronym}"
+            )
+            argv.extend([flag, str(value)])
+    update_config_with_args(source, parser.parse_args(argv), allowed_keys=allowed_keys)
+    prepared = prepare_config(source, target=command, verbose=False)
+    for pside, values in expected.items():
+        for (param, _), value in zip(params, values):
+            assert prepared["bot"][pside]["risk"][param] == value
+            assert param not in prepared["bot"][pside]
+
+
+def test_risk_cli_override_updates_flat_conflict_even_when_grouped_value_is_unchanged():
+    source = get_template_config()
+    for pside in ("long", "short"):
+        source["bot"][pside]["total_wallet_exposure_limit"] = 9.0
+        source["bot"][pside]["n_positions"] = 8.0
+    source["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    parser = argparse.ArgumentParser()
+    allowed_keys = add_config_arguments(parser, get_template_config(), command="live")
+    original = deepcopy(source)
+    update_config_with_args(source, parser.parse_args([]), allowed_keys=allowed_keys)
+    assert source == original
+
+    update_config_with_args(
+        source, parser.parse_args(["-ltwel", "0"]), allowed_keys=allowed_keys
+    )
+    assert source["bot"]["short"] == original["bot"]["short"]
+    assert source["bot"]["long"]["n_positions"] == 8.0
+    assert source["_transform_log"][-1]["details"]["diffs"] == [
+        {"path": "bot.long.total_wallet_exposure_limit", "old": 9.0, "new": 0.0}
+    ]
+    prepared = prepare_config(source, target="live", verbose=False)
+    assert prepared["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 0.0
+
+
+@pytest.mark.parametrize("command", ["live", "backtest"])
+def test_risk_cli_aliases_visible_in_default_help(command):
+    config = project_template_config_for_cli(get_template_config(), command)
+    help_text = _format_parser_help_with_config(command, config, help_all=False)
+    for pside in ("long", "short"):
+        for param, acronym in [
+            ("total_wallet_exposure_limit", "twel"),
+            ("n_positions", "np"),
+        ]:
+            _assert_help_option_aliases(
+                help_text,
+                f"--bot.{pside}.risk.{param}",
+                f"-{pside[0]}{acronym}",
+                "FLOAT",
+            )
+
+
+@pytest.mark.parametrize("legacy_last", [False, True])
+def test_risk_cli_aliases_last_value_wins(legacy_last):
+    parser = argparse.ArgumentParser()
+    add_config_arguments(parser, get_template_config(), command="live")
+    argv = ["-ltwel", "1.5", "--bot.long.risk.total_wallet_exposure_limit", "2.0"]
+    if legacy_last:
+        argv = argv[2:] + argv[:2]
+    args = parser.parse_args(argv)
+    assert getattr(args, "bot.long.risk.total_wallet_exposure_limit") == (
+        1.5 if legacy_last else 2.0
+    )
+
+
 def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
     config = get_template_config()
     del config["optimize"]
