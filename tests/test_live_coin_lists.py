@@ -187,13 +187,18 @@ def test_retained_order_and_position_do_not_expand_forager_eligibility():
         assert overrides[pside][held_symbol] == "graceful_stop"
 
 
-def test_add_to_coins_lists_skips_symbols_not_in_eligible_markets(caplog):
+@pytest.mark.parametrize("eligible_available", [True, False])
+def test_add_to_coins_lists_skips_symbols_not_in_eligible_markets(
+    caplog, eligible_available
+):
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
     eligible_symbol = "AAA/USDT:USDT"
     skipped_symbols = {f"ZZ{index:02d}/USDT:USDT" for index in range(14)}
     bot.markets_dict = {eligible_symbol: {"swap": True}}
-    bot.eligible_symbols = {eligible_symbol}
+    bot.eligible_symbols = {eligible_symbol} if eligible_available else set()
+    if not eligible_available:
+        skipped_symbols.add(eligible_symbol)
     bot.approved_coins = {"long": set(), "short": set()}
     bot.ignored_coins = {"long": set(), "short": set()}
     structured = ListEventSink()
@@ -222,7 +227,9 @@ def test_add_to_coins_lists_skips_symbols_not_in_eligible_markets(caplog):
             log_psides={"long"},
         )
 
-    assert bot.approved_coins["long"] == {eligible_symbol}
+    assert bot.approved_coins["long"] == (
+        {eligible_symbol} if eligible_available else set()
+    )
     assert bot.approved_coins["short"] == set()
     warnings = [
         rec.message for rec in caplog.records if "skipping unsupported markets" in rec.message.lower()
@@ -241,14 +248,14 @@ def test_add_to_coins_lists_skips_symbols_not_in_eligible_markets(caplog):
     assert event.pside == "long"
     assert event.data == {
         "list_kind": "approved_coins",
-        "skipped_count": 14,
+        "skipped_count": len(skipped_symbols),
         "skipped_symbols": sorted(skipped_symbols)[:12],
         "skipped_symbols_truncated": True,
-        "reason_counts": {ReasonCodes.CONFIG_MARKET_UNSUPPORTED: 14},
+        "reason_counts": {ReasonCodes.CONFIG_MARKET_UNSUPPORTED: len(skipped_symbols)},
         "reason_samples": [
             {
                 "reason_code": ReasonCodes.CONFIG_MARKET_UNSUPPORTED,
-                "count": 14,
+                "count": len(skipped_symbols),
                 "symbols": sorted(skipped_symbols)[:12],
                 "symbols_truncated": True,
             }

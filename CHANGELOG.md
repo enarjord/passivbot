@@ -4,9 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Added `position_held_time_weighted_mean_hours` to backtest analysis and CPU/GPU optimizer
-  scoring: a duration-weighted mean of per-coin/side holding episodes, including still-open
-  positions. Minimize it to penalize long holds using the full duration distribution.
+- Live startup skips unavailable coin overrides with a bounded notice and retries resolution on
+  market refresh. Inactive-market overrides and protection of existing positions remain intact;
+  an empty eligible market set no longer admits unsupported approved coins.
+- Unexpected failures that abort a bot run show bounded traceback frames, the failing phase,
+  and stop/restart action at normal console logging levels, including failures before bot
+  construction. Known missing market keys are shown
+  without exposing raw exception payloads or locals. Repeated startup failures share traceback
+  suppression across restarts, with periodic counts and a recovery notice after successful startup.
 
 - Retain Bitget Classic and UTA fills without client order IDs when fetching mixed
   bot and external execution history. Previously, omitted external closes could
@@ -42,6 +47,10 @@ All notable user-facing changes will be documented in this file.
 - `compose-coin-overrides --master-config` accepts an external JSON/HJSON master, including a
   multi-coin baseline. The input directory determines the composed coin set; the master supplies
   global values and the baseline for generated overrides.
+
+- Added `position_held_time_weighted_mean_hours` to backtest analysis and CPU/GPU optimizer
+  scoring: a duration-weighted mean of per-coin/side holding episodes, including still-open
+  positions. Minimize it to penalize long holds using the full duration distribution.
 
 - Added rolling-harmonic ADG, time-integrated ADG, and positive-gain-participation strategy-equity
   metrics to exact backtest analysis and CPU/GPU optimizer scoring.

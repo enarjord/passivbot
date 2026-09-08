@@ -496,6 +496,7 @@ class HyperliquidBot(CCXTBot):
         return bool(getattr(self, "_hl_unified_enabled", False))
 
     def _assert_supported_live_state(self) -> None:
+        super()._assert_supported_live_state()
         if self.HIP3_ISOLATED_SUPPORTED or self._hl_supports_hip3_live_trading():
             return
         unsupported = []
