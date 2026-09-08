@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Retain Bitget Classic and UTA fills without client order IDs when fetching mixed
+  bot and external execution history. Previously, omitted external closes could
+  corrupt reconstructed positions/PnL and leave trailing confirmation pending.
+  Existing incomplete caches require a history refresh covering the omitted fills.
+
 - Restored `-ltwel`/`-stwel` and `-lnp`/`-snp` CLI shortcuts for long/short total wallet
   exposure limits and position counts in live and backtest commands. They now target the grouped
   `bot.<side>.risk` fields, take precedence over supported flat config aliases, and appear in

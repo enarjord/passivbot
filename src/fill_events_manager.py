@@ -2613,11 +2613,9 @@ class BitgetFetcher(BaseFetcher):
                 events[event_id] = event
             detail_fetches += await self._flush_detail_tasks(pending_tasks)
             if on_batch:
-                batch_events = [
-                    dict(events[event_id])
-                    for event_id in batch_ids
-                    if events[event_id].get("client_order_id")
-                ]
+                # Client IDs describe attribution, not whether an exchange fill
+                # belongs in position/PnL history. Keep external executions too.
+                batch_events = [dict(events[event_id]) for event_id in batch_ids]
                 if batch_events:
                     on_batch(batch_events)
             oldest = min(int(raw["cTime"]) for raw in fill_list)
@@ -2814,9 +2812,8 @@ class BitgetFetcher(BaseFetcher):
                     detail_cache[event_id] = (event["client_order_id"], event.get("pb_order_type", ""))
                 events[event_id] = event
             if on_batch:
-                batch_events = [
-                    dict(events[i]) for i in batch_ids if events[i].get("client_order_id")
-                ]
+                # Match the complete returned history even without a clientOid.
+                batch_events = [dict(events[i]) for i in batch_ids]
                 if batch_events:
                     on_batch(batch_events)
             oldest = min(int(event["timestamp"]) for event in events.values() if event["id"] in batch_ids)
