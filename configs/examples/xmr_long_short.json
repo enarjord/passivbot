@@ -822,7 +822,8 @@
                 "crossover_prob_var": 0.64,
                 "eliminate_duplicates": true,
                 "mutation_eta": 20.0,
-                "mutation_prob_var": 0.05
+                "mutation_prob": 0.05,
+                "mutation_prob_per_variable": "auto"
             }
         },
         "round_to_n_significant_digits": 3,

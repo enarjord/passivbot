@@ -15,17 +15,17 @@ constant int DAILY_COLS = 12;
 constant int DAILY_COLS = 9;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 68;
-constant int FUSED_SCALAR_COLS = 73;
+constant int SCALAR_COLS = 69;
+constant int FUSED_SCALAR_COLS = 74;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 66;
-constant int FUSED_SCALAR_COLS = 71;
+constant int SCALAR_COLS = 67;
+constant int FUSED_SCALAR_COLS = 72;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 64;
-constant int FUSED_SCALAR_COLS = 69;
+constant int SCALAR_COLS = 65;
+constant int FUSED_SCALAR_COLS = 70;
 #else
-constant int SCALAR_COLS = 62;
-constant int FUSED_SCALAR_COLS = 67;
+constant int SCALAR_COLS = 63;
+constant int FUSED_SCALAR_COLS = 68;
 #endif
 constant int GAP_BINS = 128;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -4988,6 +4988,7 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
+    float gap_sum_squared_hours = 0.0f;
     float last_high_k = -1.0f;
     float recovery_max_min = 0.0f;
     float account_peak = -INFINITY;
@@ -5342,6 +5343,8 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
                     0, 127
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
+                const float gap_hours = gap * interval_ms / 3600000.0f;
+                gap_sum_squared_hours += gap_hours * gap_hours;
                 gap_max_min = fmax(gap_max_min, gap);
             }
             if (first_fill_k < 0.0f) first_fill_k = float(k);
@@ -5642,8 +5645,9 @@ inline void passivbot_trailing_martingale_multicoin_fused_impl(
         fills.pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
-    scalars[scalar_offset + FUSED_SCALAR_COLS - 1] = fills.held_sum_sq_min *
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 2] = fills.held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 1] = gap_sum_squared_hours;
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k
@@ -5795,6 +5799,7 @@ struct TrailingMartingaleMulticoinReplayState {
     float first_fill_k;
     float last_fill_k;
     float gap_max_min;
+    float gap_sum_squared_hours;
     float last_high_k;
     float recovery_max_min;
     float account_peak;
@@ -5980,6 +5985,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     float first_fill_k = -1.0f;
     float last_fill_k = -1.0f;
     float gap_max_min = 0.0f;
+    float gap_sum_squared_hours = 0.0f;
     float last_high_k = -1.0f;
     float recovery_max_min = 0.0f;
     float account_peak = -INFINITY;
@@ -6032,6 +6038,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         first_fill_k = replay_states[b].first_fill_k;
         last_fill_k = replay_states[b].last_fill_k;
         gap_max_min = replay_states[b].gap_max_min;
+        gap_sum_squared_hours = replay_states[b].gap_sum_squared_hours;
         last_high_k = replay_states[b].last_high_k;
         recovery_max_min = replay_states[b].recovery_max_min;
         account_peak = replay_states[b].account_peak;
@@ -6217,6 +6224,8 @@ inline void passivbot_trailing_martingale_multicoin_impl(
                     int(log(fmax(gap, 0.0f) + 1.0f) * log_bin_scale), 0, 127
                 );
                 gap_hist[int(b) * GAP_BINS + bin] += 1;
+                const float gap_hours = gap * interval_ms / 3600000.0f;
+                gap_sum_squared_hours += gap_hours * gap_hours;
                 gap_max_min = fmax(gap_max_min, gap);
             }
             if (first_fill_k < 0.0f) first_fill_k = float(k);
@@ -6462,6 +6471,7 @@ inline void passivbot_trailing_martingale_multicoin_impl(
         replay_states[b].first_fill_k = first_fill_k;
         replay_states[b].last_fill_k = last_fill_k;
         replay_states[b].gap_max_min = gap_max_min;
+        replay_states[b].gap_sum_squared_hours = gap_sum_squared_hours;
         replay_states[b].last_high_k = last_high_k;
         replay_states[b].recovery_max_min = recovery_max_min;
         replay_states[b].account_peak = account_peak;
@@ -6588,8 +6598,9 @@ inline void passivbot_trailing_martingale_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
-    scalars[scalar_offset + SCALAR_COLS - 1] = held_sum_sq_min *
+    scalars[scalar_offset + SCALAR_COLS - 2] = held_sum_sq_min *
         (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
+    scalars[scalar_offset + SCALAR_COLS - 1] = gap_sum_squared_hours;
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k

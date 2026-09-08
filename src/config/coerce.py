@@ -206,12 +206,13 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
     shared_defaults = template_pymoo["shared"]
     ref_dir_defaults = template_pymoo["algorithms"]["nsga3"]["ref_dirs"]
 
-    mutation_prob_var = shared.get("mutation_prob_var")
-    if mutation_prob_var is None:
+    # The released mutation_prob_var key controlled pymoo's individual gate.
+    mutation_prob = shared.get("mutation_prob", shared.get("mutation_prob_var"))
+    if mutation_prob is None:
         if legacy_mutation_indpb is not None and float(legacy_mutation_indpb) > 0.0:
-            mutation_prob_var = legacy_mutation_indpb
+            mutation_prob = legacy_mutation_indpb
         else:
-            mutation_prob_var = shared_defaults["mutation_prob_var"]
+            mutation_prob = shared_defaults["mutation_prob"]
 
     normalized_shared = {
         "crossover_eta": normalize_pymoo_positive_float(
@@ -239,9 +240,16 @@ def normalize_pymoo_config(config: dict, raw_optimize: Optional[dict] = None) ->
             ),
             "config.optimize.pymoo.shared.mutation_eta",
         ),
-        "mutation_prob_var": normalize_pymoo_probability(
-            mutation_prob_var,
-            "config.optimize.pymoo.shared.mutation_prob_var",
+        "mutation_prob": normalize_pymoo_probability(
+            mutation_prob,
+            "config.optimize.pymoo.shared.mutation_prob",
+            allow_auto=True,
+        ),
+        "mutation_prob_per_variable": normalize_pymoo_probability(
+            shared.get(
+                "mutation_prob_per_variable", shared_defaults["mutation_prob_per_variable"]
+            ),
+            "config.optimize.pymoo.shared.mutation_prob_per_variable",
             allow_auto=True,
         ),
         "eliminate_duplicates": bool(

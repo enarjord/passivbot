@@ -1492,6 +1492,19 @@ RESERVED_CLI_ARGS = {
         "group": {"optimize": "Optimize Common"},
         "help": "Replace optimize.limits for this run with a JSON/HJSON list of limit objects.",
     },
+    "optimize.pymoo.shared.mutation_prob": {
+        "visible": ["--optimize.pymoo.shared.mutation_prob"],
+        "hidden": [
+            "--optimize_pymoo_shared_mutation_prob",
+            "--optimize.pymoo.shared.mutation_prob_var",
+            "--optimize_pymoo_shared_mutation_prob_var",
+            "-psmpv",
+        ],
+        "type": str,
+        "metavar": "VALUE",
+        "commands": {"optimize"},
+        "help": "Per-individual mutation probability, or auto for 1 / n_params.",
+    },
 }
 
 # Keep these convenience aliases stable across config grouping changes.

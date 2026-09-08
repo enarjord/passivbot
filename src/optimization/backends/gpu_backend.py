@@ -824,6 +824,7 @@ def _build_gpu_nsga2(
         ),
         mutation=PM(
             prob=float(policy["mutation"]["prob"]),
+            prob_var=float(policy["mutation"]["prob_var"]),
             eta=float(policy["mutation"]["eta"]),
         ),
         eliminate_duplicates=bool(policy["eliminate_duplicates"]),
@@ -837,6 +838,7 @@ def _gpu_nsga2_checkpoint_contract(
 
     from optimization.backends.pymoo_backend import (
         _resolve_mutation_prob,
+        _resolve_mutation_prob_per_variable,
         _resolve_pymoo_shared,
     )
 
@@ -857,6 +859,7 @@ def _gpu_nsga2_checkpoint_contract(
         "mutation": {
             "operator": "pm",
             "prob": float(_resolve_mutation_prob(shared, n_params)),
+            "prob_var": float(_resolve_mutation_prob_per_variable(shared, n_params)),
             "eta": float(shared["mutation_eta"]),
         },
         "eliminate_duplicates": bool(shared["eliminate_duplicates"]),
@@ -940,6 +943,7 @@ def _single_scenario_metric_surface(metrics: dict) -> dict:
     return flattened
 
 
+_GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY = "__gpu_suite_unpenalized_objectives__"
 _GPU_SUITE_OBJECTIVES_KEY = "__gpu_suite_objectives__"
 _GPU_SUITE_VIOLATION_KEY = "__gpu_suite_constraint_violation__"
 _GPU_SUITE_METRICS_KEY = "__gpu_suite_metrics__"
@@ -999,6 +1003,9 @@ def _evaluate_gpu_suite_proxies(suite_evaluator, scenario_proxies, candidates) -
         results.append(
             {
                 _GPU_SUITE_OBJECTIVES_KEY: tuple(scored["objectives"]),
+                _GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY: tuple(
+                    scored["unpenalized_objectives"]
+                ),
                 _GPU_SUITE_VIOLATION_KEY: float(scored["constraint_violation"]),
                 _GPU_SUITE_METRICS_KEY: scored["suite_metrics"],
             }
@@ -1018,6 +1025,14 @@ def _suite_limit_metric_value(suite_payload: dict, check: dict):
     if scenario is not None:
         return (entry.get("scenarios") or {}).get(scenario)
     return (entry.get("stats") or {}).get(check.get("reducer") or "mean")
+
+
+def _resolve_max_pending_exact(options: dict, workers: int) -> int:
+    # Keep a complete next validation batch in flight while exact workers drain
+    # the previous batch. A worker-only default can serialize GPU and CPU work.
+    return int(options["max_pending_exact"]) or 2 * max(
+        int(workers), int(options["validate_per_generation"])
+    )
 
 
 def _resolve_options(config: dict) -> dict:
@@ -1154,7 +1169,7 @@ def _resolve_options(config: dict) -> dict:
     exact_workers = int(options["exact_workers"]) or int(
         config.get("optimize", {}).get("n_cpus", 0)
     )
-    effective_pending = int(options["max_pending_exact"]) or exact_workers * 2
+    effective_pending = _resolve_max_pending_exact(options, exact_workers)
     if effective_pending < validations:
         raise ValueError(
             "optimize.gpu.max_pending_exact (or its exact-worker default) must be "
@@ -2152,6 +2167,31 @@ def _spearman(left, right) -> float:
         if denominator
         else float("nan")
     )
+
+
+def _proxy_drift_objectives(metric_rows, specs) -> np.ndarray:
+    """Use the same goal direction and suite basis without constraint penalties."""
+    from config.scoring import to_engine_value
+    from config.metrics import canonicalize_metric_name
+
+    return np.asarray(
+        [
+            metrics[_GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY]
+            if _GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY in metrics
+            else [
+                to_engine_value(spec, metrics[canonicalize_metric_name(spec.metric)])
+                for spec in specs
+            ]
+            for metrics in metric_rows
+        ],
+        dtype=np.float64,
+    )
+
+
+def _exact_drift_objectives(payload) -> np.ndarray:
+    return np.asarray(
+        payload["metrics"]["unpenalized_objectives"], dtype=np.float64
+    ).reshape(1, -1)
 
 
 class _ObjectiveScale:
@@ -3339,7 +3379,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 3,
+        "version": 4,  # Unpenalized drift scores and streamed fill-gap moments.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -4748,8 +4788,15 @@ def run_backend(
             seed_proxy_violations = np.asarray(
                 checkpoint_seed_plan["proxy_violations"], dtype=np.float64
             )
-            objective_scale.fit(seed_proxy_objectives)
-            seed_proxy_scores = objective_scale.score(seed_proxy_objectives)
+            if checkpoint_seed_plan.get("proxy_scores") is None:
+                raise ValueError(
+                    "GPU checkpoint lacks unpenalized seed drift scores; start a fresh run"
+                )
+            seed_proxy_scores = np.asarray(
+                checkpoint_seed_plan["proxy_scores"], dtype=np.float64
+            )
+            if seed_proxy_scores.shape != (len(starting_vectors),):
+                raise ValueError("GPU checkpoint seed drift-score count mismatch")
         seed_bootstrap_contract = deepcopy(checkpoint_seed_contract)
         _validate_seed_bootstrap_plan(
             starting_vectors,
@@ -5040,7 +5087,7 @@ def run_backend(
         "checkpointing": 0.0,
     }
     workers = int(options["exact_workers"]) or int(config["optimize"]["n_cpus"])
-    max_pending = int(options["max_pending_exact"]) or workers * 2
+    max_pending = _resolve_max_pending_exact(options, workers)
     if workers <= 0:
         raise ValueError("GPU exact validation requires at least one CPU worker")
     if max_pending <= 0:
@@ -5080,6 +5127,9 @@ def run_backend(
                 "selections": seed_bootstrap_selections,
                 "population_indices": seed_population_indices,
                 "proxy_metrics": seed_proxy_metrics,
+                "proxy_scores": (
+                    None if seed_proxy_scores is None else seed_proxy_scores.tolist()
+                ),
                 "proxy_objectives": (
                     None
                     if seed_proxy_objectives is None
@@ -5187,8 +5237,9 @@ def run_backend(
         seed_proxy_objectives, seed_proxy_violations = proxy_fitness(
             proxy_metric_rows
         )
-        objective_scale.fit(seed_proxy_objectives)
-        seed_proxy_scores = objective_scale.score(seed_proxy_objectives)
+        seed_drift_objectives = _proxy_drift_objectives(proxy_metric_rows, specs)
+        objective_scale.fit(seed_drift_objectives)
+        seed_proxy_scores = objective_scale.score(seed_drift_objectives)
         seed_bootstrap_selections = _select_seed_bootstrap_indices(
             seed_proxy_objectives,
             seed_proxy_scores,
@@ -5291,9 +5342,7 @@ def run_backend(
                         proxy_violation = float(seed_proxy_violations[source_index])
                         exact_score = float(
                             objective_scale.score(
-                                np.asarray(payload["F"], dtype=np.float64).reshape(
-                                    1, -1
-                                )
+                                _exact_drift_objectives(payload)
                             )[0]
                         )
                         classification_mismatch = (
@@ -5467,7 +5516,7 @@ def run_backend(
                 result_processing_started = time.perf_counter()
             PymooAsyncRecordingRunner._raise_if_worker_failure(payload, exact_done)
             exact_score = float(
-                objective_scale.score(np.asarray(payload["F"]).reshape(1, -1))[0]
+                objective_scale.score(_exact_drift_objectives(payload))[0]
             )
             classification_mismatch = _constraint_classification_mismatch(
                 proxy_violation, payload
@@ -5624,8 +5673,14 @@ def run_backend(
                     len(rows),
                 )
             if objective_scale.median is None:
-                objective_scale.fit(proxy_objectives[full_rung_indices])
-            proxy_scores = objective_scale.score(proxy_objectives)
+                objective_scale.fit(
+                    _proxy_drift_objectives(
+                        [metric_rows[i] for i in full_rung_indices], specs
+                    )
+                )
+            proxy_scores = objective_scale.score(
+                _proxy_drift_objectives(metric_rows, specs)
+            )
             population.set("F", proxy_objectives)
             population.set(
                 "G",

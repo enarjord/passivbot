@@ -793,7 +793,9 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   `validate_per_generation` so each generation requests proxy-front safety evidence. A partial
   final validation batch scales its reserved probe count down proportionally.
 - `exact_workers: 0` inherits `optimize.n_cpus`; a positive value overrides it for this backend.
-- `max_pending_exact: 0` defaults to twice the exact-worker count.
+- `max_pending_exact: 0` defaults to twice the larger of the exact-worker count and
+  `validate_per_generation`. This leaves room for the next validation batch while CPU workers
+  finish the previous one. Explicit positive queue limits keep their configured size.
   It must be at least `validate_per_generation` so throttling cannot change the configured
   proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
   screening another generation.
@@ -935,6 +937,17 @@ seed, and all other parameters constant while switching entry retracement from p
 Reports include the number of recursive-entry candidates. Homogeneous recursive-entry dispatches
 select the recursive-only Metal variant; mixed entry modes retain the generic kernel.
 
+#### GPU Calibration Compatibility
+
+GPU drift ranks use unpenalized, goal-oriented objectives with a fixed median/IQR scale from
+initial full-history proxy evaluations (or the screened seed pool). Constraint classification
+continues to be checked separately, and evolutionary fitness retains its configured penalties.
+Suite drift uses the same ordered scenario/reducer objective values as exact suite scoring.
+The fill-gap time-weighted mean streams squared coalesced gaps; percentile metrics continue to
+use conservative histogram bounds. These metric and calibration changes invalidate older GPU
+checkpoint signatures: start a fresh run, optionally supplying existing exact-result configs as
+seeds. Population size, validation quota, drift thresholds, and algorithm defaults are unchanged.
+
 ### Pymoo Configuration
 
 Pymoo-specific settings live under `optimize.pymoo`:
@@ -950,7 +963,8 @@ Pymoo-specific settings live under `optimize.pymoo`:
         "crossover_eta": 20.0,
         "crossover_prob_var": 0.5,
         "mutation_eta": 20.0,
-        "mutation_prob_var": "auto",
+        "mutation_prob": "auto",
+        "mutation_prob_per_variable": "auto",
         "eliminate_duplicates": true
       },
       "algorithms": {
@@ -1028,11 +1042,17 @@ Current meaning of the main pymoo knobs:
   - SBX distribution index.
   - Higher values keep offspring closer to the parents; lower values explore more aggressively.
   - Default `20` is a standard conservative setting and is usually a good starting point.
-- `optimize.pymoo.shared.mutation_prob_var`
-  - Per-variable polynomial-mutation probability.
-  - `"auto"` means `1 / n_params`.
-  - This is the default and is usually the right choice for Passivbot's parameter counts because
-    it scales automatically with the number of tunable parameters.
+- `optimize.pymoo.shared.mutation_prob`
+  - Per-individual polynomial-mutation probability; `"auto"` means `1 / n_params`.
+  - Preserves the historical mutation intensity. The old `mutation_prob_var` config key
+    is accepted as an alias for this control because it was wired to pymoo's individual gate.
+- `optimize.pymoo.shared.mutation_prob_per_variable`
+  - Conditional per-variable mutation probability; `"auto"` means `min(0.5, 1 / n_params)`,
+    matching pymoo's historical implicit default.
+  - The probability of selecting a coordinate for mutation is the product of the two gates. To experiment
+    with approximately one mutated coordinate per offspring, set `mutation_prob: 1.0` and
+    leave this control on `"auto"`. This is a stronger mutation regime, not the default.
+  - `n_params` is the CPU problem's vector length or the GPU problem's active vector length.
 - `optimize.pymoo.shared.mutation_eta`
   - Polynomial-mutation distribution index.
   - Higher values make smaller, more local mutations.
@@ -1049,7 +1069,7 @@ Current meaning of the main pymoo knobs:
 Recommended defaults for typical Passivbot runs:
 
 - Use `optimize.backend: pymoo` with `optimize.pymoo.algorithm: auto`.
-- Keep `mutation_prob_var: "auto"`.
+- Keep `mutation_prob: "auto"`.
 - Keep `crossover_eta: 20` and `mutation_eta: 20` unless you have a specific reason to make
   variation much more local or much more aggressive.
 - Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
@@ -1071,7 +1091,8 @@ Practical interpretation for the default shared block:
   "crossover_prob_var": 0.5,
   "eliminate_duplicates": true,
   "mutation_eta": 20,
-  "mutation_prob_var": "auto"
+  "mutation_prob": "auto",
+  "mutation_prob_per_variable": "auto"
 }
 ```
 
@@ -1081,8 +1102,10 @@ Practical interpretation for the default shared block:
   - each parameter has a 50% chance of participating in crossover
 - `mutation_eta: 20`
   - conservative mutation; most mutations are relatively local
-- `mutation_prob_var: "auto"`
-  - mutate each parameter with probability `1 / n_params`
+- `mutation_prob: "auto"`
+  - select each offspring for mutation with probability `1 / n_params`
+- `mutation_prob_per_variable: "auto"`
+  - within selected offspring, mutate each coordinate with probability `min(0.5, 1 / n_params)`
 - `eliminate_duplicates: true`
   - do not spend backtests on duplicate candidates
 

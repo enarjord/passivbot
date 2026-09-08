@@ -779,7 +779,7 @@ def _weighted_percentile(values, counts, percentile):
 
 
 def _fill_gap_metrics(out, run):
-    """Conservatively reduce coalesced fill timestamps and log-gap bins."""
+    """Reduce streamed gap moments and conservative percentile log bins."""
 
     interval_ms = max(float(run.interval_ms), 1.0)
     first_eq_ts = out["first_eq_ts"].to(torch.float64)
@@ -854,8 +854,14 @@ def _fill_gap_metrics(out, run):
     time_weighted_mean = torch.where(
         span_hours > 0.0,
         (
-            weighted_values.square() * counts.to(values.dtype)
-        ).sum(dim=1)
+            torch.where(
+                has_fill,
+                out["gap_sum_squared_hours"].to(torch.float64),
+                torch.zeros_like(span_hours),
+            )
+            + lead_hours.square()
+            + trail_hours.square()
+        )
         / span_hours.clamp(min=1.0e-12),
         torch.zeros_like(span_hours),
     )
