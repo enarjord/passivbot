@@ -362,6 +362,18 @@ async def get_first_timestamps_unified(
             # Weekly timeframe; data since 2021
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2021-01-01")), timeframe="1w")
 
+        elif exchange_name == "kucoin":
+            # KuCoin rejects epoch-sized `from` values. Start before its futures
+            # launch and override CCXT's since + limit * duration end bound so
+            # later-listed markets are included. Keep the first returned candle.
+            return await cc.fetch_ohlcv(
+                symbol,
+                since=int(date_to_ts("2018-01-01")),
+                timeframe="1d",
+                limit=1,
+                params={"to": cc.milliseconds()},
+            )
+
         else:
             # Dynamic CCXT venues must not inherit another exchange's listing
             # horizon. Ask for the first daily candle from the epoch instead.

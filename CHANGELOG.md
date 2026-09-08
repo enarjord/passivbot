@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- KuCoin market-age discovery uses a valid millisecond history range, fixing
+  `Parameter 'from' must be milliseconds` errors and restoring eligibility for
+  new forager entries when the configured minimum market age is met.
+
 - Live startup skips unavailable coin overrides with a bounded notice and retries resolution on
   market refresh. Inactive-market overrides and protection of existing positions remain intact;
   an empty eligible market set no longer admits unsupported approved coins.

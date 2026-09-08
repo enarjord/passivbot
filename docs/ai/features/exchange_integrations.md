@@ -175,6 +175,17 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+### First-candle market-age discovery
+
+KuCoin rejects `from=1`. Request daily candles from a valid millisecond timestamp
+before futures launch (`2018-01-01`), with `to` explicitly set to the current time.
+Pinned CCXT otherwise derives `to=since + limit * duration`; with `limit=1`, that
+queries only one pre-listing day and returns no data. Retain the first returned
+candle as the age basis. Empty or failed responses remain unknown and do not
+bypass the configured minimum market age; zero cache entries are retried.
+
+Primary reference: [KuCoin futures klines](https://www.kucoin.com/docs-new/rest/futures-trading/market-data/get-klines).
+
 ### IPv4 API-key whitelist transport
 
 Problem: A dual-stack host may select IPv6 for KuCoin REST and private
