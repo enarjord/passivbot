@@ -162,6 +162,7 @@ def test_backtest_with_candle_interval():
         "fills_per_day",
         "fills_gap_longest_days",
         "fills_gap_time_weighted_mean_hours",
+        "position_held_time_weighted_mean_hours",
         "fills_per_day_per_position_slot",
     ]:
         assert key in analysis

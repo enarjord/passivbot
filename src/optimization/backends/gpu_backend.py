@@ -1627,6 +1627,7 @@ def _validate_dual_multicoin_metrics(
             "peak_recovery_hours_pnl",
             "position_held_days_mean",
             "position_held_days_max",
+            "position_held_time_weighted_mean_hours",
             "position_held_hours_mean",
             "position_held_hours_max",
             "position_unchanged_days_max",

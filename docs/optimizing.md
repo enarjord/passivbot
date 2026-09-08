@@ -277,7 +277,8 @@ The supported slice is intentionally narrow:
   unchanged. Legacy-raw mode applies the raw multiplier. The optional side-wide entry gate caps
   aggregate entries at TWEL times its positive threshold (never above raw TWEL). Disabling the gate
   permits aggregate entries beyond TWEL while each symbol remains subject to its allowed WEL
-- `position_held_hours_mean`, `position_held_days_mean`, `positions_held_per_day`,
+- `position_held_time_weighted_mean_hours`, `position_held_hours_mean`,
+  `position_held_days_mean`, `positions_held_per_day`,
   `position_unchanged_hours_max`, and `position_unchanged_days_max` may be used for scoring and
   limits in single-coin and multi-coin runs. Metal counts each completed position and open tail,
   sums its holding duration, and tracks the latest fill independently for each coin and position
@@ -1619,6 +1620,7 @@ over all exchanges before scoring.
 |--------|-------------|
 | `positions_held_per_day` | Average number of unique positions opened per day |
 | `position_held_hours_{mean,median,max}`, `position_held_days_{mean,median,max}` | Holding-time statistics in hours and equivalent days |
+| `position_held_time_weighted_mean_hours` | Minimize `sum(held_hours^2) / sum(held_hours)` across coin/side holding episodes, including open tails. Adds and partial closes do not reset an episode. Returns zero when no positive holding time exists; supported by CPU and GPU scoring. |
 | `position_unchanged_hours_max`, `position_unchanged_days_max` | Longest span without modifying an existing position, in hours and equivalent days |
 | `fills_gap_time_weighted_mean_hours` | Time-weighted mean portfolio no-fill gap: `sum(gap_hours^2) / sum(gap_hours)` over unique fill timestamps and the analysis boundaries. Lower values reward distributing fills through long droughts instead of clustering activity. |
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |

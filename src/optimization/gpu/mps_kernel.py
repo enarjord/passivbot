@@ -33,18 +33,18 @@ from optimization.gpu.model import (
 MPS_DAILY_COLS = 8
 MPS_MULTICOIN_DAILY_COLS = 9
 MPS_SCALAR_COLS = 32
-MPS_MULTICOIN_BASE_SCALAR_COLS = 61
-MPS_MULTICOIN_EMA_TAIL_SCALAR_COLS = 63
-MPS_MULTICOIN_RAW_DRAWDOWN_SCALAR_COLS = 65
-MPS_MULTICOIN_SCALAR_COLS = 67
-MPS_DIRECTIONAL_BASE_SCALAR_COLS = 66
-MPS_DIRECTIONAL_EMA_TAIL_SCALAR_COLS = 68
-MPS_DIRECTIONAL_RAW_DRAWDOWN_SCALAR_COLS = 70
-MPS_DIRECTIONAL_SCALAR_COLS = 72
-MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 66
-MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 68
-MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 70
-MPS_MULTICOIN_FUSED_SCALAR_COLS = 72
+MPS_MULTICOIN_BASE_SCALAR_COLS = 62
+MPS_MULTICOIN_EMA_TAIL_SCALAR_COLS = 64
+MPS_MULTICOIN_RAW_DRAWDOWN_SCALAR_COLS = 66
+MPS_MULTICOIN_SCALAR_COLS = 68
+MPS_DIRECTIONAL_BASE_SCALAR_COLS = 67
+MPS_DIRECTIONAL_EMA_TAIL_SCALAR_COLS = 69
+MPS_DIRECTIONAL_RAW_DRAWDOWN_SCALAR_COLS = 71
+MPS_DIRECTIONAL_SCALAR_COLS = 73
+MPS_MULTICOIN_FUSED_BASE_SCALAR_COLS = 67
+MPS_MULTICOIN_FUSED_EMA_TAIL_SCALAR_COLS = 69
+MPS_MULTICOIN_FUSED_RAW_DRAWDOWN_SCALAR_COLS = 71
+MPS_MULTICOIN_FUSED_SCALAR_COLS = 73
 # A 30-day coin-HSL lookback can legitimately contain slightly more than
 # 2,048 completed round trips for high-cadence single-coin candidates. Metal
 # coalesces every realized-PnL component from one candle into one ring event,
@@ -558,7 +558,8 @@ def _scale_tm_multicoin_coin_overrides(
 
 
 def _scalar_column_or_zero(scalars, index: int):
-    if scalars.shape[1] > index:
+    # The final scalar is the holding-duration squared sum in every ABI variant.
+    if scalars.shape[1] - 1 > index:
         return scalars[:, index]
     return torch.zeros_like(scalars[:, 0])
 
@@ -1121,6 +1122,7 @@ def _decode_outputs(daily, scalars, gaps) -> dict:
         "fills_active_days_count": scalars[:, 27],
         "pnl_recovery_max_ms": scalars[:, 28],
         "held_sum_ms": scalars[:, 29],
+        "held_sum_squared_hours": scalars[:, -1],
         "held_count": scalars[:, 30],
         "account_recovery_max_ms": scalars[:, 31],
         "hsl_long_enabled": scalars[:, 32] > 0.0,
@@ -1281,6 +1283,7 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
         "fills_active_days_count": scalars[:, 53],
         "pnl_recovery_max_ms": scalars[:, 54],
         "held_sum_ms": scalars[:, 55],
+        "held_sum_squared_hours": scalars[:, -1],
         "held_count": scalars[:, 56],
         "account_recovery_max_ms": scalars[:, 57],
         "profit_sum_long": scalars[:, 58],

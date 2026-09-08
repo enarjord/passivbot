@@ -2403,6 +2403,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
             ),
             "max_dd": torch.tensor([0.20]),
             "held_max_ms": torch.tensor([100.0]),
+            "held_sum_squared_hours": torch.tensor([9.0]),
             "held_sum_ms": torch.tensor([300.0]),
             "held_count": torch.tensor([2.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -2445,6 +2446,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     short["max_dd"] = torch.tensor([0.30])
     short["held_max_ms"] = torch.tensor([200.0])
     short["held_sum_ms"] = torch.tensor([500.0])
+    short["held_sum_squared_hours"] = torch.tensor([25.0])
     short["held_count"] = torch.tensor([3.0])
     short["position_unchanged_max_ms"] = torch.tensor([250.0])
     short["gap_max_ms"] = torch.tensor([250.0])
@@ -2480,6 +2482,7 @@ def test_combine_hedged_multicoin_outputs_uses_conservative_surface():
     assert combined["fill_count_long"].item() == 2.0
     assert combined["fills_active_days_count"].item() == 1.0
     assert combined["held_sum_ms"].item() == 800.0
+    assert combined["held_sum_squared_hours"].item() == 34.0
     assert combined["held_count"].item() == 5.0
     assert combined["position_unchanged_max_ms"].item() == 250.0
     assert combined["pnl_recovery_max_ms"].item() == 450.0
@@ -2522,6 +2525,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_equity_liquidation():
             "day_fill_count": torch.ones((1, 3)),
             "max_dd": torch.tensor([0.48]),
             "held_max_ms": torch.tensor([100.0]),
+            "held_sum_squared_hours": torch.zeros(1),
             "held_sum_ms": torch.tensor([100.0]),
             "held_count": torch.tensor([1.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),
@@ -2571,6 +2575,7 @@ def test_combine_hedged_multicoin_outputs_detects_shared_balance_depletion():
             "day_fill_count": torch.ones((1, 3)),
             "max_dd": torch.tensor([0.40]),
             "held_max_ms": torch.tensor([100.0]),
+            "held_sum_squared_hours": torch.zeros(1),
             "held_sum_ms": torch.tensor([100.0]),
             "held_count": torch.tensor([1.0]),
             "position_unchanged_max_ms": torch.tensor([150.0]),

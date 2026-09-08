@@ -57,6 +57,7 @@ SHARED_METRICS = {
     "backtest_completion_ratio",
     "positions_held_per_day",
     "positions_held_per_day_w",
+    "position_held_time_weighted_mean_hours",
     "position_held_hours_mean",
     "position_held_hours_max",
     "position_held_hours_median",

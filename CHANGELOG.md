@@ -48,6 +48,10 @@ All notable user-facing changes will be documented in this file.
   multi-coin baseline. The input directory determines the composed coin set; the master supplies
   global values and the baseline for generated overrides.
 
+- Added `position_held_time_weighted_mean_hours` to backtest analysis and CPU/GPU optimizer
+  scoring: a duration-weighted mean of per-coin/side holding episodes, including still-open
+  positions. Minimize it to penalize long holds using the full duration distribution.
+
 - Added rolling-harmonic ADG, time-integrated ADG, and positive-gain-participation strategy-equity
   metrics to exact backtest analysis and CPU/GPU optimizer scoring.
 

@@ -13,17 +13,17 @@ constant int DAILY_COLS = 12;
 constant int DAILY_COLS = 9;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 67;
-constant int FUSED_SCALAR_COLS = 72;
+constant int SCALAR_COLS = 68;
+constant int FUSED_SCALAR_COLS = 73;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 65;
-constant int FUSED_SCALAR_COLS = 70;
+constant int SCALAR_COLS = 66;
+constant int FUSED_SCALAR_COLS = 71;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 63;
-constant int FUSED_SCALAR_COLS = 68;
+constant int SCALAR_COLS = 64;
+constant int FUSED_SCALAR_COLS = 69;
 #else
-constant int SCALAR_COLS = 61;
-constant int FUSED_SCALAR_COLS = 66;
+constant int SCALAR_COLS = 62;
+constant int FUSED_SCALAR_COLS = 67;
 #endif
 constant int GAP_BINS = 128;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
@@ -195,6 +195,7 @@ struct EmaMulticoinFillState {
     float fill_count_long;
     float held_max_min;
     float held_sum_min;
+    float held_sum_sq_min;
     float held_count;
     float position_unchanged_max_min;
     float day_volume;
@@ -217,6 +218,7 @@ inline EmaMulticoinFillState init_ema_multicoin_fill_state() {
     fills.fill_count_long = 0.0f;
     fills.held_max_min = 0.0f;
     fills.held_sum_min = 0.0f;
+    fills.held_sum_sq_min = 0.0f;
     fills.held_count = 0.0f;
     fills.position_unchanged_max_min = 0.0f;
     fills.day_volume = 0.0f;
@@ -2624,6 +2626,7 @@ inline bool process_ema_multicoin_side_fills(
                         fills.held_max_min, held_min
                     );
                     fills.held_sum_min += held_min;
+                    fills.held_sum_sq_min += held_min * held_min;
                     fills.held_count += 1.0f;
                 }
                 position_open_k[c] = -1.0f;
@@ -2790,6 +2793,7 @@ inline bool force_close_ema_multicoin_delisted_position(
         const float held_min = float(k) - side.position_open_k[coin];
         fills.held_max_min = fmax(fills.held_max_min, held_min);
         fills.held_sum_min += held_min;
+        fills.held_sum_sq_min += held_min * held_min;
         fills.held_count += 1.0f;
     }
     side.position_open_k[coin] = -1.0f;
@@ -2996,6 +3000,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float total_wallet_exposure_samples = 0.0f;
     thread float& held_max_min = fills.held_max_min;
     thread float& held_sum_min = fills.held_sum_min;
+    thread float& held_sum_sq_min = fills.held_sum_sq_min;
     thread float& held_count = fills.held_count;
     thread float& position_unchanged_max_min = fills.position_unchanged_max_min;
     float first_fill_k = -1.0f;
@@ -3437,6 +3442,7 @@ inline void passivbot_ema_anchor_multicoin_impl(
             float held_min = last_eq_k - position_open_k[c];
             held_max_min = fmax(held_max_min, held_min);
             held_sum_min += held_min;
+            held_sum_sq_min += held_min * held_min;
             held_count += 1.0f;
         }
         if (position_last_fill_k[c] >= 0.0f && last_eq_k >= 0.0f) {
@@ -3501,6 +3507,8 @@ inline void passivbot_ema_anchor_multicoin_impl(
     scalars[scalar_offset + 28] = pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = held_count;
+    scalars[scalar_offset + SCALAR_COLS - 1] = held_sum_sq_min *
+        (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k
@@ -4409,6 +4417,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                     - long_side.position_open_k[c];
                 fills.held_max_min = fmax(fills.held_max_min, held_min);
                 fills.held_sum_min += held_min;
+                fills.held_sum_sq_min += held_min * held_min;
                 fills.held_count += 1.0f;
             }
             if (long_side.position_last_fill_k[c] >= 0.0f
@@ -4430,6 +4439,7 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                     - short_side.position_open_k[c];
                 fills.held_max_min = fmax(fills.held_max_min, held_min);
                 fills.held_sum_min += held_min;
+                fills.held_sum_sq_min += held_min * held_min;
                 fills.held_count += 1.0f;
             }
             if (short_side.position_last_fill_k[c] >= 0.0f
@@ -4496,6 +4506,8 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
         fills.pnl_recovery_max_min * interval_ms;
     scalars[scalar_offset + 29] = fills.held_sum_min * interval_ms;
     scalars[scalar_offset + 30] = fills.held_count;
+    scalars[scalar_offset + FUSED_SCALAR_COLS - 1] = fills.held_sum_sq_min *
+        (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k

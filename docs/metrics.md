@@ -125,6 +125,14 @@ statistics remain zero for a slice without fills. Short runs average the availab
 - `volume_pct_per_day_avg`: Average daily traded notional as a percentage of balance at fill time.
 - `positions_held_per_day`: Average number of positions opened per day.
 - `position_held_hours_mean/median/max`: Holding-time stats for closed (or still-open) positions.
+- `position_held_time_weighted_mean_hours`: Duration-weighted mean holding time, computed as
+  `sum(held_hours^2) / sum(held_hours)` over the same per-coin, per-position-side episodes.
+  An episode starts on opening and ends on a full close; adds and partial closes do not reset it.
+  Still-open episodes run to the analysis end. Concurrent positions contribute independently,
+  without position-size or exposure weighting. No positive holding time returns `0`.
+  Minimize this metric for a distribution-sensitive penalty on long holds; retain the maximum
+  as a diagnostic or limit. As with the fill-gap metric, it is a duration-weighted average,
+  so shortening an episode already much shorter than the average need not lower the score.
 - `position_held_days_mean/median/max`: Same holding-time stats converted to days.
 - `position_unchanged_hours_max`: Longest span with no fills on an open position.
 - `position_unchanged_days_max`: Same unchanged-position span converted to days.

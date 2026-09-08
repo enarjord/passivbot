@@ -29,6 +29,7 @@ def _make_analysis_entry(value):
         "mdg_w",
         "gain",
         "positions_held_per_day",
+        "position_held_time_weighted_mean_hours",
         "position_held_hours_mean",
         "position_held_hours_max",
         "position_held_hours_median",
@@ -1256,3 +1257,16 @@ def test_post_process_persists_artifacts_with_infinite_diagnostic(tmp_path, monk
     assert (result_dir / "fills.csv").exists()
     assert (result_dir / "balance_and_equity.csv.gz").exists()
     assert plot_calls == ["balance", "save"]
+
+
+def test_expand_analysis_keeps_position_held_time_weighted_metric_shared():
+    result = expand_analysis(
+        _make_analysis_entry(2.5),
+        _make_analysis_entry(9.0),
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config={"bot": {side: {"total_wallet_exposure_limit": 1.0} for side in ("long", "short")}},
+    )
+    assert result["position_held_time_weighted_mean_hours"] == 2.5
+    assert "position_held_time_weighted_mean_hours_usd" not in result
+    assert "position_held_time_weighted_mean_hours_btc" not in result
