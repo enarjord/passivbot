@@ -565,3 +565,41 @@ async def test_init_markets_waits_for_initial_balance_consistency(monkeypatch):
         (5.0, "initial_balance_consistency_check"),
     ]
     assert bot.min_cost_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_init_markets_with_unavailable_overrides_completes_mode_lookup(monkeypatch):
+    import passivbot as pb_mod
+
+    class Bot(_FakeBot, pb_mod.Passivbot):
+        init_coin_overrides = pb_mod.Passivbot.init_coin_overrides
+
+        async def update_effective_min_cost(self):
+            # Exercise the real symbol/mode lookup that sizing consumes at startup.
+            self.sizing_symbols = self.get_symbols_approved_or_has_pos()
+            self.min_cost_calls += 1
+
+    async def load_markets(*args, **kwargs):
+        return {"AAA/USDT:USDT": {"id": "AAAUSDT", "active": True}}
+
+    async def update_exchange_config(attempt):
+        return None
+
+    monkeypatch.setattr(pb_mod, "load_markets", load_markets)
+    monkeypatch.setattr(pb_mod, "filter_markets", lambda *a, **kw: ({"AAA/USDT:USDT"}, {}, {}))
+    bot = Bot(update_exchange_config)
+    bot.config = {
+        "live": {"forced_mode_long": "", "forced_mode_short": ""},
+        "coin_overrides": {"AAA": {}, "UNLISTED": {}},
+    }
+    bot.positions = {}
+    bot.approved_coins_minus_ignored_coins = {"long": {"AAA/USDT:USDT"}, "short": set()}
+    bot.coin_to_symbol = lambda coin, verbose=True: f"{coin}/USDT:USDT"
+    bot._equity_hard_stop_enabled = lambda pside: False
+
+    await pb_mod.Passivbot.init_markets(bot, verbose=False)
+
+    assert bot.refresh_authoritative_state_calls == 1
+    assert bot.min_cost_calls == 1
+    assert bot.sizing_symbols == {"AAA/USDT:USDT"}
+    assert bot.coin_overrides == {"AAA/USDT:USDT": {}}

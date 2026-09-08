@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live startup skips unavailable coin overrides with a bounded notice and retries resolution on
+  market refresh. Inactive-market overrides and protection of existing positions remain intact;
+  an empty eligible market set no longer admits unsupported approved coins.
+- Unexpected failures that abort a bot run show bounded traceback frames, the failing phase,
+  and stop/restart action at normal console logging levels, including failures before bot
+  construction. Known missing market keys are shown
+  without exposing raw exception payloads or locals. Repeated startup failures share traceback
+  suppression across restarts, with periodic counts and a recovery notice after successful startup.
+
 - Retain Bitget Classic and UTA fills without client order IDs when fetching mixed
   bot and external execution history. Previously, omitted external closes could
   corrupt reconstructed positions/PnL and leave trailing confirmation pending.
