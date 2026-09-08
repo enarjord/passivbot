@@ -1791,6 +1791,32 @@ def _is_close_payload(payload: Dict[str, object]) -> bool:
     return closed_size > 0.0
 
 
+def _is_kucoin_close(payload: Dict[str, object]) -> bool:
+    # Order labels arrive after trade normalization and may be absent on manual fills.
+    return (payload.get("side"), payload.get("position_side")) in {
+        ("sell", "long"),
+        ("buy", "short"),
+    }
+
+
+def _kucoin_trade_pnl_needs_repair(payload: Dict[str, object]) -> bool:
+    # KuCoin trades contain no authoritative realized PnL. Older fetchers stamped
+    # batch-local estimates (including nonzero ones) authoritative before order
+    # enrichment identified the close. Cycle-reconciled and synthetic rows already
+    # carry explicit sources and must retain their accounting.
+    return (
+        payload.get("pnl_contract") == PNL_CONTRACT_CURRENT
+        and _is_kucoin_close(payload)
+        and _payload_pnl_status(payload) == "complete"
+        and _payload_pnl_source(payload) == PNL_SOURCE_AUTHORITATIVE
+        and any(
+            row.get("source") == "fetch_my_trades"
+            for row in _normalize_raw_field(payload.get("raw"))
+            if isinstance(row, dict)
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
@@ -3833,6 +3859,8 @@ class FillEventsManager:
             # Doctor mode loads legacy caches read-only first so backup/repair can
             # operate on the original files.
             if self._events and not allow_legacy_contract:
+                if self.exchange.lower() == "kucoin":
+                    self._run_kucoin_doctor({}, auto_repair=True)
                 payload = [ev.to_dict() for ev in self._events]
                 if self.exchange.lower() == "hyperliquid":
                     payload = _expand_hyperliquid_coalesced_events(payload)
@@ -4809,8 +4837,16 @@ class FillEventsManager:
             self.cache._data_files()
         )
         missing_fee_paid = [ev for ev in self._events if "fee_paid" not in ev.to_dict()]
-        anomaly_count = len(self._events) if legacy_contract else len(legacy_events) + len(missing_fee_paid)
-        report["legacy_contract"] = bool(legacy_contract)
+        trade_pnl_events = [
+            ev for ev in self._events if _kucoin_trade_pnl_needs_repair(ev.to_dict())
+        ]
+        contract_repair = bool(legacy_contract or legacy_events or missing_fee_paid)
+        anomaly_count = (
+            len(self._events)
+            if legacy_contract
+            else len({ev.id for ev in legacy_events + missing_fee_paid + trade_pnl_events})
+        )
+        report["legacy_contract"] = bool(legacy_contract or legacy_events)
         report["anomaly_events"] = anomaly_count
         if not anomaly_count:
             return report
@@ -4819,9 +4855,13 @@ class FillEventsManager:
                 "id": ev.id,
                 "symbol": ev.symbol,
                 "timestamp": ev.timestamp,
-                "reason": "legacy_or_missing_pnl_contract",
+                "reason": (
+                    "legacy_or_missing_pnl_contract"
+                    if contract_repair
+                    else "trade_pnl_mislabeled_authoritative"
+                ),
             }
-            for ev in self._events[:5]
+            for ev in (self._events if contract_repair else trade_pnl_events)[:5]
         ]
         if not auto_repair:
             return report
@@ -4830,7 +4870,20 @@ class FillEventsManager:
         payload = [ev.to_dict() for ev in self._events]
         ensure_qty_signage(payload)
         order_same_timestamp_fills(payload)
-        repaired_payload, degraded_count = self._repair_kucoin_payload_contract(payload)
+        if contract_repair:
+            repaired_payload, degraded_count = self._repair_kucoin_payload_contract(payload)
+        else:
+            for ev in payload:
+                self._apply_fee_policy(ev)
+                if _kucoin_trade_pnl_needs_repair(ev):
+                    ev["pnl_status"] = "pending"
+                    ev["pnl_source"] = PNL_SOURCE_PENDING
+            self._synthesize_missing_pnls(payload)
+            repaired_payload = payload
+            degraded_count = sum(
+                ev.get("pnl_source") == PNL_SOURCE_SYNTHETIC_DEGRADED
+                for ev in repaired_payload
+            )
         compute_psize_pprice(repaired_payload)
         self._events = [FillEvent.from_dict(ev) for ev in repaired_payload]
         self.cache.save(self._events)
@@ -7195,18 +7248,13 @@ class KucoinFetcher(BaseFetcher):
         # are stored separately as signed balance cashflow in fee_paid.
         local_pnls, _ = compute_realized_pnls_from_trades(trades)
 
-        closes = [
-            t
-            for t in trades
-            if (t["side"] == "sell" and t["position_side"] == "long")
-            or (t["side"] == "buy" and t["position_side"] == "short")
-        ]
+        closes = [t for t in trades if _is_kucoin_close(t)]
         events: Dict[str, Dict[str, object]] = {}
         for t in trades:
             ev = dict(t)
             ev["fee_paid"] = signed_fee_paid_from_payload(ev)
             ev["pnl"] = local_pnls.get(ev["id"], 0.0)
-            ev["pnl_status"] = "pending" if _is_close_payload(ev) else "complete"
+            ev["pnl_status"] = "pending" if _is_kucoin_close(ev) else "complete"
             if ev["pnl_status"] == "pending":
                 ev["pnl_source"] = PNL_SOURCE_PENDING
             events[ev["id"]] = ev

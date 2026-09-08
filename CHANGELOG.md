@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- KuCoin partial closes now contribute realized losses to auto-unstuck and other PnL
+  risk inputs before the whole position closes. Existing trade-derived closes mislabeled
+  as authoritative are automatically backed up and reconstructed on cache load; the
+  fill-events doctor can also inspect or repair them. Reconciled position-history PnL
+  is preserved, and incomplete reconstruction remains unavailable to PnL risk checks.
+
 - KuCoin market-age discovery uses a valid millisecond history range, fixing
   `Parameter 'from' must be milliseconds` errors and restoring eligibility for
   new forager entries when the configured minimum market age is met.
