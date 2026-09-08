@@ -13,6 +13,16 @@ All notable user-facing changes will be documented in this file.
   without exposing raw exception payloads or locals. Repeated startup failures share traceback
   suppression across restarts, with periodic counts and a recovery notice after successful startup.
 
+- Retain Bitget Classic and UTA fills without client order IDs when fetching mixed
+  bot and external execution history. Previously, omitted external closes could
+  corrupt reconstructed positions/PnL and leave trailing confirmation pending.
+  Existing incomplete caches require a history refresh covering the omitted fills.
+
+- Restored `-ltwel`/`-stwel` and `-lnp`/`-snp` CLI shortcuts for long/short total wallet
+  exposure limits and position counts in live and backtest commands. They now target the grouped
+  `bot.<side>.risk` fields, take precedence over supported flat config aliases, and appear in
+  command help.
+
 - GPU suite optimization shares identical prepared MPS market tensors across scenarios, reducing
   memory use and repeated preparation. Long-history single-side Trailing Martingale replays use
   smaller threadgroups for higher throughput while retaining bounded, interruptible dispatches.
