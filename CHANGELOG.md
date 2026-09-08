@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
+  ordinary flatten falls before the bounded replay window. Successful empty-window replays now
+  publish the current pair once and retain the proven flatten as the episode boundary.
+
 - KuCoin partial closes now contribute realized losses to auto-unstuck and other PnL
   risk inputs before the whole position closes. Existing trade-derived closes mislabeled
   as authoritative are automatically backed up and reconstructed on cache load; the
