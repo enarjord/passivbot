@@ -161,7 +161,16 @@ logs, runtime windows, and immutable manifests.
 6. KuCoin position-history PnL is authoritative for a completed position cycle. Overlapping trade
    refreshes may return the same close as pending again; they must preserve an already reconciled
    cycle value. Reapplying an unchanged cycle observation is a no-op, while a changed authoritative
-   total is redistributed across that lifecycle and persisted.
+   total is redistributed across that lifecycle and persisted. Classify trade reductions from
+   `side` and `position_side` before optional order-label enrichment; trade-window estimates
+   are pending until reconstruction against the cached basis or cycle reconciliation.
+   On ordinary current-contract cache load, use the KuCoin doctor to back up and repair
+   trade-derived reductions mislabeled as `authoritative`, including nonzero estimates.
+   Preserve explicit synthetic and cycle-reconciled sources, raw data, provenance, coverage,
+   and the incremental refresh checkpoint. This accounting normalization is automatic;
+   standalone doctor check mode remains read-only. An incomplete basis remains degraded
+   and blocks enabled PnL risk consumers. Repeated loads do not create another backup once
+   the mislabeled rows have been repaired.
 7. Fills sharing one millisecond carry no execution order in exchange responses or caches, yet
    position reconstruction replays them in list order. When the exchange reports the position size
    preceding each fill (Hyperliquid `startPosition`), retain each execution boundary and reorder an

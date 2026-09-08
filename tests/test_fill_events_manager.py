@@ -9041,3 +9041,192 @@ def test_hyperliquid_empty_fee_wrapper_uses_native_amount_without_replacing_zero
     paid, metadata = fem._normalize_fee_paid_from_payload(event, quote_currency="USDC")
     assert paid == pytest.approx(expected)
     assert metadata["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position_side,entry_side,close_side", [("long", "buy", "sell"), ("short", "sell", "buy")])
+@pytest.mark.parametrize("owned", [False, True])
+async def test_kucoin_raw_partial_close_is_pending_before_order_enrichment(
+    position_side, entry_side, close_side, owned
+):
+    ts = 1_700_000_000_000
+    raw = {
+        "id": "partial", "order": "order-partial", "timestamp": ts,
+        "symbol": "TON/USDT:USDT", "side": close_side, "amount": 2, "price": 12,
+        "fee": {"currency": "USDT", "cost": 0.0024},
+        "info": {"positionSide": position_side.upper(), "closeFeePay": "0.0024", "value": "2.4"},
+    }
+
+    class API:
+        async def fetch_my_trades(self, params):
+            return [deepcopy(raw)] if params["startAt"] <= ts <= params["endAt"] else []
+
+        async def fetch_positions_history(self, params):
+            return []
+
+        async def fetch_order(self, order_id, symbol):
+            return {"clientOrderId": "external"}
+
+    fetcher = KucoinFetcher(API(), now_func=lambda: ts + 60_000)
+    detail_cache = {"partial": ("owned", f"close_unstuck_{position_side}")} if owned else {}
+    batches = []
+    rows = await fetcher.fetch(ts, ts + 60_000, detail_cache, on_batch=batches.extend)
+    assert len(rows) == 1
+    assert rows == batches
+    assert rows[0]["position_side"] == position_side
+    assert rows[0]["pnl_status"] == "pending"
+    assert rows[0]["pnl_source"] == fem.PNL_SOURCE_PENDING
+    # Entry normalization is independent of the order label as well.
+    raw["side"] = entry_side
+    raw["info"]["closeFeePay"] = "0"
+    rows = await fetcher.fetch(ts, ts + 60_000, detail_cache)
+    assert rows[0]["pnl_status"] == "complete"
+
+
+def _write_kucoin_mislabeled_cache(cache_dir, *, position_side="long", with_entry=True):
+    ts = 1_700_000_000_000
+    side = "buy" if position_side == "long" else "sell"
+    close_side = "sell" if position_side == "long" else "buy"
+    rows = [
+        _kucoin_manager_fill("basis", ts, side=side, qty=10, price=10, position_side=position_side),
+        _kucoin_manager_fill("partial-zero", ts + 60_000, side=close_side, qty=2, price=12, position_side=position_side),
+        _kucoin_manager_fill("partial-nonzero", ts + 86_400_000, side=close_side, qty=3, price=14, position_side=position_side),
+        _kucoin_manager_fill("reconciled", ts + 86_460_000, side=close_side, qty=1, price=13, position_side=position_side),
+    ]
+    for row in rows:
+        row.update(
+            pnl_contract=fem.PNL_CONTRACT_CURRENT, pnl_status="complete",
+            pnl_source=fem.PNL_SOURCE_AUTHORITATIVE, c_mult=0.1,
+            fees={"currency": "USDT", "cost": 0.001}, fee_paid=-0.001,
+            raw=[{"source": "fetch_my_trades", "data": {"id": row["id"]}}],
+        )
+        # Reproduce old caches even when no Passivbot order label was recovered.
+        row["pb_order_type"] = ""
+    rows[2]["pnl"] = 999.0  # a nonzero batch-local estimate is not authority either
+    rows[2]["provenance"] = {"runtime_run_id": "first-ingestion-fixture"}
+    rows[3].update(pnl=0.25, pnl_source=fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED)
+    if not with_entry:
+        rows = rows[1:]
+    cache = FillEventCache(cache_dir)
+    cache.save([FillEvent.from_dict(row) for row in rows])
+    cache.update_metadata_from_events([FillEvent.from_dict(row) for row in rows], mark_refreshed=False)
+    metadata = json.loads(cache.metadata_path.read_text())
+    metadata.update(last_refresh_ms=ts + 100_000_000, covered_start_ms=ts - 1000, history_scope="all")
+    cache.metadata_path.write_text(json.dumps(metadata))
+    return rows, metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("position_side", ["long", "short"])
+@pytest.mark.parametrize("via_doctor", [False, True])
+async def test_kucoin_current_cache_auto_repair_preserves_archive_checkpoint_and_authority(
+    tmp_path, caplog, position_side, via_doctor
+):
+    cache_dir = tmp_path / "fills"
+    original, metadata = _write_kucoin_mislabeled_cache(cache_dir, position_side=position_side)
+    original_files = {p.name: p.read_bytes() for p in cache_dir.iterdir()}
+    manager = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([]), cache_path=cache_dir)
+    caplog.set_level(logging.INFO, logger=fem.logger.name)
+    if via_doctor:
+        report = await manager.run_doctor(auto_repair=False)
+        assert report["anomaly_events"] == 2
+        assert report["anomaly_examples"][0]["reason"] == "trade_pnl_mislabeled_authoritative"
+        assert {p.name: p.read_bytes() for p in cache_dir.iterdir()} == original_files
+        report = await manager.run_doctor(auto_repair=True)
+        assert report["repaired"]
+        assert report["legacy_contract"] is False
+    else:
+        await manager.ensure_loaded()
+    by_id = {ev.id: ev for ev in manager._events}
+    sign = 1 if position_side == "long" else -1
+    assert by_id["partial-zero"].pnl == pytest.approx(sign * 0.4)
+    assert by_id["partial-nonzero"].pnl == pytest.approx(sign * 1.2)
+    for key in ("partial-zero", "partial-nonzero"):
+        assert by_id[key].pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+        assert by_id[key].fee_paid == pytest.approx(-0.001)
+    assert by_id["reconciled"].pnl == 0.25
+    assert by_id["reconciled"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+    assert by_id["partial-nonzero"].provenance == original[2]["provenance"]
+    assert not by_id["partial-zero"].provenance
+    for ev, raw in zip(manager._events, original):
+        assert ev.raw == raw["raw"]
+    backup, = tmp_path.glob("fills.backup.*")
+    assert {p.name: p.read_bytes() for p in backup.iterdir()} == original_files
+    after_metadata = json.loads((cache_dir / "metadata.json").read_text())
+    for field in ("last_refresh_ms", "covered_start_ms", "history_scope"):
+        assert after_metadata[field] == metadata[field]
+    assert "cache backed up at" in caplog.text
+    repaired_rows = [ev.to_dict() for ev in manager._events]
+    reloaded = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([]), cache_path=cache_dir)
+    await reloaded.ensure_loaded()
+    assert [ev.to_dict() for ev in reloaded._events] == repaired_rows
+    assert len(list(tmp_path.glob("fills.backup.*"))) == 1
+    assert (await reloaded.run_doctor())["anomaly_events"] == 0
+
+
+@pytest.mark.asyncio
+async def test_kucoin_auto_repair_incomplete_basis_remains_degraded(tmp_path):
+    cache_dir = tmp_path / "fills"
+    _write_kucoin_mislabeled_cache(cache_dir, with_entry=False)
+    manager = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([]), cache_path=cache_dir)
+    await manager.ensure_loaded()
+    repaired = [ev for ev in manager._events if ev.id != "reconciled"]
+    assert all(ev.pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED for ev in repaired)
+    assert all(ev.pnl_synthetic_reason == "incomplete_position_basis" for ev in repaired)
+    reloaded = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([]), cache_path=cache_dir)
+    await reloaded.ensure_loaded()
+    assert [ev.to_dict() for ev in reloaded._events] == [ev.to_dict() for ev in manager._events]
+    assert len(list(tmp_path.glob("fills.backup.*"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_kucoin_auto_repair_backup_failure_does_not_rewrite_or_load(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "fills"
+    _write_kucoin_mislabeled_cache(cache_dir)
+    original_files = {p.name: p.read_bytes() for p in cache_dir.iterdir()}
+    manager = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([]), cache_path=cache_dir)
+
+    def fail_backup():
+        raise OSError("backup unavailable")
+
+    monkeypatch.setattr(manager, "_backup_cache_for_repair", fail_backup)
+    with pytest.raises(OSError, match="backup unavailable"):
+        await manager.ensure_loaded()
+    assert not manager._loaded
+    assert {p.name: p.read_bytes() for p in cache_dir.iterdir()} == original_files
+
+
+@pytest.mark.asyncio
+async def test_kucoin_repaired_history_survives_overlap_and_delayed_cycle_reconciliation(tmp_path):
+    cache_dir = tmp_path / "fills"
+    original, _ = _write_kucoin_mislabeled_cache(cache_dir)
+    # Keep a single open lifecycle with two defective partial closes.
+    rows = original[:3]
+    cache = FillEventCache(cache_dir)
+    cache.save([FillEvent.from_dict(row) for row in rows])
+    cache.update_metadata_from_events([FillEvent.from_dict(row) for row in rows], mark_refreshed=False)
+    overlap = deepcopy(rows[-1])
+    overlap.update(pnl=0, pnl_status="pending", pnl_source=fem.PNL_SOURCE_PENDING)
+    manager = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([overlap]), cache_path=cache_dir)
+    await manager.refresh()
+    assert sum(ev.pnl for ev in manager._events) == pytest.approx(1.6)
+    final = deepcopy(overlap)
+    final.update(id="final", timestamp=overlap["timestamp"] + 60_000, qty=-5, price=11, raw=[{"source": "fetch_my_trades", "data": {"id": "final"}}])
+    manager.fetcher = _StaticFetcher([overlap, final])
+    await manager.refresh()
+    assert sum(ev.pnl for ev in manager._events) == pytest.approx(2.1)
+    observation = _kucoin_cycle_observation(
+        "cycle", realized_pnl=2.496, open_time=rows[0]["timestamp"], close_time=final["timestamp"]
+    )
+    manager.fetcher = _StaticFetcher([final], [observation])
+    await manager.refresh()
+    assert sum(ev.pnl + ev.fee_paid for ev in manager._events) == pytest.approx(2.496)
+    assert all(ev.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED for ev in manager._events[1:])
+    expected = [ev.to_dict() for ev in manager._events]
+    manager.fetcher = _StaticFetcher([overlap, final])
+    await manager.refresh()
+    assert [ev.to_dict() for ev in manager._events] == expected
+    reloaded = FillEventsManager(exchange="kucoin", user="fixture", fetcher=_StaticFetcher([]), cache_path=cache_dir)
+    await reloaded.ensure_loaded()
+    assert [ev.to_dict() for ev in reloaded._events] == expected
+    assert len(list(tmp_path.glob("fills.backup.*"))) == 1
