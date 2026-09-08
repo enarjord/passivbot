@@ -22,6 +22,7 @@ DEFAULT_OBJECTIVE_GOALS = {
     "n_days": "max",
     "positions_held_per_day": "min",
     "positions_held_per_day_w": "min",
+    "position_held_time_weighted_mean_hours": "min",
     "position_held_hours_mean": "min",
     "position_held_hours_max": "min",
     "position_held_hours_median": "min",

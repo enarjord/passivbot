@@ -157,6 +157,7 @@ _GPU_PROXY_METRIC_CANDIDATES = (
     "pnl_ratio_long_short",
     "position_held_days_mean",
     "position_held_days_max",
+    "position_held_time_weighted_mean_hours",
     "position_held_hours_mean",
     "position_held_hours_max",
     "positions_held_per_day",
@@ -2259,6 +2260,18 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
             torch.zeros_like(held_count),
         )
 
+    held_time_weighted_hours = zeros
+    if "position_held_time_weighted_mean_hours" in requested:
+        held_hours_sum = out["held_sum_ms"].to(torch.float64) / 3_600_000.0
+        held_time_weighted_hours = torch.where(
+            held_hours_sum > 0.0,
+            out["held_sum_squared_hours"].to(torch.float64)
+            / torch.where(
+                held_hours_sum > 0.0, held_hours_sum, torch.ones_like(held_hours_sum)
+            ),
+            torch.zeros_like(held_hours_sum),
+        )
+
     boundary_lead = torch.where(
         torch.isfinite(out["first_fill_ts"]),
         (out["first_fill_ts"] - first_eq_ts) / 60_000.0,
@@ -2361,6 +2374,7 @@ def compute_objectives(out: dict, run, data: dict, needed=None) -> dict:
         "omega_ratio_strategy_eq": omega,
         "position_held_days_mean": held_hours_mean / 24.0,
         "position_held_days_max": held_days,
+        "position_held_time_weighted_mean_hours": held_time_weighted_hours,
         "position_held_hours_mean": held_hours_mean,
         "position_held_hours_max": held_days * 24.0,
         "positions_held_per_day": positions_held_per_day,

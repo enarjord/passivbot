@@ -695,9 +695,9 @@ mod tests {
         assert_directional_hsl_accounting_contract(source);
         assert!(source.contains("kernel void passivbot_ema_anchor"));
         assert!(source.contains("constant int DAILY_COLS = 8"));
-        assert!(source.contains("constant int SCALAR_COLS = 66"));
-        assert!(source.contains("constant int SCALAR_COLS = 68"));
-        assert!(source.contains("constant int SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 67"));
+        assert!(source.contains("constant int SCALAR_COLS = 69"));
+        assert!(source.contains("constant int SCALAR_COLS = 73"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -815,12 +815,12 @@ mod tests {
         assert!(source.contains("never reuse the equity-derived liquidation floor"));
         assert!(source.contains("constant int DAILY_COLS = 9"));
         assert!(source.contains("day_min_balance"));
-        assert!(source.contains("constant int SCALAR_COLS = 61"));
-        assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
+        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 68"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(source.matches("struct EmaMulticoinSideState").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinSideConfig").count(), 1);
         assert_eq!(source.matches("struct EmaMulticoinFillState").count(), 1);
@@ -1069,9 +1069,9 @@ mod tests {
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
         assert!(source.contains("try_restart_hsl("));
-        assert!(source.contains("constant int SCALAR_COLS = 66"));
-        assert!(source.contains("constant int SCALAR_COLS = 68"));
-        assert!(source.contains("constant int SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 67"));
+        assert!(source.contains("constant int SCALAR_COLS = 69"));
+        assert!(source.contains("constant int SCALAR_COLS = 73"));
         assert!(source.contains("record_gross_pnl"));
         assert!(source.contains("scalars[so + 44] = loss_sum"));
         assert!(source.contains("scalars[so + 45] = position_unchanged_max_min * interval_ms"));
@@ -1320,12 +1320,12 @@ mod tests {
             2
         );
         assert!(source.contains("never reuse the equity-derived liquidation floor"));
-        assert!(source.contains("constant int SCALAR_COLS = 61"));
-        assert!(source.contains("constant int SCALAR_COLS = 63"));
-        assert!(source.contains("constant int SCALAR_COLS = 67"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 66"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 68"));
-        assert!(source.contains("constant int FUSED_SCALAR_COLS = 72"));
+        assert!(source.contains("constant int SCALAR_COLS = 62"));
+        assert!(source.contains("constant int SCALAR_COLS = 64"));
+        assert!(source.contains("constant int SCALAR_COLS = 68"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 67"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 69"));
+        assert!(source.contains("constant int FUSED_SCALAR_COLS = 73"));
         assert_eq!(
             source
                 .matches("struct TrailingMartingaleMulticoinSideState")

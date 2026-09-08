@@ -927,6 +927,20 @@ fn analyze_backtest_basic_with_starting_balance(
     let n_days = if n_days <= 0.0 { 1e-9 } else { n_days };
     let positions_held_per_day = durations_ms.len() as f64 / n_days;
 
+    // Weight each coin+side holding episode by its duration, including open tails.
+    let (held_hours_sum, held_hours_squared_sum) =
+        durations_ms
+            .iter()
+            .fold((0.0, 0.0), |(sum, squared_sum), &duration_ms| {
+                let hours = duration_ms as f64 / MS_PER_HOUR as f64;
+                (sum + hours, squared_sum + hours * hours)
+            });
+    let position_held_time_weighted_mean_hours = if held_hours_sum > 0.0 {
+        held_hours_squared_sum / held_hours_sum
+    } else {
+        0.0
+    };
+
     let position_held_hours_mean = if !durations_ms.is_empty() {
         durations_ms.iter().sum::<u64>() as f64 / (durations_ms.len() as f64 * MS_PER_HOUR as f64)
     } else {
@@ -1099,6 +1113,7 @@ fn analyze_backtest_basic_with_starting_balance(
     analysis.loss_profit_ratio_long = loss_profit_ratio_long;
     analysis.loss_profit_ratio_short = loss_profit_ratio_short;
     analysis.positions_held_per_day = positions_held_per_day;
+    analysis.position_held_time_weighted_mean_hours = position_held_time_weighted_mean_hours;
     analysis.position_held_hours_mean = position_held_hours_mean;
     analysis.position_held_hours_max = position_held_hours_max;
     analysis.position_held_hours_median = position_held_hours_median;
@@ -2305,6 +2320,89 @@ mod tests {
     }
 
     #[test]
+    fn position_held_time_weighted_mean_tracks_coin_side_episodes() {
+        let start = 1_740_000_000_000_u64;
+        let timestamps: Vec<u64> = (0..=8).map(|h| start + h * MS_PER_HOUR).collect();
+        let equities = vec![1000.0; timestamps.len()];
+        let fill = |h: usize, coin: &str, qty, size, long| {
+            make_trade_fill(h, timestamps[h], coin, 0.0, qty, size, 1000.0, long)
+        };
+        let fills = vec![
+            fill(0, "BTC", 1.0, 1.0, true),
+            fill(0, "BTC", -1.0, -1.0, false),
+            fill(1, "BTC", 1.0, 2.0, true), // Add does not reset the clock.
+            fill(1, "ETH", 1.0, 1.0, true),
+            fill(2, "BTC", -1.0, 1.0, true), // Neither does a partial close.
+            fill(2, "BTC", 1.0, 0.0, false), // Short episode: 2h.
+            fill(3, "BTC", -1.0, -1.0, false), // Reopen: counted separately.
+            fill(3, "BTC", 1.0, 0.0, false), // Zero-duration episode adds no weight.
+            fill(4, "BTC", -1.0, 0.0, true), // Long episode: 4h.
+            fill(5, "ETH", -0.5, 0.5, true), // Open ETH tail: 7h, not 3h.
+        ];
+        let result = analyze_backtest(&fills, &equities, &timestamps, &[]);
+        assert!((result.position_held_time_weighted_mean_hours - 69.0 / 13.0).abs() < 1e-12);
+        assert_eq!(result.position_held_hours_max, 7.0);
+    }
+
+    #[test]
+    fn position_held_time_weighted_mean_distinguishes_equal_maxima() {
+        let start = 1_740_000_000_000_u64;
+        let timestamps: Vec<u64> = (0..=8).map(|h| start + h * MS_PER_HOUR).collect();
+        let equities = vec![1000.0; timestamps.len()];
+        let evaluate = |close_hour: usize| {
+            let fills = vec![
+                make_trade_fill(0, timestamps[0], "BTC", 0.0, 1.0, 1.0, 1000.0, true),
+                make_trade_fill(0, timestamps[0], "ETH", 0.0, 1.0, 1.0, 1000.0, true),
+                make_trade_fill(
+                    close_hour,
+                    timestamps[close_hour],
+                    "BTC",
+                    0.0,
+                    -1.0,
+                    0.0,
+                    1000.0,
+                    true,
+                ),
+            ];
+            analyze_backtest(&fills, &equities, &timestamps, &[])
+        };
+        let longer = evaluate(6);
+        let shorter = evaluate(4);
+        assert_eq!(
+            longer.position_held_hours_max,
+            shorter.position_held_hours_max
+        );
+        assert!((longer.position_held_time_weighted_mean_hours - 100.0 / 14.0).abs() < 1e-12);
+        assert!((shorter.position_held_time_weighted_mean_hours - 80.0 / 12.0).abs() < 1e-12);
+        assert!(
+            shorter.position_held_time_weighted_mean_hours
+                < longer.position_held_time_weighted_mean_hours
+        );
+    }
+
+    #[test]
+    fn position_held_time_weighted_mean_zero_and_fallback_timestamps() {
+        assert_eq!(
+            analyze_backtest(&[], &vec![1000.0; 2], &[0, MS_PER_HOUR], &[])
+                .position_held_time_weighted_mean_hours,
+            0.0
+        );
+        let mut entry = make_trade_fill(60, 0, "BTC", 0.0, 1.0, 1.0, 1000.0, true);
+        let close = make_trade_fill(60, 0, "BTC", 0.0, -1.0, 0.0, 1000.0, true);
+        assert_eq!(
+            analyze_backtest(&[entry.clone(), close], &vec![1000.0; 121], &[], &[])
+                .position_held_time_weighted_mean_hours,
+            0.0
+        );
+        entry.index = 0;
+        assert_eq!(
+            analyze_backtest(&[entry], &vec![1000.0; 121], &[], &[])
+                .position_held_time_weighted_mean_hours,
+            2.0
+        );
+    }
+
+    #[test]
     fn position_duration_metrics_include_open_tail_to_backtest_end() {
         let start = 1_740_000_000_000_u64;
         let timestamps: Vec<u64> = (0..=10).map(|i| start + i * MS_PER_DAY).collect();
@@ -2341,6 +2439,7 @@ mod tests {
         let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
 
         assert!((analysis.position_held_days_max - 3.0).abs() < 1e-12);
+        assert_eq!(analysis.position_held_time_weighted_mean_hours, 72.0);
         assert!((analysis.position_unchanged_days_max - 3.0).abs() < 1e-12);
     }
 

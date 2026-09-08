@@ -375,7 +375,7 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.arange(72, dtype=torch.float32).reshape(1, 72)
+    scalars = torch.arange(73, dtype=torch.float32).reshape(1, 73)
     gaps = torch.zeros((1, 128), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
@@ -5292,6 +5292,7 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             "entry_initial_balance_pct_short",
             "fills_per_day",
             "position_held_days_max",
+            "position_held_time_weighted_mean_hours",
         },
     )
     if count < 1400:
@@ -5321,6 +5322,9 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
     # whereas the proxy receives this prepared span directly. The
     # proxy must nevertheless cover the all-invalid tail through its endpoint.
     assert result["backtest_completion_ratio"] > 0.9
+    assert result["position_held_time_weighted_mean_hours"] == pytest.approx(
+        exact_analysis["position_held_time_weighted_mean_hours"], rel=1.0e-5
+    )
     assert result["position_held_days_max"] == pytest.approx(
         exact_analysis["position_held_days_max"], rel=1.0e-5
     )
@@ -8814,7 +8818,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert source.index("prepare_ordinary_market_close(", ordering_start) < source.index(
         "gate_reducer_variant(", ordering_start
     )
-    assert "constant int SCALAR_COLS = 68" in source
+    assert "constant int SCALAR_COLS = 69" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
@@ -8906,7 +8910,7 @@ def test_mps_ema_anchor_shader_smoke():
     output = runner.run(parameters)
     torch.mps.synchronize()
 
-    assert runner._buffers[2][1].shape == (2, 66)
+    assert runner._buffers[2][1].shape == (2, 67)
     assert (output["hsl_drawdown_ema_mean_worst_1pct_long"] == 0.0).all()
     assert (output["hsl_drawdown_ema_mean_worst_1pct_short"] == 0.0).all()
     assert output["balance"].device.type == "mps"
@@ -9227,7 +9231,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
-    assert runner._buffers[2][1].shape == (2, 65)
+    assert runner._buffers[2][1].shape == (2, 66)
     assert (output["hsl_drawdown_ema_mean_worst_1pct_long"] == 0.0).all()
     assert (output["hsl_drawdown_ema_mean_worst_1pct_short"] == 0.0).all()
     assert (output["hsl_drawdown_raw_max_long"] == 0.0).all()
@@ -10863,7 +10867,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         raw_tail_enabled=True,
     )
     assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 72" in source
+    assert "constant int FUSED_SCALAR_COLS = 73" in source
 
     count = 512
     coin_count = 3
@@ -10997,7 +11001,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 73), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -11293,7 +11297,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 72), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 73), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -11443,7 +11447,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         raw_tail_enabled=True,
     )
     assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 72" in source
+    assert "constant int FUSED_SCALAR_COLS = 73" in source
 
     count = 512
     coin_count = 3
@@ -11603,7 +11607,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 72), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 73), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -11899,7 +11903,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 72), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 73), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -12060,7 +12064,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     assert output["balance"].device.type == "mps"
     assert output["balance"].shape == (2,)
-    assert runner._buffers[2][1].shape == (2, 65)
+    assert runner._buffers[2][1].shape == (2, 66)
     assert (output["hsl_drawdown_raw_max_long"] == 0.0).all()
     assert (output["hsl_drawdown_raw_max_short"] == 0.0).all()
     assert torch.isfinite(output["balance"]).all()
@@ -15166,6 +15170,9 @@ def test_mps_position_unchanged_includes_open_tail(strategy_kind, side):
         expected_open_tail_ms.item()
     )
     expected_held_ms = output["last_eq_ts"] - output["first_fill_ts"]
+    assert output["held_sum_squared_hours"].item() == pytest.approx(
+        (expected_held_ms.item() / 3_600_000.0) ** 2
+    )
     assert output["held_count"].item() == 1.0
     assert output["held_sum_ms"].item() == pytest.approx(expected_held_ms.item())
     assert output["held_max_ms"].item() == pytest.approx(expected_held_ms.item())
@@ -21536,3 +21543,28 @@ def test_mps_trailing_martingale_touch_close_preserves_raw_price():
     # Exact Rust keeps the raw 100.004 ask, which fills at the next 100.005
     # high. Rounding the touch up to 100.01 would leave the position open.
     assert output["psize"].item() == 0.0
+
+
+@pytest.mark.parametrize("topology", ["single", "multicoin", "fused"])
+@pytest.mark.parametrize("tail_columns", [0, 2, 4, 6])
+def test_holding_duration_scalar_does_not_alias_optional_hsl_outputs(topology, tail_columns):
+    from optimization.gpu.mps_kernel import (
+        _decode_outputs,
+        _decode_directional_outputs,
+        _decode_multicoin_fused_outputs,
+    )
+    base_columns = 62 if topology == "multicoin" else 67
+    daily_columns = 8 if topology == "single" else 9
+    daily = torch.zeros((1, 1, daily_columns), dtype=torch.float32)
+    scalars = torch.zeros((1, base_columns + tail_columns), dtype=torch.float32)
+    scalars[:, -1] = 123.0
+    decoder = {
+        "single": _decode_directional_outputs,
+        "multicoin": _decode_outputs,
+        "fused": _decode_multicoin_fused_outputs,
+    }[topology]
+    output = decoder(daily, scalars, torch.zeros((1, 128), dtype=torch.int32))
+    assert output["held_sum_squared_hours"].item() == 123.0
+    for key in output:
+        if key.startswith("hsl_drawdown_"):
+            assert output[key].item() == 0.0, key

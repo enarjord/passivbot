@@ -7,13 +7,13 @@ constant int DAILY_COLS = 11;
 constant int DAILY_COLS = 8;
 #endif
 #if PASSIVBOT_HSL_RAW_TAIL_ENABLED
-constant int SCALAR_COLS = 72;
+constant int SCALAR_COLS = 73;
 #elif PASSIVBOT_HSL_RAW_DRAWDOWN_ENABLED
-constant int SCALAR_COLS = 70;
+constant int SCALAR_COLS = 71;
 #elif PASSIVBOT_HSL_EMA_TAIL_ENABLED
-constant int SCALAR_COLS = 68;
+constant int SCALAR_COLS = 69;
 #else
-constant int SCALAR_COLS = 66;
+constant int SCALAR_COLS = 67;
 #endif
 constant int GAP_BINS = 128;
 constant int SIDE_PARAMS = 35;
@@ -1077,6 +1077,7 @@ inline bool force_close_delisted_position(
     thread float& side_loss_sum,
     thread float& held_max_min,
     thread float& held_sum_min,
+    thread float& held_sum_sq_min,
     thread float& held_count,
     thread float& day_volume
 ) {
@@ -1116,6 +1117,7 @@ inline bool force_close_delisted_position(
         const float held_min = kf - pos_open_k;
         held_max_min = fmax(held_max_min, held_min);
         held_sum_min += held_min;
+        held_sum_sq_min += held_min * held_min;
         held_count += 1.0f;
     }
     day_volume += close_qty * close_price / balance;
@@ -1243,6 +1245,7 @@ inline void passivbot_single_coin_impl(
     int liq_day = hsl_modes_valid ? -1 : 0;
     float held_max_min = 0.0f;
     float held_sum_min = 0.0f;
+    float held_sum_sq_min = 0.0f;
     float held_count = 0.0f;
     float position_unchanged_max_min = 0.0f;
     float long_position_last_fill_k = -1.0f;
@@ -1423,6 +1426,7 @@ inline void passivbot_single_coin_impl(
                     float held_min = kf - long_side.pos_open_k;
                     held_max_min = fmax(held_max_min, held_min);
                     held_sum_min += held_min;
+                    held_sum_sq_min += held_min * held_min;
                     held_count += 1.0f;
                 }
                 long_side.pos_open_k = -1.0f;
@@ -1559,6 +1563,7 @@ inline void passivbot_single_coin_impl(
                     float held_min = kf - short_side.pos_open_k;
                     held_max_min = fmax(held_max_min, held_min);
                     held_sum_min += held_min;
+                    held_sum_sq_min += held_min * held_min;
                     held_count += 1.0f;
                 }
                 short_side.pos_open_k = -1.0f;
@@ -1646,7 +1651,7 @@ inline void passivbot_single_coin_impl(
                 long_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
                 long_rolling_base, rolling_capacity, pnl_lookback_bars,
                 long_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_long,
-                loss_sum_long, held_max_min, held_sum_min, held_count, day_volume
+                loss_sum_long, held_max_min, held_sum_min, held_sum_sq_min, held_count, day_volume
             );
             if (forced_long_close) {
                 prepare_coin_hsl_rolling_signal(
@@ -1675,7 +1680,7 @@ inline void passivbot_single_coin_impl(
                 short_rolling_pnl, rolling_pnl_values, rolling_pnl_indices,
                 short_rolling_base, rolling_capacity, pnl_lookback_bars,
                 short_coin_hsl_rolling, profit_sum, loss_sum, profit_sum_short,
-                loss_sum_short, held_max_min, held_sum_min, held_count, day_volume
+                loss_sum_short, held_max_min, held_sum_min, held_sum_sq_min, held_count, day_volume
             );
             if (forced_short_close) {
                 prepare_coin_hsl_rolling_signal(
@@ -2253,12 +2258,14 @@ inline void passivbot_single_coin_impl(
         float held_min = last_eq_k - long_side.pos_open_k;
         held_max_min = fmax(held_max_min, held_min);
         held_sum_min += held_min;
+        held_sum_sq_min += held_min * held_min;
         held_count += 1.0f;
     }
     if (short_side.pos_open_k >= 0.0f && last_eq_k >= 0.0f) {
         float held_min = last_eq_k - short_side.pos_open_k;
         held_max_min = fmax(held_max_min, held_min);
         held_sum_min += held_min;
+        held_sum_sq_min += held_min * held_min;
         held_count += 1.0f;
     }
     if (long_position_last_fill_k >= 0.0f && last_eq_k >= 0.0f) {
@@ -2376,6 +2383,8 @@ inline void passivbot_single_coin_impl(
     scalars[so + 54] = pnl_recovery_max_min * interval_ms;
     scalars[so + 55] = held_sum_min * interval_ms;
     scalars[so + 56] = held_count;
+    scalars[so + SCALAR_COLS - 1] = held_sum_sq_min *
+        (interval_ms / 3600000.0f) * (interval_ms / 3600000.0f);
     if (account_peak_k >= 0.0f && last_eq_k >= 0.0f) {
         account_recovery_max_min = fmax(
             account_recovery_max_min, last_eq_k - account_peak_k

@@ -556,6 +556,7 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "fill_count": torch.ones(1, dtype=torch.float64),
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.tensor([36 * 3_600_000.0], dtype=torch.float64),
+        "held_sum_squared_hours": torch.tensor([12.0**2 + 36.0**2]),
         "held_sum_ms": torch.tensor([48 * 3_600_000.0], dtype=torch.float64),
         "held_count": torch.tensor([2.0], dtype=torch.float64),
         "position_unchanged_max_ms": torch.tensor(
@@ -587,6 +588,7 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     requested = {
         "position_held_days_mean",
         "position_held_days_max",
+        "position_held_time_weighted_mean_hours",
         "position_held_hours_mean",
         "position_held_hours_max",
         "positions_held_per_day",
@@ -618,6 +620,23 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
     assert set(metrics) == requested
     assert metrics["position_held_days_mean"].item() == pytest.approx(1.0)
     assert metrics["position_held_days_max"].item() == pytest.approx(1.5)
+    assert metrics["position_held_time_weighted_mean_hours"].item() == pytest.approx(30.0)
+    # No holds (or only instantaneous episodes) have zero duration weight.
+    for count in (0.0, 3.0):
+        empty = dict(
+            out,
+            held_sum_ms=torch.zeros(1),
+            held_sum_squared_hours=torch.zeros(1),
+            held_count=torch.tensor([count]),
+        )
+        empty_metrics = compute_objectives(
+            empty,
+            run,
+            {"ts0": 0.0, "n": 36 * 60 + 1},
+            needed={"position_held_time_weighted_mean_hours"},
+        )
+        assert empty_metrics["position_held_time_weighted_mean_hours"].item() == 0.0
+
     assert metrics["position_held_hours_mean"].item() == pytest.approx(24.0)
     assert metrics["position_held_hours_max"].item() == pytest.approx(36.0)
     assert metrics["positions_held_per_day"].item() == pytest.approx(4.0 / 3.0)

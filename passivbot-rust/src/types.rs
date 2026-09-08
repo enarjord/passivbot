@@ -980,6 +980,7 @@ pub struct Analysis {
 
     pub positions_held_per_day: f64,
     pub positions_held_per_day_w: f64,
+    pub position_held_time_weighted_mean_hours: f64,
     pub position_held_hours_mean: f64,
     pub position_held_hours_max: f64,
     pub position_held_hours_median: f64,
@@ -1171,6 +1172,7 @@ impl Default for Analysis {
             exponential_fit_error: 1.0,
             positions_held_per_day: 0.0,
             positions_held_per_day_w: 0.0,
+            position_held_time_weighted_mean_hours: 0.0,
             position_held_hours_mean: 0.0,
             position_held_hours_max: 0.0,
             position_held_hours_median: 0.0,

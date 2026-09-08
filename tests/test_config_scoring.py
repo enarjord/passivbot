@@ -278,3 +278,10 @@ def test_duration_aliases_load_with_default_max_objective(metric):
     prepared = prepare_config(config, verbose=False)
     assert prepared["optimize"]["scoring"] == [{"metric": "n_days", "goal": "max"}]
     assert default_objective_goal(metric) == "max"
+
+
+def test_position_held_time_weighted_metric_defaults_to_minimize():
+    specs, _ = normalize_scoring_entries(["position_held_time_weighted_mean_hours"])
+    assert [(spec.metric, spec.goal) for spec in specs] == [
+        ("position_held_time_weighted_mean_hours", "min")
+    ]

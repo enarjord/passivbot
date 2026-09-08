@@ -90,6 +90,7 @@ CORE_OUTPUT_KEYS = {
     "max_dd",
     "held_max_ms",
     "held_sum_ms",
+    "held_sum_squared_hours",
     "held_count",
     "position_unchanged_max_ms",
     "gap_hist",
@@ -801,6 +802,7 @@ _DUAL_SIDE_MULTICOIN_INTRADAY_CUTOFF_METRICS = {
     "peak_recovery_days_pnl",
     "peak_recovery_hours_pnl",
     "position_held_days_mean",
+    "position_held_time_weighted_mean_hours",
     "position_held_hours_mean",
     "positions_held_per_day",
     "pnl_ratio_long_short",
@@ -1713,6 +1715,9 @@ def _combine_hedged_multicoin_outputs(
     combined["max_dd"] = (long["max_dd"] + short["max_dd"]).clamp(max=1.0)
     combined["held_max_ms"] = long["held_max_ms"].maximum(short["held_max_ms"])
     combined["held_sum_ms"] = long["held_sum_ms"] + short["held_sum_ms"]
+    combined["held_sum_squared_hours"] = (
+        long["held_sum_squared_hours"] + short["held_sum_squared_hours"]
+    )
     combined["held_count"] = long["held_count"] + short["held_count"]
     combined["position_unchanged_max_ms"] = long[
         "position_unchanged_max_ms"

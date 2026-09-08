@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `position_held_time_weighted_mean_hours` to backtest analysis and CPU/GPU optimizer
+  scoring: a duration-weighted mean of per-coin/side holding episodes, including still-open
+  positions. Minimize it to penalize long holds using the full duration distribution.
+
 - Restored `-ltwel`/`-stwel` and `-lnp`/`-snp` CLI shortcuts for long/short total wallet
   exposure limits and position counts in live and backtest commands. They now target the grouped
   `bot.<side>.risk` fields, take precedence over supported flat config aliases, and appear in
