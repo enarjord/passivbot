@@ -354,3 +354,33 @@ def test_coupled_saved_scenario_preserves_explicit_coin_override_clear():
     assert overrides["coin_overrides"] == {}
     _apply_config_overrides(candidate, overrides)
     assert candidate["coin_overrides"] == {}
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {
+            "bot": {
+                "long": {
+                    "strategy": {"trailing_martingale": {"ema_span_0": 71.25}},
+                    "unstuck": {"ema_span_0": 3.0},
+                }
+            }
+        },
+        {"long.ema_span_0": 71.25, "long.unstuck_ema_span_0": 3.0},
+        {"bot.long.ema_span_0": 71.25, "bot.long.unstuck_ema_span_0": 3.0},
+    ],
+)
+def test_coupled_saved_scenarios_normalize_nested_and_legacy_aliases(overrides):
+    import json
+
+    config = config_for()
+    config["backtest"]["scenarios"] = [{"label": "legacy", "overrides": overrides}]
+    candidate = _finalize_optimizer_vector_config(config)
+    saved = json.loads(json.dumps(clean_config(candidate), sort_keys=True))
+    saved["optimize"]["enable_overrides"] = []
+    _apply_config_overrides(saved, saved["backtest"]["scenarios"][0]["overrides"])
+    assert (
+        saved["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] == 71.25
+    )
+    assert saved["bot"]["long"]["unstuck"]["ema_span_0"] == 71.25

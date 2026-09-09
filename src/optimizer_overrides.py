@@ -90,6 +90,11 @@ def couple_unstuck_ema_spans(config, pside):
 def apply_coupled_unstuck_ema_spans(config):
     """Apply coupling after scenario overrides without replaying other overrides."""
     if unstuck_ema_spans_coupled(config):
+        from config.overrides import parse_overrides
+
+        config["coin_overrides"] = parse_overrides(config, verbose=False)[
+            "coin_overrides"
+        ]
         for side in ("long", "short"):
             couple_unstuck_ema_spans(config, side)
     return config
@@ -100,10 +105,17 @@ def materialize_coupled_scenario_spans(config):
     if not unstuck_ema_spans_coupled(config):
         return
     from optimization.warmup import _apply_config_overrides
+    from config.param_paths import resolve_dotted_config_path
+    from suite_runner import _normalize_scenario_overrides
 
     for scenario in config.get("backtest", {}).get("scenarios", []) or []:
         effective = deepcopy(config)
-        overrides = scenario.get("overrides") or {}
+        overrides = {
+            ".".join(resolve_dotted_config_path(effective, key)): value
+            for key, value in _normalize_scenario_overrides(
+                scenario.get("overrides")
+            ).items()
+        }
         _apply_config_overrides(effective, overrides)
         apply_coupled_unstuck_ema_spans(effective)
         # Resolve dotted coin patches into one canonical map to preserve their
