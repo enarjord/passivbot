@@ -97,6 +97,7 @@ from optimization.backends.gpu_backend import (
     validate_gpu_preparation_scope,
     _GPU_SUITE_METRICS_KEY,
     _GPU_SUITE_OBJECTIVES_KEY,
+    _GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY,
     _GPU_SUITE_VIOLATION_KEY,
     EMA_MULTICOIN_LONG_BOUND_MAP,
     EMA_MULTICOIN_SHORT_BOUND_MAP,
@@ -1102,7 +1103,7 @@ def test_gpu_nsga2_uses_configured_pymoo_variation_operators():
         "population_size": 8,
         "configured_seed": None,
         "crossover": {"operator": "sbx", "prob_var": 0.7, "eta": 11.0},
-        "mutation": {"operator": "pm", "prob": 0.2, "eta": 13.0},
+        "mutation": {"operator": "pm", "prob": 0.2, "prob_var": 0.2, "eta": 13.0},
         "eliminate_duplicates": False,
     }
 
@@ -2422,6 +2423,7 @@ def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
             ]
             return {
                 "objectives": (-min(values),),
+                "unpenalized_objectives": (-min(values),),
                 "constraint_violation": max(values),
                 "suite_metrics": {"values": values},
             }
@@ -2438,11 +2440,13 @@ def test_gpu_suite_proxy_rows_use_canonical_suite_scorer():
     assert rows == [
         {
             _GPU_SUITE_OBJECTIVES_KEY: (-0.01,),
+            _GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY: (-0.01,),
             _GPU_SUITE_VIOLATION_KEY: 0.10,
             _GPU_SUITE_METRICS_KEY: {"values": [0.10, 0.01]},
         },
         {
             _GPU_SUITE_OBJECTIVES_KEY: (-0.02,),
+            _GPU_SUITE_UNPENALIZED_OBJECTIVES_KEY: (-0.02,),
             _GPU_SUITE_VIOLATION_KEY: 0.20,
             _GPU_SUITE_METRICS_KEY: {"values": [0.20, 0.02]},
         },
@@ -2469,6 +2473,7 @@ def test_gpu_suite_proxy_combines_exchange_metrics_before_suite_reduction():
             assert sorted(result.per_exchange) == ["binance", "bybit"]
             return {
                 "objectives": (-stats["mean"],),
+                "unpenalized_objectives": (-stats["mean"],),
                 "constraint_violation": stats["max"],
                 "suite_metrics": {"stats": stats},
             }
@@ -2519,6 +2524,7 @@ def test_gpu_suite_proxy_applies_scenario_parameter_overrides_without_mutating_c
         def score_scenario_results(results):
             return {
                 "objectives": (0.0,),
+                "unpenalized_objectives": (0.0,),
                 "constraint_violation": 0.0,
                 "suite_metrics": {},
             }

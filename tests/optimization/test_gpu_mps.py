@@ -375,7 +375,7 @@ def test_decode_multicoin_fused_outputs_maps_directional_reductions():
     daily = torch.zeros((1, 1, 9), dtype=torch.float32)
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.arange(73, dtype=torch.float32).reshape(1, 73)
+    scalars = torch.arange(74, dtype=torch.float32).reshape(1, 74)
     gaps = torch.zeros((1, 128), dtype=torch.int32)
 
     output = _decode_multicoin_fused_outputs(daily, scalars, gaps)
@@ -8818,7 +8818,7 @@ def test_mps_ema_anchor_shader_smoke():
     assert source.index("prepare_ordinary_market_close(", ordering_start) < source.index(
         "gate_reducer_variant(", ordering_start
     )
-    assert "constant int SCALAR_COLS = 69" in source
+    assert "constant int SCALAR_COLS = 70" in source
     assert "scalars[so + 50] = fill_count" in source
     assert "scalars[so + 51] = fill_count_entry" in source
     assert "scalars[so + 52] = fill_count_long" in source
@@ -8910,7 +8910,7 @@ def test_mps_ema_anchor_shader_smoke():
     output = runner.run(parameters)
     torch.mps.synchronize()
 
-    assert runner._buffers[2][1].shape == (2, 67)
+    assert runner._buffers[2][1].shape == (2, 68)
     assert (output["hsl_drawdown_ema_mean_worst_1pct_long"] == 0.0).all()
     assert (output["hsl_drawdown_ema_mean_worst_1pct_short"] == 0.0).all()
     assert output["balance"].device.type == "mps"
@@ -9231,7 +9231,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     output = runner.run(np.array([row, row], dtype=np.float64))
     torch.mps.synchronize()
 
-    assert runner._buffers[2][1].shape == (2, 66)
+    assert runner._buffers[2][1].shape == (2, 67)
     assert (output["hsl_drawdown_ema_mean_worst_1pct_long"] == 0.0).all()
     assert (output["hsl_drawdown_ema_mean_worst_1pct_short"] == 0.0).all()
     assert (output["hsl_drawdown_raw_max_long"] == 0.0).all()
@@ -10867,7 +10867,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         raw_tail_enabled=True,
     )
     assert "kernel void passivbot_ema_anchor_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 73" in source
+    assert "constant int FUSED_SCALAR_COLS = 74" in source
 
     count = 512
     coin_count = 3
@@ -11001,7 +11001,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 73), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 74), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -11297,7 +11297,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 73), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 74), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -11447,7 +11447,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         raw_tail_enabled=True,
     )
     assert "kernel void passivbot_trailing_martingale_multicoin_fused" in source
-    assert "constant int FUSED_SCALAR_COLS = 73" in source
+    assert "constant int FUSED_SCALAR_COLS = 74" in source
 
     count = 512
     coin_count = 3
@@ -11607,7 +11607,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     daily[:, :, 1].fill_(float("inf"))
     daily[:, :, 5].fill_(float("inf"))
-    scalars = torch.zeros((batch_size, 73), dtype=torch.float32, device="mps")
+    scalars = torch.zeros((batch_size, 74), dtype=torch.float32, device="mps")
     gaps = torch.zeros((batch_size, 128), dtype=torch.int32, device="mps")
     coin_fill_counts = torch.zeros(
         (batch_size, coin_count), dtype=torch.float32, device="mps"
@@ -11903,7 +11903,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
     )
     override_daily[:, :, 1].fill_(float("inf"))
     override_daily[:, :, 5].fill_(float("inf"))
-    override_scalars = torch.zeros((1, 73), dtype=torch.float32, device="mps")
+    override_scalars = torch.zeros((1, 74), dtype=torch.float32, device="mps")
     override_gaps = torch.zeros((1, 128), dtype=torch.int32, device="mps")
     override_coin_fills = torch.zeros(
         (1, coin_count), dtype=torch.float32, device="mps"
@@ -12064,7 +12064,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     assert output["balance"].device.type == "mps"
     assert output["balance"].shape == (2,)
-    assert runner._buffers[2][1].shape == (2, 66)
+    assert runner._buffers[2][1].shape == (2, 67)
     assert (output["hsl_drawdown_raw_max_long"] == 0.0).all()
     assert (output["hsl_drawdown_raw_max_short"] == 0.0).all()
     assert torch.isfinite(output["balance"]).all()
@@ -20529,6 +20529,7 @@ def test_mps_min_effective_cost_filter_keeps_managing_an_open_position(side):
             key: output[key].cpu()
             for key in (
                 "gap_hist",
+                "gap_sum_squared_hours",
                 "first_fill_ts",
                 "last_fill_ts",
                 "first_eq_ts",
@@ -21553,11 +21554,12 @@ def test_holding_duration_scalar_does_not_alias_optional_hsl_outputs(topology, t
         _decode_directional_outputs,
         _decode_multicoin_fused_outputs,
     )
-    base_columns = 62 if topology == "multicoin" else 67
+    base_columns = 63 if topology == "multicoin" else 68
     daily_columns = 8 if topology == "single" else 9
     daily = torch.zeros((1, 1, daily_columns), dtype=torch.float32)
     scalars = torch.zeros((1, base_columns + tail_columns), dtype=torch.float32)
-    scalars[:, -1] = 123.0
+    scalars[:, -2] = 123.0
+    scalars[:, -1] = 456.0
     decoder = {
         "single": _decode_directional_outputs,
         "multicoin": _decode_outputs,
@@ -21565,6 +21567,91 @@ def test_holding_duration_scalar_does_not_alias_optional_hsl_outputs(topology, t
     }[topology]
     output = decoder(daily, scalars, torch.zeros((1, 128), dtype=torch.int32))
     assert output["held_sum_squared_hours"].item() == 123.0
+    assert output["gap_sum_squared_hours"].item() == 456.0
     for key in output:
         if key.startswith("hsl_drawdown_"):
             assert output[key].item() == 0.0, key
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("topology", ["single", "multicoin", "fused"])
+@pytest.mark.parametrize("interval_minutes", [1, 5])
+def test_streamed_gap_moment_matches_distinct_fill_timestamps(
+    strategy_kind, topology, interval_minutes
+):
+    count = 20
+    multi, row, run, data = _multicoin_exposure_fixture(
+        strategy_kind,
+        "long",
+        count=count,
+        return_context=True,
+        interval_minutes=interval_minutes,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    values = dict(zip(keys, row))
+    if strategy_kind == "trailing_martingale":
+        values.update(close_threshold_base_pct=0.0, close_retracement_base_pct=0.0)
+    values["total_wallet_exposure_limit"] = 0.5
+    row = [values[key] for key in keys]
+    if topology == "multicoin":
+        runner, matrix = multi, np.asarray([row])
+    elif topology == "fused":
+        cls = (
+            MpsEmaAnchorMulticoinFusedRunner
+            if strategy_kind == "ema_anchor"
+            else MpsTrailingMartingaleMulticoinFusedRunner
+        )
+        runner, matrix = cls(run, data), np.asarray([row + row])
+    else:
+        market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+        timestamps = run.first_ts_ms + np.arange(count, dtype=np.int64) * run.interval_ms
+        single_data = build_mps_data(
+            np.full(count, 101.0),
+            np.full(count, 99.0),
+            np.full(count, 100.0),
+            timestamps,
+            run,
+            market,
+        )
+        keys = (
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+            if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        )
+        single = _single_coin_param_row(values, keys)
+        cls = MpsEmaAnchorRunner if strategy_kind == "ema_anchor" else MpsTrailingMartingaleRunner
+        runner, matrix = cls(
+            market, run, single_data, long_enabled=True, short_enabled=True
+        ), np.asarray([single + single])
+    fill_timestamps = set()
+    for end in range(3, count):
+        output = (
+            runner.run(matrix, end_step=end)
+            if topology == "single"
+            else runner.run(matrix, end_steps=np.array([end], dtype=np.int32))
+        )
+        timestamp = output["last_fill_ts"].item()
+        if np.isfinite(timestamp):
+            fill_timestamps.add(timestamp)
+    gaps = np.diff(sorted(fill_timestamps)) / 3_600_000.0
+    assert len(gaps) >= 2, "fixture must include multiple coalesced fill gaps"
+    assert output["gap_hist"].sum().item() == len(gaps)
+    assert output["gap_sum_squared_hours"].item() == pytest.approx(
+        float(np.square(gaps).sum()), rel=2e-6
+    )
+    boundaries = [
+        output["first_eq_ts"].item(),
+        *sorted(fill_timestamps),
+        output["last_eq_ts"].item(),
+    ]
+    all_gaps = np.diff(boundaries) / 3_600_000.0
+    expected = np.square(all_gaps).sum() / all_gaps.sum()
+    metrics = _fill_gap_metrics({key: value.cpu() for key, value in output.items()}, run)
+    assert metrics["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(
+        expected, rel=2e-6
+    )
