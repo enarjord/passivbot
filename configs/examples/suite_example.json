@@ -135,6 +135,8 @@
                 }
             },
             "unstuck": {
+                "ema_span_0": 770.0,
+                "ema_span_1": 210.0,
                 "close_pct": 0.078,
                 "ema_dist": -0.07,
                 "enabled": true,
@@ -208,6 +210,8 @@
                 }
             },
             "unstuck": {
+                "ema_span_0": 100.0,
+                "ema_span_1": 100.0,
                 "close_pct": 0.05,
                 "ema_dist": -0.2,
                 "enabled": true,
@@ -217,7 +221,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.2.0",
+    "config_version": "v8.3.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -503,6 +507,8 @@
                     }
                 },
                 "unstuck": {
+                    "ema_span_0": [770, 770],
+                    "ema_span_1": [210, 210],
                     "close_pct": [
                         0.05,
                         0.12,
@@ -730,6 +736,8 @@
                     }
                 },
                 "unstuck": {
+                    "ema_span_0": [100, 100],
+                    "ema_span_1": [100, 100],
                     "close_pct": [
                         0.05,
                         0.12,

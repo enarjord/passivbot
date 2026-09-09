@@ -246,6 +246,10 @@ def test_gpu_interrupt_checkpoints_complete_generation_state():
 def _long_only_ema_config():
     config = copy.deepcopy(get_template_config())
     config["live"]["strategy_kind"] = "ema_anchor"
+    # These scope fixtures exercise reducers without an EMA eligibility gate.
+    # Independent EMA screening support is covered by its explicit guard tests.
+    for side in ("long", "short"):
+        config["bot"][side]["unstuck"]["ema_gating_enabled"] = False
     config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
     config["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
     config["bot"]["long"]["risk"]["n_positions"] = 1
@@ -6574,6 +6578,7 @@ def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
     scoring = [{"goal": "max", "metric": "adg_strategy_eq"}]
     config = _long_only_ema_config()
     config["bot"]["long"]["unstuck"]["enabled"] = True
+    config["bot"]["long"]["unstuck"]["ema_gating_enabled"] = True
     proxy = SimpleNamespace(coin_override_contract=None)
     original_contract = _gpu_runtime_checkpoint_contract(config, proxy)
     original = _checkpoint_signature(
@@ -6585,6 +6590,8 @@ def test_gpu_checkpoint_signature_tracks_single_coin_unstuck_contract():
         "ema_gating_enabled": False,
         "close_pct": 0.234,
         "ema_dist": -0.012,
+        "ema_span_0": 333.5,
+        "ema_span_1": 777.25,
         "loss_allowance_pct": 0.034,
         "threshold": 0.876,
     }

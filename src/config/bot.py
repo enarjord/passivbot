@@ -483,6 +483,14 @@ def normalize_hsl_risk_unstuck_numerics(
         hsl_path = f"bot.{pside}.hsl"
         risk_path = f"bot.{pside}.risk"
         unstuck_path = f"bot.{pside}.unstuck"
+        for key in ("ema_span_0", "ema_span_1"):
+            raw = get_grouped_bot_value(bot_side, f"unstuck_{key}")
+            if isinstance(raw, bool):
+                raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
+            value = float(raw)
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
+            bot_side["unstuck"][key] = value
 
         _normalize_minimum_span(
             result,
@@ -1072,6 +1080,9 @@ def format_bot_config(
     for path in ("bot.long", "bot.short"):
         require_config_dict(result, path)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    from .migrations.unstuck_ema import migrate_unstuck_ema_spans
+
+    migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     ensure_required_bot_params_present(result)
     normalize_hsl_risk_unstuck_numerics(result, verbose=verbose, tracker=tracker)

@@ -5,6 +5,7 @@ This module bridges the gap between the general configuration system and the
 optimization-specific bounds logic.
 """
 
+import math
 from typing import List, Tuple
 
 from config.bot import validate_unstuck_ema_dist_value
@@ -104,6 +105,16 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 f"got {type(value).__name__}"
             )
         target_key = canonical_key or bound_key
+        if key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+            bound = Bound.from_config(target_key, optimize_bounds[bound_key])
+            if (
+                not math.isfinite(bound.low)
+                or not math.isfinite(bound.high)
+                or bound.low <= 0.0
+            ):
+                raise ValueError(
+                    f"optimize.bounds.{target_key} must be positive and finite"
+                )
         if target_key == "long_unstuck_ema_dist":
             bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             validate_unstuck_ema_dist_value(

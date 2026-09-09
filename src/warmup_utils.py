@@ -129,6 +129,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
+        "unstuck_ema_span_0",
+        "unstuck_ema_span_1",
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]
@@ -168,6 +170,9 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "short_forager_volume_ema_span_1m",
         "short_forager_volatility_ema_span_1m",
     ]
+    bound_keys_minutes.extend(
+        f"{side}_unstuck_ema_span_{i}" for side in ("long", "short") for i in (0, 1)
+    )
     bound_keys_minutes.extend(iter_strategy_warmup_flat_bound_keys("1m"))
     bound_keys_hours = iter_strategy_warmup_flat_bound_keys("1h")
 
@@ -204,6 +209,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
+        "unstuck_ema_span_0",
+        "unstuck_ema_span_1",
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]

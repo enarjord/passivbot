@@ -99,6 +99,8 @@ def _rust_bot_params(**overrides):
         "risk_we_excess_allowance_pct": 0.0,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
+        "unstuck_ema_span_0": 10.0,
+        "unstuck_ema_span_1": 20.0,
         "unstuck_loss_allowance_pct": 0.0,
         "unstuck_threshold": 0.0,
     }

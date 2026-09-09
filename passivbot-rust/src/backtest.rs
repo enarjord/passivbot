@@ -120,6 +120,8 @@ fn calc_effective_min_cost(price: f64, exchange: &ExchangeParams) -> f64 {
 pub struct EmaAlphas {
     pub long: Alphas,
     pub short: Alphas,
+    pub unstuck_long: Alphas,
+    pub unstuck_short: Alphas,
     pub vol_alpha_long: f64,
     pub vol_alpha_short: f64,
     pub log_range_alpha_long: f64,
@@ -137,6 +139,12 @@ pub struct Alphas {
 
 #[derive(Debug)]
 pub struct EMAs {
+    pub unstuck_long: [f64; 3],
+    pub unstuck_long_num: [f64; 3],
+    pub unstuck_long_den: [f64; 3],
+    pub unstuck_short: [f64; 3],
+    pub unstuck_short_num: [f64; 3],
+    pub unstuck_short_den: [f64; 3],
     pub long: [f64; 3],
     pub long_num: [f64; 3],
     pub long_den: [f64; 3],
@@ -278,28 +286,28 @@ fn make_orchestrator_ema_slots(
 }
 
 impl EMAs {
-    pub fn compute_bands(&self, pside: usize) -> EMABands {
+    pub fn compute_unstuck_bands(&self, pside: usize) -> EMABands {
         let (upper, lower) = match pside {
             LONG => (
                 *self
-                    .long
+                    .unstuck_long
                     .iter()
                     .max_by(|a, b| a.partial_cmp(b).unwrap())
                     .unwrap_or(&f64::MIN),
                 *self
-                    .long
+                    .unstuck_long
                     .iter()
                     .min_by(|a, b| a.partial_cmp(b).unwrap())
                     .unwrap_or(&f64::MAX),
             ),
             SHORT => (
                 *self
-                    .short
+                    .unstuck_short
                     .iter()
                     .max_by(|a, b| a.partial_cmp(b).unwrap())
                     .unwrap_or(&f64::MIN),
                 *self
-                    .short
+                    .unstuck_short
                     .iter()
                     .min_by(|a, b| a.partial_cmp(b).unwrap())
                     .unwrap_or(&f64::MAX),
@@ -1093,7 +1101,7 @@ impl<'a> Backtest<'a> {
         };
 
         let runtime_budget = self.runtime_budget(idx, side);
-        let ema_bands = self.emas[idx].compute_bands(side);
+        let ema_bands = self.emas[idx].compute_unstuck_bands(side);
         let current_price = self.hlcvs_value(k, idx, CLOSE);
         let ex = &self.exchange_params_list[idx];
 
@@ -1443,6 +1451,18 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
+                for (bot, values) in [
+                    (&self.bot_params[idx].long, self.emas[idx].unstuck_long),
+                    (&self.bot_params[idx].short, self.emas[idx].unstuck_short),
+                ] {
+                    if bot.unstuck_enabled && bot.unstuck_ema_gating_enabled {
+                        for (span, value) in unstuck_spans(bot).into_iter().zip(values) {
+                            if !m1.close.iter().any(|(existing, _)| *existing == span) {
+                                m1.close.push((span, value));
+                            }
+                        }
+                    }
+                }
                 let vol_span_long = self.bot_params_master.long.filter_volume_ema_span_1m as f64;
                 let vol_span_short = self.bot_params_master.short.filter_volume_ema_span_1m as f64;
                 let lr_span_long = self.bot_params_master.long.filter_volatility_ema_span_1m as f64;
@@ -1729,6 +1749,18 @@ impl<'a> Backtest<'a> {
                     sym.emas.m1.close[i + 3].1 = v;
                 }
             }
+            for (bot, values) in [
+                (&self.bot_params[idx].long, self.emas[idx].unstuck_long),
+                (&self.bot_params[idx].short, self.emas[idx].unstuck_short),
+            ] {
+                for (span, value) in unstuck_spans(bot).into_iter().zip(values) {
+                    for (stored_span, stored_value) in sym.emas.m1.close.iter_mut().skip(6) {
+                        if *stored_span == span {
+                            *stored_value = value;
+                        }
+                    }
+                }
+            }
             let slots = self.orchestrator_ema_slots[idx];
             if sym.emas.m1.volume.len() > slots.m1_volume_short {
                 sym.emas.m1.volume[slots.m1_volume_long].1 = self.emas[idx].vol_long;
@@ -1956,6 +1988,12 @@ impl<'a> Backtest<'a> {
                 };
                 let quote_volume = base_volume * typical_price;
                 EMAs {
+                    unstuck_long: [base_close; 3],
+                    unstuck_long_num: [base_close; 3],
+                    unstuck_long_den: [1.0; 3],
+                    unstuck_short: [base_close; 3],
+                    unstuck_short_num: [base_close; 3],
+                    unstuck_short_den: [1.0; 3],
                     long: [base_close; 3],
                     long_num: [base_close; 3],
                     long_den: [1.0; 3],
@@ -5630,6 +5668,18 @@ impl<'a> Backtest<'a> {
 
             // price EMAs (3 levels)
             for z in 0..3 {
+                emas.unstuck_long[z] = update_adjusted_ema(
+                    close_price,
+                    self.ema_alphas[i].unstuck_long.alphas[z],
+                    &mut emas.unstuck_long_num[z],
+                    &mut emas.unstuck_long_den[z],
+                );
+                emas.unstuck_short[z] = update_adjusted_ema(
+                    close_price,
+                    self.ema_alphas[i].unstuck_short.alphas[z],
+                    &mut emas.unstuck_short_num[z],
+                    &mut emas.unstuck_short_den[z],
+                );
                 emas.long[z] = update_adjusted_ema(
                     close_price,
                     long_alphas[z],
@@ -6310,6 +6360,16 @@ fn daily_worst_positive_drawdowns(
     daily_worst
 }
 
+fn unstuck_spans(bot: &BotParams) -> [f64; 3] {
+    let mut spans = [
+        bot.unstuck_ema_span_0,
+        bot.unstuck_ema_span_1,
+        (bot.unstuck_ema_span_0 * bot.unstuck_ema_span_1).sqrt(),
+    ];
+    spans.sort_by(f64::total_cmp);
+    spans
+}
+
 fn calc_ema_alphas(
     bot_params_pair: &BotParamsPair,
     strategy_params_pair: &StrategyParamsPair,
@@ -6351,6 +6411,14 @@ fn calc_ema_alphas(
         },
         short: Alphas {
             alphas: ema_alphas_short,
+        },
+        unstuck_long: Alphas {
+            alphas: unstuck_spans(&bot_params_pair.long)
+                .map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0))),
+        },
+        unstuck_short: Alphas {
+            alphas: unstuck_spans(&bot_params_pair.short)
+                .map(|x| clamp_alpha(2.0 / (x / interval_f + 1.0))),
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
         vol_alpha_long: clamp_alpha(
@@ -11623,6 +11691,103 @@ mod tests {
     }
 
     #[test]
+    fn independent_unstuck_emas_refresh_in_cached_orchestrator_input() {
+        let mut hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        hlcvs[[1, 0, CLOSE]] = 1.5;
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.wallet_exposure_limit = 0.1;
+        bp_pair.long.entry_initial_qty_pct = 0.1;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        bp_pair.long.unstuck_ema_span_0 = 7.5;
+        bp_pair.long.unstuck_ema_span_1 = 31.25;
+        bp_pair.short.unstuck_ema_span_0 = 10.0;
+        bp_pair.short.unstuck_ema_span_1 = 20.0;
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        let first = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(first.symbols[0].emas.m1.close.len(), 9);
+        bt.orchestrator_input_cache = Some(first);
+        bt.update_emas(1);
+        let refreshed = bt.get_orchestrator_input_cached(1, None, None);
+        let fresh = bt.build_orchestrator_input_iter(1, None, None, 0..1);
+        assert_eq!(
+            refreshed.symbols[0].emas.m1.close,
+            fresh.symbols[0].emas.m1.close
+        );
+        for (span, value) in unstuck_spans(&bt.bot_params[0].long)
+            .into_iter()
+            .zip(bt.emas[0].unstuck_long)
+        {
+            let alpha = 2.0 / (span + 1.0);
+            let expected = alpha * 1.5 + (1.0 - alpha);
+            assert!((value - expected).abs() < 1e-12);
+            assert!(refreshed.symbols[0].emas.m1.close.contains(&(span, value)));
+        }
+        // A migrated pair uses exactly the existing strategy EMA arithmetic.
+        assert_eq!(bt.emas[0].unstuck_short, bt.emas[0].long);
+    }
+
+    #[test]
+    fn independent_unstuck_alphas_preserve_fractional_minutes_at_every_interval() {
+        let mut bp = BotParamsPair::default();
+        bp.long.unstuck_ema_span_0 = 17.25;
+        bp.long.unstuck_ema_span_1 = 211.75;
+        let strategies = strategy_pair_for_ema_tests(&bp);
+        for interval in [1, 5, 15] {
+            let alphas = calc_ema_alphas(&bp, &strategies, interval);
+            for (span, alpha) in unstuck_spans(&bp.long)
+                .into_iter()
+                .zip(alphas.unstuck_long.alphas)
+            {
+                assert!((alpha - (2.0 / (span / interval as f64 + 1.0)).min(1.0)).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
     fn test_ema_alpha_interval_1_matches_original_formula() {
         // With interval=1, alpha should equal 2/(span+1) (the original formula)
         let mut bp = BotParamsPair::default();
@@ -11809,6 +11974,8 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_long = [
             long_span_0,
             long_span_1,
+            pair.long.unstuck_ema_span_0,
+            pair.long.unstuck_ema_span_1,
             pair.long.filter_volume_ema_span_1m as f64,
             pair.long.filter_volatility_ema_span_1m as f64,
             strategy_entry_volatility_span_hours(&strategy_pair.long).unwrap_or(0.0) * 60.0,
@@ -11816,6 +11983,8 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_short = [
             short_span_0,
             short_span_1,
+            pair.short.unstuck_ema_span_0,
+            pair.short.unstuck_ema_span_1,
             pair.short.filter_volume_ema_span_1m as f64,
             pair.short.filter_volatility_ema_span_1m as f64,
             strategy_entry_volatility_span_hours(&strategy_pair.short).unwrap_or(0.0) * 60.0,

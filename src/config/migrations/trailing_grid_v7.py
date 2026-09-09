@@ -1385,6 +1385,13 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
     _migrate_coin_overrides(source, target, report)
     _force_v7_absent_risk_defaults(source, target, report)
     _disable_enforcers_for_zero_v7_thresholds(source, target, report)
+    from .unstuck_ema import migrate_unstuck_ema_spans
+
+    for side in ("long", "short"):
+        for key in ("ema_span_0", "ema_span_1"):
+            target["bot"][side]["unstuck"].pop(key, None)
+            target["optimize"]["bounds"][side]["unstuck"].pop(key, None)
+    migrate_unstuck_ema_spans(target, base_config_path=source_path or "", verbose=False)
     _record_inserted_v8_defaults(source, target, report)
     _warn_if_v7_excess_would_be_clamped(target, report)
     report["canonical_validation"] = _validate_migrated_config(target)

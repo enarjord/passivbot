@@ -1132,14 +1132,25 @@ def _build_monitor_runtime_market_hints(
                 "lower": float(ema_lower),
                 "upper": float(ema_upper),
                 "entry_trigger_price": float(
-                    ema_lower * (1.0 - entry_dist) if pside == "long" else ema_upper * (1.0 + entry_dist)
-                ),
-                "unstuck_trigger_price": float(
-                    ema_upper * (1.0 + unstuck_ema_dist)
+                    ema_lower * (1.0 - entry_dist)
                     if pside == "long"
-                    else ema_lower * (1.0 - unstuck_ema_dist)
+                    else ema_upper * (1.0 + entry_dist)
                 ),
             }
+            if self.bp(pside, "unstuck_enabled", symbol) and self.bp(
+                pside, "unstuck_ema_gating_enabled", symbol
+            ):
+                u0 = float(self.bp(pside, "unstuck_ema_span_0", symbol))
+                u1 = float(self.bp(pside, "unstuck_ema_span_1", symbol))
+                values = [emas.get(span) for span in (u0, u1, (u0 * u1) ** 0.5)]
+                if all(v is not None and math.isfinite(v) and v > 0.0 for v in values):
+                    side_hint["unstuck_lower"] = min(values)
+                    side_hint["unstuck_upper"] = max(values)
+                    side_hint["unstuck_trigger_price"] = (
+                        max(values) * (1.0 + unstuck_ema_dist)
+                        if pside == "long"
+                        else min(values) * (1.0 - unstuck_ema_dist)
+                    )
             if last_price is not None and float(last_price) > 0.0:
                 side_hint["last_price"] = float(last_price)
             per_side[pside] = side_hint

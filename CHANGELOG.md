@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Auto-unstuck now owns independent `bot.<side>.unstuck.ema_span_0` / `ema_span_1`, including
+  coin overrides and CPU optimizer bounds. Schema v8.3.0 migrates missing spans from each coin's
+  effective strategy to preserve saved trading behavior, with warnings where exact migration is
+  impossible (including the formerly coupled optimizer search). Hard-coded defaults and the default
+  example include the new spans. Live warmup, backtest EMA updates, and monitor triggers use them.
+  Apple MPS screening rejects independent-span searches until its kernels model them; matching
+  fixed spans and disabled EMA gating remain supported.
+
 - GPU optimization automatically queues two validation batches (or twice the worker count,
   whichever is larger), allowing proxy screening and exact evaluation to overlap. Explicit queue
   sizes remain unchanged. Drift calibration now compares unpenalized objective values, keeping

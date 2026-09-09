@@ -889,6 +889,8 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
+            for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+                max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
             for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
                 max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
             if (pside == "long" and is_forager_long) or (
@@ -16734,6 +16736,8 @@ class Passivbot:
             "unstuck_close_pct",
             "unstuck_ema_gating_enabled",
             "unstuck_ema_dist",
+            "unstuck_ema_span_0",
+            "unstuck_ema_span_1",
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
@@ -17328,6 +17332,22 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
+                if self.bp(pside, "unstuck_enabled", symbol) and self.bp(
+                    pside, "unstuck_ema_gating_enabled", symbol
+                ):
+                    unstuck_spans = [
+                        float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))
+                        for i in (0, 1)
+                    ]
+                    if any(
+                        not math.isfinite(span) or span <= 0.0 for span in unstuck_spans
+                    ):
+                        raise ValueError(
+                            f"invalid unstuck EMA spans for {symbol} {pside}: {unstuck_spans}"
+                        )
+                    need_close_spans[symbol].update(
+                        (*unstuck_spans, (unstuck_spans[0] * unstuck_spans[1]) ** 0.5)
+                    )
                 requirements = strategy_warmup_requirements(
                     strategy_params,
                     pside=pside,

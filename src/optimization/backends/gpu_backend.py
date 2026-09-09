@@ -417,6 +417,9 @@ def _validate_gpu_static_scope(config: dict) -> str:
             "validation cannot make an unmodeled proxy search safe. "
             f"See {GPU_CAPABILITIES_DOC}."
         )
+    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+    validate_independent_unstuck_scope(config)
     return strategy_kind
 
 
@@ -1783,6 +1786,8 @@ def _validate_gpu_coin_overrides(
             for key in (
                 "enabled",
                 "ema_gating_enabled",
+                "ema_span_0",
+                "ema_span_1",
                 "close_pct",
                 "ema_dist",
                 "loss_allowance_pct",
@@ -3161,9 +3166,9 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
             ),
             "close_pct": float(unstuck.get("close_pct", 0.0)),
             "ema_dist": float(unstuck.get("ema_dist", 0.0)),
-            "loss_allowance_pct": float(
-                unstuck.get("loss_allowance_pct", 0.0)
-            ),
+            "ema_span_0": unstuck.get("ema_span_0"),
+            "ema_span_1": unstuck.get("ema_span_1"),
+            "loss_allowance_pct": float(unstuck.get("loss_allowance_pct", 0.0)),
             "threshold": float(unstuck.get("threshold", 0.0)),
         }
     return contract

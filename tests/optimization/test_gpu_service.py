@@ -1609,6 +1609,14 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         # directional surfaces participate in global auto-unstuck selection.
         config["bot"][side]["unstuck"]["enabled"] = True
         config["bot"][side]["hsl"]["enabled"] = True
+        for key in ("ema_span_0", "ema_span_1"):
+            span = config["bot"][side]["strategy"][strategy_kind][key]
+            config["bot"][side]["unstuck"][key] = span
+            config["optimize"]["bounds"][side]["strategy"][strategy_kind][key] = [
+                span,
+                span,
+            ]
+            config["optimize"]["bounds"][side]["unstuck"][key] = [span, span]
         flat = flatten_shared_bot_side(config["bot"][side])
         config["bot"][side].update(
             {key: value for key, value in flat.items() if key.startswith("unstuck_")}
