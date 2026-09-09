@@ -4,6 +4,16 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- GPU optimization automatically queues two validation batches (or twice the worker count,
+  whichever is larger), allowing proxy screening and exact evaluation to overlap. Explicit queue
+  sizes remain unchanged. Drift calibration now compares unpenalized objective values, keeping
+  constraint penalties from obscuring disagreement. The fill-gap time-weighted mean uses streamed
+  squared gaps instead of histogram bounds. Existing GPU checkpoints require a fresh run.
+- Pymoo mutation exposes separate `mutation_prob` (per individual) and
+  `mutation_prob_per_variable` controls on CPU and GPU. Both default to `"auto"`, preserving
+  historical mutation intensity. The old, misleading `mutation_prob_var` config key migrates to
+  `mutation_prob`; existing numeric settings keep their effective meaning.
+
 - KuCoin partial closes now contribute realized losses to auto-unstuck and other PnL
   risk inputs before the whole position closes. Existing trade-derived closes mislabeled
   as authoritative are automatically backed up and reconstructed on cache load; the

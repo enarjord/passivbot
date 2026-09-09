@@ -91,6 +91,7 @@ CORE_OUTPUT_KEYS = {
     "held_max_ms",
     "held_sum_ms",
     "held_sum_squared_hours",
+    "gap_sum_squared_hours",
     "held_count",
     "position_unchanged_max_ms",
     "gap_hist",
@@ -1722,6 +1723,11 @@ def _combine_hedged_multicoin_outputs(
     combined["position_unchanged_max_ms"] = long[
         "position_unchanged_max_ms"
     ].maximum(short["position_unchanged_max_ms"])
+    # Separate directional streams cannot reconstruct coalesced portfolio gaps.
+    # This merged topology remains excluded from fill-gap scoring by the backend.
+    combined["gap_sum_squared_hours"] = (
+        long["gap_sum_squared_hours"] + short["gap_sum_squared_hours"]
+    )
     combined["gap_hist"] = long["gap_hist"] + short["gap_hist"]
     combined["gap_max_ms"] = long["gap_max_ms"].maximum(short["gap_max_ms"])
     combined["first_fill_ts"] = _nan_min(

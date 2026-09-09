@@ -701,6 +701,7 @@ def _build_invalid_candidate_metrics(
     objectives = tuple(to_engine_value(spec, 0.0) for spec in specs)
     metrics_payload = {
         "objectives": raw_objectives,
+        "unpenalized_objectives": objectives,
         "constraint_violation": INVALID_BACKTEST_CANDIDATE_PENALTY,
         "error": error,
     }
@@ -1822,6 +1823,9 @@ class Evaluator:
         metrics_payload = {
             **scenario_metrics,
             "objectives": raw_objectives,
+            "unpenalized_objectives": tuple(
+                to_engine_value(spec, raw_objectives[spec.metric]) for spec in self.scoring_specs
+            ),
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
@@ -2175,6 +2179,10 @@ class SuiteEvaluator:
         )
         return {
             "objectives": tuple(objectives),
+            "unpenalized_objectives": tuple(
+                to_engine_value(spec, value)
+                for spec, value in zip(self.base.scoring_specs, objective_values)
+            ),
             "constraint_violation": float(total_penalty),
             "suite_metrics": suite_payload,
             "reduce_metrics_ms": reduce_metrics_ms,
@@ -2416,6 +2424,7 @@ class SuiteEvaluator:
 
         metrics_payload = {
             "objectives": objectives_map,
+            "unpenalized_objectives": suite_fitness["unpenalized_objectives"],
             "suite_metrics": suite_payload,
             "constraint_violation": total_penalty,
             "liquidated": liquidated,

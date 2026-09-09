@@ -148,6 +148,7 @@ def test_equity_balance_diff_and_paper_loss_metrics_match_rust_contract():
         "fill_count": torch.tensor([2.0]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -226,6 +227,7 @@ def test_equity_balance_diff_metrics_fail_closed_without_metal_output():
         "fill_count": torch.zeros(1),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
@@ -261,6 +263,7 @@ def test_equity_balance_diff_metrics_use_rust_defaults_without_fills():
         "fill_count": torch.zeros(1),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
@@ -360,6 +363,7 @@ def test_equity_curve_metrics_use_rust_defaults_without_fills():
         "fill_count": torch.zeros(1),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
@@ -424,6 +428,7 @@ def test_fill_activity_metrics_match_rust_full_timestamp_span_contract():
         "max_dd": torch.zeros(2),
         "held_max_ms": torch.zeros(2),
         "position_unchanged_max_ms": torch.zeros(2),
+        "gap_sum_squared_hours": torch.zeros(2),
         "gap_hist": torch.zeros((2, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(2),
         "first_fill_ts": torch.tensor([0.0, float("nan")]),
@@ -516,6 +521,7 @@ def test_fill_activity_metrics_ignore_inactive_daily_slots_and_zero_single_sampl
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -562,6 +568,7 @@ def test_duration_alias_metrics_match_rust_unit_contracts():
         "position_unchanged_max_ms": torch.tensor(
             [18 * 3_600_000.0], dtype=torch.float64
         ),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -776,6 +783,7 @@ def test_daily_pnl_metrics_match_rust_fill_day_contract():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -838,6 +846,7 @@ def test_weighted_daily_pnl_metrics_match_rust_suffix_contract():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -1038,7 +1047,6 @@ def test_weighted_daily_series_metrics_average_only_nonempty_windows():
     assert metrics["volume_pct_per_day_avg_w"].item() == pytest.approx(0.5)
 
 
-
 def test_weighted_metrics_include_fill_free_losing_tail():
     day_ms = 86_400_000
     equities = torch.arange(10000.0, 7000.0, -100.0, dtype=torch.float64).unsqueeze(0)
@@ -1173,6 +1181,7 @@ def test_weighted_pnl_uses_fill_count_not_fill_day_count_for_eligibility():
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
         "position_unchanged_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -1258,6 +1267,7 @@ def test_fill_gap_summary_metric_surface_is_supported():
 
 def test_fill_gap_summary_without_fills_uses_whole_active_span():
     out = {
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "first_fill_ts": torch.tensor([float("nan")]),
         "last_fill_ts": torch.tensor([float("nan")]),
@@ -1277,6 +1287,7 @@ def test_fill_gap_histogram_is_conservative_for_interpolated_percentiles():
     gap_hist[0, bin_index] = 1
     out = {
         "gap_hist": gap_hist,
+        "gap_sum_squared_hours": torch.tensor([4.0]),
         "first_fill_ts": torch.tensor([3_600_000.0]),
         "last_fill_ts": torch.tensor([10_800_000.0]),
         "first_eq_ts": torch.tensor([0.0]),
@@ -1322,6 +1333,7 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
     last_fill_step = first_eq_step + 3
     last_eq_step = first_eq_step + 4
     out = {
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "first_fill_ts": torch.tensor(
             [first_fill_step * interval_ms], dtype=torch.float32
@@ -1347,6 +1359,7 @@ def test_fill_gap_boundary_decode_recovers_large_float32_candle_offsets():
 
 def test_fill_gap_time_weighted_mean_uses_exact_boundary_gaps():
     out = {
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "first_fill_ts": torch.tensor([3_600_000.0]),
         "last_fill_ts": torch.tensor([3_600_000.0]),
@@ -1818,6 +1831,7 @@ def test_pnl_recovery_metrics_fail_closed_without_kernel_output():
         "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.full((1,), float("nan")),
@@ -1933,6 +1947,7 @@ def test_new_strategy_equity_metrics_reduce_existing_compact_surface():
         "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
         "max_dd": torch.tensor([0.30], dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2053,6 +2068,7 @@ def test_btc_account_metrics_use_prepared_daily_price_context(fill_count):
         "fill_count": torch.tensor([fill_count]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -2122,6 +2138,7 @@ def test_btc_account_metrics_fail_closed_without_price_context():
         "fill_count": torch.tensor([1.0]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -2171,6 +2188,7 @@ def test_btc_risk_metrics_use_synchronized_intraday_surface():
         "fill_count": torch.tensor([4.0]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -2320,6 +2338,7 @@ def test_btc_account_metrics_use_candidate_liquidation_endpoint_price():
         "fill_count": torch.tensor([2.0]),
         "max_dd": torch.zeros(1),
         "held_max_ms": torch.zeros(1),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1),
         "first_fill_ts": torch.tensor([0.0]),
@@ -2361,6 +2380,7 @@ def test_objectives_include_final_active_calendar_day():
         "day_has_fill": torch.zeros_like(day_end),
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2397,6 +2417,7 @@ def test_completion_uses_rust_exclusive_requested_end():
         "day_has_fill": torch.zeros_like(day_end),
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2431,6 +2452,7 @@ def test_completion_is_zero_when_no_equity_sample_exists():
         "day_has_fill": torch.zeros_like(day_end, dtype=torch.bool),
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2492,6 +2514,7 @@ def test_completion_uses_raw_requested_start_before_available_history():
         "day_has_fill": torch.zeros_like(day_end),
         "max_dd": torch.zeros(1, dtype=torch.float64),
         "held_max_ms": torch.zeros(1, dtype=torch.float64),
+        "gap_sum_squared_hours": torch.zeros(1),
         "gap_hist": torch.zeros((1, 128), dtype=torch.int32),
         "gap_max_ms": torch.zeros(1, dtype=torch.float64),
         "first_fill_ts": torch.full((1,), float("nan"), dtype=torch.float64),
@@ -2524,3 +2547,24 @@ def test_duration_aliases_preserve_exact_only_gpu_metric_policy(name):
         validate_gpu_metric_names([name])
     assert {"n_days", "fills_analysis_duration_days"} <= GPU_EXACT_ONLY_METRICS
     assert "n_days" not in SUPPORTED_METRICS
+
+
+@pytest.mark.parametrize("gap_hours", [1.0 / 60.0, 6.0, 120.0])
+@pytest.mark.parametrize("interval_ms", [60_000, 300_000])
+def test_fill_gap_time_weighted_mean_uses_streamed_moment(gap_hours, interval_ms):
+    if gap_hours * 3_600_000 < interval_ms:
+        return
+    steps = round(gap_hours * 3_600_000 / interval_ms)
+    histogram = torch.zeros((1, 128), dtype=torch.int32)
+    histogram[0, int(math.log(steps + 1) * 127 / math.log(4_000_001))] = 3
+    out = {
+        "gap_hist": histogram,
+        "gap_sum_squared_hours": torch.tensor([3 * gap_hours**2]),
+        "first_fill_ts": torch.tensor([0.0]),
+        "last_fill_ts": torch.tensor([3 * gap_hours * 3_600_000]),
+        "first_eq_ts": torch.tensor([0.0]),
+        "last_eq_ts": torch.tensor([3 * gap_hours * 3_600_000]),
+    }
+    metrics = _fill_gap_metrics(out, SimpleNamespace(interval_ms=interval_ms))
+    assert metrics["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(gap_hours)
+    assert metrics["fills_gap_p95_hours"].item() >= gap_hours

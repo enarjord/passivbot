@@ -130,7 +130,8 @@ def test_format_config_normalizes_pymoo_nested_defaults_and_legacy_fallbacks():
         "crossover_eta": 17.0,
         "crossover_prob_var": 0.33,
         "mutation_eta": 11.0,
-        "mutation_prob_var": 0.07,
+        "mutation_prob": 0.07,
+        "mutation_prob_per_variable": "auto",
         "eliminate_duplicates": True,
     }
     assert out["optimize"]["pymoo"]["algorithms"]["nsga3"]["ref_dirs"] == {

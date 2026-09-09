@@ -50,7 +50,8 @@ DEFAULT_PYMOO_SHARED = {
     "crossover_eta": 20.0,
     "crossover_prob_var": 0.5,
     "mutation_eta": 20.0,
-    "mutation_prob_var": "auto",
+    "mutation_prob": "auto",
+    "mutation_prob_per_variable": "auto",
     "eliminate_duplicates": True,
 }
 DEFAULT_PYMOO_REF_DIRS = {
@@ -287,27 +288,39 @@ def _resolve_pymoo_shared(config: dict[str, Any]) -> dict[str, Any]:
             return optimize_cfg[legacy_name]
         return DEFAULT_PYMOO_SHARED[name]
 
-    mutation_prob = shared.get("mutation_prob_var")
+    mutation_prob = shared.get("mutation_prob", shared.get("mutation_prob_var"))
     if mutation_prob is None:
         legacy_mutation = optimize_cfg.get("mutation_indpb")
         if isinstance(legacy_mutation, (int, float)) and float(legacy_mutation) > 0.0:
             mutation_prob = float(legacy_mutation)
         else:
-            mutation_prob = DEFAULT_PYMOO_SHARED["mutation_prob_var"]
+            mutation_prob = DEFAULT_PYMOO_SHARED["mutation_prob"]
 
     return {
         "crossover_eta": float(_fallback("crossover_eta")),
         "crossover_prob_var": float(_fallback("crossover_prob_var", "crossover_probability")),
         "mutation_eta": float(_fallback("mutation_eta")),
-        "mutation_prob_var": mutation_prob,
+        "mutation_prob": mutation_prob,
+        "mutation_prob_per_variable": shared.get("mutation_prob_per_variable", "auto"),
         "eliminate_duplicates": bool(_fallback("eliminate_duplicates")),
     }
 
 
 def _resolve_mutation_prob(shared: dict[str, Any], n_params: int) -> float:
-    raw = shared.get("mutation_prob_var", DEFAULT_PYMOO_SHARED["mutation_prob_var"])
+    raw = shared.get(
+        "mutation_prob",
+        shared.get("mutation_prob_var", DEFAULT_PYMOO_SHARED["mutation_prob"]),
+    )
     if isinstance(raw, str) and raw.strip().lower() == "auto":
         return 1.0 / max(1, int(n_params))
+    return max(0.0, min(1.0, float(raw)))
+
+
+def _resolve_mutation_prob_per_variable(shared: dict[str, Any], n_params: int) -> float:
+    raw = shared.get("mutation_prob_per_variable", "auto")
+    if isinstance(raw, str) and raw.strip().lower() == "auto":
+        # Match pymoo Mutation.get_prob_var, including one-dimensional problems.
+        return min(0.5, 1.0 / max(1, int(n_params)))
     return max(0.0, min(1.0, float(raw)))
 
 
@@ -463,6 +476,7 @@ def _build_algorithm(
     )
     mutation = PM(
         prob=_resolve_mutation_prob(shared, len(bounds)),
+        prob_var=_resolve_mutation_prob_per_variable(shared, len(bounds)),
         eta=float(shared["mutation_eta"]),
     )
     eliminate_duplicates = bool(shared["eliminate_duplicates"])
