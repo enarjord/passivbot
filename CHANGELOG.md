@@ -7,7 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
   ordinary flatten falls before the bounded replay window. Successful empty-window replays now
   establish the proven episode boundary before calculating current risk, preventing discarded
-  losses from triggering RED while retaining re-entry fees and required cooldown/no-restart history.
+  losses from triggering RED while retaining re-entry fees (including validated same-millisecond
+  re-entries) and required cooldown/no-restart history.
 
 - Auto-unstuck now owns independent `bot.<side>.unstuck.ema_span_0` / `ema_span_1`, including
   coin overrides and CPU optimizer bounds. Schema v8.3.0 migrates missing spans from each coin's

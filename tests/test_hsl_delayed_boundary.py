@@ -26,8 +26,14 @@ def _delayed_boundary_bot(*, policy="always", cooldown=0.0):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("entry_ts", [180_600, 240_500])
-async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(entry_ts):
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize(
+    "entry_ts,reverse_cohort",
+    [(180_500, False), (180_500, True), (180_600, False), (240_500, False)],
+)
+async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(
+    entry_ts, reverse_cohort, compact
+):
     bot, events = _delayed_boundary_bot()
     entry = dict(
         timestamp=entry_ts,
@@ -39,6 +45,18 @@ async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(en
         fee_paid=-2.0,
     )
     events.append(entry)
+    if entry_ts == 180_500:
+        for event, before in [(events[1], 1.0), (entry, 0.0)]:
+            event["raw"] = [{"data": {
+                "side": "sell" if event["action"] == "decrease" else "buy",
+                "amount": 1.0,
+                "price": 1.0,
+                "info": {"startPosition": str(before)},
+            }}]
+        if reverse_cohort:
+            events[1:] = reversed(events[1:])
+    retained = [event for event in events if event["timestamp"] >= entry_ts]
+    retained_pnl = sum(event["pnl"] + event.get("fee_paid", 0.0) for event in retained)
     bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
     bot.get_raw_balance = lambda: 698.0
     calls = []
@@ -46,17 +64,33 @@ async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(en
     async def history(**kwargs):
         calls.append(kwargs)
         assert kwargs["hsl_replay_start_ms"] == entry_ts
+        if compact:
+            return {
+                "hsl_coin_compact_replay": {
+                    "timestamps": [entry_ts // 60_000 * 60_000],
+                    "balances": [698.0],
+                    "realized_pnl": [retained_pnl],
+                    "pair_values": {
+                        ("long", "A"): {
+                            "realized_pnl": [retained_pnl],
+                            "unrealized_pnl": [-50.0],
+                        }
+                    },
+                },
+                "fill_events": retained,
+                "panic_flatten_events": [],
+            }
         return {
             "timeline": [
                 {
                     "timestamp": entry_ts // 60_000 * 60_000,
                     "balance": 698.0,
-                    "realized_pnl": -2.0,
-                    "realized_pnl_by_coin_pside": {"A": {"long": -2.0}},
+                    "realized_pnl": retained_pnl,
+                    "realized_pnl_by_coin_pside": {"A": {"long": retained_pnl}},
                     "unrealized_pnl_by_coin_pside": {"A": {"long": -50.0}},
                 }
             ],
-            "fill_events": [entry],
+            "fill_events": retained,
             "panic_flatten_events": [],
         }
 
@@ -69,6 +103,8 @@ async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(en
     state = bot._hsl_coin_state("long", "A")
     assert state["last_metrics"]["realized_pnl"] == -2.0
     assert state["last_metrics"]["drawdown_raw"] == pytest.approx(52.0 / 698.0)
+    assert state["last_metrics"]["drawdown_ema"] == pytest.approx(52.0 / 698.0)
+    assert not state["last_metrics"]["red_seen_in_episode"]
     assert not state["runtime"].red_latched()
     assert "A" not in bot._runtime_forced_modes["long"]
     assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(

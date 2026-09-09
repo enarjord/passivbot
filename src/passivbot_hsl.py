@@ -4857,7 +4857,16 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     replay_boundary is not None
                     and replay_boundary[:2] == (pside, symbol)
                     and replay_start_ms is not None
-                    and replay_boundary[2] < replay_start_ms
+                    and (
+                        replay_boundary[2] < replay_start_ms
+                        or (
+                            replay_boundary[2] == replay_start_ms
+                            and cooldown_ms == 0
+                            and _equity_hard_stop_config(self, pside, symbol)[
+                                "restart_after_red_policy"
+                            ] == "always"
+                        )
+                    )
                 ):
                     # Canonical coverage has already excluded this closed episode.
                     # Seed its exact boundary before replay/current sampling so the
@@ -4894,6 +4903,37 @@ async def _equity_hard_stop_initialize_coin_from_history(
                         for event_ts, _action, _qty, realized_delta in replay_events
                         if int(event_ts) < int(replay_start_boundary_ts)
                     )
+                    if (
+                        replay_boundary is not None
+                        and replay_boundary[:2] == (pside, symbol)
+                        and replay_start_boundary_ts == replay_boundary[2] + 1
+                        and replay_boundary[2] == replay_start_ms
+                    ):
+                        # A bounded tied cohort lacks the preceding opening fill.
+                        # Recover its proven post-flatten tail from the full tape,
+                        # retaining the re-entry fee in both replay and live PnL.
+                        pair_fill_events = [
+                            event
+                            for event in _equity_hard_stop_coin_events_after_reset(
+                                self._pnls_manager.get_events(), pside, symbol,
+                                replay_start_boundary_ts, qty_step=qty_step,
+                            )
+                            if _equity_hard_stop_fill_timestamp_ms(event) <= now_ms
+                        ]
+                        replay_events, replay_ambiguous = _equity_hard_stop_coin_replay_events(
+                            pair_fill_events, pside, symbol, qty_step=qty_step
+                        )
+                        if replay_ambiguous:
+                            raise AuthoritativeSurfaceUnavailable(
+                                "hsl_episode_boundaries", f"{pside}:{symbol} reset tail is ambiguous"
+                            )
+                        reset_baseline_realized -= sum(
+                            delta for ts, _action, _qty, delta in replay_events
+                            if ts < replay_start_boundary_ts
+                        )
+                        contract = self._equity_hard_stop_infer_coin_replay_contract(
+                            pside, symbol, pair_fill_events, now_ms
+                        )
                 pair_uses_dense_replay = (
                     compact_replay is None
                     or replay_ambiguous
