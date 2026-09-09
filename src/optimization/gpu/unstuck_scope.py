@@ -1,5 +1,7 @@
 """Prevent GPU screening from silently reusing a different strategy EMA band."""
 
+from optimization.bounds import Bound
+
 from .model import gpu_side_enabled
 
 
@@ -28,10 +30,9 @@ def validate_independent_unstuck_scope(config: dict) -> None:
                 if key in side_patch.get("unstuck", {}):
                     return True
                 bound = bounds.get(side, {}).get("unstuck", {}).get(key)
-                return bound is None or (
-                    isinstance(bound, (tuple, list))
-                    and len(bound) >= 2
-                    and max(bound[:2]) <= 0.0
+                return (
+                    bound is None
+                    or Bound.from_config(f"{side}_unstuck_{key}", bound).high <= 0.0
                 )
 
             if any(
@@ -48,26 +49,33 @@ def validate_independent_unstuck_scope(config: dict) -> None:
                 strategy_bound = (
                     bounds.get(side, {}).get("strategy", {}).get(kind, {}).get(key)
                 )
-                varies = (
-                    lambda b: isinstance(b, (tuple, list))
-                    and len(b) >= 2
-                    and b[0] != b[1]
+                bound = (
+                    Bound.from_config(f"{side}_unstuck_{key}", bound)
+                    if bound is not None
+                    else None
+                )
+                strategy_bound = (
+                    Bound.from_config(f"{side}_{key}", strategy_bound)
+                    if strategy_bound is not None
+                    else None
                 )
                 independently_varies = (
-                    key not in side_patch.get("unstuck", {}) and varies(bound)
-                ) or (key not in strategy_patch and varies(strategy_bound))
+                    key not in side_patch.get("unstuck", {})
+                    and bound is not None
+                    and bound.low != bound.high
+                ) or (
+                    key not in strategy_patch
+                    and strategy_bound is not None
+                    and strategy_bound.low != strategy_bound.high
+                )
                 effective_unstuck = (
-                    bound[0]
-                    if isinstance(bound, (tuple, list))
-                    and bound
-                    and key not in side_patch.get("unstuck", {})
+                    bound.low
+                    if bound is not None and key not in side_patch.get("unstuck", {})
                     else unstuck[key]
                 )
                 effective_strategy = (
-                    strategy_bound[0]
-                    if isinstance(strategy_bound, (tuple, list))
-                    and strategy_bound
-                    and key not in strategy_patch
+                    strategy_bound.low
+                    if strategy_bound is not None and key not in strategy_patch
                     else strategy.get(key)
                 )
                 if (

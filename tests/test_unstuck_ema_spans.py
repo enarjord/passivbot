@@ -424,23 +424,31 @@ def test_live_warmup_ignores_disabled_unstuck(toggle):
 
 
 @pytest.mark.parametrize("key", ["ema_span_0", "ema_span_1"])
-def test_legacy_fixed_strategy_bound_preserves_optimizer_unstuck_span(key):
+@pytest.mark.parametrize(
+    "bound",
+    [
+        199.25,
+        [199.25],
+        [199.25, 199.25],
+        [199.25, 199.25, 0.25],
+        [199.25, 199.25, None],
+    ],
+)
+def test_legacy_fixed_strategy_bound_preserves_optimizer_unstuck_span(key, bound):
     c = legacy_config()
     c["bot"]["long"]["strategy"]["trailing_martingale"][key] = 401.5
-    c["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][key] = [
-        199.25,
-        199.25,
-    ]
+    c["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][key] = bound
     prepared = prepare_config(c, verbose=False)
     assert prepared["bot"]["long"]["unstuck"][key] == 401.5
     assert prepared["optimize"]["bounds"]["long"]["unstuck"][key] == [199.25, 199.25]
 
 
-def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog):
+@pytest.mark.parametrize("bound", [0, [0], [0, 0]])
+def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog, bound):
     c = legacy_config()
     c["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
         "ema_span_0"
-    ] = [0, 0]
+    ] = bound
     prepared = prepare_config(c, verbose=False)
     assert prepared["optimize"]["bounds"]["short"]["unstuck"]["ema_span_0"][0] > 0
     assert "optimize.bounds.short.unstuck.ema_span_0" in caplog.text
@@ -531,3 +539,71 @@ def test_config_version_help_matches_canonical_schema():
     from config_utils import CLI_HELP_OVERRIDES
 
     assert CONFIG_SCHEMA_VERSION in CLI_HELP_OVERRIDES["config_version"]
+
+
+@pytest.mark.parametrize("shape", ["scalar", "single", "pair", "step", "null_step"])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_gpu_scope_compares_every_supported_fixed_bound_form(shape, side):
+    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+    def fixed(value):
+        return {
+            "scalar": value,
+            "single": [value],
+            "pair": [value, value],
+            "step": [value, value, 0.25],
+            "null_step": [value, value, None],
+        }[shape]
+
+    c = get_template_config()
+    c["optimize"]["bounds"] = {}
+    c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, n_positions=1)
+    c["bot"][side]["unstuck"].update(
+        enabled=True, loss_allowance_pct=0.1, close_pct=0.1, threshold=0.9
+    )
+    c["optimize"]["bounds"][side] = {
+        "strategy": {"trailing_martingale": {"ema_span_0": fixed(12.5)}},
+        "unstuck": {"ema_span_0": fixed(34.5)},
+    }
+    with pytest.raises(ValueError, match="does not yet model independent"):
+        validate_independent_unstuck_scope(c)
+    c["optimize"]["bounds"][side]["unstuck"]["ema_span_0"] = fixed(12.5)
+    validate_independent_unstuck_scope(c)
+    c["optimize"]["bounds"][side]["unstuck"]["ema_span_0"] = fixed(34.5)
+    c["bot"][side]["unstuck"]["close_pct"] = 0
+    c["optimize"]["bounds"][side]["unstuck"]["close_pct"] = fixed(0)
+    validate_independent_unstuck_scope(c)
+    c["optimize"]["bounds"][side]["unstuck"]["close_pct"] = fixed(0.1)
+    with pytest.raises(ValueError, match="does not yet model independent"):
+        validate_independent_unstuck_scope(c)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("bound", [0, [0], [0, 0], [0, 0, None]])
+def test_zero_exposure_unstuck_warmup_reserves_only_reactivatable_sides(side, bound):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    c = get_template_config()
+    c["live"].update(warmup_ratio=1.0, max_warmup_minutes=1_000_000)
+    opposite = "short" if side == "long" else "long"
+    c["bot"][opposite]["unstuck"]["enabled"] = False
+    c["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0
+    c["bot"][side]["unstuck"].update(
+        enabled=True, loss_allowance_pct=0.1, close_pct=0.1, threshold=0.9
+    )
+    c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit"] = bound
+    baseline = compute_backtest_warmup_minutes(c)
+    baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
+    c["bot"][side]["unstuck"].update(ema_span_0=400_000, ema_span_1=500_000)
+    c["optimize"]["bounds"][side]["unstuck"].update(
+        ema_span_0=[10, 600_000, None], ema_span_1=[10, 700_000, None]
+    )
+    assert compute_backtest_warmup_minutes(c) == baseline
+    assert compute_per_coin_warmup_minutes(c)["__default__"] == baseline_coin
+    c["optimize"]["bounds"][side]["risk"]["total_wallet_exposure_limit"] = [0, 1]
+    c["coin_overrides"] = {
+        "BTC": {"bot": {side: {"risk": {"total_wallet_exposure_limit": 0}}}}
+    }
+    assert compute_backtest_warmup_minutes(c) == 700_000
+    assert compute_per_coin_warmup_minutes(c)["__default__"] == 500_000
+    assert compute_per_coin_warmup_minutes(c)["BTC"] == baseline_coin

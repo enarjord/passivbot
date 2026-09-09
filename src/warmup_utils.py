@@ -9,6 +9,7 @@ from config.strategy import (
     get_active_strategy_config,
     normalize_strategy_kind,
 )
+from optimization.bounds import Bound
 from strategy_warmup import (
     iter_strategy_warmup_flat_bound_keys,
     strategy_warmup_requirements,
@@ -118,16 +119,16 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     pinned = flatten_shared_bot_side(
         config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
     )
-    for control in ("loss_allowance_pct", "close_pct", "threshold"):
-        key = f"unstuck_{control}"
+    for key in (
+        "unstuck_loss_allowance_pct",
+        "unstuck_close_pct",
+        "unstuck_threshold",
+        "total_wallet_exposure_limit",
+    ):
         if key not in params or _to_float(params[key], context=key) > 0.0:
             continue
         bound = bounds.get(f"{pside}_{key}") if key not in pinned else None
-        values = bound[:2] if isinstance(bound, (list, tuple)) else [bound]
-        if bound is None or not any(
-            _to_float(value, context=f"optimize.bounds.{pside}_{key}") > 0.0
-            for value in values
-        ):
+        if bound is None or Bound.from_config(f"{pside}_{key}", bound).high <= 0.0:
             return False
     return True
 
@@ -138,18 +139,11 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     def _extract_bound_max(bounds: dict, key: str) -> tuple[float, bool]:
         if key not in bounds:
             return 0.0, True
-        entry = bounds[key]
-        candidates = [entry] if isinstance(entry, (list, tuple)) else [[entry]]
-        max_val = 0.0
-        for candidate in candidates:
-            for val in candidate:
-                try:
-                    numeric = float(val)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"invalid optimize warmup bound {key}: {val!r}") from exc
-                if not math.isfinite(numeric):
-                    raise ValueError(f"invalid optimize warmup bound {key}: {val!r}")
-                max_val = max(max_val, numeric)
+        parsed = Bound.from_config(key, bounds[key])
+        max_val = max(
+            _to_float(parsed.low, context=f"optimize warmup bound {key}"),
+            _to_float(parsed.high, context=f"optimize warmup bound {key}"),
+        )
         return max_val, True
 
     max_minutes = 0.0

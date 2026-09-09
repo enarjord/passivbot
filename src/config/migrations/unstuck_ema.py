@@ -3,6 +3,8 @@
 import logging
 from copy import deepcopy
 
+from optimization.bounds import Bound
+
 from ..strategy_spec import (
     get_strategy_defaults,
     get_strategy_optimize_bounds,
@@ -129,18 +131,17 @@ def migrate_unstuck_ema_spans(
             unstuck_bounds = side_bounds.setdefault("unstuck", {})
             strategy_bounds = side_bounds.get("strategy", {}).get(kind, {})
             for key in keys:
-                old_bound = strategy_bounds.get(key, default_strategy_bounds[side][key])
+                old_bound = Bound.from_config(
+                    f"{side}_{key}",
+                    strategy_bounds.get(key, default_strategy_bounds[side][key]),
+                )
                 supplied_bounds = bounds if explicit_bounds is None else explicit_bounds
                 supplied_unstuck = supplied_bounds.get(side, {}).get("unstuck", {})
                 if key not in supplied_unstuck:
                     value = config["bot"][side]["unstuck"][key]
-                    if (
-                        isinstance(old_bound, (list, tuple))
-                        and len(old_bound) >= 2
-                        and old_bound[0] == old_bound[1]
-                    ):
+                    if old_bound.low == old_bound.high:
                         value = _migrate_inactive_zero_span(
-                            old_bound[0],
+                            old_bound.low,
                             config["bot"][side],
                             value,
                             f"optimize.bounds.{side}.unstuck.{key}",
@@ -150,11 +151,7 @@ def migrate_unstuck_ema_spans(
                         tracker.add(
                             ["optimize", "bounds", side, "unstuck", key], [value, value]
                         )
-                if (
-                    isinstance(old_bound, (list, tuple))
-                    and len(old_bound) >= 2
-                    and old_bound[0] != old_bound[1]
-                ):
+                if old_bound.low != old_bound.high:
                     coupled_search.append(f"{side}.{key}")
     if coupled_search:
         logging.warning(
