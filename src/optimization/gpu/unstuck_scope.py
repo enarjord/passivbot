@@ -1,17 +1,16 @@
 """Prevent GPU screening from silently reusing a different strategy EMA band."""
 
+from .model import gpu_side_enabled
+
 
 def validate_independent_unstuck_scope(config: dict) -> None:
     kind = config.get("live", {}).get("strategy_kind", "trailing_martingale")
     bounds = config.get("optimize", {}).get("bounds", {})
     overrides = config.get("coin_overrides", {}) or {}
     for side in ("long", "short"):
-        approved = config.get("live", {}).get("approved_coins")
-        if isinstance(approved, dict) and side in approved and not approved[side]:
+        if not gpu_side_enabled(config, side):
             continue
         base = config.get("bot", {}).get(side, {})
-        if base.get("risk", {}).get("total_wallet_exposure_limit", 0.0) <= 0.0:
-            continue
         for coin, patch in [("global", {}), *overrides.items()]:
             side_patch = patch.get("bot", {}).get(side, {})
             unstuck = {**base.get("unstuck", {}), **side_patch.get("unstuck", {})}

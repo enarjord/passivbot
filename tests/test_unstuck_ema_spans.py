@@ -469,3 +469,30 @@ def test_gpu_independent_spans_allow_fixed_inactive_reducer_only(key, coin_overr
         del target[key]
     with pytest.raises(ValueError, match="does not yet model independent"):
         validate_independent_unstuck_scope(c)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("inactive", ["no_slots", "no_exposure", "no_coins"])
+def test_gpu_independent_guard_uses_effective_side_eligibility(side, inactive):
+    from optimization.gpu.model import gpu_side_enabled
+    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+    c = get_template_config()
+    c["optimize"]["bounds"] = {}
+    c["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    for pside in ("long", "short"):
+        c["bot"][pside]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    c["bot"][side]["unstuck"]["ema_span_0"] = 400_000.5
+    if inactive == "no_slots":
+        c["bot"][side]["risk"]["n_positions"] = 0
+    elif inactive == "no_exposure":
+        c["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    else:
+        c["live"]["approved_coins"][side] = []
+    assert not gpu_side_enabled(c, side)
+    assert gpu_side_enabled(c, "short" if side == "long" else "long")
+    validate_independent_unstuck_scope(c)
+    c["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    c["live"]["approved_coins"][side] = ["BTC"]
+    with pytest.raises(ValueError, match="does not yet model independent"):
+        validate_independent_unstuck_scope(c)
