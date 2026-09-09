@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Add `couple_unstuck_ema_spans` to `optimize.enable_overrides` to search strategy and unstuck
+  EMA spans together on CPU or Apple MPS, including effective coin/scenario strategy overrides.
+  Coupled search omits redundant unstuck span genes and saves explicit horizons for ordinary
+  replay. Independent search remains the default; changing the option requires a fresh run.
+
 - Auto-unstuck now owns independent `bot.<side>.unstuck.ema_span_0` / `ema_span_1`, including
   coin overrides and CPU optimizer bounds. Schema v8.3.0 migrates missing spans from each coin's
   effective strategy to preserve saved trading behavior, with warnings where exact migration is

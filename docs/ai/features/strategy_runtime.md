@@ -175,6 +175,12 @@ Apple MPS models a separate price EMA band for unstuck in all directional and mu
 It uses the same seeded recurrence, floating horizons and candle-interval scaling as exact Rust.
 Coin overrides win over candidate globals, and temporal replay persists the independent band.
 
+The opt-in optimizer override `couple_unstuck_ema_spans` derives each side/coin's unstuck pair
+from its effective strategy, after mirroring and fixed/scenario overrides. It removes redundant
+unstuck span genes and materializes explicit runtime spans in saved candidates and scenarios.
+GPU packing preserves the dependency on candidate strategy genes while retaining strategy coin
+pins. This is optimizer configuration finalization, not a live/backtest coupling mode.
+
 ## Live/Backtest Market Slippage Boundary
 
 `backtest.market_order_slippage_pct` is a backtest simulation knob only. Live orchestrator input

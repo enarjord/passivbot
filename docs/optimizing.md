@@ -543,8 +543,27 @@ Exact-selected seeds are placed first in the initial GPU population, followed by
 seeds and then random candidates. Their exact objective values are never inserted into the proxy
 NSGA-II fitness matrix.
 
-The V8 `optimize.enable_overrides` values `mirror_short_from_long` and
-`lossless_close_trailing` are applied to Metal candidates in the same order as exact candidate
+To search the strategy and unstuck EMA horizons together, set:
+
+```json
+"enable_overrides": ["couple_unstuck_ema_spans"]
+```
+
+This opt-in setting belongs under `optimize`. It restores the former coupled EMA search on CPU
+and Apple MPS: each candidate's effective strategy spans determine its unstuck spans, including
+per-coin strategy overrides. Independent unstuck span bounds and existing unstuck span pins are
+ignored while coupling is enabled, and the redundant genes are omitted. Strategy spans must be
+positive and finite. The default remains independent search.
+
+Coupling runs after fixed runtime overrides and long-to-short mirroring, and follows effective
+scenario strategy overrides. Saved candidates materialize the derived spans, including scenario
+and coin overrides, so normal backtests and live bots reproduce them without an optimizer hook.
+Disable the option and set unstuck bounds explicitly to resume independent search; remove any
+saved per-coin unstuck pins when you want to tune a shared global pair. Start a fresh optimizer
+run when changing this option because its search dimensions and evaluation policy differ.
+
+The V8 `optimize.enable_overrides` values `mirror_short_from_long`, `couple_unstuck_ema_spans`,
+and `lossless_close_trailing` are applied to Metal candidates in the same order as exact candidate
 materialization. Mirroring may be used with the supported single-coin directional scopes; short
 genes that exact materialization overwrites are omitted from the proxy search dimensions.
 `lossless_close_trailing` is available only with `strategy_kind: trailing_martingale`. The legacy

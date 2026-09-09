@@ -362,6 +362,7 @@ GPU_CAPABILITIES_DOC = "docs/optimizing.md#deliberate-current-limitations"
 GPU_SUPPORTED_STRATEGY_KINDS = frozenset(GPU_STRATEGY_BOUND_MAPS)
 
 GPU_SUPPORTED_OPTIMIZER_OVERRIDES = {
+    "couple_unstuck_ema_spans",
     "lossless_close_trailing",
     "mirror_short_from_long",
 }
@@ -4272,6 +4273,15 @@ def run_backend(
             bound_map.update(mapper(multicoin_side, gpu_optimizer_overrides))
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
+
+    if "couple_unstuck_ema_spans" in gpu_optimizer_overrides:
+        from optimizer_overrides import COUPLED_UNSTUCK_EMA_BOUND_KEYS
+
+        bound_map = {
+            key: value
+            for key, value in bound_map.items()
+            if key not in COUPLED_UNSTUCK_EMA_BOUND_KEYS
+        }
 
     fixed_bound_values, fixed_parameter_overrides = _gpu_fixed_bound_context(
         config,

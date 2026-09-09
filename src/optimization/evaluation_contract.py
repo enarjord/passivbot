@@ -9,7 +9,7 @@ from optimization.config_adapter import _flatten_bounds_for_config
 from optimization.fine_tune_anchors import get_anchor_plan
 from optimization.evaluation_implementation import evaluation_implementation_identity
 from optimization.warmup import _apply_config_overrides
-from optimizer_overrides import optimizer_overrides
+from optimizer_overrides import optimizer_overrides, unstuck_ema_spans_coupled
 
 CONTRACT_KEY = "optimizer_evaluation_contract"
 CONTRACT_CACHE_KEY = "_optimizer_evaluation_contract"
@@ -82,6 +82,17 @@ def build_evaluation_contract(config: dict) -> dict:
 
     # Resolve before removing the base values required to validate coin patches.
     coin_overrides = deepcopy(effective.get("coin_overrides", {}))
+    coupled = unstuck_ema_spans_coupled(config)
+    if coupled:
+        # These leaves derive from the strategy policy already recorded below;
+        # candidate-dependent materialized coin values are not fixed policy.
+        for bot in [
+            effective.get("bot", {}),
+            *(patch.get("bot", {}) for patch in coin_overrides.values()),
+        ]:
+            for side in ("long", "short"):
+                for key in ("ema_span_0", "ema_span_1"):
+                    bot.get(side, {}).get("unstuck", {}).pop(key, None)
     bounds = _flatten_bounds_for_config(effective, effective["optimize"]["bounds"])
     for key in bounds:
         path = resolve_optimizer_key_path(effective, key)
@@ -110,6 +121,7 @@ def build_evaluation_contract(config: dict) -> dict:
         }
     return {
         "version": 1,
+        "coupled_unstuck_ema_spans": coupled,
         "implementation": deepcopy(evaluation_implementation_identity()),
         "prepared_data": deepcopy(config.get("_optimizer_prepared_dataset_identity")),
         "bot": effective.get("bot", {}),
