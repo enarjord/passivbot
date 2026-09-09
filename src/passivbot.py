@@ -16890,6 +16890,7 @@ class Passivbot:
                     "unstuck_loss_allowance_pct",
                     "unstuck_close_pct",
                     "unstuck_threshold",
+                    "total_wallet_exposure_limit",
                 )
             )
             and self.has_position(pside=pside, symbol=symbol)

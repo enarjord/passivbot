@@ -15,6 +15,9 @@ def validate_independent_unstuck_scope(config: dict) -> None:
         base = config.get("bot", {}).get(side, {})
         for coin, patch in [("global", {}), *overrides.items()]:
             side_patch = patch.get("bot", {}).get(side, {})
+            if side_patch.get("wallet_exposure_limit") == 0:
+                # Backtests start flat and per-coin WEL is not an optimizer gene.
+                continue
             unstuck = {**base.get("unstuck", {}), **side_patch.get("unstuck", {})}
             if not (
                 unstuck.get("enabled", True) and unstuck.get("ema_gating_enabled", True)

@@ -3198,6 +3198,7 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
             "unstuck_loss_allowance_pct": 0.1,
             "unstuck_close_pct": 0.1,
             "unstuck_threshold": 0.2,
+            "total_wallet_exposure_limit": 1.0,
         }.get(key, original_bp(side, key, symbol))
 
     bot.bp = bp
@@ -3275,6 +3276,7 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
         "unstuck_loss_allowance_pct",
         "unstuck_close_pct",
         "unstuck_threshold",
+        "total_wallet_exposure_limit",
     ],
 )
 async def test_ineligible_unstuck_consumer_does_not_read_emas(
@@ -3299,6 +3301,7 @@ async def test_ineligible_unstuck_consumer_does_not_read_emas(
         "unstuck_loss_allowance_pct": 0.1,
         "unstuck_close_pct": 0.1,
         "unstuck_threshold": 0.2,
+        "total_wallet_exposure_limit": 1.0,
     }
     if skip_reason in values:
         values[skip_reason] = 0.0
@@ -3320,3 +3323,37 @@ async def test_ineligible_unstuck_consumer_does_not_read_emas(
     assert requests and max(requests) < 1000
     assert "unstuck EMA unavailable" not in caplog.text
     assert not bot._orchestrator_allow_missing_strategy_inputs_symbols
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
+    import passivbot_rust as pbr
+
+    payload = _make_orchestrator_payload(
+        "BTC/USDT:USDT", [(10.0, 30.0), (math.sqrt(200), 30.0), (20.0, 30.0)], [], []
+    )
+    sym = payload["symbols"][0]
+    opposite = "short" if pside == "long" else "long"
+    sym[opposite]["mode"] = "manual"
+    sym[pside]["mode"] = "tp_only"
+    sym[pside]["position"] = {"size": 10.0 if pside == "long" else -10.0, "price": 30.0}
+    sym[pside]["bot_params"].update(
+        n_positions=1,
+        total_wallet_exposure_limit=0.0,
+        unstuck_enabled=True,
+        unstuck_ema_gating_enabled=True,
+        unstuck_ema_span_0=1000.0,
+        unstuck_ema_span_1=2000.0,
+        unstuck_close_pct=0.1,
+        unstuck_threshold=0.2,
+        unstuck_loss_allowance_pct=0.1,
+    )
+    payload["global"]["global_bot_params"][pside].update(
+        n_positions=1, total_wallet_exposure_limit=1.0
+    )
+    result = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
+    assert any("close" in order["order_type"] for order in result["orders"]), result
+    sym[pside]["bot_params"]["total_wallet_exposure_limit"] = 1.0
+    payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit"] = 1.0
+    with pytest.raises(ValueError, match="MissingEma"):
+        pbr.compute_ideal_orders_json(json.dumps(payload))

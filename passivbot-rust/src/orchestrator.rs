@@ -3872,7 +3872,8 @@ mod core {
             let enabled = bot.unstuck_enabled
                 && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
-                && bot.unstuck_threshold > 0.0;
+                && bot.unstuck_threshold > 0.0
+                && bot.total_wallet_exposure_limit > 0.0;
             if !enabled {
                 continue;
             }
@@ -3934,7 +3935,8 @@ mod core {
             let enabled = bot.unstuck_enabled
                 && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
-                && bot.unstuck_threshold > 0.0;
+                && bot.unstuck_threshold > 0.0
+                && bot.total_wallet_exposure_limit > 0.0;
             if !enabled {
                 continue;
             }

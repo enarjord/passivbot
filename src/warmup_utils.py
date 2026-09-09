@@ -119,11 +119,14 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     pinned = flatten_shared_bot_side(
         config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
     )
+    if pinned.get("wallet_exposure_limit") == 0:
+        return False
     for key in (
         "unstuck_loss_allowance_pct",
         "unstuck_close_pct",
         "unstuck_threshold",
         "total_wallet_exposure_limit",
+        "n_positions",
     ):
         if key not in params or _to_float(params[key], context=key) > 0.0:
             continue

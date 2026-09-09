@@ -11779,6 +11779,7 @@ mod tests {
         bp.long.unstuck_close_pct = 0.1;
         bp.long.unstuck_threshold = 0.9;
         bp.long.total_wallet_exposure_limit = 1.0;
+        bp.long.n_positions = 1;
         bp.long.unstuck_ema_span_0 = 400_000.25;
         bp.long.unstuck_ema_span_1 = 500_000.25;
         bp.long.unstuck_enabled = false;
@@ -11797,13 +11798,14 @@ mod tests {
             calc_warmup_bars(&[bp.clone()], &[strategies.clone()]),
             500_001
         );
-        for control in 0..4 {
+        for control in 0..5 {
             let mut inactive = bp.clone();
             match control {
                 0 => inactive.long.unstuck_loss_allowance_pct = 0.0,
                 1 => inactive.long.unstuck_close_pct = 0.0,
                 2 => inactive.long.unstuck_threshold = 0.0,
-                _ => inactive.long.total_wallet_exposure_limit = 0.0,
+                3 => inactive.long.total_wallet_exposure_limit = 0.0,
+                _ => inactive.long.n_positions = 0,
             }
             assert_eq!(
                 calc_warmup_bars(&[inactive], &[strategies.clone()]),
@@ -12022,6 +12024,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.long.unstuck_close_pct > 0.0
                 && pair.long.unstuck_threshold > 0.0
                 && pair.long.total_wallet_exposure_limit > 0.0
+                && pair.long.n_positions > 0
             {
                 pair.long.unstuck_ema_span_0
             } else {
@@ -12033,6 +12036,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.long.unstuck_close_pct > 0.0
                 && pair.long.unstuck_threshold > 0.0
                 && pair.long.total_wallet_exposure_limit > 0.0
+                && pair.long.n_positions > 0
             {
                 pair.long.unstuck_ema_span_1
             } else {
@@ -12051,6 +12055,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.short.unstuck_close_pct > 0.0
                 && pair.short.unstuck_threshold > 0.0
                 && pair.short.total_wallet_exposure_limit > 0.0
+                && pair.short.n_positions > 0
             {
                 pair.short.unstuck_ema_span_0
             } else {
@@ -12062,6 +12067,7 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
                 && pair.short.unstuck_close_pct > 0.0
                 && pair.short.unstuck_threshold > 0.0
                 && pair.short.total_wallet_exposure_limit > 0.0
+                && pair.short.n_positions > 0
             {
                 pair.short.unstuck_ema_span_1
             } else {

@@ -11,6 +11,7 @@ from ..strategy_spec import (
     normalize_strategy_kind,
 )
 from ..shared_bot import canonicalize_shared_bot_side
+from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
 
 
 def _migrate_inactive_zero_span(value, bot, default, path):
@@ -63,6 +64,21 @@ def migrate_unstuck_ema_spans(
                 tracker.add(["bot", side, "unstuck", key], value)
     if not migrated:
         return
+
+    def grouped_bounds(bounds):
+        if not isinstance(bounds, dict) or not any(
+            str(key).startswith(("long_", "short_")) for key in bounds
+        ):
+            return bounds
+        grouped = {}
+        for key, value in flatten_optimize_bounds(bounds, strategy_kind=kind).items():
+            set_flat_optimize_bound(grouped, kind, key, value)
+        return grouped
+
+    if isinstance(config.get("optimize", {}).get("bounds"), dict):
+        config["optimize"]["bounds"] = grouped_bounds(config["optimize"]["bounds"])
+    if explicit_bounds is not None:
+        explicit_bounds = grouped_bounds(explicit_bounds)
 
     # Resolve file + inline strategy precedence before pinning only overridden spans.
     # Persist the result inline so reloading the migrated config is idempotent.
@@ -193,6 +209,17 @@ def migrate_unstuck_ema_spans(
             continue
         leaves = dict(scenario_leaves(overrides))
         for side, keys in migrated.items():
+            effective_side = deepcopy(config["bot"][side])
+            prefix = f"bot.{side}."
+            for path, value in leaves.items():
+                if not path.startswith(prefix):
+                    continue
+                parts = path[len(prefix) :].split(".")
+                target = effective_side
+                for part in parts[:-1]:
+                    target = target.setdefault(part, {})
+                target[parts[-1]] = deepcopy(value)
+            canonicalize_shared_bot_side(effective_side)
             for key in keys:
                 for old_path in (
                     f"bot.{side}.strategy.{kind}.{key}",
@@ -200,7 +227,12 @@ def migrate_unstuck_ema_spans(
                 ):
                     new_path = f"bot.{side}.unstuck.{key}"
                     if old_path in leaves and new_path not in leaves:
-                        overrides[new_path] = deepcopy(leaves[old_path])
+                        overrides[new_path] = _migrate_inactive_zero_span(
+                            deepcopy(leaves[old_path]),
+                            effective_side,
+                            defaults[side][key],
+                            f"scenario {scenario.get('label', '<unnamed>')!r} overrides.{new_path}",
+                        )
         if "live.strategy_kind" in leaves or any(
             isinstance(v, dict) and "strategy" in str(k) for k, v in overrides.items()
         ):
