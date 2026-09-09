@@ -26,7 +26,7 @@ def _delayed_boundary_bot(*, policy="always", cooldown=0.0):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("entry_ts", [180_600, 240_500])
+@pytest.mark.parametrize("entry_ts", [180_500, 180_600, 240_500])
 async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(entry_ts):
     bot, events = _delayed_boundary_bot()
     entry = dict(
@@ -38,6 +38,18 @@ async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(en
         pnl=0.0,
         fee_paid=-2.0,
     )
+    if entry_ts == events[1]["timestamp"]:
+        for event, before in ((events[1], 1.0), (entry, 0.0)):
+            event["raw"] = [
+                {
+                    "data": {
+                        "side": "sell" if event["action"] == "decrease" else "buy",
+                        "amount": event["qty"],
+                        "price": 1.0,
+                        "info": {"startPosition": str(before)},
+                    }
+                }
+            ]
     events.append(entry)
     bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
     bot.get_raw_balance = lambda: 698.0

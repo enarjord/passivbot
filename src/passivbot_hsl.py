@@ -4857,9 +4857,10 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     replay_boundary is not None
                     and replay_boundary[:2] == (pside, symbol)
                     and replay_start_ms is not None
-                    and replay_boundary[2] < replay_start_ms
+                    and replay_boundary[2] <= replay_start_ms
                 ):
-                    # Canonical coverage has already excluded this closed episode.
+                    # Canonical coverage has excluded this closed episode or
+                    # starts at its proven same-timestamp close/re-entry tail.
                     # Seed its exact boundary before replay/current sampling so the
                     # full fill cache cannot reintroduce its PnL or latch RED. Keep
                     # any later held-episode boundary, including its entry fees.
