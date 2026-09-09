@@ -23,6 +23,7 @@ _KERNELS = (
 def _source(name):
     source = (_GPU / name).read_text()
     for marker, filename in (
+        ("UNSTUCK_EMA", "mps_unstuck_ema_common.metal"),
         ("HSL", "mps_hsl_common.metal"),
         ("BTC_RISK", "mps_btc_risk_common.metal"),
         ("EQUITY_BALANCE_DIFF", "mps_equity_balance_diff_common.metal"),

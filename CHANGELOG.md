@@ -10,8 +10,9 @@ All notable user-facing changes will be documented in this file.
   impossible (including the formerly coupled optimizer search). Hard-coded defaults and the default
   example include the new spans. Active-gate warmup, backtest EMA updates, and independent monitor
   triggers use them. Missing live unstuck-only EMAs defer unstucking while preserving strategy inputs.
-  Apple MPS screening rejects independent-span searches until its kernels model them; matching
-  fixed spans and disabled EMA gating remain supported.
+  Apple MPS screening supports the independent spans across both supported strategies, including
+  coin overrides, aggregated candles, and chunked replay. Start a fresh GPU optimizer run after
+  upgrading; older screening checkpoints use an incompatible parameter layout.
 
 - GPU optimization automatically queues two validation batches (or twice the worker count,
   whichever is larger), allowing proxy screening and exact evaluation to overlap. Explicit queue

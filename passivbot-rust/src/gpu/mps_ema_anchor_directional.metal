@@ -16,7 +16,7 @@ constant int SCALAR_COLS = 70;
 constant int SCALAR_COLS = 68;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 35;
+constant int SIDE_PARAMS = 37;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -141,6 +141,8 @@ inline float float32_floor_nonnegative(float value) {
     return as_type<float>(as_type<uint>(value) - 1u);
 }
 
+// PASSIVBOT_UNSTUCK_EMA_COMMON
+
 // PASSIVBOT_HSL_COMMON
 
 // PASSIVBOT_BTC_RISK_COMMON
@@ -206,6 +208,7 @@ inline void record_directional_gross_pnl(
 }
 
 struct EmaSide {
+    UnstuckEmaBand unstuck_ema;
     float alpha0;
     float alpha1;
     float alpha2;
@@ -324,6 +327,7 @@ inline EmaSide load_side(constant float* params, int po, float seed_close) {
     side.unstuck_ema_dist = params[po + 20];
     side.unstuck_loss_allowance_pct = params[po + 21];
     side.unstuck_threshold = params[po + 22];
+    side.unstuck_ema = init_unstuck_ema_band(params[po + 35], params[po + 36], seed_close);
     side.ema0 = seed_close;
     side.ema1 = seed_close;
     side.ema2 = seed_close;
@@ -641,8 +645,8 @@ inline ReducerVariant unstuck_reducer_variant(
         return none;
     }
     if (side.unstuck_ema_gating_enabled) {
-        float lower = fmin(side.ema0, fmin(side.ema1, side.ema2));
-        float upper = fmax(side.ema0, fmax(side.ema1, side.ema2));
+        float lower = unstuck_ema_lower(side.unstuck_ema);
+        float upper = unstuck_ema_upper(side.unstuck_ema);
         int trigger_ticks = is_long
             ? int(ceil(
                 upper * (1.0f + side.unstuck_ema_dist) / price_step
@@ -808,6 +812,7 @@ inline void update_indicators(
         side.vol1h = fma(side.alpha1h, hour_lr - side.vol1h, side.vol1h);
     }
     if (valid) {
+        update_unstuck_ema_band(side.unstuck_ema, close);
         side.ema0 = fma(side.alpha0, close - side.ema0, side.ema0);
         side.ema1 = fma(side.alpha1, close - side.ema1, side.ema1);
         side.ema2 = fma(side.alpha2, close - side.ema2, side.ema2);

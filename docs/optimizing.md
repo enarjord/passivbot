@@ -451,10 +451,11 @@ The supported slice is intentionally narrow:
 
 #### Deliberate current limitations
 
-Independent unstuck EMA horizons currently require CPU optimization (`pymoo` or `deap`).
-Apple MPS screening accepts matching fixed strategy/unstuck spans, disabled unstuck EMA gating, or
-a reducer that stays inactive throughout the search. It rejects active independent-span searches. Exact CPU
-validation cannot correct an unmodeled screening decision.
+Independent unstuck EMA horizons are supported on Apple MPS for EMA Anchor and Trailing Martingale,
+including single-coin, directional multicoin, and fused long/short searches. Global bounds and
+per-coin span overrides follow the CPU configuration contract. GPU screening remains float32;
+exact CPU validation still owns accepted results. Start a fresh GPU run after this parameter-layout
+change; old screening checkpoints are incompatible.
 
 The following boundaries are intentional rather than silent fallbacks:
 

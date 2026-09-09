@@ -2,9 +2,10 @@
 using namespace metal;
 
 constant int MAX_COINS = 64;
-constant int PARAM_COLS = 42;
+constant int PARAM_COLS = 44;
 constant int COIN_COLS = 13;
-constant int OVERRIDE_COLS = 30;
+constant int OVERRIDE_COLS = 32;
+constant int UNSTUCK_EMA_OVERRIDE_START = 30;
 constant int HSL_OVERRIDE_START = 19;
 constant int FORCED_ACTIVE_OVERRIDE_COL = 29;
 #if PASSIVBOT_BTC_RISK_ENABLED
@@ -29,6 +30,8 @@ constant int GAP_BINS = 128;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
+
+// PASSIVBOT_UNSTUCK_EMA_COMMON
 
 // PASSIVBOT_HSL_COMMON
 
@@ -79,6 +82,7 @@ inline float finalized_reducer_qty_with_ordinary(
 // behind one thread-local value lets a future fused kernel own long and short
 // portfolios concurrently without changing the proven one-side candle loop.
 struct EmaMulticoinSideState {
+    UnstuckEmaBand unstuck_ema[MAX_COINS];
     HslState hsl;
     HslState coin_hsl[MAX_COINS];
     HslStrategyEquityStats hsl_strategy_eq;
@@ -135,6 +139,8 @@ struct EmaMulticoinSideState {
 };
 
 struct EmaMulticoinSideConfig {
+    float unstuck_span0;
+    float unstuck_span1;
     float base_qty_pct;
     float span_a;
     float span_b;
@@ -328,6 +334,8 @@ inline EmaMulticoinSideConfig load_ema_multicoin_side_config(
     int po
 ) {
     EmaMulticoinSideConfig config;
+    config.unstuck_span0 = params[po + 42];
+    config.unstuck_span1 = params[po + 43];
     config.base_qty_pct = params[po + 0];
     config.span_a = params[po + 1];
     config.span_b = params[po + 2];
@@ -412,6 +420,11 @@ inline void init_ema_multicoin_side_state(
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < coin_count ? coin_settings[c * COIN_COLS + 9] : 0.0f;
         float seed_volume = c < coin_count ? coin_settings[c * COIN_COLS + 10] : 0.0f;
+        side.unstuck_ema[c] = init_unstuck_ema_band(
+            c < coin_count ? coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START, config.unstuck_span0) : config.unstuck_span0,
+            c < coin_count ? coin_override_or(coin_overrides, c, UNSTUCK_EMA_OVERRIDE_START + 1, config.unstuck_span1) : config.unstuck_span1,
+            seed_close
+        );
         side.ema0[c] = seed_close;
         side.ema1[c] = seed_close;
         side.ema2[c] = seed_close;
@@ -556,6 +569,7 @@ inline void update_ema_multicoin_side_indicators(
         }
         if (!valid) continue;
         float log_range = log(high / low);
+        update_unstuck_ema_band(side.unstuck_ema[c], close);
         side.ema0[c] = fma(
             side.alpha0_coin[c], close - side.ema0[c], side.ema0[c]
         );
@@ -1280,12 +1294,8 @@ inline int select_ema_multicoin_unstuck_coin(
             continue;
         }
         if (coin_ema_gate) {
-            const float lower = fmin(
-                side.ema0[c], fmin(side.ema1[c], side.ema2[c])
-            );
-            const float upper = fmax(
-                side.ema0[c], fmax(side.ema1[c], side.ema2[c])
-            );
+            const float lower = unstuck_ema_lower(side.unstuck_ema[c]);
+            const float upper = unstuck_ema_upper(side.unstuck_ema[c]);
             const int trigger_tick = short_side
                 ? int(floor(
                     lower * (1.0f - coin_ema_dist) / price_step
@@ -1599,8 +1609,8 @@ inline void generate_ema_multicoin_side_orders(
             continue;
         }
         if (coin_ema_gate) {
-            float lower = fmin(ema0[c], fmin(ema1[c], ema2[c]));
-            float upper = fmax(ema0[c], fmax(ema1[c], ema2[c]));
+            float lower = unstuck_ema_lower(side.unstuck_ema[c]);
+            float upper = unstuck_ema_upper(side.unstuck_ema[c]);
             int trigger_tick = short_side
                 ? int(floor(
                     lower * (1.0f - coin_ema_dist) / price_step

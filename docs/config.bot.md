@@ -164,10 +164,9 @@ warns and fixes missing new unstuck bounds at the starting values. Set new bound
 pinned; remove those leaves deliberately to tune a shared global pair. Restart optimizer searches
 rather than resuming old checkpoints after this schema change.
 
-Apple MPS screening currently supports matching fixed strategy/unstuck spans, disabled unstuck
-EMA gating, or a reducer that stays inactive throughout the search. Active independent-span searches
-fail with an explanatory error; use `optimize.backend=pymoo`
-or `deap` for them.
+Apple MPS screening supports independent unstuck horizons and bounds for both supported strategies,
+including per-coin overrides and candle-interval scaling. Start a fresh GPU run after upgrading;
+older screening checkpoints use a different parameter layout.
 
 When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is

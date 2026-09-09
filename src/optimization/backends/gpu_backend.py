@@ -200,6 +200,8 @@ _SINGLE_COIN_EXPOSURE_BOUND_SUFFIXES = {
 }
 
 _SINGLE_COIN_UNSTUCK_BOUND_SUFFIXES = {
+    "unstuck_ema_span_0": "unstuck_ema_span_0",
+    "unstuck_ema_span_1": "unstuck_ema_span_1",
     "unstuck_close_pct": "unstuck_close_pct",
     "unstuck_ema_dist": "unstuck_ema_dist",
     "unstuck_loss_allowance_pct": "unstuck_loss_allowance_pct",
@@ -424,15 +426,10 @@ def _validate_gpu_data_independent_scope(
     config: dict,
     *,
     allow_suite: bool = False,
-    validate_unstuck: bool = True,
 ) -> tuple[str, list[str], list[str]]:
     """Validate GPU behavior which does not depend on prepared candles or coin count."""
 
     strategy_kind = _validate_gpu_static_scope(config)
-    if validate_unstuck:
-        from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-        validate_independent_unstuck_scope(config)
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
@@ -543,7 +540,6 @@ def validate_gpu_preparation_scope(
         _validate_gpu_data_independent_scope(
             config,
             allow_suite=suite_enabled,
-            validate_unstuck=not (suite_enabled and suite_cfg.get("scenarios")),
         )
     )
     halving_config = (
@@ -3407,7 +3403,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 4,  # Unpenalized drift scores and streamed fill-gap moments.
+        "version": 5,  # Independent adjusted unstuck EMA state in GPU screening.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
