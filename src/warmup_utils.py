@@ -126,6 +126,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         return max_val, True
 
     max_minutes = 0.0
+    unstuck_gate_sides = set()
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
@@ -141,7 +142,14 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
+            unstuck_gate = params.get("unstuck_enabled", True) and params.get(
+                "unstuck_ema_gating_enabled", True
+            )
+            if unstuck_gate:
+                unstuck_gate_sides.add(pside)
             for field in minute_fields:
+                if field.startswith("unstuck_ema_span_") and not unstuck_gate:
+                    continue
                 if field not in params:
                     continue
                 max_minutes = _accumulate_max_minutes(
@@ -171,7 +179,9 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "short_forager_volatility_ema_span_1m",
     ]
     bound_keys_minutes.extend(
-        f"{side}_unstuck_ema_span_{i}" for side in ("long", "short") for i in (0, 1)
+        f"{side}_unstuck_ema_span_{i}"
+        for side in sorted(unstuck_gate_sides)
+        for i in (0, 1)
     )
     bound_keys_minutes.extend(iter_strategy_warmup_flat_bound_keys("1m"))
     bound_keys_hours = iter_strategy_warmup_flat_bound_keys("1h")
@@ -221,7 +231,12 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
+            unstuck_gate = params.get("unstuck_enabled", True) and params.get(
+                "unstuck_ema_gating_enabled", True
+            )
             for field in minute_fields:
+                if field.startswith("unstuck_ema_span_") and not unstuck_gate:
+                    continue
                 if field not in params:
                     continue
                 max_minutes = _accumulate_max_minutes(

@@ -316,3 +316,108 @@ def test_zero_span_on_disabled_legacy_coin_override_warns_and_migrates(caplog):
         "Cannot copy zero strategy span to coin_overrides.BTC.bot.short.unstuck.ema_span_0"
         in caplog.text
     )
+
+
+@pytest.mark.parametrize("omitted", ["bounds", "optimize"])
+def test_omitted_legacy_bounds_are_fixed_after_hydration(omitted, caplog):
+    c = legacy_config()
+    if omitted == "bounds":
+        del c["optimize"]["bounds"]
+    else:
+        del c["optimize"]
+    c["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 403.5
+    prepared = prepare_config(c, verbose=False)
+    assert prepared["optimize"]["bounds"]["long"]["unstuck"]["ema_span_0"] == [
+        403.5,
+        403.5,
+    ]
+    assert "1-to-1 optimizer-search migration is impossible" in caplog.text
+
+
+def test_inactive_coin_wel_zero_span_migrates(caplog):
+    c = legacy_config()
+    c["coin_overrides"] = {
+        "BTC": {
+            "bot": {
+                "long": {
+                    "wallet_exposure_limit": 0,
+                    "strategy": {"trailing_martingale": {"ema_span_0": 0}},
+                }
+            }
+        }
+    }
+    prepared = parse_overrides(prepare_config(c, verbose=False), verbose=False)
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]["ema_span_0"] > 0
+    assert "Cannot copy zero strategy span" in caplog.text
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_nested_scenario_spans_migrate_and_explicit_unstuck_wins(explicit):
+    from suite_runner import _normalize_scenario_overrides
+
+    c = legacy_config()
+    side = {"strategy": {"trailing_martingale": {"ema_span_0": 400.5}}}
+    if explicit:
+        side["unstuck"] = {"ema_span_0": 91.5}
+    c["backtest"]["scenarios"] = [
+        {"label": "nested", "overrides": {"bot": {"long": side}}}
+    ]
+    prepared = prepare_config(c, verbose=False)
+    overrides = _normalize_scenario_overrides(
+        prepared["backtest"]["scenarios"][0]["overrides"]
+    )
+    assert overrides["bot.long.unstuck.ema_span_0"] == (91.5 if explicit else 400.5)
+
+
+@pytest.mark.parametrize("toggle", ["enabled", "ema_gating_enabled"])
+def test_disabled_unstuck_warmup_ignores_values_and_bounds_but_honors_coin_activation(
+    toggle,
+):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    c = get_template_config()
+    c["live"].update(warmup_ratio=1.0, max_warmup_minutes=1_000_000)
+    for side in ("long", "short"):
+        c["bot"][side]["unstuck"][toggle] = False
+    baseline = compute_backtest_warmup_minutes(c)
+    baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
+    for side in ("long", "short"):
+        c["bot"][side]["unstuck"].update(ema_span_0=400_000.0, ema_span_1=500_000.0)
+        c["optimize"]["bounds"][side]["unstuck"].update(
+            ema_span_0=[10, 600_000], ema_span_1=[10, 700_000]
+        )
+    assert compute_backtest_warmup_minutes(c) == baseline
+    assert compute_per_coin_warmup_minutes(c)["__default__"] == baseline_coin
+    c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {toggle: True}}}}}
+    assert compute_backtest_warmup_minutes(c) == 700_000
+    assert compute_per_coin_warmup_minutes(c)["BTC"] == 500_000
+
+
+@pytest.mark.parametrize("toggle", ["unstuck_enabled", "unstuck_ema_gating_enabled"])
+def test_live_warmup_ignores_disabled_unstuck(toggle):
+    from passivbot import compute_live_warmup_windows
+
+    # Use the same callable surface as live configuration lookup.
+    values = {
+        "ema_span_0": 10,
+        "ema_span_1": 20,
+        "unstuck_ema_span_0": 400_000,
+        "unstuck_ema_span_1": 500_000,
+        "unstuck_enabled": True,
+        "unstuck_ema_gating_enabled": True,
+    }
+    values[toggle] = False
+
+    def lookup(side, key, symbol):
+        return values.get(key, 0.0)
+
+    kwargs = dict(
+        symbols_by_side={"long": {"BTC"}, "short": set()},
+        bp_lookup=lookup,
+        warmup_ratio=1.0,
+        max_warmup_minutes=1_000_000,
+        forager_enabled={"long": False, "short": False},
+        span_buffer=1.0,
+    )
+    windows, _, _ = compute_live_warmup_windows(**kwargs)
+    assert windows["BTC"] == 20

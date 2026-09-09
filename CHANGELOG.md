@@ -8,7 +8,8 @@ All notable user-facing changes will be documented in this file.
   coin overrides and CPU optimizer bounds. Schema v8.3.0 migrates missing spans from each coin's
   effective strategy to preserve saved trading behavior, with warnings where exact migration is
   impossible (including the formerly coupled optimizer search). Hard-coded defaults and the default
-  example include the new spans. Live warmup, backtest EMA updates, and monitor triggers use them.
+  example include the new spans. Active-gate warmup, backtest EMA updates, and independent monitor
+  triggers use them. Missing live unstuck-only EMAs defer unstucking while preserving strategy inputs.
   Apple MPS screening rejects independent-span searches until its kernels model them; matching
   fixed spans and disabled EMA gating remain supported.
 

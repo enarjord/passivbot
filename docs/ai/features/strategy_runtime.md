@@ -160,7 +160,9 @@ threshold, close sizing, and valid market/exchange inputs.
 band, using the same base candle stream and unrounded geometric-mean third span as the strategy
 band. Long eligibility uses the upper band; short eligibility uses the lower band. Strategy EMA
 changes must not change the unstuck band. Missing required unstuck EMAs follow the existing scoped
-input-unavailable contract; disabled gating does not require them.
+input-unavailable contract; disabled gating does not require them or extend warmup. Live loading
+requests unstuck-only spans for held sides separately, preserving usable strategy spans when an
+unstuck horizon is unavailable. Monitor bands are independently available for each consumer.
 
 Schema v8.3.0 materializes missing unstuck spans from the effective active strategy before default
 hydration, including coin overrides and external-file/inline precedence. Explicit unstuck spans

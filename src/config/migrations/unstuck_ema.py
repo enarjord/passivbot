@@ -15,6 +15,7 @@ def _migrate_inactive_zero_span(value, bot, default, path):
     unstuck = bot.get("unstuck", {})
     if value == 0 and (
         bot.get("risk", {}).get("total_wallet_exposure_limit") == 0
+        or bot.get("wallet_exposure_limit") == 0
         or unstuck.get("enabled") is False
         or unstuck.get("ema_gating_enabled") is False
     ):
@@ -30,7 +31,12 @@ def _migrate_inactive_zero_span(value, bot, default, path):
 
 
 def migrate_unstuck_ema_spans(
-    config: dict, *, base_config_path: str = "", verbose: bool = True, tracker=None
+    config: dict,
+    *,
+    base_config_path: str = "",
+    verbose: bool = True,
+    tracker=None,
+    explicit_bounds=None,
 ) -> None:
     kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
     defaults = get_strategy_defaults(kind)
@@ -123,7 +129,9 @@ def migrate_unstuck_ema_spans(
             unstuck_bounds = side_bounds.setdefault("unstuck", {})
             strategy_bounds = side_bounds.get("strategy", {}).get(kind, {})
             for key in keys:
-                if key not in unstuck_bounds:
+                supplied_bounds = bounds if explicit_bounds is None else explicit_bounds
+                supplied_unstuck = supplied_bounds.get(side, {}).get("unstuck", {})
+                if key not in supplied_unstuck:
                     value = config["bot"][side]["unstuck"][key]
                     unstuck_bounds[key] = [value, value]
                     if tracker is not None:
@@ -159,7 +167,15 @@ def migrate_unstuck_ema_spans(
             kind,
         )
 
-    # Dotted strategy span scenario overrides have the same exact leaf migration.
+    def scenario_leaves(mapping, prefix=""):
+        for key, value in mapping.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            if isinstance(value, dict):
+                yield from scenario_leaves(value, path)
+            else:
+                yield path, value
+
+    # Nested and dotted scenario overrides have the same exact leaf migration.
     # More general strategy replacement cannot be represented by copying a leaf.
     for scenario in config.get("backtest", {}).get("scenarios", []):
         if not isinstance(scenario, dict):
@@ -167,17 +183,17 @@ def migrate_unstuck_ema_spans(
         overrides = scenario.get("overrides", {})
         if not isinstance(overrides, dict):
             continue
+        leaves = dict(scenario_leaves(overrides))
         for side, keys in migrated.items():
             for key in keys:
                 for old_path in (
                     f"bot.{side}.strategy.{kind}.{key}",
                     f"bot.{side}.{key}",
                 ):
-                    if old_path in overrides:
-                        overrides.setdefault(
-                            f"bot.{side}.unstuck.{key}", deepcopy(overrides[old_path])
-                        )
-        if "live.strategy_kind" in overrides or any(
+                    new_path = f"bot.{side}.unstuck.{key}"
+                    if old_path in leaves and new_path not in leaves:
+                        overrides[new_path] = deepcopy(leaves[old_path])
+        if "live.strategy_kind" in leaves or any(
             isinstance(v, dict) and "strategy" in str(k) for k, v in overrides.items()
         ):
             logging.warning(

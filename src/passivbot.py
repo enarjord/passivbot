@@ -889,8 +889,11 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
-            for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
-                max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
+            if _get_bp(pside, "unstuck_enabled", sym) and _get_bp(
+                pside, "unstuck_ema_gating_enabled", sym
+            ):
+                for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+                    max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
             for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
                 max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
             if (pside == "long" and is_forager_long) or (
@@ -17258,6 +17261,7 @@ class Passivbot:
         )
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        need_unstuck_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
@@ -17332,8 +17336,10 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                if self.bp(pside, "unstuck_enabled", symbol) and self.bp(
-                    pside, "unstuck_ema_gating_enabled", symbol
+                if (
+                    self.has_position(pside=pside, symbol=symbol)
+                    and self.bp(pside, "unstuck_enabled", symbol)
+                    and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
                 ):
                     unstuck_spans = [
                         float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))
@@ -17345,7 +17351,7 @@ class Passivbot:
                         raise ValueError(
                             f"invalid unstuck EMA spans for {symbol} {pside}: {unstuck_spans}"
                         )
-                    need_close_spans[symbol].update(
+                    need_unstuck_close_spans[symbol].update(
                         (*unstuck_spans, (unstuck_spans[0] * unstuck_spans[1]) ** 0.5)
                     )
                 requirements = strategy_warmup_requirements(
@@ -18819,6 +18825,59 @@ class Passivbot:
                 )
             return ctx
 
+        async def load_unstuck_close_map(sym: str, close: dict[float, float]) -> None:
+            # Keep each successful span, even if another unstuck horizon is unavailable.
+            # Only held sides consume this family; Rust scopes absent spans at lookup.
+            for span in sorted(need_unstuck_close_spans[sym] - close.keys()):
+                projection_ctx = projection_contexts.get(sym)
+                if projection_ctx is None:
+                    try:
+                        close.update(
+                            await fetch_close_map(sym, [span], log_on_missing=False)
+                        )
+                        continue
+                    except MissingCloseEma:
+                        projection_ctx = projection_contexts.get(
+                            sym
+                        ) or refresh_open_tail_projection_context(sym)
+                if projection_ctx is not None:
+                    try:
+                        projected = await self.cm.get_projected_open_tail_ema_metrics(
+                            sym,
+                            {"close": [span]},
+                            latest_expected_ts=int(
+                                projection_ctx["latest_expected_ts"]
+                            ),
+                            last_cached_ts=int(projection_ctx["last_cached_ts"]),
+                            max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
+                        )
+                    except (TimeoutError, RuntimeError):
+                        projected = (
+                            None  # Explicit bounded input absence, scoped below.
+                        )
+                    if projected is not None:
+                        value = projected.get("close", {}).get(span)
+                        if value is not None and math.isinf(float(value)):
+                            raise RuntimeError(
+                                f"[ema] non-finite projected unstuck EMA for {sym} span={span}"
+                            )
+                        if value is not None and math.isfinite(float(value)):
+                            close[span] = float(value)
+                            self._orchestrator_ema_projection_symbols.add(sym)
+                            self._orchestrator_ema_projection_details[sym] = dict(
+                                projection_ctx
+                            )
+                            continue
+                self._orchestrator_allow_missing_strategy_inputs_symbols.add(sym)
+                log_ema_issue(
+                    ("unstuck_ema_unavailable", sym, span),
+                    logging.WARNING,
+                    "[ema] unstuck EMA unavailable %s span=%.8g action=scope_unstuck_in_rust | %s",
+                    Passivbot._log_symbol(sym),
+                    span,
+                    ema_candle_health_context(sym),
+                )
+
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             if sym in cache_only_never_fetched:
@@ -18976,6 +19035,7 @@ class Passivbot:
                     }
                 if forager_lr1m is None:
                     forager_lr1m = {}
+                await load_unstuck_close_map(sym, close)
                 if input_unavailability:
                     raise input_unavailability[0]
             except Exception as exc:

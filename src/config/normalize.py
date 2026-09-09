@@ -100,7 +100,11 @@ def normalize_config(
     from .migrations.unstuck_ema import migrate_unstuck_ema_spans
 
     migrate_unstuck_ema_spans(
-        result, base_config_path=base_config_path, verbose=verbose, tracker=tracker
+        result,
+        base_config_path=base_config_path,
+        verbose=verbose,
+        tracker=tracker,
+        explicit_bounds=raw_optimize_snapshot.get("bounds", {}),
     )
     result["bot"] = format_bot_config(
         result["bot"],

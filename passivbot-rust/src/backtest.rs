@@ -11771,6 +11771,28 @@ mod tests {
     }
 
     #[test]
+    fn disabled_unstuck_gate_does_not_extend_warmup() {
+        let mut bp = BotParamsPair::default();
+        let strategies = strategy_pair_for_ema_tests(&bp);
+        let baseline = calc_warmup_bars(&[bp.clone()], &[strategies.clone()]);
+        bp.long.unstuck_ema_span_0 = 400_000.25;
+        bp.long.unstuck_ema_span_1 = 500_000.25;
+        bp.long.unstuck_enabled = false;
+        assert_eq!(
+            calc_warmup_bars(&[bp.clone()], &[strategies.clone()]),
+            baseline
+        );
+        bp.long.unstuck_enabled = true;
+        bp.long.unstuck_ema_gating_enabled = false;
+        assert_eq!(
+            calc_warmup_bars(&[bp.clone()], &[strategies.clone()]),
+            baseline
+        );
+        bp.long.unstuck_ema_gating_enabled = true;
+        assert_eq!(calc_warmup_bars(&[bp], &[strategies]), 500_001);
+    }
+
+    #[test]
     fn independent_unstuck_alphas_preserve_fractional_minutes_at_every_interval() {
         let mut bp = BotParamsPair::default();
         bp.long.unstuck_ema_span_0 = 17.25;
@@ -11974,8 +11996,16 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_long = [
             long_span_0,
             long_span_1,
-            pair.long.unstuck_ema_span_0,
-            pair.long.unstuck_ema_span_1,
+            if pair.long.unstuck_enabled && pair.long.unstuck_ema_gating_enabled {
+                pair.long.unstuck_ema_span_0
+            } else {
+                0.0
+            },
+            if pair.long.unstuck_enabled && pair.long.unstuck_ema_gating_enabled {
+                pair.long.unstuck_ema_span_1
+            } else {
+                0.0
+            },
             pair.long.filter_volume_ema_span_1m as f64,
             pair.long.filter_volatility_ema_span_1m as f64,
             strategy_entry_volatility_span_hours(&strategy_pair.long).unwrap_or(0.0) * 60.0,
@@ -11983,8 +12013,16 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_short = [
             short_span_0,
             short_span_1,
-            pair.short.unstuck_ema_span_0,
-            pair.short.unstuck_ema_span_1,
+            if pair.short.unstuck_enabled && pair.short.unstuck_ema_gating_enabled {
+                pair.short.unstuck_ema_span_0
+            } else {
+                0.0
+            },
+            if pair.short.unstuck_enabled && pair.short.unstuck_ema_gating_enabled {
+                pair.short.unstuck_ema_span_1
+            } else {
+                0.0
+            },
             pair.short.filter_volume_ema_span_1m as f64,
             pair.short.filter_volatility_ema_span_1m as f64,
             strategy_entry_volatility_span_hours(&strategy_pair.short).unwrap_or(0.0) * 60.0,

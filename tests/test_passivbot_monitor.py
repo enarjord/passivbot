@@ -7614,3 +7614,36 @@ async def test_update_open_orders_propagates_unexpected_fetch_errors():
 
     with pytest.raises(RuntimeError, match="exchange fetch broke"):
         await bot.update_open_orders()
+
+
+@pytest.mark.parametrize("missing_family", ["strategy", "unstuck"])
+def test_monitor_ema_families_are_independent(missing_family):
+    from types import SimpleNamespace
+    from passivbot_monitor import _build_monitor_runtime_market_hints
+
+    values = {
+        "ema_span_0": 10.0,
+        "ema_span_1": 40.0,
+        "unstuck_ema_span_0": 100.0,
+        "unstuck_ema_span_1": 400.0,
+        "unstuck_enabled": True,
+        "unstuck_ema_gating_enabled": True,
+        "entry_initial_ema_dist": 0.01,
+        "unstuck_ema_dist": 0.02,
+    }
+    bot = SimpleNamespace(bp=lambda side, key, symbol: values[key])
+    emas = {
+        10.0: 90.0,
+        20.0: 95.0,
+        40.0: 100.0,
+        100.0: 110.0,
+        200.0: 115.0,
+        400.0: 120.0,
+    }
+    del emas[10.0 if missing_family == "strategy" else 100.0]
+    hints = _build_monitor_runtime_market_hints(
+        bot, ["BTC"], {"BTC": 100.0}, {"BTC": emas}
+    )["BTC"]["ema_bands"]
+    for side in ("long", "short"):
+        assert ("entry_trigger_price" in hints[side]) == (missing_family != "strategy")
+        assert ("unstuck_trigger_price" in hints[side]) == (missing_family != "unstuck")
