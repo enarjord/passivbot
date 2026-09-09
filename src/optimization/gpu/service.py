@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
+from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -1940,6 +1941,7 @@ class MpsSingleCoinProxy:
                 signal_mode, enabled_side_count=sum(self.enabled.values())
             )
         hsl_panic_market = {}
+        self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         self.base_params = {}
         configured_total_wallet_exposure_limits = {
             side: float(bot["total_wallet_exposure_limit"])
@@ -2216,6 +2218,9 @@ class MpsSingleCoinProxy:
                 merged.update(
                     getattr(self, "static_coin_override_params", {}).get(side, {})
                 )
+                if getattr(self, "couple_unstuck_emas", False):
+                    for i in (0, 1):
+                        merged[f"unstuck_ema_span_{i}"] = merged[f"ema_span_{i}"]
                 row.extend(float(merged[key]) for key in self.param_keys)
             rows.append(row)
         return np.asarray(rows, dtype=np.float64)
@@ -2583,11 +2588,17 @@ def _build_multicoin_ema_coin_overrides(
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
         for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS):
-            if key.removeprefix("unstuck_") in unstuck_patch:
-                matrix[
+            column = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset
+            strategy_key = key.removeprefix("unstuck_")
+            if unstuck_ema_spans_coupled(config):
+                # Inherited spans stay NaN so each candidate supplies its own
+                # strategy value; only actual strategy coin pins remain static.
+                matrix[coin_index, column] = matrix[
                     coin_index,
-                    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset,
-                ] = float(effective_bot[key])
+                    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(strategy_key),
+                ]
+            elif strategy_key in unstuck_patch:
+                matrix[coin_index, column] = float(effective_bot[key])
         _pack_multicoin_hsl_overrides(
             matrix,
             row=coin_index,
@@ -2732,11 +2743,19 @@ def _build_multicoin_tm_coin_overrides(
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
         for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS):
-            if key.removeprefix("unstuck_") in unstuck_patch:
-                matrix[
+            column = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset
+            strategy_key = key.removeprefix("unstuck_")
+            if unstuck_ema_spans_coupled(config):
+                # Inherited spans stay NaN so each candidate supplies its own
+                # strategy value; only actual strategy coin pins remain static.
+                matrix[coin_index, column] = matrix[
                     coin_index,
-                    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset,
-                ] = float(effective_bot[key])
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS.index(
+                        (strategy_key, (strategy_key,))
+                    ),
+                ]
+            elif strategy_key in unstuck_patch:
+                matrix[coin_index, column] = float(effective_bot[key])
         _pack_multicoin_hsl_overrides(
             matrix,
             row=coin_index,
@@ -3139,6 +3158,7 @@ class MpsMulticoinProxy:
             side: float(payload.bot_params_list[0][side]["n_positions"])
             for side in ("long", "short")
         }
+        self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         self.base_params = {}
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
@@ -3492,6 +3512,9 @@ class MpsMulticoinProxy:
                     if key.startswith(f"{side}_")
                 }
             )
+            if getattr(self, "couple_unstuck_emas", False):
+                for i in (0, 1):
+                    merged[f"unstuck_ema_span_{i}"] = merged[f"ema_span_{i}"]
             rows.append([float(merged[key]) for key in param_keys])
         return np.asarray(rows, dtype=np.float64)
 
