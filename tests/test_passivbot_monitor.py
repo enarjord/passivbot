@@ -7647,3 +7647,36 @@ def test_monitor_ema_families_are_independent(missing_family):
     for side in ("long", "short"):
         assert ("entry_trigger_price" in hints[side]) == (missing_family != "strategy")
         assert ("unstuck_trigger_price" in hints[side]) == (missing_family != "unstuck")
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize("strategy_available", [False, True])
+def test_unstuck_monitor_renderer_uses_independent_bounds(pside, strategy_available):
+    from types import SimpleNamespace
+    from passivbot_monitor import _build_monitor_runtime_unstuck_hints
+    from monitor_tui import _render_unstuck_panel
+
+    bands = {
+        "unstuck_lower": 110.0,
+        "unstuck_upper": 120.0,
+        "unstuck_trigger_price": 122.4,
+    }
+    if strategy_available:
+        bands.update(lower=90.0, upper=100.0, entry_trigger_price=89.1)
+    market = {"BTC": {"ema_bands": {pside: bands}}}
+    hints = _build_monitor_runtime_unstuck_hints(
+        SimpleNamespace(),
+        {0: "BTC"},
+        [{"order_type": f"close_unstuck_{pside}", "symbol_idx": 0, "price": 122.4}],
+        {"BTC": 100.0},
+        market,
+    )
+    assert hints[pside]["ema_bands"] == {
+        "lower": 110.0,
+        "upper": 120.0,
+        "unstuck_trigger_price": 122.4,
+    }
+    assert bands.get("lower") == (90.0 if strategy_available else None)
+    rendered = "\n".join(_render_unstuck_panel({"unstuck": {"sides": hints}}))
+    assert "band=110..120" in rendered
+    assert "trigger=122.4" in rendered

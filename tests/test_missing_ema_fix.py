@@ -3195,6 +3195,9 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
             "unstuck_ema_gating_enabled": True,
             "unstuck_ema_span_0": 1000.0,
             "unstuck_ema_span_1": 2000.0,
+            "unstuck_loss_allowance_pct": 0.1,
+            "unstuck_close_pct": 0.1,
+            "unstuck_threshold": 0.2,
         }.get(key, original_bp(side, key, symbol))
 
     bot.bp = bp
@@ -3256,4 +3259,64 @@ async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
     sym_input["long"]["bot_params"]["unstuck_enabled"] = False
     expected = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
     assert result["orders"] == expected["orders"]
-    assert any(("close" if held else "entry") in order["order_type"] for order in result["orders"])
+    assert any(
+        ("close" if held else "entry") in order["order_type"]
+        for order in result["orders"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize(
+    "skip_reason",
+    [
+        "manual",
+        "panic",
+        "unstuck_loss_allowance_pct",
+        "unstuck_close_pct",
+        "unstuck_threshold",
+    ],
+)
+async def test_ineligible_unstuck_consumer_does_not_read_emas(
+    pside, skip_reason, caplog
+):
+    from passivbot import Passivbot
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, "value")
+    bot.positions[symbol][pside] = {
+        "size": 1.0 if pside == "long" else -1.0,
+        "price": 100.0,
+    }
+    bot.PB_modes[pside][symbol] = (
+        skip_reason if skip_reason in {"manual", "panic"} else "normal"
+    )
+    values = {
+        "unstuck_enabled": True,
+        "unstuck_ema_gating_enabled": True,
+        "unstuck_ema_span_0": 1000.0,
+        "unstuck_ema_span_1": 2000.0,
+        "unstuck_loss_allowance_pct": 0.1,
+        "unstuck_close_pct": 0.1,
+        "unstuck_threshold": 0.2,
+    }
+    if skip_reason in values:
+        values[skip_reason] = 0.0
+    original_bp = bot.bp
+    bot.bp = lambda side, key, symbol=None: (
+        values[key] if key in values else original_bp(side, key, symbol)
+    )
+    requests = []
+
+    async def close(sym, span, **kwargs):
+        requests.append(span)
+        if span >= 1000:
+            raise AssertionError("ineligible unstuck consumer requested candles")
+        return 100.0
+
+    bot.cm.get_latest_ema_close = close
+    with caplog.at_level(logging.WARNING):
+        await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    assert requests and max(requests) < 1000
+    assert "unstuck EMA unavailable" not in caplog.text
+    assert not bot._orchestrator_allow_missing_strategy_inputs_symbols

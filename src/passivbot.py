@@ -17340,6 +17340,18 @@ class Passivbot:
                     self.has_position(pside=pside, symbol=symbol)
                     and self.bp(pside, "unstuck_enabled", symbol)
                     and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
+                    and Passivbot._mode_override_to_orchestrator_mode(
+                        self, modes.get(pside, {}).get(symbol)
+                    )
+                    not in {"manual", "panic"}
+                    and all(
+                        self.bp(pside, key, symbol) > 0.0
+                        for key in (
+                            "unstuck_loss_allowance_pct",
+                            "unstuck_close_pct",
+                            "unstuck_threshold",
+                        )
+                    )
                 ):
                     unstuck_spans = [
                         float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))

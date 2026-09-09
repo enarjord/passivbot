@@ -1203,9 +1203,20 @@ def _build_monitor_runtime_unstuck_hints(
         if isinstance(market_hint, dict):
             ema_bands = market_hint.get("ema_bands", {})
             if isinstance(ema_bands, dict) and isinstance(ema_bands.get(pside), dict):
-                side_ema_bands = deepcopy(ema_bands.get(pside))
+                market_bands = ema_bands[pside]
+                side_ema_bands = {
+                    target: deepcopy(market_bands[source])
+                    for target, source in (
+                        ("lower", "unstuck_lower"),
+                        ("upper", "unstuck_upper"),
+                        ("unstuck_trigger_price", "unstuck_trigger_price"),
+                    )
+                    if source in market_bands
+                }
                 hint["ema_bands"] = side_ema_bands
-                trigger_price = float(side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0)
+                trigger_price = float(
+                    side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0
+                )
                 if current_price > 0.0 and trigger_price > 0.0:
                     hint["next_unstuck_trigger_distance_ratio"] = float(
                         trigger_price / current_price - 1.0
