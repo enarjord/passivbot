@@ -175,7 +175,8 @@ def migrate_unstuck_ema_spans(
             "optimizer-search migration is impossible: strategy spans previously also controlled "
             "unstucking (%s). New unstuck span bounds are fixed at migrated values unless explicitly "
             "provided. Set optimize.bounds.<side>.unstuck.ema_span_0/1 to tune them independently; "
-            "previous optimizer checkpoints must start a new search.",
+            "or add couple_unstuck_ema_spans to optimize.enable_overrides to restore coupled search. "
+            "Previous optimizer checkpoints must start a new search.",
             ", ".join(coupled_search),
         )
     if pinned:

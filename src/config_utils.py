@@ -1615,6 +1615,11 @@ def _argument_metavar(type_, full_name: str, value):
 
 
 CLI_HELP_OVERRIDES = {
+    "optimize.enable_overrides": (
+        "Optimizer convenience overrides. couple_unstuck_ema_spans derives each coin and side's "
+        "unstuck horizons from its effective strategy, removing redundant unstuck span genes. "
+        "Saved candidates retain explicit spans. Default: no overrides."
+    ),
     "backtest.scenarios": (
         "Suite scenario definitions. Use --scenarios to select labels; use "
         "--suite-config for complex scenario files. Scenario entries support "

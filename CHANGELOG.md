@@ -8,6 +8,10 @@ All notable user-facing changes will be documented in this file.
   ordinary flatten falls before the bounded replay window. Successful empty-window replays now
   establish the proven episode boundary before calculating current risk, preventing discarded
   losses from triggering RED while retaining re-entry fees and required cooldown/no-restart history.
+- Add `couple_unstuck_ema_spans` to `optimize.enable_overrides` to search strategy and unstuck
+  EMA spans together on CPU or Apple MPS, including effective coin/scenario strategy overrides.
+  Coupled search omits redundant unstuck span genes and saves explicit horizons for ordinary
+  replay. Independent search remains the default; changing the option requires a fresh run.
 
 - Auto-unstuck now owns independent `bot.<side>.unstuck.ema_span_0` / `ema_span_1`, including
   coin overrides and CPU optimizer bounds. Schema v8.3.0 migrates missing spans from each coin's
@@ -15,8 +19,9 @@ All notable user-facing changes will be documented in this file.
   impossible (including the formerly coupled optimizer search). Hard-coded defaults and the default
   example include the new spans. Active-gate warmup, backtest EMA updates, and independent monitor
   triggers use them. Missing live unstuck-only EMAs defer unstucking while preserving strategy inputs.
-  Apple MPS screening rejects independent-span searches until its kernels model them; matching
-  fixed spans and disabled EMA gating remain supported.
+  Apple MPS screening supports the independent spans across both supported strategies, including
+  coin overrides, aggregated candles, and chunked replay. Start a fresh GPU optimizer run after
+  upgrading; older screening checkpoints use an incompatible parameter layout.
 
 - GPU optimization automatically queues two validation batches (or twice the worker count,
   whichever is larger), allowing proxy screening and exact evaluation to overlap. Explicit queue

@@ -39,7 +39,7 @@ constant int SCALAR_COLS = 70;
 constant int SCALAR_COLS = 68;
 #endif
 constant int GAP_BINS = 128;
-constant int SIDE_PARAMS = 52;
+constant int SIDE_PARAMS = 54;
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
 constant float RECOVERY_FAIL_CLOSED_SENTINEL = -3.402823466e+38f;
 #endif
@@ -220,6 +220,8 @@ inline bool realized_loss_proxy_allows_reducer(
     return -net_pnl + margin <= remaining_loss_budget;
 }
 
+// PASSIVBOT_UNSTUCK_EMA_COMMON
+
 // PASSIVBOT_HSL_COMMON
 
 // PASSIVBOT_BTC_RISK_COMMON
@@ -285,6 +287,7 @@ inline void record_directional_gross_pnl(
 }
 
 struct TmSide {
+    UnstuckEmaBand unstuck_ema;
     float alpha0, alpha1, alpha2;
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
     float alpha1m, alpha1h;
@@ -521,6 +524,7 @@ inline TmSide load_side(constant float* p, int o, float seed) {
     s.secondary_close_market = false;
     s.market_orders_allowed = false;
     s.market_order_near_touch_threshold = 0.0f;
+    s.unstuck_ema = init_unstuck_ema_band(p[o + 52], p[o + 53], seed);
     s.ema0 = seed; s.ema1 = seed; s.ema2 = seed;
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
     s.vol1m = 0.0f; s.vol1h = 0.0f;
@@ -559,6 +563,7 @@ inline void update_indicators(
         s.vol1h = fma(s.alpha1h, hour_lr - s.vol1h, s.vol1h);
 #endif
     if (valid) {
+        update_unstuck_ema_band(s.unstuck_ema, close);
         s.ema0 = fma(s.alpha0, close - s.ema0, s.ema0);
         s.ema1 = fma(s.alpha1, close - s.ema1, s.ema1);
         s.ema2 = fma(s.alpha2, close - s.ema2, s.ema2);
@@ -856,8 +861,8 @@ inline bool unstuck_eligible(
         return false;
     }
     if (!s.unstuck_ema_gating_enabled) return true;
-    float lower = fmin(s.ema0, fmin(s.ema1, s.ema2));
-    float upper = fmax(s.ema0, fmax(s.ema1, s.ema2));
+    float lower = unstuck_ema_lower(s.unstuck_ema);
+    float upper = unstuck_ema_upper(s.unstuck_ema);
     int trigger_ticks = is_long
         ? int(ceil(
             upper * (1.0f + s.unstuck_ema_dist) / price_step - 1.0e-6f

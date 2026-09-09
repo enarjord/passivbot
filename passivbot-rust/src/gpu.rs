@@ -6,6 +6,9 @@
 
 use std::sync::LazyLock;
 
+const MPS_UNSTUCK_EMA_MARKER: &str = "// PASSIVBOT_UNSTUCK_EMA_COMMON";
+const MPS_UNSTUCK_EMA_COMMON_SOURCE: &str = include_str!("gpu/mps_unstuck_ema_common.metal");
+
 const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
@@ -37,6 +40,7 @@ const MPS_EMA_SHORT_NO_HSL_PREAMBLE: &str =
     "#define PASSIVBOT_EMA_SHORT_ONLY 1\n#define PASSIVBOT_EMA_HSL_DISABLED 1\n";
 
 fn compose_hsl_source(body: &str) -> String {
+    assert_eq!(body.matches(MPS_UNSTUCK_EMA_MARKER).count(), 1);
     assert_eq!(
         body.matches(MPS_HSL_MARKER).count(),
         1,
@@ -57,7 +61,8 @@ fn compose_hsl_source(body: &str) -> String {
         1,
         "MPS source must contain exactly one shared entry-interval marker"
     );
-    body.replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
+    body.replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
+        .replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
         .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
         .replacen(
             MPS_EQUITY_BALANCE_DIFF_MARKER,
@@ -726,7 +731,7 @@ mod tests {
         assert!(source.contains("scalars[so + 68] = hsl_strategy_equity_drawdown_max("));
         assert!(source.contains("scalars[so + 69] = hsl_strategy_equity_drawdown_max("));
         assert!(source.contains("if (eqf >= account_peak)"));
-        assert!(source.contains("constant int SIDE_PARAMS = 35"));
+        assert!(source.contains("constant int SIDE_PARAMS = 37"));
         assert!(source.contains("float base_wel = params[po + 34]"));
         assert!(source.contains("side.base_wel = base_wel"));
         assert!(source.contains("current_we / fmax(side.base_wel"));
@@ -777,7 +782,7 @@ mod tests {
         assert!(source.contains("position_size <= requested_qty"));
         assert!(source.contains("remainder + tolerance < minimum_qty"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
-        assert_eq!(source.matches("= fma(").count(), 6);
+        assert_eq!(source.matches("= fma(").count(), 7);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
@@ -797,8 +802,8 @@ mod tests {
         assert!(source.contains("kernel void passivbot_ema_anchor_multicoin_long"));
         assert!(source.contains("const bool short_side"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 42"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 30"));
+        assert!(source.contains("constant int PARAM_COLS = 44"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 32"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 19"));
         assert!(source.contains("constant int FORCED_ACTIVE_OVERRIDE_COL = 29"));
         assert!(source.contains("apply_coin_hsl_overrides("));
@@ -1064,7 +1069,7 @@ mod tests {
         assert!(source.contains("short_last_initial_entry_k"));
         assert!(source.contains("long_side.entry_gen_psize <= 0.0f"));
         assert!(source.contains("short_side.entry_gen_psize <= 0.0f"));
-        assert!(source.contains("constant int SIDE_PARAMS = 52"));
+        assert!(source.contains("constant int SIDE_PARAMS = 54"));
         assert!(source.contains("float base_wel = p[o + 51]"));
         assert!(source.contains("struct HslState"));
         assert!(source.contains("update_hsl("));
@@ -1153,7 +1158,7 @@ mod tests {
             source.matches("if (twel_boundary_partial) break;").count(),
             2
         );
-        assert_eq!(source.matches("= fma(").count(), 6);
+        assert_eq!(source.matches("= fma(").count(), 7);
         assert!(!source.contains("alpha0 * close +"));
         assert_eq!(source.matches("const int fo = k * 11").count(), 1);
         assert_eq!(source.matches("const int touch_down_tick").count(), 1);
@@ -1303,8 +1308,8 @@ mod tests {
         assert_shared_entry_interval_contract(source);
         assert!(source.contains("kernel void passivbot_trailing_martingale_multicoin"));
         assert!(source.contains("constant int MAX_COINS = 64"));
-        assert!(source.contains("constant int PARAM_COLS = 59"));
-        assert!(source.contains("constant int OVERRIDE_COLS = 47"));
+        assert!(source.contains("constant int PARAM_COLS = 61"));
+        assert!(source.contains("constant int OVERRIDE_COLS = 49"));
         assert!(source.contains("constant int HSL_OVERRIDE_START = 34"));
         assert!(source.contains("constant int GATE_INITIAL_OVERRIDE_COL = 44"));
         assert!(source.contains("constant int GATE_REENTRY_OVERRIDE_COL = 45"));

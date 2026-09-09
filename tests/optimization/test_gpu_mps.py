@@ -192,26 +192,24 @@ def test_tm_parameter_packing_preserves_positive_underflow_mode_per_side():
     assert packed[0, width + entry_column] == 0.0
 
 
-@pytest.mark.parametrize("side_width", [35, 52])
-def test_legacy_single_coin_rows_gain_per_side_wallet_exposure_sentinel(
-    side_width,
+@pytest.mark.parametrize("side_width,strategy_start", [(37, 1), (54, 0)])
+@pytest.mark.parametrize("missing_wel", [False, True])
+def test_legacy_single_coin_rows_gain_explicit_unstuck_spans(
+    side_width, strategy_start, missing_wel
 ):
-    legacy_width = side_width - 1
+    legacy_width = side_width - 2 - int(missing_wel)
     params = np.arange(legacy_width * 2, dtype=np.float64).reshape(1, -1)
-
-    upgraded = _upgrade_legacy_single_coin_wel_params(
-        params, side_width=side_width
-    )
-
+    upgraded = _upgrade_legacy_single_coin_wel_params(params, side_width=side_width)
     assert upgraded.shape == (1, side_width * 2)
-    assert upgraded[0, :legacy_width].tolist() == params[
-        0, :legacy_width
-    ].tolist()
-    assert upgraded[0, legacy_width] == -1.0
-    assert upgraded[0, side_width:-1].tolist() == params[
-        0, legacy_width:
-    ].tolist()
-    assert upgraded[0, -1] == -1.0
+    for side in (0, 1):
+        original = params[0, side * legacy_width : (side + 1) * legacy_width]
+        actual = upgraded[0, side * side_width : (side + 1) * side_width]
+        np.testing.assert_array_equal(actual[:legacy_width], original)
+        if missing_wel:
+            assert actual[-3] == -1.0
+        np.testing.assert_array_equal(
+            actual[-2:], original[strategy_start : strategy_start + 2]
+        )
 
 
 @pytest.mark.skipif(
@@ -3885,6 +3883,8 @@ _HSL_DISABLED_VALUES = {
 def _single_coin_param_row(values, keys):
     merged = {
         **_UNSTUCK_DISABLED_VALUES,
+        "unstuck_ema_span_0": 2.0,
+        "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
         "wallet_exposure_limit": -1.0,
         **values,
@@ -5590,6 +5590,8 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            "unstuck_ema_span_0": 2.0,
+            "unstuck_ema_span_1": 3.0,
             **_HSL_DISABLED_VALUES,
         }
         row = [values[key] for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS]
@@ -5653,6 +5655,8 @@ def _multicoin_exposure_fixture(
             "twel_enforcer_enabled": 0.0,
             "twel_enforcer_reduce_portfolio": 0.0,
             **_UNSTUCK_DISABLED_VALUES,
+            "unstuck_ema_span_0": 2.0,
+            "unstuck_ema_span_1": 3.0,
             **_HSL_DISABLED_VALUES,
         }
         row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -5697,8 +5701,14 @@ def test_tm_multicoin_temporal_replay_preserves_every_output(side, features, bat
     )
     if features:
         for key, value in (
-            ("hsl_enabled", 1.0), ("hsl_signal_mode", 2.0),
-            ("hsl_red_threshold", 0.02), ("hsl_ema_span_minutes", 1.0),
+            ("unstuck_enabled", 1.0),
+            ("unstuck_ema_gating_enabled", 1.0),
+            ("unstuck_ema_span_0", 7.25),
+            ("unstuck_ema_span_1", 133.5),
+            ("hsl_enabled", 1.0),
+            ("hsl_signal_mode", 2.0),
+            ("hsl_red_threshold", 0.02),
+            ("hsl_ema_span_minutes", 1.0),
             ("hsl_cooldown_minutes_after_red", 3.0),
         ):
             row[TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS.index(key)] = value
@@ -8799,7 +8809,7 @@ def test_mps_ema_anchor_shader_smoke():
 
     source = passivbot_rust.mps_ema_anchor_source_py()
     assert "kernel void passivbot_ema_anchor" in source
-    assert "constant int SIDE_PARAMS = 35" in source
+    assert "constant int SIDE_PARAMS = 37" in source
     assert "total_exposure_reducer_qty" in source
     assert "secondary_close_qty" in source
     assert "realized_loss_gate_allows" in source
@@ -9138,7 +9148,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     )
     assert "kernel void passivbot_ema_anchor_multicoin" in source
     assert "kernel void passivbot_ema_anchor_multicoin_long" in source
-    assert "constant int PARAM_COLS = 42" in source
+    assert "constant int PARAM_COLS = 44" in source
     assert f"constant int OVERRIDE_COLS = {EMA_ANCHOR_COIN_OVERRIDE_COLS}" in source
     assert "allowed_wallet_exposure_limit" in source
     assert "twel_entry_gate_enabled" in source
@@ -9211,7 +9221,7 @@ def test_mps_ema_anchor_multicoin_directional_shader_smoke(side):
     ]
     row += _single_coin_exposure_fields() + [0.0, 0.0]
     row += list(_UNSTUCK_DISABLED_VALUES.values())
-    row += list(_HSL_DISABLED_VALUES.values())
+    row += list(_HSL_DISABLED_VALUES.values()) + [2.0, 3.0]
 
     runner = MpsEmaAnchorMulticoinRunner(
         runs[0],
@@ -10930,7 +10940,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         hsl["hsl_enabled"] = 1.0
         hsl["hsl_red_threshold"] = 0.9
         hsl["hsl_signal_mode"] = float(signal_mode)
-        row = base + list(hsl.values())
+        row = base + list(hsl.values()) + [2.0, 3.0]
         assert len(row) == len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         return row
 
@@ -11276,7 +11286,7 @@ def test_mps_ema_anchor_multicoin_fused_kernel_smoke_all_hsl_modes():
         for item in service_results
     )
 
-    with pytest.raises(ValueError, match="84 columns"):
+    with pytest.raises(ValueError, match="88 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     truncated = runner.run(
         np.asarray([rows[0]], dtype=np.float64),
@@ -11398,6 +11408,7 @@ def test_mps_fused_multicoin_one_way_arbitrates_each_flat_symbol(
                 "gate_reentry": 1.0,
             }
         )
+    values.update(unstuck_ema_span_0=17.25, unstuck_ema_span_1=211.75)
     side_row = [values[key] for key in param_keys]
     params = np.asarray([side_row + side_row], dtype=np.float64)
 
@@ -11525,6 +11536,8 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        "unstuck_ema_span_0": 2.0,
+        "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
     }
 
@@ -11875,7 +11888,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         for item in service_results
     )
 
-    with pytest.raises(ValueError, match="118 columns"):
+    with pytest.raises(ValueError, match="122 columns"):
         runner.run(np.asarray([side_row(0)], dtype=np.float64))
     with pytest.raises(ValueError, match="short override matrix shaped"):
         MpsTrailingMartingaleMulticoinFusedRunner(
@@ -11944,7 +11957,7 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
 
     source = passivbot_rust.mps_trailing_martingale_multicoin_source_py()
     assert "kernel void passivbot_trailing_martingale_multicoin" in source
-    assert "constant int PARAM_COLS = 59" in source
+    assert "constant int PARAM_COLS = 61" in source
     assert "effective_n_positions" in source
     assert "min_since_open" in source
     assert "entry_retracement_base" in source
@@ -12045,6 +12058,8 @@ def test_mps_trailing_martingale_multicoin_directional_shader_smoke(side):
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
         **_UNSTUCK_DISABLED_VALUES,
+        "unstuck_ema_span_0": 2.0,
+        "unstuck_ema_span_1": 3.0,
         **_HSL_DISABLED_VALUES,
     }
     row = [values[key] for key in TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS]
@@ -12679,27 +12694,33 @@ def _tm_single_row(
     unstuck_loss_allowance_pct=0.1,
     unstuck_threshold=0.5,
 ):
-    return _tm_row(
-        initial_ema_dist=initial_ema_dist,
-        gate_initial=gate_initial,
-        gate_reentry=gate_reentry,
-    ) + _single_coin_exposure_fields(
-        allowance_pct=allowance_pct,
-        legacy_raw=legacy_raw,
-        entry_gate=entry_gate,
-        threshold=threshold,
-    ) + _tm_wel_enforcer_fields(
-        enabled=wel_enforcer_enabled,
-        threshold=wel_enforcer_threshold,
-    ) + _tm_twel_enforcer_fields(
-        enabled=twel_enforcer_enabled,
-        unstuck_enabled=unstuck_enabled,
-        unstuck_ema_gating_enabled=unstuck_ema_gating_enabled,
-        unstuck_close_pct=unstuck_close_pct,
-        unstuck_ema_dist=unstuck_ema_dist,
-        unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
-        unstuck_threshold=unstuck_threshold,
-    ) + [-1.0]
+    return (
+        _tm_row(
+            initial_ema_dist=initial_ema_dist,
+            gate_initial=gate_initial,
+            gate_reentry=gate_reentry,
+        )
+        + _single_coin_exposure_fields(
+            allowance_pct=allowance_pct,
+            legacy_raw=legacy_raw,
+            entry_gate=entry_gate,
+            threshold=threshold,
+        )
+        + _tm_wel_enforcer_fields(
+            enabled=wel_enforcer_enabled,
+            threshold=wel_enforcer_threshold,
+        )
+        + _tm_twel_enforcer_fields(
+            enabled=twel_enforcer_enabled,
+            unstuck_enabled=unstuck_enabled,
+            unstuck_ema_gating_enabled=unstuck_ema_gating_enabled,
+            unstuck_close_pct=unstuck_close_pct,
+            unstuck_ema_dist=unstuck_ema_dist,
+            unstuck_loss_allowance_pct=unstuck_loss_allowance_pct,
+            unstuck_threshold=unstuck_threshold,
+        )
+        + [-1.0, 2.0, 3.0]
+    )
 
 
 def test_tm_dispatch_specialization_requires_every_enabled_side_and_row():
@@ -20612,10 +20633,11 @@ def test_mps_trailing_martingale_multicoin_sizes_raw_touch_close_before_price_fi
     row.append(0.0)  # TWEL reduce_overweight policy
     row.extend(_UNSTUCK_DISABLED_VALUES.values())
     row.extend(_HSL_DISABLED_VALUES.values())
+    row.extend([2.0, 3.0])
 
-    output = MpsTrailingMartingaleMulticoinRunner(
-        runs[0], data, side=side
-    ).run(np.array([row], dtype=np.float64))
+    output = MpsTrailingMartingaleMulticoinRunner(runs[0], data, side=side).run(
+        np.array([row], dtype=np.float64)
+    )
     torch.mps.synchronize()
 
     # Exact Rust sizes against the raw 100.004 touch before finalizing the
@@ -20640,7 +20662,7 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
 
     source = passivbot_rust.mps_trailing_martingale_source_py()
     assert "kernel void passivbot_trailing_martingale" in source
-    assert "constant int SIDE_PARAMS = 52" in source
+    assert "constant int SIDE_PARAMS = 54" in source
     assert "s.allowed_wel" in source
     assert "s.entry_cap" in source
     assert "min_since_open" in source
@@ -21655,3 +21677,204 @@ def test_streamed_gap_moment_matches_distinct_fill_timestamps(
     assert metrics["fills_gap_time_weighted_mean_hours"].item() == pytest.approx(
         expected, rel=2e-6
     )
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize(
+    "source_name",
+    [
+        "mps_ema_anchor_source_py",
+        "mps_trailing_martingale_source_py",
+        "mps_ema_anchor_multicoin_source_py",
+        "mps_trailing_martingale_multicoin_source_py",
+    ],
+)
+@pytest.mark.parametrize("spans", [(2.5, 91.75), (0.1, 0.9), (100000.5, 2.25)])
+def test_mps_independent_unstuck_band_matches_adjusted_recurrence(source_name, spans):
+    import passivbot_rust
+
+    closes = np.array([100.0, 97.0, 93.0, 98.0, 104.0, 91.0], dtype=np.float32)
+    probe = r"""
+kernel void unstuck_band_probe(constant float* inputs, device float* output,
+                              uint b [[thread_position_in_grid]]) {
+    if (b > 0) return;
+    UnstuckEmaBand band = init_unstuck_ema_band(inputs[0], inputs[1], inputs[2]);
+    for (int i = 0; i < 6; ++i) {
+        if (i > 0) update_unstuck_ema_band(band, inputs[2 + i]);
+        output[i * 2] = unstuck_ema_lower(band);
+        output[i * 2 + 1] = unstuck_ema_upper(band);
+    }
+}
+"""
+    inputs = torch.tensor([*spans, *closes], dtype=torch.float32, device="mps")
+    output = torch.zeros(12, dtype=torch.float32, device="mps")
+    library = torch.mps.compile_shader(getattr(passivbot_rust, source_name)() + probe)
+    library.unstuck_band_probe(inputs, output, threads=(1, 1, 1))
+    expected = []
+    # Use the Rust price EMA reference, including its price/1 initialization.
+    # Backtests clamp sub-candle spans to alpha=1 (equivalent to span=1).
+    for i in range(len(closes)):
+        values = [
+            passivbot_rust.ema_last(closes[: i + 1].astype(np.float64), max(1.0, span))
+            for span in (*spans, np.sqrt(spans[0] * spans[1]))
+        ]
+        expected.extend([min(values), max(values)])
+    np.testing.assert_allclose(output.cpu().numpy(), expected, rtol=2e-6, atol=2e-5)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="Apple MPS unavailable"
+)
+@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("interval_minutes", [1, 5])
+@pytest.mark.parametrize("single_coin", [False, True])
+def test_mps_independent_unstuck_horizons_change_reducer_only(
+    strategy_kind, side, interval_minutes, single_coin
+):
+    count = 6
+    closes = np.full((count, 2), 100.0)
+    closes[3:] = 98.0 if side == "long" else 102.0
+    runner, row, run, _ = _multicoin_exposure_fixture(
+        strategy_kind,
+        side,
+        count=count,
+        closes=closes,
+        highs=closes + 0.01,
+        lows=closes - 0.01,
+        interval_minutes=interval_minutes,
+        return_context=True,
+    )
+    keys = (
+        EMA_ANCHOR_MULTICOIN_PARAM_KEYS
+        if strategy_kind == "ema_anchor"
+        else TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    )
+    values = dict(zip(keys, row))
+    values.update(
+        entry_cooldown_minutes=1000.0,
+        unstuck_enabled=1.0,
+        unstuck_ema_gating_enabled=1.0,
+        unstuck_close_pct=0.1,
+        unstuck_loss_allowance_pct=0.2,
+        unstuck_threshold=0.5,
+        unstuck_ema_dist=-0.01,
+        twel_entry_gate_enabled=0.0,
+    )
+    if strategy_kind == "ema_anchor":
+        values["offset"] = 0.01
+    else:
+        values.update(
+            entry_initial_ema_dist=0.01, gate_initial=1.0, close_threshold_base_pct=0.5
+        )
+    if single_coin:
+        market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0)
+        timestamps = (
+            1_700_000_000_000
+            + np.arange(count, dtype=np.int64) * interval_minutes * 60_000
+        )
+        data = build_mps_data(
+            closes[:, 0] + 0.01,
+            closes[:, 0] - 0.01,
+            closes[:, 0],
+            timestamps,
+            run,
+            market,
+        )
+        cls = (
+            MpsEmaAnchorRunner
+            if strategy_kind == "ema_anchor"
+            else MpsTrailingMartingaleRunner
+        )
+        runner = cls(
+            market,
+            run,
+            data,
+            long_enabled=side == "long",
+            short_enabled=side == "short",
+        )
+        keys = (
+            EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS
+            if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+        )
+        values["wallet_exposure_limit"] = -1.0
+    rows = []
+    for enabled, span in [
+        (True, 0.5),
+        (True, 100000.5),
+        (False, 0.5),
+        (False, 100000.5),
+    ]:
+        values.update(
+            unstuck_enabled=float(enabled),
+            unstuck_ema_span_0=span,
+            unstuck_ema_span_1=span,
+        )
+        packed = [values[key] for key in keys]
+        rows.append(packed * (2 if single_coin else 1))
+    output = runner.run(np.asarray(rows, dtype=np.float64))
+    positions = output["psize" if side == "long" else "short_psize"].cpu().numpy()
+    assert abs(positions[0]) < abs(positions[1])
+    assert positions[1] == positions[2] == positions[3]
+    # Disabled unstuck horizons cannot change strategy entries, closes or metrics.
+    for result in output.values():
+        np.testing.assert_array_equal(result[2].cpu().numpy(), result[3].cpu().numpy())
+    if not single_coin:
+        cols = (
+            EMA_ANCHOR_COIN_OVERRIDE_COLS
+            if strategy_kind == "ema_anchor"
+            else TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+        )
+        overrides = np.full((2, cols), np.nan)
+        overrides[:, -2:] = 0.5  # Both coin pins override the slow global candidate.
+        pinned_runner, _ = _multicoin_exposure_fixture(
+            strategy_kind,
+            side,
+            count=count,
+            closes=closes,
+            highs=closes + 0.01,
+            lows=closes - 0.01,
+            interval_minutes=interval_minutes,
+            coin_overrides=overrides,
+        )
+        pinned = pinned_runner.run(np.asarray([rows[1]], dtype=np.float64))
+        assert pinned[
+            "psize" if side == "long" else "short_psize"
+        ].item() == pytest.approx(positions[0])
+
+
+@pytest.mark.parametrize("span", [0.0, -1.0, float("nan"), float("inf"), 1e100, 1e-100])
+def test_unstuck_spans_fail_closed_if_not_representable_in_packed_candles(span):
+    keys = TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS
+    row = _tm_single_row()
+    row[keys.index("unstuck_ema_span_0")] = span
+    with pytest.raises(ValueError, match="unstuck EMA spans"):
+        _scale_single_coin_minute_parameters(
+            np.asarray([row * 2]), keys, sides=2, interval_minutes=5
+        )
+
+
+@pytest.mark.parametrize("strategy", ["ema_anchor", "trailing_martingale"])
+def test_independent_unstuck_coin_spans_scale_without_changing_strategy(strategy):
+    from optimization.gpu import model, mps_kernel
+
+    if strategy == "ema_anchor":
+        cols = model.EMA_ANCHOR_COIN_OVERRIDE_COLS
+        start = model.EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
+        scale = mps_kernel._scale_ema_multicoin_coin_overrides
+    else:
+        cols = model.TRAILING_MARTINGALE_COIN_OVERRIDE_COLS
+        start = model.TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
+        scale = mps_kernel._scale_tm_multicoin_coin_overrides
+    matrix = np.full((2, cols), np.nan)
+    matrix[0, start : start + 2] = [17.25, 211.75]
+    actual = scale(matrix, 5)
+    np.testing.assert_allclose(actual[0, start : start + 2], [3.45, 42.35])
+    assert np.isnan(actual[0, :start]).all()
+    assert np.isnan(actual[1]).all()
+    matrix[0, start] = float("inf")
+    with pytest.raises(ValueError, match="unstuck EMA spans"):
+        scale(matrix, 5)

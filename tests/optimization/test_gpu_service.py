@@ -2074,6 +2074,8 @@ def test_tm_total_exposure_repair_packs_exact_rust_inputs(
 def test_single_coin_unstuck_packs_exact_rust_inputs():
     assert _unstuck_params(
         {
+            "unstuck_ema_span_0": 17.25,
+            "unstuck_ema_span_1": 211.75,
             "unstuck_enabled": True,
             "unstuck_ema_gating_enabled": False,
             "unstuck_close_pct": 0.125,
@@ -2082,6 +2084,8 @@ def test_single_coin_unstuck_packs_exact_rust_inputs():
             "unstuck_threshold": 0.85,
         }
     ) == {
+        "unstuck_ema_span_0": 17.25,
+        "unstuck_ema_span_1": 211.75,
         "unstuck_enabled": 1.0,
         "unstuck_ema_gating_enabled": 0.0,
         "unstuck_close_pct": 0.125,
@@ -2640,6 +2644,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                     "risk_entry_cooldown_minutes": 15.0,
                     "wallet_exposure_limit": 0.4,
                     "risk_we_excess_allowance_pct": 0.25,
+                    "unstuck_ema_span_0": 17.25,
+                    "unstuck_ema_span_1": 211.75,
                     "unstuck_enabled": True,
                     "unstuck_ema_gating_enabled": False,
                     "unstuck_close_pct": 0.125,
@@ -2664,6 +2670,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         },
                         "wallet_exposure_limit": 0.4,
                         "unstuck": {
+                            "ema_span_0": 17.25,
+                            "ema_span_1": 211.75,
                             "enabled": True,
                             "ema_gating_enabled": False,
                             "close_pct": 0.125,
@@ -2699,7 +2707,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
     assert matrix[1, 13:19].tolist() == pytest.approx(
         [1.0, 0.0, 0.125, -0.01, 0.02, 0.85]
     )
-    assert np.isnan(matrix[1, 19:]).all()
+    assert np.isnan(matrix[1, 19:-2]).all()
+    assert matrix[1, -2:].tolist() == pytest.approx([17.25, 211.75])
     assert contract["coins"] == ["BTC", "ETH"]
     assert contract["values"][0] == [None] * EMA_ANCHOR_COIN_OVERRIDE_COLS
     assert contract["exact_overrides"] == [

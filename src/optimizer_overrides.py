@@ -1,4 +1,5 @@
 from copy import deepcopy
+import math
 
 from config.access import require_config_value
 from config.shared_bot import BOT_SHARED_GROUPS
@@ -6,12 +7,17 @@ from config.strategy import DEFAULT_STRATEGY_KIND, normalize_strategy_kind
 
 TRAILING_GRID_V7_STRATEGY_KIND = "trailing_grid_v7"
 
+COUPLED_UNSTUCK_EMA_BOUND_KEYS = frozenset(
+    f"{side}_unstuck_ema_span_{i}" for side in ("long", "short") for i in (0, 1)
+)
+
 KNOWN_OPTIMIZER_OVERRIDES = frozenset(
     {
         "backward_tp_grid",
         "forward_tp_grid",
         "lossless_close_trailing",
         "mirror_short_from_long",
+        "couple_unstuck_ema_spans",
     }
 )
 
@@ -35,6 +41,98 @@ def _mirror_short_from_long(config):
         short_strategy[strategy_kind] = deepcopy(long_strategy[strategy_kind])
 
     return config
+
+
+def unstuck_ema_spans_coupled(config):
+    return "couple_unstuck_ema_spans" in (
+        config.get("optimize", {}).get("enable_overrides") or []
+    )
+
+
+def couple_unstuck_ema_spans(config, pside):
+    """Materialize the effective strategy horizons, including each coin's patches.
+
+    This is optimizer finalization only. Saved candidates contain ordinary explicit
+    unstuck parameters and require no live/backtest coupling mode.
+    """
+    kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    if any(
+        patch.get("override_config_path")
+        for patch in (config.get("coin_overrides") or {}).values()
+    ):
+        from config.overrides import parse_overrides
+
+        config["coin_overrides"] = parse_overrides(config, verbose=False)[
+            "coin_overrides"
+        ]
+    base = config["bot"][pside]
+    strategy = base["strategy"][kind]
+    targets = [("global", base, strategy)]
+    for coin, patch in (config.get("coin_overrides") or {}).items():
+        side_patch = patch.setdefault("bot", {}).setdefault(pside, {})
+        effective = {**strategy, **side_patch.get("strategy", {}).get(kind, {})}
+        targets.append((coin, side_patch, effective))
+    for coin, target, source in targets:
+        for key in ("ema_span_0", "ema_span_1"):
+            value = source[key]
+            if not math.isfinite(float(value)) or float(value) <= 0:
+                raise ValueError(
+                    f"couple_unstuck_ema_spans requires positive finite strategy spans: {coin} {pside}.{key}={value!r}"
+                )
+            target.setdefault("unstuck", {})[key] = value
+            # Refresh transport aliases only when this config already carries them.
+            alias = f"unstuck_{key}"
+            if alias in target:
+                target[alias] = value
+    return config
+
+
+def apply_coupled_unstuck_ema_spans(config):
+    """Apply coupling after scenario overrides without replaying other overrides."""
+    if unstuck_ema_spans_coupled(config):
+        from config.overrides import parse_overrides
+
+        config["coin_overrides"] = parse_overrides(config, verbose=False)[
+            "coin_overrides"
+        ]
+        for side in ("long", "short"):
+            couple_unstuck_ema_spans(config, side)
+    return config
+
+
+def materialize_coupled_scenario_spans(config):
+    """Save scenario-local dependencies explicitly for ordinary suite replay."""
+    if not unstuck_ema_spans_coupled(config):
+        return
+    from optimization.warmup import _apply_config_overrides
+    from config.param_paths import resolve_dotted_config_path
+    from suite_runner import _normalize_scenario_overrides
+
+    for scenario in config.get("backtest", {}).get("scenarios", []) or []:
+        effective = deepcopy(config)
+        overrides = {
+            ".".join(resolve_dotted_config_path(effective, key)): value
+            for key, value in _normalize_scenario_overrides(
+                scenario.get("overrides")
+            ).items()
+        }
+        _apply_config_overrides(effective, overrides)
+        apply_coupled_unstuck_ema_spans(effective)
+        # Resolve dotted coin patches into one canonical map to preserve their
+        # effective precedence even when a saved JSON sorts object keys.
+        saved = {
+            key: deepcopy(value)
+            for key, value in overrides.items()
+            if key != "coin_overrides" and not key.startswith("coin_overrides.")
+        }
+        if "coin_overrides" in effective:
+            saved["coin_overrides"] = effective["coin_overrides"]
+        for side in ("long", "short"):
+            for key in ("ema_span_0", "ema_span_1"):
+                saved[f"bot.{side}.unstuck.{key}"] = effective["bot"][side]["unstuck"][
+                    key
+                ]
+        scenario["overrides"] = saved
 
 
 def validate_optimizer_overrides(overrides_list):
@@ -116,7 +214,10 @@ def optimizer_overrides(overrides_list, config, pside=None):
         if pside is None:
             continue
 
-        if override == "lossless_close_trailing":
+        if override == "couple_unstuck_ema_spans":
+            config = couple_unstuck_ema_spans(config, pside)
+
+        elif override == "lossless_close_trailing":
             strategy_cfg = _require_trailing_martingale_side(config, pside)
             threshold = require_config_value(
                 config,

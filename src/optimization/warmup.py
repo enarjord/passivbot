@@ -9,7 +9,7 @@ from config.bot import normalize_forager_score_weights
 from config.optimize_bounds import flatten_optimize_bounds
 from config.param_paths import require_existing_config_path, resolve_dotted_config_path
 from config.shared_bot import flatten_shared_bot_side
-from optimizer_overrides import optimizer_overrides
+from optimizer_overrides import optimizer_overrides, materialize_coupled_scenario_spans
 from optimization.bounds import Bound, enforce_bounds
 from optimization.config_adapter import (
     extract_bounds_tuple_list_from_config,
@@ -155,6 +155,8 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         config,
         config.get("optimize", {}).get("fixed_runtime_overrides", {}),
     )
+    if overrides_list is None:
+        overrides_list = config.get("optimize", {}).get("enable_overrides", [])
     config = optimizer_overrides(overrides_list or [], config, None)
     _refresh_shared_bot_runtime_aliases(config)
     for pside in ("long", "short"):
@@ -185,6 +187,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         if isinstance(forager_cfg, dict):
             forager_cfg["score_weights"] = deepcopy(normalized)
     canonicalize_dead_optimizer_params(config)
+    materialize_coupled_scenario_spans(config)
     return config
 
 

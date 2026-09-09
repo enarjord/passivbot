@@ -2106,6 +2106,13 @@ class SuiteEvaluator:
         if ctx.overrides:
             scenario_config = deepcopy(scenario_config)
             _apply_config_overrides(scenario_config, ctx.overrides)
+        from optimizer_overrides import (
+            apply_coupled_unstuck_ema_spans,
+            unstuck_ema_spans_coupled,
+        )
+
+        if unstuck_ema_spans_coupled(scenario_config):
+            scenario_config = apply_coupled_unstuck_ema_spans(deepcopy(scenario_config))
         return scenario_config
 
     def _build_scenario_candidate_config(
@@ -3475,8 +3482,16 @@ async def main():
     )
     config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
+    if "couple_unstuck_ema_spans" in (
+        config.get("optimize", {}).get("enable_overrides") or []
+    ):
+        logging.info(
+            "Coupled unstuck EMA search: effective strategy spans own unstuck horizons; independent unstuck span bounds and pins are ignored. Saved candidates retain explicit spans."
+        )
     config_logging_value = get_optional_config_value(config, "logging.level", None)
-    effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
+    effective_log_level = resolve_log_level(
+        args.log_level, config_logging_value, fallback=1
+    )
     if effective_log_level != initial_log_level:
         configure_logging(debug=effective_log_level)
     logging.info(
