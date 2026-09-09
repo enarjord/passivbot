@@ -8,6 +8,8 @@ import numpy as np
 import torch
 
 from optimization.gpu.model import (
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN,
@@ -372,23 +374,39 @@ def _tm_dispatch_specialization(
 def _upgrade_legacy_single_coin_wel_params(
     params: np.ndarray, *, side_width: int
 ) -> np.ndarray:
-    """Append the exact-default WEL sentinel to legacy two-side rows."""
+    """Upgrade pre-independent-EMA rows, with or without the legacy WEL column.
 
-    if params.ndim != 2:
+    The old ABI used the strategy horizons for unstuck. Preserve those horizons
+    when accepting its rows; current producers always supply explicit spans.
+    """
+    if params.ndim != 2 or params.shape[1] == side_width * 2:
         return params
-    legacy_width = side_width - 1
-    if params.shape[1] != legacy_width * 2:
+    legacy_width = params.shape[1] // 2
+    if params.shape[1] % 2 or legacy_width not in (side_width - 2, side_width - 3):
         return params
-    sentinel = np.full((params.shape[0], 1), -1.0, dtype=params.dtype)
-    return np.concatenate(
-        (
-            params[:, :legacy_width],
-            sentinel,
-            params[:, legacy_width:],
-            sentinel,
-        ),
-        axis=1,
-    )
+    strategy_start = 1 if side_width == len(EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS) else 0
+    sides = []
+    for offset in (0, legacy_width):
+        side = params[:, offset : offset + legacy_width]
+        parts = [side]
+        if legacy_width == side_width - 3:
+            parts.append(np.full((len(params), 1), -1.0, dtype=params.dtype))
+        parts.append(side[:, strategy_start : strategy_start + 2])
+        sides.append(np.concatenate(parts, axis=1))
+    return np.concatenate(sides, axis=1)
+
+
+def _validate_unstuck_ema_spans(
+    values: np.ndarray, *, allow_unset: bool = False
+) -> None:
+    if allow_unset:
+        values = values[~np.isnan(values)]
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        packed = values.astype(np.float32)
+    if np.any(~np.isfinite(packed)) or np.any(packed <= 0.0):
+        raise ValueError(
+            "MPS unstuck EMA spans must remain positive and finite in float32 candle periods"
+        )
 
 
 def _scale_directional_minute_parameters(
@@ -415,6 +433,8 @@ def _scale_directional_minute_parameters(
         )
     scaled = np.array(params, dtype=np.float64, copy=True)
     minute_keys = {
+        "unstuck_ema_span_0",
+        "unstuck_ema_span_1",
         "ema_span_0",
         "ema_span_1",
         "entry_cooldown_minutes",
@@ -433,6 +453,8 @@ def _scale_directional_minute_parameters(
         offset = side_index * side_width
         for key in minute_keys:
             scaled[:, offset + keys.index(key)] /= interval_minutes
+        for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+            _validate_unstuck_ema_spans(scaled[:, offset + keys.index(key)])
         if interval_minutes != 1.0:
             hsl_span_column = offset + keys.index("hsl_ema_span_minutes")
             hsl_spans = scaled[:, hsl_span_column]
@@ -509,6 +531,7 @@ def _scale_multicoin_coin_overrides(
             interval_minutes * np.log(decay_1m[positive_decay])
         )
         scaled[finite, hsl_span_column] = 2.0 / alpha_per_candle - 1.0
+    _validate_unstuck_ema_spans(scaled[:, -2:], allow_unset=True)
     return np.ascontiguousarray(scaled, dtype=np.float32)
 
 
@@ -523,6 +546,8 @@ def _scale_ema_multicoin_coin_overrides(
         expected_cols=EMA_ANCHOR_COIN_OVERRIDE_COLS,
         label="EMA",
         minute_columns={
+            EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
+            EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
             EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_0"),
             EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index("ema_span_1"),
             EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(
@@ -548,6 +573,8 @@ def _scale_tm_multicoin_coin_overrides(
         expected_cols=TRAILING_MARTINGALE_COIN_OVERRIDE_COLS,
         label="Trailing Martingale",
         minute_columns={
+            TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
+            TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + 1,
             override_keys.index("ema_span_0"),
             override_keys.index("ema_span_1"),
             override_keys.index("volatility_ema_span_1m"),

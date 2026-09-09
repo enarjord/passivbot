@@ -166,19 +166,6 @@ def test_defaults_and_runtime_mapping():
     assert bounds["long_unstuck_ema_span_1"] == [60, 2880, 10]
 
 
-def test_gpu_guard_rejects_independent_search_but_allows_matching_fixed_spans():
-    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-    c = get_template_config()
-    c["optimize"]["bounds"] = {}
-    validate_independent_unstuck_scope(c)
-    c["bot"]["long"]["unstuck"]["ema_span_0"] = 999.5
-    with pytest.raises(ValueError, match="does not yet model independent"):
-        validate_independent_unstuck_scope(c)
-    c["bot"]["long"]["unstuck"]["ema_gating_enabled"] = False
-    validate_independent_unstuck_scope(c)
-
-
 def test_unstuck_spans_extend_per_coin_and_optimizer_warmup():
     from warmup_utils import compute_backtest_warmup_minutes
 
@@ -215,21 +202,6 @@ def test_legacy_scenario_span_override_migrates():
         prepared["backtest"]["scenarios"][0]["overrides"]["bot.long.unstuck.ema_span_0"]
         == 401.5
     )
-
-
-def test_gpu_guard_checks_fixed_bound_values_and_coin_overrides():
-    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-    c = get_template_config()
-    c["optimize"]["bounds"] = {
-        "long": {"strategy": {"trailing_martingale": {"ema_span_0": [10, 10]}}}
-    }
-    with pytest.raises(ValueError, match="independent unstuck"):
-        validate_independent_unstuck_scope(c)
-    c["optimize"]["bounds"] = {}
-    c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 10.5}}}}}
-    with pytest.raises(ValueError, match="BTC long.ema_span_0"):
-        validate_independent_unstuck_scope(c)
 
 
 def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
@@ -454,58 +426,6 @@ def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog, bound):
     assert "optimize.bounds.short.unstuck.ema_span_0" in caplog.text
 
 
-@pytest.mark.parametrize("key", ["loss_allowance_pct", "close_pct", "threshold"])
-@pytest.mark.parametrize("coin_override", [False, True])
-def test_gpu_independent_spans_allow_fixed_inactive_reducer_only(key, coin_override):
-    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-    c = get_template_config()
-    # Keep the global pair supported when testing an independent coin-specific pair.
-    c["optimize"]["bounds"] = {}
-    target = c["bot"]["long"]["unstuck"]
-    if coin_override:
-        c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {}}}}}
-        target = c["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]
-    target.update(ema_span_0=400_000.5)
-    target[key] = 0.0
-    c["optimize"]["bounds"]["long"] = {"unstuck": {key: [0, 0]}}
-    validate_independent_unstuck_scope(c)
-    c["optimize"]["bounds"]["long"]["unstuck"][key] = [0, 1]
-    if coin_override:
-        # A coin pin wins even when the global search can enable the reducer.
-        validate_independent_unstuck_scope(c)
-        del target[key]
-    with pytest.raises(ValueError, match="does not yet model independent"):
-        validate_independent_unstuck_scope(c)
-
-
-@pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("inactive", ["no_slots", "no_exposure", "no_coins"])
-def test_gpu_independent_guard_uses_effective_side_eligibility(side, inactive):
-    from optimization.gpu.model import gpu_side_enabled
-    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-    c = get_template_config()
-    c["optimize"]["bounds"] = {}
-    c["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
-    for pside in ("long", "short"):
-        c["bot"][pside]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
-    c["bot"][side]["unstuck"]["ema_span_0"] = 400_000.5
-    if inactive == "no_slots":
-        c["bot"][side]["risk"]["n_positions"] = 0
-    elif inactive == "no_exposure":
-        c["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
-    else:
-        c["live"]["approved_coins"][side] = []
-    assert not gpu_side_enabled(c, side)
-    assert gpu_side_enabled(c, "short" if side == "long" else "long")
-    validate_independent_unstuck_scope(c)
-    c["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
-    c["live"]["approved_coins"][side] = ["BTC"]
-    with pytest.raises(ValueError, match="does not yet model independent"):
-        validate_independent_unstuck_scope(c)
-
-
 @pytest.mark.parametrize("control", ["loss_allowance_pct", "close_pct", "threshold"])
 def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(control):
     from warmup_utils import compute_backtest_warmup_minutes
@@ -539,43 +459,6 @@ def test_config_version_help_matches_canonical_schema():
     from config_utils import CLI_HELP_OVERRIDES
 
     assert CONFIG_SCHEMA_VERSION in CLI_HELP_OVERRIDES["config_version"]
-
-
-@pytest.mark.parametrize("shape", ["scalar", "single", "pair", "step", "null_step"])
-@pytest.mark.parametrize("side", ["long", "short"])
-def test_gpu_scope_compares_every_supported_fixed_bound_form(shape, side):
-    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-    def fixed(value):
-        return {
-            "scalar": value,
-            "single": [value],
-            "pair": [value, value],
-            "step": [value, value, 0.25],
-            "null_step": [value, value, None],
-        }[shape]
-
-    c = get_template_config()
-    c["optimize"]["bounds"] = {}
-    c["bot"][side]["risk"].update(total_wallet_exposure_limit=1.0, n_positions=1)
-    c["bot"][side]["unstuck"].update(
-        enabled=True, loss_allowance_pct=0.1, close_pct=0.1, threshold=0.9
-    )
-    c["optimize"]["bounds"][side] = {
-        "strategy": {"trailing_martingale": {"ema_span_0": fixed(12.5)}},
-        "unstuck": {"ema_span_0": fixed(34.5)},
-    }
-    with pytest.raises(ValueError, match="does not yet model independent"):
-        validate_independent_unstuck_scope(c)
-    c["optimize"]["bounds"][side]["unstuck"]["ema_span_0"] = fixed(12.5)
-    validate_independent_unstuck_scope(c)
-    c["optimize"]["bounds"][side]["unstuck"]["ema_span_0"] = fixed(34.5)
-    c["bot"][side]["unstuck"]["close_pct"] = 0
-    c["optimize"]["bounds"][side]["unstuck"]["close_pct"] = fixed(0)
-    validate_independent_unstuck_scope(c)
-    c["optimize"]["bounds"][side]["unstuck"]["close_pct"] = fixed(0.1)
-    with pytest.raises(ValueError, match="does not yet model independent"):
-        validate_independent_unstuck_scope(c)
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -685,8 +568,7 @@ def test_inactive_scenario_zero_span_migration_uses_positive_fallback(
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_zero_wel_coin_does_not_require_independent_gpu_or_warmup_band(side):
-    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+def test_zero_wel_coin_does_not_require_unstuck_warmup_band(side):
     from warmup_utils import compute_backtest_warmup_minutes
 
     c = get_template_config()
@@ -705,12 +587,9 @@ def test_zero_wel_coin_does_not_require_independent_gpu_or_warmup_band(side):
             }
         }
     }
-    validate_independent_unstuck_scope(c)
     assert compute_backtest_warmup_minutes(c) == baseline
     assert compute_per_coin_warmup_minutes(c)["BTC"] == baseline_coin
     c["coin_overrides"]["BTC"]["bot"][side]["wallet_exposure_limit"] = 1.0
-    with pytest.raises(ValueError, match="does not yet model independent"):
-        validate_independent_unstuck_scope(c)
     assert compute_per_coin_warmup_minutes(c)["BTC"] == 500_001
 
 

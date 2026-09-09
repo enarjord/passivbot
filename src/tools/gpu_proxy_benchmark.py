@@ -105,6 +105,8 @@ def _base_parameter_values() -> dict[str, float]:
         "wel_enforcer_threshold": 1.0,
         "twel_enforcer_enabled": 0.0,
         "twel_enforcer_reduce_portfolio": 0.0,
+        "unstuck_ema_span_0": 17.25,
+        "unstuck_ema_span_1": 211.75,
         "unstuck_enabled": 0.0,
         "unstuck_ema_gating_enabled": 1.0,
         "unstuck_close_pct": 0.1,
