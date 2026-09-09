@@ -207,3 +207,53 @@ def test_live_forager_warmup_value_raises_on_malformed_span():
         pb_mod.Passivbot._live_forager_warmup_value(
             FakeBot(), "long", "forager_volume_ema_span_1m", ""
         )
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize(
+    "inactive",
+    [
+        None,
+        "manual",
+        "panic",
+        "unstuck_enabled",
+        "unstuck_ema_gating_enabled",
+        "unstuck_loss_allowance_pct",
+        "unstuck_close_pct",
+        "unstuck_threshold",
+    ],
+)
+def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+
+    values = {
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "unstuck_ema_span_0": 400_000.0,
+        "unstuck_ema_span_1": 500_000.0,
+        "unstuck_enabled": True,
+        "unstuck_ema_gating_enabled": True,
+        "unstuck_loss_allowance_pct": 0.1,
+        "unstuck_close_pct": 0.1,
+        "unstuck_threshold": 0.2,
+    }
+    if inactive in values:
+        values[inactive] = 0.0
+    bot = SimpleNamespace(
+        bp=lambda side, key, symbol: values.get(key, 0.0),
+        has_position=lambda pside, symbol: symbol == "HELD",
+    )
+    mode = inactive if inactive in {"manual", "panic"} else "normal"
+    windows, _, _ = compute_live_warmup_windows(
+        {pside: {"HELD", "FLAT"}},
+        bot.bp,
+        unstuck_eligible_lookup=lambda side, symbol: Passivbot._unstuck_ema_required(
+            bot, side, symbol, mode
+        ),
+        forager_enabled={pside: True},
+        warmup_ratio=0.0,
+        span_buffer=1.0,
+    )
+    assert windows["FLAT"] == 20
+    assert windows["HELD"] == (500_000 if inactive is None else 20)

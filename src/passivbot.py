@@ -790,6 +790,7 @@ def compute_live_warmup_windows(
     bp_lookup: Callable[[str, str, str], float],
     *,
     forager_enabled: Optional[Dict[str, bool]] = None,
+    unstuck_eligible_lookup: Optional[Callable[[str, str], bool]] = None,
     strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
     forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
@@ -889,8 +890,8 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
-            if _get_bp(pside, "unstuck_enabled", sym) and _get_bp(
-                pside, "unstuck_ema_gating_enabled", sym
+            if unstuck_eligible_lookup is not None and unstuck_eligible_lookup(
+                pside, sym
             ):
                 for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
                     max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
@@ -4991,6 +4992,12 @@ class Passivbot:
             compute_live_warmup_windows(
                 symbols_by_side,
                 lambda pside, key, sym: self.bp(pside, key, sym),
+                unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                    self,
+                    pside,
+                    sym,
+                    (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+                ),
                 forager_enabled=forager_needed,
                 strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                     self, pside, key, sym
@@ -5548,6 +5555,12 @@ class Passivbot:
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
+            unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                self,
+                pside,
+                sym,
+                (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+            ),
             forager_enabled=forager_enabled,
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym
@@ -5707,6 +5720,12 @@ class Passivbot:
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
+            unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                self,
+                pside,
+                sym,
+                (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+            ),
             forager_enabled=forager_enabled,
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym
@@ -16856,6 +16875,26 @@ class Passivbot:
         )
         return out
 
+    def _unstuck_ema_required(
+        self, pside: str, symbol: str, mode: Optional[str]
+    ) -> bool:
+        """Static input eligibility shared by live planning and candle warmup."""
+        return bool(
+            self.bp(pside, "unstuck_enabled", symbol)
+            and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
+            and Passivbot._mode_override_to_orchestrator_mode(self, mode)
+            not in {"manual", "panic"}
+            and all(
+                self.bp(pside, key, symbol) > 0.0
+                for key in (
+                    "unstuck_loss_allowance_pct",
+                    "unstuck_close_pct",
+                    "unstuck_threshold",
+                )
+            )
+            and self.has_position(pside=pside, symbol=symbol)
+        )
+
     def _pb_mode_to_orchestrator_mode(self, mode: str) -> str:
         m = (mode or "").strip().lower()
         if m == "tp_only_with_active_entry_cancellation":
@@ -17336,22 +17375,8 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                if (
-                    self.has_position(pside=pside, symbol=symbol)
-                    and self.bp(pside, "unstuck_enabled", symbol)
-                    and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
-                    and Passivbot._mode_override_to_orchestrator_mode(
-                        self, modes.get(pside, {}).get(symbol)
-                    )
-                    not in {"manual", "panic"}
-                    and all(
-                        self.bp(pside, key, symbol) > 0.0
-                        for key in (
-                            "unstuck_loss_allowance_pct",
-                            "unstuck_close_pct",
-                            "unstuck_threshold",
-                        )
-                    )
+                if Passivbot._unstuck_ema_required(
+                    self, pside, symbol, modes.get(pside, {}).get(symbol)
                 ):
                     unstuck_spans = [
                         float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))
@@ -20752,6 +20777,12 @@ class Passivbot:
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             refreshable_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
+            unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                self,
+                pside,
+                sym,
+                (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+            ),
             forager_enabled={pside: True for pside in refreshable_by_side},
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym

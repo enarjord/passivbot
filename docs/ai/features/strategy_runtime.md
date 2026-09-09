@@ -162,7 +162,9 @@ band. Long eligibility uses the upper band; short eligibility uses the lower ban
 changes must not change the unstuck band. Missing required unstuck EMAs follow the existing scoped
 input-unavailable contract; disabled gating does not require them or extend warmup. Live loading
 requests unstuck-only spans for held sides separately, preserving usable strategy spans when an
-unstuck horizon is unavailable. Monitor bands are independently available for each consumer.
+unstuck horizon is unavailable. Live warmup uses that same held/static eligibility and does not
+expand flat forager candidates to an unused unstuck horizon. Monitor bands are independently
+available for each consumer.
 
 Schema v8.3.0 materializes missing unstuck spans from the effective active strategy before default
 hydration, including coin overrides and external-file/inline precedence. Explicit unstuck spans
