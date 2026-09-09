@@ -10,6 +10,7 @@ import time
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
+from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -17,6 +18,9 @@ from optimization.gpu.metric_registry import (
     HARD_STOP_PROXY_METRICS,
 )
 from optimization.gpu.model import (
+    UNSTUCK_EMA_PARAM_KEYS,
+    EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
+    TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN,
@@ -1114,6 +1118,7 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
         "unstuck_ema_dist": float(bot["unstuck_ema_dist"]),
         "unstuck_loss_allowance_pct": float(bot["unstuck_loss_allowance_pct"]),
         "unstuck_threshold": float(bot["unstuck_threshold"]),
+        **{key: float(bot[key]) for key in UNSTUCK_EMA_PARAM_KEYS},
     }
 
 
@@ -1810,9 +1815,6 @@ class MpsSingleCoinProxy:
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
     ):
-        from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-        validate_independent_unstuck_scope(config)
         try:
             import torch
         except (
@@ -1939,6 +1941,7 @@ class MpsSingleCoinProxy:
                 signal_mode, enabled_side_count=sum(self.enabled.values())
             )
         hsl_panic_market = {}
+        self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         self.base_params = {}
         configured_total_wallet_exposure_limits = {
             side: float(bot["total_wallet_exposure_limit"])
@@ -2215,6 +2218,9 @@ class MpsSingleCoinProxy:
                 merged.update(
                     getattr(self, "static_coin_override_params", {}).get(side, {})
                 )
+                if getattr(self, "couple_unstuck_emas", False):
+                    for i in (0, 1):
+                        merged[f"unstuck_ema_span_{i}"] = merged[f"ema_span_{i}"]
                 row.extend(float(merged[key]) for key in self.param_keys)
             rows.append(row)
         return np.asarray(rows, dtype=np.float64)
@@ -2581,6 +2587,18 @@ def _build_multicoin_ema_coin_overrides(
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
+        for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS):
+            column = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset
+            strategy_key = key.removeprefix("unstuck_")
+            if unstuck_ema_spans_coupled(config):
+                # Inherited spans stay NaN so each candidate supplies its own
+                # strategy value; only actual strategy coin pins remain static.
+                matrix[coin_index, column] = matrix[
+                    coin_index,
+                    EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS.index(strategy_key),
+                ]
+            elif strategy_key in unstuck_patch:
+                matrix[coin_index, column] = float(effective_bot[key])
         _pack_multicoin_hsl_overrides(
             matrix,
             row=coin_index,
@@ -2724,6 +2742,20 @@ def _build_multicoin_tm_coin_overrides(
         ):
             if patch_key in unstuck_patch:
                 matrix[coin_index, offset] = float(effective_bot[bot_key])
+        for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS):
+            column = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN + offset
+            strategy_key = key.removeprefix("unstuck_")
+            if unstuck_ema_spans_coupled(config):
+                # Inherited spans stay NaN so each candidate supplies its own
+                # strategy value; only actual strategy coin pins remain static.
+                matrix[coin_index, column] = matrix[
+                    coin_index,
+                    TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS.index(
+                        (strategy_key, (strategy_key,))
+                    ),
+                ]
+            elif strategy_key in unstuck_patch:
+                matrix[coin_index, column] = float(effective_bot[key])
         _pack_multicoin_hsl_overrides(
             matrix,
             row=coin_index,
@@ -2785,6 +2817,7 @@ def _build_single_coin_override_params(
                 ),
             }
         )
+        unstuck_ema_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
         unstuck_start = EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         hsl_start = EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
     elif strategy_kind == "trailing_martingale":
@@ -2827,6 +2860,7 @@ def _build_single_coin_override_params(
                 ),
             }
         )
+        unstuck_ema_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN
         unstuck_start = TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_START_COLUMN
         hsl_start = TRAILING_MARTINGALE_COIN_OVERRIDE_HSL_START_COLUMN
     else:
@@ -2834,6 +2868,12 @@ def _build_single_coin_override_params(
 
     columns.update(
         {key: unstuck_start + offset for offset, key in enumerate(UNSTUCK_PARAM_KEYS)}
+    )
+    columns.update(
+        {
+            key: unstuck_ema_start + offset
+            for offset, key in enumerate(UNSTUCK_EMA_PARAM_KEYS)
+        }
     )
     columns.update(
         {
@@ -2898,9 +2938,6 @@ class MpsMulticoinProxy:
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
     ):
-        from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
-
-        validate_independent_unstuck_scope(config)
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
@@ -3121,6 +3158,7 @@ class MpsMulticoinProxy:
             side: float(payload.bot_params_list[0][side]["n_positions"])
             for side in ("long", "short")
         }
+        self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         self.base_params = {}
         for side in self.sides:
             first_bot = payload.bot_params_list[0][side]
@@ -3474,6 +3512,9 @@ class MpsMulticoinProxy:
                     if key.startswith(f"{side}_")
                 }
             )
+            if getattr(self, "couple_unstuck_emas", False):
+                for i in (0, 1):
+                    merged[f"unstuck_ema_span_{i}"] = merged[f"ema_span_{i}"]
             rows.append([float(merged[key]) for key in param_keys])
         return np.asarray(rows, dtype=np.float64)
 

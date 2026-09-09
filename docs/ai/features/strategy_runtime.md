@@ -171,9 +171,15 @@ hydration, including coin overrides and external-file/inline precedence. Explici
 win. New optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
 varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
 the old coupled search. New defaults expose tunable spans.
-Apple MPS screening currently requires matching fixed strategy/unstuck spans, disabled EMA gating,
-or a statically inactive unstuck reducer across the configuration and search bounds. Active
-independent horizons/searches must use a CPU optimizer until the kernels implement them.
+Apple MPS models a separate price EMA band for unstuck in all directional and multicoin kernels.
+It uses the same seeded recurrence, floating horizons and candle-interval scaling as exact Rust.
+Coin overrides win over candidate globals, and temporal replay persists the independent band.
+
+The opt-in optimizer override `couple_unstuck_ema_spans` derives each side/coin's unstuck pair
+from its effective strategy, after mirroring and fixed/scenario overrides. It removes redundant
+unstuck span genes and materializes explicit runtime spans in saved candidates and scenarios.
+GPU packing preserves the dependency on candidate strategy genes while retaining strategy coin
+pins. This is optimizer configuration finalization, not a live/backtest coupling mode.
 
 ## Live/Backtest Market Slippage Boundary
 

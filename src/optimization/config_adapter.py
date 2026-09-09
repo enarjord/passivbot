@@ -23,6 +23,10 @@ from config.strategy_spec import (
     strategy_optimize_key_path_map,
 )
 from optimization.bounds import Bound
+from optimizer_overrides import (
+    COUPLED_UNSTUCK_EMA_BOUND_KEYS,
+    unstuck_ema_spans_coupled,
+)
 
 
 def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
@@ -146,6 +150,11 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
             continue
         canonical_key = canonical_optimizer_key(bound_key)
         if canonical_key != bound_key and canonical_key in optimize_bounds:
+            continue
+        if (
+            unstuck_ema_spans_coupled(config)
+            and canonical_key in COUPLED_UNSTUCK_EMA_BOUND_KEYS
+        ):
             continue
         resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:

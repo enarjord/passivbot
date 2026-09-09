@@ -4,7 +4,7 @@ import passivbot_hsl as hsl
 from test_hsl_coin_mode import make_coin_bot, make_fake_pnls_manager
 
 
-def _delayed_boundary_bot(*, policy="always", cooldown=0.0):
+def _delayed_boundary_bot(*, policy="always", cooldown=0.0, last_sample_ms=240_000):
     bot = make_coin_bot()
     bot.bot_value = lambda pside, key: 1.0
     bot.hsl["long"].update(
@@ -14,7 +14,7 @@ def _delayed_boundary_bot(*, policy="always", cooldown=0.0):
     )
     bot._equity_hard_stop_coin_initialized = True
     bot._equity_hard_stop_apply_coin_metrics_sample(
-        "long", "A", 240_000, 1000.0, 0.0, 0.0, 0.0
+        "long", "A", last_sample_ms, 1000.0, 0.0, 0.0, 0.0
     )
     events = [
         dict(timestamp=60_000, symbol="A", pside="long", action="increase", qty=1.0, pnl=0.0),
@@ -34,7 +34,11 @@ def _delayed_boundary_bot(*, policy="always", cooldown=0.0):
 async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(
     entry_ts, reverse_cohort, compact
 ):
-    bot, events = _delayed_boundary_bot()
+    bot, events = _delayed_boundary_bot(
+        last_sample_ms=entry_ts + 10 if entry_ts == 180_500 else 240_000
+    )
+    now_ms = entry_ts + 20 if entry_ts == 180_500 else 300_000
+    bot.get_exchange_time = lambda: now_ms
     entry = dict(
         timestamp=entry_ts,
         symbol="A",
@@ -99,7 +103,7 @@ async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(
 
     bot.get_balance_equity_history = history
     bot._calc_upnl_sum_strict = upnl
-    assert await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, 300_000, 698.0)
+    assert await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, now_ms, 698.0)
     state = bot._hsl_coin_state("long", "A")
     assert state["last_metrics"]["realized_pnl"] == -2.0
     assert state["last_metrics"]["drawdown_raw"] == pytest.approx(52.0 / 698.0)
@@ -108,7 +112,7 @@ async def test_delayed_boundary_seeds_bounded_reentry_without_discarding_fees(
     assert not state["runtime"].red_latched()
     assert "A" not in bot._runtime_forced_modes["long"]
     assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
-        bot, 360_000, 698.0
+        bot, now_ms + 60_000, 698.0
     )
     assert len(calls) == 1
 
