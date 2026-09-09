@@ -6,7 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
   ordinary flatten falls before the bounded replay window. Successful empty-window replays now
-  publish the current pair once and retain the proven flatten as the episode boundary.
+  establish the proven episode boundary before calculating current risk, preventing discarded
+  losses from triggering RED while retaining re-entry fees and required cooldown/no-restart history.
 - GPU optimization automatically queues two validation batches (or twice the worker count,
   whichever is larger), allowing proxy screening and exact evaluation to overlap. Explicit queue
   sizes remain unchanged. Drift calibration now compares unpenalized objective values, keeping

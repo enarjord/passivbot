@@ -3212,7 +3212,7 @@ async def _equity_hard_stop_replay_live_restart(
     pside: str,
     symbol: Optional[str] = None,
     *,
-    replay_pair: Optional[tuple[str, str]] = None,
+    replay_flatten_timestamp_ms: Optional[int] = None,
 ) -> bool:
     """Publish a completed canonical replay without clearing live protection while awaiting it."""
     background = getattr(self, "_equity_hard_stop_coin_replay_task", None)
@@ -3261,11 +3261,11 @@ async def _equity_hard_stop_replay_live_restart(
     try:
         try:
             if mode == "coin":
-                if replay_pair is None:
+                if replay_flatten_timestamp_ms is None:
                     result = await staged._equity_hard_stop_initialize_coin_from_history()
                 else:
                     result = await staged._equity_hard_stop_initialize_coin_from_history(
-                        replay_pair=replay_pair
+                        replay_boundary=(pside, symbol, replay_flatten_timestamp_ms)
                     )
             else:
                 result = await staged._equity_hard_stop_initialize_from_history()
@@ -4257,7 +4257,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
 
 
 async def _equity_hard_stop_initialize_coin_from_history(
-    self, *, replay_pair: Optional[tuple[str, str]] = None
+    self, *, replay_boundary: Optional[tuple[str, str, int]] = None
 ) -> None:
     if not self._equity_hard_stop_enabled() or self._equity_hard_stop_signal_mode() != "coin":
         return
@@ -4629,10 +4629,11 @@ async def _equity_hard_stop_initialize_coin_from_history(
             for symbol in sorted(replay_symbols)
             if self._equity_hard_stop_coin_active_pside(pside, symbol)
         ]
-        if replay_pair is not None:
+        if replay_boundary is not None:
             # A delayed boundary may precede the bounded history window. Include
             # its pair so replay can still publish a fresh current-episode sample.
-            replay_pside, replay_symbol = replay_pair
+            replay_pside, replay_symbol, _flatten_ts = replay_boundary
+            replay_pair = (replay_pside, replay_symbol)
             if replay_pside not in self._hsl_psides() or not replay_symbol:
                 raise ValueError(f"invalid coin HSL replay pair: {replay_pair!r}")
             if not self._equity_hard_stop_symbol_supported_for_coin_replay(replay_symbol):
@@ -4852,6 +4853,19 @@ async def _equity_hard_stop_initialize_coin_from_history(
                 replay_start_boundary_ts = bounded_held_replay_starts.get(
                     (pside, symbol)
                 )
+                if (
+                    replay_boundary is not None
+                    and replay_boundary[:2] == (pside, symbol)
+                    and replay_start_ms is not None
+                    and replay_boundary[2] < replay_start_ms
+                ):
+                    # Canonical coverage has already excluded this closed episode.
+                    # Seed its exact boundary before replay/current sampling so the
+                    # full fill cache cannot reintroduce its PnL or latch RED. Keep
+                    # any later held-episode boundary, including its entry fees.
+                    replay_start_boundary_ts = max(
+                        replay_start_boundary_ts or 0, int(replay_boundary[2]) + 1
+                    )
                 window_points: deque[tuple[int, float]] = deque()
                 window_max_points: deque[tuple[int, float]] = deque()
                 window_base_realized = 0.0
@@ -6264,17 +6278,12 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         self,
                         pside,
                         symbol,
-                        replay_pair=(pside, symbol),
+                        replay_flatten_timestamp_ms=latest_boundary_ts,
                     ):
                         raise AuthoritativeSurfaceUnavailable(
                             "hsl_episode_boundaries",
                             f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
                         )
-                    state = self._hsl_coin_state(pside, symbol)
-                    reset_ts = state.get("pnl_reset_timestamp_ms")
-                    # An empty bounded replay has no fill row to advance this marker.
-                    if reset_ts is None or int(reset_ts) <= int(latest_boundary_ts):
-                        state["pnl_reset_timestamp_ms"] = int(latest_boundary_ts) + 1
                     return True
                 # Later fills can already be present in this refresh, including a
                 # re-entry in the same minute. Undo their PnL/fees for boundary sizing.
@@ -6299,17 +6308,12 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         self,
                         pside,
                         symbol,
-                        replay_pair=(pside, symbol),
+                        replay_flatten_timestamp_ms=latest_boundary_ts,
                     ):
                         raise AuthoritativeSurfaceUnavailable(
                             "hsl_episode_boundaries",
                             f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
                         )
-                    state = self._hsl_coin_state(pside, symbol)
-                    reset_ts = state.get("pnl_reset_timestamp_ms")
-                    # An empty bounded replay has no fill row to advance this marker.
-                    if reset_ts is None or int(reset_ts) <= int(latest_boundary_ts):
-                        state["pnl_reset_timestamp_ms"] = int(latest_boundary_ts) + 1
                     return True
                 state["pnl_reset_timestamp_ms"] = flatten_ts + 1
                 self._equity_hard_stop_reset_coin_after_restart(pside, symbol)

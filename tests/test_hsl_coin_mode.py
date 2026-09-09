@@ -4873,10 +4873,12 @@ async def test_live_coin_boundary_uses_canonical_replay_for_delayed_or_red_fill(
         bot.positions[symbol]["long"]["size"] = 1.0
     replays = []
 
-    async def replay(replay_bot, replay_pside, replay_symbol, *, replay_pair=None):
+    async def replay(
+        replay_bot, replay_pside, replay_symbol, *, replay_flatten_timestamp_ms=None
+    ):
         assert replay_bot is bot
         assert (replay_pside, replay_symbol) == ("long", symbol)
-        assert replay_pair == ("long", symbol)
+        assert replay_flatten_timestamp_ms == 180_500
         replays.append(True)
         return True
 
@@ -4893,7 +4895,8 @@ async def test_live_coin_boundary_uses_canonical_replay_for_delayed_or_red_fill(
     )
     assert rebuilt is True
     assert replays == [True]
-    assert bot._hsl_coin_state("long", symbol)["pnl_reset_timestamp_ms"] == 180_501
+    # Canonical replay owns the boundary and metrics; the caller must not amend them.
+    assert bot._hsl_coin_state("long", symbol)["pnl_reset_timestamp_ms"] is None
 
 
 @pytest.mark.asyncio
@@ -5025,12 +5028,21 @@ async def test_delayed_live_coin_boundary_is_not_replayed_again_after_reconstruc
 
 
 @pytest.mark.asyncio
-async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once():
+@pytest.mark.parametrize("loss", [100.0, 600.0])
+@pytest.mark.parametrize("retain_flat_pair", [False, True])
+async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once(
+    loss, retain_flat_pair
+):
     bot = make_coin_bot()
     bot._equity_hard_stop_coin_initialized = True
     bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
     bot.hsl["long"]["cooldown_minutes_after_red"] = 0.0
-    bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+    bot.hsl["long"]["restart_after_red_policy"] = "always"
+    if retain_flat_pair:
+        bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+    # The closing fills arrive only after the live runtime has advanced.
+    bot._pnls_manager = make_fake_pnls_manager([])
+    bot._equity_hard_stop_apply_coin_sample("long", "A", 240_000, 900.0, 0.0)
     events = [
         {
             "timestamp": 60_000,
@@ -5046,7 +5058,7 @@ async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once():
             "pside": "long",
             "action": "decrease",
             "qty": 1.0,
-            "pnl": -100.0,
+            "pnl": -loss,
         },
         {
             "timestamp": 180_600,
@@ -5066,13 +5078,13 @@ async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once():
         },
     ]
     bot._pnls_manager = make_fake_pnls_manager(events)
-    bot._equity_hard_stop_apply_coin_sample("long", "A", 240_000, 900.0, 0.0)
     previous_runtime = bot._hsl_coin_state("long", "A")["runtime"]
     bot.get_raw_balance = lambda: 900.0
     bot.get_exchange_time = lambda: 300_000
     history_calls = []
 
     async def history(**kwargs):
+        assert kwargs["hsl_replay_start_ms"] == 300_000
         history_calls.append(kwargs)
         return {
             "timeline": [
@@ -5098,6 +5110,13 @@ async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once():
     state = bot._hsl_coin_state("long", "A")
     assert state["runtime"] is not previous_runtime
     assert state["pnl_reset_timestamp_ms"] == 210_501
+    assert state["last_metrics"]["realized_pnl"] == 0.0
+    assert state["last_metrics"]["drawdown_raw"] == 0.0
+    assert state["last_metrics"]["drawdown_ema"] == 0.0
+    assert state["last_metrics"]["tier"] == "green"
+    assert not state["runtime"].red_latched()
+    assert not state["halted"]
+    assert "A" not in bot._runtime_forced_modes["long"]
     assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
         bot, 360_000, 900.0
     )
@@ -5105,9 +5124,7 @@ async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once():
 
 
 @pytest.mark.asyncio
-async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavailable(
-    monkeypatch,
-):
+async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavailable():
     bot = make_coin_bot()
     bot._equity_hard_stop_coin_initialized = True
     bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
@@ -5136,10 +5153,17 @@ async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavail
     previous_runtime = state["runtime"]
     previous_metrics = state["last_metrics"]
 
-    async def unavailable(*_args, **_kwargs):
-        return False
+    bot.get_raw_balance = lambda: 900.0
+    bot.get_exchange_time = lambda: 300_000
+    bot._runtime_forced_modes["long"]["A"] = "graceful_stop"
 
-    monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", unavailable)
+    async def unavailable(**_kwargs):
+        assert state["runtime"] is previous_runtime
+        assert state["last_metrics"] is previous_metrics
+        assert bot._runtime_forced_modes["long"]["A"] == "graceful_stop"
+        raise hsl.AuthoritativeSurfaceUnavailable("hsl_episode_boundaries", "missing history")
+
+    bot.get_balance_equity_history = unavailable
 
     with pytest.raises(
         hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
@@ -5150,6 +5174,7 @@ async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavail
     assert state["runtime"] is previous_runtime
     assert state["last_metrics"] is previous_metrics
     assert state["pnl_reset_timestamp_ms"] is None
+    assert bot._runtime_forced_modes["long"]["A"] == "graceful_stop"
 
 
 def _make_aggregate_episode_bot(
