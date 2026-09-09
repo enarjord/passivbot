@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
+  ordinary flatten falls before the bounded replay window. Successful empty-window replays now
+  establish the proven episode boundary before calculating current risk, preventing discarded
+  losses from triggering RED while retaining re-entry fees (including validated same-millisecond
+  re-entries) and required cooldown/no-restart history.
 - Add `couple_unstuck_ema_spans` to `optimize.enable_overrides` to search strategy and unstuck
   EMA spans together on CPU or Apple MPS, including effective coin/scenario strategy overrides.
   Coupled search omits redundant unstuck span genes and saves explicit horizons for ordinary
