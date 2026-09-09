@@ -9,6 +9,7 @@ from config.strategy import (
     get_active_strategy_config,
     normalize_strategy_kind,
 )
+from optimization.bounds import Bound
 from strategy_warmup import (
     iter_strategy_warmup_flat_bound_keys,
     strategy_warmup_requirements,
@@ -105,41 +106,78 @@ def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
         )
 
 
+def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> bool:
+    """Keep warmup for optimizer reactivation, but omit statically inert reducers."""
+    if not params.get("unstuck_enabled", True) or not params.get(
+        "unstuck_ema_gating_enabled", True
+    ):
+        return False
+    bounds = flatten_optimize_bounds(
+        config.get("optimize", {}).get("bounds", {}),
+        strategy_kind=config.get("live", {}).get("strategy_kind"),
+    )
+    pinned = flatten_shared_bot_side(
+        config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
+    )
+    if pinned.get("wallet_exposure_limit") == 0:
+        return False
+    for key in (
+        "unstuck_loss_allowance_pct",
+        "unstuck_close_pct",
+        "unstuck_threshold",
+        "total_wallet_exposure_limit",
+        "n_positions",
+    ):
+        if key not in params or _to_float(params[key], context=key) > 0.0:
+            continue
+        bound = bounds.get(f"{pside}_{key}") if key not in pinned else None
+        if bound is None or Bound.from_config(f"{pside}_{key}", bound).high <= 0.0:
+            return False
+    return True
+
+
 def compute_backtest_warmup_minutes(config: dict) -> int:
     """Mirror Rust warmup span calculation (see calc_warmup_bars)."""
 
     def _extract_bound_max(bounds: dict, key: str) -> tuple[float, bool]:
         if key not in bounds:
             return 0.0, True
-        entry = bounds[key]
-        candidates = [entry] if isinstance(entry, (list, tuple)) else [[entry]]
-        max_val = 0.0
-        for candidate in candidates:
-            for val in candidate:
-                try:
-                    numeric = float(val)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(f"invalid optimize warmup bound {key}: {val!r}") from exc
-                if not math.isfinite(numeric):
-                    raise ValueError(f"invalid optimize warmup bound {key}: {val!r}")
-                max_val = max(max_val, numeric)
+        parsed = Bound.from_config(key, bounds[key])
+        max_val = max(
+            _to_float(parsed.low, context=f"optimize warmup bound {key}"),
+            _to_float(parsed.high, context=f"optimize warmup bound {key}"),
+        )
         return max_val, True
 
     max_minutes = 0.0
+    unstuck_gate_sides = set()
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
+        "unstuck_ema_span_0",
+        "unstuck_ema_span_1",
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]
 
-    for _, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
+    for (
+        coin,
+        long_params,
+        short_params,
+        long_strategy,
+        short_strategy,
+    ) in _iter_param_sets(config):
         side_sets = (
             ("long", long_params, long_strategy),
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
+            unstuck_gate = _unstuck_gate_may_run(config, coin, pside, params)
+            if unstuck_gate:
+                unstuck_gate_sides.add(pside)
             for field in minute_fields:
+                if field.startswith("unstuck_ema_span_") and not unstuck_gate:
+                    continue
                 if field not in params:
                     continue
                 max_minutes = _accumulate_max_minutes(
@@ -168,6 +206,11 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "short_forager_volume_ema_span_1m",
         "short_forager_volatility_ema_span_1m",
     ]
+    bound_keys_minutes.extend(
+        f"{side}_unstuck_ema_span_{i}"
+        for side in sorted(unstuck_gate_sides)
+        for i in (0, 1)
+    )
     bound_keys_minutes.extend(iter_strategy_warmup_flat_bound_keys("1m"))
     bound_keys_hours = iter_strategy_warmup_flat_bound_keys("1h")
 
@@ -204,6 +247,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
+        "unstuck_ema_span_0",
+        "unstuck_ema_span_1",
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]
@@ -214,7 +259,10 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
+            unstuck_gate = _unstuck_gate_may_run(config, coin, pside, params)
             for field in minute_fields:
+                if field.startswith("unstuck_ema_span_") and not unstuck_gate:
+                    continue
                 if field not in params:
                     continue
                 max_minutes = _accumulate_max_minutes(

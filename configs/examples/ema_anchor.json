@@ -88,6 +88,8 @@
                 }
             },
             "unstuck": {
+                "ema_span_0": 415.0,
+                "ema_span_1": 793.0,
                 "close_pct": 0.099,
                 "ema_dist": -0.1046,
                 "ema_gating_enabled": true,
@@ -142,6 +144,8 @@
                 }
             },
             "unstuck": {
+                "ema_span_0": 415.0,
+                "ema_span_1": 793.0,
                 "close_pct": 0.099,
                 "ema_dist": -0.1046,
                 "ema_gating_enabled": true,
@@ -152,7 +156,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.2.0",
+    "config_version": "v8.3.0",
     "live": {
         "approved_coins": {"long":["SOL"],"short":["SOL"]},
         "auto_gs": true,
@@ -260,6 +264,8 @@
                     }
                 },
                 "unstuck": {
+                    "ema_span_0": [415.0, 415.0],
+                    "ema_span_1": [793.0, 793.0],
                     "close_pct": [0.01, 0.12, 0.001],
                     "ema_dist": [-0.2, 0.01, 0.0001],
                     "loss_allowance_pct": [0.005, 0.2, 0.0001],
@@ -303,6 +309,8 @@
                     }
                 },
                 "unstuck": {
+                    "ema_span_0": [415.0, 415.0],
+                    "ema_span_1": [793.0, 793.0],
                     "close_pct": [0.01, 0.12, 0.001],
                     "ema_dist": [-0.2, 0.01, 0.0001],
                     "loss_allowance_pct": [0.005, 0.2, 0.0001],

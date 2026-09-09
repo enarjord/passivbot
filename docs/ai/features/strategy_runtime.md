@@ -154,8 +154,26 @@ wallet-exposure modifier.
 Auto-unstuck has its own EMA trigger toggle:
 `bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
 EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
-threshold, close sizing, and valid market/exchange inputs. The toggle does not add independent
-unstuck EMA spans.
+threshold, close sizing, and valid market/exchange inputs.
+
+`bot.<side>.unstuck.ema_span_0` and `ema_span_1` independently define the unstuck price EMA
+band, using the same base candle stream and unrounded geometric-mean third span as the strategy
+band. Long eligibility uses the upper band; short eligibility uses the lower band. Strategy EMA
+changes must not change the unstuck band. Missing required unstuck EMAs follow the existing scoped
+input-unavailable contract; disabled gating does not require them or extend warmup. Live loading
+requests unstuck-only spans for held sides separately, preserving usable strategy spans when an
+unstuck horizon is unavailable. Live warmup uses that same held/static eligibility and does not
+expand flat forager candidates to an unused unstuck horizon. Monitor bands are independently
+available for each consumer.
+
+Schema v8.3.0 materializes missing unstuck spans from the effective active strategy before default
+hydration, including coin overrides and external-file/inline precedence. Explicit unstuck spans
+win. New optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
+varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
+the old coupled search. New defaults expose tunable spans.
+Apple MPS screening currently requires matching fixed strategy/unstuck spans, disabled EMA gating,
+or a statically inactive unstuck reducer across the configuration and search bounds. Active
+independent horizons/searches must use a CPU optimizer until the kernels implement them.
 
 ## Live/Backtest Market Slippage Boundary
 

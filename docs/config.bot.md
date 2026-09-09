@@ -10,6 +10,7 @@ Throughout:
 * `pside ∈ {long, short}`
 * `EMA_low, EMA_high` are the minima / maxima of the three EMA spans
   (`ema_span_0`, `ema_span_1`, `sqrt(ema_span_0 * ema_span_1)`).
+  Strategy logic uses the active strategy's spans; auto-unstuck uses `unstuck.ema_span_0/1`.
 * `pos.price`, `pos.size` are the current average entry price and signed quantity
   (`>0` long, `<0` short).
 * `wallet_exposure(balance, size, price, c_mult)` returns `abs(size) * price * c_mult / balance`.
@@ -139,6 +140,34 @@ unstuck thresholds remain in the config but do not create orders.
 auto-unstuck. It defaults to `true`. When false, auto-unstuck may trigger without EMA bands, but it
 still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 The field may be overridden for an individual coin+side through `coin_overrides`.
+
+`bot.<side>.unstuck.ema_span_0` and `ema_span_1` are positive floating-point EMA spans in
+minutes, independent of the active strategy spans. The band contains these two close-price EMAs
+and the EMA at their geometric-mean span. Long unstucking requires price at or above the upper
+band times `1 + ema_dist` (rounded up to the price tick); short unstucking requires price at or
+below the lower band times `1 - ema_dist` (rounded down). These are eligibility gates; the other
+unstuck conditions and account-wide candidate selection still apply.
+
+Both spans support coin overrides and optimizer bounds under
+`optimize.bounds.<side>.unstuck`. For a composed portfolio with a shared unstucker, set global
+unstuck spans and leave these leaves out of the coin overrides.
+
+When loading an older config, missing spans are copied from each side's effective active strategy,
+including individual coin strategy overrides and file/inline precedence. This preserves the saved
+trading behavior; saving the normalized config makes the independent spans explicit. Explicit new
+unstuck spans always win. An inactive legacy side with zero strategy spans receives positive
+strategy defaults with a warning to review them before enabling the side.
+
+A former optimizer search with varying strategy spans cannot be migrated one-to-one: those genes
+previously moved both bands. Migration copies fixed legacy bounds exactly; for varying ranges it
+warns and fixes missing new unstuck bounds at the starting values. Set new bounds explicitly to tune them. Migrated per-coin unstuck span overrides remain
+pinned; remove those leaves deliberately to tune a shared global pair. Restart optimizer searches
+rather than resuming old checkpoints after this schema change.
+
+Apple MPS screening currently supports matching fixed strategy/unstuck spans, disabled unstuck
+EMA gating, or a reducer that stays inactive throughout the search. Active independent-span searches
+fail with an explanatory error; use `optimize.backend=pymoo`
+or `deap` for them.
 
 When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is
@@ -296,7 +325,8 @@ intervention:
 
 | Parameter                                      | Primary effect                                             | Key equations |
 | ---------------------------------------------- | -----------------------------------------------------------| ------------- |
-| `ema_span_*`                                   | Defines EMA bands used by initial pricing & unstuck levels | `EMA_low`, `EMA_high` |
+| `strategy.<kind>.ema_span_*`                    | Defines the strategy's price EMA band                      | `EMA_low`, `EMA_high` |
+| `unstuck.ema_span_*`                            | Defines the independent auto-unstuck EMA band              | `EMA_low`, `EMA_high` |
 | `entry_grid_spacing_*`, `entry_grid_double_down_factor` | Controls grid spacing and growth of re-entry quantities | `next_grid_price`, `next_grid_qty` |
 | `entry_trailing_*`                             | Adjust trailing entry triggers via exposure & volatility  | `threshold`, `retracement` |
 | `close_grid_markup_*`, `close_grid_qty_pct`    | Shapes TP ladder                                          | `tp_prices`, `tp_qty` |

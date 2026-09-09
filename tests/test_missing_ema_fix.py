@@ -99,6 +99,8 @@ def _rust_bot_params(**overrides):
         "risk_we_excess_allowance_pct": 0.0,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
+        "unstuck_ema_span_0": 10.0,
+        "unstuck_ema_span_1": 20.0,
         "unstuck_loss_allowance_pct": 0.0,
         "unstuck_threshold": 0.0,
     }
@@ -3166,3 +3168,192 @@ async def test_ema_bundle_parallel_shutdown_cancel_propagates(monkeypatch):
             ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
             {"long": {}, "short": {}},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("projected", [False, True])
+@pytest.mark.parametrize("held", [False, True])
+@pytest.mark.parametrize("failure", ["missing", "timeout", "inf"])
+async def test_unstuck_only_ema_absence_preserves_strategy_inputs(
+    projected, held, failure, caplog
+):
+    from passivbot import Passivbot
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        "value",
+        project_open_tail=projected,
+        projected_close_ema={10.0: 100.0, 20.0: 100.0, math.sqrt(200): 100.0},
+    )
+    bot.positions[symbol]["long"] = {"size": 1.0 if held else 0.0, "price": 100.0}
+    original_bp = bot.bp
+
+    def bp(side, key, symbol=None):
+        return {
+            "unstuck_enabled": True,
+            "unstuck_ema_gating_enabled": True,
+            "unstuck_ema_span_0": 1000.0,
+            "unstuck_ema_span_1": 2000.0,
+            "unstuck_loss_allowance_pct": 0.1,
+            "unstuck_close_pct": 0.1,
+            "unstuck_threshold": 0.2,
+            "total_wallet_exposure_limit": 1.0,
+        }.get(key, original_bp(side, key, symbol))
+
+    bot.bp = bp
+    requests = []
+    original_project = bot.cm.get_projected_open_tail_ema_metrics
+
+    async def project(sym, metrics, **kwargs):
+        spans = metrics.get("close", [])
+        requests.extend(spans)
+        if any(span >= 1000 for span in spans):
+            if failure == "timeout":
+                raise TimeoutError("unstuck window unavailable")
+            return (
+                {"close": {span: float("inf") for span in spans}}
+                if failure == "inf"
+                else {"close": {}}
+            )
+        return await original_project(sym, metrics, **kwargs)
+
+    bot.cm.get_projected_open_tail_ema_metrics = project
+
+    async def close(sym, span, **kwargs):
+        requests.append(span)
+        if span >= 1000:
+            if failure == "timeout":
+                raise TimeoutError("unstuck window unavailable")
+            return float("inf") if failure == "inf" else float("nan")
+        return 100.0
+
+    bot.cm.get_latest_ema_close = close
+    if held and failure == "inf":
+        with pytest.raises((RuntimeError, FatalBotException), match="non-finite"):
+            await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+        return
+    with caplog.at_level(logging.WARNING):
+        bundles = await Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+    close_map = bundles[0][symbol]
+    assert close_map == {10.0: 100.0, 20.0: 100.0, math.sqrt(200): 100.0}
+    assert symbol not in bot._orchestrator_ema_unavailable_symbols
+    assert (symbol in bot._orchestrator_allow_missing_strategy_inputs_symbols) == held
+    assert any(span >= 1000 for span in requests) == held
+    if held:
+        assert "scope_unstuck_in_rust" in caplog.text
+    payload = _make_orchestrator_payload(symbol, sorted(close_map.items()), [], [])
+    sym_input = payload["symbols"][0]
+    sym_input["allow_missing_strategy_inputs"] = held
+    sym_input["long"]["position"] = {"size": 10.0 if held else 0.0, "price": 30.0 if held else 0.0}
+    sym_input["long"]["bot_params"].update(
+        unstuck_enabled=True, unstuck_ema_gating_enabled=True,
+        unstuck_ema_span_0=1000.0, unstuck_ema_span_1=2000.0,
+        unstuck_close_pct=0.1, unstuck_threshold=0.2, unstuck_loss_allowance_pct=0.1,
+    )
+    payload["global"]["unstuck_allowance_long"] = 100.0
+    import passivbot_rust as pbr
+
+    result = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
+    sym_input["long"]["bot_params"]["unstuck_enabled"] = False
+    expected = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
+    assert result["orders"] == expected["orders"]
+    assert any(
+        ("close" if held else "entry") in order["order_type"]
+        for order in result["orders"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize(
+    "skip_reason",
+    [
+        "manual",
+        "panic",
+        "unstuck_loss_allowance_pct",
+        "unstuck_close_pct",
+        "unstuck_threshold",
+        "total_wallet_exposure_limit",
+    ],
+)
+async def test_ineligible_unstuck_consumer_does_not_read_emas(
+    pside, skip_reason, caplog
+):
+    from passivbot import Passivbot
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, "value")
+    bot.positions[symbol][pside] = {
+        "size": 1.0 if pside == "long" else -1.0,
+        "price": 100.0,
+    }
+    bot.PB_modes[pside][symbol] = (
+        skip_reason if skip_reason in {"manual", "panic"} else "normal"
+    )
+    values = {
+        "unstuck_enabled": True,
+        "unstuck_ema_gating_enabled": True,
+        "unstuck_ema_span_0": 1000.0,
+        "unstuck_ema_span_1": 2000.0,
+        "unstuck_loss_allowance_pct": 0.1,
+        "unstuck_close_pct": 0.1,
+        "unstuck_threshold": 0.2,
+        "total_wallet_exposure_limit": 1.0,
+    }
+    if skip_reason in values:
+        values[skip_reason] = 0.0
+    original_bp = bot.bp
+    bot.bp = lambda side, key, symbol=None: (
+        values[key] if key in values else original_bp(side, key, symbol)
+    )
+    requests = []
+
+    async def close(sym, span, **kwargs):
+        requests.append(span)
+        if span >= 1000:
+            raise AssertionError("ineligible unstuck consumer requested candles")
+        return 100.0
+
+    bot.cm.get_latest_ema_close = close
+    with caplog.at_level(logging.WARNING):
+        await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    assert requests and max(requests) < 1000
+    assert "unstuck EMA unavailable" not in caplog.text
+    assert not bot._orchestrator_allow_missing_strategy_inputs_symbols
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_zero_exposure_held_side_does_not_require_unstuck_band_in_rust(pside):
+    import passivbot_rust as pbr
+
+    payload = _make_orchestrator_payload(
+        "BTC/USDT:USDT", [(10.0, 30.0), (math.sqrt(200), 30.0), (20.0, 30.0)], [], []
+    )
+    sym = payload["symbols"][0]
+    opposite = "short" if pside == "long" else "long"
+    sym[opposite]["mode"] = "manual"
+    sym[pside]["mode"] = "tp_only"
+    sym[pside]["position"] = {"size": 10.0 if pside == "long" else -10.0, "price": 30.0}
+    sym[pside]["bot_params"].update(
+        n_positions=1,
+        total_wallet_exposure_limit=0.0,
+        unstuck_enabled=True,
+        unstuck_ema_gating_enabled=True,
+        unstuck_ema_span_0=1000.0,
+        unstuck_ema_span_1=2000.0,
+        unstuck_close_pct=0.1,
+        unstuck_threshold=0.2,
+        unstuck_loss_allowance_pct=0.1,
+    )
+    payload["global"]["global_bot_params"][pside].update(
+        n_positions=1, total_wallet_exposure_limit=1.0
+    )
+    result = json.loads(pbr.compute_ideal_orders_json(json.dumps(payload)))
+    assert any("close" in order["order_type"] for order in result["orders"]), result
+    sym[pside]["bot_params"]["total_wallet_exposure_limit"] = 1.0
+    payload["global"]["global_bot_params"][pside]["total_wallet_exposure_limit"] = 1.0
+    with pytest.raises(ValueError, match="MissingEma"):
+        pbr.compute_ideal_orders_json(json.dumps(payload))

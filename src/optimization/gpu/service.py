@@ -1810,6 +1810,9 @@ class MpsSingleCoinProxy:
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
     ):
+        from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+        validate_independent_unstuck_scope(config)
         try:
             import torch
         except (
@@ -2895,6 +2898,9 @@ class MpsMulticoinProxy:
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
     ):
+        from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+        validate_independent_unstuck_scope(config)
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency

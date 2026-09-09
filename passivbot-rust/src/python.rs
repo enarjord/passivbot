@@ -2551,6 +2551,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         )?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
+        unstuck_ema_span_0: extract_value(dict, "unstuck_ema_span_0")?,
+        unstuck_ema_span_1: extract_value(dict, "unstuck_ema_span_1")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
         unstuck_threshold: extract_value(dict, "unstuck_threshold")?,
     })
@@ -2786,6 +2788,16 @@ fn validate_hsl_risk_unstuck_bot_params(
         None,
         true,
     )?;
+    for (key, span) in [
+        ("unstuck_ema_span_0", params.unstuck_ema_span_0),
+        ("unstuck_ema_span_1", params.unstuck_ema_span_1),
+    ] {
+        if !span.is_finite() || span <= 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "{path_prefix}.{key} must be positive and finite"
+            )));
+        }
+    }
     if !params.unstuck_ema_dist.is_finite() {
         return Err(PyValueError::new_err(format!(
             "{path_prefix}.unstuck_ema_dist must be finite"
