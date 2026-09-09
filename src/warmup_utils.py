@@ -105,6 +105,33 @@ def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
         )
 
 
+def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> bool:
+    """Keep warmup for optimizer reactivation, but omit statically inert reducers."""
+    if not params.get("unstuck_enabled", True) or not params.get(
+        "unstuck_ema_gating_enabled", True
+    ):
+        return False
+    bounds = flatten_optimize_bounds(
+        config.get("optimize", {}).get("bounds", {}),
+        strategy_kind=config.get("live", {}).get("strategy_kind"),
+    )
+    pinned = flatten_shared_bot_side(
+        config.get("coin_overrides", {}).get(coin, {}).get("bot", {}).get(pside, {})
+    )
+    for control in ("loss_allowance_pct", "close_pct", "threshold"):
+        key = f"unstuck_{control}"
+        if key not in params or _to_float(params[key], context=key) > 0.0:
+            continue
+        bound = bounds.get(f"{pside}_{key}") if key not in pinned else None
+        values = bound[:2] if isinstance(bound, (list, tuple)) else [bound]
+        if bound is None or not any(
+            _to_float(value, context=f"optimize.bounds.{pside}_{key}") > 0.0
+            for value in values
+        ):
+            return False
+    return True
+
+
 def compute_backtest_warmup_minutes(config: dict) -> int:
     """Mirror Rust warmup span calculation (see calc_warmup_bars)."""
 
@@ -136,15 +163,19 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         "forager_volatility_ema_span_1m",
     ]
 
-    for _, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
+    for (
+        coin,
+        long_params,
+        short_params,
+        long_strategy,
+        short_strategy,
+    ) in _iter_param_sets(config):
         side_sets = (
             ("long", long_params, long_strategy),
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
-            unstuck_gate = params.get("unstuck_enabled", True) and params.get(
-                "unstuck_ema_gating_enabled", True
-            )
+            unstuck_gate = _unstuck_gate_may_run(config, coin, pside, params)
             if unstuck_gate:
                 unstuck_gate_sides.add(pside)
             for field in minute_fields:
@@ -231,9 +262,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
-            unstuck_gate = params.get("unstuck_enabled", True) and params.get(
-                "unstuck_ema_gating_enabled", True
-            )
+            unstuck_gate = _unstuck_gate_may_run(config, coin, pside, params)
             for field in minute_fields:
                 if field.startswith("unstuck_ema_span_") and not unstuck_gate:
                     continue

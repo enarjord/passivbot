@@ -496,3 +496,38 @@ def test_gpu_independent_guard_uses_effective_side_eligibility(side, inactive):
     c["live"]["approved_coins"][side] = ["BTC"]
     with pytest.raises(ValueError, match="does not yet model independent"):
         validate_independent_unstuck_scope(c)
+
+
+@pytest.mark.parametrize("control", ["loss_allowance_pct", "close_pct", "threshold"])
+def test_inactive_unstuck_warmup_respects_optimizer_reactivation_and_coin_pins(control):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    c = get_template_config()
+    c["live"].update(warmup_ratio=1.0, max_warmup_minutes=1_000_000)
+    c["bot"]["short"]["unstuck"]["enabled"] = False
+    c["bot"]["long"]["unstuck"][control] = 0.0
+    c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0, 1]
+    baseline = compute_backtest_warmup_minutes(c)
+    baseline_coin = compute_per_coin_warmup_minutes(c)["__default__"]
+    c["bot"]["long"]["unstuck"].update(ema_span_0=400_000, ema_span_1=500_000)
+    c["optimize"]["bounds"]["long"]["unstuck"].update(
+        ema_span_0=[10, 600_000], ema_span_1=[10, 700_000]
+    )
+    assert compute_backtest_warmup_minutes(c) == baseline
+    assert compute_per_coin_warmup_minutes(c)["__default__"] == baseline_coin
+    c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0.1]
+    c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {control: 0}}}}}
+    assert compute_backtest_warmup_minutes(c) == 700_000
+    assert compute_per_coin_warmup_minutes(c)["__default__"] == 500_000
+    assert compute_per_coin_warmup_minutes(c)["BTC"] == baseline_coin
+    c["optimize"]["bounds"]["long"]["unstuck"][control] = [0, 0]
+    c["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"][control] = 0.1
+    assert compute_backtest_warmup_minutes(c) == 700_000
+    assert compute_per_coin_warmup_minutes(c)["BTC"] == 500_000
+
+
+def test_config_version_help_matches_canonical_schema():
+    from config.schema import CONFIG_SCHEMA_VERSION
+    from config_utils import CLI_HELP_OVERRIDES
+
+    assert CONFIG_SCHEMA_VERSION in CLI_HELP_OVERRIDES["config_version"]

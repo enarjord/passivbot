@@ -7704,3 +7704,81 @@ def test_resume_records_broad_probe_constraint_disagreement_without_immediate_ha
     )
 
     assert pairs == [(0.1, 0.2, True, True, False)]
+
+
+@pytest.mark.parametrize("shadow", ["all", "strategy_only", "none", "mismatch"])
+def test_gpu_suite_unstuck_scope_validates_effective_scenario_bounds(shadow):
+    from optimization.warmup import _apply_config_overrides
+    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+    config = _directional_tm_config(long_enabled=True, short_enabled=False)
+    config["backtest"]["suite_enabled"] = True
+    config["bot"]["long"]["unstuck"].update(
+        enabled=True,
+        ema_gating_enabled=True,
+        close_pct=0.1,
+        threshold=0.9,
+        loss_allowance_pct=0.01,
+    )
+    overrides = {}
+    for family in ("strategy.trailing_martingale", "unstuck"):
+        if shadow == "none" or (shadow == "strategy_only" and family == "unstuck"):
+            continue
+        for i in (0, 1):
+            overrides[f"bot.long.{family}.ema_span_{i}"] = 120.5 + i * 60
+    if shadow == "mismatch":
+        overrides["bot.long.unstuck.ema_span_0"] = 999.5
+    original = copy.deepcopy(config)
+    suite_cfg = {
+        "enabled": True,
+        "scenarios": [{"label": "fixed", "overrides": overrides}],
+    }
+    ctx = SimpleNamespace(
+        label="fixed",
+        overrides=overrides,
+        exchanges=["bybit"],
+        msss={"bybit": {"BTC": {}, "__meta__": {}}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    )
+
+    class Suite:
+        contexts = [ctx]
+
+        @staticmethod
+        def get_prepared_context_data(_ctx, _exchange):
+            return np.zeros((10, 1, 4)), np.ones(10), [0]
+
+        @staticmethod
+        def build_scenario_candidate_config(proxy_config, _ctx):
+            scenario = copy.deepcopy(proxy_config)
+            _apply_config_overrides(scenario, overrides)
+            return scenario
+
+    if shadow == "all":
+        validate_gpu_preparation_scope(
+            config, suite_cfg, torch_module=_fake_torch_with_mps()
+        )
+        prepared = _gpu_suite_scenario_inputs(config, Suite())
+        validate_independent_unstuck_scope(prepared[0]["config"])
+        for family in (
+            prepared[0]["config"]["optimize"]["bounds"]["long"]["unstuck"],
+            prepared[0]["config"]["optimize"]["bounds"]["long"]["strategy"][
+                "trailing_martingale"
+            ],
+        ):
+            assert family["ema_span_0"] == [120.5, 120.5]
+            assert family["ema_span_1"] == [180.5, 180.5]
+        # A second scenario retaining the independent search must still fail preflight.
+        suite_cfg["scenarios"].append({"label": "unshadowed", "overrides": {}})
+        with pytest.raises(ValueError, match="independent unstuck EMA"):
+            validate_gpu_preparation_scope(
+                config, suite_cfg, torch_module=_fake_torch_with_mps()
+            )
+    else:
+        with pytest.raises(ValueError, match="independent unstuck EMA"):
+            validate_gpu_preparation_scope(
+                config, suite_cfg, torch_module=_fake_torch_with_mps()
+            )
+        with pytest.raises(ValueError, match="independent unstuck EMA"):
+            _gpu_suite_scenario_inputs(config, Suite())
+    assert config == original

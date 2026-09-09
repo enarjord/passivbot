@@ -11775,6 +11775,9 @@ mod tests {
         let mut bp = BotParamsPair::default();
         let strategies = strategy_pair_for_ema_tests(&bp);
         let baseline = calc_warmup_bars(&[bp.clone()], &[strategies.clone()]);
+        bp.long.unstuck_loss_allowance_pct = 0.01;
+        bp.long.unstuck_close_pct = 0.1;
+        bp.long.unstuck_threshold = 0.9;
         bp.long.unstuck_ema_span_0 = 400_000.25;
         bp.long.unstuck_ema_span_1 = 500_000.25;
         bp.long.unstuck_enabled = false;
@@ -11789,7 +11792,22 @@ mod tests {
             baseline
         );
         bp.long.unstuck_ema_gating_enabled = true;
-        assert_eq!(calc_warmup_bars(&[bp], &[strategies]), 500_001);
+        assert_eq!(
+            calc_warmup_bars(&[bp.clone()], &[strategies.clone()]),
+            500_001
+        );
+        for control in 0..3 {
+            let mut inactive = bp.clone();
+            match control {
+                0 => inactive.long.unstuck_loss_allowance_pct = 0.0,
+                1 => inactive.long.unstuck_close_pct = 0.0,
+                _ => inactive.long.unstuck_threshold = 0.0,
+            }
+            assert_eq!(
+                calc_warmup_bars(&[inactive], &[strategies.clone()]),
+                baseline
+            );
+        }
     }
 
     #[test]
@@ -11996,12 +12014,22 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_long = [
             long_span_0,
             long_span_1,
-            if pair.long.unstuck_enabled && pair.long.unstuck_ema_gating_enabled {
+            if pair.long.unstuck_enabled
+                && pair.long.unstuck_ema_gating_enabled
+                && pair.long.unstuck_loss_allowance_pct > 0.0
+                && pair.long.unstuck_close_pct > 0.0
+                && pair.long.unstuck_threshold > 0.0
+            {
                 pair.long.unstuck_ema_span_0
             } else {
                 0.0
             },
-            if pair.long.unstuck_enabled && pair.long.unstuck_ema_gating_enabled {
+            if pair.long.unstuck_enabled
+                && pair.long.unstuck_ema_gating_enabled
+                && pair.long.unstuck_loss_allowance_pct > 0.0
+                && pair.long.unstuck_close_pct > 0.0
+                && pair.long.unstuck_threshold > 0.0
+            {
                 pair.long.unstuck_ema_span_1
             } else {
                 0.0
@@ -12013,12 +12041,22 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_short = [
             short_span_0,
             short_span_1,
-            if pair.short.unstuck_enabled && pair.short.unstuck_ema_gating_enabled {
+            if pair.short.unstuck_enabled
+                && pair.short.unstuck_ema_gating_enabled
+                && pair.short.unstuck_loss_allowance_pct > 0.0
+                && pair.short.unstuck_close_pct > 0.0
+                && pair.short.unstuck_threshold > 0.0
+            {
                 pair.short.unstuck_ema_span_0
             } else {
                 0.0
             },
-            if pair.short.unstuck_enabled && pair.short.unstuck_ema_gating_enabled {
+            if pair.short.unstuck_enabled
+                && pair.short.unstuck_ema_gating_enabled
+                && pair.short.unstuck_loss_allowance_pct > 0.0
+                && pair.short.unstuck_close_pct > 0.0
+                && pair.short.unstuck_threshold > 0.0
+            {
                 pair.short.unstuck_ema_span_1
             } else {
                 0.0
