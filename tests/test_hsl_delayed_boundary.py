@@ -110,3 +110,53 @@ async def test_delayed_boundary_retains_required_red_stop_history(policy):
     assert state["no_restart_latched"] is (policy == "never")
     if policy != "never":
         assert state["cooldown_until_ms"] == 480_500
+
+
+@pytest.mark.asyncio
+async def test_new_red_boundary_remains_actionable_when_staged_replay_defers(monkeypatch):
+    bot = make_coin_bot()
+    bot.bot_value = lambda pside, key: 1.0
+    bot.hsl["long"]["red_threshold"] = 0.15
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long", "A", 60_000, 1_000.0, 0.0, 0.0, 0.0
+    )
+    bot._pnls_manager = make_fake_pnls_manager(
+        [
+            dict(
+                timestamp=60_000,
+                symbol="A",
+                pside="long",
+                action="increase",
+                qty=1.0,
+                pnl=0.0,
+            ),
+            dict(
+                timestamp=180_500,
+                symbol="A",
+                pside="long",
+                action="decrease",
+                qty=1.0,
+                pnl=-300.0,
+            ),
+        ]
+    )
+    bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+
+    async def unavailable(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", unavailable)
+
+    with pytest.raises(
+        hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
+    ):
+        await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+            bot, 300_000, 700.0
+        )
+
+    state = bot._hsl_coin_state("long", "A")
+    assert state["runtime"].red_latched()
+    assert state["pending_red_since_ms"] == 180_500
+    assert state["pending_stop_event"] is None
+    assert bot._runtime_forced_modes["long"]["A"] == "panic"

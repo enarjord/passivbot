@@ -6310,6 +6310,12 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         symbol,
                         replay_flatten_timestamp_ms=latest_boundary_ts,
                     ):
+                        if state["pending_red_since_ms"] is None:
+                            state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
+                        state["pending_stop_event"] = None
+                        self._equity_hard_stop_set_coin_runtime_forced_mode(
+                            pside, symbol, "panic"
+                        )
                         raise AuthoritativeSurfaceUnavailable(
                             "hsl_episode_boundaries",
                             f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
