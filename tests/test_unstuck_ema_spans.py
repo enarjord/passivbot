@@ -421,3 +421,51 @@ def test_live_warmup_ignores_disabled_unstuck(toggle):
     )
     windows, _, _ = compute_live_warmup_windows(**kwargs)
     assert windows["BTC"] == 20
+
+
+@pytest.mark.parametrize("key", ["ema_span_0", "ema_span_1"])
+def test_legacy_fixed_strategy_bound_preserves_optimizer_unstuck_span(key):
+    c = legacy_config()
+    c["bot"]["long"]["strategy"]["trailing_martingale"][key] = 401.5
+    c["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][key] = [
+        199.25,
+        199.25,
+    ]
+    prepared = prepare_config(c, verbose=False)
+    assert prepared["bot"]["long"]["unstuck"][key] == 401.5
+    assert prepared["optimize"]["bounds"]["long"]["unstuck"][key] == [199.25, 199.25]
+
+
+def test_legacy_inactive_zero_fixed_bound_gets_positive_fallback(caplog):
+    c = legacy_config()
+    c["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"][
+        "ema_span_0"
+    ] = [0, 0]
+    prepared = prepare_config(c, verbose=False)
+    assert prepared["optimize"]["bounds"]["short"]["unstuck"]["ema_span_0"][0] > 0
+    assert "optimize.bounds.short.unstuck.ema_span_0" in caplog.text
+
+
+@pytest.mark.parametrize("key", ["loss_allowance_pct", "close_pct", "threshold"])
+@pytest.mark.parametrize("coin_override", [False, True])
+def test_gpu_independent_spans_allow_fixed_inactive_reducer_only(key, coin_override):
+    from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+    c = get_template_config()
+    # Keep the global pair supported when testing an independent coin-specific pair.
+    c["optimize"]["bounds"] = {}
+    target = c["bot"]["long"]["unstuck"]
+    if coin_override:
+        c["coin_overrides"] = {"BTC": {"bot": {"long": {"unstuck": {}}}}}
+        target = c["coin_overrides"]["BTC"]["bot"]["long"]["unstuck"]
+    target.update(ema_span_0=400_000.5)
+    target[key] = 0.0
+    c["optimize"]["bounds"]["long"] = {"unstuck": {key: [0, 0]}}
+    validate_independent_unstuck_scope(c)
+    c["optimize"]["bounds"]["long"]["unstuck"][key] = [0, 1]
+    if coin_override:
+        # A coin pin wins even when the global search can enable the reducer.
+        validate_independent_unstuck_scope(c)
+        del target[key]
+    with pytest.raises(ValueError, match="does not yet model independent"):
+        validate_independent_unstuck_scope(c)

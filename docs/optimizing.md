@@ -452,8 +452,8 @@ The supported slice is intentionally narrow:
 #### Deliberate current limitations
 
 Independent unstuck EMA horizons currently require CPU optimization (`pymoo` or `deap`).
-Apple MPS screening accepts matching fixed strategy/unstuck spans or disabled unstuck EMA gating;
-it rejects independent-span searches rather than screening with the wrong gate. Exact CPU
+Apple MPS screening accepts matching fixed strategy/unstuck spans, disabled unstuck EMA gating, or
+a reducer that stays inactive throughout the search. It rejects active independent-span searches. Exact CPU
 validation cannot correct an unmodeled screening decision.
 
 The following boundaries are intentional rather than silent fallbacks:

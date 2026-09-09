@@ -19,6 +19,27 @@ def validate_independent_unstuck_scope(config: dict) -> None:
                 unstuck.get("enabled", True) and unstuck.get("ema_gating_enabled", True)
             ):
                 continue
+
+            # Skip only when both the configured reducer and every candidate are inactive.
+            # A zero starting value with a positive search range can still consume the band.
+            def fixed_inactive_control(key):
+                value = unstuck.get(key)
+                if value is None or value > 0.0:
+                    return False
+                if key in side_patch.get("unstuck", {}):
+                    return True
+                bound = bounds.get(side, {}).get("unstuck", {}).get(key)
+                return bound is None or (
+                    isinstance(bound, (tuple, list))
+                    and len(bound) >= 2
+                    and max(bound[:2]) <= 0.0
+                )
+
+            if any(
+                fixed_inactive_control(key)
+                for key in ("loss_allowance_pct", "close_pct", "threshold")
+            ):
+                continue
             strategy_patch = side_patch.get("strategy", {}).get(kind, {})
             strategy = {**base.get("strategy", {}).get(kind, {}), **strategy_patch}
             for key in ("ema_span_0", "ema_span_1"):

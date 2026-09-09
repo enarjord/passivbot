@@ -119,7 +119,7 @@ def migrate_unstuck_ema_spans(
 
     # The old search had one gene driving two consumers. No pair of independent
     # ranges can encode that equality constraint. Freeze new genes at the migrated
-    # starting values; explicit new bounds always win.
+    # starting values for varying ranges, or the old fixed value; explicit new bounds win.
     bounds = config.get("optimize", {}).get("bounds")
     coupled_search = []
     if isinstance(bounds, dict):
@@ -129,16 +129,27 @@ def migrate_unstuck_ema_spans(
             unstuck_bounds = side_bounds.setdefault("unstuck", {})
             strategy_bounds = side_bounds.get("strategy", {}).get(kind, {})
             for key in keys:
+                old_bound = strategy_bounds.get(key, default_strategy_bounds[side][key])
                 supplied_bounds = bounds if explicit_bounds is None else explicit_bounds
                 supplied_unstuck = supplied_bounds.get(side, {}).get("unstuck", {})
                 if key not in supplied_unstuck:
                     value = config["bot"][side]["unstuck"][key]
+                    if (
+                        isinstance(old_bound, (list, tuple))
+                        and len(old_bound) >= 2
+                        and old_bound[0] == old_bound[1]
+                    ):
+                        value = _migrate_inactive_zero_span(
+                            old_bound[0],
+                            config["bot"][side],
+                            value,
+                            f"optimize.bounds.{side}.unstuck.{key}",
+                        )
                     unstuck_bounds[key] = [value, value]
                     if tracker is not None:
                         tracker.add(
                             ["optimize", "bounds", side, "unstuck", key], [value, value]
                         )
-                old_bound = strategy_bounds.get(key, default_strategy_bounds[side][key])
                 if (
                     isinstance(old_bound, (list, tuple))
                     and len(old_bound) >= 2

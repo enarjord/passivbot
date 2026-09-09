@@ -166,9 +166,11 @@ unstuck horizon is unavailable. Monitor bands are independently available for ea
 
 Schema v8.3.0 materializes missing unstuck spans from the effective active strategy before default
 hydration, including coin overrides and external-file/inline precedence. Explicit unstuck spans
-win. New optimizer bounds are frozen at the migrated values unless supplied; a warning explains
-that independent genes cannot preserve the old coupled search. New defaults expose tunable spans.
-Apple MPS screening currently requires matching fixed strategy/unstuck spans or disabled EMA gating;
+win. New optimizer bounds copy fixed legacy bounds, or freeze at the migrated starting values for
+varying legacy ranges unless supplied; a warning explains that independent genes cannot preserve
+the old coupled search. New defaults expose tunable spans.
+Apple MPS screening currently requires matching fixed strategy/unstuck spans, disabled EMA gating,
+or a statically inactive unstuck reducer across the configuration and search bounds. Active
 independent horizons/searches must use a CPU optimizer until the kernels implement them.
 
 ## Live/Backtest Market Slippage Boundary

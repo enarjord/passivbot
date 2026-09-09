@@ -159,13 +159,14 @@ unstuck spans always win. An inactive legacy side with zero strategy spans recei
 strategy defaults with a warning to review them before enabling the side.
 
 A former optimizer search with varying strategy spans cannot be migrated one-to-one: those genes
-previously moved both bands. Migration warns and fixes missing new unstuck bounds at the starting
-values. Set new bounds explicitly to tune them. Migrated per-coin unstuck span overrides remain
+previously moved both bands. Migration copies fixed legacy bounds exactly; for varying ranges it
+warns and fixes missing new unstuck bounds at the starting values. Set new bounds explicitly to tune them. Migrated per-coin unstuck span overrides remain
 pinned; remove those leaves deliberately to tune a shared global pair. Restart optimizer searches
 rather than resuming old checkpoints after this schema change.
 
-Apple MPS screening currently supports matching fixed strategy/unstuck spans or disabled unstuck
-EMA gating. Independent-span searches fail with an explanatory error; use `optimize.backend=pymoo`
+Apple MPS screening currently supports matching fixed strategy/unstuck spans, disabled unstuck
+EMA gating, or a reducer that stays inactive throughout the search. Active independent-span searches
+fail with an explanatory error; use `optimize.backend=pymoo`
 or `deap` for them.
 
 When aggregated realised PnL falls below the peak by more than
