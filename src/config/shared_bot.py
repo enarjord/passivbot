@@ -39,6 +39,8 @@ BOT_GROUP_FIELD_MAP = {
     "unstuck": {
         "close_pct": "unstuck_close_pct",
         "ema_dist": "unstuck_ema_dist",
+        "ema_span_0": "unstuck_ema_span_0",
+        "ema_span_1": "unstuck_ema_span_1",
         "ema_gating_enabled": "unstuck_ema_gating_enabled",
         "enabled": "unstuck_enabled",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",

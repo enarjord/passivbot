@@ -11,7 +11,7 @@ Allowed fields are intentionally limited:
 - **Bot params** (per side): per-coin wallet exposure limits; selected risk fields
   (`entry_cooldown_minutes`, position-exposure enforcer settings, and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
-  `ema_gating_enabled`, `enabled`, `loss_allowance_pct`, and `threshold`); and
+  `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `threshold`); and
   every HSL field when the global `live.hsl_signal_mode` is `"coin"`; and
   nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
   allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).

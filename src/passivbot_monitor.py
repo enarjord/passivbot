@@ -1110,39 +1110,63 @@ def _build_monitor_runtime_market_hints(
         per_side: dict[str, dict[str, float]] = {}
         last_price = last_prices.get(symbol)
         for pside in ("long", "short"):
-            try:
-                span0 = float(self.bp(pside, "ema_span_0", symbol))
-                span1 = float(self.bp(pside, "ema_span_1", symbol))
-                entry_dist = float(self.bp(pside, "entry_initial_ema_dist", symbol))
-                unstuck_ema_dist = float(self.bp(pside, "unstuck_ema_dist", symbol))
-            except Exception:
-                continue
-            if span0 <= 0.0 or span1 <= 0.0:
-                continue
-            span2 = (span0 * span1) ** 0.5
+            side_hint: dict[str, float] = {}
             emas = m1_close_emas.get(symbol, {})
-            ema0 = float(emas.get(span0, 0.0) or 0.0)
-            ema1 = float(emas.get(span1, 0.0) or 0.0)
-            ema2 = float(emas.get(span2, 0.0) or 0.0)
-            if min(ema0, ema1, ema2) <= 0.0:
-                continue
-            ema_lower = min(ema0, ema1, ema2)
-            ema_upper = max(ema0, ema1, ema2)
-            side_hint: dict[str, float] = {
-                "lower": float(ema_lower),
-                "upper": float(ema_upper),
-                "entry_trigger_price": float(
-                    ema_lower * (1.0 - entry_dist) if pside == "long" else ema_upper * (1.0 + entry_dist)
-                ),
-                "unstuck_trigger_price": float(
-                    ema_upper * (1.0 + unstuck_ema_dist)
-                    if pside == "long"
-                    else ema_lower * (1.0 - unstuck_ema_dist)
-                ),
-            }
-            if last_price is not None and float(last_price) > 0.0:
-                side_hint["last_price"] = float(last_price)
-            per_side[pside] = side_hint
+            for family in ("strategy", "unstuck"):
+                try:
+                    if family == "unstuck":
+                        if not (
+                            self.bp(pside, "unstuck_enabled", symbol)
+                            and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
+                        ):
+                            continue
+                        prefix, distance_key = "unstuck_", "unstuck_ema_dist"
+                    else:
+                        prefix, distance_key = "", "entry_initial_ema_dist"
+                    span0 = float(self.bp(pside, f"{prefix}ema_span_0", symbol))
+                    span1 = float(self.bp(pside, f"{prefix}ema_span_1", symbol))
+                    distance = float(self.bp(pside, distance_key, symbol))
+                    if (
+                        not all(math.isfinite(v) for v in (span0, span1, distance))
+                        or min(span0, span1) <= 0.0
+                    ):
+                        continue
+                    values = [
+                        emas.get(span)
+                        for span in (span0, span1, (span0 * span1) ** 0.5)
+                    ]
+                    if not all(
+                        v is not None and math.isfinite(v) and v > 0.0 for v in values
+                    ):
+                        continue
+                except (KeyError, TypeError, ValueError):
+                    # Monitor hints are optional; absence in one family does not hide the other.
+                    continue
+                lower, upper = min(values), max(values)
+                if family == "strategy":
+                    side_hint.update(
+                        lower=lower,
+                        upper=upper,
+                        entry_trigger_price=(
+                            lower * (1.0 - distance)
+                            if pside == "long"
+                            else upper * (1.0 + distance)
+                        ),
+                    )
+                else:
+                    side_hint.update(
+                        unstuck_lower=lower,
+                        unstuck_upper=upper,
+                        unstuck_trigger_price=(
+                            upper * (1.0 + distance)
+                            if pside == "long"
+                            else lower * (1.0 - distance)
+                        ),
+                    )
+            if side_hint:
+                if last_price is not None and float(last_price) > 0.0:
+                    side_hint["last_price"] = float(last_price)
+                per_side[pside] = side_hint
         if per_side:
             hint["ema_bands"] = per_side
             out[symbol] = hint
@@ -1179,9 +1203,20 @@ def _build_monitor_runtime_unstuck_hints(
         if isinstance(market_hint, dict):
             ema_bands = market_hint.get("ema_bands", {})
             if isinstance(ema_bands, dict) and isinstance(ema_bands.get(pside), dict):
-                side_ema_bands = deepcopy(ema_bands.get(pside))
+                market_bands = ema_bands[pside]
+                side_ema_bands = {
+                    target: deepcopy(market_bands[source])
+                    for target, source in (
+                        ("lower", "unstuck_lower"),
+                        ("upper", "unstuck_upper"),
+                        ("unstuck_trigger_price", "unstuck_trigger_price"),
+                    )
+                    if source in market_bands
+                }
                 hint["ema_bands"] = side_ema_bands
-                trigger_price = float(side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0)
+                trigger_price = float(
+                    side_ema_bands.get("unstuck_trigger_price", 0.0) or 0.0
+                )
                 if current_price > 0.0 and trigger_price > 0.0:
                     hint["next_unstuck_trigger_distance_ratio"] = float(
                         trigger_price / current_price - 1.0

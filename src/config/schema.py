@@ -4,8 +4,8 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 
 
-CONFIG_SCHEMA_VERSION = "v8.2.0"
-SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset({"v8.0.0", "v8.1.0"})
+CONFIG_SCHEMA_VERSION = "v8.3.0"
+SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset({"v8.0.0", "v8.1.0", "v8.2.0"})
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
 # generous bound also keeps hours-to-milliseconds conversion finite and well
@@ -57,6 +57,8 @@ def _get_shared_bot_defaults():
                 "close_pct": 0.041,
                 "ema_dist": -0.0269,
                 "ema_gating_enabled": True,
+                "ema_span_0": 790.0,
+                "ema_span_1": 1080.0,
                 "enabled": True,
                 "loss_allowance_pct": 0.0052,
                 "threshold": 0.466
@@ -104,6 +106,8 @@ def _get_shared_bot_defaults():
                 "close_pct": 0.01,
                 "ema_dist": -0.2,
                 "ema_gating_enabled": True,
+                "ema_span_0": 60.0,
+                "ema_span_1": 60.0,
                 "enabled": True,
                 "loss_allowance_pct": 0.005,
                 "threshold": 0.3

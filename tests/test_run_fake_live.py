@@ -605,6 +605,8 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_we_excess_allowance_mode": "bounded",
                         "unstuck_close_pct": 0.01,
                         "unstuck_ema_dist": 0.0,
+                        "unstuck_ema_span_0": 2.0,
+                        "unstuck_ema_span_1": 4.0,
                         "unstuck_enabled": True,
                         "unstuck_ema_gating_enabled": True,
                         "unstuck_loss_allowance_pct": 0.1,

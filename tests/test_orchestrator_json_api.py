@@ -201,6 +201,8 @@ def bot_params(**overrides):
         "unstuck_ema_gating_enabled": True,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
+        "unstuck_ema_span_0": 10.0,
+        "unstuck_ema_span_1": 20.0,
         "unstuck_loss_allowance_pct": 0.0,
         "unstuck_threshold": 0.0,
     }
@@ -5224,3 +5226,65 @@ def test_loss_gate_rejects_non_positive_raw_balance():
         inp_case["balance_raw"] = raw_balance
         with pytest.raises(ValueError, match="balance_raw must be finite and > 0"):
             compute(pbr, inp_case)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_unstuck_uses_independent_spans_and_scopes_missing_emas(side):
+    import passivbot_rust as pbr
+
+    params = dict(
+        n_positions=1,
+        total_wallet_exposure_limit=1.0,
+        unstuck_close_pct=0.1,
+        unstuck_threshold=0.001,
+        unstuck_loss_allowance_pct=0.01,
+        unstuck_ema_dist=0.0,
+        unstuck_ema_span_0=30.5,
+        unstuck_ema_span_1=80.5,
+    )
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        **{
+            f"{side}_pos_size": 10.0 if side == "long" else -10.0,
+            f"{side}_pos_price": 100.0,
+            f"{side}_bp": params,
+        },
+        emas=ema_bundle(
+            m1_close=[[10.0, 100.0], [20.0, 100.0], [math.sqrt(200.0), 100.0]]
+        ),
+    )
+    inp = make_input(
+        balance=1000.0,
+        symbols=[sym],
+        global_bp=bot_params_pair(**{f"{side}_overrides": params}),
+    )
+    inp["global"][f"unstuck_allowance_{side}"] = 100.0
+
+    def unstuck_orders():
+        return [
+            o
+            for o in compute(pbr, inp)["orders"]
+            if o["order_type"] == f"close_unstuck_{side}"
+        ]
+
+    # Required independent EMAs are absent: strategy EMAs cannot stand in for them.
+    with pytest.raises(ValueError, match="MissingEma"):
+        unstuck_orders()
+    spans = [30.5, 80.5, math.sqrt(30.5 * 80.5)]
+    sym["emas"]["m1"]["close"].extend(
+        [[sp, 101.0 if side == "long" else 99.0] for sp in spans]
+    )
+    assert not unstuck_orders()
+    for entry in sym["emas"]["m1"]["close"][-3:]:
+        entry[1] = 99.0 if side == "long" else 101.0
+    assert unstuck_orders()
+    # Changing the strategy band cannot change the unstuck decision.
+    for entry in sym["emas"]["m1"]["close"][:3]:
+        entry[1] = 120.0 if side == "long" else 80.0
+    assert unstuck_orders()
+    # Disabled gating never needs the independent EMA bundle.
+    sym[side]["bot_params"]["unstuck_ema_gating_enabled"] = False
+    del sym["emas"]["m1"]["close"][3:]
+    assert unstuck_orders()

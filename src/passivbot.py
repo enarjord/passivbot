@@ -790,6 +790,7 @@ def compute_live_warmup_windows(
     bp_lookup: Callable[[str, str, str], float],
     *,
     forager_enabled: Optional[Dict[str, bool]] = None,
+    unstuck_eligible_lookup: Optional[Callable[[str, str], bool]] = None,
     strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
     forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
@@ -889,6 +890,11 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
+            if unstuck_eligible_lookup is not None and unstuck_eligible_lookup(
+                pside, sym
+            ):
+                for key in ("unstuck_ema_span_0", "unstuck_ema_span_1"):
+                    max_1m_span = max(max_1m_span, _get_bp(pside, key, sym))
             for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
                 max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
             if (pside == "long" and is_forager_long) or (
@@ -4986,6 +4992,12 @@ class Passivbot:
             compute_live_warmup_windows(
                 symbols_by_side,
                 lambda pside, key, sym: self.bp(pside, key, sym),
+                unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                    self,
+                    pside,
+                    sym,
+                    (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+                ),
                 forager_enabled=forager_needed,
                 strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                     self, pside, key, sym
@@ -5543,6 +5555,12 @@ class Passivbot:
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
+            unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                self,
+                pside,
+                sym,
+                (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+            ),
             forager_enabled=forager_enabled,
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym
@@ -5702,6 +5720,12 @@ class Passivbot:
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
+            unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                self,
+                pside,
+                sym,
+                (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+            ),
             forager_enabled=forager_enabled,
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym
@@ -16734,6 +16758,8 @@ class Passivbot:
             "unstuck_close_pct",
             "unstuck_ema_gating_enabled",
             "unstuck_ema_dist",
+            "unstuck_ema_span_0",
+            "unstuck_ema_span_1",
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",
         ]
@@ -16848,6 +16874,27 @@ class Passivbot:
             }
         )
         return out
+
+    def _unstuck_ema_required(
+        self, pside: str, symbol: str, mode: Optional[str]
+    ) -> bool:
+        """Static input eligibility shared by live planning and candle warmup."""
+        return bool(
+            self.bp(pside, "unstuck_enabled", symbol)
+            and self.bp(pside, "unstuck_ema_gating_enabled", symbol)
+            and Passivbot._mode_override_to_orchestrator_mode(self, mode)
+            not in {"manual", "panic"}
+            and all(
+                self.bp(pside, key, symbol) > 0.0
+                for key in (
+                    "unstuck_loss_allowance_pct",
+                    "unstuck_close_pct",
+                    "unstuck_threshold",
+                    "total_wallet_exposure_limit",
+                )
+            )
+            and self.has_position(pside=pside, symbol=symbol)
+        )
 
     def _pb_mode_to_orchestrator_mode(self, mode: str) -> str:
         m = (mode or "").strip().lower()
@@ -17254,6 +17301,7 @@ class Passivbot:
         )
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        need_unstuck_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
@@ -17328,6 +17376,22 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
+                if Passivbot._unstuck_ema_required(
+                    self, pside, symbol, modes.get(pside, {}).get(symbol)
+                ):
+                    unstuck_spans = [
+                        float(self.bp(pside, f"unstuck_ema_span_{i}", symbol))
+                        for i in (0, 1)
+                    ]
+                    if any(
+                        not math.isfinite(span) or span <= 0.0 for span in unstuck_spans
+                    ):
+                        raise ValueError(
+                            f"invalid unstuck EMA spans for {symbol} {pside}: {unstuck_spans}"
+                        )
+                    need_unstuck_close_spans[symbol].update(
+                        (*unstuck_spans, (unstuck_spans[0] * unstuck_spans[1]) ** 0.5)
+                    )
                 requirements = strategy_warmup_requirements(
                     strategy_params,
                     pside=pside,
@@ -18799,6 +18863,59 @@ class Passivbot:
                 )
             return ctx
 
+        async def load_unstuck_close_map(sym: str, close: dict[float, float]) -> None:
+            # Keep each successful span, even if another unstuck horizon is unavailable.
+            # Only held sides consume this family; Rust scopes absent spans at lookup.
+            for span in sorted(need_unstuck_close_spans[sym] - close.keys()):
+                projection_ctx = projection_contexts.get(sym)
+                if projection_ctx is None:
+                    try:
+                        close.update(
+                            await fetch_close_map(sym, [span], log_on_missing=False)
+                        )
+                        continue
+                    except MissingCloseEma:
+                        projection_ctx = projection_contexts.get(
+                            sym
+                        ) or refresh_open_tail_projection_context(sym)
+                if projection_ctx is not None:
+                    try:
+                        projected = await self.cm.get_projected_open_tail_ema_metrics(
+                            sym,
+                            {"close": [span]},
+                            latest_expected_ts=int(
+                                projection_ctx["latest_expected_ts"]
+                            ),
+                            last_cached_ts=int(projection_ctx["last_cached_ts"]),
+                            max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
+                        )
+                    except (TimeoutError, RuntimeError):
+                        projected = (
+                            None  # Explicit bounded input absence, scoped below.
+                        )
+                    if projected is not None:
+                        value = projected.get("close", {}).get(span)
+                        if value is not None and math.isinf(float(value)):
+                            raise RuntimeError(
+                                f"[ema] non-finite projected unstuck EMA for {sym} span={span}"
+                            )
+                        if value is not None and math.isfinite(float(value)):
+                            close[span] = float(value)
+                            self._orchestrator_ema_projection_symbols.add(sym)
+                            self._orchestrator_ema_projection_details[sym] = dict(
+                                projection_ctx
+                            )
+                            continue
+                self._orchestrator_allow_missing_strategy_inputs_symbols.add(sym)
+                log_ema_issue(
+                    ("unstuck_ema_unavailable", sym, span),
+                    logging.WARNING,
+                    "[ema] unstuck EMA unavailable %s span=%.8g action=scope_unstuck_in_rust | %s",
+                    Passivbot._log_symbol(sym),
+                    span,
+                    ema_candle_health_context(sym),
+                )
+
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             if sym in cache_only_never_fetched:
@@ -18956,6 +19073,7 @@ class Passivbot:
                     }
                 if forager_lr1m is None:
                     forager_lr1m = {}
+                await load_unstuck_close_map(sym, close)
                 if input_unavailability:
                     raise input_unavailability[0]
             except Exception as exc:
@@ -20660,6 +20778,12 @@ class Passivbot:
         per_symbol_win, per_symbol_h1_hours, _ = compute_live_warmup_windows(
             refreshable_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
+            unstuck_eligible_lookup=lambda pside, sym: Passivbot._unstuck_ema_required(
+                self,
+                pside,
+                sym,
+                (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
+            ),
             forager_enabled={pside: True for pside in refreshable_by_side},
             strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
                 self, pside, key, sym

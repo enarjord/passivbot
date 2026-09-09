@@ -625,6 +625,8 @@ pub struct BotParams {
     pub unstuck_ema_gating_enabled: bool,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
+    pub unstuck_ema_span_0: f64,
+    pub unstuck_ema_span_1: f64,
     pub unstuck_loss_allowance_pct: f64,
     pub unstuck_threshold: f64,
 }
@@ -685,6 +687,8 @@ impl Default for BotParams {
             unstuck_ema_gating_enabled: true,
             unstuck_close_pct: 0.0,
             unstuck_ema_dist: 0.0,
+            unstuck_ema_span_0: 60.0,
+            unstuck_ema_span_1: 60.0,
             unstuck_loss_allowance_pct: 0.0,
             unstuck_threshold: 0.0,
         }

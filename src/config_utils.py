@@ -62,7 +62,10 @@ from config.overrides import (
 from config.parse import load_raw_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
-from config.schema import get_template_config as get_schema_template_config
+from config.schema import (
+    CONFIG_SCHEMA_VERSION,
+    get_template_config as get_schema_template_config,
+)
 from config.strategy import prune_inactive_strategy_subtrees
 from config.tree_ops import (
     add_missing_keys_recursively,
@@ -1678,7 +1681,7 @@ CLI_HELP_OVERRIDES = {
         "Terminal metric visibility config. null uses optimize scoring/limits; "
         "[] shows all; a list adds named metrics. Full analysis is still saved."
     ),
-    "config_version": "Config schema version. Canonical V8 configs use v8.2.0.",
+    "config_version": f"Config schema version. Canonical V8 configs use {CONFIG_SCHEMA_VERSION}.",
 }
 
 for _pside in ("long", "short"):

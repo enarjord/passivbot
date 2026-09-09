@@ -87,6 +87,8 @@ OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
         "risk.we_excess_allowance_pct",
         "unstuck.close_pct",
         "unstuck.ema_dist",
+        "unstuck.ema_span_0",
+        "unstuck.ema_span_1",
         "unstuck.ema_gating_enabled",
         "unstuck.enabled",
         "unstuck.loss_allowance_pct",

@@ -940,6 +940,25 @@ mod core {
         strategy_params: &crate::strategies::StrategyParams,
     ) -> Result<EMABands, OrchestratorError> {
         let (ema_span_0, ema_span_1) = strategy_ema_spans(strategy_params);
+        derive_ema_bands_for_spans(symbol_idx, emas, ema_span_0, ema_span_1)
+    }
+
+    fn derive_ema_bands_for_spans(
+        symbol_idx: usize,
+        emas: &EmaBundle,
+        ema_span_0: f64,
+        ema_span_1: f64,
+    ) -> Result<EMABands, OrchestratorError> {
+        if !ema_span_0.is_finite()
+            || ema_span_0 <= 0.0
+            || !ema_span_1.is_finite()
+            || ema_span_1 <= 0.0
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "ema_spans",
+                symbol_idx: Some(symbol_idx),
+            });
+        }
         let ema0 = ema_lookup(&emas.m1.close, ema_span_0)
             .ok_or(OrchestratorError::MissingEma { symbol_idx })?;
         let ema1 = ema_lookup(&emas.m1.close, ema_span_1)
@@ -3853,23 +3872,17 @@ mod core {
             let enabled = bot.unstuck_enabled
                 && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
-                && bot.unstuck_threshold > 0.0;
+                && bot.unstuck_threshold > 0.0
+                && bot.total_wallet_exposure_limit > 0.0;
             if !enabled {
                 continue;
             }
             let ema_bands = if bot.unstuck_ema_gating_enabled {
-                let strategy_params = cached_strategy_params_for_symbol_side(
-                    &mut workspace.derived_long,
-                    s.symbol_idx,
-                    input.global.strategy_kind,
-                    StrategySide::Long,
-                    &sym.long,
-                )?;
-                match cached_ema_bands(
-                    &mut workspace.derived_long,
+                match derive_ema_bands_for_spans(
                     s.symbol_idx,
                     &sym.emas,
-                    &strategy_params,
+                    bot.unstuck_ema_span_0,
+                    bot.unstuck_ema_span_1,
                 ) {
                     Ok(value) => value,
                     Err(err) => {
@@ -3922,23 +3935,17 @@ mod core {
             let enabled = bot.unstuck_enabled
                 && bot.unstuck_loss_allowance_pct > 0.0
                 && bot.unstuck_close_pct > 0.0
-                && bot.unstuck_threshold > 0.0;
+                && bot.unstuck_threshold > 0.0
+                && bot.total_wallet_exposure_limit > 0.0;
             if !enabled {
                 continue;
             }
             let ema_bands = if bot.unstuck_ema_gating_enabled {
-                let strategy_params = cached_strategy_params_for_symbol_side(
-                    &mut workspace.derived_short,
-                    s.symbol_idx,
-                    input.global.strategy_kind,
-                    StrategySide::Short,
-                    &sym.short,
-                )?;
-                match cached_ema_bands(
-                    &mut workspace.derived_short,
+                match derive_ema_bands_for_spans(
                     s.symbol_idx,
                     &sym.emas,
-                    &strategy_params,
+                    bot.unstuck_ema_span_0,
+                    bot.unstuck_ema_span_1,
                 ) {
                     Ok(value) => value,
                     Err(err) => {

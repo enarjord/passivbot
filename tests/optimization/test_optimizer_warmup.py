@@ -68,6 +68,9 @@ def _make_optimizer_config() -> dict:
     bounds["short_forager_volume_ema_span_1m"] = [0, 0]
     bounds["short_volatility_ema_span_1h"] = [0, 0]
     bounds["short_volatility_ema_span_1m"] = [0, 0]
+    for side in ("long", "short"):
+        for i in (0, 1):
+            bounds[f"{side}_unstuck_ema_span_{i}"] = [1, 100, 1]
     return config
 
 

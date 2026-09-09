@@ -424,10 +424,15 @@ def _validate_gpu_data_independent_scope(
     config: dict,
     *,
     allow_suite: bool = False,
+    validate_unstuck: bool = True,
 ) -> tuple[str, list[str], list[str]]:
     """Validate GPU behavior which does not depend on prepared candles or coin count."""
 
     strategy_kind = _validate_gpu_static_scope(config)
+    if validate_unstuck:
+        from optimization.gpu.unstuck_scope import validate_independent_unstuck_scope
+
+        validate_independent_unstuck_scope(config)
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
     if bool(config.get("backtest", {}).get("filter_by_min_effective_cost")):
@@ -538,6 +543,7 @@ def validate_gpu_preparation_scope(
         _validate_gpu_data_independent_scope(
             config,
             allow_suite=suite_enabled,
+            validate_unstuck=not (suite_enabled and suite_cfg.get("scenarios")),
         )
     )
     halving_config = (
@@ -566,6 +572,7 @@ def validate_gpu_preparation_scope(
             )
             scenario_config = deepcopy(config)
             _apply_config_overrides(scenario_config, overrides)
+            _fix_gpu_suite_shadowed_bounds(config, scenario_config, overrides)
             _validate_gpu_data_independent_scope(
                 scenario_config,
                 allow_suite=True,
@@ -1783,6 +1790,8 @@ def _validate_gpu_coin_overrides(
             for key in (
                 "enabled",
                 "ema_gating_enabled",
+                "ema_span_0",
+                "ema_span_1",
                 "close_pct",
                 "ema_dist",
                 "loss_allowance_pct",
@@ -1944,10 +1953,10 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             raise ValueError(
                 f"GPU suite scenario {ctx.label!r} has no prepared datasets"
             )
-        scenario_config = build_config(proxy_config, ctx)
+        scenario_config = deepcopy(build_config(proxy_config, ctx))
+        _fix_gpu_suite_shadowed_bounds(proxy_config, scenario_config, overrides)
         effective_coin_sources = (
-            getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources")
-            or {}
+            getattr(ctx, "config", {}).get("backtest", {}).get("coin_sources") or {}
         )
         for exchange in exchanges:
             scenario_mss = ctx.msss[exchange]
@@ -2123,6 +2132,25 @@ def _gpu_suite_scenario_override_context(
                 )
             fixed_parameters[parameter] = value
     return fixed_bound_values, fixed_parameters
+
+
+def _fix_gpu_suite_shadowed_bounds(
+    base_config: dict, scenario_config: dict, overrides: dict
+) -> None:
+    """Expose exact-last scenario bounds to scope validation and proxy constructors."""
+    from config.optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+
+    kind = base_config["live"]["strategy_kind"]
+    bounds = scenario_config.get("optimize", {}).get("bounds", {})
+    fixed, _ = _gpu_suite_scenario_override_context(
+        base_config,
+        scenario_config,
+        overrides,
+        flatten_optimize_bounds(bounds, strategy_kind=kind),
+        {},
+    )
+    for key, value in fixed.items():
+        set_flat_optimize_bound(bounds, kind, key, [value, value])
 
 
 def _gpu_suite_enabled(config: dict, evaluator, evaluator_for_pool) -> bool:
@@ -3161,9 +3189,9 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
             ),
             "close_pct": float(unstuck.get("close_pct", 0.0)),
             "ema_dist": float(unstuck.get("ema_dist", 0.0)),
-            "loss_allowance_pct": float(
-                unstuck.get("loss_allowance_pct", 0.0)
-            ),
+            "ema_span_0": unstuck.get("ema_span_0"),
+            "ema_span_1": unstuck.get("ema_span_1"),
+            "loss_allowance_pct": float(unstuck.get("loss_allowance_pct", 0.0)),
             "threshold": float(unstuck.get("threshold", 0.0)),
         }
     return contract
@@ -4494,11 +4522,14 @@ def run_backend(
             if bound_side not in hsl_search_sides:
                 # Dormant HSL bounds affect neither proxy nor exact Rust.
                 continue
-        if (
-            max_coin_count == 1
-            and bound_key
-            in {f"{side}_n_positions" for side in candidate_search_sides}
+        if max_coin_count == 1 and bound_key in {
+            f"{side}_n_positions" for side in candidate_search_sides
+        }:
+            continue
+        if suite_inputs and all(
+            bound_key in item["fixed_bound_values"] for item in suite_inputs
         ):
+            # Every exact scenario replaces this gene before either evaluator uses it.
             continue
         if bound_key not in bound_map:
             raise ValueError(

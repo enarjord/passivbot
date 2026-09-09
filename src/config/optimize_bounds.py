@@ -43,6 +43,8 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     "unstuck": {
         "close_pct": "unstuck_close_pct",
         "ema_dist": "unstuck_ema_dist",
+        "ema_span_0": "unstuck_ema_span_0",
+        "ema_span_1": "unstuck_ema_span_1",
         "loss_allowance_pct": "unstuck_loss_allowance_pct",
         "threshold": "unstuck_threshold",
     },
@@ -83,9 +85,11 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "unstuck": {
             "close_pct": [0.01, 0.12, 0.001],
             "ema_dist": [-0.2, 0.01, 0.0001],
+            "ema_span_0": [60, 2880, 10],
+            "ema_span_1": [60, 2880, 10],
             "loss_allowance_pct": [0.005, 0.2, 0.0001],
-            "threshold": [0.4, 0.9, 0.001]
-        }
+            "threshold": [0.4, 0.9, 0.001],
+        },
     },
     "short": {
         "forager": {
@@ -112,10 +116,12 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
         "unstuck": {
             "close_pct": [0.01, 0.12, 0.001],
             "ema_dist": [-0.2, 0.01, 0.0001],
+            "ema_span_0": [60, 2880, 10],
+            "ema_span_1": [60, 2880, 10],
             "loss_allowance_pct": [0.005, 0.2, 0.0001],
-            "threshold": [0.4, 0.9, 0.001]
-        }
-    }
+            "threshold": [0.4, 0.9, 0.001],
+        },
+    },
 }
 
 
