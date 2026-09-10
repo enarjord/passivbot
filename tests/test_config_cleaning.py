@@ -40,8 +40,10 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
         "volume_ema_span_1m"
     ]
     assert (
-        cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]
-        == template["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]
+        cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
+        == template["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_0"
+        ]
     )
     assert "BTC" in cleaned["coin_overrides"]
     assert "_meta" not in cleaned["coin_overrides"]["BTC"]

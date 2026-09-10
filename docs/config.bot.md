@@ -30,6 +30,19 @@ Throughout:
 
 ## Trailing Martingale Entries
 
+Price EMA horizons are `bot.<side>.strategy.trailing_martingale.entry.ema_span_0`
+and `entry.ema_span_1`. They govern entry gating, forager entry readiness, and the one-way
+entry tie-break. Ordinary closes do not consume this band. The shared
+`volatility_ema_span_1m/1h` remain at strategy level because both entries and closes use them.
+
+Schema v8.4.0 moves the old strategy-root spans into `entry`, including optimizer bounds
+and coin/scenario overrides. Values and floating-point precision are preserved. Within one
+source, explicit new paths win over conflicting old paths with a warning; normal file/inline
+coin precedence is preserved. Old CLI paths and dotted optimizer selectors still work.
+Selecting `long.strategy.entry` now includes the entry EMA horizons. Other strategies retain
+their existing schema. `couple_unstuck_ema_spans` continues to derive unstuck horizons from
+each coin's effective entry spans during optimization.
+
 ```text
 alpha(span)         = 2 / (span + 1)
 entry_threshold_vol_term =

@@ -110,11 +110,11 @@ def _rust_bot_params(**overrides):
 
 def _rust_strategy_params(**overrides):
     params = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "volatility_ema_span_1h": 0.0,
         "volatility_ema_span_1m": 60.0,
         "entry": {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
             "double_down_factor": 1.0,
             "initial_ema_dist": 0.0,
             "initial_qty_pct": 0.1,
@@ -2950,11 +2950,11 @@ async def test_trailing_martingale_weight_group_uses_later_nonzero_path():
 
     def trailing_martingale_params(_pside, _symbol=None):
         return {
-            "ema_span_0": 10.0,
-            "ema_span_1": 20.0,
             "volatility_ema_span_1m": 6.0,
             "volatility_ema_span_1h": 0.0,
             "entry": {
+                "ema_span_0": 10.0,
+                "ema_span_1": 20.0,
                 "threshold_volatility_1m_weight": 0.0,
                 "retracement_volatility_1m_weight": 1.0,
                 "threshold_volatility_1h_weight": 0.0,

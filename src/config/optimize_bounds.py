@@ -6,6 +6,7 @@ from .strategy_spec import (
     get_supported_strategy_kinds,
     get_strategy_optimize_bounds,
     normalize_strategy_kind,
+    strategy_optimize_key_path_map,
 )
 
 
@@ -139,6 +140,10 @@ def get_optimize_bounds_defaults() -> dict:
 def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     flat = {}
+    strategy_keys = {
+        "_".join(path[4:]): key.split("_", 1)[1]
+        for key, path in strategy_optimize_key_path_map(normalized_kind).items()
+    }
     if not isinstance(bounds, dict):
         return flat
     if any(
@@ -155,7 +160,7 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
                 strategy_bounds = group_bounds.get(normalized_kind, {}) if isinstance(group_bounds, dict) else {}
                 if isinstance(strategy_bounds, dict):
                     for key, value in _flatten_strategy_bound_items(strategy_bounds):
-                        flat[f"{pside}_{key}"] = deepcopy(value)
+                        flat[f"{pside}_{strategy_keys.get(key, key)}"] = deepcopy(value)
                 continue
             if not isinstance(group_bounds, dict):
                 continue
@@ -175,6 +180,12 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
     if group is None:
         strategy_root = side_bounds.setdefault("strategy", {})
         current = strategy_root.setdefault(normalized_kind, {})
+        canonical_path = strategy_optimize_key_path_map(normalized_kind).get(flat_key)
+        if canonical_path is not None:
+            for part in canonical_path[4:-1]:
+                current = current.setdefault(part, {})
+            current[canonical_path[-1]] = deepcopy(value)
+            return
         parts = key.split("_")
         if parts[0] in {"entry", "close"} and len(parts) > 1:
             current = current.setdefault(parts[0], {})

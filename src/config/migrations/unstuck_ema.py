@@ -4,6 +4,7 @@ import logging
 from copy import deepcopy
 
 from optimization.bounds import Bound
+from .entry_ema import migrate_entry_ema_tree
 
 from ..strategy_spec import (
     get_strategy_defaults,
@@ -12,6 +13,10 @@ from ..strategy_spec import (
 )
 from ..shared_bot import canonicalize_shared_bot_side
 from ..optimize_bounds import flatten_optimize_bounds, set_flat_optimize_bound
+
+
+def _price_spans(strategy, kind):
+    return strategy.get("entry", {}) if kind == "trailing_martingale" else strategy
 
 
 def _migrate_inactive_zero_span(value, bot, default, path):
@@ -42,14 +47,17 @@ def migrate_unstuck_ema_spans(
     explicit_bounds=None,
 ) -> None:
     kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    defaults = get_strategy_defaults(kind)
+    defaults = {
+        side: _price_spans(value, kind)
+        for side, value in get_strategy_defaults(kind).items()
+    }
     migrated = {}
     for side, bot in config.get("bot", {}).items():
         if side not in ("long", "short") or not isinstance(bot, dict):
             continue
         canonicalize_shared_bot_side(bot)
         unstuck = bot.setdefault("unstuck", {})
-        strategy = bot.get("strategy", {}).get(kind, {})
+        strategy = _price_spans(bot.get("strategy", {}).get(kind, {}), kind)
         for key in ("ema_span_0", "ema_span_1"):
             if key in unstuck:
                 continue
@@ -106,12 +114,13 @@ def migrate_unstuck_ema_spans(
             effective_patch = deepcopy(
                 _unwrap_override_document(source, source=f"coin_overrides.{coin}")
             )
+        migrate_entry_ema_tree(effective_patch)
         nested_update(effective_patch, deepcopy(override))
         for side, keys in migrated.items():
             patch_side = effective_patch.get("bot", {}).get(side, {})
             canonicalize_shared_bot_side(patch_side)
             patch_unstuck = patch_side.get("unstuck", {})
-            strategy = patch_side.get("strategy", {}).get(kind, {})
+            strategy = _price_spans(patch_side.get("strategy", {}).get(kind, {}), kind)
             for key in keys:
                 if key in patch_unstuck or key not in strategy:
                     continue
@@ -141,11 +150,16 @@ def migrate_unstuck_ema_spans(
     bounds = config.get("optimize", {}).get("bounds")
     coupled_search = []
     if isinstance(bounds, dict):
-        default_strategy_bounds = get_strategy_optimize_bounds(kind)
+        default_strategy_bounds = {
+            side: _price_spans(value, kind)
+            for side, value in get_strategy_optimize_bounds(kind).items()
+        }
         for side, keys in migrated.items():
             side_bounds = bounds.setdefault(side, {})
             unstuck_bounds = side_bounds.setdefault("unstuck", {})
-            strategy_bounds = side_bounds.get("strategy", {}).get(kind, {})
+            strategy_bounds = _price_spans(
+                side_bounds.get("strategy", {}).get(kind, {}), kind
+            )
             for key in keys:
                 old_bound = Bound.from_config(
                     f"{side}_{key}",
@@ -223,7 +237,9 @@ def migrate_unstuck_ema_spans(
             canonicalize_shared_bot_side(effective_side)
             for key in keys:
                 for old_path in (
-                    f"bot.{side}.strategy.{kind}.{key}",
+                    f"bot.{side}.strategy.{kind}."
+                    + ("entry." if kind == "trailing_martingale" else "")
+                    + key,
                     f"bot.{side}.{key}",
                 ):
                     new_path = f"bot.{side}.unstuck.{key}"

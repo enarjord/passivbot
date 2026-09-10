@@ -95,9 +95,15 @@ def normalize_config(
             "optimize": deepcopy(raw_optimize_snapshot),
         }
         apply_backward_compatibility_renames(raw_optimize_compat, verbose=False, tracker=None)
+        from .migrations.entry_ema import migrate_entry_ema_tree
+
+        migrate_entry_ema_tree(raw_optimize_compat)
         raw_optimize_snapshot = raw_optimize_compat["optimize"]
 
+    from .migrations.entry_ema import migrate_entry_ema_spans
     from .migrations.unstuck_ema import migrate_unstuck_ema_spans
+
+    migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(
         result,

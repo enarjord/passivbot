@@ -44,8 +44,6 @@ impl EmaGateMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleParams {
-    pub ema_span_0: f64,
-    pub ema_span_1: f64,
     pub volatility_ema_span_1h: f64,
     pub volatility_ema_span_1m: f64,
     pub entry: TrailingMartingaleEntryParams,
@@ -55,6 +53,8 @@ pub struct TrailingMartingaleParams {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleEntryParams {
+    pub ema_span_0: f64,
+    pub ema_span_1: f64,
     pub double_down_factor: f64,
     pub ema_gate_mode: EmaGateMode,
     pub initial_ema_dist: f64,
@@ -256,7 +256,7 @@ pub fn parse_strategy_params(
 
 pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
     match params {
-        StrategyParams::TrailingMartingale(params) => (params.ema_span_0, params.ema_span_1),
+        StrategyParams::TrailingMartingale(params) => (params.entry.ema_span_0, params.entry.ema_span_1),
         StrategyParams::EmaAnchor(params) => (params.ema_span_0, params.ema_span_1),
         StrategyParams::TrailingGridV7(params) => (params.ema_span_0, params.ema_span_1),
     }

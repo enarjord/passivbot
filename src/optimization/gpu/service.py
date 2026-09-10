@@ -2751,7 +2751,7 @@ def _build_multicoin_tm_coin_overrides(
                 matrix[coin_index, column] = matrix[
                     coin_index,
                     TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS.index(
-                        (strategy_key, (strategy_key,))
+                        (strategy_key, ("entry", strategy_key))
                     ),
                 ]
             elif strategy_key in unstuck_patch:

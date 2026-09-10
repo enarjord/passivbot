@@ -2198,6 +2198,19 @@ def add_arguments_recursively(
                 else parser
             )
             hidden_names = [f"--{full_name.replace('.', '_')}"]
+            if full_name.endswith(
+                tuple(f"trailing_martingale.entry.ema_span_{i}" for i in (0, 1))
+            ):
+                old_name = full_name.replace(
+                    "trailing_martingale.entry.ema_span_",
+                    "trailing_martingale.ema_span_",
+                )
+                hidden_names.extend(
+                    [f"--{old_name}", f"--{old_name.replace('.', '_')}"]
+                )
+                old_acronym = create_acronym(old_name, acronyms)
+                hidden_names.append(f"-{old_acronym}")
+                acronyms.add(old_acronym)
             if command is None or len(acronym) > 1:
                 hidden_names.append(f"-{acronym}")
             _register_argument(

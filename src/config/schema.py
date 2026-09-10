@@ -4,8 +4,10 @@ from .optimize_bounds import get_optimize_bounds_defaults
 from .strategy import get_all_strategy_defaults
 
 
-CONFIG_SCHEMA_VERSION = "v8.3.0"
-SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset({"v8.0.0", "v8.1.0", "v8.2.0"})
+CONFIG_SCHEMA_VERSION = "v8.4.0"
+SUPPORTED_PREVIOUS_CONFIG_SCHEMA_VERSIONS = frozenset(
+    {"v8.0.0", "v8.1.0", "v8.2.0", "v8.3.0"}
+)
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_martingale_long.json"
 # A symbol suspension is temporary policy, not an indefinite timestamp. This
 # generous bound also keeps hours-to-milliseconds conversion finite and well

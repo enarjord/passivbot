@@ -235,14 +235,16 @@ Key HSL analysis metrics:
 
 ### General Parameters for Long and Short
 
-- **ema_span_0**, **ema_span_1**:
+- **strategy.trailing_martingale.entry.ema_span_0**, **entry.ema_span_1**:
   - Spans are given in minutes.
   - Formula: `next_EMA = prev_EMA * (1 - alpha) + new_val * alpha`, where `alpha = 2 / (span + 1)`.
   - An additional EMA span is calculated as `(ema_span_0 * ema_span_1)**0.5`.
   - The three EMAs form an upper and lower EMA band:
     - `ema_band_lower = min(emas)`
     - `ema_band_upper = max(emas)`
-  - These bands are used for initial entries and auto unstuck closes.
+  - These bands govern entry gating, forager entry readiness, and one-way entry arbitration.
+  - Auto-unstuck uses its own `unstuck.ema_span_0/1`; ordinary trailing-martingale closes do not use the entry price band.
+  - Schema v8.4.0 migrates old strategy-root spans into `entry`; conflicting explicit new values win with warnings.
 - **n_positions**: Maximum number of positions to open. Set to `0` to disable long/short.
 - **total_wallet_exposure_limit**: Maximum exposure allowed.
   - Example: `total_wallet_exposure_limit = 0.75` means 75% of (unleveraged) wallet balance is used.
@@ -389,7 +391,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - `config.bot.long/short.strategy.trailing_martingale`:
       ```
       [
-        ema_span_0, ema_span_1, volatility_ema_span_1h, volatility_ema_span_1m,
+        entry.ema_span_0, entry.ema_span_1, volatility_ema_span_1h, volatility_ema_span_1m,
         entry.double_down_factor, entry.initial_ema_dist, entry.initial_qty_pct,
         entry.threshold_base_pct, entry.threshold_we_weight,
         entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,

@@ -336,7 +336,9 @@ def test_prep_backtest_args_matches_exact_override_to_active_alias(tmp_path, mon
 
 def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload():
     config = _base_config()
-    config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 321.0
+    config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "ema_span_0"
+    ] = 321.0
     config["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = 0.0123
     mss = _base_mss()
 
@@ -345,7 +347,7 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
     assert len(bot_params_list) == 1
     assert "ema_span_0" not in bot_params_list[0]["long"]
     assert "entry_grid_spacing_pct" not in bot_params_list[0]["short"]
-    assert strategy_params_list[0]["long"]["ema_span_0"] == 321.0
+    assert strategy_params_list[0]["long"]["entry"]["ema_span_0"] == 321.0
     assert strategy_params_list[0]["short"]["entry"]["threshold_base_pct"] == 0.0123
 
 

@@ -67,10 +67,15 @@ def couple_unstuck_ema_spans(config, pside):
         ]
     base = config["bot"][pside]
     strategy = base["strategy"][kind]
+    if kind == DEFAULT_STRATEGY_KIND:
+        strategy = strategy["entry"]
     targets = [("global", base, strategy)]
     for coin, patch in (config.get("coin_overrides") or {}).items():
         side_patch = patch.setdefault("bot", {}).setdefault(pside, {})
-        effective = {**strategy, **side_patch.get("strategy", {}).get(kind, {})}
+        patch_strategy = side_patch.get("strategy", {}).get(kind, {})
+        if kind == DEFAULT_STRATEGY_KIND:
+            patch_strategy = patch_strategy.get("entry", {})
+        effective = {**strategy, **patch_strategy}
         targets.append((coin, side_patch, effective))
     for coin, target, source in targets:
         for key in ("ema_span_0", "ema_span_1"):

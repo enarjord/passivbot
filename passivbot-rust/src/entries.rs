@@ -1495,6 +1495,8 @@ mod tests {
 
     fn make_entry_params() -> TrailingMartingaleEntryParams {
         TrailingMartingaleEntryParams {
+            ema_span_0: 0.0,
+            ema_span_1: 0.0,
             double_down_factor: 1.0,
             ema_gate_mode: EmaGateMode::Initial,
             threshold_base_pct: 0.01,
