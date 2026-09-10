@@ -141,6 +141,19 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
         and parts[3] != "*"
     ):
         parts = (*parts[:3], active_strategy_kind(config), *parts[3:])
+    if (
+        len(parts) >= 2
+        and (
+            parts[-2] == "trailing_martingale"
+            or (
+                len(parts) >= 3
+                and parts[-3:-1] == ("strategy", "*")
+                and active_strategy_kind(config) == "trailing_martingale"
+            )
+        )
+        and parts[-1] in ("ema_span_0", "ema_span_1")
+    ):
+        parts = (*parts[:-1], "entry", parts[-1])
     return tuple(parts)
 
 

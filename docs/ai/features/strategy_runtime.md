@@ -113,6 +113,13 @@ shared span cannot leak a projected strategy value into coin ranking.
 
 ## Trailing Martingale Semantics
 
+Trailing-martingale price spans belong to `entry.ema_span_0/1`. Schema v8.4.0 migrates
+old strategy-root leaves before hydration and before file/inline override merges; explicit
+new leaves win with warnings on conflicting values. Public optimizer bounds share the nested
+paths; internal optimizer keys and Metal columns retain `ema_span_0/1`. Entry subtree selectors
+include the horizons. EMA-anchor and trailing-grid-v7 paths are unchanged. Volatility horizons
+remain shared by entries and closes.
+
 Entries and closes use threshold/retracement fields.
 
 - `retracement_base_pct <= 0.0`: trailing disabled, use passive recursive limit-order behavior.

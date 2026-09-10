@@ -23,9 +23,11 @@ def config_for(kind="trailing_martingale"):
     config["optimize"]["enable_overrides"] = ["couple_unstuck_ema_spans"]
     config = parse_overrides(prepare_config(config, verbose=False), verbose=False)
     for side in ("long", "short"):
-        config["bot"][side]["strategy"][kind].update(
-            ema_span_0=17.25, ema_span_1=211.75
-        )
+        (
+            config["bot"][side]["strategy"][kind]["entry"]
+            if kind == "trailing_martingale"
+            else config["bot"][side]["strategy"][kind]
+        ).update(ema_span_0=17.25, ema_span_1=211.75)
         config["bot"][side]["unstuck"].update(ema_span_0=9999.5, ema_span_1=8888.5)
     return config
 
@@ -41,7 +43,13 @@ def test_coupled_candidates_drop_redundant_genes_and_materialize_effective_coin_
         "BTC": {
             "bot": {
                 "long": {
-                    "strategy": {kind: {"ema_span_0": 71.5}},
+                    "strategy": {
+                        kind: (
+                            {"entry": {"ema_span_0": 71.5}}
+                            if kind == "trailing_martingale"
+                            else {"ema_span_0": 71.5}
+                        )
+                    },
                     "unstuck": {"ema_span_0": 1.0, "ema_span_1": 2.0},
                 }
             }
@@ -131,7 +139,9 @@ def test_coupling_contract_ignores_derived_coin_values_but_tracks_mode_and_sourc
         "BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 4.5}}}}
     }
     first = build_evaluation_contract(config)
-    config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 501.25
+    config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "ema_span_0"
+    ] = 501.25
     assert build_evaluation_contract(config) == first
     config["coin_overrides"]["BTC"]["bot"]["long"]["strategy"] = {
         "trailing_martingale": {"ema_span_0": 71.5}
@@ -196,14 +206,22 @@ def test_gpu_coin_packing_preserves_dependency_when_only_one_strategy_span_is_pi
         "BTC": {
             "bot": {
                 side: {
-                    "strategy": {kind: {"ema_span_0": 71.5}},
+                    "strategy": {
+                        kind: (
+                            {"entry": {"ema_span_0": 71.5}}
+                            if kind == "trailing_martingale"
+                            else {"ema_span_0": 71.5}
+                        )
+                    },
                     "unstuck": {"ema_span_0": 4.0, "ema_span_1": 5.0},
                 }
             }
         }
     }
     strategy = deepcopy(config["bot"][side]["strategy"][kind])
-    strategy["ema_span_0"] = 71.5
+    (strategy["entry"] if kind == "trailing_martingale" else strategy)[
+        "ema_span_0"
+    ] = 71.5
     payload = SimpleNamespace(
         strategy_params_list=[{side: strategy}],
         bot_params_list=[
@@ -236,7 +254,7 @@ def test_coupled_warmup_tracks_strategy_bounds_and_ignores_migrated_unstuck_pins
     config["coin_overrides"] = {
         "BTC": {"bot": {"long": {"unstuck": {"ema_span_0": 900_000.5}}}}
     }
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][
+    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_span_0"
     ] = [17.25, 80_000.5]
     coupled = compute_optimizer_per_coin_warmup_minutes(config)
@@ -249,13 +267,17 @@ def test_anchored_search_derives_spans_from_selected_anchor_and_tunable_strategy
     from optimization.shape import build_optimization_shape
 
     config = config_for()
-    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][
+    config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["entry"][
         "ema_span_0"
     ] = [1.0, 1000.0]
     config["optimize"]["round_to_n_significant_digits"] = 6
     anchors = [deepcopy(config), deepcopy(config)]
-    anchors[0]["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 101.25
-    anchors[1]["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 401.75
+    anchors[0]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "ema_span_0"
+    ] = 101.25
+    anchors[1]["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "ema_span_0"
+    ] = 401.75
     install_anchored_fine_tune_plan(
         config, ["long.ema_span_1"], "<memory>", starting_configs_override=anchors
     )
@@ -294,7 +316,9 @@ def test_exact_suite_finalization_couples_after_context_overrides_without_mutati
 @pytest.mark.parametrize("bad", [0, -1, float("nan"), float("inf")])
 def test_coupling_fails_explicitly_for_invalid_strategy_spans(bad):
     config = config_for()
-    config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = bad
+    config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "ema_span_0"
+    ] = bad
     with pytest.raises(
         ValueError, match="couple_unstuck_ema_spans requires positive finite"
     ):
@@ -308,7 +332,7 @@ def test_scenario_override_file_is_resolved_before_materializing_coupled_spans(
 
     config = config_for()
     file_config = clean_config(config)
-    file_config["bot"]["long"]["strategy"]["trailing_martingale"].update(
+    file_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"].update(
         ema_span_0=71.25, ema_span_1=99.5
     )
     path = tmp_path / "coin.json"
@@ -381,6 +405,7 @@ def test_coupled_saved_scenarios_normalize_nested_and_legacy_aliases(overrides):
     saved["optimize"]["enable_overrides"] = []
     _apply_config_overrides(saved, saved["backtest"]["scenarios"][0]["overrides"])
     assert (
-        saved["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] == 71.25
+        saved["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"]
+        == 71.25
     )
     assert saved["bot"]["long"]["unstuck"]["ema_span_0"] == 71.25

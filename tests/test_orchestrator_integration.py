@@ -77,11 +77,11 @@ LEGACY_STRATEGY_KEY_MAP = {
 def adaptive_strategy_params(**overrides):
     """Create trailing_martingale strategy params for direct JSON orchestrator tests."""
     base = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "volatility_ema_span_1h": 0.0,
         "volatility_ema_span_1m": 60.0,
         "entry": {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
             "double_down_factor": 1.0,
             "initial_ema_dist": 0.0,
             "initial_qty_pct": 0.1,

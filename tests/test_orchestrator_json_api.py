@@ -98,11 +98,11 @@ LEGACY_STRATEGY_KEY_MAP = {
 
 def adaptive_strategy_params(**overrides):
     base = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "volatility_ema_span_1h": 0.0,
         "volatility_ema_span_1m": 60.0,
         "entry": {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
             "double_down_factor": 1.0,
             "ema_gate_mode": "initial",
             "initial_ema_dist": 0.0,

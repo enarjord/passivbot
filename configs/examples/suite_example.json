@@ -105,11 +105,11 @@
             },
             "strategy": {
                 "trailing_martingale": {
-                    "ema_span_0": 770,
-                    "ema_span_1": 210,
                     "volatility_ema_span_1h": 1690,
                     "volatility_ema_span_1m": 60.0,
                     "entry": {
+                        "ema_span_0": 770,
+                        "ema_span_1": 210,
                         "double_down_factor": 0.73,
                         "initial_ema_dist": 0.0097,
                         "initial_qty_pct": 0.0276,
@@ -180,11 +180,11 @@
             },
             "strategy": {
                 "trailing_martingale": {
-                    "ema_span_0": 100,
-                    "ema_span_1": 100,
                     "volatility_ema_span_1h": 672,
                     "volatility_ema_span_1m": 60.0,
                     "entry": {
+                        "ema_span_0": 100,
+                        "ema_span_1": 100,
                         "double_down_factor": 0.5,
                         "initial_ema_dist": -0.01,
                         "initial_qty_pct": 0.01,
@@ -221,7 +221,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.3.0",
+    "config_version": "v8.4.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -385,16 +385,6 @@
                 },
                 "strategy": {
                     "trailing_martingale": {
-                        "ema_span_0": [
-                            200,
-                            1440,
-                            10
-                        ],
-                        "ema_span_1": [
-                            200,
-                            1440,
-                            10
-                        ],
                         "volatility_ema_span_1h": [
                             672,
                             2016,
@@ -406,6 +396,16 @@
                             1
                         ],
                         "entry": {
+                            "ema_span_0": [
+                                200,
+                                1440,
+                                10
+                            ],
+                            "ema_span_1": [
+                                200,
+                                1440,
+                                10
+                            ],
                             "double_down_factor": [
                                 0.5,
                                 1,
@@ -614,16 +614,6 @@
                 },
                 "strategy": {
                     "trailing_martingale": {
-                        "ema_span_0": [
-                            200,
-                            1440,
-                            10
-                        ],
-                        "ema_span_1": [
-                            200,
-                            1440,
-                            10
-                        ],
                         "volatility_ema_span_1h": [
                             672,
                             2016,
@@ -635,6 +625,16 @@
                             1
                         ],
                         "entry": {
+                            "ema_span_0": [
+                                200,
+                                1440,
+                                10
+                            ],
+                            "ema_span_1": [
+                                200,
+                                1440,
+                                10
+                            ],
                             "double_down_factor": [
                                 0.5,
                                 1,
