@@ -308,16 +308,32 @@ async def test_red_supervisor_returns_to_recovery_when_refresh_invalidates_balan
 
 
 @pytest.mark.asyncio
-async def test_risk_event_sink_failure_cannot_change_recovery_or_leak_secrets(monkeypatch, caplog):
-    bot, _ = make_bot(monkeypatch)
+@pytest.mark.parametrize("raises", [True, False])
+async def test_risk_event_sink_failure_preserves_attempt_logs_and_terminal_stop(
+    monkeypatch, caplog, raises
+):
+    from passivbot_exceptions import FatalBotException
+    bot, clock = make_bot(monkeypatch)
+    bot.config["live"]["risk_input_max_attempts"] = 2
     bot.balance_raw = 0.0
     def fail(*args, **kwargs):
-        raise RuntimeError("api_key=should-never-appear")
+        if raises:
+            raise RuntimeError("api_key=should-never-appear")
+        return None
     bot._live_event_pipeline = SimpleNamespace(emit=fail, console_sink=object())
     bot.live_event_console_enabled = True
-    with caplog.at_level(logging.DEBUG):
+    with caplog.at_level(logging.WARNING):
         assert not await recovery.ensure_ready(bot)
-    assert bot._risk_input_recovery.reason == "current_balance_unavailable"
+        clock[0] = bot._risk_input_recovery.retry_at
+        with pytest.raises(FatalBotException, match="2/2"):
+            await recovery.ensure_ready(bot)
+    attempts = [record for record in caplog.records if "retry_count=" in record.message]
+    assert len(attempts) == 2
+    assert attempts[0].levelno == logging.WARNING
+    assert "retry_count=1" in attempts[0].message
+    assert attempts[-1].levelno == logging.ERROR
+    for detail in ("retry_count=2", "max_attempts=2", "balance_raw=0.0", "stop_without_restart"):
+        assert detail in attempts[-1].message
     assert "should-never-appear" not in caplog.text
 
 

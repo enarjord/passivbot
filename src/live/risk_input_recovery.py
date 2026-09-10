@@ -106,10 +106,11 @@ def _emit(bot, *, reason, status, details, level, exc=None):
         message=message,
         data=data,
     )
-    emit_event(bot, event)
+    emitted = emit_event(bot, event)
     pipeline = getattr(bot, "_live_event_pipeline", None)
     if not (
-        getattr(bot, "live_event_console_enabled", False)
+        emitted is not None
+        and getattr(bot, "live_event_console_enabled", False)
         and callable(getattr(pipeline, "emit", None))
         and getattr(pipeline, "console_sink", None) is not None
     ):
