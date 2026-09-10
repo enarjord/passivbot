@@ -109,7 +109,11 @@ User-facing behavior and configuration are documented in `../../equity_hard_stop
 A numeric current raw/sizing balance that is non-finite or non-positive, or an invalid balance
 in the required reconstructed HSL history, is explicitly unavailable for live risk evaluation.
 Python keeps the process alive and refreshes authoritative account/fill state instead of consuming
-the restart budget. Startup remains unready; runtime ordinary planning waits. No balance is
+the full-bot restart budget. Recovery has its own finite budget: `live.risk_input_max_attempts`
+(default 10, integer >= 1) counts failed attempts, including the first failure, per episode.
+The final allowed failure raises a terminal `FatalBotException`, so cleanup runs and the process
+stops without another full-bot restart. A value of 1 stops at the first failure. There is no
+unlimited setting. Startup remains unready; runtime ordinary planning waits. No balance is
 clamped to a positive substitute, no required history is discarded, and HSL remains enabled.
 Malformed configuration, payload types/shapes, and unrelated validation errors retain their strict
 failure policy. Rust and individual HSL sample consumers keep their positive-balance guards.
@@ -123,7 +127,13 @@ inputs; the panic planner also requires positive current balances. Deferral does
 replacement strategy orders or new HSL state.
 
 `risk.input.status` reports the cause, bounded balance values (non-finite values are `null`), first
-invalid historical timestamp/value, invalid-row count, replay window, retry count and delay. It
-emits a warning on entry/reason change and at most every five minutes for an unchanged reason,
-then a recovery event after successful input validation and HSL initialization/check. Runtime
-readiness state is retry scheduling only and is not persisted across process restarts.
+invalid historical timestamp/value, invalid-row count, replay window, failed-attempt count, limit
+and delay. Every failed attempt emits a warning; exhaustion emits an error with
+`action=stop_without_restart` and zero retry delay. The first and final failures include bounded
+frame chains without raw exception text, payloads, or locals. Polls during backoff spend no attempt
+and emit no repeated warning. Changed reasons share the same count and deadline; they cannot renew
+the budget. Successful startup initialization, a successful runtime execution operation, or a
+successful active HSL supervisor pass emits recovery and resets the episode. Passing the early
+runtime precheck alone does not reset it, since later risk consumers can still reject inputs.
+Unrelated readiness failures keep their existing policy. This state is not persisted across
+process restarts; exhausted recovery never asks the outer restart loop to create a new instance.

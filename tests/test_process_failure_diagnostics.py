@@ -86,7 +86,8 @@ def test_diagnostic_projection_failure_keeps_failure_summary(caplog, monkeypatch
     def broken(_exc):
         raise RuntimeError("diagnostic failure")
 
-    monkeypatch.setattr(pb, "_bounded_traceback_detail_inner", broken)
+    from live import diagnostic_safety
+    monkeypatch.setattr(diagnostic_safety, "bounded_traceback_detail_inner", broken)
     with caplog.at_level(logging.ERROR):
         pb._log_process_failure(
             "passivbot fatal error", FatalBotException("SECRET"), action="stop"

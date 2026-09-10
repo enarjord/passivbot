@@ -447,6 +447,7 @@ def get_template_config():
                 "order_replacement_churn_gate_window_minutes": 10.0,
                 "pnls_max_lookback_days": 30.0,
                 "recv_window_ms": 5000,
+                "risk_input_max_attempts": 10,
                 "startup_phase_budgets": {},
                 "strategy_kind": "trailing_martingale",
                 "time_in_force": "good_till_cancelled",

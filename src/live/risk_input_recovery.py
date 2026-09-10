@@ -11,6 +11,9 @@ from time import monotonic
 
 import numpy as np
 
+from config.access import require_live_value
+from passivbot_exceptions import FatalBotException
+from live.diagnostic_safety import bounded_traceback_detail
 from live.event_bus import EventTypes, ReasonCodes, LiveEvent, emit_event, format_console_event
 
 
@@ -74,11 +77,21 @@ class RecoveryState:
     reason: str = ""
     attempts: int = 0
     retry_at: float = 0.0
-    warning_at: float = 0.0
+    max_attempts: int = 10
 
 
-def _emit(bot, *, reason, status, details, level):
+def _emit(bot, *, reason, status, details, level, exc=None):
     message = " ".join(f"{key}={value}" for key, value in details.items())
+    if status != "succeeded":
+        requirement = (
+            "Required reconstructed HSL balances must be finite and positive."
+            if reason == ReasonCodes.HSL_HISTORY_BALANCE_UNAVAILABLE
+            else "Current raw and sizing balances must be finite and positive."
+        )
+        message = f"{requirement} {message}"
+    data = dict(details)
+    if exc is not None:
+        data["traceback"] = bounded_traceback_detail(exc)
     event = LiveEvent(
         EventTypes.RISK_INPUT_STATUS,
         level=level,
@@ -91,7 +104,7 @@ def _emit(bot, *, reason, status, details, level):
         status=status,
         reason_code=reason,
         message=message,
-        data=details,
+        data=data,
     )
     emit_event(bot, event)
     pipeline = getattr(bot, "_live_event_pipeline", None)
@@ -101,30 +114,64 @@ def _emit(bot, *, reason, status, details, level):
         and getattr(pipeline, "console_sink", None) is not None
     ):
         logging.log(
-            logging.WARNING if level == "warning" else logging.INFO,
+            getattr(logging, level.upper()),
             format_console_event(event),
         )
 
+    if exc is not None:
+        trace = data["traceback"]
+        lines = ["Risk input traceback (bounded frames; no locals or raw exception text):"]
+        for item in trace["exceptions"]:
+            lines.append(f"  {item['relation']}: {item['error_type']}")
+            for frame in item["frames"]:
+                lines.append(f"    {frame['file']}:{frame['line']} in {frame['function']}")
+        if trace["truncated"]:
+            lines.append("  ... traceback truncated")
+        logging.log(getattr(logging, level.upper()), "%s", "\n".join(lines))
+
 
 def defer(bot, exc):
+    """Count failed attempts, never readiness polls or changing failure reasons."""
     now = monotonic()
     state = getattr(bot, "_risk_input_recovery", None)
-    changed = state is None or state.reason != exc.reason
-    if changed:
-        state = RecoveryState(reason=exc.reason)
+    if state is None:
+        state = RecoveryState(
+            max_attempts=require_live_value(bot.config, "risk_input_max_attempts")
+        )
         bot._risk_input_recovery = state
+    elif now < state.retry_at:
+        return
+    state.reason = exc.reason
     state.attempts += 1
+    exhausted = state.attempts >= state.max_attempts
     cap = 300.0 if exc.reason == ReasonCodes.HSL_HISTORY_BALANCE_UNAVAILABLE else 60.0
-    delay = min(cap, 5.0 * 2 ** min(state.attempts - 1, 6))
+    delay = 0.0 if exhausted else min(cap, 5.0 * 2 ** min(state.attempts - 1, 6))
     state.retry_at = now + delay
-    if changed or now >= state.warning_at:
-        state.warning_at = now + 300.0
-        _emit(bot, reason=exc.reason, status="deferred", level="warning", details={
-            **exc.details,
+    _emit(bot, reason=exc.reason, status="failed" if exhausted else "deferred",
+          level="error" if exhausted else "warning", details={
+        **exc.details,
+        "retry_count": state.attempts,
+        "max_attempts": state.max_attempts,
+        "retry_delay_seconds": delay,
+        "action": "stop_without_restart" if exhausted else "block_ordinary_trading_and_retry",
+    }, exc=exc if state.attempts == 1 or exhausted else None)
+    if exhausted:
+        raise FatalBotException(
+            f"Risk input recovery exhausted after {state.attempts}/{state.max_attempts} "
+            f"failed attempts: {exc.reason}; stopping without automatic restart"
+        ) from exc
+
+
+def mark_ready(bot):
+    """Reset only after the owner completes its risk-consuming operation."""
+    state = getattr(bot, "_risk_input_recovery", None)
+    if state is not None:
+        _emit(bot, reason=state.reason, status="succeeded", level="info", details={
             "retry_count": state.attempts,
-            "retry_delay_seconds": delay,
-            "action": "block_ordinary_trading_and_retry",
+            "max_attempts": state.max_attempts,
+            "action": "resume_readiness_checks",
         })
+        bot._risk_input_recovery = None
 
 
 async def ensure_ready(bot, *, startup=False):
@@ -133,8 +180,7 @@ async def ensure_ready(bot, *, startup=False):
     try:
         validate_current_balances(bot)
     except RiskInputUnavailable as exc:
-        if state is None or state.reason != exc.reason or monotonic() >= state.retry_at:
-            defer(bot, exc)
+        defer(bot, exc)
         return False
     if state is not None and monotonic() < state.retry_at:
         return False
@@ -150,12 +196,6 @@ async def ensure_ready(bot, *, startup=False):
     except RiskInputUnavailable as exc:
         defer(bot, exc)
         return False
-    if state is not None:
-        _emit(bot, reason=state.reason, status="succeeded", level="info", details={
-            "retry_count": state.attempts,
-            "action": "resume_readiness_checks",
-        })
-        bot._risk_input_recovery = None
     return True
 
 
@@ -176,9 +216,7 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             )
         except RiskInputUnavailable as exc:
             # A protective cooldown restart may itself require replay.
-            state = getattr(bot, "_risk_input_recovery", None)
-            if state is None or state.reason != exc.reason:
-                defer(bot, exc)
+            defer(bot, exc)
     await bot._monitor_flush_snapshot()
     await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
 
@@ -188,6 +226,7 @@ async def wait_for_startup(bot):
     authoritative_ready = await bot.refresh_authoritative_state()
     while not bot.stop_signal_received:
         if authoritative_ready and await ensure_ready(bot, startup=True):
+            mark_ready(bot)
             return
         await protect_and_wait(bot)
         if bot.stop_signal_received:

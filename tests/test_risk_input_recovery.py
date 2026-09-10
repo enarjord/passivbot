@@ -13,6 +13,7 @@ def make_bot(monkeypatch, *, hsl=True):
     clock = [1000.0]
     monkeypatch.setattr(recovery, "monotonic", lambda: clock[0])
     bot = SimpleNamespace(
+        config={"live": {"risk_input_max_attempts": 10}},
         balance=100.0,
         balance_raw=100.0,
         stop_signal_received=False,
@@ -55,6 +56,7 @@ async def test_current_balance_blocks_risk_until_valid(monkeypatch, hsl, field, 
     bot._run_latched_hsl_supervisor_if_active.assert_not_awaited()
     setattr(bot, field, 100.0)
     assert await recovery.ensure_ready(bot)
+    recovery.mark_ready(bot)
     assert bot._risk_input_recovery is None
     assert bot._equity_hard_stop_check.await_count == int(hsl)
 
@@ -77,7 +79,7 @@ async def test_startup_refreshes_zero_to_funded_without_restart(monkeypatch, cap
     assert len(refreshes) == 4
     bot._equity_hard_stop_start_coin_history_replay.assert_awaited_once()
     assert bot._risk_input_recovery is None
-    assert len([r for r in caplog.records if r.levelno == logging.WARNING]) == 1
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING and "retry_count=" in r.message]) == 2
     assert "current_balance_unavailable" in caplog.text
     assert "resume_readiness_checks" in caplog.text
 
@@ -99,6 +101,7 @@ async def test_startup_does_not_replay_on_failed_refresh_and_stops_cleanly(monke
 @pytest.mark.parametrize("startup", [True, False])
 async def test_bad_history_backoff_diagnostics_protection_and_recovery(monkeypatch, caplog, startup):
     bot, clock = make_bot(monkeypatch)
+    bot.config["live"]["risk_input_max_attempts"] = 11
     check = (bot._equity_hard_stop_start_coin_history_replay if startup
              else bot._equity_hard_stop_check)
     check.side_effect = invalid_history
@@ -121,6 +124,7 @@ async def test_bad_history_backoff_diagnostics_protection_and_recovery(monkeypat
         assert delays == [5, 10, 20, 40, 80, 160, 300, 300, 300, 300]
         assert bot._run_halted_hsl_protection_if_active.await_count == 10
         assert bot._run_latched_hsl_supervisor_if_active.await_count == 10
+        recovery.mark_ready(bot)
         assert bot._risk_input_recovery is None
         assert bot._live_event_pipeline.flush(timeout=2.0)
         events = [e for e in sink.events if e.event_type == EventTypes.RISK_INPUT_STATUS]
@@ -129,7 +133,7 @@ async def test_bad_history_backoff_diagnostics_protection_and_recovery(monkeypat
         assert events[0].data["first_invalid_timestamp_ms"] == 60_000
         assert events[0].data["invalid_rows"] == 1
         assert events[-1].status == "succeeded"
-        assert len(events) < check.await_count
+        assert len(events) == check.await_count
     finally:
         assert bot._live_event_pipeline.close(timeout=2.0)
 
@@ -220,6 +224,7 @@ async def test_scoped_restart_respects_retry_deadline_and_preserves_state(monkey
 async def test_real_coin_startup_replay_recovers_from_invalid_history(monkeypatch):
     from test_hsl_coin_mode import make_coin_bot
     bot = make_coin_bot()
+    bot.config["live"]["risk_input_max_attempts"] = 10
     clock = [1000.0]
     monkeypatch.setattr(recovery, "monotonic", lambda: clock[0])
     payload = {"hsl_coin_compact_replay": {
@@ -235,6 +240,7 @@ async def test_real_coin_startup_replay_recovers_from_invalid_history(monkeypatc
     await bot._equity_hard_stop_coin_replay_task
     assert bot._equity_hard_stop_coin_protective_ready
     assert bot._equity_hard_stop_coin_initialized
+    recovery.mark_ready(bot)
     assert bot._risk_input_recovery is None
 
 
@@ -256,15 +262,20 @@ async def test_aggregate_invalid_history_preserves_protection(mode):
 
 
 @pytest.mark.asyncio
-async def test_current_balance_failure_supersedes_history_retry_immediately(monkeypatch):
+async def test_current_balance_failure_during_history_backoff_does_not_renew_budget(monkeypatch):
     bot, clock = make_bot(monkeypatch)
     bot._equity_hard_stop_check.side_effect = invalid_history
     assert not await recovery.ensure_ready(bot)
     bot._risk_input_recovery.retry_at = clock[0] + 300.0
     bot.balance_raw = 0.0
     assert not await recovery.ensure_ready(bot)
+    assert bot._risk_input_recovery.attempts == 1
+    assert bot._risk_input_recovery.retry_at == clock[0] + 300.0
+    clock[0] += 300.0
+    assert not await recovery.ensure_ready(bot)
     assert bot._risk_input_recovery.reason == "current_balance_unavailable"
-    assert bot._risk_input_recovery.retry_at == clock[0] + 5.0
+    assert bot._risk_input_recovery.attempts == 2
+    assert bot._risk_input_recovery.retry_at == clock[0] + 10.0
     bot._equity_hard_stop_check.assert_awaited_once()
 
 
@@ -308,3 +319,129 @@ async def test_risk_event_sink_failure_cannot_change_recovery_or_leak_secrets(mo
         assert not await recovery.ensure_ready(bot)
     assert bot._risk_input_recovery.reason == "current_balance_unavailable"
     assert "should-never-appear" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("startup", [True, False])
+@pytest.mark.parametrize("failure", ["current", "history", "alternating"])
+async def test_budget_exhaustion_is_terminal_and_diagnostics_are_safe(
+    monkeypatch, caplog, startup, failure
+):
+    from passivbot_exceptions import FatalBotException
+    bot, clock = make_bot(monkeypatch)
+    check = (bot._equity_hard_stop_start_coin_history_replay if startup
+             else bot._equity_hard_stop_check)
+    check.side_effect = invalid_history
+    with caplog.at_level(logging.INFO):
+        for attempt in range(1, 11):
+            bot.balance_raw = 0.0 if failure == "current" or (
+                failure == "alternating" and attempt % 2 == 0
+            ) else 100.0
+            if attempt == 10:
+                with pytest.raises(FatalBotException, match="10/10") as raised:
+                    await recovery.ensure_ready(bot, startup=startup)
+                assert isinstance(raised.value.__cause__, recovery.RiskInputUnavailable)
+            else:
+                assert not await recovery.ensure_ready(bot, startup=startup)
+                # Polls and a different reason inside the deadline spend no attempt.
+                before = bot._risk_input_recovery.attempts
+                assert not await recovery.ensure_ready(bot, startup=startup)
+                assert bot._risk_input_recovery.attempts == before
+                clock[0] = bot._risk_input_recovery.retry_at
+    attempts = [r for r in caplog.records if "retry_count=" in r.message]
+    assert len(attempts) == 10
+    assert attempts[-1].levelno == logging.ERROR
+    assert "max_attempts=10" in attempts[-1].message
+    assert "retry_delay_seconds=0.0" in attempts[-1].message
+    assert "stop_without_restart" in attempts[-1].message
+    assert caplog.text.count("Risk input traceback (") == 2
+    assert "src/live/risk_input_recovery.py:" in caplog.text
+    assert "in validate_" in caplog.text
+    assert "resume_readiness_checks" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_success_resets_episode_but_precheck_alone_does_not(monkeypatch):
+    bot, clock = make_bot(monkeypatch)
+    bot.balance_raw = 0.0
+    assert not await recovery.ensure_ready(bot)
+    clock[0] = bot._risk_input_recovery.retry_at
+    bot.balance_raw = 100.0
+    assert await recovery.ensure_ready(bot)
+    assert bot._risk_input_recovery.attempts == 1
+    recovery.mark_ready(bot)
+    assert bot._risk_input_recovery is None
+    bot.balance_raw = 0.0
+    assert not await recovery.ensure_ready(bot)
+    assert bot._risk_input_recovery.attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_permanent_failure_stops_at_configured_limit(monkeypatch):
+    from passivbot_exceptions import FatalBotException
+    bot, clock = make_bot(monkeypatch, hsl=False)
+    bot.config["live"]["risk_input_max_attempts"] = 3
+    bot.balance_raw = 0.0
+    with pytest.raises(FatalBotException, match="3/3"):
+        await recovery.wait_for_startup(bot)
+    assert clock[0] == 1015.0  # Initial failure plus retries after 5 and 10 seconds.
+    assert bot.refresh_authoritative_state.await_count == 4
+    assert bot._risk_input_recovery.attempts == 3
+
+
+@pytest.mark.asyncio
+async def test_protective_failures_share_budget_and_tracebacks_exclude_raw_text(monkeypatch, caplog):
+    from passivbot_exceptions import FatalBotException
+    bot, clock = make_bot(monkeypatch)
+    bot.config["live"]["risk_input_max_attempts"] = 2
+    def fail():
+        try:
+            raise ValueError("api_key=PRIVATE_VALUE")
+        except ValueError:
+            invalid_history()
+    bot._run_halted_hsl_protection_if_active.side_effect = fail
+    with caplog.at_level(logging.WARNING):
+        await recovery.protect_and_wait(bot)
+        with pytest.raises(FatalBotException, match="2/2"):
+            await recovery.protect_and_wait(bot)
+    assert "PRIVATE_VALUE" not in caplog.text
+    assert "ValueError" in caplog.text
+    assert "invalid_history" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_exhaustion_exits_outer_lifecycle_without_full_restart(monkeypatch, caplog):
+    import passivbot as pb
+    from config import get_template_config
+    bot, clock = make_bot(monkeypatch, hsl=False)
+    config = get_template_config()
+    config["live"]["risk_input_max_attempts"] = 2
+    bot.config = config
+    bot.balance_raw = 0.0
+    bot.start_bot = AsyncMock()
+    async def start():
+        await recovery.wait_for_startup(bot)
+    bot.start_bot.side_effect = start
+    bot.cleanup_for_restart = AsyncMock()
+    from unittest.mock import Mock
+    setup = Mock(side_effect=[bot, AssertionError("must not recreate bot")])
+    monkeypatch.setattr(pb, "bot", None, raising=False)
+    monkeypatch.setattr(pb.sys, "argv", ["passivbot"])
+    monkeypatch.setattr(pb, "configure_logging", lambda **kwargs: None)
+    monkeypatch.setattr(pb, "load_input_config", lambda *a: (config, None, None))
+    monkeypatch.setattr(pb, "prepare_config", lambda *a, **k: config)
+    monkeypatch.setattr(pb, "resolve_live_log_file_settings", lambda *a, **k: {"log_file": None})
+    monkeypatch.setattr(pb, "configure_custom_endpoint_loader", lambda *a, **k: None)
+    monkeypatch.setattr(pb, "load_user_info", lambda *a: {"exchange": "fake"})
+    monkeypatch.setattr(pb, "load_markets", AsyncMock())
+    monkeypatch.setattr(pb, "parse_overrides", lambda c, **k: c)
+    monkeypatch.setattr(pb, "compile_runtime_config", lambda c, **k: c)
+    monkeypatch.setattr(pb, "setup_bot", setup)
+    with caplog.at_level(logging.INFO):
+        await pb._run_live({})
+    setup.assert_called_once()
+    bot.cleanup_for_restart.assert_awaited_once()
+    assert clock[0] == 1005.0
+    assert "stop_without_restart" in caplog.text
+    assert "action=stop" in caplog.text
+    assert "restarting bot" not in caplog.text

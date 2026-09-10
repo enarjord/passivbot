@@ -262,6 +262,11 @@ def validate_config(
         raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
     if fee_conversion_max_age_ms < 0:
         raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
+    risk_attempts = config["live"]["risk_input_max_attempts"]
+    if isinstance(risk_attempts, bool) or not isinstance(risk_attempts, int):
+        raise TypeError("config.live.risk_input_max_attempts must be an integer")
+    if risk_attempts < 1:
+        raise ValueError("config.live.risk_input_max_attempts must be >= 1")
     exchange_symbol_cooldown_raw = config["live"][
         "exchange_symbol_unavailable_cooldown_hours"
     ]

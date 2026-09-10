@@ -2915,7 +2915,7 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10}}
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -13558,9 +13558,11 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["current_balance", "history", "late_balance"])
-async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monkeypatch, failure):
+@pytest.mark.parametrize("permanent", [False, True])
+async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monkeypatch, failure, permanent):
     from live import risk_input_recovery as recovery
     bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"risk_input_max_attempts": 3}}
     bot.balance = bot.balance_raw = 100.0
     bot.stop_signal_received = False
     bot.debug_mode = True
@@ -13583,11 +13585,11 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
 
     async def refresh():
         cycle[0] += 1
-        bot.balance = bot.balance_raw = 0.0 if failure == "current_balance" and cycle[0] < 4 else 100.0
+        bot.balance = bot.balance_raw = 0.0 if failure == "current_balance" and (permanent or cycle[0] < 4) else 100.0
         return True
 
     async def check():
-        if cycle[0] < 4:
+        if permanent or cycle[0] < 4:
             recovery.validate_history_balances([60_000], [-1.0], current_balance=100.0)
 
     async def sleep(seconds, *, stage):
@@ -13595,7 +13597,7 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
         assert cycle[0] < 6
 
     async def execute(*, prepare_cycle):
-        if failure == "late_balance" and cycle[0] == 1:
+        if failure == "late_balance" and (permanent or cycle[0] == 1):
             # Models a refreshed account losing its positive balance during planning.
             recovery.validate_balances(0.0, 0.0)
         assert cycle[0] >= (2 if failure == "late_balance" else 4)
@@ -13607,6 +13609,12 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
     bot.prepare_planning_universe = AsyncMock()
     bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
     bot.execute_to_exchange = AsyncMock(side_effect=execute)
+    if permanent:
+        with pytest.raises(FatalBotException, match="3/3"):
+            await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
+        assert bot._risk_input_recovery.attempts == 3
+        bot.restart_bot_on_too_many_errors.assert_not_awaited()
+        return
     result = await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
     assert result == {"executed_cycle": 2 if failure == "late_balance" else 4}
     assert bot.prepare_planning_universe.await_count == (2 if failure == "late_balance" else 1)
@@ -13622,7 +13630,7 @@ async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch
     bot._runtime_manifest_written = True
     bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10}}
     bot.user_info = {"exchange": "fake"}
     bot.stop_signal_received = False
     bot.debug_mode = True

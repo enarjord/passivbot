@@ -642,10 +642,15 @@ converting it to zero. Totals may be summed across compatible windows; maxima re
 
 ### Risk input readiness
 
-`risk.input.status` reports entry into or recovery from the live balance-input readiness gate.
-The producer in `live/risk_input_recovery.py` emits only code-owned reason/action strings and bounded
+`risk.input.status` reports live balance-input readiness: `deferred` blocks ordinary planning,
+`succeeded` reports recovery, and `failed` reports terminal exhaustion of the local attempt budget.
+The producer in `live/risk_input_recovery.py` emits code-owned reason/action strings and bounded
 numeric diagnostics: current raw/sizing balances, first invalid replay timestamp/balance, invalid
-row count, replay start/end, retry count and delay. Non-finite numbers become null. Raw payloads and
-exception text are excluded. Deferred status blocks ordinary planning; succeeded status reports
-recovery to the remaining readiness checks. Console warnings coalesce unchanged reasons for five
-minutes; recovery is immediate. See `equity_hard_stop_loss.md` for retry/protection policy.
+row count, replay start/end, `retry_count` (failed attempts including the initial failure),
+`max_attempts`, and `retry_delay_seconds`. Non-finite numbers become null. Each counted failure
+emits a warning, except the final failure which emits an error with `action=stop_without_restart`
+and zero delay. The first and final failures also attach a bounded `traceback` frame chain and
+log its frame-only text representation. Raw payloads, exception text, and locals are excluded.
+Readiness polls inside the retry deadline neither increment the count nor repeat the warning.
+Recovery is immediate after the owning operation succeeds. See `equity_hard_stop_loss.md` for
+retry, terminal-stop, and protection policy.

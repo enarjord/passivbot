@@ -98,7 +98,8 @@ symbol-scoped requirements are fresh, even if unrelated strategy surfaces are un
 
 Numeric non-positive/non-finite current balances and unusable historical HSL balance denominators
 have an explicit live readiness policy in `features/equity_hard_stop_loss.md`: pause ordinary
-planning, retain valid protection, refresh and retry with capped backoff, and expose recovery.
+planning, retain valid protection, refresh and retry with capped backoff and a finite per-episode
+attempt budget, and expose recovery. Exhaustion stops terminally without full-bot auto-restart.
 This is unavailability, not a substitute input or permission to ignore Rust validation. Shape/type
 errors, malformed configuration, and unrelated validation errors are outside this policy.
 

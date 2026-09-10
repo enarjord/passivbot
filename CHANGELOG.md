@@ -4,11 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Live startup and trading now wait and retry with clear risk diagnostics when current balances
-  or required HSL replay balances cannot support risk evaluation, instead of crashing or exhausting
-  the restart budget. Ordinary planning resumes automatically after valid inputs recover; existing
-  HSL protection is retained and may act only when its own inputs are valid. Malformed payloads and
-  configuration remain errors; balances and required history are never substituted or discarded.
+- Risk-input recovery now stops after `live.risk_input_max_attempts` failed attempts (default 10)
+  per recovery episode, without entering the full-bot restart loop. Each failed attempt logs its
+  count, limit, safe balance diagnostics, and retry delay; the first and final failures include
+  bounded tracebacks. Changing failure reasons or passing an early check does not renew the budget.
+  Ordinary trading resumes after successful recovery; valid HSL protection remains available while
+  waiting. Invalid balances are never substituted and required history is never discarded.
 
 - Trailing-martingale price EMA spans now live at
   `bot.<side>.strategy.trailing_martingale.entry.ema_span_0/1` (schema v8.4.0).
