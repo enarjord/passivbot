@@ -121,6 +121,7 @@ def test_default_example_config_loads_with_grouped_shape_and_live_execution_sett
     assert "market_orders_allowed" in loaded["live"]
     assert "market_order_near_touch_threshold" in loaded["live"]
     assert "pnls_max_lookback_days" in loaded["live"]
+    assert loaded["live"]["risk_input_max_attempts"] == 10
 
 
 def test_default_trailing_martingale_long_example_matches_template_and_rust_defaults():
@@ -2220,3 +2221,18 @@ def test_live_reserved_user_alias_parses_short_and_long():
 
     assert getattr(parsed_short, "live.user") == "binance_01"
     assert getattr(parsed_long, "live.user") == "bybit_02"
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, 1.5, 10.0, "10", None, float("inf"), float("nan")])
+def test_risk_input_attempt_budget_rejects_invalid_values(value):
+    config = get_template_config()
+    config["live"]["risk_input_max_attempts"] = value
+    with pytest.raises((TypeError, ValueError), match="risk_input_max_attempts"):
+        validate_config(config, verbose=False)
+
+
+def test_risk_input_attempt_budget_default_and_single_attempt():
+    config = get_template_config()
+    assert config["live"]["risk_input_max_attempts"] == 10
+    config["live"]["risk_input_max_attempts"] = 1
+    validate_config(config, verbose=False)

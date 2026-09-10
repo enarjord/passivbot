@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+from typing import Any
 import re
 import sys
 
@@ -375,3 +378,85 @@ def bounded_exchange_error_context(exc: BaseException) -> dict[str, str]:
     for key, value in bounded_exchange_error_context_from_mapping(payload).items():
         result.setdefault(key, value)
     return result
+
+
+def bounded_traceback_detail_inner(exc: BaseException) -> dict[str, Any]:
+    """Return a durable frame chain without exception text, locals, or source lines."""
+    exceptions: list[dict[str, Any]] = []
+    visited: set[int] = set()
+    current: BaseException | None = exc
+    relation = "raised"
+    total_frames = 0
+    truncated = False
+    source_root = Path(__file__).resolve().parents[2]
+    while current is not None and id(current) not in visited:
+        if len(exceptions) >= 8:
+            truncated = True
+            break
+        visited.add(id(current))
+        frames: list[dict[str, Any]] = []
+        tb = current.__traceback__
+        while tb is not None:
+            if total_frames >= 64:
+                truncated = True
+                break
+            raw_filename = str(tb.tb_frame.f_code.co_filename)
+            try:
+                resolved = Path(raw_filename).resolve()
+                relative = resolved.relative_to(source_root)
+                filename = relative.as_posix()
+            except (OSError, RuntimeError, ValueError):
+                filename = os.path.basename(raw_filename)
+            if not re.fullmatch(r"[A-Za-z0-9_./<>-]{1,240}", filename):
+                filename = os.path.basename(raw_filename)
+            if not re.fullmatch(r"[A-Za-z0-9_./<>-]{1,240}", filename):
+                filename = "unknown"
+            function = str(tb.tb_frame.f_code.co_name)
+            if not re.fullmatch(r"[A-Za-z0-9_<>.-]{1,96}", function):
+                function = "unknown"
+            frames.append(
+                {
+                    "file": filename,
+                    "function": function,
+                    "line": max(0, int(tb.tb_lineno)),
+                }
+            )
+            total_frames += 1
+            tb = tb.tb_next
+        exceptions.append(
+            {
+                "relation": relation,
+                "error_type": bounded_exception_type(current),
+                "frames": frames,
+            }
+        )
+        if current.__cause__ is not None:
+            current = current.__cause__
+            relation = "cause"
+        elif current.__context__ is not None and not current.__suppress_context__:
+            current = current.__context__
+            relation = "context"
+        else:
+            current = None
+    return {
+        "exceptions": exceptions,
+        "frame_count": total_frames,
+        "truncated": truncated,
+        "includes_exception_text": False,
+        "includes_locals": False,
+    }
+
+
+def bounded_traceback_detail(exc: BaseException) -> dict[str, Any]:
+    """Isolate optional traceback projection from the execution failure policy."""
+    try:
+        return bounded_traceback_detail_inner(exc)
+    except BaseException:
+        return {
+            "exceptions": [],
+            "frame_count": 0,
+            "truncated": True,
+            "unavailable_reason": "projection_failed",
+            "includes_exception_text": False,
+            "includes_locals": False,
+        }

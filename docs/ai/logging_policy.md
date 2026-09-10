@@ -164,3 +164,8 @@ visibly rather than being ignored.
 4. Does sink failure remain isolated from trading behavior?
 5. Is each INFO record a new operator fact, transition, action, or bounded summary?
 6. Do steady-state logical-record and displayed-row measurements satisfy the console budget?
+
+Numbered failures that advance the finite risk-input recovery budget each emit one warning (the
+final attempt emits an error), even within five minutes. Readiness polls during backoff do not
+advance this budget or repeat the warning. First and final failures include bounded frame-only
+tracebacks. See `features/equity_hard_stop_loss.md` for the episode and terminal-stop contract.
