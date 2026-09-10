@@ -461,3 +461,44 @@ async def test_exhaustion_exits_outer_lifecycle_without_full_restart(monkeypatch
     assert "stop_without_restart" in caplog.text
     assert "action=stop" in caplog.text
     assert "restarting bot" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("console_fails", [False, True])
+async def test_real_pipeline_risk_attempt_delivery_and_failure_fallback(
+    monkeypatch, caplog, console_fails
+):
+    from live.event_bus import ConsoleSummarySink
+    from passivbot_exceptions import FatalBotException
+    bot, clock = make_bot(monkeypatch)
+    bot.config["live"]["risk_input_max_attempts"] = 2
+    bot.balance_raw = 0.0
+    class BrokenSink:
+        def write(self, event):
+            raise RuntimeError("api_key=CONSOLE_SECRET")
+    structured = ListEventSink()
+    pipeline = LiveEventPipeline(
+        console_sink=BrokenSink() if console_fails else ConsoleSummarySink(),
+        structured_sinks=[structured], monitor_sinks=[],
+    )
+    bot._live_event_pipeline = pipeline
+    bot.live_event_console_enabled = True
+    try:
+        with caplog.at_level(logging.WARNING):
+            assert not await recovery.ensure_ready(bot)
+            clock[0] = bot._risk_input_recovery.retry_at
+            with pytest.raises(FatalBotException, match="2/2"):
+                await recovery.ensure_ready(bot)
+        attempts = [r for r in caplog.records if "retry_count=" in r.message]
+        assert len(attempts) == 2  # No duplicate on healthy console delivery.
+        assert attempts[0].levelno == logging.WARNING
+        assert attempts[-1].levelno == logging.ERROR
+        for detail in ("retry_count=2", "max_attempts=2", "balance_raw=0.0", "stop_without_restart"):
+            assert detail in attempts[-1].message
+        assert "CONSOLE_SECRET" not in caplog.text
+        assert pipeline.flush(timeout=2.0)
+        events = [e for e in structured.events if e.event_type == EventTypes.RISK_INPUT_STATUS]
+        assert [e.status for e in events] == ["deferred", "failed"]
+        assert events[-1].data["traceback"]["frame_count"] > 0
+    finally:
+        assert pipeline.close(timeout=2.0)

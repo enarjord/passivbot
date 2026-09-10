@@ -651,6 +651,9 @@ row count, replay start/end, `retry_count` (failed attempts including the initia
 emits a warning, except the final failure which emits an error with `action=stop_without_restart`
 and zero delay. The first and final failures also attach a bounded `traceback` frame chain and
 log its frame-only text representation. Raw payloads, exception text, and locals are excluded.
+Failed event emission falls back to standard logging. The pipeline also logs these recovery
+records directly if its configured console sink raises, since an accepted event alone does not
+prove console delivery. Healthy console delivery produces one attempt record.
 Readiness polls inside the retry deadline neither increment the count nor repeat the warning.
 Recovery is immediate after the owning operation succeeds. See `equity_hard_stop_loss.md` for
 retry, terminal-stop, and protection policy.

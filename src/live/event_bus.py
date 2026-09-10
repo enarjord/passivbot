@@ -4343,6 +4343,10 @@ class LiveEventPipeline:
             return sink.write(event)
         except Exception as exc:
             self._handle_sink_failure(name, exc)
+            if name == "console" and event.event_type == EventTypes.RISK_INPUT_STATUS:
+                # Finite recovery attempts must remain visible even when the
+                # configured sink fails internally and emit() still succeeds.
+                logging.log(_logging_level(event.level), format_console_event(event))
             return None
 
     def _write_sink_in_worker(
