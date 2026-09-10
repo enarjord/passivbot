@@ -201,9 +201,9 @@
                         "threshold_volatility_1m_weight": 3.22,
                         "threshold_we_weight": -0.0001
                     },
-                    "ema_span_0": 790.0,
-                    "ema_span_1": 1080.0,
                     "entry": {
+                        "ema_span_0": 790.0,
+                        "ema_span_1": 1080.0,
                         "double_down_factor": 0.94,
                         "ema_gate_mode": "all",
                         "initial_ema_dist": 0.0028,
@@ -275,9 +275,9 @@
                         "threshold_volatility_1m_weight": 0.01,
                         "threshold_we_weight": -0.1
                     },
-                    "ema_span_0": 60.0,
-                    "ema_span_1": 60.0,
                     "entry": {
+                        "ema_span_0": 60.0,
+                        "ema_span_1": 60.0,
                         "double_down_factor": 0.2,
                         "ema_gate_mode": "all",
                         "initial_ema_dist": -0.1,
@@ -308,7 +308,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.3.0",
+    "config_version": "v8.4.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -522,9 +522,9 @@
                             "threshold_volatility_1m_weight": [0.01, 80, 0.01],
                             "threshold_we_weight": [-0.05, 0.05, 0.0001]
                         },
-                        "ema_span_0": [100.0, 2880.0, 10.0],
-                        "ema_span_1": [100.0, 2880.0, 10.0],
                         "entry": {
+                            "ema_span_0": [100.0, 2880.0, 10.0],
+                            "ema_span_1": [100.0, 2880.0, 10.0],
                             "double_down_factor": [0.2, 1.2, 0.01],
                             "initial_ema_dist": [-0.05, 0.005, 0.0001],
                             "initial_qty_pct": [0.005, 0.1, 0.0001],
@@ -584,9 +584,9 @@
                             "threshold_volatility_1m_weight": [0.01, 70, 0.01],
                             "threshold_we_weight": [-0.1, 0.1, 0.0001]
                         },
-                        "ema_span_0": [100.0, 1440.0, 10.0],
-                        "ema_span_1": [100.0, 1440.0, 10.0],
                         "entry": {
+                            "ema_span_0": [100.0, 1440.0, 10.0],
+                            "ema_span_1": [100.0, 1440.0, 10.0],
                             "double_down_factor": [0.2, 2, 0.01],
                             "initial_ema_dist": [-0.1, 0.02, 0.0001],
                             "initial_qty_pct": [0.005, 0.1, 0.0001],

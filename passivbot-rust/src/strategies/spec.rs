@@ -51,7 +51,7 @@ struct NestedParamSeed {
 const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "ema_span_0",
-        path: &["ema_span_0"],
+        path: &["entry", "ema_span_0"],
         long_default: 790.0,
         short_default: 60.0,
         long_bounds: &[100.0, 2880.0, 10.0],
@@ -59,7 +59,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     },
     NestedParamSeed {
         name: "ema_span_1",
-        path: &["ema_span_1"],
+        path: &["entry", "ema_span_1"],
         long_default: 1080.0,
         short_default: 60.0,
         long_bounds: &[100.0, 2880.0, 10.0],

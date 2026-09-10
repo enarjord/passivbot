@@ -4569,11 +4569,11 @@ mod core {
             bot_params: &BotParams,
         ) -> crate::strategies::TrailingMartingaleParams {
             crate::strategies::TrailingMartingaleParams {
-                ema_span_0: bot_params.ema_span_0,
-                ema_span_1: bot_params.ema_span_1,
                 volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
                 volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
                 entry: crate::strategies::TrailingMartingaleEntryParams {
+                    ema_span_0: bot_params.ema_span_0,
+                    ema_span_1: bot_params.ema_span_1,
                     double_down_factor: bot_params.entry_grid_double_down_factor,
                     ema_gate_mode: crate::strategies::EmaGateMode::Initial,
                     initial_ema_dist: bot_params.entry_initial_ema_dist,

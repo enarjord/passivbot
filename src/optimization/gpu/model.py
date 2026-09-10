@@ -395,8 +395,8 @@ TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS = (
 )
 
 TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS = (
-    ("ema_span_0", ("ema_span_0",)),
-    ("ema_span_1", ("ema_span_1",)),
+    ("ema_span_0", ("entry", "ema_span_0")),
+    ("ema_span_1", ("entry", "ema_span_1")),
     ("volatility_ema_span_1h", ("volatility_ema_span_1h",)),
     ("volatility_ema_span_1m", ("volatility_ema_span_1m",)),
     ("entry_double_down_factor", ("entry", "double_down_factor")),
@@ -519,8 +519,8 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
     if mode not in {"disabled", "all", "initial", "reentry"}:
         raise ValueError(f"unsupported trailing_martingale entry.ema_gate_mode={mode!r}")
     flattened = {
-        "ema_span_0": strategy.get("ema_span_0"),
-        "ema_span_1": strategy.get("ema_span_1"),
+        "ema_span_0": entry.get("ema_span_0"),
+        "ema_span_1": entry.get("ema_span_1"),
         "volatility_ema_span_1h": strategy.get("volatility_ema_span_1h"),
         "volatility_ema_span_1m": strategy.get("volatility_ema_span_1m"),
         "entry_cooldown_minutes": float(
@@ -530,9 +530,7 @@ def flatten_trailing_martingale_params(strategy: dict, risk: dict) -> dict:
             )
             or 0.0
         ),
-        "total_wallet_exposure_limit": float(
-            risk["total_wallet_exposure_limit"]
-        ),
+        "total_wallet_exposure_limit": float(risk["total_wallet_exposure_limit"]),
         "gate_initial": float(mode in {"all", "initial"}),
         "gate_reentry": float(mode in {"all", "reentry"}),
     }

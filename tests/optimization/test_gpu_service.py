@@ -1610,9 +1610,21 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
         config["bot"][side]["unstuck"]["enabled"] = True
         config["bot"][side]["hsl"]["enabled"] = True
         for key in ("ema_span_0", "ema_span_1"):
-            span = config["bot"][side]["strategy"][strategy_kind][key]
+            strategy = config["bot"][side]["strategy"][strategy_kind]
+            span = (
+                strategy["entry"]
+                if strategy_kind == "trailing_martingale"
+                else strategy
+            )[key]
             config["bot"][side]["unstuck"][key] = span
-            config["optimize"]["bounds"][side]["strategy"][strategy_kind][key] = [
+            strategy_bounds = config["optimize"]["bounds"][side]["strategy"][
+                strategy_kind
+            ]
+            (
+                strategy_bounds["entry"]
+                if strategy_kind == "trailing_martingale"
+                else strategy_bounds
+            )[key] = [
                 span,
                 span,
             ]
@@ -3109,11 +3121,11 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
         key for key, _path in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
     ) == TRAILING_MARTINGALE_PARAM_KEYS[:23]
     strategy_base = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "volatility_ema_span_1h": 30.0,
         "volatility_ema_span_1m": 40.0,
         "entry": {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
             "ema_gate_mode": "all",
             "double_down_factor": 1.1,
             "initial_ema_dist": 0.01,
@@ -3329,11 +3341,11 @@ def test_trailing_martingale_flattening_preserves_nested_params_and_gates(
     mode, expected
 ):
     strategy = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "volatility_ema_span_1h": 30.0,
         "volatility_ema_span_1m": 40.0,
         "entry": {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
             "ema_gate_mode": mode,
             "double_down_factor": 1.1,
             "initial_ema_dist": 0.01,
@@ -3382,11 +3394,9 @@ def test_trailing_martingale_flattening_rejects_unknown_gate_mode():
 
 def test_trailing_martingale_flattening_reads_canonical_payload_cooldown():
     strategy = {
-        "ema_span_0": 10.0,
-        "ema_span_1": 20.0,
         "volatility_ema_span_1h": 30.0,
         "volatility_ema_span_1m": 40.0,
-        "entry": {"ema_gate_mode": "all"},
+        "entry": {"ema_span_0": 10.0, "ema_span_1": 20.0, "ema_gate_mode": "all"},
         "close": {},
     }
     for key in TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS:

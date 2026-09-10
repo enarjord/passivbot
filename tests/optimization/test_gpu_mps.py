@@ -4667,8 +4667,8 @@ def test_mps_single_coin_service_dispatches_forced_delist_tail(
         )
     else:
         strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
-        strategy["ema_span_0"] = 2.0
-        strategy["ema_span_1"] = 3.0
+        strategy["entry"]["ema_span_0"] = 2.0
+        strategy["entry"]["ema_span_1"] = 3.0
         strategy["entry"]["initial_qty_pct"] = 0.1
         strategy["entry"]["initial_ema_dist"] = 0.01
 
@@ -4857,8 +4857,8 @@ def test_mps_single_coin_overrides_shadow_candidates_and_track_exact(
             strategy = config["bot"][side]["strategy"][
                 "trailing_martingale"
             ]
-            strategy["ema_span_0"] = 2.0
-            strategy["ema_span_1"] = 3.0
+            strategy["entry"]["ema_span_0"] = 2.0
+            strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 0.1
             strategy["entry"]["initial_ema_dist"] = 0.4
             strategy["entry"]["double_down_factor"] = 0.0
@@ -5064,8 +5064,8 @@ def test_mps_multicoin_service_dispatches_forced_delist_tail(
             strategy = config["bot"][side]["strategy"][
                 "trailing_martingale"
             ]
-            strategy["ema_span_0"] = 2.0
-            strategy["ema_span_1"] = 3.0
+            strategy["entry"]["ema_span_0"] = 2.0
+            strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 1.0
             strategy["entry"]["initial_ema_dist"] = 0.1
             strategy["entry"]["double_down_factor"] = 0.0
@@ -5271,8 +5271,8 @@ def test_mps_multicoin_service_matches_exact_declared_all_invalid_time(
             strategy = config["bot"][side]["strategy"][
                 "trailing_martingale"
             ]
-            strategy["ema_span_0"] = 2.0
-            strategy["ema_span_1"] = 3.0
+            strategy["entry"]["ema_span_0"] = 2.0
+            strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 1.0
             strategy["entry"]["initial_ema_dist"] = 0.1
             strategy["entry"]["double_down_factor"] = 0.0
@@ -6114,8 +6114,8 @@ def test_mps_multicoin_forced_normal_service_matches_exact_active_symbols(
             strategy = config["bot"][side]["strategy"][
                 "trailing_martingale"
             ]
-            strategy["ema_span_0"] = 2.0
-            strategy["ema_span_1"] = 3.0
+            strategy["entry"]["ema_span_0"] = 2.0
+            strategy["entry"]["ema_span_1"] = 3.0
             strategy["entry"]["initial_qty_pct"] = 1.0
             strategy["entry"]["initial_ema_dist"] = 0.1
             strategy["entry"]["double_down_factor"] = 0.0

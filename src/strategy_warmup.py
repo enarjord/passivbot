@@ -36,8 +36,8 @@ STRATEGY_WARMUP_H1_BOUND_LOCAL_KEYS = (
 )
 
 STRATEGY_WARMUP_PROBE_PATHS = {
-    "ema_span_0": (("ema_span_0",),),
-    "ema_span_1": (("ema_span_1",),),
+    "ema_span_0": (("entry", "ema_span_0"), ("ema_span_0",)),
+    "ema_span_1": (("entry", "ema_span_1"), ("ema_span_1",)),
     "volatility_ema_span_1m": (
         ("volatility_ema_span_1m",),
         ("entry_volatility_ema_span_1m",),

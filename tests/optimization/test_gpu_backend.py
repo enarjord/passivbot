@@ -7761,7 +7761,9 @@ def test_gpu_suite_unstuck_scope_validates_effective_scenario_bounds(shadow):
     prepared = _gpu_suite_scenario_inputs(config, Suite())
     for path, value in overrides.items():
         family = prepared[0]["config"]["optimize"]["bounds"]
-        for part in path.split(".")[1:-1]:
+        from config.param_paths import resolve_dotted_config_path
+
+        for part in resolve_dotted_config_path(config, path)[1:-1]:
             family = family[part]
         assert family[path.split(".")[-1]] == [value, value]
     suite_cfg["scenarios"].append({"label": "unshadowed", "overrides": {}})

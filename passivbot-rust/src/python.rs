@@ -2184,11 +2184,12 @@ fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Valu
     let entry = extract_value::<&PyDict>(dict, "entry")?;
     let close = extract_value::<&PyDict>(dict, "close")?;
     Ok(serde_json::json!({
-        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
-        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+
         "volatility_ema_span_1h": extract_value::<f64>(dict, "volatility_ema_span_1h")?,
         "volatility_ema_span_1m": extract_value::<f64>(dict, "volatility_ema_span_1m")?,
         "entry": {
+            "ema_span_0": extract_value::<f64>(entry, "ema_span_0")?,
+            "ema_span_1": extract_value::<f64>(entry, "ema_span_1")?,
             "double_down_factor": extract_value::<f64>(entry, "double_down_factor")?,
             "ema_gate_mode": extract_optional_string(entry, "ema_gate_mode", "initial")?,
             "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
@@ -2941,6 +2942,8 @@ fn make_trailing_martingale_entry_params(
         entry_trailing_threshold_pct,
     );
     TrailingMartingaleEntryParams {
+        ema_span_0: 0.0,
+        ema_span_1: 0.0,
         double_down_factor: entry_grid_double_down_factor,
         ema_gate_mode: EmaGateMode::Initial,
         initial_ema_dist: entry_initial_ema_dist,

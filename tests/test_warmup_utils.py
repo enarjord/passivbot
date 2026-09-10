@@ -37,8 +37,10 @@ def base_config():
                 "forager_volatility_ema_span_1m": 100.0,
                 "strategy": {
                     "trailing_martingale": {
-                        "ema_span_0": 1000.0,
-                        "ema_span_1": 1500.0,
+                        "entry": {
+                            "ema_span_0": 1000.0,
+                            "ema_span_1": 1500.0,
+                        },
                         "volatility_ema_span_1h": 1.0,
                     }
                 },
@@ -48,8 +50,10 @@ def base_config():
                 "forager_volatility_ema_span_1m": 100.0,
                 "strategy": {
                     "trailing_martingale": {
-                        "ema_span_0": 1000.0,
-                        "ema_span_1": 1500.0,
+                        "entry": {
+                            "ema_span_0": 1000.0,
+                            "ema_span_1": 1500.0,
+                        },
                         "volatility_ema_span_1h": 1.0,
                     }
                 },
@@ -75,8 +79,10 @@ def config_with_coin_overrides(base_config):
                 "long": {
                     "strategy": {
                         "trailing_martingale": {
-                            "ema_span_0": 5000.0,
-                            "ema_span_1": 7000.0,
+                            "entry": {
+                                "ema_span_0": 5000.0,
+                                "ema_span_1": 7000.0,
+                            },
                         }
                     },
                 },
@@ -105,8 +111,10 @@ def config_with_bounds(base_config):
             "forager": {"volume_ema_span_1m": [1000, 5000]},
             "strategy": {
                 "trailing_martingale": {
-                    "ema_span_0": [500, 5000],
-                    "ema_span_1": [1000, 10000],
+                    "entry": {
+                        "ema_span_0": [500, 5000],
+                        "ema_span_1": [1000, 10000],
+                    },
                     "volatility_ema_span_1h": [0.5, 5.0],
                 }
             },
@@ -114,8 +122,10 @@ def config_with_bounds(base_config):
         "short": {
             "strategy": {
                 "trailing_martingale": {
-                    "ema_span_0": [500, 5000],
-                    "ema_span_1": [1000, 10000],
+                    "entry": {
+                        "ema_span_0": [500, 5000],
+                        "ema_span_1": [1000, 10000],
+                    },
                 }
             }
         },
@@ -202,7 +212,9 @@ class TestWarmupCalculation:
 
     def test_extreme_spans_edge_case(self, base_config):
         """Test with very large EMA spans."""
-        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 1_000_000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_0"
+        ] = 1_000_000.0
 
         warmup_minutes = compute_backtest_warmup_minutes(base_config)
 
@@ -345,18 +357,26 @@ class TestEMASpanExtraction:
         # Modify each field to be the maximum and verify it's used
 
         # Test ema_span_0
-        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 10000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_0"
+        ] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000  # 10000 * 3.0
 
         # Reset and test ema_span_1
-        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 1000.0
-        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_1"] = 10000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_0"
+        ] = 1000.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_1"
+        ] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
 
         # Reset and test forager_volume_ema_span_1m
-        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_1"] = 1500.0
+        base_config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_1"
+        ] = 1500.0
         base_config["bot"]["long"]["forager_volume_ema_span_1m"] = 10000.0
         warmup = compute_backtest_warmup_minutes(base_config)
         assert warmup == 30000
@@ -370,7 +390,9 @@ class TestEMASpanExtraction:
     def test_short_params_also_considered(self, base_config):
         """Test that short-side params are also considered."""
         # Make short side have larger span
-        base_config["bot"]["short"]["strategy"]["trailing_martingale"]["ema_span_0"] = 15000.0
+        base_config["bot"]["short"]["strategy"]["trailing_martingale"]["entry"][
+            "ema_span_0"
+        ] = 15000.0
 
         warmup = compute_backtest_warmup_minutes(base_config)
 
@@ -429,7 +451,11 @@ class TestWarmupEdgeCases:
         """Test handling of missing warmup_ratio."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_martingale": {"ema_span_0": 1000.0}}},
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"ema_span_0": 1000.0}}
+                    }
+                },
                 "short": {},
             },
             "live": {"strategy_kind": "trailing_martingale"},  # Missing warmup_ratio
@@ -444,7 +470,11 @@ class TestWarmupEdgeCases:
         """Test handling of missing max_warmup_minutes."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_martingale": {"ema_span_0": 1000.0}}},
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"ema_span_0": 1000.0}}
+                    }
+                },
                 "short": {},
             },
             "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0},
@@ -472,10 +502,18 @@ class TestWarmupEdgeCases:
         """Test that infinite strategy spans fail loudly."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_martingale": {"ema_span_0": math.inf}}},
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"ema_span_0": math.inf}}
+                    }
+                },
                 "short": {},
             },
-            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
+            "live": {
+                "strategy_kind": "trailing_martingale",
+                "warmup_ratio": 3.0,
+                "max_warmup_minutes": 0.0,
+            },
             "optimize": {"bounds": {}},
         }
 
@@ -486,10 +524,18 @@ class TestWarmupEdgeCases:
         """Test that NaN strategy spans fail loudly."""
         config = {
             "bot": {
-                "long": {"strategy": {"trailing_martingale": {"ema_span_0": math.nan}}},
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"ema_span_0": math.nan}}
+                    }
+                },
                 "short": {},
             },
-            "live": {"strategy_kind": "trailing_martingale", "warmup_ratio": 3.0, "max_warmup_minutes": 0.0},
+            "live": {
+                "strategy_kind": "trailing_martingale",
+                "warmup_ratio": 3.0,
+                "max_warmup_minutes": 0.0,
+            },
             "optimize": {"bounds": {}},
         }
 

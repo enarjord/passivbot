@@ -40,16 +40,16 @@ def _make_optimizer_config() -> dict:
     config["backtest"]["coins"] = {"combined": ["HYPE"]}
 
     long_bot = config["bot"]["long"]
-    long_bot["strategy"]["trailing_martingale"]["ema_span_0"] = 770.0
-    long_bot["strategy"]["trailing_martingale"]["ema_span_1"] = 210.0
+    long_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 770.0
+    long_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_1"] = 210.0
     long_bot["forager"]["volume_ema_span_1m"] = 520.0
     long_bot["forager"]["volatility_ema_span_1m"] = 225.0
     long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h"] = 1690.0
     long_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1m"] = 60.0
 
     short_bot = config["bot"]["short"]
-    short_bot["strategy"]["trailing_martingale"]["ema_span_0"] = 1.0
-    short_bot["strategy"]["trailing_martingale"]["ema_span_1"] = 1.0
+    short_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 1.0
+    short_bot["strategy"]["trailing_martingale"]["entry"]["ema_span_1"] = 1.0
     short_bot["forager"]["volume_ema_span_1m"] = 0.0
     short_bot["forager"]["volatility_ema_span_1m"] = 0.0
     short_bot["strategy"]["trailing_martingale"]["volatility_ema_span_1h"] = 0.0

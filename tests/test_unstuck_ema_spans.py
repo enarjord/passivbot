@@ -20,6 +20,11 @@ from warmup_utils import compute_per_coin_warmup_minutes
 def legacy_config(kind="trailing_martingale"):
     c = get_template_config()
     c["config_version"] = "v8.2.0"
+    for root in (c["bot"], c["optimize"]["bounds"]):
+        for side in ("long", "short"):
+            strategy = root[side]["strategy"]["trailing_martingale"]
+            for key in ("ema_span_0", "ema_span_1"):
+                strategy[key] = strategy["entry"].pop(key)
     c["live"]["strategy_kind"] = kind
     for side in ("long", "short"):
         for key in ("ema_span_0", "ema_span_1"):
@@ -214,6 +219,7 @@ def test_optimizer_paths_keep_strategy_and_unstuck_spans_separate():
         "long",
         "strategy",
         "trailing_martingale",
+        "entry",
         "ema_span_0",
     )
 
@@ -254,7 +260,7 @@ def test_legacy_coin_flags_file_spans_are_preserved(tmp_path):
 
 def test_zero_span_on_disabled_legacy_side_warns_and_gets_positive_default(caplog):
     c = legacy_config()
-    c["bot"]["short"]["strategy"]["trailing_martingale"]["ema_span_0"] = 0
+    c["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["ema_span_0"] = 0
     prepared = prepare_config(c, verbose=False)
     assert prepared["bot"]["short"]["unstuck"]["ema_span_0"] > 0
     assert "Cannot copy zero strategy span" in caplog.text

@@ -1080,7 +1080,10 @@ def format_bot_config(
     for path in ("bot.long", "bot.short"):
         require_config_dict(result, path)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
+    from .migrations.entry_ema import migrate_entry_ema_spans
     from .migrations.unstuck_ema import migrate_unstuck_ema_spans
+
+    migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)

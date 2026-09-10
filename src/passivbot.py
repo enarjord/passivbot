@@ -17325,13 +17325,18 @@ class Passivbot:
                 strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
                 if callable(strategy_getter):
                     strategy_params = strategy_getter(pside, symbol)
+                    price_ema_params = (
+                        strategy_params["entry"]
+                        if strategy_kind == "trailing_martingale"
+                        else strategy_params
+                    )
                     span0 = Passivbot._positive_finite_warmup_value(
-                        strategy_params["ema_span_0"],
+                        price_ema_params["ema_span_0"],
                         context=f"strategy {pside}.ema_span_0",
                         symbol=symbol,
                     )
                     span1 = Passivbot._positive_finite_warmup_value(
-                        strategy_params["ema_span_1"],
+                        price_ema_params["ema_span_1"],
                         context=f"strategy {pside}.ema_span_1",
                         symbol=symbol,
                     )

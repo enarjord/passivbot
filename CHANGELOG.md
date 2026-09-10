@@ -10,6 +10,14 @@ All notable user-facing changes will be documented in this file.
   HSL protection is retained and may act only when its own inputs are valid. Malformed payloads and
   configuration remain errors; balances and required history are never substituted or discarded.
 
+- Trailing-martingale price EMA spans now live at
+  `bot.<side>.strategy.trailing_martingale.entry.ema_span_0/1` (schema v8.4.0).
+  Existing configs, bounds, coin files/inline overrides, and scenario paths migrate without
+  changing their horizons. Explicit new paths win on conflicts, with warnings. Previous CLI
+  paths and optimizer selectors remain accepted. Entry-only optimizer selectors now include
+  these spans; coupled unstuck search, CPU/GPU execution, and warmup use the new paths.
+  Shared volatility spans and other strategies keep their existing locations.
+
 - Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
   ordinary flatten falls before the bounded replay window. Successful empty-window replays now
   establish the proven episode boundary before calculating current risk, preventing discarded

@@ -1152,7 +1152,10 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     assert compiled["bot"]["long"]["filter_volatility_ema_span_1m"] == config["bot"]["long"][
         "forager"
     ]["volatility_ema_span_1m"]
-    assert _strategy_side(compiled, "long")["ema_span_0"] == _strategy_side(config, "long")["ema_span_0"]
+    assert (
+        _strategy_side(compiled, "long")["entry"]["ema_span_0"]
+        == _strategy_side(config, "long")["entry"]["ema_span_0"]
+    )
 
 
 def test_project_config_prunes_unrelated_sections():

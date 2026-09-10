@@ -158,7 +158,13 @@ def test_rust_strategy_spec_matches_generated_strategy_optimize_bounds(strategy_
     for pside in ("long", "short"):
         strategy_bounds = generated[pside]["strategy"][strategy_kind]
         for local_key, value in _flatten_strategy_bound_items(strategy_bounds):
-            flat_generated[f"{pside}_{local_key}"] = value
+            flat_key = (
+                local_key.removeprefix("entry_")
+                if strategy_kind == "trailing_martingale"
+                and local_key in ("entry_ema_span_0", "entry_ema_span_1")
+                else local_key
+            )
+            flat_generated[f"{pside}_{flat_key}"] = value
 
     assert flat_generated == expected
 
@@ -1509,9 +1515,12 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert prepared["live"]["strategy_kind"] == "trailing_martingale"
     assert "ema_span_0" not in get_template_config()["bot"]["long"]
     assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
-    assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
-        get_template_config(), "long", "trailing_martingale"
-    )["ema_span_0"]
+    assert (
+        _strategy_side(prepared, "long")["entry"]["ema_span_0"]
+        == _strategy_side(get_template_config(), "long", "trailing_martingale")[
+            "entry"
+        ]["ema_span_0"]
+    )
 
 
 def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_martingale():
@@ -1653,21 +1662,26 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     ]["volatility_ema_span_1m"]
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
     assert compiled["optimize"]["bounds"] == canonical["optimize"]["bounds"]
-    assert _strategy_side(compiled, "long")["ema_span_0"] == _strategy_side(canonical, "long")[
-        "ema_span_0"
-    ]
+    assert (
+        _strategy_side(compiled, "long")["entry"]["ema_span_0"]
+        == _strategy_side(canonical, "long")["entry"]["ema_span_0"]
+    )
 
 
 def test_prepare_config_preserves_nested_strategy_namespace():
     source = get_template_config()
-    source["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"] = 321.0
+    source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+        "ema_span_0"
+    ] = 321.0
     source["bot"]["short"]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"] = 0.0123
     source["live"].pop("strategy_kind", None)
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["live"]["strategy_kind"] == "trailing_martingale"
-    assert _strategy_side(prepared, "long")["ema_span_0"] == pytest.approx(321.0)
+    assert _strategy_side(prepared, "long")["entry"]["ema_span_0"] == pytest.approx(
+        321.0
+    )
     assert _strategy_side(prepared, "short")["entry"]["threshold_base_pct"] == pytest.approx(0.0123)
 
 
@@ -1887,9 +1901,12 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
     assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == template["bot"]["long"]["forager"][
         "volume_ema_span_1m"
     ]
-    assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
-        template, "long", "trailing_martingale"
-    )["ema_span_0"]
+    assert (
+        _strategy_side(prepared, "long")["entry"]["ema_span_0"]
+        == _strategy_side(template, "long", "trailing_martingale")["entry"][
+            "ema_span_0"
+        ]
+    )
     assert prepared["backtest"]["visible_metrics"] == template["backtest"]["visible_metrics"]
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template

@@ -10,6 +10,11 @@ from backtest import run_backtest
 def _legacy_replay_config():
     c = get_template_config()
     c["config_version"] = "v8.2.0"
+    for root in (c["bot"], c["optimize"]["bounds"]):
+        for side in ("long", "short"):
+            strategy = root[side]["strategy"]["trailing_martingale"]
+            for key in ("ema_span_0", "ema_span_1"):
+                strategy[key] = strategy["entry"].pop(key)
     for side in ("long", "short"):
         for key in ("ema_span_0", "ema_span_1"):
             c["bot"][side]["unstuck"].pop(key)
