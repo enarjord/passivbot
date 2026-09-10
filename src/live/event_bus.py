@@ -172,6 +172,7 @@ class EventTypes:
     CYCLE_STARTED = "cycle.started"
     CYCLE_COMPLETED = "cycle.completed"
     CYCLE_DEGRADED = "cycle.degraded"
+    RISK_INPUT_STATUS = "risk.input.status"
     DATA_PACKET_UPDATED = "data_packet.updated"
     SNAPSHOT_BUILT = "snapshot.built"
     OPEN_ORDERS_SNAPSHOT_DELTA = "open_orders.snapshot_delta"
@@ -315,6 +316,8 @@ class EventTags:
 
 
 class ReasonCodes:
+    CURRENT_BALANCE_UNAVAILABLE = "current_balance_unavailable"
+    HSL_HISTORY_BALANCE_UNAVAILABLE = "hsl_history_balance_unavailable"
     AUTHORITATIVE_CONFIRMATION = "authoritative_confirmation"
     AUTHORITATIVE_CONFIRMATION_TIMEOUT = "authoritative_confirmation_timeout"
     BALANCE_CHANGED = "balance_changed"
@@ -1316,6 +1319,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
         console=True, text=True, throttle_interval_ms=60_000
     ),
     EventTypes.CYCLE_DEGRADED: EventRoute(console=True, text=True),
+    EventTypes.RISK_INPUT_STATUS: EventRoute(console=True, text=True),
     EventTypes.DATA_PACKET_UPDATED: EventRoute(console=False),
     EventTypes.SNAPSHOT_BUILT: EventRoute(console=False),
     EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA: EventRoute(console=True, text=True),
@@ -1503,6 +1507,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.CYCLE_STARTED: "cycle",
     EventTypes.CYCLE_COMPLETED: "cycle",
     EventTypes.CYCLE_DEGRADED: "cycle",
+    EventTypes.RISK_INPUT_STATUS: "risk",
     EventTypes.PLANNING_UNAVAILABLE: "gate",
     EventTypes.OPEN_ORDERS_SNAPSHOT_DELTA: "order",
     EventTypes.FORAGER_SELECTION: "forager",

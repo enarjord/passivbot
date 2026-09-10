@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live startup and trading now wait and retry with clear risk diagnostics when current balances
+  or required HSL replay balances cannot support risk evaluation, instead of crashing or exhausting
+  the restart budget. Ordinary planning resumes automatically after valid inputs recover; existing
+  HSL protection is retained and may act only when its own inputs are valid. Malformed payloads and
+  configuration remain errors; balances and required history are never substituted or discarded.
+
 - Trailing-martingale price EMA spans now live at
   `bot.<side>.strategy.trailing_martingale.entry.ema_span_0/1` (schema v8.4.0).
   Existing configs, bounds, coin files/inline overrides, and scenario paths migrate without

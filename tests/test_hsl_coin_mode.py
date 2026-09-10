@@ -1277,6 +1277,7 @@ def make_coin_bot(policy="panic"):
     bot._monitor_record_event = lambda *args, **kwargs: None
     bot._equity_hard_stop_write_latch = lambda pside, payload, symbol=None: "/tmp/hsl_coin.json"
     bot._equity_hard_stop_remove_latch_file = lambda pside, symbol=None: None
+    bot.get_hysteresis_snapped_balance = lambda: 100.0
     bot.get_raw_balance = lambda: 100.0
     bot.get_exchange_time = lambda: 180_000
     bot.live_value = lambda key: bot.config["live"][key]
@@ -5817,6 +5818,7 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     monkeypatch.setattr(hsl, "_equity_hard_stop_replay_live_restart", AsyncMock(return_value=False))
     fixture = make_coin_bot(policy=policy)
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     bot.__dict__.update(vars(fixture))
     for name, value in list(vars(bot).items()):
         if isinstance(value, MethodType) and value.__self__ is fixture:

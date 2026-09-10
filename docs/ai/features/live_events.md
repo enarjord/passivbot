@@ -639,3 +639,13 @@ converting it to zero. Totals may be summed across compatible windows; maxima re
 - `src/live/event_producers.py`
 - `tests/test_live_event_registry_docs.py`
 - event-family tests under `tests/`
+
+### Risk input readiness
+
+`risk.input.status` reports entry into or recovery from the live balance-input readiness gate.
+The producer in `live/risk_input_recovery.py` emits only code-owned reason/action strings and bounded
+numeric diagnostics: current raw/sizing balances, first invalid replay timestamp/balance, invalid
+row count, replay start/end, retry count and delay. Non-finite numbers become null. Raw payloads and
+exception text are excluded. Deferred status blocks ordinary planning; succeeded status reports
+recovery to the remaining readiness checks. Console warnings coalesce unchanged reasons for five
+minutes; recovery is immediate. See `equity_hard_stop_loss.md` for retry/protection policy.

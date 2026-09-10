@@ -5888,6 +5888,12 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(
         def _log_startup_banner(self):
             return None
 
+        get_raw_balance = staticmethod(lambda: 100.0)
+        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
+
+        async def refresh_authoritative_state(self):
+            return True
+
         async def init_markets(self):
             return None
 

@@ -771,6 +771,9 @@ async def test_red_supervisor_uses_protective_refresh_and_order_plan():
     calls = []
 
     class FakeBot:
+        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
+        get_raw_balance = staticmethod(lambda: 100.0)
+
         _equity_hard_stop_supervisor_running = False
         stop_signal_received = False
 
@@ -862,6 +865,9 @@ async def test_red_supervisor_uses_protective_refresh_and_order_plan():
 @pytest.mark.asyncio
 async def test_red_supervisor_propagates_fatal_protective_plan_failure():
     class FakeBot:
+        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
+        get_raw_balance = staticmethod(lambda: 100.0)
+
         _equity_hard_stop_supervisor_running = False
         stop_signal_received = False
 
@@ -925,6 +931,8 @@ async def test_red_supervisor_refreshes_late_flatten_fill_and_exits():
     ]
 
     class FakeBot:
+        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
+
         _equity_hard_stop_supervisor_running = False
         _equity_hard_stop_cooldown_log_interval_ms = 60_000
         stop_signal_received = False
@@ -1058,6 +1066,8 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
     ]
 
     class FakeBot:
+        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
+
         _equity_hard_stop_supervisor_running = False
         _equity_hard_stop_cooldown_log_interval_ms = 60_000
         stop_signal_received = False
@@ -1177,6 +1187,8 @@ async def test_coin_red_supervisor_propagates_fatal_protective_plan_failure():
     symbol = "BTC/USDT:USDT"
 
     class FakeBot:
+        get_hysteresis_snapped_balance = staticmethod(lambda: 100.0)
+
         _equity_hard_stop_supervisor_running = False
         stop_signal_received = False
 

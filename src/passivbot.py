@@ -56,6 +56,7 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
 )
 from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
+from live import risk_input_recovery
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -3546,22 +3547,24 @@ class Passivbot:
                     payload={"stage": boot_stage, "stop_signal_received": True},
                 )
                 return
+            boot_stage = "risk_input_readiness"
             if self._equity_hard_stop_enabled():
-                boot_stage = "equity_hard_stop_initialize_from_history"
-                hsl_mode = self._equity_hard_stop_signal_mode()
-                if hsl_mode == "coin":
-                    boot_stage = "equity_hard_stop_initialize_coin_from_history"
-                    await self._equity_hard_stop_start_coin_history_replay()
-                else:
-                    await self._equity_hard_stop_initialize_from_history()
-                Passivbot._startup_timing_mark(self, "hsl", details=f"mode={hsl_mode}")
-                if self.stop_signal_received:
-                    self._monitor_emit_stop(
-                        "startup_aborted",
-                        ts=utc_ms(),
-                        payload={"stage": boot_stage, "stop_signal_received": True},
-                    )
-                    return
+                boot_stage = (
+                    "equity_hard_stop_initialize_coin_from_history"
+                    if self._equity_hard_stop_signal_mode() == "coin"
+                    else "equity_hard_stop_initialize_from_history"
+                )
+            await risk_input_recovery.wait_for_startup(self)
+            if self._equity_hard_stop_enabled():
+                Passivbot._startup_timing_mark(
+                    self, "hsl", details=f"mode={self._equity_hard_stop_signal_mode()}"
+                )
+            if self.stop_signal_received:
+                self._monitor_emit_stop(
+                    "startup_aborted", ts=utc_ms(),
+                    payload={"stage": boot_stage, "stop_signal_received": True},
+                )
+                return
             boot_stage = "post_init_sleep"
             await self._sleep_unless_shutdown(1, stage="post_init_sleep")
             if self.stop_signal_received:
@@ -6298,6 +6301,7 @@ class Passivbot:
             return False
         if not await self.refresh_protective_authoritative_state():
             return False
+        risk_input_recovery.validate_current_balances(self)
         now_ms = int(self.get_exchange_time())
         panic_needed = False
         cooldown_entry_cancels = []
@@ -6447,6 +6451,7 @@ class Passivbot:
                 return False
             reason_code = "hsl_red_supervisor"
             supervisor = self._equity_hard_stop_run_red_supervisor
+        risk_input_recovery.validate_current_balances(self)
         self._emit_live_cycle_degraded(
             cycle_id=cycle_id,
             reason_code=reason_code,
@@ -6468,19 +6473,6 @@ class Passivbot:
         balance_consistency_retry_count = 0
         balance_consistency_last_warning_ms = 0
         max_n_fails = 10
-        if self._equity_hard_stop_enabled():
-            if self._equity_hard_stop_signal_mode() == "coin":
-                if not (
-                    getattr(self, "_equity_hard_stop_coin_initialized", False)
-                    or getattr(self, "_equity_hard_stop_coin_protective_ready", False)
-                ):
-                    await self._equity_hard_stop_initialize_coin_from_history()
-            elif not all(
-                self._equity_hard_stop_runtime_initialized(pside)
-                or not self._equity_hard_stop_enabled(pside)
-                for pside in self._hsl_psides()
-            ):
-                await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
             loop_start_ms = utc_ms()
             loop_timings_ms: dict[str, int] = {}
@@ -6668,33 +6660,37 @@ class Passivbot:
                         data={"timings_ms": dict(loop_timings_ms)},
                     )
                     break
-                if self._equity_hard_stop_enabled():
-                    try:
-                        await self._equity_hard_stop_check()
-                    except state_refresh.AuthoritativeSurfaceUnavailable as exc:
-                        if exc.surface != "hsl_episode_boundaries":
-                            raise
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="hsl_episode_boundaries_unavailable",
-                            data={"reason": exc.reason},
-                        )
-                        if not (
-                            await self._run_halted_hsl_protection_if_active()
-                            or await self._run_latched_hsl_supervisor_if_active(
-                                cycle_id=cycle_id,
-                                loop_timings_ms=loop_timings_ms,
-                            )
-                        ):
-                            await self._sleep_unless_shutdown(
-                                0.5, stage="hsl_episode_boundaries_retry"
-                            )
-                        continue
-                    if await self._run_latched_hsl_supervisor_if_active(
+                try:
+                    risk_ready = await risk_input_recovery.ensure_ready(self)
+                except state_refresh.AuthoritativeSurfaceUnavailable as exc:
+                    if exc.surface != "hsl_episode_boundaries":
+                        raise
+                    self._emit_live_cycle_degraded(
                         cycle_id=cycle_id,
-                        loop_timings_ms=loop_timings_ms,
+                        reason_code="hsl_episode_boundaries_unavailable",
+                        data={"reason": exc.reason},
+                    )
+                    if not (
+                        await self._run_halted_hsl_protection_if_active()
+                        or await self._run_latched_hsl_supervisor_if_active(
+                            cycle_id=cycle_id,
+                            loop_timings_ms=loop_timings_ms,
+                        )
                     ):
-                        continue
+                        await self._sleep_unless_shutdown(
+                            0.5, stage="hsl_episode_boundaries_retry"
+                        )
+                    continue
+                if not risk_ready:
+                    await risk_input_recovery.protect_and_wait(
+                        self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                    )
+                    continue
+                if await self._run_latched_hsl_supervisor_if_active(
+                    cycle_id=cycle_id,
+                    loop_timings_ms=loop_timings_ms,
+                ):
+                    continue
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
@@ -6947,6 +6943,11 @@ class Passivbot:
                             data={"timings_ms": dict(loop_timings_ms)},
                         )
                     break
+            except risk_input_recovery.RiskInputUnavailable as exc:
+                risk_input_recovery.defer(self, exc)
+                await risk_input_recovery.protect_and_wait(
+                    self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                )
             except FillHistoryCoverageUnavailable as e:
                 if self._shutdown_requested():
                     self._emit_live_cycle_degraded(
@@ -16611,6 +16612,7 @@ class Passivbot:
                 }
             )
 
+        risk_input_recovery.validate_balances(input_dict["balance_raw"], input_dict["balance"])
         out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
             pbr.compute_ideal_orders_json(json.dumps(input_dict)),
             idx_to_symbol,
@@ -19862,6 +19864,7 @@ class Passivbot:
                 }
             )
 
+        risk_input_recovery.validate_balances(input_dict["balance_raw"], input_dict["balance"])
         input_json = json.dumps(input_dict)
         rust_call_id = self._next_live_event_remote_call_id("rust")
         orchestrator_started_ms = int(utc_ms())
