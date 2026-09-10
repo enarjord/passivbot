@@ -86,6 +86,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `remote_call.throttled`
 - `resource.memory_snapshot`
 - `risk.entry_cooldown_delta_anchored`
+- `risk.input.status`
 - `risk.mode_changed`
 - `risk.realized_loss_gate_blocked`
 - `runtime.started`
@@ -170,6 +171,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `config_stock_perp_unavailable_market`
 - `config_stock_perp_wrong_exchange`
 - `connector_call_started`
+- `current_balance_unavailable`
 - `ema_fallback_used`
 - `entry_cooldown_position_delta`
 - `exchange_acknowledged`
@@ -187,6 +189,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `fresh_entry_eligibility`
 - `hsl_balance_override_account_level_replay_unsafe`
 - `hsl_held_protective_ready`
+- `hsl_history_balance_unavailable`
 - `hsl_history_empty`
 - `hsl_history_inputs_loaded`
 - `hsl_price_history_fetch_completed`

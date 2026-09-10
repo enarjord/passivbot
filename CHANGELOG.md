@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live startup and trading now wait and retry with clear risk diagnostics when current balances
+  or required HSL replay balances cannot support risk evaluation, instead of crashing or exhausting
+  the restart budget. Ordinary planning resumes automatically after valid inputs recover; existing
+  HSL protection is retained and may act only when its own inputs are valid. Malformed payloads and
+  configuration remain errors; balances and required history are never substituted or discarded.
+
 - Coin HSL no longer clears live protection or repeatedly reconstructs history when a delayed
   ordinary flatten falls before the bounded replay window. Successful empty-window replays now
   establish the proven episode boundary before calculating current risk, preventing discarded

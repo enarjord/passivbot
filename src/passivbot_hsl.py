@@ -34,6 +34,12 @@ from fill_events_manager import (
     _unique_position_chain_order,
 )
 from live.state_refresh import AuthoritativeSurfaceUnavailable
+from live.risk_input_recovery import (
+    RiskInputUnavailable,
+    validate_current_balances,
+    validate_history_balances,
+    validate_history_rows,
+)
 from live.freshness import ACCOUNT_SURFACES
 from live.diagnostic_safety import bounded_exception_type as _bounded_hsl_exception_type
 from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
@@ -3215,6 +3221,9 @@ async def _equity_hard_stop_replay_live_restart(
     replay_flatten_timestamp_ms: Optional[int] = None,
 ) -> bool:
     """Publish a completed canonical replay without clearing live protection while awaiting it."""
+    recovery = getattr(self, "_risk_input_recovery", None)
+    if recovery is not None and time.monotonic() < recovery.retry_at:
+        return False
     background = getattr(self, "_equity_hard_stop_coin_replay_task", None)
     if getattr(self, "_hsl_live_restart_replay_active", False) or (
         background is not None and not background.done()
@@ -3919,6 +3928,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 )
             scope_boundaries_by_pside[pside] = boundaries
         # Validate every enabled scope before replacing existing protective state.
+        validate_history_rows(timeline, current_balance=current_balance)
+        for boundaries in scope_boundaries_by_pside.values():
+            validate_history_rows(boundaries, current_balance=current_balance)
         self._equity_hard_stop_reset_state()
         n_rows = {pside: 0 for pside in self._hsl_psides()}
         for pside in self._hsl_psides():
@@ -4267,14 +4279,12 @@ async def _equity_hard_stop_initialize_coin_from_history(
     initialization_started_s = time.monotonic()
     watchdog_context_restored = False
     protective_ready_elapsed_s: Optional[float] = None
+    if not hasattr(self, "_equity_hard_stop_coin_protective_ready"):
+        self._equity_hard_stop_coin_protective_ready = False
     ready_event = getattr(self, "_equity_hard_stop_coin_replay_ready_event", None)
     if ready_event is None:
         ready_event = asyncio.Event()
         self._equity_hard_stop_coin_replay_ready_event = ready_event
-    self._equity_hard_stop_coin_protective_ready = False
-    self._equity_hard_stop_coin_replay_ready_pairs = set()
-    self._equity_hard_stop_coin_replay_pending_pairs = set()
-    self._equity_hard_stop_coin_replay_failure = None
 
     def check_shutdown(stage: str) -> None:
         if callable(raise_if_shutdown):
@@ -4291,8 +4301,6 @@ async def _equity_hard_stop_initialize_coin_from_history(
         )
     try:
         check_shutdown("hsl_coin_history_replay_start")
-        self._equity_hard_stop_coin = {"long": {}, "short": {}}
-        self._runtime_forced_modes = {"long": {}, "short": {}}
         lookback = parse_pnls_max_lookback_days(
             self.live_value("pnls_max_lookback_days"),
             field_name="live.pnls_max_lookback_days",
@@ -4416,12 +4424,6 @@ async def _equity_hard_stop_initialize_coin_from_history(
                 raise ValueError(
                     "compact coin HSL replay timestamps must be contiguous 1m samples"
                 )
-            if not bool(np.all(np.isfinite(compact_balances))) or bool(
-                np.any(compact_balances <= 0.0)
-            ):
-                raise ValueError(
-                    "compact coin HSL replay balances must be finite and > 0"
-                )
             if not bool(np.all(np.isfinite(compact_realized_pnl))):
                 raise ValueError("compact coin HSL replay realized_pnl must be finite")
             normalized_pair_values: dict[tuple[str, str], dict[str, Any]] = {}
@@ -4457,6 +4459,20 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     "unrealized_pnl": unrealized_values,
                 }
             compact_pair_values = normalized_pair_values
+
+        # Reject unavailable balances before replacing any live protective state.
+        if compact_replay is not None:
+            validate_history_balances(
+                compact_timestamps, compact_balances, current_balance=self.get_raw_balance(),
+            )
+        else:
+            validate_history_rows(timeline, current_balance=self.get_raw_balance())
+        self._equity_hard_stop_coin_protective_ready = False
+        self._equity_hard_stop_coin_replay_ready_pairs = set()
+        self._equity_hard_stop_coin_replay_pending_pairs = set()
+        self._equity_hard_stop_coin_replay_failure = None
+        self._equity_hard_stop_coin = {"long": {}, "short": {}}
+        self._runtime_forced_modes = {"long": {}, "short": {}}
 
         now_ms = int(self.get_exchange_time())
         lookback_ms = self._equity_hard_stop_lookback_ms()
@@ -7067,6 +7083,7 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
             if not await self.refresh_protective_authoritative_state():
                 await asyncio.sleep(0.5)
                 continue
+            validate_current_balances(self)
             for pside in list(active_red_psides):
                 state = self._hsl_state(pside)
                 n_positions = self._equity_hard_stop_count_open_positions(pside)
@@ -7169,7 +7186,7 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                     to_create,
                     configure_creations=False,
                 )
-            except FatalBotException:
+            except (FatalBotException, RiskInputUnavailable):
                 raise
             except RestartBotException as e:
                 logging.error("[risk] RED supervisor ignored restart request: %s", e)
@@ -7198,6 +7215,7 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
             if not await self.refresh_protective_authoritative_state():
                 await asyncio.sleep(0.5)
                 continue
+            validate_current_balances(self)
             for pside, symbol in list(active):
                 state = self._hsl_coin_state(pside, symbol)
                 has_position = self._equity_hard_stop_has_open_position_symbol(pside, symbol)
@@ -7313,7 +7331,7 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                     to_create,
                     configure_creations=False,
                 )
-            except FatalBotException:
+            except (FatalBotException, RiskInputUnavailable):
                 raise
             except RestartBotException as e:
                 logging.error("[risk] coin RED supervisor ignored restart request: %s", e)

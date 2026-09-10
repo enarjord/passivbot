@@ -2856,6 +2856,8 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
 @pytest.mark.asyncio
 async def test_start_bot_bounds_trading_ready_warmup_failure(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
+    bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
     bot.exchange = "bybit"
@@ -2905,6 +2907,8 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     monkeypatch, caplog
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
+    bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
     bot.exchange = "gateio"
@@ -11040,6 +11044,7 @@ def test_authoritative_barrier_does_not_block_on_balance_only_change():
 @pytest.mark.asyncio
 async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_execute():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     executes = []
 
@@ -11093,6 +11098,7 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
 @pytest.mark.asyncio
 async def test_run_execution_loop_does_not_reinitialize_coin_hsl_after_startup():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     calls = []
 
     bot.stop_signal_received = False
@@ -11150,6 +11156,7 @@ async def test_run_execution_loop_does_not_reinitialize_coin_hsl_after_startup()
 @pytest.mark.asyncio
 async def test_run_execution_loop_does_not_defer_for_completed_candles():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     executes = []
 
@@ -11216,6 +11223,7 @@ async def test_run_execution_loop_does_not_defer_for_completed_candles():
 @pytest.mark.asyncio
 async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     executes = []
     sleeps = []
@@ -11284,6 +11292,7 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
 @pytest.mark.asyncio
 async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_restart():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     sleeps = []
 
@@ -11349,6 +11358,7 @@ async def test_run_execution_loop_waits_on_bitunix_balance_confirmation_without_
 @pytest.mark.asyncio
 async def test_run_execution_loop_waits_on_degraded_pnl_without_restart():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     sleeps = []
 
@@ -11413,6 +11423,7 @@ async def test_run_execution_loop_waits_on_degraded_pnl_without_restart():
 @pytest.mark.asyncio
 async def test_run_execution_loop_waits_on_fill_coverage_without_restart():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     sleeps = []
 
@@ -11486,6 +11497,7 @@ async def test_run_execution_loop_waits_on_fill_coverage_without_restart():
 @pytest.mark.asyncio
 async def test_run_execution_loop_resets_fill_retry_backoff_when_reason_changes():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     reasons = iter(
         [
             "fill_history_coverage",
@@ -11554,6 +11566,7 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
     signal_mode,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
 
     async def stop_after_supervision():
         bot.stop_signal_received = True
@@ -11610,6 +11623,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     monkeypatch, caplog
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     cycle = {"n": 0}
     executes = []
     sleeps = []
@@ -11724,6 +11738,7 @@ async def test_refresh_market_state_updates_trailing_after_candles():
 @pytest.mark.asyncio
 async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after_refresh():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     executes = []
 
     bot.stop_signal_received = False
@@ -11770,6 +11785,7 @@ async def test_run_execution_loop_stops_before_execute_when_signal_arrives_after
 @pytest.mark.asyncio
 async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
 
     bot.stop_signal_received = False
     bot.execution_scheduled = False
@@ -11817,6 +11833,7 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
     caplog, monkeypatch
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
 
     bot.exchange = "gateio"
     bot.stop_signal_received = False
@@ -11887,6 +11904,7 @@ async def test_run_execution_loop_records_nonshutdown_cancelled_error(
 @pytest.mark.asyncio
 async def test_run_execution_loop_treats_shutdown_cancelled_error_as_clean_stop(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
 
     bot.stop_signal_received = False
     bot.execution_scheduled = False
@@ -12217,6 +12235,7 @@ def test_exchange_time_sync_warning_stays_within_full_console_line_budget():
 @pytest.mark.asyncio
 async def test_run_execution_loop_recovers_timestamp_error_without_traceback(caplog):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     bot.exchange = "binance"
     bot.stop_signal_received = False
     bot.execution_scheduled = False
@@ -12271,6 +12290,7 @@ async def test_run_execution_loop_recovers_timestamp_error_without_traceback(cap
 @pytest.mark.asyncio
 async def test_run_execution_loop_error_log_includes_type_status_and_action(caplog, monkeypatch):
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     bot.exchange = "kucoin"
     bot.stop_signal_received = False
     bot.execution_scheduled = False
@@ -13292,6 +13312,7 @@ async def test_staged_account_refresh_request_counts_missing_self_order_escalate
 @pytest.mark.asyncio
 async def test_run_execution_loop_propagates_fatal_bot_exception():
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
 
     bot.stop_signal_received = False
     bot.execution_scheduled = False
@@ -13502,6 +13523,7 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     from live.state_refresh import AuthoritativeSurfaceUnavailable
 
     bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
     bot.stop_signal_received = False
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -13532,3 +13554,111 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     bot.execute_to_exchange.assert_not_awaited()
     assert bot._equity_hard_stop_run_coin_red_supervisor.await_count == int(latched)
     assert bot._sleep_unless_shutdown.await_count == int(not latched)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["current_balance", "history", "late_balance"])
+async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monkeypatch, failure):
+    from live import risk_input_recovery as recovery
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = bot.balance_raw = 100.0
+    bot.stop_signal_received = False
+    bot.debug_mode = True
+    bot._equity_hard_stop_enabled = lambda *a, **k: failure == "history"
+    bot._equity_hard_stop_check = AsyncMock()
+    bot._set_log_silence_watchdog_context = lambda **k: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
+    bot._run_latched_hsl_supervisor_if_active = AsyncMock(return_value=False)
+    bot._authoritative_execution_barrier_state = lambda: (False, {})
+    bot._staged_execution_ready_state = lambda **kwargs: (True, {})
+    bot._handle_execution_loop_failure = AsyncMock(side_effect=AssertionError("unexpected failure"))
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+    clock = [1000.0]
+    cycle = [0]
+    monkeypatch.setattr(recovery, "monotonic", lambda: clock[0])
+
+    async def refresh():
+        cycle[0] += 1
+        bot.balance = bot.balance_raw = 0.0 if failure == "current_balance" and cycle[0] < 4 else 100.0
+        return True
+
+    async def check():
+        if cycle[0] < 4:
+            recovery.validate_history_balances([60_000], [-1.0], current_balance=100.0)
+
+    async def sleep(seconds, *, stage):
+        clock[0] += seconds
+        assert cycle[0] < 6
+
+    async def execute(*, prepare_cycle):
+        if failure == "late_balance" and cycle[0] == 1:
+            # Models a refreshed account losing its positive balance during planning.
+            recovery.validate_balances(0.0, 0.0)
+        assert cycle[0] >= (2 if failure == "late_balance" else 4)
+        return {"executed_cycle": cycle[0]}
+
+    bot.refresh_authoritative_state = refresh
+    bot._equity_hard_stop_check.side_effect = check
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=sleep)
+    bot.prepare_planning_universe = AsyncMock()
+    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
+    bot.execute_to_exchange = AsyncMock(side_effect=execute)
+    result = await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
+    assert result == {"executed_cycle": 2 if failure == "late_balance" else 4}
+    assert bot.prepare_planning_universe.await_count == (2 if failure == "late_balance" else 1)
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert bot._risk_input_recovery is None
+
+
+@pytest.mark.asyncio
+async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch):
+    from live import risk_input_recovery as recovery
+    bot = Passivbot.__new__(Passivbot)
+    bot.runtime_identity = TEST_RUNTIME_IDENTITY
+    bot._runtime_manifest_written = True
+    bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"
+    bot.start_time_ms = 1_000_000
+    bot.config = {"live": {"boot_stagger_seconds": 0}}
+    bot.user_info = {"exchange": "fake"}
+    bot.stop_signal_received = False
+    bot.debug_mode = True
+    bot._log_startup_banner = lambda: None
+    bot._log_memory_snapshot = lambda: None
+    bot._monitor_record_event = MagicMock()
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.init_markets = AsyncMock()
+    bot.warmup_trading_ready_candles = AsyncMock()
+    bot._equity_hard_stop_enabled = lambda: True
+    bot._equity_hard_stop_signal_mode = lambda: "coin"
+    bot._equity_hard_stop_start_coin_history_replay = AsyncMock()
+    bot.start_data_maintainers = AsyncMock()
+    bot.start_background_candle_warmup = AsyncMock()
+    bot.run_execution_loop = AsyncMock()
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
+    bot._run_latched_hsl_supervisor_if_active = AsyncMock(return_value=False)
+    clock, refreshes = [1000.0], [0]
+    monkeypatch.setattr(recovery, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", AsyncMock())
+
+    async def refresh():
+        refreshes[0] += 1
+        assert not bot._bot_ready
+        bot.start_data_maintainers.assert_not_awaited()
+        bot.balance = bot.balance_raw = 0.0 if refreshes[0] == 1 else 100.0
+        return True
+
+    async def sleep(seconds, *, stage):
+        clock[0] += seconds
+
+    bot.refresh_authoritative_state = AsyncMock(side_effect=refresh)
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=sleep)
+    await bot.start_bot()
+    assert refreshes[0] == 2
+    assert bot._bot_ready
+    bot.start_data_maintainers.assert_awaited_once()
+    bot._equity_hard_stop_start_coin_history_replay.assert_awaited_once()
+    bot.run_execution_loop.assert_not_awaited()  # debug mode

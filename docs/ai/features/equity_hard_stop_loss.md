@@ -103,3 +103,27 @@ adds to held positions retain their policy semantics.
 
 User-facing behavior and configuration are documented in `../../equity_hard_stop_loss.md` and
 `../../equity_hard_stop_loss_cooldown_contracts.md`.
+
+### Live balance input recovery
+
+A numeric current raw/sizing balance that is non-finite or non-positive, or an invalid balance
+in the required reconstructed HSL history, is explicitly unavailable for live risk evaluation.
+Python keeps the process alive and refreshes authoritative account/fill state instead of consuming
+the restart budget. Startup remains unready; runtime ordinary planning waits. No balance is
+clamped to a positive substitute, no required history is discarded, and HSL remains enabled.
+Malformed configuration, payload types/shapes, and unrelated validation errors retain their strict
+failure policy. Rust and individual HSL sample consumers keep their positive-balance guards.
+
+Retry delays grow from 5 seconds to 60 seconds for current balances and 300 seconds for history.
+Account refresh, shutdown observation, and independently ready protection continue between replay
+attempts. Scoped cooldown replays observe the same deadline so protective supervision cannot
+bypass the backoff. History balance validation occurs before clearing live protection; existing
+latched/cooldown state is retained on this failure. Protection may act only with its own required
+inputs; the panic planner also requires positive current balances. Deferral does not fabricate
+replacement strategy orders or new HSL state.
+
+`risk.input.status` reports the cause, bounded balance values (non-finite values are `null`), first
+invalid historical timestamp/value, invalid-row count, replay window, retry count and delay. It
+emits a warning on entry/reason change and at most every five minutes for an unchanged reason,
+then a recovery event after successful input validation and HSL initialization/check. Runtime
+readiness state is retry scheduling only and is not persisted across process restarts.
