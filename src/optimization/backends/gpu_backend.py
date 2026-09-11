@@ -2655,6 +2655,45 @@ def _select_validation_indices(
     return selected
 
 
+def _seed_proxy_key(candidate: dict) -> tuple:
+    # Match the exact effective proxy input, including inactive parameters.
+    # Canonical vector hashes serve exact-result deduplication and may collapse
+    # inputs that must not share proxy evidence.
+    return tuple(sorted((name, float(value).hex()) for name, value in candidate.items()))
+
+
+def _screen_seed_proxy_candidates(seed_candidates, base_candidate, evaluate_proxy):
+    """Include the population base in the screen without changing seed ranking."""
+    base_key = _seed_proxy_key(base_candidate) if base_candidate is not None else None
+    base_index = next(
+        (i for i, candidate in enumerate(seed_candidates)
+         if _seed_proxy_key(candidate) == base_key),
+        None,
+    ) if base_key is not None else None
+    extra = int(base_key is not None and base_index is None)
+    candidates = seed_candidates + [base_candidate] if extra else seed_candidates
+    rows = evaluate_proxy(candidates)
+    if len(rows) != len(candidates):
+        raise RuntimeError("GPU seed screen received misaligned proxy results")
+    base_row = rows[-1] if extra else (rows[base_index] if base_index is not None else None)
+    return rows[:len(seed_candidates)], base_row, extra
+
+
+def _evaluate_with_seed_proxy_reuse(candidates, cached_rows, evaluate_proxy):
+    """Reuse full-history seed evidence without changing row order or fitness."""
+    keys = [_seed_proxy_key(candidate) for candidate in candidates]
+    missing = [i for i, key in enumerate(keys) if key not in cached_rows]
+    fresh = evaluate_proxy([candidates[i] for i in missing]) if missing else []
+    if len(fresh) != len(missing):
+        raise RuntimeError("GPU seed reuse received misaligned proxy results")
+    fresh_rows = iter(fresh)
+    rows = [
+        deepcopy(cached_rows[key]) if key in cached_rows else next(fresh_rows)
+        for key in keys
+    ]
+    return rows, len(candidates) - len(missing)
+
+
 def _effective_seed_bootstrap_mode(policy: dict, seed_count: int) -> str:
     """Resolve auto without silently weakening an explicit exact request."""
 
@@ -4777,6 +4816,7 @@ def run_backend(
     sampling[0] = normalize_vector(base_vector)
     seed_policy = options["seed_bootstrap"]
     objective_scale = _ObjectiveScale()
+    initial_seed_proxy_rows = {}
     seed_proxy_metrics = None
     seed_proxy_objectives = None
     seed_proxy_violations = None
@@ -5009,6 +5049,17 @@ def run_backend(
         algorithm = checkpoint["algorithm"]
         seed = int(checkpoint.get("seed", seed))
         generation = int(checkpoint["generation"])
+        # The surrounding evaluation contract binds this evidence to the data,
+        # proxy implementation, metrics, overrides, and search configuration.
+        if generation == 0:
+            initial_seed_proxy_rows = dict(
+                checkpoint.get("initial_seed_proxy_rows", {})
+            )
+            cache_bound = population_size + int(seed_policy["max_exact"])
+            if len(initial_seed_proxy_rows) > cache_bound:
+                raise RuntimeError(
+                    "GPU checkpoint seed proxy cache exceeds its population bound"
+                )
         exact_done = int(checkpoint["exact_done"])
         seed_exact_done = int(checkpoint.get("seed_exact_done", 0))
         seed_bootstrap_complete = bool(
@@ -5192,6 +5243,7 @@ def run_backend(
             ),
             "seed_bootstrap_contract": deepcopy(seed_bootstrap_contract),
             "seed_bootstrap_plan": seed_plan,
+            "initial_seed_proxy_rows": initial_seed_proxy_rows,
             "anchor_plan": deepcopy(get_anchor_plan(config)),
             "completed_hashes": sorted(completed_hashes),
             "scale_median": objective_scale.median,
@@ -5263,13 +5315,20 @@ def run_backend(
             [normalize_vector(vector) for vector in starting_vectors],
             dtype=np.float64,
         )
-        proxy_metric_rows = evaluate_proxy(parameter_dicts(seed_rows))
+        seed_candidates = parameter_dicts(seed_rows)
+        base_candidate = (
+            parameter_dicts(sampling[:1])[0] if not halving_policy["enabled"] else None
+        )
+        proxy_metric_rows, base_proxy_row, extra_base = _screen_seed_proxy_candidates(
+            seed_candidates, base_candidate, evaluate_proxy
+        )
         seed_proxy_seconds = time.perf_counter() - seed_proxy_started
         logging.info(
-            "GPU seed proxy screen complete | seeds=%d wall=%.2fs rate=%.1f/s",
+            "GPU seed proxy screen complete | seeds=%d wall=%.2fs rate=%.1f/s base_extra=%d",
             len(starting_vectors),
             seed_proxy_seconds,
-            len(starting_vectors) / max(seed_proxy_seconds, 1.0e-9),
+            (len(starting_vectors) + extra_base) / max(seed_proxy_seconds, 1.0e-9),
+            extra_base,
         )
         seed_proxy_objectives, seed_proxy_violations = proxy_fitness(
             proxy_metric_rows
@@ -5292,9 +5351,20 @@ def run_backend(
             seed_proxy_violations,
             count=min(len(starting_vectors), population_size - 1),
         )
-        # Keep only compact objective arrays and the selected exact-validation
-        # metric rows. Full per-seed metrics and normalized screen inputs can be
-        # substantial for large seed archives.
+        if not halving_policy["enabled"]:
+            # Exact preference can reorder the initial population, so retain
+            # the union of both bounded selection sets, never the whole archive.
+            reuse_indices = set(seed_population_indices) | set(seed_proxy_metrics)
+            initial_seed_proxy_rows[_seed_proxy_key(base_candidate)] = base_proxy_row
+            initial_seed_proxy_rows.update(
+                {
+                    _seed_proxy_key(seed_candidates[index]): proxy_metric_rows[index]
+                    for index in reuse_indices
+                }
+            )
+        del seed_candidates
+        # Retain bounded selected metric rows and compact objective arrays;
+        # release the full archive's metrics and normalized screen inputs.
         del proxy_metric_rows
         del seed_rows
         seed_screen_complete = True
@@ -5670,6 +5740,7 @@ def run_backend(
                     )
                     proxy_profile_records.append(record)
 
+            seed_proxy_reused = 0
             if halving_policy["enabled"]:
                 (
                     metric_rows,
@@ -5686,7 +5757,16 @@ def run_backend(
                     stage_callback=capture_halving_profile,
                 )
             else:
-                metric_rows = evaluate_proxy(proxy_candidates)
+                if initial_seed_proxy_rows:
+                    metric_rows, seed_proxy_reused = _evaluate_with_seed_proxy_reuse(
+                        proxy_candidates, initial_seed_proxy_rows, evaluate_proxy
+                    )
+                    logging.info(
+                        "GPU initial population seed reuse | reused=%d evaluated=%d",
+                        seed_proxy_reused, len(proxy_candidates) - seed_proxy_reused,
+                    )
+                else:
+                    metric_rows = evaluate_proxy(proxy_candidates)
                 proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
                 full_rung_indices = np.arange(len(rows), dtype=np.int64)
                 halving_trace = []
@@ -5696,7 +5776,7 @@ def run_backend(
             proxy_evaluations += (
                 sum(int(item["candidate_count"]) for item in halving_trace)
                 if halving_trace
-                else len(rows)
+                else len(rows) - seed_proxy_reused
             )
             if halving_trace:
                 logging.info(
@@ -5734,6 +5814,7 @@ def run_backend(
             )
             generation_in_progress = False
             generation += 1
+            initial_seed_proxy_rows.clear()
             # PyTorch MPS may consume KeyboardInterrupt while waiting for a
             # Metal dispatch. Finish the in-progress ask/tell transaction, then
             # honor the latched signal before exact work is submitted. This is
@@ -5813,7 +5894,7 @@ def run_backend(
                 generation_wall_seconds = (
                     time.perf_counter() - generation_profile_started
                 )
-                if not halving_policy["enabled"]:
+                if not halving_policy["enabled"] and seed_proxy_reused < len(rows):
                     proxy_profile_records = [
                         deepcopy(getattr(item, "last_profile", {}))
                         for item in profile_proxies
@@ -5832,6 +5913,7 @@ def run_backend(
                     "generation",
                     generation=generation,
                     population_size=len(rows),
+                    seed_proxy_reused=seed_proxy_reused,
                     successive_halving=halving_trace,
                     full_history_candidate_count=len(full_rung_indices),
                     proxy_profiles=proxy_profile_records,

@@ -773,7 +773,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   active-volatility kernels, nor to kernels with optional metric feature paths enabled.
 - `seed_bootstrap.mode` controls `-t/--start` handling. `auto` exact-evaluates all deduplicated seeds
   up to `seed_bootstrap.max_exact`, then switches to full-history proxy screening plus capped exact
-  validation for larger pools. `exact` forces exact evaluation of every seed even above the cap;
+  validation for larger pools. With successive halving disabled, screened seeds reuse their
+  full-history proxy metrics in the initial population. This bounded cache survives resume and is
+  released after the initial population completes; exact validation still runs normally. The
+  initial base-config candidate is screened alongside the seeds, without entering seed ranking
+  or drift calibration, so a fully seeded population can avoid replay entirely.
+  `exact` forces exact evaluation of every seed even above the cap;
   `screened` always performs proxy screening and validates at most the cap; and `legacy` restores
   the former behavior of copying seeds directly into the first proxy population without an
   authoritative bootstrap archive. Bootstrap exact evaluations are recorded in `all_results.bin`
