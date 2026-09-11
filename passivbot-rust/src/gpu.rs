@@ -1290,7 +1290,9 @@ mod tests {
         assert!(source.contains("passes_min_effective_cost"));
         assert!(source.contains("projected_cost_lower"));
         assert!(source.contains("float guaranteed_balance_lower"));
-        assert_eq!(source.matches("bool min_cost_exact_open_uncertain").count(), 1);
+        // The temporal replay record also preserves this mutable gate state.
+        assert_eq!(source.matches("bool min_cost_exact_open_uncertain").count(), 2);
+        assert!(source.contains("kernel void passivbot_tm_single_coin_replay_state_bytes"));
         assert!(source.contains("guaranteed_balance_lower = 0.0f"));
         assert!(!source.contains("accumulate_min_cost_balance_error"));
         assert!(source.contains("for (int rung = 0; rung < 500; ++rung)"));

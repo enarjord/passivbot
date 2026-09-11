@@ -1807,6 +1807,113 @@ inline bool force_close_delisted_position(
     return true;
 }
 
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+// Only mutable replay state crosses dispatches. Candle indices and all input
+// parameters retain their original full-history coordinates.
+struct TrailingMartingaleSingleCoinReplayState {
+    TmSide long_side;
+    TmSide short_side;
+    HslState long_hsl;
+    HslState short_hsl;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    HslStrategyEquityStats long_hsl_strategy_eq;
+    HslStrategyEquityStats short_hsl_strategy_eq;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+    HslDrawdownEmaTailStats long_hsl_ema_tail;
+    HslDrawdownEmaTailStats short_hsl_ema_tail;
+#endif
+    HslRollingPnlWindow long_rolling_pnl;
+    HslRollingPnlWindow short_rolling_pnl;
+    float balance;
+    float realized_pnl_cumsum_last;
+    float realized_pnl_cumsum_max;
+    float realized_pnl_cumsum_long;
+    float realized_pnl_cumsum_short;
+    float pnl_recovery_peak;
+    float pnl_recovery_peak_k;
+    float pnl_recovery_max_min;
+    float profit_sum;
+    float loss_sum;
+    float profit_sum_long;
+    float loss_sum_long;
+    float profit_sum_short;
+    float loss_sum_short;
+    float fill_count;
+    float fill_count_entry;
+    float fill_count_long;
+    float fills_active_days_count;
+    int last_active_fill_day;
+    bool alive;
+    bool min_cost_exact_open_uncertain;
+    int liq_day;
+    float held_max_min;
+    float held_sum_min;
+    float held_sum_sq_min;
+    float held_count;
+    float position_unchanged_max_min;
+    float long_position_last_fill_k;
+    float short_position_last_fill_k;
+    float last_fill_k;
+    float first_fill_k;
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+    float long_last_initial_entry_k;
+    float short_last_initial_entry_k;
+#endif
+    float gap_max_min;
+    float gap_sum_squared_hours;
+    float run_peak;
+    float max_dd;
+    float total_wallet_exposure_max;
+    float total_wallet_exposure_mean;
+    float total_wallet_exposure_samples;
+    float last_high_k;
+    float recovery_max_min;
+    float account_peak;
+    float account_peak_k;
+    float account_recovery_max_min;
+    float first_eq_k;
+    float last_eq_k;
+    bool eq_started;
+#if PASSIVBOT_BTC_RISK_ENABLED
+    BtcRiskState btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+    EquityBalanceDiffState equity_balance_diff_state;
+#endif
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+    int recovery_start_k;
+#endif
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    float hsl_tier_samples_total;
+    float hsl_tier_samples_yellow;
+    float hsl_tier_samples_orange;
+    float hsl_tier_samples_red;
+#endif
+    int cur_day;
+    bool day_touched;
+    float day_end;
+    float day_min;
+    float day_dd;
+    float day_volume;
+    float day_has_fill;
+    float day_start_balance;
+    float day_fill_count;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+    float bounded_hour_high;
+    float bounded_hour_low;
+    float bounded_hour_latest;
+    bool bounded_hour_has_price;
+    bool bounded_hour_latest_valid;
+    bool bounded_hour_synced;
+#endif
+};
+
+kernel void passivbot_tm_single_coin_replay_state_bytes(device uint* result) {
+    result[0] = sizeof(TrailingMartingaleSingleCoinReplayState);
+}
+#endif
+
 inline void passivbot_single_coin_impl(
     constant float* bars,
     constant int* flags,
@@ -1831,6 +1938,10 @@ inline void passivbot_single_coin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    device TrailingMartingaleSingleCoinReplayState* replay_states,
+    constant int* replay_range,
+#endif
     uint b
 ) {
     const int B = sizes[0];
@@ -1853,6 +1964,11 @@ inline void passivbot_single_coin_impl(
     const int recovery_sample_count = sizes[12];
 #endif
     if (b >= uint(B)) return;
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    // Preserve a fatal valuation marker through later dispatches without
+    // reading a state slot that the failing first chunk never initialized.
+    if (scalars[int(b) * SCALAR_COLS + 9] < -1.0f) return;
+#endif
 
     const float qty_step = settings[0];
     const float price_step = settings[1];
@@ -2002,6 +2118,9 @@ inline void passivbot_single_coin_impl(
     float day_start_balance = balance;
     float day_fill_count = 0.0f;
 
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    if (replay_range[0] <= (recent_history_window ? max(seed_k + 1, 1) : 1)) {
+#endif
     for (int j = 0; j < GAP_BINS; ++j) {
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
@@ -2009,6 +2128,10 @@ inline void passivbot_single_coin_impl(
     init_entry_interval_output(
         entry_interval_stats, entry_interval_counts, b
     );
+#endif
+
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    }
 #endif
 
 #if !PASSIVBOT_TM_VOLATILITY_DISABLED
@@ -2031,7 +2154,113 @@ inline void passivbot_single_coin_impl(
 #endif
 
     const int loop_start = recent_history_window ? max(seed_k + 1, 1) : 1;
-    for (int k = loop_start; k < T - 1; ++k) {
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    if (replay_range[0] > loop_start) {
+        const TrailingMartingaleSingleCoinReplayState state = replay_states[b];
+        long_side = state.long_side;
+        short_side = state.short_side;
+        long_hsl = state.long_hsl;
+        short_hsl = state.short_hsl;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        long_hsl_strategy_eq = state.long_hsl_strategy_eq;
+        short_hsl_strategy_eq = state.short_hsl_strategy_eq;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        long_hsl_ema_tail = state.long_hsl_ema_tail;
+        short_hsl_ema_tail = state.short_hsl_ema_tail;
+#endif
+        long_rolling_pnl = state.long_rolling_pnl;
+        short_rolling_pnl = state.short_rolling_pnl;
+        balance = state.balance;
+        realized_pnl_cumsum_last = state.realized_pnl_cumsum_last;
+        realized_pnl_cumsum_max = state.realized_pnl_cumsum_max;
+        realized_pnl_cumsum_long = state.realized_pnl_cumsum_long;
+        realized_pnl_cumsum_short = state.realized_pnl_cumsum_short;
+        pnl_recovery_peak = state.pnl_recovery_peak;
+        pnl_recovery_peak_k = state.pnl_recovery_peak_k;
+        pnl_recovery_max_min = state.pnl_recovery_max_min;
+        profit_sum = state.profit_sum;
+        loss_sum = state.loss_sum;
+        profit_sum_long = state.profit_sum_long;
+        loss_sum_long = state.loss_sum_long;
+        profit_sum_short = state.profit_sum_short;
+        loss_sum_short = state.loss_sum_short;
+        fill_count = state.fill_count;
+        fill_count_entry = state.fill_count_entry;
+        fill_count_long = state.fill_count_long;
+        fills_active_days_count = state.fills_active_days_count;
+        last_active_fill_day = state.last_active_fill_day;
+        alive = state.alive;
+        min_cost_exact_open_uncertain = state.min_cost_exact_open_uncertain;
+        liq_day = state.liq_day;
+        held_max_min = state.held_max_min;
+        held_sum_min = state.held_sum_min;
+        held_sum_sq_min = state.held_sum_sq_min;
+        held_count = state.held_count;
+        position_unchanged_max_min = state.position_unchanged_max_min;
+        long_position_last_fill_k = state.long_position_last_fill_k;
+        short_position_last_fill_k = state.short_position_last_fill_k;
+        last_fill_k = state.last_fill_k;
+        first_fill_k = state.first_fill_k;
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+        long_last_initial_entry_k = state.long_last_initial_entry_k;
+        short_last_initial_entry_k = state.short_last_initial_entry_k;
+#endif
+        gap_max_min = state.gap_max_min;
+        gap_sum_squared_hours = state.gap_sum_squared_hours;
+        run_peak = state.run_peak;
+        max_dd = state.max_dd;
+        total_wallet_exposure_max = state.total_wallet_exposure_max;
+        total_wallet_exposure_mean = state.total_wallet_exposure_mean;
+        total_wallet_exposure_samples = state.total_wallet_exposure_samples;
+        last_high_k = state.last_high_k;
+        recovery_max_min = state.recovery_max_min;
+        account_peak = state.account_peak;
+        account_peak_k = state.account_peak_k;
+        account_recovery_max_min = state.account_recovery_max_min;
+        first_eq_k = state.first_eq_k;
+        last_eq_k = state.last_eq_k;
+        eq_started = state.eq_started;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        btc_risk = state.btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        equity_balance_diff_state = state.equity_balance_diff_state;
+#endif
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        recovery_start_k = state.recovery_start_k;
+#endif
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        hsl_tier_samples_total = state.hsl_tier_samples_total;
+        hsl_tier_samples_yellow = state.hsl_tier_samples_yellow;
+        hsl_tier_samples_orange = state.hsl_tier_samples_orange;
+        hsl_tier_samples_red = state.hsl_tier_samples_red;
+#endif
+        cur_day = state.cur_day;
+        day_touched = state.day_touched;
+        day_end = state.day_end;
+        day_min = state.day_min;
+        day_dd = state.day_dd;
+        day_volume = state.day_volume;
+        day_has_fill = state.day_has_fill;
+        day_start_balance = state.day_start_balance;
+        day_fill_count = state.day_fill_count;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+        bounded_hour_high = state.bounded_hour_high;
+        bounded_hour_low = state.bounded_hour_low;
+        bounded_hour_latest = state.bounded_hour_latest;
+        bounded_hour_has_price = state.bounded_hour_has_price;
+        bounded_hour_latest_valid = state.bounded_hour_latest_valid;
+        bounded_hour_synced = state.bounded_hour_synced;
+#endif
+    }
+    const int replay_start = max(loop_start, replay_range[0]);
+    const int replay_stop = min(T - 1, replay_range[1]);
+#else
+    const int replay_start = loop_start;
+    const int replay_stop = T - 1;
+#endif
+    for (int k = replay_start; k < replay_stop; ++k) {
         const int bo = k * 5;
         const int fo = k * 11;
         const float high = bars[bo + 0];
@@ -4470,6 +4699,110 @@ inline void passivbot_single_coin_impl(
         }
     }
 
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    if (replay_stop < T - 1) {
+        TrailingMartingaleSingleCoinReplayState state;
+        state.long_side = long_side;
+        state.short_side = short_side;
+        state.long_hsl = long_hsl;
+        state.short_hsl = short_hsl;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        state.long_hsl_strategy_eq = long_hsl_strategy_eq;
+        state.short_hsl_strategy_eq = short_hsl_strategy_eq;
+#endif
+#if PASSIVBOT_HSL_EMA_TAIL_ENABLED
+        state.long_hsl_ema_tail = long_hsl_ema_tail;
+        state.short_hsl_ema_tail = short_hsl_ema_tail;
+#endif
+        state.long_rolling_pnl = long_rolling_pnl;
+        state.short_rolling_pnl = short_rolling_pnl;
+        state.balance = balance;
+        state.realized_pnl_cumsum_last = realized_pnl_cumsum_last;
+        state.realized_pnl_cumsum_max = realized_pnl_cumsum_max;
+        state.realized_pnl_cumsum_long = realized_pnl_cumsum_long;
+        state.realized_pnl_cumsum_short = realized_pnl_cumsum_short;
+        state.pnl_recovery_peak = pnl_recovery_peak;
+        state.pnl_recovery_peak_k = pnl_recovery_peak_k;
+        state.pnl_recovery_max_min = pnl_recovery_max_min;
+        state.profit_sum = profit_sum;
+        state.loss_sum = loss_sum;
+        state.profit_sum_long = profit_sum_long;
+        state.loss_sum_long = loss_sum_long;
+        state.profit_sum_short = profit_sum_short;
+        state.loss_sum_short = loss_sum_short;
+        state.fill_count = fill_count;
+        state.fill_count_entry = fill_count_entry;
+        state.fill_count_long = fill_count_long;
+        state.fills_active_days_count = fills_active_days_count;
+        state.last_active_fill_day = last_active_fill_day;
+        state.alive = alive;
+        state.min_cost_exact_open_uncertain = min_cost_exact_open_uncertain;
+        state.liq_day = liq_day;
+        state.held_max_min = held_max_min;
+        state.held_sum_min = held_sum_min;
+        state.held_sum_sq_min = held_sum_sq_min;
+        state.held_count = held_count;
+        state.position_unchanged_max_min = position_unchanged_max_min;
+        state.long_position_last_fill_k = long_position_last_fill_k;
+        state.short_position_last_fill_k = short_position_last_fill_k;
+        state.last_fill_k = last_fill_k;
+        state.first_fill_k = first_fill_k;
+#if PASSIVBOT_ENTRY_INTERVAL_ENABLED
+        state.long_last_initial_entry_k = long_last_initial_entry_k;
+        state.short_last_initial_entry_k = short_last_initial_entry_k;
+#endif
+        state.gap_max_min = gap_max_min;
+        state.gap_sum_squared_hours = gap_sum_squared_hours;
+        state.run_peak = run_peak;
+        state.max_dd = max_dd;
+        state.total_wallet_exposure_max = total_wallet_exposure_max;
+        state.total_wallet_exposure_mean = total_wallet_exposure_mean;
+        state.total_wallet_exposure_samples = total_wallet_exposure_samples;
+        state.last_high_k = last_high_k;
+        state.recovery_max_min = recovery_max_min;
+        state.account_peak = account_peak;
+        state.account_peak_k = account_peak_k;
+        state.account_recovery_max_min = account_recovery_max_min;
+        state.first_eq_k = first_eq_k;
+        state.last_eq_k = last_eq_k;
+        state.eq_started = eq_started;
+#if PASSIVBOT_BTC_RISK_ENABLED
+        state.btc_risk = btc_risk;
+#endif
+#if PASSIVBOT_EQUITY_BALANCE_DIFF_ENABLED
+        state.equity_balance_diff_state = equity_balance_diff_state;
+#endif
+#ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
+        state.recovery_start_k = recovery_start_k;
+#endif
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        state.hsl_tier_samples_total = hsl_tier_samples_total;
+        state.hsl_tier_samples_yellow = hsl_tier_samples_yellow;
+        state.hsl_tier_samples_orange = hsl_tier_samples_orange;
+        state.hsl_tier_samples_red = hsl_tier_samples_red;
+#endif
+        state.cur_day = cur_day;
+        state.day_touched = day_touched;
+        state.day_end = day_end;
+        state.day_min = day_min;
+        state.day_dd = day_dd;
+        state.day_volume = day_volume;
+        state.day_has_fill = day_has_fill;
+        state.day_start_balance = day_start_balance;
+        state.day_fill_count = day_fill_count;
+#if !PASSIVBOT_TM_VOLATILITY_DISABLED
+        state.bounded_hour_high = bounded_hour_high;
+        state.bounded_hour_low = bounded_hour_low;
+        state.bounded_hour_latest = bounded_hour_latest;
+        state.bounded_hour_has_price = bounded_hour_has_price;
+        state.bounded_hour_latest_valid = bounded_hour_latest_valid;
+        state.bounded_hour_synced = bounded_hour_synced;
+#endif
+        replay_states[b] = state;
+        return;
+    }
+#endif
+
     if (day_touched && cur_day >= 0 && cur_day < D) {
         int o = (int(b) * D + cur_day) * DAILY_COLS;
         daily[o + 0] = day_end;
@@ -4695,6 +5028,10 @@ kernel void passivbot_trailing_martingale(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+    device TrailingMartingaleSingleCoinReplayState* replay_states,
+    constant int* replay_range,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_single_coin_impl(
@@ -4712,6 +5049,9 @@ kernel void passivbot_trailing_martingale(
         rolling_pnl_values, rolling_pnl_indices,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#ifdef PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY
+        replay_states, replay_range,
 #endif
         b
     );

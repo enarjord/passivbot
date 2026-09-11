@@ -752,8 +752,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   size, candidate order, NSGA-II ask/tell semantics, and the number of proxy evaluations are
   unchanged. Ctrl+C is polled between those bounded dispatches. If it arrives during a generation,
   that incomplete ask/tell transaction is discarded and the last complete checkpoint is retained.
-  A topology whose single candidate already exceeds the safety envelope fails closed with guidance
-  to shorten the date range or reduce its coin count.
+  Long-history, single-coin Trailing Martingale with both sides enabled can instead split history
+  into chunks of at most 96,000 candles and run up to 1,024 candidates concurrently. The complete
+  replay state remains on the GPU between chunks; metrics are finalized only after the last chunk.
+  The same work envelope applies to each chunk, and interruption is checked between chunks.
+  Topologies without temporal replay fail closed when even one candidate exceeds the envelope,
+  with guidance to shorten the date range or reduce the coin count.
 - `max_dispatch_candidate_bars` sets that MPS work envelope. The default is 1 billion, allowing
   roughly 512 candidates per dispatch across 1.95 million one-sided candle bars on a dedicated
   optimization Mac. Set it to `500000000` for the former conservative behavior when desktop
