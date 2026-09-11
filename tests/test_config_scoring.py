@@ -111,6 +111,16 @@ def test_peak_recovery_days_strategy_eq_normalizes_to_recovery_max_alias():
     ]
 
 
+@pytest.mark.parametrize("suffix", ["", "_mean", "_min", "_max", "_std", "_median"])
+def test_profit_ratio_alias_resolves_both_artifact_spellings(suffix):
+    alias = f"long_short_profit_ratio{suffix}"
+    canonical = f"pnl_ratio_long_short{suffix}"
+
+    assert canonicalize_metric_name(alias) == canonical
+    assert resolve_metric_value({alias: 0.3}, canonical) == 0.3
+    assert resolve_metric_value({canonical: 0.3}, alias) == 0.3
+
+
 def test_strategy_eq_recovery_max_resolves_legacy_peak_metric_value():
     metrics = {
         "peak_recovery_days_strategy_eq": 12.5,

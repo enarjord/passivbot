@@ -835,6 +835,33 @@ def test_load_config_malformed_optimize_limits_raises(tmp_path):
 
 
 @pytest.mark.parametrize("surface", ["scoring", "limits"])
+@pytest.mark.parametrize("backend", ["gpu", "pymoo"])
+def test_profit_ratio_alias_survives_config_roundtrip_and_gpu_preflight(
+    surface, backend, tmp_path
+):
+    cfg = get_template_config()
+    cfg["optimize"]["backend"] = backend
+    entry = (
+        {"goal": "max", "metric": "long_short_profit_ratio"}
+        if surface == "scoring"
+        else {"metric": "long_short_profit_ratio", "penalize_if": "less_than_or_equal", "value": 0.2}
+    )
+    cfg["optimize"][surface] = [entry]
+    path = tmp_path / "profit_ratio.json"
+    path.write_text(json.dumps(cfg))
+
+    loaded = load_config(str(path), verbose=False)
+    prepared = prepare_config(loaded, verbose=False)
+    assert prepared["optimize"][surface][0]["metric"] == "pnl_ratio_long_short"
+    assert prepared["_raw"]["optimize"][surface][0]["metric"] == "long_short_profit_ratio"
+    reject_configured_exact_only_gpu_metrics(prepared)
+
+    path.write_text(json.dumps(format_config(prepared, verbose=False)))
+    reloaded = load_config(str(path), verbose=False)
+    assert reloaded["optimize"][surface] == prepared["optimize"][surface]
+
+
+@pytest.mark.parametrize("surface", ["scoring", "limits"])
 def test_prepare_gpu_config_preserves_exact_only_alias_provenance(
     surface,
 ):

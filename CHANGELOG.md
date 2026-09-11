@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Accept `long_short_profit_ratio` as an alias for `pnl_ratio_long_short` in optimizer scoring
+  and limits, including GPU optimization, reusing the existing metric calculation.
+
 - GPU optimization uses bounded temporal replay for long-history, single-coin Trailing Martingale
   with both sides enabled, allowing more concurrent candidates while preserving replay state,
   per-dispatch work limits, and interruption checkpoints.

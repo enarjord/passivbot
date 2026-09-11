@@ -58,6 +58,12 @@ def test_proxy_metric_validation_canonicalizes_retained_cpu_shorthand():
     }
 
 
+def test_proxy_metric_validation_accepts_profit_ratio_alias():
+    assert validate_gpu_metric_names(
+        ["long_short_profit_ratio", "pnl_ratio_long_short"]
+    ) == {"pnl_ratio_long_short"}
+
+
 def _assert_proxy_surface_partition(metric_names):
     names = set(metric_names)
     assert names - GPU_EXACT_ONLY_METRICS <= set(SUPPORTED_METRICS)

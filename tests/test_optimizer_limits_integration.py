@@ -15,6 +15,21 @@ def _make_config(limits, scoring=None):
     return cfg
 
 
+@pytest.mark.parametrize("ratio", [0.1, 0.2, 0.3, 0.5, 1.5, -0.5])
+def test_profit_ratio_alias_matches_canonical_limit_fitness(ratio):
+    results = []
+    for name in ("long_short_profit_ratio", "pnl_ratio_long_short"):
+        cfg = _make_config(
+            [{"metric": name, "penalize_if": "less_than_or_equal", "value": 0.2}]
+        )
+        evaluator = Evaluator({}, {}, {}, cfg)
+        results.append(
+            evaluator.calc_fitness({"adg_mean": 0.001, "pnl_ratio_long_short_mean": ratio})
+        )
+    assert results[0] == results[1]
+    assert (results[0][1] > 0.0) == (ratio <= 0.2)
+
+
 def test_evaluator_applies_limit_penalties():
     limits = [
         {"metric": "drawdown_worst", "penalize_if": "greater_than", "value": 0.4, "stat": "max"},
