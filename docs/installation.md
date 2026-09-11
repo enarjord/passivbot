@@ -79,9 +79,14 @@ Common errors:
 ## 5. Verify the install
 
 ```bash
+python3 -c "import passivbot_rust; print(passivbot_rust.__file__)"
 passivbot --version
 passivbot -h
 ```
+
+The import check loads the compiled Rust extension without starting a bot or contacting an
+exchange. It catches a missing extension or an ABI/shared-library loading failure; root CLI help
+and version output alone do not load the extension.
 
 Contributors who installed the `[dev]` profile can also run `pytest -q`. Pytest is not included
 in the live-only or `[full]` profiles; running the test suite is not required to verify a live-only
@@ -94,7 +99,9 @@ passivbot backtest -h
 passivbot optimize -h
 ```
 
-If pytest reports missing `passivbot_rust`, double-check that the venv is active and `maturin develop --release` completed successfully.
+If the import check fails, double-check that the venv is active and rebuild with
+`maturin develop --release`. The printed path should identify the extension/package in the intended
+environment.
 
 ## 6. Keeping it up to date
 

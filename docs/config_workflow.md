@@ -16,7 +16,8 @@ This is the recommended way to work with Passivbot configs on the current config
 
 ## Recommended Workflow
 
-1. Copy `configs/examples/default_trailing_martingale_long.json` to a new file.
+1. Copy `configs/examples/default_trailing_martingale_long.json` to a new file under
+   `configs/private/`, which is ignored by Git.
 2. Edit that new file for your account, market universe, and strategy changes.
 3. Use `passivbot backtest` first.
 4. Use `passivbot optimize` if you want to tune parameters or compare alternatives.
@@ -26,11 +27,11 @@ This is the recommended way to work with Passivbot configs on the current config
 Example:
 
 ```bash
-mkdir -p configs/live
-cp configs/examples/default_trailing_martingale_long.json configs/live/my_config.json
-passivbot backtest configs/live/my_config.json -s BTC -sd 2025 --suite n
-passivbot optimize configs/live/my_config.json -s BTC -sd 2025 -c 4 --suite n
-passivbot live configs/live/my_config.json
+mkdir -p configs/private
+cp configs/examples/default_trailing_martingale_long.json configs/private/my_config.json
+passivbot backtest configs/private/my_config.json -s BTC -sd 2025 --suite n
+passivbot optimize configs/private/my_config.json -s BTC -sd 2025 -c 4 --suite n
+passivbot live configs/private/my_config.json
 ```
 
 ## Best Practices
@@ -89,7 +90,7 @@ passivbot optimize -s BTC -sd 2025 -c 4 --suite n
 Live from an explicit config:
 
 ```bash
-passivbot live configs/live/my_config.json
+passivbot live configs/private/my_config.json
 ```
 
 ## Related Docs
