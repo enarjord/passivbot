@@ -18,6 +18,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     GAP_BINS,
     MPS_TM_MULTICOIN_CHUNK_BARS,
+    MPS_TM_SINGLE_COIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     ProxyMarket,
     ProxyRun,
@@ -742,6 +743,7 @@ def _trailing_martingale_shader_library(
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
     hsl_diagnostics_enabled: bool = True,
+    temporal_chunking: bool = False,
 ):
     if not torch.backends.mps.is_available():
         raise RuntimeError("Apple MPS is not available in this process")
@@ -768,6 +770,8 @@ def _trailing_martingale_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
+    if temporal_chunking:
+        source = "#define PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY 1\n" + source
     return torch.mps.compile_shader(source)
 
 
@@ -2945,9 +2949,20 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         hsl_enabled: bool = True,
         hsl_diagnostics_enabled: bool = True,
         entry_interval_enabled: bool = False,
+        max_dispatch_candidate_bars: int | None = None,
+        interrupt_check=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if max_dispatch_candidate_bars is not None:
+            if max_dispatch_candidate_bars <= 0:
+                raise ValueError("max_dispatch_candidate_bars must be positive")
+            if not (self.long_enabled and self.short_enabled):
+                raise ValueError("single-coin temporal replay requires both sides")
+        self.max_dispatch_candidate_bars = max_dispatch_candidate_bars
+        self.interrupt_check = interrupt_check or (lambda: None)
+        self._replay_state_sizes = {}
+        self._replay_states = {}
         self._encode_hour_boundary_flags()
         self.hsl_diagnostics_enabled = bool(hsl_diagnostics_enabled)
         if not self.hsl_diagnostics_enabled and (
@@ -3077,6 +3092,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
             self.hsl_diagnostics_enabled,
+            self.max_dispatch_candidate_bars is not None,
         )
 
     def _entry_interval_buffers(self, batch_size: int):
@@ -3327,12 +3343,70 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
-            library.passivbot_trailing_martingale(
-                *kernel_args,
-                threads=(batch_size, 1, 1),
+            if self.max_dispatch_candidate_bars is None:
+                library.passivbot_trailing_martingale(
+                    *kernel_args, threads=(batch_size, 1, 1)
+                )
+                return {"dispatch_count": 1}
+            chunk_bars = min(
+                MPS_TM_SINGLE_COIN_CHUNK_BARS,
+                self.max_dispatch_candidate_bars // (batch_size * 2),
             )
+            if chunk_bars < 1:
+                raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
+            if library_args not in self._replay_state_sizes:
+                size = torch.empty(1, dtype=torch.int32, device="mps")
+                library.passivbot_tm_single_coin_replay_state_bytes(size, threads=1)
+                self._replay_state_sizes[library_args] = int(size.item())
+            # Feature specialization changes the state ABI. Only the current
+            # candidate batch allocation is retained across evaluations.
+            state_bytes = self._replay_state_sizes[library_args]
+            state_key = (batch_size, state_bytes)
+            if state_key not in self._replay_states:
+                self._replay_states = {state_key: torch.empty(
+                    (batch_size, state_bytes), dtype=torch.uint8, device="mps"
+                )}
+            replay_states = self._replay_states[state_key]
+            begin = max(1, effective_history_start + 1)
+            stop = effective_end_step - 1
+            count = 0
+            longest = 0.0
+            replay_started = time.perf_counter()
+            next_progress = replay_started + 30.0
+            for first in range(begin, stop, chunk_bars):
+                self.interrupt_check()
+                replay_range = torch.tensor(
+                    [first, min(first + chunk_bars, stop)],
+                    dtype=torch.int32, device="mps",
+                )
+                started = time.perf_counter()
+                library.passivbot_trailing_martingale(
+                    *kernel_args, replay_states, replay_range,
+                    threads=(batch_size, 1, 1),
+                    group_size=(min(batch_size, 64), 1, 1),
+                )
+                torch.mps.synchronize()
+                longest = max(longest, time.perf_counter() - started)
+                count += 1
+                now = time.perf_counter()
+                if now >= next_progress and first + chunk_bars < stop:
+                    logging.info(
+                        "GPU temporal replay progress | candidates=%d bars=%d/%d elapsed=%.1fs",
+                        batch_size, first + chunk_bars - begin, stop - begin,
+                        now - replay_started,
+                    )
+                    next_progress = now + 30.0
+            self.interrupt_check()
+            return {
+                "dispatch_count": count,
+                "temporal_chunk_bars": chunk_bars,
+                "kernel_candidate_steps": batch_size * (stop - begin),
+                "replay_state_bytes_per_candidate": state_bytes,
+                "threads_per_threadgroup": min(batch_size, 64),
+                "max_dispatch_seconds": longest,
+            }
 
-        dispatch_once()
+        dispatch_profile = dispatch_once()
         if profile:
             torch.mps.synchronize()
             finished = time.perf_counter()
@@ -3343,7 +3417,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 "pre_dispatch_sync_seconds": dispatched - compiled,
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
-                "dispatch_count": 1,
+                **dispatch_profile,
                 "cold": cold,
                 "effective_candle_count": effective_end_step
                 - max(0, effective_history_start),

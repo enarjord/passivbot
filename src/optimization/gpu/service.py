@@ -34,6 +34,8 @@ from optimization.gpu.model import (
     HSL_COIN_OVERRIDE_PATHS,
     MPS_MULTICOIN_MAX_COINS,
     MPS_TM_MULTICOIN_CHUNK_BARS,
+    MPS_TM_SINGLE_COIN_CHUNK_BARS,
+    MPS_TM_SINGLE_COIN_CHUNK_CANDIDATES,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
     ProxyMarket,
@@ -718,6 +720,31 @@ def _single_coin_candle_interval_minutes(backtest_params: dict) -> int:
             "integer >= 1"
         )
     return int(interval)
+
+
+def _mps_single_coin_dispatch_plan(
+    strategy_kind: str, requested_batch_size: int, *, n_bars: int,
+    n_sides: int, max_candidate_bars: int,
+) -> tuple[bool, int, int]:
+    temporal_chunking = (
+        strategy_kind == "trailing_martingale"
+        and n_sides == 2
+        and n_bars > MPS_TM_SINGLE_COIN_CHUNK_BARS
+        and n_bars * n_sides * min(
+            requested_batch_size, MPS_TM_SINGLE_COIN_CHUNK_CANDIDATES
+        ) > max_candidate_bars
+    )
+    dispatch_history = (
+        min(MPS_TM_SINGLE_COIN_CHUNK_BARS, max(1, max_candidate_bars // n_sides))
+        if temporal_chunking else n_bars
+    )
+    batch = _mps_dispatch_batch_size(
+        min(requested_batch_size, MPS_TM_SINGLE_COIN_CHUNK_CANDIDATES)
+        if temporal_chunking else requested_batch_size,
+        n_bars=dispatch_history, n_sides=n_sides,
+        max_candidate_bars=max_candidate_bars,
+    )
+    return temporal_chunking, batch, dispatch_history
 
 
 def _mps_multicoin_dispatch_plan(
@@ -1913,16 +1940,17 @@ class MpsSingleCoinProxy:
         if not any(self.enabled.values()):
             raise ValueError("GPU foundation requires at least one enabled side")
         enabled_side_count = sum(self.enabled.values())
-        self.dispatch_batch_size = _mps_dispatch_batch_size(
-            self.batch_size,
-            n_bars=len(hlcvs),
-            n_sides=enabled_side_count,
-            max_candidate_bars=self.max_dispatch_candidate_bars,
+        self.temporal_chunking, self.dispatch_batch_size, dispatch_history = (
+            _mps_single_coin_dispatch_plan(
+                self.strategy_kind, self.batch_size, n_bars=len(hlcvs),
+                n_sides=enabled_side_count,
+                max_candidate_bars=self.max_dispatch_candidate_bars,
+            )
         )
         _log_mps_dispatch_cap(
             requested_batch_size=self.batch_size,
             dispatch_batch_size=self.dispatch_batch_size,
-            n_bars=len(hlcvs),
+            n_bars=dispatch_history,
             n_coins=1,
             n_sides=enabled_side_count,
             max_candidate_bars=self.max_dispatch_candidate_bars,
@@ -2187,6 +2215,9 @@ class MpsSingleCoinProxy:
             runner_kwargs["hsl_diagnostics_enabled"] = _hsl_diagnostics_needed(
                 self.needed_metrics
             )
+        if self.temporal_chunking:
+            runner_kwargs["max_dispatch_candidate_bars"] = self.max_dispatch_candidate_bars
+            runner_kwargs["interrupt_check"] = self.interrupt_check
         runner_kwargs["hsl_enabled"] = bool(hsl_enabled_sides)
         self.runner = runner_cls(
             self.market,
@@ -2311,7 +2342,8 @@ class MpsSingleCoinProxy:
         )
         dispatch_batch_size = (
             int(getattr(self, "dispatch_batch_size", self.batch_size))
-            if end_step is None and not bounded_history
+            if (end_step is None and not bounded_history)
+            or getattr(self, "temporal_chunking", False)
             else _mps_dispatch_batch_size(
                 self.batch_size,
                 n_bars=effective_candle_count,

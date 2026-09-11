@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- GPU optimization uses bounded temporal replay for long-history, single-coin Trailing Martingale
+  with both sides enabled, allowing more concurrent candidates while preserving replay state,
+  per-dispatch work limits, and interruption checkpoints.
+
 - Risk-input recovery now stops after `live.risk_input_max_attempts` failed attempts (default 10)
   per recovery episode, without entering the full-bot restart loop. Each failed attempt logs its
   count, limit, safe balance diagnostics, and retry delay; the first and final failures include

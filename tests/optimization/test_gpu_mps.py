@@ -21878,3 +21878,159 @@ def test_independent_unstuck_coin_spans_scale_without_changing_strategy(strategy
     matrix[0, start] = float("inf")
     with pytest.raises(ValueError, match="unstuck EMA spans"):
         scale(matrix, 5)
+
+
+def _tm_directional_temporal_fixture(features=False, hedge_mode=False):
+    count = 1513
+    steps = np.arange(count)
+    close = 100.0 * (1 + 0.15 * np.sin(steps / 23.0))
+    timestamps = 1_700_000_000_000 + steps.astype(np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.0002)
+    run = ProxyRun(1000.0, 1, 11, int(timestamps[0]), int(timestamps[0]),
+                   int(timestamps[0]), 60_000, 0.05, 0, count - 1)
+    data = build_mps_data(close * 1.02, close * 0.98, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.0, unstuck_enabled=features)
+    for key, value in {
+        "hsl_enabled": float(features), "hsl_red_threshold": 0.02,
+        "hsl_ema_span_minutes": 1.0, "hsl_cooldown_minutes_after_red": 3.0,
+        "hsl_no_restart_drawdown_threshold": 1.0, "hsl_restart_policy": 1.0,
+        "hsl_tier_ratio_yellow": 0.5, "hsl_tier_ratio_orange": 0.75,
+        "hsl_signal_mode": 2.0, "hsl_slot_count": 1.0,
+        "entry_threshold_volatility_1m_weight": 0.1 if features else 0.0,
+        "unstuck_ema_span_0": 7.25, "unstuck_ema_span_1": 133.5,
+    }.items():
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index(key)] = value
+    kwargs = dict(long_enabled=True, short_enabled=True, hedge_mode=hedge_mode,
+                  hsl_enabled=features, pnl_lookback_bars=100 if features else 0,
+                  hsl_ema_tail_enabled=features, hsl_raw_drawdown_enabled=features,
+                  hsl_raw_tail_enabled=features, recovery_distribution_enabled=features,
+                  entry_interval_enabled=features, btc_risk_enabled=features,
+                  equity_balance_diff_enabled=features,
+                  btc_prices=30_000.0 + steps if features else None)
+    return market, run, data, row, kwargs
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+@pytest.mark.parametrize("features", [False, True])
+@pytest.mark.parametrize("hedge_mode", [False, True])
+@pytest.mark.parametrize("recent", [False, True])
+def test_tm_directional_temporal_replay_preserves_every_output(features, hedge_mode, recent):
+    market, run, data, row, kwargs = _tm_directional_temporal_fixture(features, hedge_mode)
+    matrix = np.asarray([row + row] * 3, dtype=np.float64)
+    history = dict(history_start_step=73, trade_start_step=113) if recent else {}
+    original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
+    expected = {k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+                for k, v in original.run(matrix, **history).items()}
+    chunked = MpsTrailingMartingaleRunner(
+        market, run, data, max_dispatch_candidate_bars=3 * 2 * 47, **kwargs
+    )
+    for _ in range(2):
+        actual = chunked.run(matrix, profile=True, **history)
+        assert actual.keys() == expected.keys()
+        for key, value in actual.items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+            else:
+                assert value == expected[key]
+        assert chunked.last_profile["temporal_chunk_bars"] == 47
+        begin = 74 if recent else 1
+        assert chunked.last_profile["kernel_candidate_steps"] == 3 * (1512 - begin)
+        assert chunked.last_profile["dispatch_count"] == int(np.ceil((1512 - begin) / 47))
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+def test_tm_directional_temporal_interruption_starts_next_run_fresh():
+    market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
+    matrix = np.asarray([row + row], dtype=np.float64)
+    expected = {k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+                for k, v in MpsTrailingMartingaleRunner(market, run, data, **kwargs).run(matrix).items()}
+    calls = 0
+    def interrupt():
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise InterruptedError("test interruption")
+    runner = MpsTrailingMartingaleRunner(
+        market, run, data, max_dispatch_candidate_bars=2 * 47,
+        interrupt_check=interrupt, **kwargs
+    )
+    with pytest.raises(InterruptedError):
+        runner.run(matrix)
+    runner.interrupt_check = lambda: None
+    for key, value in runner.run(matrix).items():
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+        else:
+            assert value == expected[key]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+def test_tm_directional_temporal_state_abi_tracks_dispatch_features():
+    market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
+    plain = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
+    chunked = MpsTrailingMartingaleRunner(
+        market, run, data, max_dispatch_candidate_bars=2 * 113, **kwargs
+    )
+    for weight in (0.0, 0.1, 0.0):
+        row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("entry_threshold_volatility_1m_weight")] = weight
+        matrix = np.asarray([row + row], dtype=np.float64)
+        expected = {k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+                    for k, v in plain.run(matrix).items()}
+        for key, value in chunked.run(matrix).items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+            else:
+                assert value == expected[key]
+    assert len(chunked._replay_state_sizes) == 2
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+@pytest.mark.parametrize("chunk_bars", [2, 9])
+def test_tm_directional_temporal_preserves_invalid_valuation(chunk_bars):
+    count = 20
+    close = np.full(count, np.nan)
+    high = close.copy()
+    low = close.copy()
+    close[:7] = high[:7] = low[:7] = 100.0
+    low[3] = 98.0
+    high[6] = low[6] = close[6] = 80.0
+    timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
+    market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0)
+    run = ProxyRun(1000.0, 1, 1, int(timestamps[0]), int(timestamps[0]),
+                   int(timestamps[0]), 60_000, 0.05, 0, 6)
+    data = build_mps_data(high, low, close, timestamps, run, market)
+    row = _tm_single_row(initial_ema_dist=0.01)
+    row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("entry_cooldown_minutes")] = 100.0
+    short = list(row)
+    short[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("entry_initial_qty_pct")] = 0.0
+    matrix = np.asarray([row + short], dtype=np.float64)
+    for cap in (None, 2 * chunk_bars):
+        runner = MpsTrailingMartingaleRunner(
+            market, run, data, long_enabled=True, short_enabled=True,
+            max_dispatch_candidate_bars=cap,
+        )
+        for _ in range(2):
+            with pytest.raises(ValueError, match="held-position valuation"):
+                runner.run(matrix)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+def test_tm_directional_temporal_preserves_early_liquidation_outputs():
+    from dataclasses import replace
+
+    market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
+    market = replace(market, maker_fee=2.0)
+    row[TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS.index("entry_initial_qty_pct")] = 1.0
+    matrix = np.asarray([row + row], dtype=np.float64)
+    original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
+    expected = {k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+                for k, v in original.run(matrix).items()}
+    assert not expected["alive"].item()
+    chunked = MpsTrailingMartingaleRunner(
+        market, run, data, max_dispatch_candidate_bars=2 * 47, **kwargs
+    )
+    for key, value in chunked.run(matrix).items():
+        if isinstance(value, torch.Tensor):
+            torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+        else:
+            assert value == expected[key]

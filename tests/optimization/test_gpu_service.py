@@ -3415,3 +3415,18 @@ def test_trailing_martingale_flattening_reads_canonical_payload_cooldown():
     )
 
     assert flattened["entry_cooldown_minutes"] == 37.0
+
+
+@pytest.mark.parametrize("strategy,batch,bars,sides,cap,expected", [
+    ("trailing_martingale", 4096, 3000000, 2, 1_000_000_000, (True, 1024, 96000)),
+    ("trailing_martingale", 4096, 3000000, 1, 1_000_000_000, (False, 333, 3000000)),
+    ("ema_anchor", 4096, 3000000, 2, 1_000_000_000, (False, 166, 3000000)),
+    ("trailing_martingale", 16, 3000000, 2, 1_000_000_000, (False, 16, 3000000)),
+    ("trailing_martingale", 4096, 4320, 2, 1_000_000_000, (False, 4096, 4320)),
+    ("trailing_martingale", 4096, 3000000, 2, 100, (True, 1, 50)),
+])
+def test_mps_single_coin_temporal_plan_preserves_work_limit(strategy, batch, bars, sides, cap, expected):
+    from optimization.gpu.service import _mps_single_coin_dispatch_plan
+    plan = _mps_single_coin_dispatch_plan(strategy, batch, n_bars=bars, n_sides=sides, max_candidate_bars=cap)
+    assert plan == expected
+    assert plan[1] * plan[2] * sides <= cap
