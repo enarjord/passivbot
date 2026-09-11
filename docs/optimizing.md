@@ -755,6 +755,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   Long-history, single-coin Trailing Martingale with both sides enabled can instead split history
   into chunks of at most 96,000 candles and run up to 1,024 candidates concurrently. The complete
   replay state remains on the GPU between chunks; metrics are finalized only after the last chunk.
+  Small actual batches that fit the work envelope use unchunked replay, even when the configured
+  batch ceiling requires temporal chunks.
   The same work envelope applies to each chunk, and interruption is checked between chunks.
   Topologies without temporal replay fail closed when even one candidate exceeds the envelope,
   with guidance to shorten the date range or reduce the coin count.

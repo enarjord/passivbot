@@ -9,7 +9,8 @@ All notable user-facing changes will be documented in this file.
   per-dispatch work limits, and interruption checkpoints.
 
 - GPU optimization reuses full-history screened seed metrics in the initial population, including
-  after checkpoint resume, avoiding duplicate replay while preserving exact validation.
+  after checkpoint resume, avoiding duplicate replay while preserving exact validation. Small
+  two-sided MPS batches use unchunked replay when they fit the dispatch work limit.
 
 - Risk-input recovery now stops after `live.risk_input_max_attempts` failed attempts (default 10)
   per recovery episode, without entering the full-bot restart loop. Each failed attempt logs its

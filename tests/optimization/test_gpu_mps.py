@@ -22034,3 +22034,23 @@ def test_tm_directional_temporal_preserves_early_liquidation_outputs():
             torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
         else:
             assert value == expected[key]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Apple MPS unavailable")
+def test_tm_directional_chunking_uses_actual_batch_work_and_switches_safely():
+    market, run, data, row, kwargs = _tm_directional_temporal_fixture(True)
+    original = MpsTrailingMartingaleRunner(market, run, data, **kwargs)
+    runner = MpsTrailingMartingaleRunner(
+        market, run, data, max_dispatch_candidate_bars=2 * 1513, **kwargs
+    )
+    for count in (1, 3, 1):
+        matrix = np.asarray([row + row] * count, dtype=np.float64)
+        expected = {k: v.cpu().clone() if isinstance(v, torch.Tensor) else v
+                    for k, v in original.run(matrix).items()}
+        for key, value in runner.run(matrix, profile=True).items():
+            if isinstance(value, torch.Tensor):
+                torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
+            else:
+                assert value == expected[key]
+        assert runner.last_profile["dispatch_count"] == (1 if count == 1 else 3)
+        assert ("temporal_chunk_bars" in runner.last_profile) == (count == 3)
