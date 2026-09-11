@@ -5,8 +5,10 @@ use_directory_urls: True
 docs_dir: docs
 nav:
   - Home: index.md
+  - Releases: releases.md
   - Installation: installation.md
   - Configuration: configuration.md
+  - Strategy Parameters: config.bot.md
   - Config Workflow: config_workflow.md
   - Running live: live.md
   - Monitor: monitor.md
@@ -16,6 +18,7 @@ nav:
   - Tools: tools.md
   - Forager: forager.md
   - Risk Management: risk_management.md
+  - Equity Hard Stop Loss: equity_hard_stop_loss.md
   - Coin Overrides: coin_overrides.md
   - Fake Live: fake_live.md
   - Container Deployment: container_deployment.md
