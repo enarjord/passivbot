@@ -1,6 +1,8 @@
 # Fill Events Manager Specification
 
-**Status:** Current reference for the fill-events cache/normalization layer
+**Status:** Historical design reference. The schema and exchange status tables below are not
+current runtime contracts. Use the [maintained fill-events contract](ai/features/fill_events_manager.md)
+for accounting, coverage, recovery, and current code references, and [Tools](tools.md) for diagnostics.
 **Module:** `src/fill_events_manager.py`
 **Goal:** Replace exchange-specific `fetch_pnls` functions with a unified `FillEventsManager`
 

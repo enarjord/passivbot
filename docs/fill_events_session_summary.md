@@ -1,5 +1,9 @@
 # Fill Events Manager Session Summary
 
+**Status:** Historical session notes. Exchange implementation status and examples reflect this
+session, not current support. See the [maintained fill-events contract](ai/features/fill_events_manager.md)
+and [Tools](tools.md) for current behavior.
+
 **Date:** 2026-01-16
 **Purpose:** Continue work on `src/fill_events_manager.py` and `src/tools/fill_events_dash.py`
 

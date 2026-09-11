@@ -19,6 +19,9 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  git clone https://github.com/enarjord/passivbot.git
  cd passivbot
 
+# Optional: choose a tagged release instead of master (see releases.md).
+# git switch --detach v8.1.0
+
 # Select the supported interpreter you installed. Use python3 only if it is 3.12 or 3.14.
  PYTHON_BIN=python3.14
  "$PYTHON_BIN" --version
@@ -28,6 +31,9 @@ This guide collects all steps (and common pitfalls) for setting up Passivbot on 
  source venv/bin/activate  # Windows: venv\Scripts\activate
  python --version
 ```
+
+A clone defaults to `master`, including changes since the latest tag. See [Releases](releases.md)
+to choose a fixed release and match its documentation.
 
 Replace `python3.14` with `python3.12` as needed. Do not assume the system `python3` changed when
 a versioned interpreter was installed alongside it.
@@ -73,9 +79,18 @@ Common errors:
 ## 5. Verify the install
 
 ```bash
-pytest -q
+python3 -c "import passivbot_rust; print(passivbot_rust.__file__)"
+passivbot --version
 passivbot -h
 ```
+
+The import check loads the compiled Rust extension without starting a bot or contacting an
+exchange. It catches a missing extension or an ABI/shared-library loading failure; root CLI help
+and version output alone do not load the extension.
+
+Contributors who installed the `[dev]` profile can also run `pytest -q`. Pytest is not included
+in the live-only or `[full]` profiles; running the test suite is not required to verify a live-only
+installation.
 
 For backtesting and optimization environments, also verify:
 
@@ -84,20 +99,26 @@ passivbot backtest -h
 passivbot optimize -h
 ```
 
-If pytest reports missing `passivbot_rust`, double-check that the venv is active and `maturin develop --release` completed successfully.
+If the import check fails, double-check that the venv is active and rebuild with
+`maturin develop --release`. The printed path should identify the extension/package in the intended
+environment.
 
 ## 6. Keeping it up to date
 
-When pulling new commits:
+When following `master`, review [Unreleased changes](https://github.com/enarjord/passivbot/blob/master/CHANGELOG.md#unreleased) before updating.
+Preserve your config and source revision for reproducibility. From a clean `master` checkout:
 
 ```bash
 source venv/bin/activate
-git pull
+git pull --ff-only
 python3 -m pip install -e .            # live-only refresh
 # or: python3 -m pip install -e ".[full]"  # full research/runtime refresh
 # or: python3 -m pip install -e ".[dev]"   # contributor refresh
 maturin develop --release              # only when passivbot-rust changed
 ```
+
+A detached tagged checkout stays at its selected release. Select the intended new tag or switch
+back to `master` before reinstalling; `git pull` does not upgrade a detached release checkout.
 
 If you see linker errors after an OS update (e.g. new glibc), rebuild the extension with `maturin develop --release`.
 
