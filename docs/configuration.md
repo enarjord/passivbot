@@ -3,10 +3,18 @@
 This document explains the canonical config schema used by Passivbot.
 
 - The source of truth for defaults is `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_martingale_long.json` mirrors those hardcoded defaults exactly.
+- The example config `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile.
 - If you omit `config_path`, Passivbot loads those in-code defaults.
 
 For the recommended user workflow, examples, and best practices, see [Config Workflow](config_workflow.md).
+
+## Config version
+
+`config_version` is a top-level schema field, not a backtest setting or package version.
+Current configs use `v8.4.0`; supported v8.0.0–v8.3.0 inputs migrate on load. Review migration
+warnings and normalized settings. For v7 trailing-grid configs, use the explicit
+[migration helper](v7_to_v8_migration.md). See [release status](releases.md) for the distinction
+between schemas, package versions, and tags.
 
 ## Backtest Settings
 
@@ -24,7 +32,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
   GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles; use `backtest.ohlcv_source_dir` or another candle source for older GateIO backtests.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
 - **market_settings_sources**: Optional mapping of `coin -> exchange` used specifically for exchange metadata such as `price_step`, `qty_step`, fees, and min-size rules. This is separate from `coin_sources`: you may source candles from one exchange while borrowing market settings from another.
-- **ohlcv_source_dir**: Optional path to a pre-populated OHLCV directory to read directly before using PB7's v2 raw OHLCV store or exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`). Passivbot still writes the final prepared HLCV dataset cache for the run, but it does not mirror explicit source-dir raw candles into `caches/ohlcvs/`.
+- **ohlcv_source_dir**: Optional path to a pre-populated OHLCV directory to read directly before using Passivbot's v2 raw OHLCV store or exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`). Passivbot still writes the final prepared HLCV dataset cache for the run, but it does not mirror explicit source-dir raw candles into `caches/ohlcvs/`.
 - **hlcvs_data_dir**: Optional path to a prepared final HLCV dataset under
   `caches/hlcvs_data/`. The dataset must have a valid manifest whose hashes
   verify `hlcvs`, `timestamps`, `btc_usd_prices`, `coins`, and
@@ -62,7 +70,6 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
   Fill-activity metrics use the `fills_*` prefix, including fill counts, per-day entry/close and long/short rates, no-fill gap durations, per-position-slot activity, active fill day counts/ratio, analysis duration, active symbol count, and top-symbol fill share.
-- **config_version**: Top-level schema version string for the config file. Canonical V8 configs must use `v8.3.0`. V8 is a breaking config schema and does not automatically convert v7 or pre-v8 configs; start from a V8 example config and port settings manually.
 - **balance_sample_divider**: Minutes per bucket when sampling balances/equity for
   `balance_and_equity.csv.gz` and related plots. `1` keeps full per-minute resolution; higher values
   thin out the series (e.g., `15` stores one point every 15 minutes) to reduce file sizes. The CSV
@@ -112,7 +119,7 @@ Example per-metric aggregation:
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
 - **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk and refreshes `logs/{user}.log` as a stable alias to the current run. On Windows without symlink privileges, this alias is a text pointer containing the absolute path to the current run log; Passivbot's monitor tooling follows it automatically. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
 - **dir**: Directory used for persisted live log files and the stable current-run alias when `persist_to_file` is enabled. Default `logs`.
-- **rotation**: Enables rotating live log files instead of appending to one file per process. Default `false`.
+- **rotation**: Enables rotating live log files instead of appending to one file per process. Default `true`.
 - **max_bytes_mb**: Maximum size in megabytes for each live log file before rotation. Used only when `rotation = true`. Default `10`.
 - **backup_count**: Number of rotated backup files to keep when rotation is enabled. Default `5`.
 - **memory_snapshot_interval_minutes**: Interval between `_log_memory_snapshot` telemetry entries (RSS, cache footprint, asyncio task counts). Default `30`; lower values surface leaks sooner, higher values reduce noise.
@@ -140,98 +147,19 @@ See [monitor.md](monitor.md) for current output files and event kinds.
 
 ## Bot Settings
 
-### Side-Specific HSL Parameters
+### Equity Hard Stop Loss
 
-HSL now lives under the grouped side config for each `pside`:
+HSL settings live under `bot.long.hsl` and `bot.short.hsl`. Use grouped names such as
+`enabled`, `red_threshold`, `ema_span_minutes`, `cooldown_minutes_after_red`,
+`restart_after_red_policy`, `no_restart_drawdown_threshold`, `tier_ratios`,
+`orange_tier_mode`, and `panic_close_order_type`; do not prefix these leaves with `hsl_`.
+`live.hsl_signal_mode` selects `coin` (default), `pside`, or `unified` signal construction.
 
-1. `bot.long.hsl.*`
-2. `bot.short.hsl.*`
-3. `live.hsl_signal_mode`
-
-See also:
-
-1. [Equity Hard Stop Loss](equity_hard_stop_loss.md)
-2. [Risk Management](risk_management.md)
-
-### Equity Hard Stop Loss (`bot.{long,short}.hsl.*`)
-
-Side-specific drawdown circuit breaker.
-
-Each `pside` has the same parameter set:
-
-- **hsl_enabled**:
-  - Enables or disables HSL on that `pside`.
-- **hsl_red_threshold**:
-  - RED trigger threshold for the HSL drawdown score.
-- **hsl_ema_span_minutes**:
-  - EMA span used for smoothed drawdown.
-  - In backtests, if this is smaller than `backtest.candle_interval_minutes`, smoothing is effectively disabled and HSL uses raw drawdown for the EMA leg.
-- **hsl_cooldown_minutes_after_red**:
-  - Minutes to wait before auto-restart after a RED halt on that `pside`.
-  - `0.0` means halt without auto-restart.
-  - HSL resets tracking after every fill that fully flattens the configured signal scope, regardless of order type. A RED-seen episode's cooldown begins at that flattening fill; restart replay reconstructs the same boundary before evaluating later behavior.
-- **hsl_no_restart_drawdown_threshold**:
-  - Terminal no-restart threshold for that `pside`.
-  - Evaluated from persistent cross-restart HSL drawdown.
-  - Values below `hsl_red_threshold` are clamped up to `hsl_red_threshold`.
-  - Must satisfy: `hsl_red_threshold <= hsl_no_restart_drawdown_threshold <= 1.0`.
-- **hsl_tier_ratios.yellow / hsl_tier_ratios.orange**:
-  - Multipliers used to derive YELLOW and ORANGE thresholds from `hsl_red_threshold`.
-  - Must satisfy: `0 < yellow < orange < 1`.
-- **hsl_orange_tier_mode**:
-  - Allowed values:
-    - `graceful_stop`
-    - `tp_only_with_active_entry_cancellation`
-  - Determines how the bot behaves in ORANGE on that `pside`.
-- **hsl_panic_close_order_type**:
-  - Allowed values:
-    - `market`
-    - `limit`
-  - Determines how RED panic exits are executed or simulated for that `pside`.
-
-Behavior summary:
-
-1. YELLOW: warning tier for that `pside`
-2. ORANGE: reduced-risk mode for that `pside`
-3. RED: panic close, wait until all positions on that `pside` are fully closed, halt, optional cooldown restart for that `pside`
-
-Signal mode:
-
-1. `live.hsl_signal_mode = "unified"`
-   - long and short keep separate HSL controllers
-   - both are fed from the same combined account-level strategy signal
-2. `live.hsl_signal_mode = "pside"`
-   - each `pside` controller uses its own realized/unrealized strategy PnL
-3. `live.hsl_signal_mode = "coin"` (default)
-   - each `coin+pside` controller uses realized PnL drawdown inside `live.pnls_max_lookback_days` plus current UPnL
-   - RED panic-closes only the affected `coin+pside`
-   - live denominator is `balance / config.n_positions`; TWEL and WE-excess allowance are intentionally not included
-   - backtests use `balance / configured_n_positions` when `backtest.dynamic_wel_by_tradability=false`, and `balance / effective_tradability_aware_n_positions` when it is `true`; TWEL does not scale either denominator
-
-Backtest-specific note:
-
-1. If `hsl_panic_close_order_type = "market"`, the backtester uses `backtest.market_order_slippage_pct` for simulated taker execution and charges per-coin taker fees (exchange-derived by default, or global `backtest.taker_fee_override` when set).
-
-Key HSL analysis metrics:
-
-1. Global account metrics:
-   - `drawdown_worst_strategy_eq`
-   - `drawdown_worst_mean_1pct_strategy_eq`
-   - `strategy_eq_recovery_days_max`
-   - `strategy_eq_recovery_days_mean_worst_1pct`
-   - `hard_stop_triggers`
-   - `hard_stop_restarts`
-2. Side-specific metrics:
-   - `drawdown_worst_strategy_eq_long`
-   - `drawdown_worst_strategy_eq_short`
-   - `drawdown_worst_mean_1pct_strategy_eq_long`
-   - `drawdown_worst_mean_1pct_strategy_eq_short`
-   - `peak_recovery_days_strategy_eq_long`
-   - `peak_recovery_days_strategy_eq_short`
-   - `hard_stop_triggers_long`
-   - `hard_stop_triggers_short`
-   - `hard_stop_restarts_long`
-   - `hard_stop_restarts_short`
+For parameter definitions, RED handling, cooldown/restart rules, per-coin overrides, and
+backtest behavior, see [Equity Hard Stop Loss](equity_hard_stop_loss.md) and the
+[HSL reference](equity_hard_stop_loss_reference.md). The [metrics reference](metrics.md)
+describes HSL analysis outputs. These focused guides are the maintained reference for HSL
+behavior.
 
 ### General Parameters for Long and Short
 

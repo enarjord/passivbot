@@ -4,7 +4,10 @@
 
 :warning: **Used at one's own risk** :warning:
 
-Current stable version: **[v8.1.0](docs/release_notes_v8.1.0.md)**.
+Latest tagged release: **[v8.1.0](docs/release_notes_v8.1.0.md)**.
+A clone of `master` includes subsequent changes listed under
+[Unreleased](CHANGELOG.md#unreleased). See [release status and version meanings](docs/releases.md)
+before choosing a revision; these docs describe the revision you are viewing.
 
 > **Upgrading from v7:** v8 is a breaking config and strategy release. Do not
 > start v8 live with an unreviewed v7 config. Read the
@@ -23,7 +26,14 @@ Order planning is computed by a shared Rust orchestrator used by both live tradi
 
 ## Strategy
 
-Inspired by the Martingale betting strategy, the robot will make a small initial entry and double down on its losing positions multiple times to bring the average entry price closer to current price action. The orders are placed in a grid, ready to absorb sudden price movements. After each re-entry, the robot quickly updates its closing orders at a set take-profit markup. This way, if there is even a minor market reversal, or "bounce", the position can be closed in profit, and it starts over.  
+The default `trailing_martingale` strategy starts with a small entry and can add to a position
+as price moves against it, subject to configured exposure and risk limits. Re-entries change the
+average entry price, while closes seek a configured profit margin or use trailing confirmation.
+Entry sizes, distances, and trailing behavior are configurable.
+
+The `ema_anchor` strategy is also available. `trailing_grid_v7` is a deprecated compatibility
+strategy for explicit v7 migrations. See the [bot configuration guide](docs/config.bot.md) for
+strategy-specific parameters.
 
 ### Trailing Orders
 In addition to grid-based entries and closes, Passivbot may be configured to utilize trailing entries and trailing closes.
@@ -74,6 +84,8 @@ First, clone the Passivbot repository to the local machine:
 git clone https://github.com/enarjord/passivbot.git
 cd passivbot
 ```
+
+This checks out `master`. For a fixed tagged version, follow [release selection](docs/releases.md).
 
 
 ### Step 2: Install Rust
@@ -178,12 +190,13 @@ Legacy direct-script entrypoints such as `python3 src/main.py ...`, `python3 src
 and `python3 src/optimize.py ...` still work unchanged for backwards compatibility.
 
 The canonical hardcoded defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_martingale_long.json` mirrors that default profile exactly, so
+`configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile, so
 copying it is the recommended starting point for new configs.
 
 ### Logging
 
-Passivbot uses Python's logging module throughout the bot, backtester, and supporting tools.  
+Passivbot uses Python's logging module throughout the bot, backtester, and supporting tools.
+
 - Use `--log-level {warning|info|debug|trace}` or `--log-level {0-3}` on `passivbot live` or `passivbot backtest` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.
 - Use `--verbose` on `passivbot live` to force debug logging (`--log-level debug`).  
 - Persist a default by adding a top-level section to your config: `"logging": {"level": 2}`. The CLI flag always overrides the config value for that run.
@@ -192,35 +205,43 @@ Passivbot uses Python's logging module throughout the bot, backtester, and suppo
 
 ### Running Multiple Bots
 
-Running several Passivbot instances against the same exchange on one machine is supported. Each process shares the same on-disk OHLCV cache, and the candlestick manager now uses short-lived, self-healing locks with automatic stale cleanup so that one stalled process cannot block the rest. No manual deletion of lock files is required; the bot removes stale locks on startup and logs whenever a lock acquisition times out.
+Running several Passivbot instances on one machine is supported when each uses a separate
+exchange account or subaccount. Do not run competing bots on the same account; see
+[concurrent bot protection](docs/live.md#concurrent-passivbot-protection). Each process shares the same on-disk OHLCV cache, and the candlestick manager now uses short-lived, self-healing locks with automatic stale cleanup so that one stalled process cannot block the rest. No manual deletion of lock files is required; the bot removes stale locks on startup and logs whenever a lock acquisition times out.
 
 ## Jupyter Lab
 
-Jupyter lab needs to be run in the same virtual environment as the bot. Activate venv (see installation instructions above, step 3), and launch Jupyter lab from the Passivbot root dir with:
+JupyterLab is an optional separate install. Activate the bot virtual environment, then install and
+launch it from the repository root:
+
 ```shell
+python3 -m pip install jupyterlab
 python3 -m jupyter lab
 ```
 
 ## Requirements
 
-- Python >= 3.12
+- Python 3.12 or 3.14 (Python 3.13 is not supported)
 - `python3 -m pip install -e .` for live trading only
 - `python3 -m pip install -e ".[full]"` for backtesting, optimization, downloader, and advanced tools
 - `python3 -m pip install -e ".[dev]"` for contributor tooling on top of the full install
 
-## Pre-optimized configurations
+## Example configurations
 
-Coming soon...
-
-See also https://pbconfigdb.scud.dedyn.io/
+Start from a maintained [example config](configs/examples/) and follow the
+[config workflow](docs/config_workflow.md) to backtest and tune it for your use case.
+Community configurations are also available at https://pbconfigdb.scud.dedyn.io/.
 
 ## Documentation
 
-For more detailed information about Passivbot, see documentation files here: [docs/](docs/)
+For more detailed information about Passivbot, see the [documentation index](docs/index.md).
 
 Useful entry points:
 
+- [Release status and upgrades](docs/releases.md)
 - [Installation](docs/installation.md)
+- [Config workflow](docs/config_workflow.md)
+- [Configuration reference](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Backtesting](docs/backtesting.md)
 - [Optimizing](docs/optimizing.md)

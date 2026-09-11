@@ -5,8 +5,11 @@ This is the recommended way to work with Passivbot configs on the current config
 ## Source Of Truth
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_martingale_long.json` mirrors those defaults exactly.
-- New V8 configs must keep the top-level `config_version: "v8.3.0"` field. V8 is a breaking schema; v7 and pre-v8 configs are not automatically converted to V8.
+- The example config `configs/examples/default_trailing_martingale_long.json` provides the maintained default strategy profile.
+- New configs use top-level `config_version: "v8.4.0"`. Supported v8.0.0–v8.3.0 configs migrate
+  on load; review warnings and the normalized result rather than manually relabeling an old file.
+  Config-schema versions are separate from [package versions and release tags](releases.md).
+  V7 and pre-v8 configs require explicit migration.
 - The legacy `pb_multi` root shape, identified by fields such as `TWE_long`, `TWE_short`, and `universal_live_config`, is not a supported V8 input or migration format. Residual flavor-detection and formatter code is stale internal compatibility code and must not be treated as an end-to-end or live-trading support contract. Start from a canonical V8 config; for a normalized V7 trailing-grid config, use the explicit migration helper below.
 - V7 trailing-grid configs can be converted explicitly with `passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json`. Clean migrations write deprecated compatibility strategy kind `trailing_grid_v7`; if the report contains manual-review or dropped unsupported fields, the command returns nonzero and does not write output unless `--allow-manual-review-output` is passed. The tool always writes a sibling JSON migration report and validates canonical output before writing the config. Follow [Migrating v7 trailing-grid configs to v8](v7_to_v8_migration.md) for the report, backtest comparison, and review workflow. New optimization work should use the canonical `trailing_martingale` strategy unless you intentionally need v7 behavior.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
@@ -23,6 +26,7 @@ This is the recommended way to work with Passivbot configs on the current config
 Example:
 
 ```bash
+mkdir -p configs/live
 cp configs/examples/default_trailing_martingale_long.json configs/live/my_config.json
 passivbot backtest configs/live/my_config.json -s BTC -sd 2025 --suite n
 passivbot optimize configs/live/my_config.json -s BTC -sd 2025 -c 4 --suite n
