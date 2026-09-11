@@ -755,6 +755,8 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   Long-history, single-coin Trailing Martingale with both sides enabled can instead split history
   into chunks of at most 96,000 candles and run up to 1,024 candidates concurrently. The complete
   replay state remains on the GPU between chunks; metrics are finalized only after the last chunk.
+  Small actual batches that fit the work envelope use unchunked replay, even when the configured
+  batch ceiling requires temporal chunks.
   The same work envelope applies to each chunk, and interruption is checked between chunks.
   Topologies without temporal replay fail closed when even one candidate exceeds the envelope,
   with guidance to shorten the date range or reduce the coin count.
@@ -773,7 +775,12 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   active-volatility kernels, nor to kernels with optional metric feature paths enabled.
 - `seed_bootstrap.mode` controls `-t/--start` handling. `auto` exact-evaluates all deduplicated seeds
   up to `seed_bootstrap.max_exact`, then switches to full-history proxy screening plus capped exact
-  validation for larger pools. `exact` forces exact evaluation of every seed even above the cap;
+  validation for larger pools. With successive halving disabled, screened seeds reuse their
+  full-history proxy metrics in the initial population. This bounded cache survives resume and is
+  released after the initial population completes; exact validation still runs normally. The
+  initial base-config candidate is screened alongside the seeds, without entering seed ranking
+  or drift calibration, so a fully seeded population can avoid replay entirely.
+  `exact` forces exact evaluation of every seed even above the cap;
   `screened` always performs proxy screening and validates at most the cap; and `legacy` restores
   the former behavior of copying seeds directly into the first proxy population without an
   authoritative bootstrap archive. Bootstrap exact evaluations are recorded in `all_results.bin`

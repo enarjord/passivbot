@@ -7771,3 +7771,108 @@ def test_gpu_suite_unstuck_scope_validates_effective_scenario_bounds(shadow):
         config, suite_cfg, torch_module=_fake_torch_with_mps()
     )
     assert config == original
+
+
+@pytest.mark.parametrize("roundtrip", [False, True])
+def test_seed_proxy_reuse_preserves_order_and_nested_metric_evidence(roundtrip):
+    import pickle
+    from optimization.backends.gpu_backend import _seed_proxy_key, _evaluate_with_seed_proxy_reuse
+
+    seed = {"long_span": 17.25, "short_span": 42.5}
+    evidence = {"adg": 0.125, "suite_objectives": [1.0, 2.0]}
+    cached = {_seed_proxy_key(seed): evidence}
+    if roundtrip:
+        cached = pickle.loads(pickle.dumps(cached))
+    changed = dict(seed, short_span=42.50001)
+    requested = [changed, dict(reversed(list(seed.items()))), seed]
+    calls = []
+    def evaluate(candidates):
+        calls.append(candidates)
+        return [{"adg": 0.25} for _ in candidates]
+    rows, reused = _evaluate_with_seed_proxy_reuse(requested, cached, evaluate)
+    assert calls == [[changed]]
+    assert reused == 2
+    assert rows == [{"adg": 0.25}, evidence, evidence]
+    rows[1]["suite_objectives"][0] = 99.0
+    assert cached[_seed_proxy_key(seed)]["suite_objectives"] == [1.0, 2.0]
+    assert rows[2]["suite_objectives"] == [1.0, 2.0]
+
+
+def test_seed_proxy_reuse_all_hits_avoids_dispatch_and_handles_absent_cache():
+    from optimization.backends.gpu_backend import _seed_proxy_key, _evaluate_with_seed_proxy_reuse
+
+    candidate = {"span": 17.25}
+    evidence = {"adg": 0.125}
+    cached = {_seed_proxy_key(candidate): evidence}
+    def unexpected(_candidates):
+        pytest.fail("cached seed should not be dispatched again")
+    assert _evaluate_with_seed_proxy_reuse([candidate], cached, unexpected) == ([evidence], 1)
+    assert _evaluate_with_seed_proxy_reuse([candidate], {}, lambda c: [evidence]) == ([evidence], 0)
+
+
+def test_seed_proxy_reuse_interrupted_misses_do_not_commit_partial_evidence():
+    from optimization.backends.gpu_backend import _seed_proxy_key, _evaluate_with_seed_proxy_reuse
+
+    candidate = {"span": 17.25}
+    evidence = {"adg": 0.125}
+    cached = {_seed_proxy_key(candidate): evidence}
+    def interrupt(_candidates):
+        raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        _evaluate_with_seed_proxy_reuse([candidate, {"span": 99.0}], cached, interrupt)
+    assert cached == {_seed_proxy_key(candidate): evidence}
+    with pytest.raises(RuntimeError, match="misaligned"):
+        _evaluate_with_seed_proxy_reuse([{"span": 99.0}], cached, lambda c: [])
+
+
+def test_seed_proxy_reuse_preserves_nsga_next_population_after_resume():
+    import pickle
+    from pymoo.algorithms.moo.nsga2 import NSGA2
+    from pymoo.core.problem import Problem
+    from optimization.backends.gpu_backend import _seed_proxy_key, _evaluate_with_seed_proxy_reuse
+
+    sampling = np.linspace(0.05, 0.95, 8).reshape(-1, 1)
+    algorithm = NSGA2(pop_size=8, sampling=sampling)
+    algorithm.setup(Problem(n_var=1, n_obj=2, n_ieq_constr=1, xl=0.0, xu=1.0), seed=19)
+    def evaluate(candidates):
+        return [{"F": [c["x"] ** 2, (1.0 - c["x"]) ** 2], "G": c["x"] - 0.7}
+                for c in candidates]
+    seeds = [{"x": float(x)} for x in sampling[1:, 0]]
+    cache = {_seed_proxy_key(c): m for c, m in zip(seeds, evaluate(seeds))}
+    checkpoint = pickle.dumps({"algorithm": algorithm, "initial_seed_proxy_rows": cache})
+    populations = []
+    for reuse in (False, True):
+        restored = pickle.loads(checkpoint)
+        algorithm = restored["algorithm"]
+        population = algorithm.ask()
+        candidates = [{"x": float(x)} for x in population.get("X")[:, 0]]
+        if reuse:
+            rows, count = _evaluate_with_seed_proxy_reuse(
+                candidates, restored["initial_seed_proxy_rows"], evaluate
+            )
+            assert count == 7
+        else:
+            rows = evaluate(candidates)
+        population.set("F", np.asarray([row["F"] for row in rows]))
+        population.set("G", np.asarray([[row["G"]] for row in rows]))
+        algorithm.tell(infills=population)
+        populations.append((algorithm.pop.get("F"), algorithm.pop.get("G"), algorithm.ask().get("X")))
+    for before, after in zip(*populations):
+        np.testing.assert_array_equal(before, after)
+
+
+@pytest.mark.parametrize("base", [{"x": 0.5}, {"x": 0.25}, None])
+def test_seed_screen_includes_population_base_without_changing_seed_rows(base):
+    from optimization.backends.gpu_backend import _screen_seed_proxy_candidates
+
+    seeds = [{"x": 0.25}, {"x": 0.75}]
+    calls = []
+    def evaluate(candidates):
+        calls.append(list(candidates))
+        return [{"score": c["x"]} for c in candidates]
+    rows, base_row, extra = _screen_seed_proxy_candidates(seeds, base, evaluate)
+    assert seeds == [{"x": 0.25}, {"x": 0.75}]
+    assert rows == [{"score": 0.25}, {"score": 0.75}]
+    assert base_row == (None if base is None else {"score": base["x"]})
+    assert extra == int(base == {"x": 0.5})
+    assert calls == [seeds + [base] if extra else seeds]

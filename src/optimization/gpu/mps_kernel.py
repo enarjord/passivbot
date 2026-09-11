@@ -3031,6 +3031,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         dispatch_features: tuple[
             bool, bool, bool, bool, bool, bool, bool
         ] | None = None,
+        *,
+        temporal_chunking: bool | None = None,
     ):
         if dispatch_features is None:
             dispatch_features = (
@@ -3092,7 +3094,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.equity_balance_diff_enabled,
             self.entry_interval_enabled,
             self.hsl_diagnostics_enabled,
-            self.max_dispatch_candidate_bars is not None,
+            (self.max_dispatch_candidate_bars is not None)
+            if temporal_chunking is None else temporal_chunking,
         )
 
     def _entry_interval_buffers(self, batch_size: int):
@@ -3312,7 +3315,17 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 device="mps",
             )
         prepared = time.perf_counter() if profile else 0.0
-        loader, library_args = self._shader_library_cache_call(dispatch_features)
+        # A small seed pool, cache miss, or final batch may fit the full-history
+        # work envelope even when the configured batch ceiling needs chunking.
+        # Preserve the cheaper unchunked shader for those actual dispatches.
+        temporal_chunking = (
+            self.max_dispatch_candidate_bars is not None
+            and batch_size * 2 * (effective_end_step - max(0, effective_history_start))
+            > self.max_dispatch_candidate_bars
+        )
+        loader, library_args = self._shader_library_cache_call(
+            dispatch_features, temporal_chunking=temporal_chunking
+        )
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
@@ -3343,9 +3356,11 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
-            if self.max_dispatch_candidate_bars is None:
+            if not temporal_chunking:
                 library.passivbot_trailing_martingale(
-                    *kernel_args, threads=(batch_size, 1, 1)
+                    *kernel_args, threads=(batch_size, 1, 1),
+                    **({"group_size": (min(batch_size, 64), 1, 1)}
+                       if self.max_dispatch_candidate_bars is not None else {}),
                 )
                 return {"dispatch_count": 1}
             chunk_bars = min(

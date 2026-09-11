@@ -8,6 +8,10 @@ All notable user-facing changes will be documented in this file.
   with both sides enabled, allowing more concurrent candidates while preserving replay state,
   per-dispatch work limits, and interruption checkpoints.
 
+- GPU optimization reuses full-history screened seed metrics in the initial population, including
+  after checkpoint resume, avoiding duplicate replay while preserving exact validation. Small
+  two-sided MPS batches use unchunked replay when they fit the dispatch work limit.
+
 - Risk-input recovery now stops after `live.risk_input_max_attempts` failed attempts (default 10)
   per recovery episode, without entering the full-bot restart loop. Each failed attempt logs its
   count, limit, safe balance diagnostics, and retry delay; the first and final failures include
