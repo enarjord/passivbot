@@ -210,6 +210,7 @@ ANALYSIS_SHARED_KEYS = SHARED_METRICS | {
 STAT_SUFFIXES = ("min", "max", "mean", "std", "median")
 
 METRIC_ALIASES = {
+    "long_short_profit_ratio": "pnl_ratio_long_short",
     "fills_analysis_duration_days": "n_days",
     "gain_strategy_pnl_rebased": "gain_strategy_eq",
     "adg_strategy_pnl_rebased": "adg_strategy_eq",

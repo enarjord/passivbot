@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Accept `long_short_profit_ratio` as an alias for `pnl_ratio_long_short` in optimizer scoring
+  and limits, including GPU optimization, reusing the existing metric calculation.
+
 Changes since [v8.1.0](https://github.com/enarjord/passivbot/releases/tag/v8.1.0).
 The earlier incremental entries are preserved in the
 [detailed development history](docs/development_history_since_v8.1.0.md).

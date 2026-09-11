@@ -93,7 +93,6 @@ GPU_EXACT_ONLY_METRICS = frozenset(
         "hard_stop_triggers",
         "hard_stop_triggers_long",
         "hard_stop_triggers_short",
-        "long_short_profit_ratio",
         "mdg_pnl",
         "mdg_pnl_w",
         "peak_recovery_days_equity_btc",

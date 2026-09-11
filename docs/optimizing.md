@@ -612,8 +612,8 @@ Positive `backtest.btc_collateral_cap` remains unsupported and fails before GPU 
 Daily USD equity choppiness, jerkiness, and exponential fit error are reduced from that same active
 daily closing-equity surface with Rust's no-fill defaults and short-series behavior.
 Gross close-fill loss/profit ratios are supported both in aggregate and separately for long and
-short. `pnl_ratio_long_short` uses each side's signed realized PnL and Rust's neutral `0.5` result
-when combined signed PnL is zero. Directional kernels
+short. `pnl_ratio_long_short` (also accepted as `long_short_profit_ratio`) uses each side's signed
+realized PnL and Rust's neutral `0.5` result when combined signed PnL is zero. Directional kernels
 retain the four gross side sums, while one-sided and dual-side multi-coin dispatches preserve the
 same side partition before reduction.
 Full-run fill activity is supported for single-coin and multi-coin topologies through combined
