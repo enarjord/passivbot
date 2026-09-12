@@ -116,21 +116,44 @@ Example:
 }
 ```
 
-### Apple MPS GPU Backend (Experimental)
+### GPU Backend (Experimental)
 
-The GPU backend is an additive research backend for Apple Silicon. Install the normal optimizer
-dependencies plus its optional PyTorch runtime:
+<a id="apple-mps-gpu-backend-experimental"></a>
+
+The GPU backend is an additive research backend for Apple Silicon and NVIDIA GPUs on Linux,
+including Ubuntu under Windows WSL2. Install the normal optimizer dependencies plus the
+GPU runtime for your platform:
+
+Apple Silicon:
 
 ```bash
 python3 -m pip install -e ".[full,gpu-mps]"
 ```
+
+NVIDIA on Linux or WSL2 (Python 3.12 recommended):
+
+```bash
+python3 -m pip install -e ".[full,gpu-cuda]"
+python3 -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name())"
+```
+
+The NVIDIA path uses CUDA runtime/compiler wheels and the same Rust-owned screening
+strategy sources as Apple MPS. A compatible NVIDIA driver is required; in WSL2 install
+the driver on Windows, not inside Ubuntu. No system-wide CUDA toolkit is required.
+The runtime selects available Apple MPS or NVIDIA CUDA automatically; it fails visibly
+when neither is available. Exact Rust backtests still determine all archived results.
+
+Start with a small batch and few exact workers, then increase after measuring memory and
+throughput. CUDA multi-coin input preparation limits invariant tensors to 45% of currently
+free GPU memory. Native Windows Python is not supported by this installation profile.
 
 Select it with `--backend gpu` or `optimize.backend: "gpu"`. Normal live operation, backtesting,
 and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
 
 The supported slice is intentionally narrow:
 
-- Apple Silicon with `torch.backends.mps.is_available()`
+- Apple Silicon with `torch.backends.mps.is_available()`, or NVIDIA CUDA on Linux/WSL2
+  with `torch.cuda.is_available()`
 - one prepared dataset per independent run or suite scenario; single- and multi-coin EMA Anchor
   and Trailing Martingale runs accept any positive integer
   `backtest.candle_interval_minutes`; the dataset may be an

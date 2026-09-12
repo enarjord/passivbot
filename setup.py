@@ -58,6 +58,13 @@ setup(
     extras_require={
         "full": FULL_REQUIREMENTS,
         "dev": FULL_REQUIREMENTS + DEV_REQUIREMENTS,
+        "gpu-cuda": [
+            "torch>=2.13,<2.14; platform_system == 'Linux'",
+            "cupy-cuda12x>=13.6,<14; platform_system == 'Linux' and python_version < '3.14'",
+            "cupy-cuda12x>=14.2,<15; platform_system == 'Linux' and python_version >= '3.14'",
+            "nvidia-cuda-runtime-cu12==12.8.90; platform_system == 'Linux'",
+            "nvidia-cuda-nvrtc-cu12==12.8.93; platform_system == 'Linux'",
+        ],
         "gpu-mps": [
             "torch>=2.13,<2.14; platform_system == 'Darwin' and platform_machine == 'arm64'",
         ],

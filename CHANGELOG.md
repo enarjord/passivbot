@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add experimental NVIDIA CUDA GPU optimization on Linux and Windows WSL2 with the
+  `gpu-cuda` install extra, sharing the existing GPU strategy kernels and exact Rust validation.
+
 - Accept `long_short_profit_ratio` as an alias for `pnl_ratio_long_short` in optimizer scoring
   and limits, including GPU optimization, reusing the existing metric calculation.
 

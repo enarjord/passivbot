@@ -9,6 +9,7 @@ import time
 
 import numpy as np
 
+from optimization.gpu.runtime import gpu_device
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_COLS,
     EMA_ANCHOR_COIN_OVERRIDE_WALLET_EXPOSURE_COLUMN,
@@ -606,7 +607,7 @@ def run_benchmark_case(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run deterministic, in-memory Apple MPS proxy benchmarks. No "
+            "Run deterministic, in-memory GPU proxy benchmarks. No "
             "exchange, cache, config, or result files are accessed."
         )
     )
@@ -615,7 +616,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dispatch-batch-size",
         type=int,
-        help="Candidates per MPS dispatch (defaults to --candidates)",
+        help="Candidates per GPU dispatch (defaults to --candidates)",
     )
     parser.add_argument("--warm-runs", type=int, default=5)
     parser.add_argument("--single-bars", type=int, default=60_000)
@@ -640,12 +641,15 @@ def _require_mps_torch(parser):
     except ModuleNotFoundError as exc:
         if exc.name == "torch" or str(exc.name).startswith("torch."):
             parser.error(
-                "Apple MPS benchmarking requires the optional GPU dependencies; "
-                'install with python3 -m pip install -e ".[full,gpu-mps]"'
+                "GPU benchmarking requires the optional GPU dependencies; "
+                'install with pip install -e ".[full,gpu-mps]" (Apple) or '
+                'pip install -e ".[full,gpu-cuda]" (NVIDIA)'
             )
         raise
-    if not torch.backends.mps.is_available():
-        parser.error("Apple MPS is unavailable in this process")
+    try:
+        gpu_device(torch)
+    except RuntimeError as exc:
+        parser.error(str(exc))
     return torch
 
 
@@ -694,7 +698,8 @@ def main(argv: list[str] | None = None) -> int:
             "macos": platform.mac_ver()[0],
             "python": platform.python_version(),
             "torch": torch.__version__,
-            "mps_available": True,
+            "device": gpu_device(torch),
+            "mps_available": torch.backends.mps.is_available(),
         },
         "cases": [
             run_benchmark_case(

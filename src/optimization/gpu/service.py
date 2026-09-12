@@ -11,6 +11,7 @@ import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
 from optimizer_overrides import unstuck_ema_spans_coupled
+from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -1848,13 +1849,11 @@ class MpsSingleCoinProxy:
             ModuleNotFoundError
         ) as exc:  # pragma: no cover - optional dependency path
             raise ModuleNotFoundError(
-                "GPU optimization requires the optional 'gpu-mps' dependencies; "
-                "install Passivbot with `pip install -e '.[full,gpu-mps]'`"
+                "GPU optimization requires the optional GPU dependencies; "
+                "install Passivbot with `pip install -e '.[full,gpu-mps]'` (Apple) "
+                "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
             ) from exc
-        if not torch.backends.mps.is_available():
-            raise RuntimeError(
-                "GPU optimization requested but Apple MPS is unavailable in this process"
-            )
+        gpu_device(torch)
 
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
@@ -2080,6 +2079,8 @@ class MpsSingleCoinProxy:
                 else None
             ),
         )
+
+        self.checkpoint_contract.update(checkpoint_runtime(torch))
 
         self.base_total_wallet_exposure_limits = {
             side: configured_total_wallet_exposure_limits[side]
@@ -2411,7 +2412,7 @@ class MpsSingleCoinProxy:
                 output, self.needed_metrics
             )
             if profile is not None:
-                torch.mps.synchronize()
+                synchronize()
                 profile["timings_seconds"]["metric_reduction"] += (
                     time.perf_counter() - stage_started
                 )
@@ -2974,13 +2975,11 @@ class MpsMulticoinProxy:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
             raise ModuleNotFoundError(
-                "GPU optimization requires the optional 'gpu-mps' dependencies; "
-                "install Passivbot with `pip install -e '.[full,gpu-mps]'`"
+                "GPU optimization requires the optional GPU dependencies; "
+                "install Passivbot with `pip install -e '.[full,gpu-mps]'` (Apple) "
+                "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
             ) from exc
-        if not torch.backends.mps.is_available():
-            raise RuntimeError(
-                "GPU optimization requested but Apple MPS is unavailable in this process"
-            )
+        gpu_device(torch)
 
         from optimization.gpu.metrics import (
             BTC_INTRADAY_RISK_METRICS,
@@ -3281,6 +3280,8 @@ class MpsMulticoinProxy:
             base_params=self.base_params,
             btc_prices=btc_values if self.btc_analysis_enabled else None,
         )
+
+        self.checkpoint_contract.update(checkpoint_runtime(torch))
 
         coins = list(backtest_params.get("coins") or [])
         if len(coins) != coin_count:
@@ -3624,7 +3625,7 @@ class MpsMulticoinProxy:
                     raw_output, self.needed_metrics
                 )
                 if profile is not None:
-                    torch.mps.synchronize()
+                    synchronize()
                     profile["timings_seconds"]["metric_reduction"] += (
                         time.perf_counter() - stage_started
                     )
@@ -3661,7 +3662,7 @@ class MpsMulticoinProxy:
                     else None
                 )
                 if profile is not None:
-                    torch.mps.synchronize()
+                    synchronize()
                     profile["timings_seconds"]["metric_reduction"] += (
                         time.perf_counter() - stage_started
                     )
