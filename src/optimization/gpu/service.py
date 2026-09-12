@@ -1826,6 +1826,45 @@ def _combine_hedged_multicoin_outputs(
     return combined
 
 
+def _candidate_parameter_matrix(
+    candidates: list[dict],
+    param_keys,
+    base_params: dict,
+    *,
+    static_overrides: dict | None = None,
+    couple_unstuck_emas: bool = False,
+) -> np.ndarray:
+    """Pack columns directly, preserving base < candidate < fixed override precedence."""
+    if not candidates:
+        return np.asarray([], dtype=np.float64)
+    matrix = np.empty(
+        (len(candidates), len(base_params) * len(param_keys)), dtype=np.float64
+    )
+    for side_index, (side, base) in enumerate(base_params.items()):
+        overrides = (static_overrides or {}).get(side, {})
+        for column, key in enumerate(param_keys):
+            source_key = (
+                key.removeprefix("unstuck_")
+                if couple_unstuck_emas
+                and key in ("unstuck_ema_span_0", "unstuck_ema_span_1")
+                else key
+            )
+            target = side_index * len(param_keys) + column
+            if source_key in overrides:
+                matrix[:, target] = float(overrides[source_key])
+            else:
+                candidate_key = f"{side}_{source_key}"
+                matrix[:, target] = [
+                    float(
+                        candidate[candidate_key]
+                        if candidate_key in candidate
+                        else base[source_key]
+                    )
+                    for candidate in candidates
+                ]
+    return matrix
+
+
 class MpsSingleCoinProxy:
     """Batched directional screening proxy for supported single-coin strategies."""
 
@@ -2235,27 +2274,13 @@ class MpsSingleCoinProxy:
             )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
-        rows = []
-        for candidate in candidates:
-            row = []
-            for side in ("long", "short"):
-                merged = dict(self.base_params[side])
-                merged.update(
-                    {
-                        key.removeprefix(f"{side}_"): value
-                        for key, value in candidate.items()
-                        if key.startswith(f"{side}_")
-                    }
-                )
-                merged.update(
-                    getattr(self, "static_coin_override_params", {}).get(side, {})
-                )
-                if getattr(self, "couple_unstuck_emas", False):
-                    for i in (0, 1):
-                        merged[f"unstuck_ema_span_{i}"] = merged[f"ema_span_{i}"]
-                row.extend(float(merged[key]) for key in self.param_keys)
-            rows.append(row)
-        return np.asarray(rows, dtype=np.float64)
+        return _candidate_parameter_matrix(
+            candidates,
+            self.param_keys,
+            {side: self.base_params[side] for side in ("long", "short")},
+            static_overrides=getattr(self, "static_coin_override_params", None),
+            couple_unstuck_emas=getattr(self, "couple_unstuck_emas", False),
+        )
 
     def recent_window_for_history_fraction(
         self, history_fraction: float
@@ -3535,21 +3560,12 @@ class MpsMulticoinProxy:
                 raise ValueError("side is required for dual-side multicoin parameters")
             side = self.sides[0]
         param_keys = getattr(self, "param_keys", EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
-        rows = []
-        for candidate in candidates:
-            merged = dict(self.base_params[side])
-            merged.update(
-                {
-                    key.removeprefix(f"{side}_"): value
-                    for key, value in candidate.items()
-                    if key.startswith(f"{side}_")
-                }
-            )
-            if getattr(self, "couple_unstuck_emas", False):
-                for i in (0, 1):
-                    merged[f"unstuck_ema_span_{i}"] = merged[f"ema_span_{i}"]
-            rows.append([float(merged[key]) for key in param_keys])
-        return np.asarray(rows, dtype=np.float64)
+        return _candidate_parameter_matrix(
+            candidates,
+            param_keys,
+            {side: self.base_params[side]},
+            couple_unstuck_emas=getattr(self, "couple_unstuck_emas", False),
+        )
 
     def evaluate(self, candidates: list[dict]) -> list[dict]:
         results: list[dict] = []

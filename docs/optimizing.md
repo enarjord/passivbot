@@ -147,6 +147,22 @@ Start with a small batch and few exact workers, then increase after measuring me
 throughput. CUDA multi-coin input preparation limits invariant tensors to 45% of currently
 free GPU memory. Native Windows Python is not supported by this installation profile.
 
+For NVIDIA throughput tuning, use the deterministic proxy benchmark to hold candidate work
+fixed while varying dispatch batch size:
+
+```bash
+PYTHONPATH=src python src/tools/gpu_proxy_benchmark.py --case tm-single-long \
+  --candidates 1024 --dispatch-batch-size 1024 --single-bars 23040 --warm-runs 5
+```
+
+Compare `--dispatch-batch-size 16`, `256`, and `1024` using the same candidate count and seed.
+Small setup-test batches can spend much of their time on repeated launches and host processing.
+For a modest dataset, a population and batch of 1024 are a useful starting point; retain the
+existing dispatch and memory limits, and reduce the batch if the workload approaches VRAM capacity.
+Increasing population size changes the search workload, whereas increasing batch size alone only
+changes how a fixed population is dispatched. Measure complete optimization runs separately,
+including exact Rust workers, startup, and checkpointing; proxy throughput is not end-to-end speedup.
+
 Select it with `--backend gpu` or `optimize.backend: "gpu"`. Normal live operation, backtesting,
 and the DEAP/pymoo CPU optimizers do not import or require PyTorch.
 

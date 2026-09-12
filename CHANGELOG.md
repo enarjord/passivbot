@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce GPU optimizer candidate-packing overhead by assembling parameter columns directly,
+  preserving side-specific values, fixed coin overrides, and EMA coupling.
+
 - Add experimental NVIDIA CUDA GPU optimization on Linux and Windows WSL2 with the
   `gpu-cuda` install extra, sharing the existing GPU strategy kernels and exact Rust validation.
 

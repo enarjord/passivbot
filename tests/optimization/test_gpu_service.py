@@ -3430,3 +3430,55 @@ def test_mps_single_coin_temporal_plan_preserves_work_limit(strategy, batch, bar
     plan = _mps_single_coin_dispatch_plan(strategy, batch, n_bars=bars, n_sides=sides, max_candidate_bars=cap)
     assert plan == expected
     assert plan[1] * plan[2] * sides <= cap
+
+
+@pytest.mark.parametrize("coupled", [False, True])
+def test_parameter_columns_preserve_fixed_override_then_ema_coupling(coupled):
+    proxy = MpsEmaAnchorProxy.__new__(MpsEmaAnchorProxy)
+    proxy.param_keys = (
+        "ema_span_0",
+        "ema_span_1",
+        "unstuck_ema_span_0",
+        "unstuck_ema_span_1",
+        "offset",
+    )
+    proxy.base_params = {
+        "short": dict(zip(proxy.param_keys, [6.0, 7.0, 8.0, 9.0, 0.1])),
+        "long": dict(zip(proxy.param_keys, [1.0, 2.0, 3.0, 4.0, 0.2])),
+    }
+    proxy.static_coin_override_params = {
+        "long": {"ema_span_0": 10.25, "unstuck_ema_span_0": 999.0},
+        "short": {"offset": 0.125},
+    }
+    proxy.couple_unstuck_emas = coupled
+    candidate = {
+        "long_ema_span_0": 12.5,
+        "long_ema_span_1": 2.5,
+        "long_unstuck_ema_span_1": 13.5,
+        "long_offset": 0.5,
+        "short_offset": 0.75,
+        "unrelated": -999.0,
+    }
+    original = dict(candidate)
+    expected = (
+        [10.25, 2.5, 10.25, 2.5, 0.5, 6.0, 7.0, 6.0, 7.0, 0.125]
+        if coupled
+        else [10.25, 2.5, 999.0, 13.5, 0.5, 6.0, 7.0, 8.0, 9.0, 0.125]
+    )
+    matrix = proxy._parameter_matrix([candidate, candidate])
+    np.testing.assert_array_equal(matrix, [expected, expected])
+    assert matrix.dtype == np.float64
+    assert matrix.flags.c_contiguous
+    assert candidate == original
+
+
+def test_parameter_columns_keep_candidate_fallback_and_missing_key_failure():
+    proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.param_keys = ("offset",)
+    proxy.sides = ["short"]
+    proxy.base_params = {"short": {}}
+    np.testing.assert_array_equal(proxy._parameter_matrix([{"short_offset": 0.125}]), [[0.125]])
+    with pytest.raises(KeyError, match="offset"):
+        proxy._parameter_matrix([{}])
+    with pytest.raises((TypeError, ValueError)):
+        proxy._parameter_matrix([{"short_offset": None}])
