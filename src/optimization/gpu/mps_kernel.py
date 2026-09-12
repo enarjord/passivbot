@@ -7,6 +7,8 @@ import time
 import numpy as np
 import torch
 
+from optimization.gpu.runtime import gpu_device, compile_shader, synchronize
+
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
     TRAILING_MARTINGALE_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
@@ -270,7 +272,7 @@ def _btc_risk_price_tensor(btc_prices, *, expected_count: int):
         raise ValueError(
             "MPS BTC-risk prices must remain finite and positive after float32 packing"
         )
-    return torch.as_tensor(values, dtype=torch.float32, device="mps")
+    return torch.as_tensor(values, dtype=torch.float32, device=gpu_device())
 
 
 def _pack_tm_parameter_matrix(
@@ -672,8 +674,7 @@ def _shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_hsl_features(
@@ -685,7 +686,7 @@ def _shader_library(
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=4)
@@ -694,8 +695,7 @@ def _ema_anchor_long_no_hsl_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_recovery_distribution(
@@ -704,7 +704,7 @@ def _ema_anchor_long_no_hsl_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=4)
@@ -713,8 +713,7 @@ def _ema_anchor_short_no_hsl_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_recovery_distribution(
@@ -723,7 +722,7 @@ def _ema_anchor_short_no_hsl_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=16)
@@ -745,8 +744,7 @@ def _trailing_martingale_shader_library(
     hsl_diagnostics_enabled: bool = True,
     temporal_chunking: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_tm_dispatch_features(
@@ -772,7 +770,7 @@ def _trailing_martingale_shader_library(
     source = _with_entry_interval(source, entry_interval_enabled)
     if temporal_chunking:
         source = "#define PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY 1\n" + source
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=16)
@@ -793,8 +791,7 @@ def _trailing_martingale_long_hsl_shader_library(
     entry_interval_enabled: bool = False,
     hsl_diagnostics_enabled: bool = True,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_tm_dispatch_features(
@@ -818,7 +815,7 @@ def _trailing_martingale_long_hsl_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=16)
@@ -839,8 +836,7 @@ def _trailing_martingale_short_hsl_shader_library(
     entry_interval_enabled: bool = False,
     hsl_diagnostics_enabled: bool = True,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_tm_dispatch_features(
@@ -864,7 +860,7 @@ def _trailing_martingale_short_hsl_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=8)
@@ -881,8 +877,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_tm_dispatch_features(
@@ -902,7 +897,7 @@ def _trailing_martingale_long_no_hsl_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=8)
@@ -919,8 +914,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_tm_dispatch_features(
@@ -940,7 +934,7 @@ def _trailing_martingale_short_no_hsl_shader_library(
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
     source = _with_entry_interval(source, entry_interval_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=32)
@@ -953,8 +947,7 @@ def _ema_anchor_multicoin_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_hsl_features(
@@ -969,7 +962,7 @@ def _ema_anchor_multicoin_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=32)
@@ -984,8 +977,7 @@ def _trailing_martingale_multicoin_shader_library(
     entry_interval_enabled: bool = False,
     temporal_chunking: bool = False,
 ):
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
     source = _with_hsl_features(
@@ -1005,16 +997,15 @@ def _trailing_martingale_multicoin_shader_library(
         if "#if PASSIVBOT_TM_MULTICOIN_CHUNKED" not in source:
             raise RuntimeError("MPS source is missing the multicoin replay-state contract")
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
-    return torch.mps.compile_shader(source)
+    return compile_shader(source)
 
 
 @lru_cache(maxsize=1)
 def _strategy_eq_recovery_distribution_shader_library():
-    if not torch.backends.mps.is_available():
-        raise RuntimeError("Apple MPS is not available in this process")
+    gpu_device(torch)
     import passivbot_rust
 
-    return torch.mps.compile_shader(
+    return compile_shader(
         passivbot_rust.mps_strategy_eq_recovery_distribution_source_py()
     )
 
@@ -1025,14 +1016,14 @@ def _strategy_eq_recovery_distribution_buffers(
 ):
     shape = (int(batch_size), int(sample_capacity))
     return (
-        torch.empty(shape, dtype=torch.int32, device="mps"),
-        torch.empty(shape, dtype=torch.int32, device="mps"),
+        torch.empty(shape, dtype=torch.int32, device=gpu_device()),
+        torch.empty(shape, dtype=torch.int32, device=gpu_device()),
         torch.empty(
             (int(batch_size), MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         ),
-        torch.tensor(shape, dtype=torch.int32, device="mps"),
+        torch.tensor(shape, dtype=torch.int32, device=gpu_device()),
     )
 
 
@@ -1041,8 +1032,8 @@ def strategy_eq_recovery_distribution_from_samples(
 ):
     """Approximate exact recovery summaries from uniformly spaced proxy samples."""
 
-    if strategy_equity_samples.device.type != "mps":
-        raise ValueError("strategy-equity recovery distribution requires an MPS tensor")
+    if strategy_equity_samples.device.type not in {"mps", "cuda"}:
+        raise ValueError("strategy-equity recovery distribution requires an MPS or CUDA tensor")
     if strategy_equity_samples.dtype != torch.float32:
         raise ValueError("strategy-equity recovery distribution requires float32 input")
     if strategy_equity_samples.ndim != 2:
@@ -1058,13 +1049,13 @@ def strategy_eq_recovery_distribution_from_samples(
         return torch.empty(
             (0, MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         )
     if sample_capacity == 0:
         return torch.zeros(
             (batch_size, MPS_STRATEGY_EQ_RECOVERY_METRIC_COLS),
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         )
     stack, histogram, output, sizes = _strategy_eq_recovery_distribution_buffers(
         batch_size, sample_capacity
@@ -1494,7 +1485,7 @@ class MpsEmaAnchorRunner:
                 ],
                 dim=1,
             )
-            .to(dtype=torch.float32, device="mps")
+            .to(dtype=torch.float32, device=gpu_device())
             .contiguous()
         )
         self.flags = (
@@ -1514,7 +1505,7 @@ class MpsEmaAnchorRunner:
                 ],
                 dim=1,
             )
-            .to(device="mps")
+            .to(device=gpu_device())
             .contiguous()
         )
         liq_floor = max(0.0, run.starting_balance) * max(0.0, run.liquidation_threshold)
@@ -1543,7 +1534,7 @@ class MpsEmaAnchorRunner:
                 market_order_near_touch_threshold,
             ],
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         )
         self._buffers: dict[int, tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = {}
         self._rolling_buffers: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
@@ -1602,7 +1593,7 @@ class MpsEmaAnchorRunner:
                     torch.zeros(
                         (batch_size, self.n_days, self.daily_cols),
                         dtype=torch.float32,
-                        device="mps",
+                        device=gpu_device(),
                     ),
                     torch.zeros(
                         (
@@ -1620,10 +1611,10 @@ class MpsEmaAnchorRunner:
                             ),
                         ),
                         dtype=torch.float32,
-                        device="mps",
+                        device=gpu_device(),
                     ),
                     torch.zeros(
-                        (batch_size, GAP_BINS), dtype=torch.int32, device="mps"
+                        (batch_size, GAP_BINS), dtype=torch.int32, device=gpu_device()
                     ),
                 )
             }
@@ -1642,8 +1633,8 @@ class MpsEmaAnchorRunner:
             shape = (batch_size, 2, self.rolling_capacity, 2)
             self._rolling_buffers = {
                 batch_size: (
-                    torch.empty(shape, dtype=torch.float32, device="mps"),
-                    torch.empty(shape, dtype=torch.int32, device="mps"),
+                    torch.empty(shape, dtype=torch.float32, device=gpu_device()),
+                    torch.empty(shape, dtype=torch.int32, device=gpu_device()),
                 )
             }
         return self._rolling_buffers[batch_size]
@@ -1655,7 +1646,7 @@ class MpsEmaAnchorRunner:
                     (batch_size, self.n_recovery_samples),
                     float("nan"),
                     dtype=torch.float32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
         else:
@@ -1670,7 +1661,7 @@ class MpsEmaAnchorRunner:
                 batch_size: torch.zeros(
                     (batch_size, MPS_EQUITY_BALANCE_DIFF_COLS),
                     dtype=torch.float32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
         else:
@@ -1714,7 +1705,7 @@ class MpsEmaAnchorRunner:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         packed = time.perf_counter() if profile else 0.0
-        params_mps = torch.as_tensor(matrix, device="mps")
+        params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
         daily, scalars, gaps = self._output_buffers(batch_size)
         rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
@@ -1737,14 +1728,14 @@ class MpsEmaAnchorRunner:
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
                 dtype=torch.int32,
-                device="mps",
+                device=gpu_device(),
             )
         prepared = time.perf_counter() if profile else 0.0
         loader, library_args = self._shader_library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
@@ -1776,7 +1767,7 @@ class MpsEmaAnchorRunner:
 
         dispatch_once()
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             finished = time.perf_counter()
             self.last_profile = {
                 "cpu_pack_seconds": packed - started,
@@ -1799,7 +1790,7 @@ class MpsEmaAnchorRunner:
                 self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
             )
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             self.last_profile["metric_decode_seconds"] = (
                 time.perf_counter() - finished
             )
@@ -1945,7 +1936,7 @@ class MpsEmaAnchorMulticoinRunner:
                 f"got {coin_overrides.shape}"
             )
         self.coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(coin_overrides), device="mps"
+            self._prepare_coin_overrides(coin_overrides), device=gpu_device()
         )
         forager_score_hysteresis_pct = float(forager_score_hysteresis_pct)
         if not np.isfinite(forager_score_hysteresis_pct) or (
@@ -1999,7 +1990,7 @@ class MpsEmaAnchorMulticoinRunner:
                 float(bool(filter_by_min_effective_cost)),
             ],
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         )
         self._buffers: dict[int, tuple[torch.Tensor, ...]] = {}
         self._recovery_buffers: dict[int, torch.Tensor] = {}
@@ -2048,22 +2039,22 @@ class MpsEmaAnchorMulticoinRunner:
                     torch.zeros(
                         (batch_size, self.n_days, self.daily_cols),
                         dtype=torch.float32,
-                        device="mps",
+                        device=gpu_device(),
                     ),
                     torch.zeros(
                         (batch_size, self.scalar_cols),
                         dtype=torch.float32,
-                        device="mps",
+                        device=gpu_device(),
                     ),
                     torch.zeros(
-                        (batch_size, GAP_BINS), dtype=torch.int32, device="mps"
+                        (batch_size, GAP_BINS), dtype=torch.int32, device=gpu_device()
                     ),
                     torch.zeros(
                         (batch_size, self.n_coins)
                         if self.collect_coin_fill_counts
                         else (1,),
                         dtype=torch.float32,
-                        device="mps",
+                        device=gpu_device(),
                     ),
                 )
             }
@@ -2078,7 +2069,7 @@ class MpsEmaAnchorMulticoinRunner:
         if end_steps is None:
             if batch_size not in self._full_end_steps:
                 self._full_end_steps[batch_size] = torch.full(
-                    (batch_size,), self.n - 1, dtype=torch.int32, device="mps"
+                    (batch_size,), self.n - 1, dtype=torch.int32, device=gpu_device()
                 )
             return self._full_end_steps[batch_size]
         values = np.asarray(end_steps, dtype=np.int32)
@@ -2088,7 +2079,7 @@ class MpsEmaAnchorMulticoinRunner:
             )
         values = np.clip(values, 1, self.n - 1)
         return torch.as_tensor(
-            np.ascontiguousarray(values), dtype=torch.int32, device="mps"
+            np.ascontiguousarray(values), dtype=torch.int32, device=gpu_device()
         )
 
     def _dispatch(
@@ -2163,7 +2154,7 @@ class MpsEmaAnchorMulticoinRunner:
                 (batch_size, self.n_recovery_samples),
                 float("nan"),
                 dtype=torch.float32,
-                device="mps",
+                device=gpu_device(),
             )
         else:
             self._recovery_buffers[batch_size].fill_(float("nan"))
@@ -2177,7 +2168,7 @@ class MpsEmaAnchorMulticoinRunner:
                 batch_size: torch.zeros(
                     (batch_size, MPS_EQUITY_BALANCE_DIFF_COLS),
                     dtype=torch.float32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
         else:
@@ -2192,14 +2183,14 @@ class MpsEmaAnchorMulticoinRunner:
                 batch_size: torch.zeros(
                     (batch_size, MPS_ENTRY_INTERVAL_STAT_COLS),
                     dtype=torch.float32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
             self._entry_interval_count_buffers = {
                 batch_size: torch.zeros(
                     (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
                     dtype=torch.int32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
         else:
@@ -2220,7 +2211,7 @@ class MpsEmaAnchorMulticoinRunner:
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         packed = time.perf_counter() if profile else 0.0
-        params_mps = torch.as_tensor(matrix, device="mps")
+        params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
         end_steps_mps = self._end_steps(end_steps, batch_size)
         daily, scalars, gaps, coin_fill_counts = self._output_buffers(batch_size)
@@ -2252,14 +2243,14 @@ class MpsEmaAnchorMulticoinRunner:
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
                 dtype=torch.int32,
-                device="mps",
+                device=gpu_device(),
             )
         prepared = time.perf_counter() if profile else 0.0
         loader, library_args = self._library_cache_call()
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
@@ -2279,7 +2270,7 @@ class MpsEmaAnchorMulticoinRunner:
             batch_size=batch_size,
         )
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             finished = time.perf_counter()
             self.last_profile = {
                 "cpu_pack_seconds": packed - started,
@@ -2308,7 +2299,7 @@ class MpsEmaAnchorMulticoinRunner:
         if self.collect_coin_fill_counts:
             output["coin_fill_counts"] = coin_fill_counts
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             self.last_profile["metric_decode_seconds"] = (
                 time.perf_counter() - finished
             )
@@ -2384,7 +2375,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 f"{expected_shape}, got {short_coin_overrides.shape}"
             )
         self.short_coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(short_coin_overrides), device="mps"
+            self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
         max_realized_loss_pct = float(max_realized_loss_pct)
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
@@ -2415,7 +2406,7 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 float(bool(filter_by_min_effective_cost)),
             ],
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2699,14 +2690,14 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         if chunk_bars < 1:
             raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
         if self._replay_state_bytes is None:
-            size = torch.empty(1, dtype=torch.int32, device="mps")
+            size = torch.empty(1, dtype=torch.int32, device=gpu_device())
             library.passivbot_tm_multicoin_replay_state_bytes(size, threads=1)
             self._replay_state_bytes = int(size.item())
         if batch_size not in self._replay_states:
             self._replay_states = {
                 batch_size: torch.empty(
                     (batch_size, self._replay_state_bytes),
-                    dtype=torch.uint8, device="mps",
+                    dtype=torch.uint8, device=gpu_device(),
                 )
             }
         replay_states = self._replay_states[batch_size]
@@ -2722,7 +2713,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.interrupt_check()
             replay_range = torch.tensor(
                 [begin_k, min(begin_k + chunk_bars, stop_k)],
-                dtype=torch.int32, device="mps",
+                dtype=torch.int32, device=gpu_device(),
             )
             started = time.perf_counter()
             library.passivbot_trailing_martingale_multicoin(
@@ -2732,7 +2723,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             )
             # Bound queued work as well as each command, and make Ctrl+C visible
             # between temporal chunks even when profiling is disabled.
-            torch.mps.synchronize()
+            synchronize()
             dispatch_count += 1
             max_dispatch_seconds = max(
                 max_dispatch_seconds, time.perf_counter() - started
@@ -2837,7 +2828,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 f"matrix shaped {expected_shape}, got {short_coin_overrides.shape}"
             )
         self.short_coin_overrides = torch.as_tensor(
-            self._prepare_coin_overrides(short_coin_overrides), device="mps"
+            self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )
         encoded_max_realized_loss_pct = _encode_max_realized_loss_pct(
             float(max_realized_loss_pct)
@@ -2863,7 +2854,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
                 float(bool(filter_by_min_effective_cost)),
             ],
             dtype=torch.float32,
-            device="mps",
+            device=gpu_device(),
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -3018,7 +3009,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             )
             last_hour_boundary_ms = current_hour_boundary_ms
         boundary_bits = torch.as_tensor(
-            hour_boundary_bits, dtype=torch.int32, device="mps"
+            hour_boundary_bits, dtype=torch.int32, device=gpu_device()
         )
         self.flags[:, 3].bitwise_or_(boundary_bits)
 
@@ -3106,14 +3097,14 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 batch_size: torch.zeros(
                     (batch_size, MPS_ENTRY_INTERVAL_STAT_COLS),
                     dtype=torch.float32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
             self._entry_interval_count_buffers = {
                 batch_size: torch.zeros(
                     (batch_size, MPS_ENTRY_INTERVAL_COUNT_COLS),
                     dtype=torch.int32,
-                    device="mps",
+                    device=gpu_device(),
                 )
             }
         else:
@@ -3257,7 +3248,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             loss_gate_enabled=self.loss_gate_enabled,
         )
         packed = time.perf_counter() if profile else 0.0
-        params_mps = torch.as_tensor(matrix, device="mps")
+        params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
         daily, scalars, gaps = self._output_buffers(batch_size)
         rolling_pnl_values, rolling_pnl_indices = self._hsl_rolling_buffers(
@@ -3312,7 +3303,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self._sizes[sizes_key] = torch.tensor(
                 size_values,
                 dtype=torch.int32,
-                device="mps",
+                device=gpu_device(),
             )
         prepared = time.perf_counter() if profile else 0.0
         # A small seed pool, cache miss, or final batch may fit the full-history
@@ -3329,7 +3320,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         library, cold = _cached_library_with_miss(loader, *library_args)
         compiled = time.perf_counter() if profile else 0.0
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             dispatched = time.perf_counter()
         else:
             dispatched = compiled
@@ -3370,7 +3361,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             if chunk_bars < 1:
                 raise ValueError("MPS replay batch exceeds the per-dispatch work envelope")
             if library_args not in self._replay_state_sizes:
-                size = torch.empty(1, dtype=torch.int32, device="mps")
+                size = torch.empty(1, dtype=torch.int32, device=gpu_device())
                 library.passivbot_tm_single_coin_replay_state_bytes(size, threads=1)
                 self._replay_state_sizes[library_args] = int(size.item())
             # Feature specialization changes the state ABI. Only the current
@@ -3379,7 +3370,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             state_key = (batch_size, state_bytes)
             if state_key not in self._replay_states:
                 self._replay_states = {state_key: torch.empty(
-                    (batch_size, state_bytes), dtype=torch.uint8, device="mps"
+                    (batch_size, state_bytes), dtype=torch.uint8, device=gpu_device()
                 )}
             replay_states = self._replay_states[state_key]
             begin = max(1, effective_history_start + 1)
@@ -3392,7 +3383,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.interrupt_check()
                 replay_range = torch.tensor(
                     [first, min(first + chunk_bars, stop)],
-                    dtype=torch.int32, device="mps",
+                    dtype=torch.int32, device=gpu_device(),
                 )
                 started = time.perf_counter()
                 library.passivbot_trailing_martingale(
@@ -3400,7 +3391,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                     threads=(batch_size, 1, 1),
                     group_size=(min(batch_size, 64), 1, 1),
                 )
-                torch.mps.synchronize()
+                synchronize()
                 longest = max(longest, time.perf_counter() - started)
                 count += 1
                 now = time.perf_counter()
@@ -3423,7 +3414,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
 
         dispatch_profile = dispatch_once()
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             finished = time.perf_counter()
             self.last_profile = {
                 "cpu_pack_seconds": packed - started,
@@ -3463,7 +3454,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 self.recovery_stride * self.run_config.interval_ms / 86_400_000.0
             )
         if profile:
-            torch.mps.synchronize()
+            synchronize()
             self.last_profile["metric_decode_seconds"] = (
                 time.perf_counter() - finished
             )

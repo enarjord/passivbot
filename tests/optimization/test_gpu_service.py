@@ -619,7 +619,7 @@ def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatc
         return output
 
     proxy.runner.run = profiled_run
-    monkeypatch.setattr(torch.mps, "synchronize", lambda: None)
+    monkeypatch.setattr("optimization.gpu.service.synchronize", lambda: None)
 
     proxy.evaluate([{"value": float(index)} for index in range(5)])
 

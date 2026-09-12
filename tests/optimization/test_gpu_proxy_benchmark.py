@@ -204,8 +204,11 @@ def test_gpu_proxy_benchmark_counts_only_recursive_close_ladder_candidates():
 def test_gpu_proxy_benchmark_applies_safety_limit_per_dispatch(
     monkeypatch, case, extra_args
 ):
+    from types import SimpleNamespace
+
     class FakeTorch:
         __version__ = "test"
+        backends = SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True))
 
     monkeypatch.setattr(
         "tools.gpu_proxy_benchmark._require_mps_torch", lambda _parser: FakeTorch()

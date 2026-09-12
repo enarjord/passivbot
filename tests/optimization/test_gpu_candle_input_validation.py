@@ -20,7 +20,8 @@ def cpu_packer(monkeypatch):
         return np.asarray(value, dtype=dtype).view(Array)
 
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
-        as_tensor=as_tensor, float32=np.float32, int32=np.int32, mps=SimpleNamespace()
+        as_tensor=as_tensor, float32=np.float32, int32=np.int32, mps=SimpleNamespace(),
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
     ))
     return calls
 

@@ -2773,7 +2773,7 @@ def test_gpu_preparation_preflight_accepts_modeled_tm_exposure_repair_override()
 
 
 def test_gpu_preparation_preflight_requires_available_mps():
-    with pytest.raises(RuntimeError, match=r"MPS is unavailable.*pymoo"):
+    with pytest.raises(RuntimeError, match=r"GPU optimization requires.*pymoo"):
         validate_gpu_preparation_scope(
             _long_only_ema_config(),
             torch_module=_fake_torch_with_mps(False),

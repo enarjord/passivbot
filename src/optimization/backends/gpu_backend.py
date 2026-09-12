@@ -580,22 +580,18 @@ def validate_gpu_preparation_scope(
             import torch as torch_module
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
             raise ModuleNotFoundError(
-                "Apple MPS GPU optimization requires the optional 'gpu-mps' "
-                "dependencies; install Passivbot with "
-                "`pip install -e '.[full,gpu-mps]'`. "
+                "GPU optimization requires optional GPU dependencies; install "
+                "`pip install -e '.[full,gpu-mps]'` (Apple) or "
+                "`pip install -e '.[full,gpu-cuda]'` (NVIDIA). "
                 f"See {GPU_CAPABILITIES_DOC}."
             ) from exc
-    if not torch_module.backends.mps.is_available():
-        raise RuntimeError(
-            "Apple MPS GPU optimization was requested, but MPS is unavailable in "
-            "this process. Run on Apple Silicon with an MPS-enabled PyTorch build, "
-            "or use optimize.backend='pymoo' or 'deap'. "
-            f"See {GPU_CAPABILITIES_DOC}."
-        )
+    from optimization.gpu.runtime import gpu_device
 
+    runtime = gpu_device(torch_module)
     logging.info(
-        "GPU capability preflight passed | runtime=apple_mps | strategy=%s | "
+        "GPU capability preflight passed | runtime=%s | strategy=%s | "
         "btc_collateral_cap=0 | max_coins_per_scenario=%d",
+        "apple_mps" if runtime == "mps" else "nvidia_cuda",
         strategy_kind,
         MPS_MULTICOIN_MAX_COINS,
     )

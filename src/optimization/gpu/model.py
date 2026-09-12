@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from optimization.gpu.runtime import gpu_device
+
 
 GAP_BINS = 128
 GAP_MAX_MINUTES = 4_000_000.0
@@ -903,8 +905,9 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         ModuleNotFoundError
     ) as exc:  # pragma: no cover - exercised without the optional extra
         raise ModuleNotFoundError(
-            "Apple MPS optimization requires the optional 'gpu-mps' dependencies; "
-            "install Passivbot with `pip install -e '.[full,gpu-mps]'`"
+            "GPU optimization requires the optional GPU dependencies; "
+            "install Passivbot with `pip install -e '.[full,gpu-mps]'` (Apple) "
+            "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
         ) from exc
 
     high = np.asarray(high, dtype=np.float64)
@@ -959,7 +962,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
     max_effective_min_cost = _maximum_effective_min_cost(close, market)
 
     def tensor(values, *, dtype=None):
-        return torch.as_tensor(values, dtype=dtype, device="mps")
+        return torch.as_tensor(values, dtype=dtype, device=gpu_device())
 
     return {
         "high_f": tensor(np.where(np.isfinite(high), high, 0.0).astype(np.float32)),
@@ -1005,8 +1008,9 @@ def build_mps_multicoin_data(
         import torch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
         raise ModuleNotFoundError(
-            "Apple MPS optimization requires the optional 'gpu-mps' dependencies; "
-            "install Passivbot with `pip install -e '.[full,gpu-mps]'`"
+            "GPU optimization requires the optional GPU dependencies; "
+            "install Passivbot with `pip install -e '.[full,gpu-mps]'` (Apple) "
+            "or `pip install -e '.[full,gpu-cuda]'` (NVIDIA)"
         ) from exc
 
     values = np.asarray(hlcvs)
@@ -1129,18 +1133,21 @@ def build_mps_multicoin_data(
         + (hour_log_ranges.nbytes if hour_log_ranges is not None else 0)
     )
     recommended = None
-    recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
-    if callable(recommended_fn):
-        recommended = int(recommended_fn())
+    if gpu_device(torch) == "cuda":
+        recommended = int(torch.cuda.mem_get_info()[0])
+    else:
+        recommended_fn = getattr(torch.mps, "recommended_max_memory", None)
+        if callable(recommended_fn):
+            recommended = int(recommended_fn())
     if recommended and invariant_bytes > int(recommended * 0.45):
         raise MemoryError(
-            "MPS multicoin invariant tensors would consume "
+            f"{gpu_device(torch).upper()} multicoin invariant tensors would consume "
             f"{invariant_bytes / 2**30:.2f} GiB, above the 45% safety limit of "
             f"the device's {recommended / 2**30:.2f} GiB recommended working set"
         )
 
     def tensor(array, *, dtype=None):
-        return torch.as_tensor(array, dtype=dtype, device="mps").contiguous()
+        return torch.as_tensor(array, dtype=dtype, device=gpu_device()).contiguous()
 
     first_day = int(timestamps[0] // 86_400_000)
     last_day = int(timestamps[-1] // 86_400_000)
