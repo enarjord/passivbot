@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce CPU usage during long NVIDIA GPU optimizer screening waits,
+  preserving GPU calculations and Apple GPU synchronization behavior.
+
 - Reduce NVIDIA multi-coin GPU optimizer memory and screening overhead by compiling
   per-candidate coin storage to a capacity matched to the dataset. Apple GPU compilation is unchanged.
 

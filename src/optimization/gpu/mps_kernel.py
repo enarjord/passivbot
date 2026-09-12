@@ -7,7 +7,9 @@ import time
 import numpy as np
 import torch
 
-from optimization.gpu.runtime import gpu_device, compile_shader, synchronize
+from optimization.gpu.runtime import (
+    gpu_device, compile_shader, synchronize, wait_for_cuda_stream,
+)
 
 from optimization.gpu.model import (
     EMA_ANCHOR_COIN_OVERRIDE_UNSTUCK_EMA_START_COLUMN,
@@ -1785,6 +1787,7 @@ class MpsEmaAnchorRunner:
             }
         else:
             self.last_profile = {}
+            wait_for_cuda_stream()
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         if self.recovery_distribution_enabled:
@@ -2296,6 +2299,7 @@ class MpsEmaAnchorMulticoinRunner:
             }
         else:
             self.last_profile = {}
+            wait_for_cuda_stream()
         output = self._decode(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(
@@ -3454,6 +3458,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             }
         else:
             self.last_profile = {}
+            wait_for_cuda_stream()
         output = _decode_directional_outputs(daily, scalars, gaps)
         output.update(_decode_equity_balance_diff_outputs(equity_balance_diff))
         output.update(

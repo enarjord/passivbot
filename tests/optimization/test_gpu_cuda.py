@@ -210,3 +210,115 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     assert specialized.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(specialized[key], baseline[key], err_msg=key)
+
+
+@pytest.mark.parametrize("pending_queries", [0, 2])
+def test_cuda_completion_wait_yields_until_ready(monkeypatch, pending_queries):
+    import sys
+    from optimization.gpu import runtime
+
+    calls = []
+    ready = iter([False] * pending_queries + [True])
+    event = SimpleNamespace(
+        record=lambda: calls.append("record"),
+        query=lambda: next(ready),
+    )
+    torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            Event=lambda: event,
+            synchronize=lambda: calls.append("device_sync"),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    ticks = iter([0.0] + [0.5] * pending_queries)
+    monkeypatch.setattr(
+        runtime, "time", SimpleNamespace(
+            perf_counter=lambda: next(ticks),
+            sleep=lambda seconds: calls.append(seconds),
+        )
+    )
+    runtime.synchronize()
+    assert calls == ["record", *([0.001] * pending_queries), "device_sync"]
+
+
+def test_cuda_completion_error_propagates(monkeypatch):
+    import sys
+    from optimization.gpu import runtime
+
+    def failed_query():
+        raise RuntimeError("asynchronous kernel failure")
+
+    torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            Event=lambda: SimpleNamespace(record=lambda: None, query=failed_query),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    with pytest.raises(RuntimeError, match="asynchronous kernel failure"):
+        runtime.synchronize()
+
+
+def test_mps_completion_keeps_existing_synchronization(monkeypatch):
+    import sys
+    from optimization.gpu import runtime
+
+    calls = []
+    torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        mps=SimpleNamespace(synchronize=lambda: calls.append("mps_sync")),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    runtime.wait_for_cuda_stream()
+    runtime.synchronize()
+    assert calls == ["mps_sync"]
+
+
+def test_cuda_completion_waits_for_current_stream(cuda):
+    torch, _library_cls = cuda
+    from optimization.gpu.runtime import wait_for_cuda_stream
+
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        output = torch.empty(16, device="cuda")
+        torch.cuda._sleep(10_000_000)
+        output.fill_(42)
+        wait_for_cuda_stream()
+        assert stream.query()
+    np.testing.assert_array_equal(output.cpu().numpy(), np.full(16, 42))
+
+
+def test_cuda_synchronize_still_waits_for_other_streams(cuda):
+    torch, _library_cls = cuda
+    from optimization.gpu.runtime import synchronize
+
+    other = torch.cuda.Stream()
+    with torch.cuda.stream(other):
+        torch.cuda._sleep(10_000_000)
+    synchronize()
+    assert other.query()
+
+
+def test_cuda_completion_keeps_short_wait_active(monkeypatch):
+    import sys
+    from optimization.gpu import runtime
+
+    calls = []
+    ready = iter([False, False, True])
+    ticks = iter([0.0, 0.1, 0.49])
+    torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: False)),
+        cuda=SimpleNamespace(
+            is_available=lambda: True,
+            Event=lambda: SimpleNamespace(record=lambda: None, query=lambda: next(ready)),
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setattr(runtime, "time", SimpleNamespace(
+        perf_counter=lambda: next(ticks), sleep=lambda seconds: calls.append(seconds),
+    ))
+    runtime.wait_for_cuda_stream()
+    assert calls == []
