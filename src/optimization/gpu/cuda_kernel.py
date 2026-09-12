@@ -1,7 +1,8 @@
 """Compile the repository's scalar Metal kernel dialect as CUDA C++.
 
 Only address-space qualifiers, the grid index, and the few Metal vector operations
-used by these kernels differ. Strategy expressions remain in the Rust-owned source.
+used by these kernels differ. Multi-coin private arrays may use a smaller validated
+capacity. Strategy expressions remain in the Rust-owned source.
 CuPy compiles with NVRTC and shares PyTorch tensors and its current CUDA stream.
 """
 
@@ -59,8 +60,25 @@ __device__ inline PBFloat3 fma(PBFloat3 a, PBFloat3 b, PBFloat3 c) {
 """
 
 
-def cuda_source(source: str) -> str:
+def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
     """Lower only the explicitly supported scalar shader dialect."""
+    if coin_capacity is not None:
+        declarations = list(re.finditer(
+            r"\bconstant\s+int\s+MAX_COINS\s*=\s*(\d+)\s*;", source
+        ))
+        if len(declarations) != 1:
+            raise ValueError("CUDA coin specialization requires one MAX_COINS declaration")
+        declaration = declarations[0]
+        if (
+            type(coin_capacity) is not int
+            or not 1 <= coin_capacity <= int(declaration[1])
+        ):
+            raise ValueError("CUDA coin capacity must fit the shader's MAX_COINS limit")
+        source = (
+            source[:declaration.start(1)]
+            + str(coin_capacity)
+            + source[declaration.end(1):]
+        )
     for signature in re.findall(r"kernel\s+void\s+\w+\((.*?)\)\s*\{", source, re.S):
         for position, argument in enumerate(signature.split(",")):
             slot = re.search(r"\[\[buffer\((\d+)\)\]\]", argument)
@@ -103,7 +121,7 @@ def cuda_source(source: str) -> str:
 
 
 class CudaShaderLibrary:
-    def __init__(self, source: str):
+    def __init__(self, source: str, *, coin_capacity: int | None = None):
         import cupy
 
         self._cupy = cupy
@@ -115,7 +133,7 @@ class CudaShaderLibrary:
                 if (match := re.search(r"\bconstant\s+(\w+)\s*&", argument))
             }
         self._module = cupy.RawModule(
-            code=cuda_source(source),
+            code=cuda_source(source, coin_capacity=coin_capacity),
             options=("--std=c++17", "--fmad=false"),
         )
         self._module.compile()

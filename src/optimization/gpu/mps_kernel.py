@@ -19,6 +19,7 @@ from optimization.gpu.model import (
     EMA_ANCHOR_MULTICOIN_PARAM_KEYS,
     EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS,
     GAP_BINS,
+    MPS_MULTICOIN_MAX_COINS,
     MPS_TM_MULTICOIN_CHUNK_BARS,
     MPS_TM_SINGLE_COIN_CHUNK_BARS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
@@ -946,6 +947,7 @@ def _ema_anchor_multicoin_shader_library(
     dynamic_wel_by_tradability: bool = True,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    cuda_coin_capacity: int | None = None,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -962,7 +964,7 @@ def _ema_anchor_multicoin_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    return compile_shader(source)
+    return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
 @lru_cache(maxsize=32)
@@ -976,6 +978,7 @@ def _trailing_martingale_multicoin_shader_library(
     equity_balance_diff_enabled: bool = False,
     entry_interval_enabled: bool = False,
     temporal_chunking: bool = False,
+    cuda_coin_capacity: int | None = None,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -997,7 +1000,7 @@ def _trailing_martingale_multicoin_shader_library(
         if "#if PASSIVBOT_TM_MULTICOIN_CHUNKED" not in source:
             raise RuntimeError("MPS source is missing the multicoin replay-state contract")
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
-    return compile_shader(source)
+    return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
 @lru_cache(maxsize=1)
@@ -1917,6 +1920,12 @@ class MpsEmaAnchorMulticoinRunner:
             else 1
         )
         self.bars = data["bars"]
+        self.cuda_coin_capacity = None
+        if self.bars.device.type == "cuda":
+            if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
+                raise ValueError("CUDA coin count exceeds the multicoin shader limit")
+            # Bound CUDA private arrays while sharing compiled variants within buckets.
+            self.cuda_coin_capacity = 1 << (self.n_coins - 1).bit_length()
         self.fill_ticks = data["fill_ticks"]
         self.touch_ticks = data["touch_ticks"]
         self.touch_nearest_ticks = data["touch_nearest_ticks"]
@@ -2135,7 +2144,7 @@ class MpsEmaAnchorMulticoinRunner:
         return loader(*args)
 
     def _library_cache_call(self):
-        return _ema_anchor_multicoin_shader_library, (
+        args = (
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -2144,6 +2153,9 @@ class MpsEmaAnchorMulticoinRunner:
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
         )
+        if self.cuda_coin_capacity is not None:
+            args += (self.cuda_coin_capacity,)
+        return _ema_anchor_multicoin_shader_library, args
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps)
@@ -2619,7 +2631,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         return loader(*args)
 
     def _library_cache_call(self):
-        return _trailing_martingale_multicoin_shader_library, (
+        args = (
             self.hsl_ema_tail_enabled,
             self.hsl_raw_drawdown_enabled,
             self.hsl_raw_tail_enabled,
@@ -2630,6 +2642,9 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.entry_interval_enabled,
             self.max_dispatch_candidate_bars is not None,
         )
+        if self.cuda_coin_capacity is not None:
+            args += (self.cuda_coin_capacity,)
+        return _trailing_martingale_multicoin_shader_library, args
 
     def _dispatch(
         self,

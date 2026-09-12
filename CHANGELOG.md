@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce NVIDIA multi-coin GPU optimizer memory and screening overhead by compiling
+  per-candidate coin storage to a capacity matched to the dataset. Apple GPU compilation is unchanged.
+
 - Reduce GPU optimizer candidate-packing overhead by assembling parameter columns directly,
   preserving side-specific values, fixed coin overrides, and EMA coupling.
 
