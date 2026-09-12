@@ -138,3 +138,75 @@ def test_cuda_constant_reference_buffer(cuda):
     for value in [factor, 3]:
         library.scale(value, output, threads=5)
         np.testing.assert_array_equal(output.cpu().numpy(), [3, 6, 9, 12, 15])
+
+
+@pytest.mark.parametrize("capacity", [1, 2, 8, 64])
+def test_cuda_coin_capacity_specializes_only_the_declared_limit(capacity):
+    source = """constant int MAX_COINS = 64;
+        kernel void size(device int* output, uint i [[thread_position_in_grid]]) {
+            output[i] = MAX_COINS;
+        }"""
+    assert f"constexpr int MAX_COINS = {capacity};" in cuda_source(
+        source, coin_capacity=capacity
+    )
+    assert "constexpr int MAX_COINS = 64;" in cuda_source(source)
+
+
+@pytest.mark.parametrize("capacity", [0, -1, 65, 8.5, True])
+def test_cuda_coin_capacity_rejects_invalid_limits(capacity):
+    with pytest.raises(ValueError, match="coin capacity"):
+        cuda_source("constant int MAX_COINS = 64;", coin_capacity=capacity)
+
+
+@pytest.mark.parametrize("source", ["", "constant int MAX_COINS = 64;" * 2])
+def test_cuda_coin_capacity_requires_one_known_declaration(source):
+    with pytest.raises(ValueError, match="one MAX_COINS declaration"):
+        cuda_source(source, coin_capacity=8)
+
+
+def test_mps_compilation_does_not_apply_cuda_coin_specialization(monkeypatch):
+    import sys
+    from optimization.gpu.runtime import compile_shader
+
+    sources = []
+    torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        mps=SimpleNamespace(compile_shader=lambda source: sources.append(source)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    source = "constant int MAX_COINS = 64;"
+    compile_shader(source, cuda_coin_capacity=8)
+    assert sources == [source]
+
+
+@pytest.mark.parametrize("case", ["ema-multicoin-overhead", "tm-multicoin-overhead"])
+@pytest.mark.parametrize("coins", [2, 3, 5, 9, 17, 33, 64])
+def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
+    torch, _library_cls = cuda
+    from tools.gpu_proxy_benchmark import _build_case
+
+    def evaluate(full_capacity):
+        proxy, candidates, *_ = _build_case(
+            case, candidates=4, dispatch_batch_size=4, single_bars=256,
+            multicoin_bars=256, coins=coins, seed=7,
+        )
+        runner = proxy.runners["long"]
+        expected_capacity = 1 << (coins - 1).bit_length()
+        assert runner.cuda_coin_capacity == expected_capacity
+        assert runner._library_cache_call()[1][-1] == expected_capacity
+        if full_capacity:
+            runner.cuda_coin_capacity = 64
+        if case.startswith("tm-"):
+            # Exercise the variant-specific replay-state ABI across temporal chunks.
+            runner.max_dispatch_candidate_bars = 4 * coins * 31
+        output = runner.run(proxy._parameter_matrix(candidates, "long"))
+        return {
+            key: value.cpu().numpy().copy()
+            for key, value in output.items() if isinstance(value, torch.Tensor)
+        }
+
+    specialized = evaluate(False)
+    baseline = evaluate(True)
+    assert specialized.keys() == baseline.keys()
+    for key in baseline:
+        np.testing.assert_array_equal(specialized[key], baseline[key], err_msg=key)

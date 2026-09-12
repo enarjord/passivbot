@@ -26,14 +26,14 @@ def synchronize() -> None:
         torch.cuda.synchronize()
 
 
-def compile_shader(source: str):
+def compile_shader(source: str, *, cuda_coin_capacity: int | None = None):
     import torch
 
     if gpu_device(torch) == "mps":
         return torch.mps.compile_shader(source)
     from optimization.gpu.cuda_kernel import CudaShaderLibrary
 
-    return CudaShaderLibrary(source)
+    return CudaShaderLibrary(source, coin_capacity=cuda_coin_capacity)
 
 
 def checkpoint_runtime(torch_module) -> dict:
