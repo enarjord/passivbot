@@ -889,7 +889,10 @@ inline bool finish_hsl_episode_at_flat(
     update_hsl_from_signal(h, signal, realized_pnl, false, false, kf, interval_ms, true);
     if (h.red_latched) {
         update_hsl_from_signal(h, signal, realized_pnl, false, false, kf, interval_ms);
-        return false;
+        // Finalization at this fill already increments the trigger counter.
+        // The later per-bar transition check cannot detect it, so the caller
+        // must clear the completed coin episode's rolling PnL window now.
+        return h.halted;
     }
     // Prime the next episode at the exact flat baseline. Another closing fill
     // in this minute must include its entry fee and closing loss in its signal.

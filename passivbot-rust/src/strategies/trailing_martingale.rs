@@ -508,4 +508,66 @@ mod tests {
         assert_eq!(generated.closes[0].price, 98.9);
         assert_eq!(generated.closes[9].price, 98.0);
     }
+
+    #[test]
+    fn trailing_close_touch_is_quantized_before_every_peek_path() {
+        use crate::strategies::PeekBehavior;
+        for side in [StrategySide::Long, StrategySide::Short] {
+            let long = matches!(side, StrategySide::Long);
+            // A raw touch would fill the next candle, but its nearest tick would not.
+            let touch = if long { 101.006 } else { 98.994 };
+            let tick = if long { 101.01 } else { 98.99 };
+            let exchange = ExchangeParams {
+                qty_step: 0.01, price_step: 0.01, min_qty: 0.01,
+                min_cost: 0.0, c_mult: 1.0, ..Default::default()
+            };
+            let state = StateParams {
+                balance: 1000.0,
+                order_book: OrderBook { ask: touch, bid: touch },
+                ..Default::default()
+            };
+            let bot = BotParams {
+                wallet_exposure_limit: 1.0, total_wallet_exposure_limit: 1.0,
+                risk_wel_enforcer_enabled: false, ..Default::default()
+            };
+            let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
+                close: TrailingMartingaleCloseParams {
+                    qty_pct: 1.0, threshold_base_pct: 0.001,
+                    retracement_base_pct: 0.001, ..Default::default()
+                },
+                ..Default::default()
+            });
+            let position = Position { size: if long { 1.0 } else { -1.0 }, price: 100.0 };
+            let trailing = TrailingPriceBundle {
+                min_since_open: 98.0, max_since_min: 99.0,
+                max_since_open: 102.0, min_since_max: 101.0,
+            };
+            let next_low = if long { 100.0 } else { 98.992 };
+            let next_high = if long { 101.008 } else { 100.0 };
+            let mut prices = Vec::new();
+            for mode in 0..5 {
+                let mut request = recursive_close_request(
+                    &exchange, &state, &bot, &params, &position, &trailing,
+                    next_low, next_high,
+                );
+                match mode {
+                    0 => request.next_candle = None, // live/full generation
+                    1 => {}, // next-candle fallback
+                    2 => request.next_candle.as_mut().unwrap().tradable = false,
+                    3 | 4 => request.peek = Some(PeekBehavior {
+                        expand_entries: false, expand_closes: mode == 4,
+                    }),
+                    _ => unreachable!(),
+                }
+                let orders = generate_orders(side, request);
+                assert_eq!(orders.closes.len(), 1, "mode {mode}");
+                let order = &orders.closes[0];
+                assert_eq!(order.price, tick, "side {side:?}, mode {mode}");
+                assert!(!would_fill_next_candle(next_low, next_high, order.qty, order.price));
+                prices.push(order.price);
+            }
+            assert!(prices.iter().all(|price| *price == prices[0]));
+        }
+    }
+
 }

@@ -21493,8 +21493,8 @@ def test_mps_trailing_martingale_entry_cap_uses_rust_nearest_step_rounding():
 @pytest.mark.skipif(
     not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable"
 )
-def test_mps_trailing_martingale_touch_close_preserves_raw_price():
-    """Match Rust finalization when an off-tick market touch controls a close."""
+def test_mps_trailing_touch_close_uses_nearest_not_directional_tick():
+    """Match nearest-tick finalization when an off-tick touch controls a close."""
 
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 
@@ -21567,8 +21567,8 @@ def test_mps_trailing_martingale_touch_close_preserves_raw_price():
     ).run(np.array([row + row], dtype=np.float64))
     synchronize()
 
-    # Exact Rust keeps the raw 100.004 ask, which fills at the next 100.005
-    # high. Rounding the touch up to 100.01 would leave the position open.
+    # Nearest-tick finalization rounds the 100.004 ask to 100.00, which fills
+    # at the next 100.005 high. Rounding up to 100.01 would leave it open.
     assert output["psize"].item() == 0.0
 
 

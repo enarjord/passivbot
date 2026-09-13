@@ -463,6 +463,18 @@ pub fn calc_trailing_close_long(
     }
 }
 
+// Size against the selected raw price first, then normalize executable intent.
+// Single-order backtest peeks must use the same price as expanded close bundles.
+fn quantize_close_price(mut order: Order, exchange_params: &ExchangeParams) -> Order {
+    order.price = quantize_price(
+        order.price,
+        exchange_params.price_step,
+        RoundingMode::Nearest,
+        "calc_next_close::price",
+    );
+    order
+}
+
 pub fn calc_next_close_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
@@ -490,9 +502,9 @@ pub fn calc_next_close_long(
         position,
         wallet_exposure,
     ) {
-        return order;
+        return quantize_close_price(order, exchange_params);
     }
-    if close_params.retracement_base_pct > 0.0 {
+    let order = if close_params.retracement_base_pct > 0.0 {
         calc_trailing_close_long(
             exchange_params,
             state_params,
@@ -511,7 +523,8 @@ pub fn calc_next_close_long(
             close_params,
             position,
         )
-    }
+    };
+    quantize_close_price(order, exchange_params)
 }
 
 pub fn calc_grid_close_short(
@@ -701,9 +714,9 @@ pub fn calc_next_close_short(
         position,
         wallet_exposure,
     ) {
-        return order;
+        return quantize_close_price(order, exchange_params);
     }
-    if close_params.retracement_base_pct > 0.0 {
+    let order = if close_params.retracement_base_pct > 0.0 {
         calc_trailing_close_short(
             exchange_params,
             state_params,
@@ -722,7 +735,8 @@ pub fn calc_next_close_short(
             close_params,
             position,
         )
-    }
+    };
+    quantize_close_price(order, exchange_params)
 }
 
 pub fn calc_trailing_martingale_close_diagnostic(

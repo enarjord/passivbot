@@ -251,3 +251,28 @@ def test_calc_twel_enforcer_orders_quantizes_results():
     assert ot == order_type
     assert _is_step_aligned(abs(qty), 0.1)
     assert _is_step_aligned(price, 0.0005)
+
+
+@requires_extension
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_single_trailing_close_matches_expanded_price_at_raw_touch(side):
+    is_long = side == "long"
+    params = dict(
+        qty_step=0.01, price_step=0.01, min_qty=0.01, min_cost=0.0, c_mult=1.0,
+        close_grid_qty_pct=1.0, close_trailing_qty_pct=1.0,
+        close_trailing_retracement_pct=0.001, close_trailing_threshold_pct=0.001,
+        wallet_exposure_limit=1.0, risk_we_excess_allowance_pct=0.0,
+        risk_wel_enforcer_threshold=1.0, balance=1000.0,
+        position_size=1.0 if is_long else -1.0, position_price=100.0,
+        min_since_open=98.0, max_since_min=99.0,
+        max_since_open=102.0, min_since_max=101.0,
+    )
+    params["order_book_ask" if is_long else "order_book_bid"] = (
+        101.006 if is_long else 98.994
+    )
+    single = getattr(pbr, f"calc_next_close_{side}_py")(**params)
+    expanded = getattr(pbr, f"calc_closes_{side}_py")(**params)
+    assert single[1] == expanded[0][1] == (101.01 if is_long else 98.99)
+    assert single[0] == expanded[0][0]
+    # Strict fill tests must agree for a candle between the raw touch and tick.
+    assert not (101.008 > single[1] if is_long else 98.992 < single[1])
