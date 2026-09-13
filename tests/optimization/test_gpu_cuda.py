@@ -322,3 +322,79 @@ def test_cuda_completion_keeps_short_wait_active(monkeypatch):
     ))
     runtime.wait_for_cuda_stream()
     assert calls == []
+
+
+@pytest.mark.parametrize("device", ["cuda", "mps"])
+def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
+    pytest.importorskip("torch")
+    from optimization.gpu import mps_kernel
+
+    monkeypatch.setattr(mps_kernel, "gpu_device", lambda *_: device)
+    runner = SimpleNamespace(
+        **{name: object() for name in (
+            "bars", "fill_ticks", "touch_ticks", "touch_nearest_ticks",
+            "touch_min_qty_bits", "touch_min_qty_relation", "hour_log_ranges",
+            "coin_settings", "coin_overrides", "settings",
+        )},
+        btc_prices_enabled=False, equity_balance_diff_enabled=False,
+        entry_interval_enabled=False, recovery_distribution_enabled=False,
+        max_dispatch_candidate_bars=None,
+    )
+    calls = []
+    library = SimpleNamespace(
+        passivbot_trailing_martingale_multicoin=lambda *args, **kwargs: calls.append(
+            (args, kwargs)
+        )
+    )
+    mps_kernel.MpsTrailingMartingaleMulticoinRunner._dispatch(
+        runner, library, *[object() for _ in range(11)], batch_size=65
+    )
+    assert len(calls) == 1
+    assert len(calls[0][0]) == 17
+    expected = {"threads": (65, 1, 1)}
+    if device == "cuda":
+        expected["group_size"] = (32, 1, 1)
+    assert calls[0][1] == expected
+
+
+@pytest.mark.parametrize("count", [33, 129])
+@pytest.mark.parametrize("coins", [2, 8])
+def test_cuda_tm_unchunked_blocks_preserve_raw_outputs(cuda, monkeypatch, count, coins):
+    torch, library_cls = cuda
+    from tools.gpu_proxy_benchmark import _build_case
+
+    proxy, candidates, *_ = _build_case(
+        "tm-multicoin-overhead", candidates=count, dispatch_batch_size=count,
+        single_bars=256, multicoin_bars=256, coins=coins, seed=7,
+    )
+    runner = proxy.runners["long"]
+    runner.max_dispatch_candidate_bars = None
+    matrix = proxy._parameter_matrix(candidates, "long")
+
+    def evaluate():
+        return {
+            key: value.cpu().numpy().copy()
+            for key, value in runner.run(matrix).items()
+            if isinstance(value, torch.Tensor)
+        }
+
+    actual = evaluate()
+    assert actual
+    original = library_cls.__getattr__
+
+    def old_block(self, name):
+        launch = original(self, name)
+        if name != "passivbot_trailing_martingale_multicoin":
+            return launch
+
+        def launch_64(*args, **kwargs):
+            kwargs["group_size"] = (64, 1, 1)
+            return launch(*args, **kwargs)
+
+        return launch_64
+
+    monkeypatch.setattr(library_cls, "__getattr__", old_block)
+    baseline = evaluate()
+    assert actual.keys() == baseline.keys()
+    for key in baseline:
+        np.testing.assert_array_equal(actual[key], baseline[key], err_msg=key)
