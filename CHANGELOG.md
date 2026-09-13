@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep live coin-HSL episode-boundary checks within the canonical proven history
+  window, preventing discarded cached fills from blocking current trading.
+
 - Improve NVIDIA Trailing Martingale multi-coin screening throughput with smaller CUDA
   thread blocks for unchunked replays. Apple GPU dispatch and strategy arithmetic are unchanged.
 

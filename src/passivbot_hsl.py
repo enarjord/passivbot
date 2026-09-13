@@ -5742,6 +5742,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
                 )
             if batch_idx == 0:
                 mark_protective_ready()
+        self._equity_hard_stop_coin_boundary_start_ms = replay_start_ms
         self._equity_hard_stop_coin_initialized = True
         elapsed_s = max(0.0, time.monotonic() - replay_started_s)
         total_elapsed_s = max(0.0, time.monotonic() - initialization_started_s)
@@ -6279,6 +6280,21 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
         for event in manager.get_events()
         if _equity_hard_stop_fill_timestamp_ms(event) <= timestamp_ms
     ]
+    initialized_start_ms = getattr(self, "_equity_hard_stop_coin_boundary_start_ms", None)
+    pair_starts = None
+    if initialized_start_ms is not None:
+        lookback = parse_pnls_max_lookback_days(
+            self.live_value("pnls_max_lookback_days"),
+            field_name="live.pnls_max_lookback_days",
+        )
+        _required, start_ms, pair_starts = _equity_hard_stop_required_fill_history_scope(
+            self, timestamp_ms, pnl_start_ms=lookback.balance_history_start_ms(timestamp_ms)
+        )
+        # Do not slide past fills that arrived late after the runtime was seeded.
+        start_ms = (
+            min(initialized_start_ms, start_ms)
+            if start_ms is not None else initialized_start_ms
+        )
     for pside in self._hsl_psides():
         for symbol, state in list(
             getattr(self, "_equity_hard_stop_coin", {}).get(pside, {}).items()
@@ -6295,6 +6311,14 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
             scope_events = _equity_hard_stop_coin_events_after_reset(
                 events, pside, symbol, reset_ts, qty_step=qty_step
             )
+            if pair_starts is not None and initialized_start_ms is not None:
+                # Startup already proves this coin-always window. Resolve tied
+                # reset cohorts using the full tape first, then exclude old
+                # cache rows that cannot affect the retained episodes.
+                scope_events = [
+                    event for event in scope_events
+                    if _equity_hard_stop_fill_timestamp_ms(event) >= start_ms
+                ]
             replay, ambiguous = _equity_hard_stop_coin_replay_events(
                 scope_events, pside, symbol, qty_step=qty_step
             )
