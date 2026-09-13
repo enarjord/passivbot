@@ -2697,8 +2697,12 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         if self.recovery_distribution_enabled:
             kernel_args += (recovery_samples,)
         if self.max_dispatch_candidate_bars is None:
+            dispatch_options = {"threads": (batch_size, 1, 1)}
+            if gpu_device(torch) == "cuda":
+                # Spread independent, state-heavy candidates across more SMs.
+                dispatch_options["group_size"] = (32, 1, 1)
             library.passivbot_trailing_martingale_multicoin(
-                *kernel_args, threads=(batch_size, 1, 1)
+                *kernel_args, **dispatch_options
             )
             return
         chunk_bars = min(

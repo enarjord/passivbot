@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Improve NVIDIA Trailing Martingale multi-coin screening throughput with smaller CUDA
+  thread blocks for unchunked replays. Apple GPU dispatch and strategy arithmetic are unchanged.
+
 - Clear completed coin-HSL rolling PnL windows when GPU replay finalizes a RED stop at
   a closing fill, preventing old losses from triggering another stop after cooldown.
 - Quantize single trailing-martingale close prices before backtest fill peeks, matching
