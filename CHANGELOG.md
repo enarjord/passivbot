@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Apply the shared 30-second request timeout to KuCoin clients and honor explicit
+  timeout overrides and native CCXT credential names while preserving broker signing.
+
 - Keep live coin-HSL episode-boundary checks within the canonical proven history
   window, preventing discarded cached fills from blocking current trading.
 

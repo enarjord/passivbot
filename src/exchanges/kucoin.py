@@ -159,12 +159,9 @@ class KucoinBot(CCXTBot):
                 }
             }
         }
-        base_kwargs = {
-            "apiKey": self.user_info["key"],
-            "secret": self.user_info["secret"],
-            "password": self.user_info["passphrase"],
-            "enableRateLimit": True,
-        }
+        # Preserve the shared request timeout and explicit operator overrides
+        # while keeping KuCoin's mandatory futures broker options below.
+        base_kwargs = self._build_ccxt_config()
         base_kwargs["options"] = options
 
         async_cls = AsyncKucoinBrokerFutures

@@ -182,6 +182,42 @@ def test_create_ccxt_sessions_requires_complete_futures_broker_config():
         bot.create_ccxt_sessions()
 
 
+@pytest.mark.parametrize("timeout", [None, 65_000])
+@pytest.mark.parametrize("native_keys", [False, True])
+def test_kucoin_session_setup_preserves_common_timeout_and_broker_headers(timeout, native_keys):
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.exchange = "kucoin"
+    bot.user_info = (
+        {"apiKey": "api_key", "secret": "api_secret", "password": "api_passphrase"}
+        if native_keys else
+        {"key": "api_key", "secret": "api_secret", "passphrase": "api_passphrase"}
+    )
+    if timeout is not None:
+        bot.user_info["timeout"] = timeout
+    bot.broker_code = {"futures": {
+        "partner": "passivbotFutures", "broker-key": "broker_secret",
+        "broker-name": "passivbotFutures",
+    }}
+    bot.ws_enabled = True
+    bot._build_ccxt_options = lambda: {}
+    bot._apply_endpoint_override = lambda client: None
+
+    bot.create_ccxt_sessions()
+
+    for client in (bot.cca, bot.ccp):
+        assert client.timeout == (30_000 if timeout is None else timeout)
+        assert client.enableRateLimit is True
+        assert (client.apiKey, client.secret, client.password) == (
+            "api_key", "api_secret", "api_passphrase"
+        )
+        assert client.options["defaultType"] == "swap"
+        headers = client.sign("orders", "futuresPrivate", "GET", {})["headers"]
+        assert headers["KC-API-PARTNER"] == "passivbotFutures"
+        assert headers["KC-API-PARTNER-VERIFY"] == "true"
+        assert headers["KC-API-PARTNER-SIGN"]
+        assert headers["KC-BROKER-NAME"] == "passivbotFutures"
+
+
 def test_kucoin_ticker_normalizer_labels_last_price_fallback(caplog):
     caplog.set_level(logging.WARNING)
     bot = KucoinBot.__new__(KucoinBot)
