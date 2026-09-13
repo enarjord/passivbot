@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Clear completed coin-HSL rolling PnL windows when GPU replay finalizes a RED stop at
+  a closing fill, preventing old losses from triggering another stop after cooldown.
+- Quantize single trailing-martingale close prices before backtest fill peeks, matching
+  expanded close bundles and preventing off-tick simulated fills.
+
 - Reduce CPU usage during long NVIDIA GPU optimizer screening waits,
   preserving GPU calculations and Apple GPU synchronization behavior.
 
