@@ -1334,6 +1334,7 @@ async def test_coin_hsl_initializer_uses_canonical_required_history_start():
     assert captured["hsl_replay_signal_mode"] == "coin"
     assert captured["hsl_coin_compact_replay"] is True
     assert captured["hsl_replay_start_ms"] == 120_000
+    assert bot._equity_hard_stop_coin_boundary_start_ms == 120_000
 
 
 def test_coin_hsl_restart_reset_preserves_persistent_no_restart_peak():
@@ -4934,6 +4935,53 @@ async def test_live_coin_boundary_does_not_guess_from_incomplete_fill_sizes():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("held", [False, True])
+async def test_live_coin_boundary_excludes_discarded_ambiguous_cache_prefix(held):
+    bot = make_coin_bot()
+    bot.hsl["long"]["restart_after_red_policy"] = "always"
+    bot._equity_hard_stop_coin_initialized = True
+    now = 40 * 86_400_000
+    bot._equity_hard_stop_coin_boundary_start_ms = now - 300_000
+    bot.get_exchange_time = lambda: now
+    events = [
+        {"timestamp": 60_000, "symbol": "OLD", "pside": "long",
+         "action": "decrease", "qty": 3.0, "pnl": -10.0},
+    ]
+    bot.positions = {"OLD": {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+    if held:
+        bot.positions["HELD"] = {"long": {"size": 1.0}, "short": {"size": 0.0}}
+        events.append({"timestamp": now - 60_000, "symbol": "HELD", "pside": "long",
+                       "action": "increase", "qty": 1.0, "pnl": 0.0})
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    for symbol in bot.positions:
+        bot._equity_hard_stop_apply_coin_sample("long", symbol, now, 1000.0, 0.0)
+    states = {symbol: bot._hsl_coin_state("long", symbol)["runtime"] for symbol in bot.positions}
+    assert not await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, now, 1000.0)
+    for symbol, runtime in states.items():
+        assert bot._hsl_coin_state("long", symbol)["runtime"] is runtime
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reason", ["recent_flat", "held_mismatch", "never", "threshold"])
+async def test_live_coin_boundary_preserves_strict_history_when_scope_is_unproven(reason):
+    bot = make_coin_bot()
+    bot.hsl["long"]["restart_after_red_policy"] = reason if reason in {"never", "threshold"} else "always"
+    bot._equity_hard_stop_coin_initialized = True
+    now = 40 * 86_400_000
+    bot._equity_hard_stop_coin_boundary_start_ms = now - 300_000
+    bot.positions = {"A": {"long": {"size": 1.0 if reason == "held_mismatch" else 0.0}, "short": {"size": 0.0}}}
+    events = [{"timestamp": 60_000, "symbol": "A", "pside": "long",
+               "action": "decrease", "qty": 3.0, "pnl": -10.0}]
+    if reason == "recent_flat":
+        events.append({"timestamp": now - 1, "symbol": "A", "pside": "long",
+                       "action": "decrease", "qty": 1.0, "pnl": -1.0})
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_sample("long", "A", now, 1000.0, 0.0)
+    with pytest.raises(hsl.AuthoritativeSurfaceUnavailable, match="ambiguous"):
+        await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, now, 1000.0)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("initialized", [False, True])
 async def test_live_coin_boundary_waits_for_background_replay_owner(initialized):
     bot = make_coin_bot()
@@ -5036,6 +5084,7 @@ async def test_delayed_live_coin_boundary_commits_empty_bounded_replay_once(
 ):
     bot = make_coin_bot()
     bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_coin_boundary_start_ms = 0
     bot.bot_value = lambda pside, key: 1 if key == "n_positions" else 1.0
     bot.hsl["long"]["cooldown_minutes_after_red"] = 0.0
     bot.hsl["long"]["restart_after_red_policy"] = "always"
