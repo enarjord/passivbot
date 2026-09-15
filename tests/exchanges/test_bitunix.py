@@ -27,6 +27,8 @@ from exchanges.bitunix import BitunixBot, BitunixClient, BitunixOrderStream
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from fill_events_manager import (
     BitunixFetcher,
+    DEFAULT_FEE_PCT_FALLBACK,
+    FillEvent,
     _build_fetcher_for_bot,
     signed_fee_paid_from_payload,
 )
@@ -2510,6 +2512,28 @@ async def test_bitunix_fetcher_normalizes_accounting_fields():
     assert events[0]["c_mult"] == 1.0
     assert signed_fee_paid_from_payload(events[0]) == pytest.approx(-0.01)
     assert cache["trade-1"][0] == "clock_entry_long_1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fee", ["missing", None, "", "0", "-0.01", "0.01"])
+async def test_bitunix_missing_fee_uses_shared_fallback_and_preserves_reported_fees(fee):
+    client = _prepared_client()
+    raw = _trade_row()
+    if fee == "missing":
+        raw.pop("fee")
+    else:
+        raw["fee"] = fee
+    client.fetch_my_trades = AsyncMock(return_value=[client._normalize_trade(raw)])
+    events = await BitunixFetcher(client).fetch(None, None, {})
+    event = FillEvent.from_dict(events[0])
+    if fee in ("missing", None, ""):
+        assert event.fee_paid == pytest.approx(-abs(event.qty * event.price) * DEFAULT_FEE_PCT_FALLBACK)
+        assert event.fee_source == "fallback_pct"
+        assert event.fee_quality == "fallback"
+    else:
+        assert event.fee_paid == pytest.approx(-float(fee))
+        assert event.fee_source == "reported_quote"
+        assert event.fee_quality == "exact"
 
 
 @pytest.mark.asyncio

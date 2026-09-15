@@ -1181,7 +1181,11 @@ class BitunixClient:
         qty = abs(_float(row.get("qty"), field="fill.qty"))
         price = _float(row.get("price"), field="fill.price")
         timestamp = _int(row.get("ctime"), field="fill.ctime")
-        fee = _float(row.get("fee"), field="fill.fee", default=0.0)
+        fee = (
+            None
+            if row.get("fee") in (None, "")
+            else {"currency": "USDT", "cost": _float(row["fee"], field="fill.fee")}
+        )
         info = deepcopy(row)
         info["positionSide"] = pside.upper()
         info["reduceOnly"] = reduce_only
@@ -1197,8 +1201,8 @@ class BitunixClient:
             "price": price,
             "amount": qty,
             "cost": qty * price,
-            "fee": {"currency": "USDT", "cost": fee},
-            "fees": [{"currency": "USDT", "cost": fee}],
+            "fee": fee,
+            "fees": [fee] if fee is not None else None,
             "clientOrderId": str(row.get("clientId") or ""),
         }
 
