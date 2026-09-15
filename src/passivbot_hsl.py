@@ -1688,6 +1688,9 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
         return 0.0, 0.0
     lookback_ms = self._equity_hard_stop_lookback_ms()
     start_ms = None if lookback_ms is None else int(timestamp_ms) - int(lookback_ms)
+    live_start_ms = _equity_hard_stop_live_coin_history_start_ms(self, int(timestamp_ms))
+    if live_start_ms is not None:
+        start_ms = live_start_ms if start_ms is None else max(start_ms, live_start_ms)
     reset_events = _equity_hard_stop_coin_events_after_reset(
         self._pnls_manager.get_events(), pside, symbol, reset_timestamp_ms,
         qty_step=_hsl_qty_step_for_symbol(self, symbol),
@@ -4891,6 +4894,15 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     replay_start_boundary_ts = max(
                         replay_start_boundary_ts or 0, int(replay_boundary[2]) + 1
                     )
+                if (
+                    replay_start_boundary_ts is None
+                    and replay_start_ms is not None
+                    and (configured_start_ms is None or replay_start_ms > configured_start_ms)
+                ):
+                    # Flat position rows may still be present at startup. Their
+                    # current sample must exclude cache history outside the
+                    # canonical bounded replay, just like held scopes do.
+                    replay_start_boundary_ts = replay_start_ms
                 window_points: deque[tuple[int, float]] = deque()
                 window_max_points: deque[tuple[int, float]] = deque()
                 window_base_realized = 0.0
@@ -6102,6 +6114,24 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
     return out if out else None
 
 
+def _equity_hard_stop_live_coin_history_start_ms(self, timestamp_ms: int) -> Optional[int]:
+    """Keep live consumers inside the proven replay window while it remains valid."""
+    initialized_start_ms = getattr(self, "_equity_hard_stop_coin_boundary_start_ms", None)
+    if initialized_start_ms is None or not getattr(self, "_equity_hard_stop_coin_initialized", False):
+        return None
+    lookback = parse_pnls_max_lookback_days(
+        self.live_value("pnls_max_lookback_days"),
+        field_name="live.pnls_max_lookback_days",
+    )
+    _required, start_ms, pair_starts = _equity_hard_stop_required_fill_history_scope(
+        self, timestamp_ms, pnl_start_ms=lookback.balance_history_start_ms(timestamp_ms)
+    )
+    if pair_starts is None:
+        return None
+    # Passing time cannot discard delayed fills from the initialized window.
+    return min(initialized_start_ms, start_ms) if start_ms is not None else initialized_start_ms
+
+
 def _equity_hard_stop_coin_symbols(self) -> set[str]:
     symbols = set(self.positions.keys())
     for pside_states in getattr(self, "_equity_hard_stop_coin", {}).values():
@@ -6110,6 +6140,9 @@ def _equity_hard_stop_coin_symbols(self) -> set[str]:
         lookback_ms = self._equity_hard_stop_lookback_ms()
         now_ms = int(self.get_exchange_time())
         start_ms = None if lookback_ms is None else now_ms - int(lookback_ms)
+        live_start_ms = _equity_hard_stop_live_coin_history_start_ms(self, now_ms)
+        if live_start_ms is not None:
+            start_ms = live_start_ms if start_ms is None else max(start_ms, live_start_ms)
         for event in self._pnls_manager.get_events():
             ts = _equity_hard_stop_fill_timestamp_ms(event)
             if start_ms is not None and ts < start_ms:
@@ -6280,21 +6313,7 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
         for event in manager.get_events()
         if _equity_hard_stop_fill_timestamp_ms(event) <= timestamp_ms
     ]
-    initialized_start_ms = getattr(self, "_equity_hard_stop_coin_boundary_start_ms", None)
-    pair_starts = None
-    if initialized_start_ms is not None:
-        lookback = parse_pnls_max_lookback_days(
-            self.live_value("pnls_max_lookback_days"),
-            field_name="live.pnls_max_lookback_days",
-        )
-        _required, start_ms, pair_starts = _equity_hard_stop_required_fill_history_scope(
-            self, timestamp_ms, pnl_start_ms=lookback.balance_history_start_ms(timestamp_ms)
-        )
-        # Do not slide past fills that arrived late after the runtime was seeded.
-        start_ms = (
-            min(initialized_start_ms, start_ms)
-            if start_ms is not None else initialized_start_ms
-        )
+    start_ms = _equity_hard_stop_live_coin_history_start_ms(self, timestamp_ms)
     for pside in self._hsl_psides():
         for symbol, state in list(
             getattr(self, "_equity_hard_stop_coin", {}).get(pside, {}).items()
@@ -6311,7 +6330,7 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
             scope_events = _equity_hard_stop_coin_events_after_reset(
                 events, pside, symbol, reset_ts, qty_step=qty_step
             )
-            if pair_starts is not None and initialized_start_ms is not None:
+            if start_ms is not None:
                 # Startup already proves this coin-always window. Resolve tied
                 # reset cohorts using the full tape first, then exclude old
                 # cache rows that cannot affect the retained episodes.
