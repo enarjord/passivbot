@@ -69,8 +69,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    finalization consumes pair metrics and must not add an account-wide PnL dependency. Coin mode
    evaluates each configured coin's effective HSL enablement, restart policy, and cooldown.
    `threshold`, `never`, pside, and unified modes remain full-lookback strict.
-   Live ordinary-boundary checks use this same proven coin window and retain its
-   initialized lower bound until canonical reconstruction replaces it. Time passing
+   Live symbol discovery, PnL sampling, and ordinary-boundary checks use this same
+   proven coin window and retain its initialized lower bound until canonical
+   reconstruction replaces it. Time passing
    must not slide the boundary past delayed fills, and newly uncertain scope evidence
    restores strict checking. Discarded cache rows cannot reintroduce old episodes.
 9. Restart price reconstruction fetches 1m history first. When an exchange cannot provide the

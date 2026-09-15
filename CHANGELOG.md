@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep live coin-HSL symbol discovery and PnL sampling within the proven restart
+  history window, so discarded closed episodes cannot trigger a new stop.
+- Preserve missing Bitunix fill fees as unavailable so the configured fee fallback
+  applies; explicit zero fees and rebates retain their reported values.
+
 - Apply the shared 30-second request timeout to KuCoin clients and honor explicit
   timeout overrides and native CCXT credential names while preserving broker signing.
 

@@ -4,6 +4,83 @@ import passivbot_hsl as hsl
 from test_hsl_coin_mode import make_coin_bot, make_fake_pnls_manager
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flat_position_row", [False, True])
+async def test_bounded_live_sampling_does_not_resurrect_discarded_flat_coin(flat_position_row):
+    bot = make_coin_bot()
+    bot.bot_value = lambda pside, key: 1.0
+    bot.hsl["long"].update(
+        restart_after_red_policy="always", cooldown_minutes_after_red=1.0,
+        red_threshold=0.1,
+    )
+    now = 10 * 86_400_000
+    bot.get_exchange_time = lambda: now
+    bot.positions = {"CURRENT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    if flat_position_row:
+        bot.positions["OLD"] = {"long": {"size": 0.0}, "short": {"size": 0.0}}
+    events = [
+        dict(timestamp=now-86_400_000, symbol="OLD", pside="long", action="increase", qty=1.0, pnl=0.0),
+        dict(timestamp=now-86_340_000, symbol="OLD", pside="long", action="decrease", qty=1.0, pnl=-30.0),
+        dict(timestamp=now-90_000, symbol="CURRENT", pside="long", action="increase", qty=1.0, pnl=0.0),
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    async def history(**kwargs):
+        assert kwargs["hsl_replay_start_ms"] == now-90_000
+        return {
+            "timeline": [{
+                "timestamp": now-90_000,
+                "balance": 100.0,
+                "realized_pnl": 0.0,
+                "realized_pnl_by_coin_pside": {"CURRENT": {"long": 0.0}},
+                "unrealized_pnl_by_coin_pside": {"CURRENT": {"long": 0.0}},
+            }],
+            "fill_events": [events[-1]],
+            "panic_flatten_events": [],
+        }
+
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_coin_from_history()
+    assert bot._equity_hard_stop_coin_boundary_start_ms == now-90_000
+    for _ in range(3):
+        await bot._equity_hard_stop_check_coin()
+        assert not bot._equity_hard_stop_coin_red_active()
+        assert bot._equity_hard_stop_coin_realized_pnl_peak_last("long", "OLD", now) == (0.0, 0.0)
+        now += 60_000
+    if not flat_position_row:
+        assert "OLD" not in bot._equity_hard_stop_coin_symbols()
+
+    # A genuine re-entry must be discovered and retain its fee without the old loss.
+    events.append(dict(timestamp=now-1, symbol="OLD", pside="long", action="increase", qty=1.0, pnl=0.0, fee_paid=-0.25))
+    bot.positions["OLD"] = {"long": {"size": 1.0}, "short": {"size": 0.0}}
+    await bot._equity_hard_stop_check_coin()
+    assert "OLD" in bot._equity_hard_stop_coin_symbols()
+    assert bot._hsl_coin_state("long", "OLD")["last_metrics"]["realized_pnl"] == -0.25
+    assert not bot._equity_hard_stop_coin_red_active()
+
+
+@pytest.mark.parametrize("strict_reason", ["recent_flat_fill", "unproven_position", "threshold", "never"])
+def test_live_coin_history_restores_full_scope_when_bounded_proof_is_lost(strict_reason):
+    bot = make_coin_bot()
+    bot.hsl["long"].update(restart_after_red_policy="always", cooldown_minutes_after_red=5.0)
+    now = 10 * 86_400_000
+    bot.get_exchange_time = lambda: now
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_coin_boundary_start_ms = now-60_000
+    events = [
+        dict(timestamp=now-86_400_000, symbol="OLD", pside="long", action="increase", qty=1.0, pnl=0.0),
+        dict(timestamp=now-86_340_000, symbol="OLD", pside="long", action="decrease", qty=1.0, pnl=-30.0),
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    if strict_reason == "recent_flat_fill":
+        events.append(dict(timestamp=now-1, symbol="RECENT", pside="long", action="decrease", qty=1.0, pnl=-1.0))
+    elif strict_reason == "unproven_position":
+        bot.positions = {"CURRENT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    else:
+        bot.hsl["long"]["restart_after_red_policy"] = strict_reason
+    assert "OLD" in bot._equity_hard_stop_coin_symbols()
+    assert bot._equity_hard_stop_coin_realized_pnl_peak_last("long", "OLD", now) == (0.0, -30.0)
+
+
 def _delayed_boundary_bot(*, policy="always", cooldown=0.0, last_sample_ms=240_000):
     bot = make_coin_bot()
     bot.bot_value = lambda pside, key: 1.0
