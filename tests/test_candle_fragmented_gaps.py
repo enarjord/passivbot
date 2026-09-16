@@ -183,3 +183,65 @@ async def test_failed_contextual_proof_retries_after_bounded_delay(tmp_path):
     assert calls == [(9 * ONE_MIN_MS, 5), (9 * ONE_MIN_MS, 5)]
     assert recovered.size == 30
     assert all(g["reason"] == GAP_REASON_NO_TRADES for g in cm._get_known_gaps_enhanced(symbol))
+
+
+def test_many_deferred_fragments_use_one_metadata_snapshot(tmp_path, monkeypatch):
+    cm = CandlestickManager(cache_dir=str(tmp_path), archive_enabled=False)
+    now = 2000 * ONE_MIN_MS
+    gaps = [
+        dict(start_ts=m * ONE_MIN_MS, end_ts=m * ONE_MIN_MS,
+             reason=GAP_REASON_FETCH_FAILED, retry_count=_GAP_MAX_RETRIES,
+             added_at=now, last_retry_at=now)
+        for m in range(1000)
+    ]
+    reads = []
+
+    def load_gaps(symbol):
+        reads.append(symbol)
+        return gaps
+
+    monkeypatch.setattr(cm, "_get_known_gaps_enhanced", load_gaps)
+    assert cm._known_gap_retry_deferred_at(
+        "SPARSE/USDT:USDT", 0, 999 * ONE_MIN_MS, now_ms=now
+    )
+    assert len(reads) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("gap_minutes", [197, 198])
+async def test_contextual_proof_requires_boundaries_within_one_page(tmp_path, gap_minutes):
+    end_minute = gap_minutes + 14
+    now = (end_minute + 1) * ONE_MIN_MS + 1000
+    calls = []
+    rows = np.array(
+        [(m * ONE_MIN_MS, 100, 101, 99, 100, 5)
+         for m in range(end_minute + 1)
+         if not 11 <= m <= 10 + gap_minutes], dtype=CANDLE_DTYPE
+    )
+
+    class Exchange:
+        id = "kucoinfutures"
+
+        async def fetch_ohlcv(self, symbol, timeframe=None, since=None, limit=None, params=None):
+            calls.append((since, limit))
+            return [list(row) for row in rows if since < row[0] <= since + limit * ONE_MIN_MS]
+
+    cm = CandlestickManager(exchange=Exchange(), cache_dir=str(tmp_path), archive_enabled=False)
+    cm._now_ms_callback = lambda: now
+    symbol = "SPARSE/USDT:USDT"
+    cm._cache[symbol] = rows
+    cm._save_known_gaps_enhanced(symbol, [
+        dict(start_ts=m * ONE_MIN_MS, end_ts=m * ONE_MIN_MS,
+             reason=GAP_REASON_FETCH_FAILED, retry_count=_GAP_MAX_RETRIES,
+             added_at=now, last_retry_at=now, last_contextual_retry_at=0)
+        for m in range(11, 11 + gap_minutes)
+    ])
+    result = await cm.get_candles(symbol, start_ts=0, end_ts=end_minute * ONE_MIN_MS)
+    if gap_minutes == 197:
+        assert calls == [(9 * ONE_MIN_MS, 200)]
+        assert result.size == end_minute + 1
+    else:
+        assert calls == []
+        assert list(result["ts"]) == list(rows["ts"])
+        assert all(g["reason"] == GAP_REASON_FETCH_FAILED
+                   for g in cm._get_known_gaps_enhanced(symbol))

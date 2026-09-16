@@ -3648,24 +3648,22 @@ class CandlestickManager:
             now_ms = self._now_ms()
         fetch_start = int(start_ts)
         fetch_end = int(end_ts)
-        while fetch_start <= fetch_end:
-            deferred_gap_end = None
-            for gap in self._get_known_gaps_enhanced(symbol):
-                gap_start = int(gap["start_ts"])
-                gap_end = int(gap["end_ts"])
-                if (
-                    gap_start <= fetch_start <= gap_end
-                    and not self._should_retry_gap(gap, now_ms=now_ms)
-                ):
-                    deferred_gap_end = (
-                        gap_end
-                        if deferred_gap_end is None
-                        else max(deferred_gap_end, gap_end)
-                    )
-            if deferred_gap_end is None:
-                return fetch_start
-            fetch_start = int(deferred_gap_end) + ONE_MIN_MS
-        return None
+        gaps = sorted(
+            self._get_known_gaps_enhanced(symbol),
+            key=lambda gap: int(gap["start_ts"]),
+        )
+        for gap in gaps:
+            if fetch_start > fetch_end:
+                return None
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            if gap_end < fetch_start:
+                continue
+            if gap_start > fetch_start:
+                break
+            if not self._should_retry_gap(gap, now_ms=now_ms):
+                fetch_start = gap_end + ONE_MIN_MS
+        return None if fetch_start > fetch_end else fetch_start
 
     def _unverified_gap_ranges(
         self,
@@ -5523,6 +5521,24 @@ class CandlestickManager:
                 return True
         return False
 
+    def _kucoin_contextual_gap_request(
+        self, left_ts: int, right_ts: int
+    ) -> Optional[Tuple[int, int]]:
+        """Plan a single proof page only when both real bounds fit."""
+        request_since = int(left_ts)
+        if (
+            self._ccxt_since_exclusive
+            and self._ccxt_page_overlap_candles > 0
+            and left_ts > 0
+        ):
+            request_since = max(
+                0, left_ts - ONE_MIN_MS * int(self._ccxt_page_overlap_candles)
+            )
+        requested_buckets = max(2, (right_ts - request_since) // ONE_MIN_MS + 1)
+        if requested_buckets > int(self._ccxt_limit_default):
+            return None
+        return request_since, requested_buckets
+
     async def _fetch_kucoin_contextual_gap_page(
         self,
         symbol: str,
@@ -5544,25 +5560,14 @@ class CandlestickManager:
         right_ts = int(right_boundary_ts)
         gap_start = int(gap_start_ts)
         gap_end = int(gap_end_ts)
-        request_since = left_ts
-        if (
-            self._ccxt_since_exclusive
-            and self._ccxt_page_overlap_candles > 0
-            and left_ts > 0
-        ):
-            request_since = max(
-                0,
-                left_ts
-                - ONE_MIN_MS * int(self._ccxt_page_overlap_candles),
-            )
-        requested_buckets = max(
-            2,
-            (right_ts - request_since) // ONE_MIN_MS + 1,
-        )
+        request = self._kucoin_contextual_gap_request(left_ts, right_ts)
+        if request is None:
+            return np.empty((0,), dtype=CANDLE_DTYPE), False
+        request_since, requested_buckets = request
         page = await self._ccxt_fetch_ohlcv_once(
             symbol,
             request_since,
-            min(int(self._ccxt_limit_default), int(requested_buckets)),
+            requested_buckets,
             end_exclusive_ms=right_ts + ONE_MIN_MS,
             tf="1m",
         )
@@ -8581,7 +8586,10 @@ class CandlestickManager:
                     after = timestamps[timestamps > int(e)]
                     if before.size == 0 or after.size == 0:
                         return None
-                    return int(before[-1]), int(after[0])
+                    left_ts, right_ts = int(before[-1]), int(after[0])
+                    if self._kucoin_contextual_gap_request(left_ts, right_ts) is None:
+                        return None
+                    return left_ts, right_ts
 
                 # Attempt limited targeted fetches for unknown spans
                 attempts = 0

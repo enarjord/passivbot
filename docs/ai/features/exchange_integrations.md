@@ -260,7 +260,9 @@ Handling:
    recovered responses remain unavailable, preserve persistent gap status, and start a five-minute
    contextual-proof cooldown rather than issuing another request on every candle read. Adjacent
    records retain independent retry clocks; all unverified fragments of the proof window must be
-   eligible. Ordinary missing-range retry timing remains unchanged.
+   eligible and both real bounds must fit one request page. Wider gaps retain ordinary repair
+   instead of repeated short-cooldown proof attempts. Ordinary missing-range retry timing remains
+   unchanged.
 
 ## Bitget Futures
 
