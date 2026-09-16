@@ -1,3 +1,4 @@
+from simulation_data import OfflineDataError, is_offline, require_online, snapshot_file
 import glob
 import json
 import logging
@@ -393,9 +394,31 @@ async def get_first_timestamps_unified(
             raise ValueError("exchanges must contain at least one venue")
         scoped_results = []
         for selected_exchange in selected_exchanges:
+            selected_coins = coins
+            if is_offline():
+                # A venue which does not list a market needs no listing timestamp.
+                # Its cached market snapshot must still be available to prove absence.
+                markets = await load_markets(selected_exchange, verbose=False)
+                selected_coins = []
+                for coin in coins:
+                    try:
+                        symbol = coin_to_symbol(coin, selected_exchange)
+                    except MarketIdentifierResolutionError:
+                        continue
+                    if symbol in markets:
+                        selected_coins.append(coin)
             scoped_results.append(
-                await get_first_timestamps_unified(coins, exchange=selected_exchange)
+                await get_first_timestamps_unified(selected_coins, exchange=selected_exchange)
             )
+        if is_offline():
+            unavailable = [coin for coin in coins if not any(
+                float(result.get(coin, 0.0)) > 0.0 for result in scoped_results
+            )]
+            if unavailable:
+                raise OfflineDataError(
+                    f"Offline listing metadata unavailable for {unavailable} on {selected_exchanges}; "
+                    "refresh/copy market and first-OHLCV timestamp caches."
+                )
         return {
             coin: min(
                 (
@@ -514,6 +537,12 @@ async def get_first_timestamps_unified(
             for exchange_name, exchange_value in ftss_exchange_specific.get(coin, {}).items()
         )
 
+    if is_offline():
+        for path in (cache_version_fpath, cache_fpath, cache_fpath_exchange_specific,
+                     cache_symbols_fpath_exchange_specific):
+            if os.path.isfile(path):
+                snapshot_file(path)
+
     # 1) If no exchange is specified and all coins have valid cached timestamps, just return ftss
     if exchange is None:
         if all(_valid_unified_cache_entry(coin) for coin in coins):
@@ -537,6 +566,10 @@ async def get_first_timestamps_unified(
             return {c: ftss_exchange_specific.get(c, {}).get(exchange, 0.0) for c in coins}
         return ftss
 
+    require_online(
+        f"listing timestamps for {sorted(missing_coins)} on {exchange or 'unified exchanges'}; "
+        f"cache={cache_fpath_exchange_specific}, resolver version={FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION}"
+    )
     print("Missing coins:", sorted(missing_coins))
 
     # Map of exchange -> quote currency

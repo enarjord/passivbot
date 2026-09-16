@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `backtest.offline` / `--offline y` for backtests and optimization: reuse cached
+  metadata regardless of age, prohibit remote data fetching, verify local coverage,
+  and retain data snapshot fingerprints. Live behavior is unchanged.
+
 - Keep live coin-HSL symbol discovery and PnL sampling within the proven restart
   history window, so discarded closed episodes cannot trigger a new stop.
 - Preserve missing Bitunix fill fees as unavailable so the configured fee fallback

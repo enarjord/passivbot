@@ -225,6 +225,12 @@ HSL_PSIDE_KEYS = (
     "hsl_tier_ratios",
 )
 FIELD_RUNTIME_RULES = {
+    "backtest.offline": {
+        "owner": "backtest",
+        "consumed_by": {"backtest", "optimize"},
+        "cli_exposed_on": {"backtest", "optimize"},
+        "help_group": {"backtest": "Backtest Runtime", "optimize": "Backtest Runtime"},
+    },
     "live.approved_coins": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -1337,6 +1343,14 @@ RESERVED_CLI_ARGS = {
             "optimize": "Date Range",
         },
         "help": "Backtest candle interval in minutes.",
+    },
+    "backtest.offline": {
+        "visible": ["--offline"],
+        "hidden": ["--backtest.offline", "--backtest_offline"],
+        "type": str2bool,
+        "metavar": "BOOL",
+        "commands": {"backtest", "optimize"},
+        "help": "Use local simulation data only; never refresh metadata or download candles.",
     },
     "backtest.hlcvs_data_dir": {
         "visible": ["--hlcvs-data-dir"],

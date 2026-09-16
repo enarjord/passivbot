@@ -2,7 +2,11 @@
 
 ## Contract
 
-1. Prefer existing local data before remote calls.
+1. Prefer existing local data before remote calls. Backtest/optimization `backtest.offline`
+   forbids every remote preparation path, including metadata and listing refreshes. Accept
+   valid stale metadata, preserve confirmed exchange-side coverage boundaries, and fail on
+   missing required local inputs. The task-local policy must never enable offline behavior
+   in live callers. Verified prepared datasets retain input provenance.
 2. For backtest preparation, use v2 OHLCV chunks first, legacy raw shards second, and targeted remote fetches last.
    For missing Binance futures 1m data in the current v2 path, remote source priority is Binance
    Vision monthly archives, Binance Vision daily archives, then CCXT. More than seven days of

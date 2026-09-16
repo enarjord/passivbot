@@ -1,4 +1,6 @@
+from simulation_data import OfflineDataError, is_offline, require_online, simulation_data_scope, record_range, snapshot_file
 import asyncio
+from types import SimpleNamespace
 import json
 import logging
 import os
@@ -509,6 +511,7 @@ class HLCVManager:
         self.cm = None
 
     def get_binance_archive_client(self) -> BinanceOhlcvArchiveClient:
+        require_online("Binance archive download")
         if self.binance_archive_client is None:
             self.binance_archive_client = BinanceOhlcvArchiveClient()
         return self.binance_archive_client
@@ -759,6 +762,7 @@ class HLCVManager:
             try:
                 ftss = json.load(open(fpath))
                 if coin in ftss:
+                    snapshot_file(fpath)
                     return ftss[coin]
             except Exception as e:
                 logging.error(f"Error loading {fpath} {e}")
@@ -782,6 +786,7 @@ class HLCVManager:
     async def get_first_timestamp(self, coin: str) -> float:
         if fts := self.load_first_timestamp(coin):
             return float(fts)
+        require_online(f"listing timestamp for {self.exchange}/{coin}; caches/{self.exchange}/first_timestamps.json")
         if not self.markets:
             await self.load_markets()
         self.load_cc()
@@ -926,6 +931,8 @@ class HLCVManager:
         if self.ohlcv_source_dir:
             df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
             if df is not None and not df.empty:
+                if is_offline() and (int(df.timestamp.iloc[0]) > start_ts or int(df.timestamp.iloc[-1]) < end_ts):
+                    raise OfflineDataError(f"Incomplete source directory candles: {self.exchange}/{coin} {start_ts}..{end_ts}; {self.ohlcv_source_dir}")
                 self.load_cc()
                 assert self.cm is not None
 
@@ -971,8 +978,14 @@ class HLCVManager:
                     self.exchange,
                     coin,
                 )
+                record_range(self.exchange, symbol, start_ts, end_ts, SimpleNamespace(
+                    timestamps=filled_ts, values=df[["high", "low", "close", "volume"]].to_numpy(),
+                    valid=df["valid"].to_numpy(),
+                ))
                 return df.reset_index(drop=True)
             if source_dir_only:
+                if is_offline():
+                    raise OfflineDataError(f"Offline source candles missing: {self.exchange}/{coin} {start_ts}..{end_ts}; {self.ohlcv_source_dir}")
                 logging.info(
                     "[%s] get_ohlcvs: source_dir_only had no data for %s",
                     self.exchange,
@@ -988,6 +1001,7 @@ class HLCVManager:
         self.load_cc()
         assert self.cm is not None
 
+        require_online(f"candles {self.exchange}/{coin} {start_ts}..{end_ts}; caches/ohlcvs")
         # Fetch strict (real) candles first to detect large gaps.
         real = await self.cm.get_candles(
             symbol,
@@ -1104,6 +1118,7 @@ class HLCVManager:
         self, coin: str, *, start_ts: int, end_ts: int
     ) -> pd.DataFrame:
         """Fetch 1m candles for the v2 store without writing legacy daily shards."""
+        require_online(f"candles {self.exchange}/{coin} {start_ts}..{end_ts}; caches/ohlcvs")
         empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         if not self.markets:
             await self.load_markets()
@@ -1173,6 +1188,7 @@ class HLCVManager:
         ).reset_index(drop=True)
 
 
+@simulation_data_scope
 async def prepare_hlcvs(
     config: dict,
     exchange: str,
@@ -1330,6 +1346,7 @@ async def prepare_hlcvs(
             await om.cc.close()
 
 
+@simulation_data_scope
 async def try_prepare_hlcvs_v2_local(
     config: dict, exchange: str, *, force_refetch_gaps: bool = False
 ) -> Optional[tuple[dict, np.ndarray, np.memmap, np.memmap]]:
@@ -1432,7 +1449,7 @@ async def try_prepare_hlcvs_v2_local(
                 symbol=symbol,
                 start_ts=adjusted_start_ts,
                 end_ts=end_ts,
-                allow_remote_fetch=True,
+                allow_remote_fetch=not is_offline(),
                 local_hit_log_label="v2 local hit",
                 remote_fetch_log_label="v2 local fetching missing range",
             )
@@ -1480,7 +1497,7 @@ async def try_prepare_hlcvs_v2_local(
                     symbol=btc_symbol,
                     start_ts=global_start_ts,
                     end_ts=end_ts,
-                    allow_remote_fetch=True,
+                    allow_remote_fetch=not is_offline(),
                     local_hit_log_label="v2 local BTC hit",
                     remote_fetch_log_label="v2 local fetching missing BTC range",
                 )
@@ -1547,7 +1564,43 @@ async def try_prepare_hlcvs_v2_local(
             await om.cc.close()
 
 
-async def _resolve_v2_store_range(
+async def _resolve_v2_store_range(**kwargs):
+    if is_offline():
+        kwargs["allow_remote_fetch"] = False
+        kwargs["allow_partial_window"] = False
+    rng = await _resolve_v2_store_range_impl(**kwargs)
+    if not is_offline():
+        return rng
+    exchange, symbol = kwargs["exchange"], kwargs["symbol"]
+    start, end = kwargs["start_ts"], kwargs["end_ts"]
+    if rng is None:
+        raise OfflineDataError(
+            f"Offline candles unavailable: {exchange}/{kwargs['coin']} ({symbol}) "
+            f"{ts_to_date(start)}..{ts_to_date(end)} including warmup; cache=caches/ohlcvs. "
+            "Refresh/copy this range from a connected host."
+        )
+    omitted_edges = []
+    if int(rng.timestamps[0]) > start:
+        omitted_edges.append((start, int(rng.timestamps[0]) - 60_000, "pre_inception"))
+    if int(rng.timestamps[-1]) < end:
+        omitted_edges.append((int(rng.timestamps[-1]) + 60_000, end, "trailing_unavailable"))
+    for left, right, reason in omitted_edges:
+        cursor = left
+        gaps = kwargs["catalog"].get_persistent_gaps(exchange, "1m", symbol, left, right)
+        for gap in sorted(gaps, key=lambda g: g.start_ts):
+            if gap.reason == reason and int(gap.start_ts) <= cursor:
+                cursor = max(cursor, int(gap.end_ts) + 60_000)
+        if cursor <= right:
+            raise OfflineDataError(
+                f"Unverified offline candle boundary: {exchange}/{kwargs['coin']} "
+                f"{ts_to_date(left)}..{ts_to_date(right)}; cache=caches/ohlcvs. "
+                "Refresh/copy candles and coverage catalog from a connected host."
+            )
+    record_range(exchange, symbol, start, end, rng)
+    return rng
+
+
+async def _resolve_v2_store_range_impl(
     *,
     om: HLCVManager,
     catalog: OhlcvCatalog,
@@ -4167,6 +4220,7 @@ def _sync_persistent_cm_gaps_to_v2_catalog(
         )
 
 
+@simulation_data_scope
 async def prepare_hlcvs_internal(
     config,
     coins,
@@ -4399,6 +4453,7 @@ async def prepare_hlcvs_internal(
     return mss, timestamps, aligned_values_by_coin
 
 
+@simulation_data_scope
 async def prepare_hlcvs_combined(
     config,
     forced_sources=None,
@@ -5535,7 +5590,7 @@ async def _load_combined_btc_prices(
                 symbol=btc_symbol,
                 start_ts=int(timestamps[0]),
                 end_ts=int(timestamps[-1]),
-                allow_remote_fetch=True,
+                allow_remote_fetch=not is_offline(),
                 local_hit_log_label="combined BTC v2 local hit",
                 remote_fetch_log_label="combined BTC fetching missing range",
             )
@@ -5620,7 +5675,7 @@ async def fetch_data_for_coin_and_exchange(
             symbol=symbol,
             start_ts=effective_start_ts,
             end_ts=end_ts,
-            allow_remote_fetch=True,
+            allow_remote_fetch=not is_offline(),
             allow_partial_window=True,
             local_hit_log_label="combined v2 local hit",
             remote_fetch_log_label="combined v2 fetching missing range",

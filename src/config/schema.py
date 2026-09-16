@@ -152,6 +152,7 @@ def get_template_config():
                     "overrides_by_exchange": {}
                 },
                 "market_settings_sources": {},
+                "offline": False,
                 "ohlcv_source_dir": None,
                 "scenarios": [
                     {

@@ -7,6 +7,7 @@ backtester and the optimizer import this module when operating in suite mode.
 """
 
 from __future__ import annotations
+from simulation_data import simulation_data_scope
 
 import asyncio
 import json
@@ -1984,6 +1985,7 @@ def summarize_scenario_metrics(metrics: Dict[str, Any]) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+@simulation_data_scope
 async def run_backtest_suite_async(
     config: Dict[str, Any],
     suite_cfg: Dict[str, Any],
