@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Repair KuCoin sparse candle gaps across adjacent retry records, and retry failed
+  boundary verification after five minutes so trailing inputs can recover. Avoid
+  refetching already cached history when adjacent records jointly defer a gap. Bound
+  coverage scanning and skip proof requests whose boundaries exceed one page.
+
 - Keep live coin-HSL symbol discovery and PnL sampling within the proven restart
   history window, so discarded closed episodes cannot trigger a new stop.
 - Preserve missing Bitunix fill fees as unavailable so the configured fee fallback

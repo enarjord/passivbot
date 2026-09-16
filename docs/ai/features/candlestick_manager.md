@@ -302,7 +302,14 @@
     proof does not wait for the ordinary retry count to become persistent. Only when one successful
     raw payload returns both boundaries while omitting the intervening timestamps may that exact
     range be promoted to verified `no_trades` continuity. Empty, one-sided, terminal, or rejected
-    payloads do not prove the gap and start a separate seven-day contextual-proof cooldown. Ordinary
+    payloads do not prove the gap and start a separate five-minute contextual-proof cooldown. A
+    contiguous missing span may be covered by multiple adjacent retry records; verification requires
+    complete metadata coverage and every unverified fragment's contextual retry to be due. Verified
+    no-trade fragments may share the proof window, but terminal and uncovered fragments cannot.
+    Ordinary historical repair recognizes the union of deferred records without merging their
+    independent retry clocks or refetching the surrounding cached history. Coverage uses one sorted
+    metadata snapshot per check. Contextual proof is scheduled only when both real bounds and the
+    overlap fit one request page; wider gaps remain unavailable under ordinary retry policy. Ordinary
     missing-range retries retain their existing independent schedule.
 15. Urgent active-candle refresh records and reports incomplete symbol coverage but does not itself
     gate the whole planner cycle. Canonical EMA consumers determine symbol/order-class readiness;
