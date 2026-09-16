@@ -296,3 +296,39 @@ async def test_combined_listing_does_not_require_timestamp_on_unlisted_venue(tmp
     with simulation_data_policy(OFFLINE):
         result = await procedures.get_first_timestamps_unified(["BTC"], exchanges=["binance", "bybit"])
         assert result == {"BTC": START - 86400000}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [False, True])
+async def test_combined_offline_never_swallows_missing_coin(monkeypatch, empty):
+    async def unavailable(**kwargs):
+        if empty:
+            return []
+        raise OfflineDataError("missing BTC candles")
+    monkeypatch.setattr(hp, "_load_combined_coin_candidates", unavailable)
+    with simulation_data_policy(OFFLINE), pytest.raises(OfflineDataError, match="BTC"):
+        await hp._resolve_combined_coin(
+            coin="BTC", sem=asyncio.Semaphore(1), base_start_ts=START,
+            end_ts=START + 600000, first_timestamps_unified={"BTC": START - 60000},
+            minimum_coin_age_days=0, min_coin_age_ms=0, tradfi_for_stock_perps=False,
+            forced_sources={}, market_settings_sources={}, exchanges_to_consider=["binance"],
+            normalization_candidate_exchanges=[], om_dict={"binance": object()},
+            per_coin_warmups={}, default_warm=0, force_refetch_gaps=False,
+            catalog=None, store=None, legacy_root=None)
+
+
+@pytest.mark.asyncio
+async def test_known_tail_does_not_authorize_unknown_leading_gap(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    mask = np.ones(10, dtype=bool)
+    mask[[0, 9]] = False
+    catalog, store, ts = raw_store(tmp_path, mask)
+    catalog.mark_gap(exchange="binance", timeframe="1m", symbol=SYMBOL,
+                     start_ts=int(ts[-1]), end_ts=int(ts[-1]), reason="trailing_unavailable",
+                     persistent=True, retry_count=0, note="confirmed_by_v2_fetch")
+    with simulation_data_policy(OFFLINE), pytest.raises(OfflineDataError, match="Unverified offline candle boundary"):
+        await hp._resolve_v2_store_range(
+            om=SimpleNamespace(cm=None, gap_tolerance_ohlcvs_minutes=0), catalog=catalog,
+            store=store, legacy_root=None, exchange="binance", coin="BTC", symbol=SYMBOL,
+            start_ts=int(ts[0]), end_ts=int(ts[-1]), allow_remote_fetch=True,
+            local_hit_log_label="test", remote_fetch_log_label="test")

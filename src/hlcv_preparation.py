@@ -1580,10 +1580,13 @@ async def _resolve_v2_store_range(**kwargs):
             "Refresh/copy this range from a connected host."
         )
     omitted_edges = []
-    if int(rng.timestamps[0]) > start:
-        omitted_edges.append((start, int(rng.timestamps[0]) - 60_000, "pre_inception"))
-    if int(rng.timestamps[-1]) < end:
-        omitted_edges.append((int(rng.timestamps[-1]) + 60_000, end, "trailing_unavailable"))
+    valid_indices = np.flatnonzero(rng.valid)
+    first_valid = int(rng.timestamps[int(valid_indices[0])])
+    last_valid = int(rng.timestamps[int(valid_indices[-1])])
+    if first_valid > start:
+        omitted_edges.append((start, first_valid - 60_000, "pre_inception"))
+    if last_valid < end:
+        omitted_edges.append((last_valid + 60_000, end, "trailing_unavailable"))
     for left, right, reason in omitted_edges:
         cursor = left
         gaps = kwargs["catalog"].get_persistent_gaps(exchange, "1m", symbol, left, right)
@@ -5376,6 +5379,11 @@ async def _resolve_combined_coin(
                 if candidate.exchange in selection_exchange_set
             ]
             if not selection_candidates:
+                if is_offline():
+                    raise OfflineDataError(
+                        f"Offline candles unavailable for {coin} on {list(plan.selection_exchanges)}; "
+                        f"{ts_to_date(plan.effective_start_ts)}..{ts_to_date(end_ts)}; cache=caches/ohlcvs"
+                    )
                 if plan.forced_exchange:
                     raise ValueError(
                         f"No exchange data found for coin {coin} on forced exchange {plan.forced_exchange}."
@@ -5415,7 +5423,7 @@ async def _resolve_combined_coin(
         except Exception as e:
             logging.error(f"Error processing coin {coin}: {e}")
             traceback.print_exc()
-            if plan.forced_exchange:
+            if plan.forced_exchange or is_offline():
                 raise
             return None
 
@@ -5482,6 +5490,8 @@ async def _load_combined_coin_candidates(
         except Exception:
             symbol = None
         if isinstance(result, Exception):
+            if is_offline():
+                raise result
             if ex in selection_exchange_set:
                 raise RuntimeError(f"Exchange {ex} failed for coin {plan.coin}") from result
             summary = _ineligible_combined_summary(
