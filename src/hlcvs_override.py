@@ -345,6 +345,9 @@ def load_hlcvs_data_override(config, exchange):
         "input_side_membership": original_approved,
         "effective_side_membership": side_membership,
     }
+    offline_snapshot = manifest.get("preparation", {}).get("offline_snapshot")
+    if offline_snapshot is not None:
+        selected_mss["__meta__"]["offline_snapshot"] = deepcopy(offline_snapshot)
     config["_hlcvs_dataset_override_meta"] = deepcopy(selected_mss["__meta__"])
     logging.info(
         "[hlcvs] override %s mode=%s coins=%s range=%s -> %s",

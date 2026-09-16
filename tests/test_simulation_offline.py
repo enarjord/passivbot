@@ -229,6 +229,10 @@ async def test_prepare_dataset_and_reuse_verified_cache(tmp_path, monkeypatch, e
     monkeypatch.setattr("backtest.prepare_hlcvs_combined", no_rebuild)
     again = await prepare_hlcvs_mss(config, exchange)
     np.testing.assert_equal(result[1], again[1])
+    config["backtest"]["hlcvs_data_dir"] = str(result[4])
+    override = await prepare_hlcvs_mss(config, exchange)
+    assert override[2]["__meta__"]["offline_snapshot"] == result[2]["__meta__"]["offline_snapshot"]
+    np.testing.assert_equal(result[1], override[1])
 
 
 @pytest.mark.parametrize("command", ["backtest", "optimize"])
@@ -332,3 +336,86 @@ async def test_known_tail_does_not_authorize_unknown_leading_gap(tmp_path, monke
             store=store, legacy_root=None, exchange="binance", coin="BTC", symbol=SYMBOL,
             start_ts=int(ts[0]), end_ts=int(ts[-1]), allow_remote_fetch=True,
             local_hit_log_label="test", remote_fetch_log_label="test")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_v2", [False, True])
+@pytest.mark.parametrize("all_missing", [False, True])
+async def test_btc_candidates_try_all_local_sources(monkeypatch, use_v2, all_missing):
+    import pandas as pd
+    attempts = []
+    ts = START + np.arange(2, dtype=np.int64) * 60000
+    class Manager:
+        cc = None
+        def __init__(self, exchange, *args, **kwargs):
+            self.exchange = exchange
+        def update_date_range(self, *args):
+            pass
+        async def load_markets(self):
+            pass
+        def has_coin(self, coin):
+            return True
+        def get_symbol(self, coin):
+            return SYMBOL
+        async def get_ohlcvs(self, *args, **kwargs):
+            attempts.append(self.exchange)
+            if self.exchange == "bybit" or all_missing:
+                raise OfflineDataError("missing BTC fixture")
+            return pd.DataFrame({"timestamp": ts, "close": [100., 101.]})
+        async def aclose(self):
+            pass
+    async def resolve(**kwargs):
+        frame = await kwargs["om"].get_ohlcvs("BTC")
+        return SimpleNamespace(timestamps=ts, values=np.column_stack([frame.close]*4))
+    monkeypatch.setattr(hp, "HLCVManager", Manager)
+    monkeypatch.setattr(hp, "_resolve_v2_store_range", resolve)
+    with simulation_data_policy(OFFLINE):
+        call = hp._load_combined_btc_prices(
+            exchanges_to_consider=["bybit"], timestamps=ts,
+            effective_start_date="2024-01-01", end_date="2024-01-02",
+            gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
+            catalog=None, store=None, legacy_root=None, use_v2_local=use_v2)
+        if all_missing:
+            with pytest.raises(OfflineDataError, match="BTC benchmark"):
+                await call
+        else:
+            frame, source = await call
+            assert source == "binanceusdm"
+            assert len(frame) == 2
+    assert attempts == ["bybit", "binanceusdm"]
+
+
+@pytest.mark.asyncio
+async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypatch):
+    from backtest import prepare_hlcvs_mss
+    from utils import ts_to_date
+    cache = metadata(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    bybit = cache / "bybit"
+    bybit.mkdir()
+    markets = json.loads((cache / "binance/markets.json").read_text())
+    eth = dict(markets[SYMBOL], id="ETHUSDT", base="ETH", symbol="ETH/USDT:USDT")
+    markets[eth["symbol"]] = eth
+    (bybit / "markets.json").write_text(json.dumps(markets))
+    for name, value in (
+        ("first_ohlcv_timestamps_unified.json", START-86400000),
+        ("first_ohlcv_timestamps_unified_exchange_specific.json", {"bybit": START-86400000}),
+        ("first_ohlcv_timestamps_unified_exchange_specific_symbols.json", {"bybit": eth["symbol"]}),
+    ):
+        path = cache / name
+        data = json.loads(path.read_text())
+        data["ETH"] = value
+        path.write_text(json.dumps(data))
+    config = get_template_config()
+    config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
+                              end_date=ts_to_date(START+9*60000), compress_cache=False)
+    config["live"].update(approved_coins={"long": ["ETH"], "short": []},
+                          minimum_coin_age_days=0, max_warmup_minutes=1)
+    catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
+    store = OhlcvStore(cache / "ohlcvs", catalog)
+    ts = START + np.arange(-1, 10, dtype=np.int64)*60000
+    values = np.tile(np.array([101, 99, 100, 10], dtype=np.float32), (len(ts), 1))
+    store.write_rows("bybit", "1m", eth["symbol"], ts, values)
+    store.write_rows("binance", "1m", SYMBOL, ts, values)
+    result = await prepare_hlcvs_mss(config, "bybit")
+    assert result[2]["__meta__"]["btc_source_exchange"] == "binance"

@@ -1188,6 +1188,14 @@ class HLCVManager:
         ).reset_index(drop=True)
 
 
+async def _try_direct_btc_candidate(om):
+    try:
+        return await om.get_ohlcvs("BTC")
+    except OfflineDataError as exc:
+        logging.info("[offline] BTC candidate unavailable on %s: %s", om.exchange, exc)
+        return pd.DataFrame()
+
+
 @simulation_data_scope
 async def prepare_hlcvs(
     config: dict,
@@ -1257,7 +1265,7 @@ async def prepare_hlcvs(
         )
 
         om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-        btc_df = await om.get_ohlcvs("BTC")
+        btc_df = await _try_direct_btc_candidate(om)
         btc_source_exchange = exchange
 
         if btc_df.empty and exchange != "binanceusdm":
@@ -1273,9 +1281,11 @@ async def prepare_hlcvs(
                     config, "backtest.gap_tolerance_ohlcvs_minutes"
                 ),
             )
+            if is_offline():
+                btc_fallback_om.ohlcv_source_dir = config.get("backtest", {}).get("ohlcv_source_dir")
             try:
                 btc_fallback_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-                btc_df = await btc_fallback_om.get_ohlcvs("BTC")
+                btc_df = await _try_direct_btc_candidate(btc_fallback_om)
                 if not btc_df.empty:
                     btc_source_exchange = "binanceusdm"
             finally:
@@ -1284,6 +1294,10 @@ async def prepare_hlcvs(
                     await btc_fallback_om.cc.close()
 
         if btc_df.empty:
+            require_online(
+                f"BTC benchmark {ts_to_date(int(timestamps[0]))}..{ts_to_date(int(timestamps[-1]))} "
+                f"on {exchange} and binanceusdm; cache=caches/ohlcvs or backtest.ohlcv_source_dir"
+            )
             raise ValueError(
                 f"Failed to fetch BTC/USD prices from {exchange} (and binanceusdm fallback)"
             )
@@ -1482,8 +1496,9 @@ async def try_prepare_hlcvs_v2_local(
                         config, "backtest.gap_tolerance_ohlcvs_minutes"
                     ),
                 )
-                await btc_om.load_markets()
             try:
+                if owned_om:
+                    await btc_om.load_markets()
                 if not btc_om.has_coin("BTC"):
                     continue
                 btc_symbol = btc_om.get_symbol("BTC")
@@ -1507,6 +1522,8 @@ async def try_prepare_hlcvs_v2_local(
                 btc_prices = btc_df["close"].to_numpy(dtype=np.float64, copy=False)
                 btc_source_exchange = btc_exchange
                 break
+            except OfflineDataError as exc:
+                logging.info("[offline] BTC candidate unavailable on %s: %s", btc_exchange, exc)
             finally:
                 if owned_om:
                     await btc_om.aclose()
@@ -1514,6 +1531,10 @@ async def try_prepare_hlcvs_v2_local(
                         await btc_om.cc.close()
 
         if btc_prices is None:
+            require_online(
+                f"BTC benchmark {ts_to_date(global_start_ts)}..{ts_to_date(end_ts)} "
+                f"on {[ex for ex, _ in btc_candidates]}; cache=caches/ohlcvs"
+            )
             return None
 
         run_id = f"{store_exchange}_{uuid4().hex[:12]}"
@@ -5623,10 +5644,16 @@ async def _load_combined_btc_prices(
                 btc_om.start_date,
                 btc_om.end_date,
             )
+        except OfflineDataError as exc:
+            logging.info("[offline] BTC candidate unavailable on %s: %s", btc_exchange, exc)
         finally:
             await btc_om.aclose()
             if btc_om.cc:
                 await btc_om.cc.close()
+    require_online(
+        f"BTC benchmark {ts_to_date(int(timestamps[0]))}..{ts_to_date(int(timestamps[-1]))} "
+        f"on {btc_candidates}; cache=caches/ohlcvs or backtest.ohlcv_source_dir"
+    )
     return pd.DataFrame(), btc_source_exchange
 
 
