@@ -36,6 +36,46 @@ the run, but they do not mirror those raw daily files into `caches/ohlcvs/`.
 
 For `.npz` files, the archive must contain a `candles` key with a structured NumPy array having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), `bv` (base volume). Timestamps should be in milliseconds. For `.npy` files, the array should have columns `[timestamp, open, high, low, close, volume]`.
 
+## Offline preparation
+
+Set `backtest.offline: true`, or pass `--offline y`, for backtests and optimization
+(including suites and GPU optimization):
+
+```bash
+passivbot backtest path/to/config.json --offline y
+passivbot optimize path/to/config.json --offline y
+```
+
+Offline preparation never refreshes market metadata, listing timestamps, exchange
+archives, or candles. Valid cached metadata is accepted regardless of age; its age
+and fingerprint are logged. Online remains the default; live trading is unaffected.
+
+Prepare the requested date range on a connected machine, then copy these caches:
+
+- `caches/ohlcvs/`, including its coverage catalog and candle chunks
+- `caches/<exchange>/markets.json` and `first_timestamps.json` for each data or
+  market-settings exchange
+- `caches/first_ohlcv_timestamps_unified*`, including the resolver version and
+  exchange-specific symbol provenance files
+- Any configured `backtest.ohlcv_source_dir` legacy shards
+
+Include the optimizer's maximum warmup range and BTC benchmark candles. Combined
+runs also need inputs for candidate exchanges used in source selection and volume
+normalization. Copy a consistent cache snapshot while no downloader is writing it;
+SQLite catalog paths must refer to the copied chunks on the receiving machine.
+
+Missing or incompatible metadata, incomplete candles, or unconfirmed range edges
+fail with an input/range diagnostic. Refresh those inputs on the connected machine
+and copy them again. Offline mode does not replace missing prices or silently shorten
+a requested range. Existing confirmed listing boundaries and supported internal-gap
+rules still apply. Use a fixed end date for reproducible runs.
+
+Older prepared HLCV caches are verified from raw caches once. Subsequent runs can
+reuse the verified prepared dataset. Its manifest retains metadata and consumed-range
+fingerprints under `preparation.offline_snapshot`. An explicit `--hlcvs-data-dir`
+override must refer to such a verified dataset. `--force-refetch-gaps` conflicts with
+offline mode.
+
 ## Usage
 
 ```shell

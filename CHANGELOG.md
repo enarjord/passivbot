@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `backtest.offline` / `--offline y` for backtests and optimization: reuse cached
+  metadata regardless of age, prohibit remote data fetching, verify local coverage,
+  and retain data snapshot fingerprints. Live behavior is unchanged.
 - Repair KuCoin sparse candle gaps across adjacent retry records, and retry failed
   boundary verification after five minutes so trailing inputs can recover. Avoid
   refetching already cached history when adjacent records jointly defer a gap. Bound

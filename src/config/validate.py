@@ -83,6 +83,8 @@ def validate_config(
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
+    if not isinstance(config.get("backtest", {}).get("offline", False), bool):
+        raise ValueError("backtest.offline must be a boolean")
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))

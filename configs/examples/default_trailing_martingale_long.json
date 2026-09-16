@@ -20,6 +20,7 @@
         "market_order_slippage_pct": 0.0005,
         "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
         "market_settings_sources": {},
+        "offline": false,
         "ohlcv_source_dir": null,
         "scenarios": [
             {"label": "base"},

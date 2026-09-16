@@ -1,3 +1,4 @@
+from simulation_data import OfflineDataError, is_offline, snapshot_file, simulation_data_policy
 import re
 import json
 import ccxt.async_support as ccxt
@@ -505,6 +506,7 @@ async def load_markets(
     verbose=True,
     cc=None,
     quote=None,
+    offline=False,
 ) -> dict:
     """
     Standalone helper to load and cache markets for a given exchange.
@@ -521,6 +523,24 @@ async def load_markets(
     # client's library id may differ (for example Gate.io is ``gate`` in CCXT).
     ex = to_standard_exchange_name(exchange or getattr(cc, "id", None) or "")
     markets_path = os.path.join("caches", ex, "markets.json")
+
+    if offline or is_offline():
+        try:
+            with open(markets_path) as f:
+                markets = json.load(f)
+            if not isinstance(markets, dict) or not markets or any(
+                not isinstance(m, dict) or not m.get("symbol") for m in markets.values()
+            ):
+                raise ValueError("invalid markets dictionary")
+            snapshot_file(markets_path)
+            create_coin_symbol_map_cache(ex, markets, quote=quote, verbose=verbose)
+            logging.info("[offline] loaded cached markets for %s (freshness ignored)", ex)
+            return markets
+        except (OSError, ValueError, TypeError) as exc:
+            raise OfflineDataError(
+                f"Offline market metadata missing or invalid: {markets_path}. "
+                "Refresh and copy markets.json from a connected host."
+            ) from exc
 
     # Try cache first
     try:
@@ -1827,7 +1847,17 @@ async def _coalesce_resolved_approved_markets(
         config["live"]["approved_coins"][pside] = coalesced
 
 
-async def format_approved_ignored_coins(
+async def format_approved_ignored_coins(config, exchanges, quote=None, verbose=True, *,
+                                        prefer_backtest_coin_source_keys=False):
+    policy_config = config if prefer_backtest_coin_source_keys else {}
+    with simulation_data_policy(policy_config):
+        return await _format_approved_ignored_coins(
+            config, exchanges, quote, verbose,
+            prefer_backtest_coin_source_keys=prefer_backtest_coin_source_keys,
+        )
+
+
+async def _format_approved_ignored_coins(
     config,
     exchanges: [str],
     quote=None,

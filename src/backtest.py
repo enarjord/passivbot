@@ -1,3 +1,4 @@
+from simulation_data import OfflineDataError, is_offline, simulation_data_scope, data_manifest
 import os
 from datetime import datetime, timezone
 import sys
@@ -2030,6 +2031,9 @@ def _save_coins_hlcvs_artifacts_to_cache_dir(
         precomputed_array_hashes=array_hashes,
     )
     raise_if_backtest_cancel_requested("cache manifest write")
+    offline_snapshot = mss.get("__meta__", {}).get("offline_snapshot")
+    if offline_snapshot is not None:
+        manifest.setdefault("preparation", {})["offline_snapshot"] = offline_snapshot
     write_hlcvs_manifest(cache_dir, manifest)
     json.dump(
         {
@@ -2174,6 +2178,7 @@ def assert_hlcv_has_tradable_coverage(coins, mss):
         raise ValueError("HLCV data has no tradable candles after warmup")
 
 
+@simulation_data_scope
 async def prepare_hlcvs_mss(
     config,
     exchange,
@@ -2181,6 +2186,8 @@ async def prepare_hlcvs_mss(
     force_refetch_gaps: bool = False,
     allow_internal_nan_gaps: bool = False,
 ):
+    if is_offline() and force_refetch_gaps:
+        raise ValueError("backtest.offline cannot be combined with force_refetch_gaps")
     base_dir = require_config_value(config, "backtest.base_dir")
     results_path = oj(base_dir, exchange, "")
     warmup_map = compute_per_coin_warmup_minutes(config)
@@ -2220,6 +2227,12 @@ async def prepare_hlcvs_mss(
     override_result = load_hlcvs_data_override(config, exchange)
     if override_result is not None:
         cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = override_result
+        if is_offline() and not mss.get("__meta__", {}).get("offline_snapshot"):
+            release_materialized_payload(hlcvs)
+            raise OfflineDataError(
+                "Offline dataset override lacks verified offline coverage provenance. "
+                "Prepare it once from raw caches using --offline y without --hlcvs-data-dir."
+            )
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
         _validate_hlcvs_valid_windows_from_mss(
             hlcvs,
@@ -2252,6 +2265,9 @@ async def prepare_hlcvs_mss(
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = (
                 result
             )
+            if is_offline() and not mss.get("__meta__", {}).get("offline_snapshot"):
+                release_materialized_payload(hlcvs)
+                raise OfflineDataError("Prepared cache lacks offline coverage provenance; verifying raw caches")
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
             _validate_hlcvs_valid_windows_from_mss(
@@ -2326,6 +2342,8 @@ async def prepare_hlcvs_mss(
     )
     warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
     assert_hlcv_has_tradable_coverage(coins, mss)
+    if is_offline():
+        mss.setdefault("__meta__", {})["offline_snapshot"] = data_manifest()
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(
@@ -2337,7 +2355,7 @@ async def prepare_hlcvs_mss(
             btc_usd_prices,
             timestamps,
             warmup_minutes=backtest_warmup_minutes,
-            force_overwrite=force_refetch_gaps,
+            force_overwrite=force_refetch_gaps or is_offline(),
         )
     except Exception as e:
         release_materialized_payload(hlcvs)
@@ -3221,7 +3239,7 @@ async def main():
         return
 
     for ex in backtest_exchanges:
-        await load_markets(ex)
+        await load_markets(ex, offline=config["backtest"].get("offline", False))
     await format_approved_ignored_coins(
         config, backtest_exchanges, prefer_backtest_coin_source_keys=True
     )

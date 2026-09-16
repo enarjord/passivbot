@@ -1,6 +1,7 @@
 """Optimizer helpers for running suites of backtests per candidate."""
 
 from __future__ import annotations
+from simulation_data import simulation_data_scope
 
 import asyncio
 import logging
@@ -67,6 +68,7 @@ class ScenarioEvalContext:
     coin_slice_indices: Optional[Dict[str, List[int]]] = None  # per-exchange coin indices
 
 
+@simulation_data_scope
 async def prepare_suite_contexts(
     config: Dict[str, Any],
     suite_cfg: Dict[str, Any],

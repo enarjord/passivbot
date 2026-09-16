@@ -1,4 +1,6 @@
+from simulation_data import OfflineDataError, is_offline, require_online, simulation_data_scope, record_range, snapshot_file
 import asyncio
+from types import SimpleNamespace
 import json
 import logging
 import os
@@ -509,6 +511,7 @@ class HLCVManager:
         self.cm = None
 
     def get_binance_archive_client(self) -> BinanceOhlcvArchiveClient:
+        require_online("Binance archive download")
         if self.binance_archive_client is None:
             self.binance_archive_client = BinanceOhlcvArchiveClient()
         return self.binance_archive_client
@@ -759,6 +762,7 @@ class HLCVManager:
             try:
                 ftss = json.load(open(fpath))
                 if coin in ftss:
+                    snapshot_file(fpath)
                     return ftss[coin]
             except Exception as e:
                 logging.error(f"Error loading {fpath} {e}")
@@ -782,6 +786,7 @@ class HLCVManager:
     async def get_first_timestamp(self, coin: str) -> float:
         if fts := self.load_first_timestamp(coin):
             return float(fts)
+        require_online(f"listing timestamp for {self.exchange}/{coin}; caches/{self.exchange}/first_timestamps.json")
         if not self.markets:
             await self.load_markets()
         self.load_cc()
@@ -926,6 +931,24 @@ class HLCVManager:
         if self.ohlcv_source_dir:
             df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
             if df is not None and not df.empty:
+                requested_start_ts = start_ts
+                if is_offline():
+                    first_row_ts = int(df.timestamp.iloc[0])
+                    if first_row_ts > start_ts:
+                        inception = await get_first_timestamps_unified([coin], exchange=self.exchange)
+                        first_listing_ts = int(inception[coin])
+                        if abs(first_row_ts - first_listing_ts) > 60_000:
+                            raise OfflineDataError(
+                                f"Unverified source directory prefix: {self.exchange}/{coin} "
+                                f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}"
+                            )
+                        # Start at the confirmed listing; do not synthesize pre-listing prices.
+                        start_ts = first_row_ts
+                    if int(df.timestamp.iloc[-1]) < end_ts:
+                        raise OfflineDataError(
+                            f"Incomplete source directory candles: {self.exchange}/{coin} "
+                            f"{start_ts}..{end_ts}; {self.ohlcv_source_dir}"
+                        )
                 self.load_cc()
                 assert self.cm is not None
 
@@ -971,8 +994,14 @@ class HLCVManager:
                     self.exchange,
                     coin,
                 )
+                record_range(self.exchange, symbol, requested_start_ts, end_ts, SimpleNamespace(
+                    timestamps=filled_ts, values=df[["high", "low", "close", "volume"]].to_numpy(),
+                    valid=df["valid"].to_numpy(),
+                ))
                 return df.reset_index(drop=True)
             if source_dir_only:
+                if is_offline():
+                    raise OfflineDataError(f"Offline source candles missing: {self.exchange}/{coin} {start_ts}..{end_ts}; {self.ohlcv_source_dir}")
                 logging.info(
                     "[%s] get_ohlcvs: source_dir_only had no data for %s",
                     self.exchange,
@@ -988,6 +1017,7 @@ class HLCVManager:
         self.load_cc()
         assert self.cm is not None
 
+        require_online(f"candles {self.exchange}/{coin} {start_ts}..{end_ts}; caches/ohlcvs")
         # Fetch strict (real) candles first to detect large gaps.
         real = await self.cm.get_candles(
             symbol,
@@ -1104,6 +1134,7 @@ class HLCVManager:
         self, coin: str, *, start_ts: int, end_ts: int
     ) -> pd.DataFrame:
         """Fetch 1m candles for the v2 store without writing legacy daily shards."""
+        require_online(f"candles {self.exchange}/{coin} {start_ts}..{end_ts}; caches/ohlcvs")
         empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         if not self.markets:
             await self.load_markets()
@@ -1173,6 +1204,15 @@ class HLCVManager:
         ).reset_index(drop=True)
 
 
+async def _try_direct_btc_candidate(om):
+    try:
+        return await om.get_ohlcvs("BTC")
+    except OfflineDataError as exc:
+        logging.info("[offline] BTC candidate unavailable on %s: %s", om.exchange, exc)
+        return pd.DataFrame()
+
+
+@simulation_data_scope
 async def prepare_hlcvs(
     config: dict,
     exchange: str,
@@ -1241,7 +1281,7 @@ async def prepare_hlcvs(
         )
 
         om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-        btc_df = await om.get_ohlcvs("BTC")
+        btc_df = await _try_direct_btc_candidate(om)
         btc_source_exchange = exchange
 
         if btc_df.empty and exchange != "binanceusdm":
@@ -1257,9 +1297,11 @@ async def prepare_hlcvs(
                     config, "backtest.gap_tolerance_ohlcvs_minutes"
                 ),
             )
+            if is_offline():
+                btc_fallback_om.ohlcv_source_dir = config.get("backtest", {}).get("ohlcv_source_dir")
             try:
                 btc_fallback_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
-                btc_df = await btc_fallback_om.get_ohlcvs("BTC")
+                btc_df = await _try_direct_btc_candidate(btc_fallback_om)
                 if not btc_df.empty:
                     btc_source_exchange = "binanceusdm"
             finally:
@@ -1268,6 +1310,10 @@ async def prepare_hlcvs(
                     await btc_fallback_om.cc.close()
 
         if btc_df.empty:
+            require_online(
+                f"BTC benchmark {ts_to_date(int(timestamps[0]))}..{ts_to_date(int(timestamps[-1]))} "
+                f"on {exchange} and binanceusdm; cache=caches/ohlcvs or backtest.ohlcv_source_dir"
+            )
             raise ValueError(
                 f"Failed to fetch BTC/USD prices from {exchange} (and binanceusdm fallback)"
             )
@@ -1330,6 +1376,7 @@ async def prepare_hlcvs(
             await om.cc.close()
 
 
+@simulation_data_scope
 async def try_prepare_hlcvs_v2_local(
     config: dict, exchange: str, *, force_refetch_gaps: bool = False
 ) -> Optional[tuple[dict, np.ndarray, np.memmap, np.memmap]]:
@@ -1432,7 +1479,7 @@ async def try_prepare_hlcvs_v2_local(
                 symbol=symbol,
                 start_ts=adjusted_start_ts,
                 end_ts=end_ts,
-                allow_remote_fetch=True,
+                allow_remote_fetch=not is_offline(),
                 local_hit_log_label="v2 local hit",
                 remote_fetch_log_label="v2 local fetching missing range",
             )
@@ -1465,8 +1512,9 @@ async def try_prepare_hlcvs_v2_local(
                         config, "backtest.gap_tolerance_ohlcvs_minutes"
                     ),
                 )
-                await btc_om.load_markets()
             try:
+                if owned_om:
+                    await btc_om.load_markets()
                 if not btc_om.has_coin("BTC"):
                     continue
                 btc_symbol = btc_om.get_symbol("BTC")
@@ -1480,7 +1528,7 @@ async def try_prepare_hlcvs_v2_local(
                     symbol=btc_symbol,
                     start_ts=global_start_ts,
                     end_ts=end_ts,
-                    allow_remote_fetch=True,
+                    allow_remote_fetch=not is_offline(),
                     local_hit_log_label="v2 local BTC hit",
                     remote_fetch_log_label="v2 local fetching missing BTC range",
                 )
@@ -1490,6 +1538,8 @@ async def try_prepare_hlcvs_v2_local(
                 btc_prices = btc_df["close"].to_numpy(dtype=np.float64, copy=False)
                 btc_source_exchange = btc_exchange
                 break
+            except OfflineDataError as exc:
+                logging.info("[offline] BTC candidate unavailable on %s: %s", btc_exchange, exc)
             finally:
                 if owned_om:
                     await btc_om.aclose()
@@ -1497,6 +1547,10 @@ async def try_prepare_hlcvs_v2_local(
                         await btc_om.cc.close()
 
         if btc_prices is None:
+            require_online(
+                f"BTC benchmark {ts_to_date(global_start_ts)}..{ts_to_date(end_ts)} "
+                f"on {[ex for ex, _ in btc_candidates]}; cache=caches/ohlcvs"
+            )
             return None
 
         run_id = f"{store_exchange}_{uuid4().hex[:12]}"
@@ -1547,7 +1601,46 @@ async def try_prepare_hlcvs_v2_local(
             await om.cc.close()
 
 
-async def _resolve_v2_store_range(
+async def _resolve_v2_store_range(**kwargs):
+    if is_offline():
+        kwargs["allow_remote_fetch"] = False
+        kwargs["allow_partial_window"] = False
+    rng = await _resolve_v2_store_range_impl(**kwargs)
+    if not is_offline():
+        return rng
+    exchange, symbol = kwargs["exchange"], kwargs["symbol"]
+    start, end = kwargs["start_ts"], kwargs["end_ts"]
+    if rng is None:
+        raise OfflineDataError(
+            f"Offline candles unavailable: {exchange}/{kwargs['coin']} ({symbol}) "
+            f"{ts_to_date(start)}..{ts_to_date(end)} including warmup; cache=caches/ohlcvs. "
+            "Refresh/copy this range from a connected host."
+        )
+    omitted_edges = []
+    valid_indices = np.flatnonzero(rng.valid)
+    first_valid = int(rng.timestamps[int(valid_indices[0])])
+    last_valid = int(rng.timestamps[int(valid_indices[-1])])
+    if first_valid > start:
+        omitted_edges.append((start, first_valid - 60_000, "pre_inception"))
+    if last_valid < end:
+        omitted_edges.append((last_valid + 60_000, end, "trailing_unavailable"))
+    for left, right, reason in omitted_edges:
+        cursor = left
+        gaps = kwargs["catalog"].get_persistent_gaps(exchange, "1m", symbol, left, right)
+        for gap in sorted(gaps, key=lambda g: g.start_ts):
+            if gap.reason == reason and int(gap.start_ts) <= cursor:
+                cursor = max(cursor, int(gap.end_ts) + 60_000)
+        if cursor <= right:
+            raise OfflineDataError(
+                f"Unverified offline candle boundary: {exchange}/{kwargs['coin']} "
+                f"{ts_to_date(left)}..{ts_to_date(right)}; cache=caches/ohlcvs. "
+                "Refresh/copy candles and coverage catalog from a connected host."
+            )
+    record_range(exchange, symbol, start, end, rng)
+    return rng
+
+
+async def _resolve_v2_store_range_impl(
     *,
     om: HLCVManager,
     catalog: OhlcvCatalog,
@@ -4167,6 +4260,7 @@ def _sync_persistent_cm_gaps_to_v2_catalog(
         )
 
 
+@simulation_data_scope
 async def prepare_hlcvs_internal(
     config,
     coins,
@@ -4399,6 +4493,7 @@ async def prepare_hlcvs_internal(
     return mss, timestamps, aligned_values_by_coin
 
 
+@simulation_data_scope
 async def prepare_hlcvs_combined(
     config,
     forced_sources=None,
@@ -5321,6 +5416,11 @@ async def _resolve_combined_coin(
                 if candidate.exchange in selection_exchange_set
             ]
             if not selection_candidates:
+                if is_offline():
+                    raise OfflineDataError(
+                        f"Offline candles unavailable for {coin} on {list(plan.selection_exchanges)}; "
+                        f"{ts_to_date(plan.effective_start_ts)}..{ts_to_date(end_ts)}; cache=caches/ohlcvs"
+                    )
                 if plan.forced_exchange:
                     raise ValueError(
                         f"No exchange data found for coin {coin} on forced exchange {plan.forced_exchange}."
@@ -5360,7 +5460,7 @@ async def _resolve_combined_coin(
         except Exception as e:
             logging.error(f"Error processing coin {coin}: {e}")
             traceback.print_exc()
-            if plan.forced_exchange:
+            if plan.forced_exchange or is_offline():
                 raise
             return None
 
@@ -5427,6 +5527,8 @@ async def _load_combined_coin_candidates(
         except Exception:
             symbol = None
         if isinstance(result, Exception):
+            if is_offline():
+                raise result
             if ex in selection_exchange_set:
                 raise RuntimeError(f"Exchange {ex} failed for coin {plan.coin}") from result
             summary = _ineligible_combined_summary(
@@ -5535,7 +5637,7 @@ async def _load_combined_btc_prices(
                 symbol=btc_symbol,
                 start_ts=int(timestamps[0]),
                 end_ts=int(timestamps[-1]),
-                allow_remote_fetch=True,
+                allow_remote_fetch=not is_offline(),
                 local_hit_log_label="combined BTC v2 local hit",
                 remote_fetch_log_label="combined BTC fetching missing range",
             )
@@ -5558,10 +5660,16 @@ async def _load_combined_btc_prices(
                 btc_om.start_date,
                 btc_om.end_date,
             )
+        except OfflineDataError as exc:
+            logging.info("[offline] BTC candidate unavailable on %s: %s", btc_exchange, exc)
         finally:
             await btc_om.aclose()
             if btc_om.cc:
                 await btc_om.cc.close()
+    require_online(
+        f"BTC benchmark {ts_to_date(int(timestamps[0]))}..{ts_to_date(int(timestamps[-1]))} "
+        f"on {btc_candidates}; cache=caches/ohlcvs or backtest.ohlcv_source_dir"
+    )
     return pd.DataFrame(), btc_source_exchange
 
 
@@ -5620,7 +5728,7 @@ async def fetch_data_for_coin_and_exchange(
             symbol=symbol,
             start_ts=effective_start_ts,
             end_ts=end_ts,
-            allow_remote_fetch=True,
+            allow_remote_fetch=not is_offline(),
             allow_partial_window=True,
             local_hit_log_label="combined v2 local hit",
             remote_fetch_log_label="combined v2 fetching missing range",
