@@ -266,6 +266,7 @@ class GapEntry(TypedDict, total=False):
 # Maximum fetch attempts before marking gap as persistent
 _GAP_MAX_RETRIES = 3
 _GAP_PERSISTENT_RETRY_MS = 7 * 24 * 60 * 60 * 1000
+_KUCOIN_CONTEXTUAL_GAP_RETRY_MS = 5 * 60 * 1000
 _HYPERLIQUID_RECENT_GAP_HORIZON_MS = 2 * 60 * 60 * 1000
 _HYPERLIQUID_RECENT_GAP_MAX_SPAN_MS = 2 * 60 * 60 * 1000
 _HYPERLIQUID_RECENT_GAP_RETRY_MS = 5 * 60 * 1000
@@ -3556,7 +3557,7 @@ class CandlestickManager:
         last_retry_at = int(gap.get("last_contextual_retry_at", 0))
         return (
             last_retry_at <= 0
-            or now - last_retry_at >= _GAP_PERSISTENT_RETRY_MS
+            or now - last_retry_at >= _KUCOIN_CONTEXTUAL_GAP_RETRY_MS
         )
 
     def _defer_kucoin_contextual_gap_retry(
@@ -3588,7 +3589,7 @@ class CandlestickManager:
                 symbol=symbol,
                 start_ts=int(start_ts),
                 end_ts=int(end_ts),
-                retry_after_ms=now + _GAP_PERSISTENT_RETRY_MS,
+                retry_after_ms=now + _KUCOIN_CONTEXTUAL_GAP_RETRY_MS,
             )
         return changed
 
@@ -8029,18 +8030,11 @@ class CandlestickManager:
                 missing_before = self._missing_spans(sub, start_ts, end_ts)
 
                 def span_in_persistent_gap(s: int, e: int) -> bool:
-                    """Check if span is fully contained in a persistent (max retries) gap.
-
-                    NOTE: We reload gaps fresh each call to avoid stale closures when
-                    _add_known_gap() is called within the same function context.
-                    """
-                    known_enhanced = self._get_known_gaps_enhanced(symbol)
-                    for gap in known_enhanced:
-                        if s >= gap["start_ts"] and e <= gap["end_ts"]:
-                            # Only consider it "known" if it's persistent (max retries reached)
-                            if not self._should_retry_gap(gap):
-                                return True
-                    return False
+                    # Adjacent records retain independent retry epochs but may
+                    # jointly cover one physically missing candle span.
+                    return self._known_gap_retry_deferred_at(
+                        symbol, s, e, now_ms=now
+                    )
 
                 unknown_missing = [
                     (s, e) for (s, e) in missing_before if not span_in_persistent_gap(s, e)
@@ -8514,13 +8508,9 @@ class CandlestickManager:
             if missing:
                 # Helper to test if a span is fully inside any persistent known gap
                 def span_in_persistent_gap_present(s: int, e: int) -> bool:
-                    """Check if span is in persistent gap. Reloads gaps to avoid stale data."""
-                    known_enhanced_present = self._get_known_gaps_enhanced(symbol)
-                    for gap in known_enhanced_present:
-                        if s >= gap["start_ts"] and e <= gap["end_ts"]:
-                            if not self._should_retry_gap(gap):
-                                return True
-                    return False
+                    return self._known_gap_retry_deferred_at(
+                        symbol, s, e, now_ms=now
+                    )
 
                 def span_has_unverified_gap_present(s: int, e: int) -> bool:
                     return any(
@@ -8531,18 +8521,31 @@ class CandlestickManager:
                         for gap in self._get_known_gaps_enhanced(symbol)
                     )
 
-                def unverified_gap_covering(
+                def contextual_gap_verification_due(
                     s: int, e: int
-                ) -> Optional[GapEntry]:
-                    for gap in self._get_known_gaps_enhanced(symbol):
-                        if (
-                            int(gap["start_ts"]) <= int(s)
-                            and int(gap["end_ts"]) >= int(e)
-                            and str(gap.get("reason", GAP_REASON_AUTO))
-                            in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
-                        ):
-                            return gap
-                    return None
+                ) -> bool:
+                    # A contiguous omission can have several metadata records
+                    # as its tail grows. Keep their retry clocks independent;
+                    # one boundary request must be eligible over the whole span.
+                    cursor = int(s)
+                    has_unverified = False
+                    for gap in sorted(
+                        self._get_known_gaps_enhanced(symbol),
+                        key=lambda item: int(item["start_ts"]),
+                    ):
+                        if int(gap["end_ts"]) < cursor:
+                            continue
+                        if int(gap["start_ts"]) > cursor:
+                            return False
+                        reason = str(gap.get("reason", GAP_REASON_AUTO))
+                        if reason != GAP_REASON_NO_TRADES:
+                            if not self._kucoin_contextual_retry_due(gap, now_ms=now):
+                                return False
+                            has_unverified = True
+                        cursor = int(gap["end_ts"]) + ONE_MIN_MS
+                        if cursor > int(e):
+                            return has_unverified
+                    return False
 
                 def kucoin_verification_bounds(
                     candles: np.ndarray, s: int, e: int
@@ -8560,10 +8563,7 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    unverified_gap = unverified_gap_covering(s, e)
-                    if unverified_gap is None or not self._kucoin_contextual_retry_due(
-                        unverified_gap, now_ms=now
-                    ):
+                    if not contextual_gap_verification_due(s, e):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
                     provisional = self._synthetic_timestamps.get(symbol, set())
