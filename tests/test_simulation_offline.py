@@ -87,8 +87,12 @@ async def test_missing_or_obsolete_listing_cache_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with simulation_data_policy(OFFLINE):
         await utils.load_markets("binance")
+        path = tmp_path / "caches/first_ohlcv_timestamps_unified_exchange_specific.json"
+        original = path.read_text()
+        path.write_text("{}")
         with pytest.raises(OfflineDataError, match="listing timestamps"):
-            await procedures.get_first_timestamps_unified(["ETH"], exchange="binance")
+            await procedures.get_first_timestamps_unified(["BTC"], exchange="binance")
+        path.write_text(original)
         (tmp_path / "caches/first_ohlcv_timestamps_unified.version").unlink()
         with pytest.raises(OfflineDataError, match="resolver version"):
             await procedures.get_first_timestamps_unified(["BTC"], exchange="binance")
@@ -409,7 +413,7 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
     config = get_template_config()
     config["backtest"].update(offline=True, exchanges=["bybit"], start_date=ts_to_date(START),
                               end_date=ts_to_date(START+9*60000), compress_cache=False)
-    config["live"].update(approved_coins={"long": ["ETH"], "short": []},
+    config["live"].update(approved_coins={"long": ["ETH", "UNLISTED"], "short": []},
                           minimum_coin_age_days=0, max_warmup_minutes=1)
     catalog = OhlcvCatalog(cache / "ohlcvs/catalog.sqlite")
     store = OhlcvStore(cache / "ohlcvs", catalog)
@@ -477,3 +481,25 @@ async def test_iterative_preload_uses_stale_markets_offline(tmp_path, monkeypatc
         cli_overrides=["backtest.offline=true"] if cli_override else [])
     loaded = await session._load_config()
     assert loaded["backtest"]["offline"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [{"exchange": "binance"}, {"exchanges": ["binance"]}])
+async def test_unlisted_coins_need_no_inception_metadata(tmp_path, monkeypatch, scope):
+    metadata(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    with simulation_data_policy(OFFLINE):
+        result = await procedures.get_first_timestamps_unified(["BTC", "UNLISTED"], **scope)
+        assert result == {"BTC": START-86400000}
+        assert await procedures.get_first_timestamps_unified(["UNLISTED"], **scope) == {}
+
+
+@pytest.mark.asyncio
+async def test_offline_listing_filter_does_not_hide_ambiguous_identity(tmp_path, monkeypatch):
+    metadata(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    def ambiguous(*args, **kwargs):
+        raise utils.AmbiguousMarketIdentifier("ambiguous fixture")
+    monkeypatch.setattr(procedures, "coin_to_symbol", ambiguous)
+    with simulation_data_policy(OFFLINE), pytest.raises(utils.AmbiguousMarketIdentifier):
+        await procedures.get_first_timestamps_unified(["BTC"], exchange="binance")

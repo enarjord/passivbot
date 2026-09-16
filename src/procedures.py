@@ -1,4 +1,4 @@
-from simulation_data import OfflineDataError, is_offline, require_online, snapshot_file
+from simulation_data import is_offline, require_online, snapshot_file
 import glob
 import json
 import logging
@@ -16,6 +16,7 @@ from collections.abc import Sized
 from utils import (
     FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
     MarketIdentifierResolutionError,
+    MarketIdentifierExchangeMismatch,
     UnknownMarketIdentifier,
     coin_to_symbol,
     symbol_to_coin,
@@ -394,31 +395,12 @@ async def get_first_timestamps_unified(
             raise ValueError("exchanges must contain at least one venue")
         scoped_results = []
         for selected_exchange in selected_exchanges:
-            selected_coins = coins
-            if is_offline():
-                # A venue which does not list a market needs no listing timestamp.
-                # Its cached market snapshot must still be available to prove absence.
-                markets = await load_markets(selected_exchange, verbose=False)
-                selected_coins = []
-                for coin in coins:
-                    try:
-                        symbol = coin_to_symbol(coin, selected_exchange)
-                    except MarketIdentifierResolutionError:
-                        continue
-                    if symbol in markets:
-                        selected_coins.append(coin)
             scoped_results.append(
-                await get_first_timestamps_unified(selected_coins, exchange=selected_exchange)
+                await get_first_timestamps_unified(coins, exchange=selected_exchange)
             )
         if is_offline():
-            unavailable = [coin for coin in coins if not any(
-                float(result.get(coin, 0.0)) > 0.0 for result in scoped_results
-            )]
-            if unavailable:
-                raise OfflineDataError(
-                    f"Offline listing metadata unavailable for {unavailable} on {selected_exchanges}; "
-                    "refresh/copy market and first-OHLCV timestamp caches."
-                )
+            # Coins absent from every cached venue are not required inputs.
+            coins = [coin for coin in coins if any(coin in result for result in scoped_results)]
         return {
             coin: min(
                 (
@@ -430,6 +412,22 @@ async def get_first_timestamps_unified(
             )
             for coin in coins
         }
+
+    if is_offline() and exchange is not None:
+        # Require a market snapshot to prove absence, but no inception metadata
+        # for a market the venue does not list. Listed markets still fail closed.
+        markets = await load_markets(exchange, verbose=False)
+        listed_coins = []
+        for coin in coins:
+            try:
+                symbol = coin_to_symbol(coin, exchange)
+            except (UnknownMarketIdentifier, MarketIdentifierExchangeMismatch):
+                continue
+            if symbol in markets:
+                listed_coins.append(coin)
+        coins = listed_coins
+        if not coins:
+            return {}
 
     # Paths to the cache files
     cache_fpath = make_get_filepath("caches/first_ohlcv_timestamps_unified.json")
