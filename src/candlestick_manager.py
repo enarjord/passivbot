@@ -266,6 +266,7 @@ class GapEntry(TypedDict, total=False):
 # Maximum fetch attempts before marking gap as persistent
 _GAP_MAX_RETRIES = 3
 _GAP_PERSISTENT_RETRY_MS = 7 * 24 * 60 * 60 * 1000
+_KUCOIN_CONTEXTUAL_GAP_RETRY_MS = 5 * 60 * 1000
 _HYPERLIQUID_RECENT_GAP_HORIZON_MS = 2 * 60 * 60 * 1000
 _HYPERLIQUID_RECENT_GAP_MAX_SPAN_MS = 2 * 60 * 60 * 1000
 _HYPERLIQUID_RECENT_GAP_RETRY_MS = 5 * 60 * 1000
@@ -3556,7 +3557,7 @@ class CandlestickManager:
         last_retry_at = int(gap.get("last_contextual_retry_at", 0))
         return (
             last_retry_at <= 0
-            or now - last_retry_at >= _GAP_PERSISTENT_RETRY_MS
+            or now - last_retry_at >= _KUCOIN_CONTEXTUAL_GAP_RETRY_MS
         )
 
     def _defer_kucoin_contextual_gap_retry(
@@ -3588,7 +3589,7 @@ class CandlestickManager:
                 symbol=symbol,
                 start_ts=int(start_ts),
                 end_ts=int(end_ts),
-                retry_after_ms=now + _GAP_PERSISTENT_RETRY_MS,
+                retry_after_ms=now + _KUCOIN_CONTEXTUAL_GAP_RETRY_MS,
             )
         return changed
 
@@ -3647,24 +3648,22 @@ class CandlestickManager:
             now_ms = self._now_ms()
         fetch_start = int(start_ts)
         fetch_end = int(end_ts)
-        while fetch_start <= fetch_end:
-            deferred_gap_end = None
-            for gap in self._get_known_gaps_enhanced(symbol):
-                gap_start = int(gap["start_ts"])
-                gap_end = int(gap["end_ts"])
-                if (
-                    gap_start <= fetch_start <= gap_end
-                    and not self._should_retry_gap(gap, now_ms=now_ms)
-                ):
-                    deferred_gap_end = (
-                        gap_end
-                        if deferred_gap_end is None
-                        else max(deferred_gap_end, gap_end)
-                    )
-            if deferred_gap_end is None:
-                return fetch_start
-            fetch_start = int(deferred_gap_end) + ONE_MIN_MS
-        return None
+        gaps = sorted(
+            self._get_known_gaps_enhanced(symbol),
+            key=lambda gap: int(gap["start_ts"]),
+        )
+        for gap in gaps:
+            if fetch_start > fetch_end:
+                return None
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            if gap_end < fetch_start:
+                continue
+            if gap_start > fetch_start:
+                break
+            if not self._should_retry_gap(gap, now_ms=now_ms):
+                fetch_start = gap_end + ONE_MIN_MS
+        return None if fetch_start > fetch_end else fetch_start
 
     def _unverified_gap_ranges(
         self,
@@ -5522,6 +5521,24 @@ class CandlestickManager:
                 return True
         return False
 
+    def _kucoin_contextual_gap_request(
+        self, left_ts: int, right_ts: int
+    ) -> Optional[Tuple[int, int]]:
+        """Plan a single proof page only when both real bounds fit."""
+        request_since = int(left_ts)
+        if (
+            self._ccxt_since_exclusive
+            and self._ccxt_page_overlap_candles > 0
+            and left_ts > 0
+        ):
+            request_since = max(
+                0, left_ts - ONE_MIN_MS * int(self._ccxt_page_overlap_candles)
+            )
+        requested_buckets = max(2, (right_ts - request_since) // ONE_MIN_MS + 1)
+        if requested_buckets > int(self._ccxt_limit_default):
+            return None
+        return request_since, requested_buckets
+
     async def _fetch_kucoin_contextual_gap_page(
         self,
         symbol: str,
@@ -5543,25 +5560,14 @@ class CandlestickManager:
         right_ts = int(right_boundary_ts)
         gap_start = int(gap_start_ts)
         gap_end = int(gap_end_ts)
-        request_since = left_ts
-        if (
-            self._ccxt_since_exclusive
-            and self._ccxt_page_overlap_candles > 0
-            and left_ts > 0
-        ):
-            request_since = max(
-                0,
-                left_ts
-                - ONE_MIN_MS * int(self._ccxt_page_overlap_candles),
-            )
-        requested_buckets = max(
-            2,
-            (right_ts - request_since) // ONE_MIN_MS + 1,
-        )
+        request = self._kucoin_contextual_gap_request(left_ts, right_ts)
+        if request is None:
+            return np.empty((0,), dtype=CANDLE_DTYPE), False
+        request_since, requested_buckets = request
         page = await self._ccxt_fetch_ohlcv_once(
             symbol,
             request_since,
-            min(int(self._ccxt_limit_default), int(requested_buckets)),
+            requested_buckets,
             end_exclusive_ms=right_ts + ONE_MIN_MS,
             tf="1m",
         )
@@ -8029,18 +8035,11 @@ class CandlestickManager:
                 missing_before = self._missing_spans(sub, start_ts, end_ts)
 
                 def span_in_persistent_gap(s: int, e: int) -> bool:
-                    """Check if span is fully contained in a persistent (max retries) gap.
-
-                    NOTE: We reload gaps fresh each call to avoid stale closures when
-                    _add_known_gap() is called within the same function context.
-                    """
-                    known_enhanced = self._get_known_gaps_enhanced(symbol)
-                    for gap in known_enhanced:
-                        if s >= gap["start_ts"] and e <= gap["end_ts"]:
-                            # Only consider it "known" if it's persistent (max retries reached)
-                            if not self._should_retry_gap(gap):
-                                return True
-                    return False
+                    # Adjacent records retain independent retry epochs but may
+                    # jointly cover one physically missing candle span.
+                    return self._known_gap_retry_deferred_at(
+                        symbol, s, e, now_ms=now
+                    )
 
                 unknown_missing = [
                     (s, e) for (s, e) in missing_before if not span_in_persistent_gap(s, e)
@@ -8514,13 +8513,9 @@ class CandlestickManager:
             if missing:
                 # Helper to test if a span is fully inside any persistent known gap
                 def span_in_persistent_gap_present(s: int, e: int) -> bool:
-                    """Check if span is in persistent gap. Reloads gaps to avoid stale data."""
-                    known_enhanced_present = self._get_known_gaps_enhanced(symbol)
-                    for gap in known_enhanced_present:
-                        if s >= gap["start_ts"] and e <= gap["end_ts"]:
-                            if not self._should_retry_gap(gap):
-                                return True
-                    return False
+                    return self._known_gap_retry_deferred_at(
+                        symbol, s, e, now_ms=now
+                    )
 
                 def span_has_unverified_gap_present(s: int, e: int) -> bool:
                     return any(
@@ -8531,18 +8526,31 @@ class CandlestickManager:
                         for gap in self._get_known_gaps_enhanced(symbol)
                     )
 
-                def unverified_gap_covering(
+                def contextual_gap_verification_due(
                     s: int, e: int
-                ) -> Optional[GapEntry]:
-                    for gap in self._get_known_gaps_enhanced(symbol):
-                        if (
-                            int(gap["start_ts"]) <= int(s)
-                            and int(gap["end_ts"]) >= int(e)
-                            and str(gap.get("reason", GAP_REASON_AUTO))
-                            in {GAP_REASON_AUTO, GAP_REASON_FETCH_FAILED}
-                        ):
-                            return gap
-                    return None
+                ) -> bool:
+                    # A contiguous omission can have several metadata records
+                    # as its tail grows. Keep their retry clocks independent;
+                    # one boundary request must be eligible over the whole span.
+                    cursor = int(s)
+                    has_unverified = False
+                    for gap in sorted(
+                        self._get_known_gaps_enhanced(symbol),
+                        key=lambda item: int(item["start_ts"]),
+                    ):
+                        if int(gap["end_ts"]) < cursor:
+                            continue
+                        if int(gap["start_ts"]) > cursor:
+                            return False
+                        reason = str(gap.get("reason", GAP_REASON_AUTO))
+                        if reason != GAP_REASON_NO_TRADES:
+                            if not self._kucoin_contextual_retry_due(gap, now_ms=now):
+                                return False
+                            has_unverified = True
+                        cursor = int(gap["end_ts"]) + ONE_MIN_MS
+                        if cursor > int(e):
+                            return has_unverified
+                    return False
 
                 def kucoin_verification_bounds(
                     candles: np.ndarray, s: int, e: int
@@ -8560,10 +8568,7 @@ class CandlestickManager:
                         and "kucoin" in self._ex_id.lower()
                     ):
                         return None
-                    unverified_gap = unverified_gap_covering(s, e)
-                    if unverified_gap is None or not self._kucoin_contextual_retry_due(
-                        unverified_gap, now_ms=now
-                    ):
+                    if not contextual_gap_verification_due(s, e):
                         return None
                     real = np.sort(_ensure_dtype(candles), order="ts")
                     provisional = self._synthetic_timestamps.get(symbol, set())
@@ -8581,7 +8586,10 @@ class CandlestickManager:
                     after = timestamps[timestamps > int(e)]
                     if before.size == 0 or after.size == 0:
                         return None
-                    return int(before[-1]), int(after[0])
+                    left_ts, right_ts = int(before[-1]), int(after[0])
+                    if self._kucoin_contextual_gap_request(left_ts, right_ts) is None:
+                        return None
+                    return left_ts, right_ts
 
                 # Attempt limited targeted fetches for unknown spans
                 attempts = 0
