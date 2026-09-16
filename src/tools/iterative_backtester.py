@@ -570,7 +570,7 @@ class IterativeBacktestSession:
         )
         # Ensure exchanges have markets loaded and live coin lists expanded
         for ex in require_config_value(config, "backtest.exchanges"):
-            await load_markets(ex, verbose=False)
+            await load_markets(ex, verbose=False, offline=config["backtest"].get("offline", False))
         await format_approved_ignored_coins(
             config,
             require_config_value(config, "backtest.exchanges"),

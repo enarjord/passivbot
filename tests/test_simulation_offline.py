@@ -419,3 +419,61 @@ async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypat
     store.write_rows("binance", "1m", SYMBOL, ts, values)
     result = await prepare_hlcvs_mss(config, "bybit")
     assert result[2]["__meta__"]["btc_source_exchange"] == "binance"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirmed", [False, True])
+async def test_source_directory_prefix_requires_listing_provenance(tmp_path, monkeypatch, confirmed):
+    from utils import ts_to_date
+    cache = metadata(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    if confirmed:
+        for name, value in (
+            ("first_ohlcv_timestamps_unified.json", START+120000),
+            ("first_ohlcv_timestamps_unified_exchange_specific.json", {"binanceusdm": START+120000}),
+        ):
+            (cache / name).write_text(json.dumps({"BTC": value}))
+    source = tmp_path / "legacy"
+    day = source / "binance/1m/BTC/2024-01-01.npz"
+    day.parent.mkdir(parents=True)
+    rows = np.zeros(8, dtype=[("ts", "i8"), ("o", "f8"), ("h", "f8"),
+                             ("l", "f8"), ("c", "f8"), ("bv", "f8")])
+    rows["ts"] = START + np.arange(2, 10)*60000
+    for field in ("o", "h", "l", "c"):
+        rows[field] = 100.
+    rows["bv"] = 1.
+    np.savez(day, candles=rows)
+    om = hp.HLCVManager("binance", ts_to_date(START), ts_to_date(START+9*60000),
+                        ohlcv_source_dir=str(source))
+    om.update_timestamp_range(START, START+9*60000)
+    try:
+        with simulation_data_policy(OFFLINE):
+            if confirmed:
+                frame = await om.get_ohlcvs("BTC", source_dir_only=True)
+                assert frame.timestamp.iloc[0] == START+120000
+                assert frame.valid.all()
+            else:
+                with pytest.raises(OfflineDataError, match="Unverified source directory prefix"):
+                    await om.get_ohlcvs("BTC", source_dir_only=True)
+    finally:
+        await om.aclose()
+        if om.cc:
+            await om.cc.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cli_override", [False, True])
+async def test_iterative_preload_uses_stale_markets_offline(tmp_path, monkeypatch, cli_override):
+    from tools.iterative_backtester import IterativeBacktestSession
+    metadata(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    config = get_template_config()
+    config["backtest"].update(exchanges=["binance"], offline=not cli_override)
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    session = IterativeBacktestSession(
+        path, log_level="warning", auto_run=False,
+        cli_overrides=["backtest.offline=true"] if cli_override else [])
+    loaded = await session._load_config()
+    assert loaded["backtest"]["offline"] is True

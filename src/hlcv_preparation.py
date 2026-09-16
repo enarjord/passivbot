@@ -931,8 +931,24 @@ class HLCVManager:
         if self.ohlcv_source_dir:
             df = self._try_load_ohlcvs_from_source_dir(coin, symbol, start_ts, end_ts)
             if df is not None and not df.empty:
-                if is_offline() and (int(df.timestamp.iloc[0]) > start_ts or int(df.timestamp.iloc[-1]) < end_ts):
-                    raise OfflineDataError(f"Incomplete source directory candles: {self.exchange}/{coin} {start_ts}..{end_ts}; {self.ohlcv_source_dir}")
+                requested_start_ts = start_ts
+                if is_offline():
+                    first_row_ts = int(df.timestamp.iloc[0])
+                    if first_row_ts > start_ts:
+                        inception = await get_first_timestamps_unified([coin], exchange=self.exchange)
+                        first_listing_ts = int(inception[coin])
+                        if abs(first_row_ts - first_listing_ts) > 60_000:
+                            raise OfflineDataError(
+                                f"Unverified source directory prefix: {self.exchange}/{coin} "
+                                f"{start_ts}..{first_row_ts}; {self.ohlcv_source_dir}"
+                            )
+                        # Start at the confirmed listing; do not synthesize pre-listing prices.
+                        start_ts = first_row_ts
+                    if int(df.timestamp.iloc[-1]) < end_ts:
+                        raise OfflineDataError(
+                            f"Incomplete source directory candles: {self.exchange}/{coin} "
+                            f"{start_ts}..{end_ts}; {self.ohlcv_source_dir}"
+                        )
                 self.load_cc()
                 assert self.cm is not None
 
@@ -978,7 +994,7 @@ class HLCVManager:
                     self.exchange,
                     coin,
                 )
-                record_range(self.exchange, symbol, start_ts, end_ts, SimpleNamespace(
+                record_range(self.exchange, symbol, requested_start_ts, end_ts, SimpleNamespace(
                     timestamps=filled_ts, values=df[["high", "low", "close", "volume"]].to_numpy(),
                     valid=df["valid"].to_numpy(),
                 ))
