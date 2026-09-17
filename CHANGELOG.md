@@ -13,6 +13,11 @@ since the latest release tag; these features may already be available when insta
   episode evidence now uses bounded risk-input recovery with visible causes and
   continued independently ready protection, instead of an unbounded retry loop.
 
+- Prevent GPU optimizer rank halts caused by near-ties or opposing objectives cancelling in
+  scalar scores when complete per-objective evidence confirms agreement. Preserve constraint
+  gates and material rank-disagreement checks, add a separate `drift_rank_halt` override, and
+  persist objective evidence with score-spread and error diagnostics for reproducible recovery.
+
 - Reduce GPU optimizer memory use by sharing full coin selections across suite
   scenarios and losslessly packing CUDA minimum-quantity relations into signed bytes.
   Apple GPU input packing and GPU memory safety limits are unchanged.

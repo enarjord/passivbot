@@ -883,6 +883,13 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
 def _canonicalize_resume_optimize(section: dict) -> dict:
     normalized = deepcopy(section)
+    if normalized.get("backend") == "gpu" and isinstance(normalized.get("gpu"), dict):
+        from optimization.backends.gpu_backend import GPU_DEFAULTS
+
+        # These additive options preserve the legacy gates when omitted. Do not
+        # normalize other policy differences or erase explicit non-default values.
+        for key in ("drift_rank_halt", "drift_objective_tolerance"):
+            normalized["gpu"].setdefault(key, GPU_DEFAULTS[key])
     if "scoring" in normalized:
         normalized["scoring"] = [
             spec.to_config() for spec in extract_objective_specs(normalized["scoring"])

@@ -65,6 +65,8 @@ GPU_DEFAULTS = {
     "drift_window": 128,
     "drift_min_samples": 32,
     "drift_halt": 0.60,
+    "drift_rank_halt": None,
+    "drift_objective_tolerance": 1.0e-6,
     "exact_workers": 0,
     "max_pending_exact": 0,
     "seed_bootstrap": {
@@ -1045,7 +1047,9 @@ def _resolve_options(config: dict) -> dict:
         if key in nested_options:
             continue
         if key in (configured or {}) and configured[key] is not None:
-            options[key] = type(default)(configured[key])
+            options[key] = (float if key == "drift_rank_halt" else type(default))(
+                configured[key]
+            )
     seed_bootstrap = dict(GPU_DEFAULTS["seed_bootstrap"])
     configured_seed_bootstrap = (configured or {}).get("seed_bootstrap")
     if configured_seed_bootstrap is not None and not isinstance(
@@ -1145,6 +1149,17 @@ def _resolve_options(config: dict) -> dict:
     if not 0.0 < float(options["drift_halt"]) <= 1.0:
         raise ValueError(
             "optimize.gpu.drift_halt must be greater than zero and at most one"
+        )
+    if options["drift_rank_halt"] is not None and not (
+        0.0 < options["drift_rank_halt"] <= 1.0
+    ):
+        raise ValueError(
+            "optimize.gpu.drift_rank_halt must be greater than zero and at most one"
+        )
+    tolerance = options["drift_objective_tolerance"]
+    if not math.isfinite(tolerance) or tolerance < 0.0:
+        raise ValueError(
+            "optimize.gpu.drift_objective_tolerance must be finite and non-negative"
         )
     if int(options["drift_min_samples"]) > int(options["drift_window"]):
         raise ValueError(
@@ -2230,25 +2245,78 @@ class _ObjectiveScale:
         fallback = np.maximum(np.abs(self.median) * 0.1, 1.0e-9)
         self.spread = np.where(q75 - q25 > 1.0e-12, q75 - q25, fallback)
 
-    def score(self, objectives: np.ndarray) -> np.ndarray:
+    def normalize(self, objectives: np.ndarray) -> np.ndarray:
         if self.median is None or self.spread is None:
             raise RuntimeError("GPU objective scale has not been fitted")
-        values = (np.asarray(objectives, dtype=np.float64) - self.median) / self.spread
+        return (np.asarray(objectives, dtype=np.float64) - self.median) / self.spread
+
+    def score(self, objectives: np.ndarray) -> np.ndarray:
+        values = self.normalize(objectives)
         values[~np.isfinite(values)] = 1.0e6
         return values.mean(axis=1)
+
+
+def _drift_objective_pair(
+    proxy, exact, *, objective_count: int | None, allow_nonfinite: bool = False
+) -> tuple[list[float] | None, list[float] | None]:
+    """Validate normalized, ordered objectives before using or recovering evidence."""
+    if objective_count is None or objective_count <= 0:
+        raise ValueError("GPU drift objectives require a configured objective count")
+    proxy = np.asarray(proxy, dtype=np.float64)
+    exact = np.asarray(exact, dtype=np.float64)
+    if proxy.shape != (objective_count,) or exact.shape != (objective_count,):
+        raise ValueError("GPU drift objectives must match the configured objective count")
+    if not np.all(np.isfinite(proxy)) or not np.all(np.isfinite(exact)):
+        if allow_nonfinite:
+            # Some supported metrics use infinity for insufficient samples.
+            # Keep their existing conservative scalar score, without granting
+            # the new per-objective continuation exception.
+            return None, None
+        raise ValueError("GPU drift objectives must be finite")
+    return proxy.tolist(), exact.tolist()
+
+
+def _recover_drift_objectives(metadata: dict, objective_count: int | None) -> tuple:
+    # Schema 2 did not retain objective evidence. Never infer it from scalar means.
+    if metadata["schema_version"] == 2:
+        return ()
+    try:
+        proxy, exact = metadata["proxy_objectives"], metadata["exact_objectives"]
+        if proxy is None and exact is None:
+            return ()
+        return _drift_objective_pair(
+            proxy, exact, objective_count=objective_count
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RuntimeError("GPU resume found invalid per-objective drift evidence") from exc
+
+
+def _drift_agreement(proxy: np.ndarray, exact: np.ndarray) -> dict:
+    return {
+        "rho": _spearman(proxy, exact),
+        "proxy_spread": float(np.ptp(proxy)),
+        "exact_spread": float(np.ptp(exact)),
+        "max_abs_error": float(np.max(np.abs(proxy - exact))),
+    }
 
 
 class _DriftMonitor:
     MIN_PROBES = MIN_DRIFT_PROBES
     MIN_FRONT_SAMPLES = MIN_DRIFT_PROBES
 
-    def __init__(self, options: dict):
+    def __init__(self, options: dict, *, objective_count: int | None = None):
         self.window = int(options["drift_window"])
         self.minimum = int(options["drift_min_samples"])
-        self.halt = float(options["drift_halt"])
-        self.pairs: deque[tuple[float, float, bool, bool, bool]] = deque(
-            maxlen=self.window
+        self.constraint_halt = float(options["drift_halt"])
+        rank_halt = options.get("drift_rank_halt")
+        self.halt = self.constraint_halt if rank_halt is None else float(rank_halt)
+        self.objective_tolerance = float(
+            options.get(
+                "drift_objective_tolerance", GPU_DEFAULTS["drift_objective_tolerance"]
+            )
         )
+        self.pairs: deque[tuple] = deque(maxlen=self.window)
+        self.objective_count = objective_count
 
     def add(
         self,
@@ -2258,11 +2326,18 @@ class _DriftMonitor:
         probe: bool,
         proxy_front: bool,
         constraint_mismatch: bool = False,
+        proxy_objectives=None,
+        exact_objectives=None,
     ) -> None:
         if bool(probe) == bool(proxy_front):
             raise ValueError(
                 "GPU validation evidence must be exactly one of proxy-front "
                 "or broad/off-front"
+            )
+        objectives = ()
+        if proxy_objectives is not None or exact_objectives is not None:
+            objectives = _drift_objective_pair(
+                proxy_objectives, exact_objectives, objective_count=self.objective_count
             )
         self.pairs.append(
             (
@@ -2271,6 +2346,7 @@ class _DriftMonitor:
                 bool(probe),
                 bool(constraint_mismatch),
                 bool(proxy_front),
+                *objectives,
             )
         )
 
@@ -2293,6 +2369,9 @@ class _DriftMonitor:
             "front_constraint_mismatches": 0,
             "halt_reason": None,
             "warn_reason": None,
+            "probe_score_agreement": None,
+            "probe_objective_agreement": [],
+            "probe_objective_samples": 0,
         }
         if len(self.pairs) < self.minimum:
             return result
@@ -2331,6 +2410,46 @@ class _DriftMonitor:
         result["front_rho"] = _spearman(
             proxy[front_rank_eligible], exact[front_rank_eligible]
         )
+        objective_rows = []
+        for row, eligible in zip(self.pairs, probe_rank_eligible):
+            if len(row) not in (5, 7):
+                raise ValueError("GPU drift evidence has an invalid objective layout")
+            if len(row) == 7:
+                pair = _drift_objective_pair(
+                    row[5], row[6], objective_count=self.objective_count
+                )
+                if eligible:
+                    objective_rows.append(pair)
+        if np.any(probe_rank_eligible):
+            result["probe_score_agreement"] = _drift_agreement(
+                proxy[probe_rank_eligible], exact[probe_rank_eligible]
+            )
+        result["probe_objective_samples"] = len(objective_rows)
+        objectives_sound = False
+        if objective_rows:
+            objective_proxy = np.asarray([row[0] for row in objective_rows])
+            objective_exact = np.asarray([row[1] for row in objective_rows])
+            result["probe_objective_agreement"] = [
+                _drift_agreement(objective_proxy[:, i], objective_exact[:, i])
+                for i in range(objective_proxy.shape[1])
+            ]
+            # Rescue a low/undefined scalar rank only with complete evidence for
+            # EVERY objective of EVERY rank-comparable probe in this window.
+            # Cancellation or a subset of good objectives cannot conceal drift.
+            objectives_sound = (
+                len(objective_rows) == result["probe_rank_samples"]
+                and len(objective_rows) >= self.MIN_PROBES
+                and all(
+                    item["max_abs_error"] <= self.objective_tolerance
+                    or (
+                        item["proxy_spread"] > self.objective_tolerance
+                        and item["exact_spread"] > self.objective_tolerance
+                        and np.isfinite(item["rho"])
+                        and item["rho"] >= self.halt
+                    )
+                    for item in result["probe_objective_agreement"]
+                )
+            )
         result["constraint_agreement"] = 1.0 - (
             result["constraint_mismatches"] / result["samples"]
         )
@@ -2349,8 +2468,8 @@ class _DriftMonitor:
                 result["front_constraint_mismatches"] / result["front_samples"]
             )
         detail = (
-            f"rho={result['rho']:.3f}, probe_rho={result['probe_rho']:.3f}, "
-            f"front_rho={result['front_rho']:.3f}, samples={result['samples']}, "
+            f"rho={result['rho']:.6f}, probe_rho={result['probe_rho']:.6f}, "
+            f"front_rho={result['front_rho']:.6f}, samples={result['samples']}, "
             f"constraint_agreement={result['constraint_agreement']:.3f}, "
             f"probes={result['probes']}, "
             f"probe_rank_samples={result['probe_rank_samples']}, "
@@ -2358,21 +2477,26 @@ class _DriftMonitor:
             f"front_samples={result['front_samples']}, "
             f"front_rank_samples={result['front_rank_samples']}, "
             f"front_constraint_agreement={result['front_constraint_agreement']:.3f}"
+            f", rank_halt={self.halt:.6g}, constraint_halt={self.constraint_halt:.6g}"
+            f", objective_tolerance={self.objective_tolerance:.6g}"
+            f", probe_score_agreement={result['probe_score_agreement']}"
+            f", probe_objective_samples={result['probe_objective_samples']}"
+            f", probe_objective_agreement={result['probe_objective_agreement']}"
         )
-        if result["constraint_agreement"] < self.halt:
+        if result["constraint_agreement"] < self.constraint_halt:
             result["halt_reason"] = (
                 "GPU proxy/exact rolling constraint agreement fell below "
                 f"safety threshold ({detail})"
             )
         elif result["probes"] >= self.MIN_PROBES and (
-            result["probe_constraint_agreement"] < self.halt
+            result["probe_constraint_agreement"] < self.constraint_halt
         ):
             result["halt_reason"] = (
                 "GPU proxy/exact broad-probe constraint agreement fell below "
                 f"safety threshold ({detail})"
             )
         elif result["front_samples"] >= self.MIN_FRONT_SAMPLES and (
-            result["front_constraint_agreement"] < self.halt
+            result["front_constraint_agreement"] < self.constraint_halt
         ):
             result["halt_reason"] = (
                 "GPU proxy/exact proxy-front constraint agreement fell below "
@@ -2382,9 +2506,15 @@ class _DriftMonitor:
             not np.isfinite(result["probe_rho"])
             or result["probe_rho"] < self.halt
         ):
-            result["halt_reason"] = (
-                f"GPU proxy/exact broad-probe rank drift exceeded safety threshold ({detail})"
-            )
+            if objectives_sound:
+                result["warn_reason"] = (
+                    "GPU scalar rank is inconclusive but per-objective broad probes "
+                    f"remain sound ({detail})"
+                )
+            else:
+                result["halt_reason"] = (
+                    f"GPU proxy/exact broad-probe rank drift exceeded safety threshold ({detail})"
+                )
         elif np.isfinite(result["rho"]) and result["rho"] >= self.halt:
             return result
         elif result["probe_rank_samples"] < self.MIN_PROBES:
@@ -3976,11 +4106,12 @@ def _recover_durable_validations(
     stop_index: int,
     vector_from_entry,
     hash_vector,
-) -> tuple[set[str], list[tuple[float, float, bool, bool, bool]]]:
+    objective_count: int | None = None,
+) -> tuple[set[str], list[tuple]]:
     """Recover candidate identities and safety evidence after a stale checkpoint."""
 
     recovered: set[str] = set()
-    drift_pairs: list[tuple[float, float, bool, bool, bool]] = []
+    drift_pairs: list[tuple] = []
     consumed = 0
     for index, entry in enumerate(entries):
         if index < start_index:
@@ -3994,7 +4125,7 @@ def _recover_durable_validations(
                 "GPU resume cannot recover proxy/exact safety evidence from "
                 f"durable result {index}"
             )
-        if metadata.get("schema_version") != 2:
+        if metadata.get("schema_version") not in (2, 3):
             raise RuntimeError(
                 "GPU resume found unsupported proxy/exact safety evidence in "
                 f"durable result {index}"
@@ -4032,6 +4163,7 @@ def _recover_durable_validations(
                 probe,
                 classification_mismatch,
                 proxy_front,
+                *_recover_drift_objectives(metadata, objective_count),
             )
         )
         consumed += 1
@@ -4051,16 +4183,17 @@ def _recover_durable_seed_bootstrap(
     stop_index: int,
     vector_from_entry,
     hash_vector,
+    objective_count: int | None = None,
 ) -> tuple[
     dict[str, dict[str, Any]],
     set[str],
-    list[tuple[float, float, bool, bool, bool]],
+    list[tuple],
 ]:
     """Recover exact seed payloads flushed after a stale bootstrap checkpoint."""
 
     payloads: dict[str, dict[str, Any]] = {}
     recovered: set[str] = set()
-    drift_pairs: list[tuple[float, float, bool, bool, bool]] = []
+    drift_pairs: list[tuple] = []
     consumed = 0
     for index, entry in enumerate(entries):
         if index < start_index:
@@ -4116,7 +4249,7 @@ def _recover_durable_seed_bootstrap(
         if validation is not None:
             if (
                 not isinstance(validation, dict)
-                or validation.get("schema_version") != 2
+                or validation.get("schema_version") not in (2, 3)
                 or validation.get("phase") != "seed_bootstrap"
             ):
                 raise RuntimeError(
@@ -4147,7 +4280,10 @@ def _recover_durable_seed_bootstrap(
                     f"in durable result {index}"
                 )
             drift_pairs.append(
-                (proxy_score, exact_score, probe, mismatch, proxy_front)
+                (
+                    proxy_score, exact_score, probe, mismatch, proxy_front,
+                    *_recover_drift_objectives(validation, objective_count),
+                )
             )
         consumed += 1
     expected = max(0, stop_index - start_index)
@@ -4991,7 +5127,7 @@ def run_backend(
     completed_hashes: set[str] = set()
     seed_bootstrap_payloads = {}
     seed_bootstrap_complete = seed_bootstrap_mode in {"none", "legacy"}
-    drift_monitor = _DriftMonitor(options)
+    drift_monitor = _DriftMonitor(options, objective_count=len(specs))
     persisted_halt_reason = None
     signature = _checkpoint_signature(
         active,
@@ -5111,6 +5247,7 @@ def run_backend(
                     stop_index=recorded_exact,
                     vector_from_entry=vector_from_entry,
                     hash_vector=vector_hash,
+                    objective_count=len(specs),
                 )
                 exact_done += recorded_exact - checkpoint_exact_total
             else:
@@ -5124,6 +5261,7 @@ def run_backend(
                     stop_index=recorded_exact,
                     vector_from_entry=vector_from_entry,
                     hash_vector=vector_hash,
+                    objective_count=len(specs),
                 )
                 seed_bootstrap_payloads.update(recovered_seed_payloads)
                 seed_exact_done += recorded_exact - checkpoint_exact_total
@@ -5456,8 +5594,18 @@ def run_backend(
                                 proxy_violation, payload
                             )
                         )
+                        proxy_objectives, exact_objectives = _drift_objective_pair(
+                            objective_scale.normalize(
+                                _proxy_drift_objectives([seed_proxy_metrics[source_index]], specs)
+                            )[0],
+                            objective_scale.normalize(_exact_drift_objectives(payload))[0],
+                            objective_count=len(specs),
+                            allow_nonfinite=True,
+                        )
                         validation_metadata = {
-                            "schema_version": 2,
+                            "schema_version": 3,
+                            "proxy_objectives": proxy_objectives,
+                            "exact_objectives": exact_objectives,
                             "phase": "seed_bootstrap",
                             "proxy_score": proxy_score,
                             "exact_score": exact_score,
@@ -5478,6 +5626,8 @@ def run_backend(
                             probe=is_probe,
                             proxy_front=is_proxy_front,
                             constraint_mismatch=classification_mismatch,
+                            proxy_objectives=proxy_objectives,
+                            exact_objectives=exact_objectives,
                         )
                     seed_metadata = {
                         "schema_version": 1,
@@ -5633,11 +5783,19 @@ def run_backend(
             persistence_started = (
                 time.perf_counter() if profile_enabled else 0.0
             )
+            proxy_objectives, exact_objectives = _drift_objective_pair(
+                objective_scale.normalize(_proxy_drift_objectives([proxy_metrics], specs))[0],
+                objective_scale.normalize(_exact_drift_objectives(payload))[0],
+                objective_count=len(specs),
+                allow_nonfinite=True,
+            )
             record_exact(
                 vector,
                 payload,
                 validation_metadata={
-                    "schema_version": 2,
+                    "schema_version": 3,
+                    "proxy_objectives": proxy_objectives,
+                    "exact_objectives": exact_objectives,
                     "proxy_score": float(proxy_score),
                     "exact_score": exact_score,
                     "probe": bool(is_probe),
@@ -5672,6 +5830,8 @@ def run_backend(
                 probe=is_probe,
                 proxy_front=is_proxy_front,
                 constraint_mismatch=classification_mismatch,
+                proxy_objectives=proxy_objectives,
+                exact_objectives=exact_objectives,
             )
             status = drift_monitor.evaluate()
             if status["warn_reason"] and status["warn_reason"] != last_warning:
