@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Prevent GPU optimizer rank halts caused by near-ties or opposing objectives cancelling in
+  scalar scores when complete per-objective evidence confirms agreement. Preserve constraint
+  gates and material rank-disagreement checks, add a separate `drift_rank_halt` override, and
+  persist objective evidence with score-spread and error diagnostics for reproducible recovery.
+
 - Add `backtest.offline` / `--offline y` for backtests and optimization: reuse cached
   metadata regardless of age, prohibit remote data fetching, verify local coverage,
   and retain data snapshot fingerprints. Live behavior is unchanged.

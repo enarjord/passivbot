@@ -720,7 +720,7 @@ The backend is hybrid rather than a replacement backtester:
 4. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 5. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 6. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
-   falls below `drift_halt` after sufficient evidence. Constraint classification is monitored over
+   falls below their thresholds after sufficient evidence. Constraint classification is monitored over
    all validations and independently for proxy-front candidates and broad probes. An isolated
    disagreement is retained as drift evidence rather than aborting immediately; the exact Rust
    result remains authoritative and an exact-infeasible candidate cannot enter the Pareto front.
@@ -728,6 +728,11 @@ The backend is hybrid rather than a replacement backtester:
    gates, so rank correlation uses only classification-agreeing samples and requires at least eight
    comparable broad probes. Window and exact-budget validation reserve enough total probes to retain
    those eight whenever the configured probe constraint-agreement gate has not already failed.
+   A low or undefined scalar rank can instead be explained by complete per-objective evidence:
+   every objective must either agree within `drift_objective_tolerance` or have non-flat proxy
+   and exact values whose rank correlation meets the rank threshold. This handles near-ties and
+   cancellation between opposing objectives without excusing a flat proxy against meaningfully
+   varying exact results. The continuation is logged; constraint gates remain independent.
 
 `optimize.iters` remains the number of evolutionary exact Rust validations. Any exact seed-
 bootstrap evaluations are additional and are reported separately. GPU screening counts and
@@ -746,6 +751,8 @@ GPU-specific settings live under `optimize.gpu`:
       "max_dispatch_candidate_bars": null,
       "checkpoint_interval_seconds": 5.0,
       "drift_halt": 0.6,
+      "drift_rank_halt": null,
+      "drift_objective_tolerance": 0.000001,
       "drift_min_samples": 32,
       "drift_probes": 4,
       "drift_window": 128,
@@ -850,10 +857,29 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   true-front candidates. Front members are never relabeled as broad probes. The separate broad-
   probe gates activate only after enough truthful off-front evidence has accumulated; allocation
   shortfalls and recovery are logged.
-- `drift_window`, `drift_min_samples`, and `drift_halt` configure the rolling rank and optimizer-
-  limit classification safety gates. Broad-probe Spearman correlation plus aggregate,
-  proxy-front, and broad-probe constraint agreement must each remain at or above `drift_halt`.
-  `drift_halt` must be greater than zero and at most one.
+- `drift_window` and `drift_min_samples` configure the rolling evidence window. `drift_halt`
+  controls optimizer-limit classification agreement and, for compatibility, the rank threshold
+  when `drift_rank_halt` is `null`. Set `drift_rank_halt` to change rank sensitivity independently;
+  it does not change constraint thresholds or their evidence budgets. Both thresholds must be
+  greater than zero and at most one. Aggregate, proxy-front, and broad-probe constraint agreement
+  must each remain at or above `drift_halt`.
+  Scalar broad-probe Spearman below the rank threshold (or undefined for constant values) halts
+  unless every rank-comparable probe has per-objective evidence and every objective passes the
+  check described above. `drift_objective_tolerance` defaults to `0.000001` and must be finite and
+  non-negative. It is an absolute error allowance in the fixed initial objective-scale units
+  (normally each objective's initial interquartile range), not a percentage of profit or a
+  dynamically widened tolerance as the population converges. Zero requires identical objective
+  values for the small-error exception. The alternative rank check requires both objective
+  ranges to exceed that tolerance, so constant biased values cannot pass on absent rank signal.
+  Diagnostics report scalar and per-objective ranges, maximum absolute errors, correlations,
+  sample counts, and both thresholds. Objective indices follow configured scoring order,
+  including repeated scenario objectives. Broad probes sample the current off-front population;
+  they are not independent draws across the original search bounds.
+  New `metrics.gpu_validation` records persist the ordered normalized proxy/exact objective
+  vectors as schema 3, in both seed screening and evolutionary validation. Checkpoints and
+  durable-tail recovery retain this evidence. Legacy schema 2 records have only scalar evidence
+  and cannot enable the per-objective exception. A checkpoint already halted by its safety gate
+  remains halted; exact Pareto results can seed a fresh run after investigating the disagreement.
   At least eight samples of a validation class are required before its independent low agreement
   can halt a run, so `drift_window` and `optimize.iters` must be large enough to retain and reach
   eight true proxy-front validations even when the complete feasible proxy front contributes only

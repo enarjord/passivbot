@@ -514,6 +514,8 @@ def get_template_config():
                         "max_dispatch_candidate_bars": None,
                         "checkpoint_interval_seconds": 5.0,
                         "drift_halt": 0.6,
+                        "drift_rank_halt": None,
+                        "drift_objective_tolerance": 1.0e-6,
                         "drift_min_samples": 32,
                         "drift_probes": 4,
                         "drift_window": 128,
