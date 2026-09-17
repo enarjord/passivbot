@@ -67,3 +67,21 @@ def test_direct_builders_allow_unavailable_listing_prefix_and_delisting_tail(cpu
         packed = build_mps_data(*[values[:, 0, column] for column in range(3)], timestamps, _run(2, 4), _market())
         np.testing.assert_array_equal(packed["valid"], [False, False, True, True, True, False])
     assert cpu_packer
+
+
+def test_cuda_relation_packing_is_lossless_and_keeps_apple_layout(cpu_packer):
+    torch = sys.modules['torch']
+    values = np.tile([101.0, 99.0, 100.0, 1.0], (6, 2, 1))
+    values[:, :, 2] += np.arange(6)[:, None] * 0.01
+    timestamps = np.arange(6) * 60000
+    apple = build_mps_multicoin_data(values, timestamps, [_run()] * 2, [_market()] * 2)
+    assert apple['touch_min_qty_relation'].dtype == np.int32
+    torch.backends.mps.is_available = lambda: False
+    torch.cuda = SimpleNamespace(is_available=lambda: True, mem_get_info=lambda: (8*2**30, 8*2**30))
+    torch.int8 = np.int8
+    cuda = build_mps_multicoin_data(values, timestamps, [_run()] * 2, [_market()] * 2)
+    assert cuda['touch_min_qty_relation'].dtype == np.int8
+    for key in apple:
+        if isinstance(apple[key], np.ndarray):
+            np.testing.assert_array_equal(cuda[key], apple[key], err_msg=key)
+    assert apple['invariant_bytes'] - cuda['invariant_bytes'] == 6*2*3

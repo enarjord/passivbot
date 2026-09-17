@@ -7876,3 +7876,31 @@ def test_seed_screen_includes_population_base_without_changing_seed_rows(base):
     assert base_row == (None if base is None else {"score": base["x"]})
     assert extra == int(base == {"x": 0.5})
     assert calls == [seeds + [base] if extra else seeds]
+
+
+@pytest.mark.parametrize("indices", [None, [0, 1, 2], [2, 0, 1], [0, 2]])
+def test_gpu_suite_full_selection_reuses_input_across_scenarios(indices):
+    config = _long_only_ema_config()
+    config["backtest"]["suite_enabled"] = True
+    config["live"]["forager_score_hysteresis_pct"] = 0.0
+    coins = ["BTC", "ETH", "SOL"]
+    config["live"]["approved_coins"]["long"] = coins
+    config["bot"]["long"]["risk"]["n_positions"] = 2
+    master = np.arange(12 * 3 * 4, dtype=np.float64).reshape(12, 3, 4)
+    selected = list(range(3)) if indices is None else indices
+    contexts = [SimpleNamespace(
+        label=f"scenario_{i}", overrides={}, exchanges=["bybit"],
+        msss={"bybit": {coins[j]: {} for j in selected}},
+        timestamps={"bybit": np.arange(10, dtype=np.int64)},
+    ) for i in range(9)]
+    class Suite:
+        def __init__(self): self.contexts = contexts
+        def get_prepared_context_data(self, ctx, exchange):
+            return master[1:11], np.ones(10), indices
+        def build_scenario_candidate_config(self, proxy_config, ctx):
+            return copy.deepcopy(proxy_config)
+    prepared = _gpu_suite_scenario_inputs(config, Suite())
+    for item in prepared:
+        np.testing.assert_array_equal(item["hlcvs"], np.take(master[1:11], selected, axis=1))
+        assert item["hlcvs"].flags.c_contiguous
+        assert np.shares_memory(item["hlcvs"], master) == (selected == [0, 1, 2])
