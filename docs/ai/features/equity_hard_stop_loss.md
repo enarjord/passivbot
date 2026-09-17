@@ -62,7 +62,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    into replay rows or reconsidered as retained-episode events.
    Live fill-history readiness uses that same fill-derived boundary as its only held-episode owner
    and also proves every enabled side's flat-scope cooldown horizon. A recent fill for a currently
-   flat pair may still own a RED cooldown and therefore preserves the full configured lookback.
+   flat pair may still own a RED cooldown. When the full tape proves that closed episode and
+   its cooldown-connected predecessors, their earliest opening remains required. Unproven
+   closed-episode evidence preserves the full configured lookback.
    Ambiguous or delayed held evidence also preserves or restores the full requirement before fills
    become authoritative. PnL blockers are evaluated against each held pair's own canonical episode
    boundary; the aggregate earliest boundary exists only to fetch and prove coverage. Coin stop
@@ -110,7 +112,7 @@ tape starts flat. Python reconstructs exchange facts; Rust still evaluates risk.
 
 Startup captures value-based fill, position, balance, and HSL-config evidence before
 history I/O and rejects changed observations before replacing protective state.
-The original full tape supplies held-episode boundaries even when returned price
+The original full tape supplies held and recent closed-episode boundaries even when returned price
 history starts with a close whose opening fill was discarded. Live checks validate
 current positions again; revisions to already-sampled quantities, PnL, or fees request
 canonical reconstruction before ordinary shared-account planning. Evidence is

@@ -87,12 +87,17 @@ class EpisodeEvidence:
         if reason is not None:
             raise EpisodeEvidenceUnavailable(reason, pside=pside, symbol=symbol)
 
-    def required_start(self, size, cooldown_ms):
-        if self.unavailable or not self.matches_position(size) or abs(size) <= self.epsilon:
+    def required_start(self, size, cooldown_ms, *, now_ms=None):
+        if self.unavailable or not self.matches_position(size) or not self.episodes:
             return None
-        if not self.episodes or self.episodes[-1][1] is not None:
+        start, flatten = self.episodes[-1]
+        if abs(size) <= self.epsilon:
+            # A closed episode can still own a RED cooldown. Its proven opening
+            # and every cooldown-connected predecessor remain required.
+            if now_ms is None or flatten is None or flatten + cooldown_ms < now_ms:
+                return None
+        elif flatten is not None:
             return None
-        start = self.episodes[-1][0]
         for previous_start, flatten in reversed(self.episodes[:-1]):
             if flatten + cooldown_ms <= start:
                 break

@@ -128,3 +128,90 @@ async def test_revised_sampled_evidence_requests_replay_and_preserves_runtime(mo
     with pytest.raises(hsl.EpisodeEvidenceUnavailable, match='episode_observation_not_stable'):
         await bot._equity_hard_stop_check_coin()
     assert replay.await_count == 3
+
+
+def test_recent_proven_flat_episode_retains_its_own_cooldown_history():
+    bot = make_coin_bot()
+    bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=5.0)
+    bot.positions = {'A': {'long': {'size': 0.0}, 'short': {'size': 0.0}}}
+    now = 10_000_000
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=1.0, pnl=0.0)
+              for t, a in [(1_000, 'increase'), (2_000, 'decrease'),
+                           (now-400_000, 'increase'), (now-100_000, 'decrease')]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    required, start, pairs = hsl._equity_hard_stop_required_fill_history_scope(bot, now, pnl_start_ms=0)
+    assert required and start == now-400_000
+    assert pairs == {('long', 'A'): now-400_000}
+    # A cooldown-connected earlier episode remains necessary, even while flat.
+    events[1]['timestamp'] = now-500_000
+    required, start, pairs = hsl._equity_hard_stop_required_fill_history_scope(bot, now, pnl_start_ms=0)
+    assert start == 1_000
+    # An unexplained flat observation never supplies its own flatten timestamp.
+    del events[-1]
+    events[-1]['timestamp'] = now-200_000
+    assert hsl._equity_hard_stop_required_fill_history_scope(bot, now, pnl_start_ms=0)[2] is None
+
+
+@pytest.mark.asyncio
+async def test_held_to_flat_keeps_discarded_symbols_out_and_matches_restart():
+    now = [10 * 86_400_000]
+    events = [dict(timestamp=t, symbol=symbol, pside='long', action=a, qty=1.0, pnl=pnl)
+              for t, symbol, a, pnl in [(now[0]-86_400_000, 'OLD', 'increase', 0.0),
+                (now[0]-86_340_000, 'OLD', 'decrease', -20.0),
+                (now[0]-90_123, 'A', 'increase', 0.0)]]
+    def make():
+        bot = make_coin_bot()
+        bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=1.0)
+        bot.hsl['short'].update(enabled=True, restart_after_red_policy='always', cooldown_minutes_after_red=60.0)
+        bot.get_exchange_time = lambda: now[0]
+        bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+        bot._pnls_manager = make_fake_pnls_manager(events)
+        async def history(**kwargs):
+            retained = [e for e in events if e['timestamp'] >= kwargs['hsl_replay_start_ms']]
+            assert all(e['symbol'] == 'A' for e in retained)
+            return {'timeline': [{'timestamp': now[0]//60_000*60_000, 'balance': 100.0,
+                'realized_pnl': 0.0, 'realized_pnl_by_coin_pside': {'A': {'long': 0.0, 'short': 0.0}},
+                'unrealized_pnl_by_coin_pside': {'A': {'long': 0.0, 'short': 0.0}}}],
+                'fill_events': retained, 'panic_flatten_events': []}
+        bot.get_balance_equity_history = history
+        return bot
+    bot = make()
+    await bot._equity_hard_stop_initialize_coin_from_history()
+    await bot._equity_hard_stop_check_coin()
+    now[0] += 60_123
+    events.append(dict(events[-1], timestamp=now[0]-1, action='decrease'))
+    bot.positions['A']['long']['size'] = 0.0
+    await bot._equity_hard_stop_check_coin()
+    assert 'OLD' not in bot._equity_hard_stop_coin_symbols()
+    cold = make()
+    cold.positions['A']['long']['size'] = 0.0
+    await cold._equity_hard_stop_initialize_coin_from_history()
+    await cold._equity_hard_stop_check_coin()
+    for side in ('long', 'short'):
+        live = bot._hsl_coin_state(side, 'A')
+        fresh = cold._hsl_coin_state(side, 'A')
+        assert live['halted'] == fresh['halted']
+        for key in ('realized_pnl', 'tier', 'drawdown_raw'):
+            assert live['last_metrics'][key] == fresh['last_metrics'][key]
+
+
+@pytest.mark.asyncio
+async def test_replay_completion_refreshes_live_sample_time(monkeypatch):
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    now = [180_000]
+    bot.get_exchange_time = lambda: now[0]
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', now[0], 100.0, 0.0, 0.0, 0.0)
+    calls = []
+    async def boundary(bot, timestamp, balance):
+        calls.append(timestamp)
+        if len(calls) == 1:
+            now[0] = 300_000
+            bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', now[0], 100.0, 0.0, 0.0, 0.0)
+            return True
+        return False
+    monkeypatch.setattr(hsl, '_equity_hard_stop_refresh_live_coin_episode_boundaries', boundary)
+    await bot._equity_hard_stop_check_coin()
+    assert calls == [180_000, 300_000]
+    assert bot._hsl_coin_state('long', 'A')['last_metrics']['timestamp_ms'] == 300_000

@@ -2548,8 +2548,17 @@ def _equity_hard_stop_required_fill_history_scope(
             int(now_ms) - cooldown_ms
         ):
             continue
-        if (pside, symbol) not in held_pairs:
-            return True, pnl_start_ms, None
+        pair = (pside, symbol)
+        if pair not in held_pairs and pair not in required_start_by_pair:
+            evidence = _equity_hard_stop_coin_episode_evidence(
+                events_by_pair.get(pair, []), pside, symbol,
+                qty_step=_hsl_qty_step_for_symbol(self, symbol),
+            )
+            bounded_start = evidence.required_start(0.0, cooldown_ms, now_ms=now_ms)
+            if bounded_start is None:
+                return True, pnl_start_ms, None
+            required_start_by_pair[pair] = clamp(bounded_start)
+            required_starts.append(required_start_by_pair[pair])
 
     if not required_starts:
         return False, None, {}
@@ -4474,7 +4483,17 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     continue
                 pside = _equity_hard_stop_fill_pside(event)
                 symbols.add(symbol)
-        bounded_held_replay_starts: dict[tuple[str, str], int] = {}
+        bounded_pair_replay_starts: dict[tuple[str, str], int] = {}
+        if observation is not None:
+            for (pside, symbol), evidence in observation["pairs"].items():
+                cfg = _equity_hard_stop_config(self, pside, symbol)
+                if not cfg["enabled"] or cfg["restart_after_red_policy"] != "always":
+                    continue
+                size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
+                cooldown_ms = max(0, int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000)))
+                boundary = evidence.required_start(size, cooldown_ms, now_ms=now_ms)
+                if boundary is not None:
+                    bounded_pair_replay_starts[(pside, symbol)] = boundary
         for pside, symbol in sorted(current_position_pairs):
             pair_fill_events = fill_events_by_pair.get((pside, symbol), [])
             restart_policy = normalize_hsl_restart_after_red_policy(
@@ -4505,7 +4524,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     math.floor(int(bounded_start_ts) / 60_000) * 60_000
                 )
                 required_replay_start_ts[(pside, symbol)] = replay_ts
-                bounded_held_replay_starts[(pside, symbol)] = int(bounded_start_ts)
+                bounded_pair_replay_starts[(pside, symbol)] = int(bounded_start_ts)
             else:
                 for event in pair_fill_events:
                     remember_required_replay_start(
@@ -4565,7 +4584,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
             symbols.add(symbol)
             panic_replay_pairs.add((pside, symbol))
             required_replay_pairs.add((pside, symbol))
-            bounded_start_ts = bounded_held_replay_starts.get((pside, symbol))
+            bounded_start_ts = bounded_pair_replay_starts.get((pside, symbol))
             if bounded_start_ts is None or minute_ts >= bounded_start_ts:
                 remember_required_replay_start(pside, symbol, minute_ts)
             key = (pside, symbol, minute_ts)
@@ -4843,7 +4862,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
                 contract = self._equity_hard_stop_infer_coin_replay_contract(
                     pside, symbol, pair_fill_events, now_ms
                 )
-                replay_start_boundary_ts = bounded_held_replay_starts.get(
+                replay_start_boundary_ts = bounded_pair_replay_starts.get(
                     (pside, symbol)
                 )
                 if (
@@ -6431,6 +6450,10 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
     for _ in range(replay_limit):
         if not await _equity_hard_stop_refresh_live_coin_episode_boundaries(self, ts_ms, balance):
             break
+        # Replay may finish minutes after this check began. Its Rust runtime has
+        # already consumed that newer observation; never sample it at the old time.
+        ts_ms = int(self.get_exchange_time())
+        balance = float(self.get_raw_balance())
     else:
         raise EpisodeEvidenceUnavailable(
             "episode_observation_not_stable", pside=None, symbol=None,
