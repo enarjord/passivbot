@@ -298,6 +298,24 @@ def test_gpu_runtime_settings_retain_documented_strict_resume_comparison():
     assert any("gpu" in item for item in _resume_config_mismatches(old, config))
 
 
+@pytest.mark.parametrize("legacy_halt", [0.6, 0.8])
+def test_gpu_resume_accepts_missing_additive_drift_defaults(legacy_halt):
+    from optimize import _resume_config_mismatches
+
+    config = _config()
+    config["optimize"]["backend"] = "gpu"
+    config["optimize"]["gpu"]["drift_halt"] = legacy_halt
+    old = _record(config)
+    del old["optimize"]["gpu"]["drift_rank_halt"]
+    del old["optimize"]["gpu"]["drift_objective_tolerance"]
+    assert _resume_config_mismatches(old, config) == []
+    assert "drift_rank_halt" not in old["optimize"]["gpu"]
+    for key, value in (("drift_rank_halt", 0.5), ("drift_objective_tolerance", 0.1)):
+        changed = deepcopy(config)
+        changed["optimize"]["gpu"][key] = value
+        assert any("gpu" in item for item in _resume_config_mismatches(old, changed))
+
+
 @pytest.mark.parametrize("backend", ["deap", "pymoo"])
 @pytest.mark.parametrize("token", ["now", "today", "", None])
 def test_prepared_dynamic_end_date_rollover_rejects_saved_fitness(
