@@ -13,6 +13,7 @@ from optimization.backends.gpu_backend import (
     GPU_DEFAULTS,
     _DriftMonitor,
     _ObjectiveScale,
+    _drift_objective_pair,
     _recover_durable_seed_bootstrap,
     _recover_durable_validations,
     _resolve_options,
@@ -23,7 +24,7 @@ from optimization.backends.gpu_backend import (
 def _monitor(proxy, exact, **options):
     proxy = np.asarray(proxy, dtype=float)
     exact = np.asarray(exact, dtype=float)
-    monitor = _DriftMonitor(dict(GPU_DEFAULTS, **options))
+    monitor = _DriftMonitor(dict(GPU_DEFAULTS, **options), objective_count=proxy.shape[1])
     for i, (p, e) in enumerate(zip(proxy, exact)):
         monitor.add(
             float(np.mean(p)), float(np.mean(e)), probe=i >= 19, proxy_front=i < 19,
@@ -71,7 +72,7 @@ def test_identical_constant_objectives_are_not_disagreement(constant):
 def test_selection_and_monitor_preserve_perfect_opposing_objectives():
     scale = _ObjectiveScale()
     scale.fit(np.array([[-1, -1], [0, 0], [1, 1]]))
-    monitor = _DriftMonitor(GPU_DEFAULTS)
+    monitor = _DriftMonitor(GPU_DEFAULTS, objective_count=2)
     for generation in range(16):
         # The single front point dominates a changing, genuinely off-front
         # population. Both individual objectives vary but their mean is zero.
@@ -136,7 +137,7 @@ def test_missing_objective_evidence_cannot_rescue_scalar_rank(legacy_count):
 
 @pytest.mark.parametrize("bad", [None, [], [float("nan")], [float("inf")], [1, 2], [[1]]])
 def test_invalid_objective_evidence_is_rejected(bad):
-    monitor = _DriftMonitor(GPU_DEFAULTS)
+    monitor = _DriftMonitor(GPU_DEFAULTS, objective_count=1)
     with pytest.raises((TypeError, ValueError), match="objectives"):
         monitor.add(1, 1, probe=True, proxy_front=False,
                     proxy_objectives=bad, exact_objectives=[1])
@@ -145,7 +146,7 @@ def test_invalid_objective_evidence_is_rejected(bad):
 @pytest.mark.parametrize("mismatch_class", ["front", "probe", "all"])
 def test_near_ties_cannot_bypass_constraint_gates(mismatch_class):
     proxy, exact = _near_ties(1e-8)
-    monitor = _DriftMonitor(GPU_DEFAULTS)
+    monitor = _DriftMonitor(GPU_DEFAULTS, objective_count=1)
     for i, (p, e) in enumerate(zip(proxy, exact)):
         probe = i >= 19
         mismatch = mismatch_class == "all" or probe == (mismatch_class == "probe")
@@ -210,7 +211,8 @@ def _entries(monitor, seed=False):
         metadata = dict(
             schema_version=3, proxy_score=row[0], exact_score=row[1], probe=row[2],
             constraint_classification_mismatch=row[3], proxy_front=row[4],
-            proxy_objectives=row[5], exact_objectives=row[6],
+            proxy_objectives=row[5] if len(row) == 7 else None,
+            exact_objectives=row[6] if len(row) == 7 else None,
         )
         metrics = {"gpu_validation": metadata}
         if seed:
@@ -229,10 +231,10 @@ def test_checkpoint_and_durable_tail_reproduce_live_gate(seed):
     entries = _entries(monitor, seed=seed)
     recover = _recover_durable_seed_bootstrap if seed else _recover_durable_validations
     recovered = recover(
-        entries, start_index=110, stop_index=128,
+        entries, start_index=110, stop_index=128, objective_count=1,
         vector_from_entry=lambda entry: [entry["id"]], hash_vector=lambda vector: str(vector),
     )
-    restored = _DriftMonitor(GPU_DEFAULTS)
+    restored = _DriftMonitor(GPU_DEFAULTS, objective_count=1)
     restored.pairs.extend(pickle.loads(pickle.dumps(list(monitor.pairs)[:110])))
     restored.pairs.extend(recovered[-1])
     assert list(restored.pairs) == list(monitor.pairs)
@@ -253,5 +255,53 @@ def test_recovery_rejects_corrupt_new_objective_evidence(seed, corruption):
         metadata["proxy_objectives"] = [1, 2]
     recover = _recover_durable_seed_bootstrap if seed else _recover_durable_validations
     with pytest.raises(RuntimeError, match="per-objective drift evidence"):
-        recover([entry], start_index=0, stop_index=1,
+        recover([entry], start_index=0, stop_index=1, objective_count=1,
                 vector_from_entry=lambda entry: [0], hash_vector=lambda vector: "0")
+
+
+@pytest.mark.parametrize("seed", [False, True])
+def test_supported_infinity_sentinel_keeps_scalar_evidence_and_persists(seed):
+    scale = _ObjectiveScale()
+    scale.fit(np.array([[0.0], [1.0], [2.0]]))
+    monitor = _DriftMonitor(GPU_DEFAULTS, objective_count=1)
+    for i in range(128):
+        raw = np.array([[float("inf") if i == 40 else float(i)]])
+        score = scale.score(raw)[0]
+        proxy, exact = _drift_objective_pair(
+            scale.normalize(raw)[0], scale.normalize(raw)[0],
+            objective_count=1, allow_nonfinite=True,
+        )
+        if i == 40:
+            assert score == 1e6
+            assert proxy is exact is None
+        monitor.add(score, score, probe=i >= 19, proxy_front=i < 19,
+                    proxy_objectives=proxy, exact_objectives=exact)
+    assert monitor.evaluate()["halt_reason"] is None
+    assert monitor.evaluate()["probe_objective_samples"] == 108
+    recover = _recover_durable_seed_bootstrap if seed else _recover_durable_validations
+    rows = recover(
+        _entries(monitor, seed), start_index=0, stop_index=128, objective_count=1,
+        vector_from_entry=lambda entry: [entry["id"]], hash_vector=str,
+    )[-1]
+    assert rows == list(monitor.pairs)
+    assert len(rows[40]) == 5
+
+
+@pytest.mark.parametrize("seed", [False, True])
+def test_recovery_rejects_both_vectors_truncated_to_same_length(seed):
+    values = np.tile([1.0, 2.0], (128, 1))
+    entry = _entries(_monitor(values, values), seed)[0]
+    entry["metrics"]["gpu_validation"].update(proxy_objectives=[1.0], exact_objectives=[1.0])
+    recover = _recover_durable_seed_bootstrap if seed else _recover_durable_validations
+    with pytest.raises(RuntimeError, match="per-objective drift evidence"):
+        recover([entry], start_index=0, stop_index=1, objective_count=2,
+                vector_from_entry=lambda entry: [0], hash_vector=str)
+
+
+def test_checkpoint_rejects_consistently_truncated_vectors():
+    values = np.tile([1.0, 2.0], (128, 1))
+    original = _monitor(values, values)
+    restored = _DriftMonitor(GPU_DEFAULTS, objective_count=2)
+    restored.pairs.extend([(*row[:5], row[5][:1], row[6][:1]) for row in original.pairs])
+    with pytest.raises(ValueError, match="configured objective count"):
+        restored.evaluate()

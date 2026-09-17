@@ -877,7 +877,10 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   they are not independent draws across the original search bounds.
   New `metrics.gpu_validation` records persist the ordered normalized proxy/exact objective
   vectors as schema 3, in both seed screening and evolutionary validation. Checkpoints and
-  durable-tail recovery retain this evidence. Legacy schema 2 records have only scalar evidence
+  durable-tail recovery retain this evidence and validate its length against configured scoring.
+  Supported non-finite metric sentinels keep their existing conservative scalar scores; schema 3
+  records mark both objective vectors `null` and cannot enable the per-objective exception.
+  Legacy schema 2 records have only scalar evidence
   and cannot enable the per-objective exception. A checkpoint already halted by its safety gate
   remains halted; exact Pareto results can seed a fresh run after investigating the disagreement.
   At least eight samples of a validation class are required before its independent low agreement

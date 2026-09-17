@@ -2256,28 +2256,36 @@ class _ObjectiveScale:
         return values.mean(axis=1)
 
 
-def _drift_objective_pair(proxy, exact) -> tuple[list[float], list[float]]:
+def _drift_objective_pair(
+    proxy, exact, *, objective_count: int | None, allow_nonfinite: bool = False
+) -> tuple[list[float] | None, list[float] | None]:
     """Validate normalized, ordered objectives before using or recovering evidence."""
+    if objective_count is None or objective_count <= 0:
+        raise ValueError("GPU drift objectives require a configured objective count")
     proxy = np.asarray(proxy, dtype=np.float64)
     exact = np.asarray(exact, dtype=np.float64)
-    if (
-        proxy.ndim != 1
-        or not proxy.size
-        or proxy.shape != exact.shape
-        or not np.all(np.isfinite(proxy))
-        or not np.all(np.isfinite(exact))
-    ):
-        raise ValueError("GPU drift objectives must be finite, nonempty, aligned vectors")
+    if proxy.shape != (objective_count,) or exact.shape != (objective_count,):
+        raise ValueError("GPU drift objectives must match the configured objective count")
+    if not np.all(np.isfinite(proxy)) or not np.all(np.isfinite(exact)):
+        if allow_nonfinite:
+            # Some supported metrics use infinity for insufficient samples.
+            # Keep their existing conservative scalar score, without granting
+            # the new per-objective continuation exception.
+            return None, None
+        raise ValueError("GPU drift objectives must be finite")
     return proxy.tolist(), exact.tolist()
 
 
-def _recover_drift_objectives(metadata: dict) -> tuple:
+def _recover_drift_objectives(metadata: dict, objective_count: int | None) -> tuple:
     # Schema 2 did not retain objective evidence. Never infer it from scalar means.
     if metadata["schema_version"] == 2:
         return ()
     try:
+        proxy, exact = metadata["proxy_objectives"], metadata["exact_objectives"]
+        if proxy is None and exact is None:
+            return ()
         return _drift_objective_pair(
-            metadata["proxy_objectives"], metadata["exact_objectives"]
+            proxy, exact, objective_count=objective_count
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise RuntimeError("GPU resume found invalid per-objective drift evidence") from exc
@@ -2296,7 +2304,7 @@ class _DriftMonitor:
     MIN_PROBES = MIN_DRIFT_PROBES
     MIN_FRONT_SAMPLES = MIN_DRIFT_PROBES
 
-    def __init__(self, options: dict):
+    def __init__(self, options: dict, *, objective_count: int | None = None):
         self.window = int(options["drift_window"])
         self.minimum = int(options["drift_min_samples"])
         self.constraint_halt = float(options["drift_halt"])
@@ -2308,6 +2316,7 @@ class _DriftMonitor:
             )
         )
         self.pairs: deque[tuple] = deque(maxlen=self.window)
+        self.objective_count = objective_count
 
     def add(
         self,
@@ -2327,7 +2336,9 @@ class _DriftMonitor:
             )
         objectives = ()
         if proxy_objectives is not None or exact_objectives is not None:
-            objectives = _drift_objective_pair(proxy_objectives, exact_objectives)
+            objectives = _drift_objective_pair(
+                proxy_objectives, exact_objectives, objective_count=self.objective_count
+            )
         self.pairs.append(
             (
                 float(proxy_score),
@@ -2404,7 +2415,9 @@ class _DriftMonitor:
             if len(row) not in (5, 7):
                 raise ValueError("GPU drift evidence has an invalid objective layout")
             if len(row) == 7:
-                pair = _drift_objective_pair(row[5], row[6])
+                pair = _drift_objective_pair(
+                    row[5], row[6], objective_count=self.objective_count
+                )
                 if eligible:
                     objective_rows.append(pair)
         if np.any(probe_rank_eligible):
@@ -4093,6 +4106,7 @@ def _recover_durable_validations(
     stop_index: int,
     vector_from_entry,
     hash_vector,
+    objective_count: int | None = None,
 ) -> tuple[set[str], list[tuple]]:
     """Recover candidate identities and safety evidence after a stale checkpoint."""
 
@@ -4149,7 +4163,7 @@ def _recover_durable_validations(
                 probe,
                 classification_mismatch,
                 proxy_front,
-                *_recover_drift_objectives(metadata),
+                *_recover_drift_objectives(metadata, objective_count),
             )
         )
         consumed += 1
@@ -4169,6 +4183,7 @@ def _recover_durable_seed_bootstrap(
     stop_index: int,
     vector_from_entry,
     hash_vector,
+    objective_count: int | None = None,
 ) -> tuple[
     dict[str, dict[str, Any]],
     set[str],
@@ -4267,7 +4282,7 @@ def _recover_durable_seed_bootstrap(
             drift_pairs.append(
                 (
                     proxy_score, exact_score, probe, mismatch, proxy_front,
-                    *_recover_drift_objectives(validation),
+                    *_recover_drift_objectives(validation, objective_count),
                 )
             )
         consumed += 1
@@ -5112,7 +5127,7 @@ def run_backend(
     completed_hashes: set[str] = set()
     seed_bootstrap_payloads = {}
     seed_bootstrap_complete = seed_bootstrap_mode in {"none", "legacy"}
-    drift_monitor = _DriftMonitor(options)
+    drift_monitor = _DriftMonitor(options, objective_count=len(specs))
     persisted_halt_reason = None
     signature = _checkpoint_signature(
         active,
@@ -5232,6 +5247,7 @@ def run_backend(
                     stop_index=recorded_exact,
                     vector_from_entry=vector_from_entry,
                     hash_vector=vector_hash,
+                    objective_count=len(specs),
                 )
                 exact_done += recorded_exact - checkpoint_exact_total
             else:
@@ -5245,6 +5261,7 @@ def run_backend(
                     stop_index=recorded_exact,
                     vector_from_entry=vector_from_entry,
                     hash_vector=vector_hash,
+                    objective_count=len(specs),
                 )
                 seed_bootstrap_payloads.update(recovered_seed_payloads)
                 seed_exact_done += recorded_exact - checkpoint_exact_total
@@ -5582,6 +5599,8 @@ def run_backend(
                                 _proxy_drift_objectives([seed_proxy_metrics[source_index]], specs)
                             )[0],
                             objective_scale.normalize(_exact_drift_objectives(payload))[0],
+                            objective_count=len(specs),
+                            allow_nonfinite=True,
                         )
                         validation_metadata = {
                             "schema_version": 3,
@@ -5767,6 +5786,8 @@ def run_backend(
             proxy_objectives, exact_objectives = _drift_objective_pair(
                 objective_scale.normalize(_proxy_drift_objectives([proxy_metrics], specs))[0],
                 objective_scale.normalize(_exact_drift_objectives(payload))[0],
+                objective_count=len(specs),
+                allow_nonfinite=True,
             )
             record_exact(
                 vector,
