@@ -2359,7 +2359,9 @@ kernel void passivbot_tm_multicoin_side_fill_pass_probe(
     touch_ticks = torch.zeros((3, 2), dtype=torch.int32, device=gpu_device())
     touch_nearest_ticks = torch.zeros(3, dtype=torch.int32, device=gpu_device())
     touch_min_qty_bits = torch.zeros(3, dtype=torch.int32, device=gpu_device())
-    touch_min_qty_relation = torch.zeros(3, dtype=torch.int32, device=gpu_device())
+    touch_min_qty_relation = torch.zeros(
+        3, dtype=torch.int8 if gpu_device() == "cuda" else torch.int32, device=gpu_device()
+    )
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 1.0
     coin_settings[0, 1] = 1.0
@@ -2684,7 +2686,7 @@ kernel void passivbot_tm_multicoin_order_phase_probe(
     )
     touch_min_qty_bits = torch.zeros((2, 1), dtype=torch.int32, device=gpu_device())
     touch_min_qty_relation = torch.zeros(
-        (2, 1), dtype=torch.int32, device=gpu_device()
+        (2, 1), dtype=torch.int8 if gpu_device() == "cuda" else torch.int32, device=gpu_device()
     )
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
@@ -18110,7 +18112,7 @@ kernel void passivbot_tm_multicoin_market_wel_reservation_probe(
         (2, 1), dtype=torch.int32, device=gpu_device()
     )
     touch_min_qty_relation = torch.zeros(
-        (2, 1), dtype=torch.int32, device=gpu_device()
+        (2, 1), dtype=torch.int8 if gpu_device() == "cuda" else torch.int32, device=gpu_device()
     )
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
@@ -18245,7 +18247,7 @@ kernel void passivbot_tm_multicoin_market_unstuck_reservation_probe(
         (2, 1), dtype=torch.int32, device=gpu_device()
     )
     touch_min_qty_relation = torch.zeros(
-        (2, 1), dtype=torch.int32, device=gpu_device()
+        (2, 1), dtype=torch.int8 if gpu_device() == "cuda" else torch.int32, device=gpu_device()
     )
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.001
@@ -18492,7 +18494,7 @@ kernel void passivbot_tm_multicoin_market_reducer_dust_probe(
         (2, 1), dtype=torch.int32, device=gpu_device()
     )
     touch_min_qty_relation = torch.zeros(
-        (2, 1), dtype=torch.int32, device=gpu_device()
+        (2, 1), dtype=torch.int8 if gpu_device() == "cuda" else torch.int32, device=gpu_device()
     )
     coin_settings = torch.zeros((1, 13), dtype=torch.float32, device=gpu_device())
     coin_settings[0, 0] = 0.1

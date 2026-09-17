@@ -398,3 +398,25 @@ def test_cuda_tm_unchunked_blocks_preserve_raw_outputs(cuda, monkeypatch, count,
     assert actual.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(actual[key], baseline[key], err_msg=key)
+
+
+@pytest.mark.parametrize("capacity", [None, 4])
+def test_cuda_multicoin_relation_bytes_preserve_signed_values(cuda, capacity):
+    torch, library_cls = cuda
+    source = '''
+        constant int MAX_COINS = 64;
+        kernel void relations(constant int* touch_min_qty_relation,
+                              device int* output,
+                              uint i [[thread_position_in_grid]]) {
+            output[i] = touch_min_qty_relation[i];
+        }
+    '''
+    assert "const signed char* touch_min_qty_relation" in cuda_source(source, coin_capacity=4)
+    assert "const signed char* touch_min_qty_relation" in cuda_source(source)
+    library = library_cls(source, coin_capacity=capacity)
+    values = torch.tensor([-1, 0, 1] * 50, device="cuda", dtype=torch.int8)
+    output = torch.empty(len(values), device="cuda", dtype=torch.int32)
+    library.relations(values, output, threads=len(values))
+    np.testing.assert_array_equal(output.cpu().numpy(), values.cpu().numpy())
+    with pytest.raises(ValueError, match="signed int8"):
+        library.relations(values.to(torch.int32), output, threads=len(values))

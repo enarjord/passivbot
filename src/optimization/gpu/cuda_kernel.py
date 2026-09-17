@@ -2,7 +2,8 @@
 
 Only address-space qualifiers, the grid index, and the few Metal vector operations
 used by these kernels differ. Multi-coin private arrays may use a smaller validated
-capacity. Strategy expressions remain in the Rust-owned source.
+capacity, and the immutable ternary quantity-relation table uses signed bytes.
+Strategy expressions remain in the Rust-owned source.
 CuPy compiles with NVRTC and shares PyTorch tensors and its current CUDA stream.
 """
 
@@ -102,6 +103,13 @@ def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
     source = source.replace("#include <metal_stdlib>", "")
     source = source.replace("using namespace metal;", "")
     source = re.sub(r"\bconstant\s+(\w+)\s*\*", r"const \1*", source)
+    # The multicoin input packer uses signed bytes for this ternary table.
+    # Integer promotion preserves all strategy expressions and comparisons.
+    source = re.sub(
+        r"\bconst int\*\s+touch_min_qty_relation\b",
+        "const signed char* touch_min_qty_relation",
+        source,
+    )
     source = re.sub(r"\bconstant\b", "constexpr", source)
     source = re.sub(r"\b(?:device|thread)\s+", "", source)
     source = re.sub(r"\binline\b", "__device__ inline", source)
@@ -126,7 +134,12 @@ class CudaShaderLibrary:
 
         self._cupy = cupy
         self._scalar_parameters = {}
+        self._byte_parameters = {}
         for name, signature in re.findall(r"kernel\s+void\s+(\w+)\((.*?)\)\s*\{", source, re.S):
+            self._byte_parameters[name] = {
+                index for index, argument in enumerate(signature.split(","))
+                if re.search(r"\bconstant\s+int\s*\*\s*touch_min_qty_relation\b", argument)
+            }
             self._scalar_parameters[name] = {
                 index: match[1]
                 for index, argument in enumerate(signature.split(","))
@@ -187,6 +200,11 @@ class CudaShaderLibrary:
                 raise ValueError(
                     "CUDA kernel arguments must be contiguous tensors on one CUDA device"
                 )
+            if any(
+                args[index].dtype != torch.int8
+                for index in self._byte_parameters.get(name, ())
+            ):
+                raise ValueError("CUDA multicoin quantity relations must use signed int8 tensors")
             device = args[0].device
             with torch.cuda.device(device), self._cupy.cuda.Device(device.index):
                 stream = self._cupy.cuda.ExternalStream(

@@ -1059,7 +1059,9 @@ def build_mps_multicoin_data(
     touch_ticks = np.empty((candle_count, coin_count, 2), dtype=np.int32)
     touch_nearest_ticks = np.empty((candle_count, coin_count), dtype=np.int32)
     touch_min_qty_bits = np.empty((candle_count, coin_count), dtype=np.int32)
-    touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=np.int32)
+    # Relations encode only -1, 0, +1; CUDA can read them losslessly as bytes.
+    relation_dtype = np.int8 if gpu_device(torch) == "cuda" else np.int32
+    touch_min_qty_relation = np.empty((candle_count, coin_count), dtype=relation_dtype)
     if include_hourly_ranges:
         # A valid log range is always non-negative, so -1.0 is an unambiguous
         # sentinel and avoids a second dense per-candle/per-coin validity tensor.
@@ -1158,7 +1160,7 @@ def build_mps_multicoin_data(
         "touch_nearest_ticks": tensor(touch_nearest_ticks, dtype=torch.int32),
         "touch_min_qty_bits": tensor(touch_min_qty_bits, dtype=torch.int32),
         "touch_min_qty_relation": tensor(
-            touch_min_qty_relation, dtype=torch.int32
+            touch_min_qty_relation, dtype=torch.int8 if relation_dtype == np.int8 else torch.int32
         ),
         "coin_settings": tensor(coin_settings, dtype=torch.float32),
         "n": candle_count,
