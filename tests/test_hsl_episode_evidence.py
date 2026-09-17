@@ -215,3 +215,26 @@ async def test_replay_completion_refreshes_live_sample_time(monkeypatch):
     await bot._equity_hard_stop_check_coin()
     assert calls == [180_000, 300_000]
     assert bot._hsl_coin_state('long', 'A')['last_metrics']['timestamp_ms'] == 300_000
+
+
+@pytest.mark.asyncio
+async def test_corrected_closed_episode_inside_cooldown_requires_replay(monkeypatch):
+    from unittest.mock import AsyncMock
+    bot = make_coin_bot()
+    bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=10.0)
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_coin_boundary_start_ms = 60_000
+    bot.positions = {'A': {'long': {'size': 0.0}, 'short': {'size': 0.0}}}
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=1.0, pnl=0.0)
+              for t, a in [(60_000, 'increase'), (120_000, 'decrease')]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    state = bot._hsl_coin_state('long', 'A')
+    state['pnl_reset_timestamp_ms'] = 120_001
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', 180_000, 100.0, 0.0, 0.0, 0.0)
+    await bot._equity_hard_stop_check_coin()
+    events[-1]['pnl'] = -30.0
+    replay = AsyncMock(return_value=False)
+    monkeypatch.setattr(hsl, '_equity_hard_stop_replay_live_restart', replay)
+    with pytest.raises(hsl.EpisodeEvidenceUnavailable, match='revised_episode_replay_unavailable'):
+        await bot._equity_hard_stop_check_coin()
+    replay.assert_awaited_once_with(bot, 'long', 'A')

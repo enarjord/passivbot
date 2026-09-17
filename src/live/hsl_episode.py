@@ -32,6 +32,7 @@ class EpisodeEvidence:
     realized_prefix: tuple[float, ...]
     unavailable: str | None
     epsilon: float
+    start_ms: int | None = None
 
     @classmethod
     def reconstruct(cls, rows, *, ambiguous=False, epsilon=1e-12):
@@ -74,7 +75,7 @@ class EpisodeEvidence:
             episodes=tuple((start, flat) for start, flat in self.episodes
                            if start <= end_ms and (flat is None or flat >= (start_ms or 0))),
             realized_prefix=tuple(value - baseline for value in self.realized_prefix[first:end + 1]),
-            unavailable=self.unavailable, epsilon=self.epsilon,
+            unavailable=self.unavailable, epsilon=self.epsilon, start_ms=start_ms,
         )
 
     def matches_position(self, size):

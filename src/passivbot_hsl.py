@@ -4780,13 +4780,14 @@ async def _equity_hard_stop_initialize_coin_from_history(
 
         def mark_pair_ready(pside: str, symbol: str) -> None:
             if observation is not None:
-                state = self._hsl_coin_state(pside, symbol)
-                evidence = _equity_hard_stop_live_coin_episode_evidence(
-                    self, self._pnls_manager.get_events(), pside, symbol, state, replay_start_ms
-                )
-                size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
-                if evidence.unavailable is None and evidence.matches_position(size):
-                    state["episode_evidence"] = evidence
+                evidence = observation["pairs"].get((pside, symbol))
+                if evidence is not None:
+                    # Keep the consumed observation, including closed episodes
+                    # whose cooldown can still matter. Later arrivals/corrections
+                    # must compare against these values, not a fresh cache read.
+                    self._hsl_coin_state(pside, symbol)["episode_evidence"] = (
+                        evidence.window(replay_start_ms, now_ms)
+                    )
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
             self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
@@ -6344,11 +6345,18 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                 float((self.positions or {}).get(symbol, {}).get(pside, {}).get("size", 0.0))
             )
             evidence.require_position(current_size, pside=pside, symbol=symbol)
+            basis = _equity_hard_stop_coin_episode_evidence(
+                events, pside, symbol, qty_step=_hsl_qty_step_for_symbol(self, symbol)
+            ).window(start_ms, timestamp_ms)
             previous = state.get("episode_evidence")
+            if previous is not None:
+                # Compare the window actually consumed by this scope. A scoped
+                # replay may discard more history than another scope's window.
+                basis = basis.window(previous.start_ms, timestamp_ms)
             last_sample_ts = int((state["last_metrics"] or {}).get("timestamp_ms", 0))
             if previous is not None and (
-                evidence.rows[:len(previous.rows)] != previous.rows
-                or any(row[0] <= last_sample_ts for row in evidence.rows[len(previous.rows):])
+                basis.rows[:len(previous.rows)] != previous.rows
+                or any(row[0] <= last_sample_ts for row in basis.rows[len(previous.rows):])
             ):
                 # Revised PnL/fees or a late fill changes an already-sampled
                 # episode. Rebuild its Rust runtime from authoritative history.
@@ -6357,7 +6365,7 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         "revised_episode_replay_unavailable", pside=pside, symbol=symbol,
                     )
                 return True
-            state["episode_evidence"] = evidence
+            state["episode_evidence"] = basis
             replay = evidence.rows
             boundaries = [replay[index][0] for index in evidence.flatten_indices]
             if not boundaries:
@@ -6427,9 +6435,7 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                     pside, symbol, flatten_ts, boundary_balance, 0.0, 0.0, 0.0,
                     latch_red=False,
                 )
-                state["episode_evidence"] = _equity_hard_stop_live_coin_episode_evidence(
-                    self, events, pside, symbol, state, start_ms
-                )
+                state["episode_evidence"] = basis
                 logging.info(
                     "[risk] HSL[%s:%s] reset current episode after ordinary flat fill | flat_ts=%s",
                     pside,
