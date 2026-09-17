@@ -1,0 +1,130 @@
+"""Startup/live transitions must consume the same proven fill episode."""
+import pytest
+
+import passivbot_hsl as hsl
+from test_hsl_coin_mode import make_coin_bot, make_fake_pnls_manager
+
+
+@pytest.mark.asyncio
+async def test_startup_proof_survives_clipped_history_with_leading_close():
+    bot = make_coin_bot()
+    bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=1.0)
+    bot.hsl['short'].update(enabled=True, restart_after_red_policy='always', cooldown_minutes_after_red=60.0)
+    now = 10 * 86_400_000
+    bot.get_exchange_time = lambda: now
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    events = [
+        dict(timestamp=now-7_200_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+        dict(timestamp=now-3_000_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-2.0),
+        dict(timestamp=now-90_123, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0, fee_paid=-0.01),
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    async def history(**kwargs):
+        assert kwargs['hsl_replay_start_ms'] == now-3_600_000
+        return {'timeline': [{
+            'timestamp': now-60_000, 'balance': 100.0, 'realized_pnl': -2.01,
+            'realized_pnl_by_coin_pside': {'A': {'long': -2.01, 'short': 0.0}},
+            'unrealized_pnl_by_coin_pside': {'A': {'long': 0.0, 'short': 0.0}},
+        }], 'fill_events': events[1:], 'panic_flatten_events': []}
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_coin_from_history()
+    await bot._equity_hard_stop_check_coin()
+    metrics = bot._hsl_coin_state('long', 'A')['last_metrics']
+    assert metrics['realized_pnl'] == pytest.approx(-0.01)
+    assert bot._hsl_coin_state('long', 'A')['pnl_reset_timestamp_ms'] == events[-1]['timestamp']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['position', 'late_fill', 'pnl', 'fee', 'policy'])
+async def test_history_io_invalidates_changed_observation_before_replacing_protection(change):
+    bot = make_coin_bot()
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0)]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    old_state = bot._hsl_coin_state('long', 'A')
+    old_state['halted'] = True
+    old_state['no_restart_latched'] = True
+    async def history(**kwargs):
+        if change == 'position':
+            bot.positions['A']['long']['size'] = 2.0
+        elif change == 'late_fill':
+            events.append(dict(events[0], timestamp=120_000))
+        elif change == 'pnl':
+            events[0]['pnl'] = -10.0
+        elif change == 'fee':
+            events[0]['fee_paid'] = -0.5
+        else:
+            bot.hsl['long']['restart_after_red_policy'] = 'never'
+        return {'timeline': [], 'fill_events': events, 'panic_flatten_events': []}
+    bot.get_balance_equity_history = history
+    with pytest.raises(hsl.EpisodeEvidenceUnavailable, match='observation_changed_during_replay'):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+    assert bot._hsl_coin_state('long', 'A') is old_state
+    assert old_state['halted'] and old_state['no_restart_latched']
+
+
+def test_episode_evidence_preserves_exact_boundaries_prefixes_and_cooldown_chain():
+    from live.hsl_episode import EpisodeEvidence
+    rows = [(10, 'increase', 1.0, -0.1), (20, 'decrease', 1.0, -2.0),
+            (20, 'increase', 2.0, -0.2), (30, 'decrease', 2.0, 1.0),
+            (100, 'increase', 1.0, -0.1)]
+    evidence = EpisodeEvidence.reconstruct(rows)
+    assert evidence.flatten_indices == (1, 3)
+    assert evidence.sizes == (0.0, 1.0, 0.0, 2.0, 0.0, 1.0)
+    assert evidence.realized_prefix[-1] == pytest.approx(-1.4)
+    assert evidence.required_start(1.0, 70) == 100
+    assert evidence.required_start(1.0, 71) == 10
+    assert evidence.required_start(2.0, 71) is None
+    truncated = EpisodeEvidence.reconstruct(rows[1:])
+    assert truncated.unavailable == 'missing_opening_fill'
+    assert truncated.required_start(1.0, 0) is None
+
+
+def test_episode_evidence_is_equal_for_reordered_normalized_fill_tape():
+    events = [dict(timestamp=t, symbol='A', pside='long', action=action, qty=1.0, pnl=0.0)
+              for t, action in [(100, 'increase'), (200, 'decrease'), (300, 'increase')]]
+    assert hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A') == hsl._equity_hard_stop_coin_episode_evidence(list(reversed(events)), 'long', 'A')
+
+
+def test_projected_episode_retains_opening_quantity_and_pnl_baseline():
+    from live.hsl_episode import EpisodeEvidence
+    full = EpisodeEvidence.reconstruct([(10, 'increase', 2.0, -0.1),
+        (20, 'decrease', 2.0, -2.0), (100, 'increase', 1.0, -0.2)])
+    window = full.window(15, 100)
+    assert window.sizes == (2.0, 0.0, 1.0)
+    assert window.flatten_indices == (0,)
+    assert window.realized_prefix == pytest.approx((0.0, -2.0, -2.2))
+    assert window.unavailable is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['pnl', 'fee', 'late_round_trip'])
+async def test_revised_sampled_evidence_requests_replay_and_preserves_runtime(monkeypatch, change):
+    from unittest.mock import AsyncMock
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0)]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    await bot._equity_hard_stop_check_coin()
+    await bot._equity_hard_stop_check_coin()
+    state = bot._hsl_coin_state('long', 'A')
+    original = state['last_metrics']
+    # Initial check had no state yet; second check recorded the proven tape.
+    if change == 'late_round_trip':
+        events.extend([
+            dict(events[0], timestamp=90_000, action='decrease'),
+            dict(events[0], timestamp=120_000),
+        ])
+    else:
+        events[0]['pnl' if change == 'pnl' else 'fee_paid'] = -1.0
+    replay = AsyncMock(return_value=False)
+    monkeypatch.setattr(hsl, '_equity_hard_stop_replay_live_restart', replay)
+    with pytest.raises(hsl.EpisodeEvidenceUnavailable, match='revised_episode_replay_unavailable'):
+        await bot._equity_hard_stop_check_coin()
+    assert state['last_metrics'] is original
+    replay.assert_awaited_once_with(bot, 'long', 'A')
+    replay.return_value = True
+    with pytest.raises(hsl.EpisodeEvidenceUnavailable, match='episode_observation_not_stable'):
+        await bot._equity_hard_stop_check_coin()
+    assert replay.await_count == 3

@@ -99,6 +99,23 @@ evidence cannot distinguish those cases, the cancellation wave refreshes the fil
 account observation and preserves manual orders if proof remains unavailable. Graceful-stop
 adds to held positions retain their policy semantics.
 
+## Episode Evidence Ownership
+
+`live/hsl_episode.py` owns immutable quantity reconstruction, exact flatten indices,
+PnL prefixes, and cooldown-connected episode ranges. Coverage selection, startup
+replay, and live boundary checks consume this evidence. Candle timestamps are a
+separate projection: rounding a price row never changes an exact fill/PnL boundary.
+A replay window retains the proven opening quantity rather than assuming a clipped
+tape starts flat. Python reconstructs exchange facts; Rust still evaluates risk.
+
+Startup captures value-based fill, position, balance, and HSL-config evidence before
+history I/O and rejects changed observations before replacing protective state.
+The original full tape supplies held-episode boundaries even when returned price
+history starts with a close whose opening fill was discarded. Live checks validate
+current positions again; revisions to already-sampled quantities, PnL, or fees request
+canonical reconstruction before ordinary shared-account planning. Evidence is
+rederived after restart and never persisted as trading authority.
+
 ## Code And Tests
 
 - Replay and live finalization: `src/passivbot_hsl.py`
@@ -109,7 +126,7 @@ adds to held positions retain their policy semantics.
 User-facing behavior and configuration are documented in `../../equity_hard_stop_loss.md` and
 `../../equity_hard_stop_loss_cooldown_contracts.md`.
 
-### Live balance input recovery
+### Live risk input recovery
 
 A numeric current raw/sizing balance that is non-finite or non-positive, or an invalid balance
 in the required reconstructed HSL history, is explicitly unavailable for live risk evaluation.
@@ -140,5 +157,10 @@ and emit no repeated warning. Changed reasons share the same count and deadline;
 the budget. Successful startup initialization, a successful runtime execution operation, or a
 successful active HSL supervisor pass emits recovery and resets the episode. Passing the early
 runtime precheck alone does not reset it, since later risk consumers can still reject inputs.
-Unrelated readiness failures keep their existing policy. This state is not persisted across
+HSL episode-boundary unavailability uses this same recovery owner and finite budget,
+with delays capped at 60 seconds. Structured causes identify missing opening fills,
+ambiguous ordering, position mismatches, or changed replay observations; scoped
+diagnostics include the side and symbol and elapsed blocked time. Protective owners
+retain their own execution pacing during recovery. Unrelated readiness failures keep
+their existing policy. This state is not persisted across
 process restarts; exhausted recovery never asks the outer restart loop to create a new instance.

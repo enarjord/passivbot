@@ -318,6 +318,7 @@ class EventTags:
 class ReasonCodes:
     CURRENT_BALANCE_UNAVAILABLE = "current_balance_unavailable"
     HSL_HISTORY_BALANCE_UNAVAILABLE = "hsl_history_balance_unavailable"
+    HSL_EPISODE_EVIDENCE_UNAVAILABLE = "hsl_episode_evidence_unavailable"
     AUTHORITATIVE_CONFIRMATION = "authoritative_confirmation"
     AUTHORITATIVE_CONFIRMATION_TIMEOUT = "authoritative_confirmation_timeout"
     BALANCE_CHANGED = "balance_changed"

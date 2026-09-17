@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Share fill-derived HSL episode evidence across startup replay and live validation,
+  preserving exact episode boundaries and opening quantities when history is clipped.
+  Reject changed replay observations and reconstruct revised sampled fills. Unavailable
+  episode evidence now uses bounded risk-input recovery with visible causes and
+  continued independently ready protection, instead of an unbounded retry loop.
+
 - Reduce GPU optimizer memory use by sharing full coin selections across suite
   scenarios and losslessly packing CUDA minimum-quantity relations into signed bytes.
   Apple GPU input packing and GPU memory safety limits are unchanged.

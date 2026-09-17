@@ -40,6 +40,7 @@ from live.risk_input_recovery import (
     validate_history_balances,
     validate_history_rows,
 )
+from live.hsl_episode import EpisodeEvidence, EpisodeEvidenceUnavailable
 from live.freshness import ACCOUNT_SURFACES
 from live.diagnostic_safety import bounded_exception_type as _bounded_hsl_exception_type
 from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
@@ -2313,23 +2314,13 @@ def _equity_hard_stop_coin_events_after_reset(
             raise AuthoritativeSurfaceUnavailable(
                 "hsl_episode_boundaries", f"{pside}:{symbol} reset fill cohort is ambiguous"
             )
-        size = 0.0
-        last_boundary_index = None
-        epsilon = _hsl_flat_epsilon(qty_step)
-        for index, event in enumerate(ordered):
-            event_ts = _equity_hard_stop_fill_timestamp_ms(event)
-            if event_ts > boundary_ts:
-                break
-            qty = _equity_hard_stop_fill_replay_qty(event)
-            action = _equity_hard_stop_fill_action(event)
-            if qty is None or action not in {"increase", "decrease"}:
-                break
-            previous_size = size
-            if action == "decrease" and qty > size + epsilon:
-                break
-            size = size + qty if action == "increase" else max(0.0, size - qty)
-            if event_ts == boundary_ts and previous_size > epsilon and size <= epsilon:
-                last_boundary_index = index
+        evidence = _equity_hard_stop_coin_episode_evidence(
+            ordered, pside, symbol, qty_step=qty_step
+        )
+        last_boundary_index = next((
+            index for index in reversed(evidence.flatten_indices)
+            if evidence.rows[index][0] == boundary_ts
+        ), None) if evidence.unavailable is None else None
         if last_boundary_index is None:
             raise AuthoritativeSurfaceUnavailable(
                 "hsl_episode_boundaries",
@@ -2339,16 +2330,15 @@ def _equity_hard_stop_coin_events_after_reset(
     return [event for event in events if _equity_hard_stop_fill_timestamp_ms(event) >= reset_ts]
 
 
-def _equity_hard_stop_coin_replay_events(
+def _equity_hard_stop_coin_episode_evidence(
     fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
-) -> tuple[list[tuple[int, str, float, float]], bool]:
+) -> EpisodeEvidence:
     replay_events: list[tuple[int, str, float, float]] = []
     fill_events, ambiguous = _equity_hard_stop_order_fill_cohorts([
         event for event in fill_events
         if _equity_hard_stop_fill_pside(event) == pside
         and _equity_hard_stop_fill_symbol(event) == symbol
     ])
-    replay_size = 0.0
     flat_epsilon = _hsl_flat_epsilon(qty_step)
     for event in fill_events:
         if _equity_hard_stop_fill_pside(event) != pside:
@@ -2379,14 +2369,37 @@ def _equity_hard_stop_coin_replay_events(
             )
         )
     replay_events.sort(key=lambda item: item[0])
-    for _event_ts, action, qty, _realized_delta in replay_events:
-        if action == "increase":
-            replay_size += qty
-        else:
-            if qty > replay_size + flat_epsilon:
-                ambiguous = True
-            replay_size = max(0.0, replay_size - qty)
-    return replay_events, ambiguous
+    return EpisodeEvidence.reconstruct(
+        replay_events, ambiguous=ambiguous, epsilon=flat_epsilon
+    )
+
+
+def _equity_hard_stop_coin_replay_events(
+    fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
+) -> tuple[list[tuple[int, str, float, float]], bool]:
+    evidence = _equity_hard_stop_coin_episode_evidence(
+        fill_events, pside, symbol, qty_step=qty_step
+    )
+    return list(evidence.rows), evidence.unavailable is not None
+
+
+def _equity_hard_stop_coin_input_observation(self, start_ms):
+    """Value identity, not cache/list identity: late fills and PnL edits invalidate it."""
+    manager = getattr(self, "_pnls_manager", None)
+    if manager is None:
+        return None
+    events = [event for event in manager.get_events()
+              if start_ms is None or _equity_hard_stop_fill_timestamp_ms(event) >= start_ms]
+    pairs = _equity_hard_stop_index_coin_fill_events(events)
+    return {
+        "positions": copy.deepcopy(self.positions),
+        "balance": self.get_raw_balance(),
+        "hsl": copy.deepcopy(self.hsl),
+        "overrides": copy.deepcopy(getattr(self, "coin_overrides", {})),
+        "pairs": {pair: _equity_hard_stop_coin_episode_evidence(
+            tape, *pair, qty_step=_hsl_qty_step_for_symbol(self, pair[1])
+        ) for pair, tape in pairs.items()},
+    }
 
 
 def _equity_hard_stop_coin_bounded_required_replay_start_ts(
@@ -2419,59 +2432,14 @@ def _equity_hard_stop_coin_bounded_required_replay_start_ts(
     )
     if current_size <= flat_epsilon:
         return None
-    replay_events, ambiguous = _equity_hard_stop_coin_replay_events(
-        fill_events,
-        pside,
-        symbol,
-        qty_step=qty_step,
+    evidence = _equity_hard_stop_coin_episode_evidence(
+        fill_events, pside, symbol, qty_step=qty_step,
     )
-    if ambiguous:
-        return None
-
-    episodes: list[tuple[int, Optional[int]]] = []
-    replay_size = 0.0
-    episode_start_ts: Optional[int] = None
-    for event_ts, action, qty, _realized_delta in replay_events:
-        was_flat = replay_size <= flat_epsilon
-        if action == "increase":
-            replay_size += qty
-            if was_flat and replay_size > flat_epsilon:
-                episode_start_ts = int(event_ts)
-        else:
-            replay_size = max(0.0, replay_size - qty)
-            if not was_flat and replay_size <= flat_epsilon:
-                if episode_start_ts is None:
-                    return None
-                episodes.append((int(episode_start_ts), int(event_ts)))
-                episode_start_ts = None
-
-    size_tolerance = max(flat_epsilon, abs(current_size) * 1e-12, 1e-12)
-    if abs(replay_size - current_size) > size_tolerance:
-        return None
-    if episode_start_ts is None:
-        return None
-
-    required_start_ts = int(episode_start_ts)
     cooldown_minutes = float(
         _equity_hard_stop_config(self, pside, symbol)["cooldown_minutes_after_red"]
     )
-    cooldown_ms = (
-        int(round(cooldown_minutes * 60_000.0))
-        if cooldown_minutes > 0.0
-        else 0
-    )
-    if cooldown_ms <= 0:
-        return required_start_ts
-
-    next_episode_start_ts = required_start_ts
-    for previous_start_ts, previous_flatten_ts in reversed(episodes):
-        if previous_flatten_ts is None:
-            return None
-        if int(previous_flatten_ts) + cooldown_ms <= next_episode_start_ts:
-            break
-        required_start_ts = int(previous_start_ts)
-        next_episode_start_ts = int(previous_start_ts)
-    return required_start_ts
+    cooldown_ms = max(0, int(round(cooldown_minutes * 60_000.0)))
+    return evidence.required_start(current_size, cooldown_ms)
 
 
 def _equity_hard_stop_required_fill_history_scope(
@@ -2636,21 +2604,6 @@ def _equity_hard_stop_required_pnl_events(
         ) >= int(pair_start_ms):
             out.append(event)
     return out
-
-
-def _equity_hard_stop_coin_replay_size_at(
-    replay_events: list[tuple[int, str, float, float]], row_ts_ms: int
-) -> float:
-    boundary_ts_ms = int(row_ts_ms) + 60_000
-    size = 0.0
-    for event_ts, action, qty, _realized_delta in replay_events:
-        if int(event_ts) >= boundary_ts_ms:
-            break
-        if action == "increase":
-            size += qty
-        else:
-            size = max(0.0, size - qty)
-    return float(size)
 
 
 def _equity_hard_stop_symbol_supported_for_coin_replay(self, symbol: str) -> bool:
@@ -4324,10 +4277,12 @@ async def _equity_hard_stop_initialize_coin_from_history(
         )
         now_ms = int(self.get_exchange_time())
         configured_start_ms = lookback.balance_history_start_ms(now_ms)
+        # Capture the authoritative observation before price-history I/O. The
+        # retained replay tape cannot prove its own discarded opening fills.
+        observation = _equity_hard_stop_coin_input_observation(self, configured_start_ms)
         history_required, replay_start_ms = (
             self._equity_hard_stop_required_fill_history_start_ms(
-                now_ms,
-                pnl_start_ms=configured_start_ms,
+                now_ms, pnl_start_ms=configured_start_ms,
             )
         )
         if not history_required:
@@ -4463,6 +4418,10 @@ async def _equity_hard_stop_initialize_coin_from_history(
                 }
             compact_pair_values = normalized_pair_values
 
+        if observation != _equity_hard_stop_coin_input_observation(self, configured_start_ms):
+            raise EpisodeEvidenceUnavailable(
+                "observation_changed_during_replay", pside=None, symbol=None,
+            )
         # Reject unavailable balances before replacing any live protective state.
         if compact_replay is not None:
             validate_history_balances(
@@ -4526,20 +4485,27 @@ async def _equity_hard_stop_initialize_coin_from_history(
             )
             bounded_start_ts = None
             if restart_policy == "always":
-                bounded_start_ts = (
-                    _equity_hard_stop_coin_bounded_required_replay_start_ts(
-                        self,
-                        pside,
-                        symbol,
-                        pair_fill_events,
+                evidence = (
+                    observation["pairs"].get((pside, symbol))
+                    if observation is not None else None
+                )
+                if evidence is None:
+                    evidence = _equity_hard_stop_coin_episode_evidence(
+                        pair_fill_events, pside, symbol,
+                        qty_step=_hsl_qty_step_for_symbol(self, symbol),
                     )
+                bounded_start_ts = evidence.required_start(
+                    abs(float(self.positions[symbol][pside]["size"])),
+                    max(0, int(round(float(_equity_hard_stop_config(
+                        self, pside, symbol
+                    )["cooldown_minutes_after_red"]) * 60_000.0))),
                 )
             if bounded_start_ts is not None:
                 replay_ts = int(
                     math.floor(int(bounded_start_ts) / 60_000) * 60_000
                 )
                 required_replay_start_ts[(pside, symbol)] = replay_ts
-                bounded_held_replay_starts[(pside, symbol)] = replay_ts
+                bounded_held_replay_starts[(pside, symbol)] = int(bounded_start_ts)
             else:
                 for event in pair_fill_events:
                     remember_required_replay_start(
@@ -4794,6 +4760,14 @@ async def _equity_hard_stop_initialize_coin_from_history(
             )
 
         def mark_pair_ready(pside: str, symbol: str) -> None:
+            if observation is not None:
+                state = self._hsl_coin_state(pside, symbol)
+                evidence = _equity_hard_stop_live_coin_episode_evidence(
+                    self, self._pnls_manager.get_events(), pside, symbol, state, replay_start_ms
+                )
+                size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
+                if evidence.unavailable is None and evidence.matches_position(size):
+                    state["episode_evidence"] = evidence
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
             self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
@@ -4962,6 +4936,17 @@ async def _equity_hard_stop_initialize_coin_from_history(
                         contract = self._equity_hard_stop_infer_coin_replay_contract(
                             pside, symbol, pair_fill_events, now_ms
                         )
+                episode_evidence = EpisodeEvidence.reconstruct(
+                    replay_events, ambiguous=replay_ambiguous,
+                    epsilon=_hsl_flat_epsilon(qty_step),
+                )
+                if observation is not None:
+                    full_evidence = observation["pairs"].get((pside, symbol))
+                    if full_evidence is not None and full_evidence.unavailable is None:
+                        projected = full_evidence.window(replay_start_ms, now_ms)
+                        if projected.rows == tuple(replay_events):
+                            episode_evidence = projected
+                replay_ambiguous = episode_evidence.unavailable is not None
                 pair_uses_dense_replay = (
                     compact_replay is None
                     or replay_ambiguous
@@ -5054,8 +5039,9 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     )
                     return peak_realized, window_last_realized
 
+                flatten_indices = set(episode_evidence.flatten_indices)
                 replay_event_idx = 0
-                replay_size = 0.0
+                replay_size = episode_evidence.sizes[0]
                 flat_epsilon = _hsl_flat_epsilon(qty_step)
                 ignored_panic_marker_timestamps: set[int] = set()
                 if replay_start_boundary_ts is not None:
@@ -5079,20 +5065,12 @@ async def _equity_hard_stop_initialize_coin_from_history(
                         ]
                         if int(event_ts) >= boundary_ts_ms:
                             break
-                        was_nonflat = replay_size > flat_epsilon
                         realized_delta += float(event_realized_delta)
-                        if action == "increase":
-                            replay_size += qty
-                        else:
-                            replay_size = max(0.0, replay_size - qty)
-                            if was_nonflat and replay_size <= flat_epsilon:
-                                # Preserve every zero crossing in fill order.
-                                # The cumulative realized delta lets the row's
-                                # aggregate realized value be split at the
-                                # exact episode boundary.
-                                flatten_boundaries.append(
-                                    (int(event_ts), float(realized_delta), replay_event_idx)
-                                )
+                        replay_size = episode_evidence.sizes[replay_event_idx + 1]
+                        if replay_event_idx in flatten_indices:
+                            flatten_boundaries.append(
+                                (int(event_ts), float(realized_delta), replay_event_idx)
+                            )
                         replay_event_idx += 1
                     return (
                         float(replay_size),
@@ -6289,6 +6267,21 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
         )
 
 
+def _equity_hard_stop_live_coin_episode_evidence(
+    self, events, pside, symbol, state, start_ms
+):
+    qty_step = _hsl_qty_step_for_symbol(self, symbol)
+    scope_events = _equity_hard_stop_coin_events_after_reset(
+        events, pside, symbol, state.get("pnl_reset_timestamp_ms"), qty_step=qty_step
+    )
+    if start_ms is not None:
+        scope_events = [event for event in scope_events
+                        if _equity_hard_stop_fill_timestamp_ms(event) >= start_ms]
+    return _equity_hard_stop_coin_episode_evidence(
+        scope_events, pside, symbol, qty_step=qty_step
+    )
+
+
 async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
     self, timestamp_ms: int, balance: float
 ) -> bool:
@@ -6325,41 +6318,29 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                 or state["last_metrics"] is None
             ):
                 continue
-            reset_ts = state.get("pnl_reset_timestamp_ms")
-            qty_step = _hsl_qty_step_for_symbol(self, symbol)
-            scope_events = _equity_hard_stop_coin_events_after_reset(
-                events, pside, symbol, reset_ts, qty_step=qty_step
+            evidence = _equity_hard_stop_live_coin_episode_evidence(
+                self, events, pside, symbol, state, start_ms
             )
-            if start_ms is not None:
-                # Startup already proves this coin-always window. Resolve tied
-                # reset cohorts using the full tape first, then exclude old
-                # cache rows that cannot affect the retained episodes.
-                scope_events = [
-                    event for event in scope_events
-                    if _equity_hard_stop_fill_timestamp_ms(event) >= start_ms
-                ]
-            replay, ambiguous = _equity_hard_stop_coin_replay_events(
-                scope_events, pside, symbol, qty_step=qty_step
-            )
-            if ambiguous:
-                raise AuthoritativeSurfaceUnavailable(
-                    "hsl_episode_boundaries", f"{pside}:{symbol} fill tape has ambiguous boundaries"
-                )
-            epsilon = _hsl_flat_epsilon(qty_step)
-            size = 0.0
-            boundaries = []
-            for event_ts, action, qty, _delta in replay:
-                previous_size = size
-                size = size + qty if action == "increase" else max(0.0, size - qty)
-                if previous_size > epsilon and size <= epsilon:
-                    boundaries.append(event_ts)
             current_size = abs(
                 float((self.positions or {}).get(symbol, {}).get(pside, {}).get("size", 0.0))
             )
-            if abs(size - current_size) > max(epsilon, current_size * 1e-12):
-                raise AuthoritativeSurfaceUnavailable(
-                    "hsl_episode_boundaries", f"{pside}:{symbol} fill tape does not match position"
-                )
+            evidence.require_position(current_size, pside=pside, symbol=symbol)
+            previous = state.get("episode_evidence")
+            last_sample_ts = int((state["last_metrics"] or {}).get("timestamp_ms", 0))
+            if previous is not None and (
+                evidence.rows[:len(previous.rows)] != previous.rows
+                or any(row[0] <= last_sample_ts for row in evidence.rows[len(previous.rows):])
+            ):
+                # Revised PnL/fees or a late fill changes an already-sampled
+                # episode. Rebuild its Rust runtime from authoritative history.
+                if not await _equity_hard_stop_replay_live_restart(self, pside, symbol):
+                    raise EpisodeEvidenceUnavailable(
+                        "revised_episode_replay_unavailable", pside=pside, symbol=symbol,
+                    )
+                return True
+            state["episode_evidence"] = evidence
+            replay = evidence.rows
+            boundaries = [replay[index][0] for index in evidence.flatten_indices]
             if not boundaries:
                 continue
             latest_boundary_ts = max(boundaries)
@@ -6427,6 +6408,9 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                     pside, symbol, flatten_ts, boundary_balance, 0.0, 0.0, 0.0,
                     latch_red=False,
                 )
+                state["episode_evidence"] = _equity_hard_stop_live_coin_episode_evidence(
+                    self, events, pside, symbol, state, start_ms
+                )
                 logging.info(
                     "[risk] HSL[%s:%s] reset current episode after ordinary flat fill | flat_ts=%s",
                     pside,
@@ -6439,8 +6423,18 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
 async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
     balance = float(self.get_raw_balance())
     ts_ms = int(self.get_exchange_time())
-    if await _equity_hard_stop_refresh_live_coin_episode_boundaries(self, ts_ms, balance):
-        return None
+    # A successful replay replaces one scope. Re-check all scopes before declaring
+    # the shared account ready; never let the first recovered pair skip the rest.
+    replay_limit = 1 + sum(len(states) for states in getattr(
+        self, "_equity_hard_stop_coin", {}
+    ).values())
+    for _ in range(replay_limit):
+        if not await _equity_hard_stop_refresh_live_coin_episode_boundaries(self, ts_ms, balance):
+            break
+    else:
+        raise EpisodeEvidenceUnavailable(
+            "episode_observation_not_stable", pside=None, symbol=None,
+        )
     out = {}
     symbols = sorted(self._equity_hard_stop_coin_symbols())
     partial_replay = (
