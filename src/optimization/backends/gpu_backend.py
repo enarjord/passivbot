@@ -1989,7 +1989,10 @@ def _gpu_suite_scenario_inputs(proxy_config: dict, suite_evaluator) -> list[dict
             hlcvs, btc, coin_indices = get_data(ctx, exchange)
             values = np.asarray(hlcvs)
             if coin_indices is not None:
-                values = np.take(values, list(coin_indices), axis=1)
+                indices = list(coin_indices)
+                # Keep full, ordered selections as views across suite scenarios.
+                if indices != list(range(values.shape[1])):
+                    values = np.take(values, indices, axis=1)
             values = np.ascontiguousarray(values)
             coin_count = int(values.shape[1])
             _validate_scope_config(

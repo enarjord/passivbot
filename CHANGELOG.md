@@ -11,6 +11,10 @@ since the latest release tag; these features may already be available when insta
   gates and material rank-disagreement checks, add a separate `drift_rank_halt` override, and
   persist objective evidence with score-spread and error diagnostics for reproducible recovery.
 
+- Reduce GPU optimizer memory use by sharing full coin selections across suite
+  scenarios and losslessly packing CUDA minimum-quantity relations into signed bytes.
+  Apple GPU input packing and GPU memory safety limits are unchanged.
+
 - Add `backtest.offline` / `--offline y` for backtests and optimization: reuse cached
   metadata regardless of age, prohibit remote data fetching, verify local coverage,
   and retain data snapshot fingerprints. Live behavior is unchanged.
