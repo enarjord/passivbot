@@ -96,8 +96,8 @@ candles; it does not retain per-span contexts or consecutive-use counters.
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
 
-Numeric non-positive/non-finite current balances and unusable historical HSL balance denominators
-have an explicit live readiness policy in `features/equity_hard_stop_loss.md`: pause ordinary
+Numeric non-positive/non-finite current balances, unusable historical HSL balance denominators,
+and unavailable HSL episode evidence have an explicit live readiness policy in `features/equity_hard_stop_loss.md`: pause ordinary
 planning, retain valid protection, refresh and retry with capped backoff and a finite per-episode
 attempt budget, and expose recovery. Exhaustion stops terminally without full-bot auto-restart.
 This is unavailability, not a substitute input or permission to ignore Rust validation. Shape/type

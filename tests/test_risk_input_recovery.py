@@ -502,3 +502,48 @@ async def test_real_pipeline_risk_attempt_delivery_and_failure_fallback(
         assert events[-1].data["traceback"]["frame_count"] > 0
     finally:
         assert pipeline.close(timeout=2.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('startup', [False, True])
+async def test_episode_evidence_uses_bounded_recovery_and_retains_scope(monkeypatch, startup):
+    from live.hsl_episode import EpisodeEvidenceUnavailable
+    from passivbot_exceptions import FatalBotException
+    bot, clock = make_bot(monkeypatch)
+    bot.config['live']['risk_input_max_attempts'] = 3
+    operation = bot._equity_hard_stop_start_coin_history_replay if startup else bot._equity_hard_stop_check
+    operation.side_effect = EpisodeEvidenceUnavailable('position_mismatch', pside='long', symbol='A')
+    emitted = []
+    monkeypatch.setattr(recovery, '_emit', lambda *args, **kwargs: emitted.append(kwargs))
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    assert emitted[0]['details']['cause'] == 'position_mismatch'
+    assert emitted[0]['details']['symbol'] == 'A'
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    assert operation.await_count == 1
+    await recovery.protect_and_wait(bot)
+    bot._run_halted_hsl_protection_if_active.assert_awaited_once()
+    bot._run_latched_hsl_supervisor_if_active.assert_awaited_once()
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    clock[0] += 10
+    with pytest.raises(FatalBotException, match='without automatic restart'):
+        await recovery.ensure_ready(bot, startup=startup)
+    assert emitted[-1]['details']['action'] == 'stop_without_restart'
+    assert emitted[-1]['details']['blocked_seconds'] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_episode_evidence_recovery_after_late_fill_and_unrelated_surface_is_strict(monkeypatch):
+    from live.hsl_episode import EpisodeEvidenceUnavailable
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+    bot, clock = make_bot(monkeypatch)
+    bot._equity_hard_stop_check.side_effect = EpisodeEvidenceUnavailable('missing_opening_fill', pside='long', symbol='A')
+    assert not await recovery.ensure_ready(bot)
+    clock[0] += 5
+    bot._equity_hard_stop_check.side_effect = None
+    assert await recovery.ensure_ready(bot)
+    assert bot._risk_input_recovery is not None
+    recovery.mark_ready(bot)
+    assert bot._risk_input_recovery is None
+    bot._equity_hard_stop_check.side_effect = AuthoritativeSurfaceUnavailable('positions', 'bad')
+    with pytest.raises(AuthoritativeSurfaceUnavailable):
+        await recovery.ensure_ready(bot)

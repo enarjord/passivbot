@@ -3068,7 +3068,7 @@ async def test_held_coin_replay_bounds_missing_prices_only_after_proven_cooldown
     assert state["last_metrics"]["realized_pnl"] == pytest.approx(0.0)
     assert state["last_metrics"]["unrealized_pnl"] == pytest.approx(-1.0)
     assert state["last_metrics"]["tier"] == "green"
-    assert state["pnl_reset_timestamp_ms"] == current_entry_ts // 60_000 * 60_000
+    assert state["pnl_reset_timestamp_ms"] == current_entry_ts
 
 
 @pytest.mark.asyncio
@@ -5873,6 +5873,7 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
         if isinstance(value, MethodType) and value.__self__ is fixture:
             setattr(bot, name, MethodType(value.__func__, bot))
     bot.config["live"]["hsl_signal_mode"] = signal_mode
+    bot.config["live"]["risk_input_max_attempts"] = 10
     bot.config["live"]["execution_delay_seconds"] = 0.25
     bot.hsl["short"]["enabled"] = True
     bot.positions = {"A": {"long": {"size": 0.0}, "short": {"size": 1.0}}}

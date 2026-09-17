@@ -13523,6 +13523,8 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     from live.state_refresh import AuthoritativeSurfaceUnavailable
 
     bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"risk_input_max_attempts": 10}}
+    bot._monitor_flush_snapshot = AsyncMock()
     bot.balance = 100.0
     bot.stop_signal_received = False
     bot.execution_scheduled = False

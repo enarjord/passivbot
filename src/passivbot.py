@@ -6579,27 +6579,7 @@ class Passivbot:
                         data={"timings_ms": dict(loop_timings_ms)},
                     )
                     break
-                try:
-                    risk_ready = await risk_input_recovery.ensure_ready(self)
-                except state_refresh.AuthoritativeSurfaceUnavailable as exc:
-                    if exc.surface != "hsl_episode_boundaries":
-                        raise
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="hsl_episode_boundaries_unavailable",
-                        data={"reason": exc.reason},
-                    )
-                    if not (
-                        await self._run_halted_hsl_protection_if_active()
-                        or await self._run_latched_hsl_supervisor_if_active(
-                            cycle_id=cycle_id,
-                            loop_timings_ms=loop_timings_ms,
-                        )
-                    ):
-                        await self._sleep_unless_shutdown(
-                            0.5, stage="hsl_episode_boundaries_retry"
-                        )
-                    continue
+                risk_ready = await risk_input_recovery.ensure_ready(self)
                 if not risk_ready:
                     await risk_input_recovery.protect_and_wait(
                         self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
