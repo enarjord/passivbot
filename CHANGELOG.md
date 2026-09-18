@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Allow GPU successive halving to screen named suite scenarios on partial-history rungs.
+  Full-history screens and exact validation retain the complete suite; scenario-specific
+  objectives and limits must remain represented in the early subset.
+
 - Extend opt-in GPU successive halving to Trailing Martingale suites and multicoin runs.
   Recent-history windows share candle tensors, preserve indicator warmup and suite reducers,
   and keep partial results out of exact validation and drift evidence. Compatible NVIDIA
