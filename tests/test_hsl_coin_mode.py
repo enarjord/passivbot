@@ -2082,6 +2082,27 @@ async def test_data_maintainers_own_active_coin_hsl_replay_task():
     assert hourly_task.cancelled()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_none", [False, True])
+async def test_data_maintainers_restart_without_coin_replay_task(explicit_none):
+    bot = Passivbot.__new__(Passivbot)
+    bot.ws_enabled = False
+    bot.maintainers = {}
+    if explicit_none:
+        bot._equity_hard_stop_coin_replay_task = None
+    blocker = asyncio.Event()
+    bot.maintain_hourly_cycle = blocker.wait
+    await bot.start_data_maintainers()
+    first = bot.maintainers["maintain_hourly_cycle"]
+    await bot.start_data_maintainers()
+    second = bot.maintainers["maintain_hourly_cycle"]
+    assert first is not second
+    assert "hsl_coin_replay" not in bot.maintainers
+    bot.stop_data_maintainers(verbose=False)
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert first.cancelled() and second.cancelled()
+
+
 async def _run_parity_history(
     monkeypatch,
     *,

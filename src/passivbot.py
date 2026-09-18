@@ -21487,7 +21487,7 @@ class Passivbot:
         """Spawn background tasks responsible for market metadata and order watching."""
         hsl_replay_task = getattr(self, "_equity_hard_stop_coin_replay_task", None)
         if hasattr(self, "maintainers"):
-            if self.maintainers.get("hsl_coin_replay") is hsl_replay_task:
+            if hsl_replay_task is not None and self.maintainers.get("hsl_coin_replay") is hsl_replay_task:
                 self.maintainers.pop("hsl_coin_replay")
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]

@@ -11,7 +11,8 @@ since the latest release tag; these features may already be available when insta
   order type, potentially before RED, while ordinary trading waits for confirmed exits
   and input recovery. Preserve proven cooldown/manual ownership. Avoid replaying already
   consumed fill boundaries, and report coin-level HSL cooldown and input-recovery state
-  in monitoring snapshots.
+  in monitoring snapshots. Keep maintainer startup/restart safe when no coin-replay
+  task exists.
 
 - Allow GPU successive halving to screen named suite scenarios on partial-history rungs.
   Full-history screens and exact validation retain the complete suite; scenario-specific
