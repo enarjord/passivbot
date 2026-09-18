@@ -6410,6 +6410,10 @@ class Passivbot:
 
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
+                if await risk_input_recovery.protect_before_history_refresh(
+                    self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                ):
+                    continue
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_authoritative_state"
                 )

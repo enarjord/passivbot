@@ -79,10 +79,10 @@ async def test_startup_refreshes_zero_to_funded_without_restart(monkeypatch, cap
     bot.refresh_authoritative_state.side_effect = refresh
     with caplog.at_level(logging.INFO):
         await recovery.wait_for_startup(bot)
-    assert len(refreshes) == 4
+    assert refreshes == [1000.0, 1005.0, 1015.0, 1035.0]
     bot._equity_hard_stop_start_coin_history_replay.assert_awaited_once()
     assert bot._risk_input_recovery is None
-    assert len([r for r in caplog.records if r.levelno == logging.WARNING and "retry_count=" in r.message]) == 2
+    assert len([r for r in caplog.records if r.levelno == logging.WARNING and "retry_count=" in r.message]) == 3
     assert "current_balance_unavailable" in caplog.text
     assert "resume_readiness_checks" in caplog.text
 
@@ -815,3 +815,50 @@ async def test_protective_reader_unavailability_is_classified_before_rust(monkey
         await Passivbot.calc_protective_panic_ideal_orders_orchestrator(
             bot, target_psides_by_symbol={'A': {'short'}},
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('startup', [True, False])
+@pytest.mark.parametrize('exposed', [False, True])
+async def test_history_fetch_backoff_keeps_protective_refresh_running(monkeypatch, startup, exposed):
+    from passivbot import Passivbot
+    bot, clock = make_bot(monkeypatch)
+    bot.config['live']['risk_input_max_attempts'] = 1
+    bot.positions = {'A': {'short': {'size': -1.0 if exposed else 0.0}}}
+    history_times, protective_times = [], []
+    async def history():
+        history_times.append(clock[0])
+        bot._last_authoritative_block_reason = 'fill_history_coverage'
+        return False
+    async def protective():
+        protective_times.append(clock[0])
+        # Keep a partial/unfilled exit beyond its first history retry deadline.
+        if clock[0] >= 1020.0:
+            bot.positions['A']['short']['size'] = 0.0
+        return True
+    async def sleep(seconds, *, stage):
+        clock[0] += seconds
+        if clock[0] >= 1040.0:
+            bot.stop_signal_received = True
+    bot.refresh_authoritative_state = AsyncMock(side_effect=history)
+    bot.refresh_protective_authoritative_state = AsyncMock(side_effect=protective)
+    bot._sleep_unless_shutdown = AsyncMock(side_effect=sleep)
+    bot.live_value = lambda key: 1.0
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot._begin_live_event_cycle = lambda **kwargs: 'test'
+    bot._set_log_silence_watchdog_context = lambda **kwargs: None
+    bot._shutdown_requested = lambda: bot.stop_signal_received
+    bot._handle_execution_loop_failure = AsyncMock(side_effect=AssertionError('unexpected restart path'))
+    bot._emit_live_cycle_degraded = lambda **kwargs: None
+    if startup:
+        await recovery.wait_for_startup(bot)
+    else:
+        await Passivbot.run_execution_loop(bot)
+    assert history_times == ([1000.0, 1025.0, 1035.0] if exposed else [1000.0, 1005.0, 1015.0, 1035.0])
+    assert len(protective_times) > len(history_times)
+    if exposed:
+        assert protective_times[:20] == list(range(1000, 1020))
+        assert bot.execute_order_plan_to_exchange.await_count == 20
+    assert bot._risk_input_recovery.attempts == len(history_times)
+    bot._equity_hard_stop_check.assert_not_awaited()

@@ -361,16 +361,28 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
     await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
 
 
+async def protect_before_history_refresh(bot, *, cycle_id=None, loop_timings_ms=None):
+    """Keep the full fill/history cohort behind its deadline while exits continue."""
+    state = getattr(bot, "_risk_input_recovery", None)
+    if state is None or not bot._equity_hard_stop_enabled():
+        return False
+    if not state.protective_exit_pending and monotonic() >= state.retry_at:
+        return False
+    await protect_and_wait(bot, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms)
+    return True
+
+
 async def wait_for_startup(bot):
     # Maintainers do not exist yet; this owner refreshes account/fill inputs.
-    authoritative_ready = await bot.refresh_authoritative_state()
     while not bot.stop_signal_received:
+        if await protect_before_history_refresh(bot):
+            continue
+        authoritative_ready = await bot.refresh_authoritative_state()
+        if bot.stop_signal_received:
+            return
         if not authoritative_ready:
             defer_authoritative_hsl(bot)
         if authoritative_ready and await ensure_ready(bot, startup=True):
             mark_ready(bot)
             return
         await protect_and_wait(bot)
-        if bot.stop_signal_received:
-            return
-        authoritative_ready = await bot.refresh_authoritative_state()
