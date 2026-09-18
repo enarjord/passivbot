@@ -2678,11 +2678,11 @@ def test_gpu_preparation_preflight_explains_trailing_grid_cpu_fallback():
         )
 
 
-def test_gpu_preparation_preflight_rejects_halving_for_ema_or_suite():
+def test_gpu_preparation_preflight_halving_requires_tm_but_allows_suite():
     config = _long_only_ema_config()
     config["optimize"]["gpu"]["successive_halving"]["enabled"] = True
 
-    with pytest.raises(ValueError, match="single-coin trailing_martingale"):
+    with pytest.raises(ValueError, match="requires trailing_martingale"):
         validate_gpu_preparation_scope(
             config,
             torch_module=_fake_torch_with_mps(),
@@ -2690,12 +2690,11 @@ def test_gpu_preparation_preflight_rejects_halving_for_ema_or_suite():
 
     config = _directional_tm_config(long_enabled=True, short_enabled=False)
     config["optimize"]["gpu"]["successive_halving"]["enabled"] = True
-    with pytest.raises(ValueError, match="non-suite"):
-        validate_gpu_preparation_scope(
-            config,
-            {"enabled": True, "scenarios": []},
-            torch_module=_fake_torch_with_mps(),
-        )
+    validate_gpu_preparation_scope(
+        config,
+        {"enabled": True, "scenarios": []},
+        torch_module=_fake_torch_with_mps(),
+    )
 
 
 def test_gpu_preparation_preflight_rejects_unmodeled_suite_override_early():
@@ -7904,3 +7903,94 @@ def test_gpu_suite_full_selection_reuses_input_across_scenarios(indices):
         np.testing.assert_array_equal(item["hlcvs"], np.take(master[1:11], selected, axis=1))
         assert item["hlcvs"].flags.c_contiguous
         assert np.shares_memory(item["hlcvs"], master) == (selected == [0, 1, 2])
+
+
+@pytest.mark.parametrize("fraction", [0.1, 0.2, 0.33, 0.5])
+def test_suite_halving_routes_every_scenario_window_and_preserves_overrides(fraction):
+    seen = []
+    class Proxy:
+        def __init__(self, size):
+            self.size = size
+        def recent_window_for_history_fraction(self, value):
+            assert value == fraction
+            return self.size // 2, self.size * 3 // 4
+        def evaluate(self, candidates, **kwargs):
+            seen.append((self.size, copy.deepcopy(candidates), kwargs))
+            return [{"adg_strategy_eq": candidate["value"]} for candidate in candidates]
+    class Suite:
+        @staticmethod
+        def score_scenario_results(results):
+            values = [r.metrics["stats"]["adg_strategy_eq"]["mean"] for r in results]
+            return dict(objectives=(-min(values),), unpenalized_objectives=(-min(values),),
+                        constraint_violation=0, suite_metrics={})
+    candidates = [{"value": 1}, {"value": 2}]
+    rows = _evaluate_gpu_suite_proxies(Suite(), [
+        (SimpleNamespace(label="small"), [("a", Proxy(100))], {"value": 3}),
+        (SimpleNamespace(label="large"), [("a", Proxy(200))], {}),
+    ], candidates, history_fraction=fraction)
+    assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-1,), (-2,)]
+    assert seen == [
+        (100, [{"value": 3}, {"value": 3}], dict(history_start_step=50, trade_start_step=75)),
+        (200, candidates, dict(history_start_step=100, trade_start_step=150)),
+    ]
+    assert candidates == [{"value": 1}, {"value": 2}]
+
+
+@pytest.mark.parametrize("fractions,survival,counts", [
+    ([0.25, 0.5, 1.0], 0.1, [1024, 103, 11]),
+    ([0.1, 0.33, 1.0], 0.2, [1024, 205, 41]),
+    ([0.1, 0.2, 0.4, 1.0], 0.2, [1024, 205, 41, 9]),
+    ([0.1, 0.33, 1.0], 0.05, [1024, 52, 8]),
+])
+def test_halving_flexible_ladders_keep_only_full_history_eligible(fractions, survival, counts):
+    calls = []
+    def evaluate(candidates, *, history_fraction):
+        calls.append((len(candidates), history_fraction))
+        return [dict(value=c["value"]) for c in candidates]
+    def fitness(rows):
+        return np.array([[r["value"]] for r in rows]), np.zeros(len(rows))
+    rows, objectives, violations, eligible, trace = _evaluate_successive_halving(
+        [dict(value=i) for i in range(1024)],
+        policy=dict(history_fractions=fractions, survival_fraction=survival, min_survivors=8),
+        evaluate_proxy=evaluate, proxy_fitness=fitness, interrupt_check=lambda: None,
+    )
+    assert calls == list(zip(counts, fractions))
+    np.testing.assert_array_equal(eligible, np.arange(counts[-1]))
+    assert np.isinf(violations[counts[-1]:]).all()
+    assert (violations[eligible] == 0).all()
+
+
+@pytest.mark.parametrize('batching,compatible,expected_batches', [
+    (False, True, [2, 2]), (True, False, [2, 2]), (True, True, [4]),
+])
+def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching, compatible, expected_batches):
+    calls = []
+    class Proxy:
+        def __init__(self, default, key):
+            self.default, self.key = default, key
+            self.last_profile = {'stale': True}
+        def suite_batch_key(self):
+            return self.key
+        def materialize_suite_candidates(self, candidates):
+            return [dict(c, value=c.get('value', self.default)) for c in candidates]
+        def evaluate(self, candidates):
+            calls.append(len(candidates))
+            self.last_profile = {'count': len(candidates)}
+            return [{'adg_strategy_eq': c.get('value', self.default)} for c in candidates]
+    class Suite:
+        @staticmethod
+        def score_scenario_results(results):
+            values = [r.metrics['stats']['adg_strategy_eq']['mean'] for r in results]
+            return dict(objectives=(-min(values),), unpenalized_objectives=(-min(values),),
+                        constraint_violation=0, suite_metrics={})
+    first, second = Proxy(2, 'same'), Proxy(4, 'same' if compatible else None)
+    candidates = [{}, {'value': 5}]
+    rows = _evaluate_gpu_suite_proxies(Suite(), [
+        (SimpleNamespace(label='first'), [('x', first)], {}),
+        (SimpleNamespace(label='second'), [('x', second)], {}),
+    ], candidates, batch_compatible_scenarios=batching)
+    assert calls == expected_batches
+    assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-2,), (-5,)]
+    assert candidates == [{}, {'value': 5}]
+    assert sum(p.last_profile.get('count', 0) for p in [first, second]) == 4
+    assert all('stale' not in p.last_profile for p in [first, second])

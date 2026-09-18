@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Extend opt-in GPU successive halving to Trailing Martingale suites and multicoin runs.
+  Recent-history windows share candle tensors, preserve indicator warmup and suite reducers,
+  and keep partial results out of exact validation and drift evidence. Compatible NVIDIA
+  single-side scenarios share batches so small survivor sets use the GPU more effectively.
+
 - Increase NVIDIA Trailing Martingale multi-coin temporal replay batches to at most
   1,024 candidates, with shorter history chunks preserving per-dispatch work limits.
   Apple GPU batches and strategy calculations retain their existing behavior.
