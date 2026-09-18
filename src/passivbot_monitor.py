@@ -336,6 +336,32 @@ def _monitor_hsl_payload(self, pside: str) -> dict:
         "cooldown_repanic_reset_pending": bool(state.get("cooldown_repanic_reset_pending", False)),
         "last_metrics": dict(last_metrics) if isinstance(last_metrics, dict) else {},
     }
+    signal_mode = getattr(self, "_equity_hard_stop_signal_mode", None)
+    if callable(signal_mode) and signal_mode() == "coin":
+        coins = {}
+        for symbol, coin_state in getattr(self, "_equity_hard_stop_coin", {}).get(pside, {}).items():
+            metrics = coin_state.get("last_metrics") or {}
+            coins[symbol] = {
+                "tier": str(metrics.get("tier", "unknown")),
+                "halted": bool(coin_state.get("halted", False)),
+                "no_restart_latched": bool(coin_state.get("no_restart_latched", False)),
+                "pending_red_since_ms": coin_state.get("pending_red_since_ms"),
+                "cooldown_until_ms": coin_state.get("cooldown_until_ms"),
+                "last_metrics": dict(metrics),
+            }
+        payload["coins"] = coins
+        if coins:
+            tiers = {"disabled": 0, "green": 1, "yellow": 2, "orange": 3, "unknown": 4, "red": 5}
+            payload["tier"] = max((c["tier"] for c in coins.values()), key=lambda t: tiers.get(t, 4))
+            for field in ("halted", "no_restart_latched"):
+                payload[field] = any(c[field] for c in coins.values())
+    recovery = getattr(self, "_risk_input_recovery", None)
+    if recovery is not None:
+        payload["input_recovery"] = {
+            "reason": recovery.reason,
+            "attempts": recovery.attempts,
+            "protective_exit_pending": recovery.protective_exit_pending,
+        }
     return {k: v for k, v in payload.items() if v is not None}
 
 

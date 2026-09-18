@@ -2082,6 +2082,27 @@ async def test_data_maintainers_own_active_coin_hsl_replay_task():
     assert hourly_task.cancelled()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_none", [False, True])
+async def test_data_maintainers_restart_without_coin_replay_task(explicit_none):
+    bot = Passivbot.__new__(Passivbot)
+    bot.ws_enabled = False
+    bot.maintainers = {}
+    if explicit_none:
+        bot._equity_hard_stop_coin_replay_task = None
+    blocker = asyncio.Event()
+    bot.maintain_hourly_cycle = blocker.wait
+    await bot.start_data_maintainers()
+    first = bot.maintainers["maintain_hourly_cycle"]
+    await bot.start_data_maintainers()
+    second = bot.maintainers["maintain_hourly_cycle"]
+    assert first is not second
+    assert "hsl_coin_replay" not in bot.maintainers
+    bot.stop_data_maintainers(verbose=False)
+    await asyncio.gather(first, second, return_exceptions=True)
+    assert first.cancelled() and second.cancelled()
+
+
 async def _run_parity_history(
     monkeypatch,
     *,
@@ -5215,12 +5236,14 @@ async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavail
 
     bot.get_balance_equity_history = unavailable
 
-    with pytest.raises(
-        hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
-    ):
-        await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
-            bot, 300_000, 900.0
-        )
+    for _ in range(2):
+        with pytest.raises(
+            hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
+        ):
+            await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+                bot, 300_000, 900.0
+            )
+        assert state.get("episode_evidence") is None
     assert state["runtime"] is previous_runtime
     assert state["last_metrics"] is previous_metrics
     assert state["pnl_reset_timestamp_ms"] is None
@@ -5904,6 +5927,9 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     bot._run_latched_hsl_supervisor_if_active = MethodType(
         Passivbot._run_latched_hsl_supervisor_if_active, bot
     )
+    # This fixture exercises cooldown execution; bounded RED waves have their
+    # own confirmation/finalization tests in test_risk_input_recovery.
+    bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock()
     bot._run_halted_hsl_protection_if_active = MethodType(
         Passivbot._run_halted_hsl_protection_if_active, bot
     )
@@ -5935,7 +5961,7 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
             bot.stop_signal_received = True
 
     async def stop(seconds, *, stage):
-        if stage == "hsl_cooldown_protection":
+        if stage == "risk_input_protective_exit":
             calls.append("pace")
             assert seconds == 0.25
         else:
@@ -5950,14 +5976,15 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     bot.execute_to_exchange.assert_not_awaited()
     if policy == "panic":
         assert calls == [
+            "refresh",  # Conservative recovery checks fresh exposure first.
             "refresh",
             "plan",
             "execute",
             "pace",
             "refresh",
+            "refresh",
             "plan",
-            "execute",
-            "pace",
+            "execute",  # Shutdown skips the shared pacing delay.
         ]
         assert bot.positions["A"]["short"]["size"] == 0.0
         assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
@@ -5994,7 +6021,8 @@ async def test_deferred_cooldown_protection_requires_ready_scope_and_fresh_accou
 
 
 @pytest.mark.asyncio
-async def test_deferred_cooldown_empty_protective_wave_is_paced():
+@pytest.mark.parametrize("pace", [True, False])
+async def test_deferred_cooldown_empty_protective_wave_is_paced(pace):
     from unittest.mock import AsyncMock
 
     bot = make_coin_bot(policy="panic")
@@ -6010,9 +6038,10 @@ async def test_deferred_cooldown_empty_protective_wave_is_paced():
     bot.execute_order_plan_to_exchange = AsyncMock()
     bot._sleep_unless_shutdown = AsyncMock()
     for _ in range(2):
-        assert await Passivbot._run_halted_hsl_protection_if_active(bot)
-    assert bot._sleep_unless_shutdown.await_count == 2
-    bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
+        assert await Passivbot._run_halted_hsl_protection_if_active(bot, pace=pace)
+    assert bot._sleep_unless_shutdown.await_count == (2 if pace else 0)
+    if pace:
+        bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
     assert state["cooldown_repanic_since_ms"] == 180_000
     assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
 

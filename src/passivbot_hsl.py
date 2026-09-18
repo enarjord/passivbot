@@ -6365,10 +6365,17 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         "revised_episode_replay_unavailable", pside=pside, symbol=symbol,
                     )
                 return True
-            state["episode_evidence"] = basis
             replay = evidence.rows
             boundaries = [replay[index][0] for index in evidence.flatten_indices]
+            if previous is not None:
+                # Replay has already consumed these exact boundaries. The value
+                # comparison above still detects corrections and late arrivals.
+                # Do not repeatedly reconstruct an unchanged historical flatten.
+                consumed = {previous.rows[index][0] for index in previous.flatten_indices}
+                boundaries = [ts for ts in boundaries if ts not in consumed
+                              and (previous.start_ms is None or ts >= previous.start_ms)]
             if not boundaries:
+                state["episode_evidence"] = basis
                 continue
             latest_boundary_ts = max(boundaries)
             for flatten_ts in boundaries:
@@ -6435,13 +6442,14 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                     pside, symbol, flatten_ts, boundary_balance, 0.0, 0.0, 0.0,
                     latch_red=False,
                 )
-                state["episode_evidence"] = basis
+                state["episode_evidence"] = basis.window(basis.start_ms, flatten_ts)
                 logging.info(
                     "[risk] HSL[%s:%s] reset current episode after ordinary flat fill | flat_ts=%s",
                     pside,
                     symbol,
                     flatten_ts,
                 )
+            state["episode_evidence"] = basis
     return False
 
 
@@ -7126,14 +7134,15 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     )
 
 
-async def _equity_hard_stop_run_red_supervisor(self) -> None:
+async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = False) -> None:
     if self._equity_hard_stop_supervisor_running:
         return
     self._equity_hard_stop_supervisor_running = True
     for pside in self._hsl_psides():
         state = self._hsl_state(pside)
-        state["red_flat_confirmations"] = 0
-        state["last_red_progress"] = None
+        if not single_pass:
+            state["red_flat_confirmations"] = 0
+            state["last_red_progress"] = None
     try:
         logging.critical("[risk] entering HSL RED supervisor loop (panic-close until confirmed flat)")
         while not self.stop_signal_received:
@@ -7147,6 +7156,8 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
             if not active_red_psides:
                 return
             if not await self.refresh_protective_authoritative_state():
+                if single_pass:
+                    return
                 await asyncio.sleep(0.5)
                 continue
             validate_current_balances(self)
@@ -7259,12 +7270,14 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
             except Exception as e:
                 logging.error("[risk] RED supervisor execute_to_exchange failed: %s", e)
                 traceback.print_exc()
+            if single_pass:
+                return
             await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
     finally:
         self._equity_hard_stop_supervisor_running = False
 
 
-async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
+async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool = False) -> None:
     if self._equity_hard_stop_supervisor_running:
         return
     self._equity_hard_stop_supervisor_running = True
@@ -7279,6 +7292,8 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
             if not active:
                 return
             if not await self.refresh_protective_authoritative_state():
+                if single_pass:
+                    return
                 await asyncio.sleep(0.5)
                 continue
             validate_current_balances(self)
@@ -7404,6 +7419,8 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
             except Exception as e:
                 logging.error("[risk] coin RED supervisor execute_to_exchange failed: %s", e)
                 traceback.print_exc()
+            if single_pass:
+                return
             await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
     finally:
         self._equity_hard_stop_supervisor_running = False

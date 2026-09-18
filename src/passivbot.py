@@ -103,7 +103,7 @@ from live.event_bus import (
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from runtime_identity import build_runtime_identity, write_runtime_manifest
-from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
+from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -6195,7 +6195,7 @@ class Passivbot:
         await asyncio.sleep(1.0)
         return True
 
-    async def _run_halted_hsl_protection_if_active(self) -> bool:
+    async def _run_halted_hsl_protection_if_active(self, *, pace: bool = True) -> bool:
         """Protect proven cooldown scopes while unrelated episode evidence is unavailable."""
         coin_mode = self._equity_hard_stop_signal_mode() == "coin"
         scopes = []
@@ -6219,7 +6219,7 @@ class Passivbot:
         if not scopes:
             return False
         if not await self.refresh_protective_authoritative_state():
-            return False
+            return not pace  # Recovery must pace an attempted protective owner.
         risk_input_recovery.validate_current_balances(self)
         now_ms = int(self.get_exchange_time())
         panic_needed = False
@@ -6257,7 +6257,7 @@ class Passivbot:
                 or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
             ):
                 if not await self.refresh_protective_authoritative_state():
-                    return False
+                    return not pace
             now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:
             cooldown_until_ms = state["cooldown_until_ms"]
@@ -6344,13 +6344,14 @@ class Passivbot:
                 to_cancel.append(order)
                 cancel_keys.add(key)
         await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
-        await self._sleep_unless_shutdown(
-            float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
-        )
+        if pace:
+            await self._sleep_unless_shutdown(
+                float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
+            )
         return True
 
     async def _run_latched_hsl_supervisor_if_active(
-        self, *, cycle_id: object, loop_timings_ms: dict[str, int]
+        self, *, cycle_id: object, loop_timings_ms: dict[str, int], single_pass: bool = False
     ) -> bool:
         """Run already-latched RED supervision without requiring fill readiness."""
         if not self._equity_hard_stop_enabled():
@@ -6376,7 +6377,10 @@ class Passivbot:
             reason_code=reason_code,
             data={"timings_ms": dict(loop_timings_ms)},
         )
-        await supervisor()
+        if single_pass:
+            await supervisor(single_pass=True)
+        else:
+            await supervisor()
         return True
 
     async def run_execution_loop(self):
@@ -6407,6 +6411,10 @@ class Passivbot:
 
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
+                if await risk_input_recovery.protect_before_history_refresh(
+                    self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                ):
+                    continue
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_authoritative_state"
                 )
@@ -6445,6 +6453,11 @@ class Passivbot:
                     authoritative_block_reason = getattr(
                         self, "_last_authoritative_block_reason", None
                     )
+                    if risk_input_recovery.defer_authoritative_hsl(self):
+                        await risk_input_recovery.protect_and_wait(
+                            self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                        )
+                        continue
                     if authoritative_block_reason in {
                         "pending_pnl",
                         "degraded_pnl",
@@ -16368,12 +16381,11 @@ class Passivbot:
                     targets.setdefault(symbol, set()).add(pside)
         return targets
 
-    async def calc_protective_panic_ideal_orders_orchestrator(self):
+    async def calc_protective_panic_ideal_orders_orchestrator(self, *, target_psides_by_symbol=None):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
-        target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(
-            self
-        )
+        if target_psides_by_symbol is None:
+            target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(self)
         self._protective_panic_reconcile_psides_by_symbol = {
             symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
         }
@@ -16398,10 +16410,23 @@ class Passivbot:
         if not symbols:
             return {}
 
-        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        planning_snapshot = planning_gates.build_protective_planning_snapshot(
-            self, symbols, market_snapshots
-        )
+        try:
+            market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        except MarketSnapshotUnavailable as exc:
+            raise state_refresh.AuthoritativeSurfaceUnavailable(
+                "protective_planning_inputs", "current protective market unavailable"
+            ) from exc
+        try:
+            planning_snapshot = planning_gates.build_protective_planning_snapshot(
+                self, symbols, market_snapshots
+            )
+        except RuntimeError as exc:
+            # Snapshot capture uses RuntimeError for unavailable/stale quotes
+            # and account epochs. Classify before entering Rust, whose output
+            # and validation failures must never become retryable input errors.
+            raise state_refresh.AuthoritativeSurfaceUnavailable(
+                "protective_planning_inputs", "current protective snapshot unavailable"
+            ) from exc
         self._current_planning_snapshot = planning_snapshot
         last_prices = planning_snapshot.last_prices()
         Passivbot._monitor_record_price_ticks(
@@ -20136,9 +20161,12 @@ class Passivbot:
         """Determine which existing orders to cancel and which new ones to place."""
         return await reconciler.calc_orders_to_cancel_and_create(self)
 
-    async def calc_protective_panic_orders_to_cancel_and_create(self):
+    async def calc_protective_panic_orders_to_cancel_and_create(self, *, target_psides_by_symbol=None):
         """Determine protective cancels/reduce-only creates for RED panic supervision."""
-        ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator()
+        ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator(
+            **({"target_psides_by_symbol": target_psides_by_symbol}
+               if target_psides_by_symbol is not None else {})
+        )
         actual_symbols = sorted(
             set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
             | set(ideal_orders)
@@ -21459,7 +21487,7 @@ class Passivbot:
         """Spawn background tasks responsible for market metadata and order watching."""
         hsl_replay_task = getattr(self, "_equity_hard_stop_coin_replay_task", None)
         if hasattr(self, "maintainers"):
-            if self.maintainers.get("hsl_coin_replay") is hsl_replay_task:
+            if hsl_replay_task is not None and self.maintainers.get("hsl_coin_replay") is hsl_replay_task:
                 self.maintainers.pop("hsl_coin_replay")
             self.stop_data_maintainers()
         maintainer_names = ["maintain_hourly_cycle"]

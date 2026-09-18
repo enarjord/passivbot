@@ -1152,6 +1152,11 @@ async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
     assert snap.last == pytest.approx(73.455)
 
 
+def _hostile_market_unavailable(detail):
+    from live.market_snapshot import MarketSnapshotUnavailable
+    return type("ApiKeySecretError", (MarketSnapshotUnavailable,), {})(detail)
+
+
 @pytest.mark.asyncio
 async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplog):
     bot = Passivbot.__new__(Passivbot)
@@ -1159,10 +1164,10 @@ async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplo
     bot.symbol_ids = {}
 
     async def fail_primary(*_args, **_kwargs):
-        raise _hostile_runtime_error("primary token=secret-primary")
+        raise _hostile_market_unavailable("primary token=secret-primary")
 
     async def fail_all_mids(*_args, **_kwargs):
-        raise _hostile_runtime_error("allMids token=secret-mid")
+        raise _hostile_market_unavailable("allMids token=secret-mid")
 
     async def fetch_symbol_tickers(symbols):
         assert symbols == ["BTC/USDC:USDC"]
@@ -1186,8 +1191,8 @@ async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplo
 
     assert snapshots["BTC/USDC:USDC"].last == pytest.approx(100.5)
     messages = "\n".join(record.getMessage() for record in caplog.records)
-    assert "error_type=RuntimeError action=try_all_mids" in messages
-    assert "error_type=RuntimeError action=try_symbol_tickers" in messages
+    assert "error_type=MarketSnapshotUnavailable action=try_all_mids" in messages
+    assert "error_type=MarketSnapshotUnavailable action=try_symbol_tickers" in messages
     assert "ApiKeySecretError" not in messages
     assert "secret-primary" not in messages
     assert "secret-mid" not in messages
@@ -1206,7 +1211,7 @@ async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
     bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
 
     async def fail_symbol_tickers(_symbols):
-        raise _hostile_runtime_error("symbol ticker token=secret-symbol")
+        raise _hostile_market_unavailable("symbol ticker token=secret-symbol")
 
     bot.fetch_tickers_for_symbols = fail_symbol_tickers
 
@@ -1217,7 +1222,7 @@ async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
             )
 
     messages = "\n".join(record.getMessage() for record in caplog.records)
-    assert "error_type=RuntimeError action=fail_if_incomplete" in messages
+    assert "error_type=MarketSnapshotUnavailable action=fail_if_incomplete" in messages
     assert "ApiKeySecretError" not in messages
     assert "secret-symbol" not in messages
 
@@ -1230,9 +1235,9 @@ async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog
     bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
 
     async def fail_primary(*_args, **_kwargs):
-        raise _hostile_runtime_error("primary token=secret-primary")
+        raise _hostile_market_unavailable("primary token=secret-primary")
 
-    fallback_error = _hostile_runtime_error("fallback token=secret-fallback")
+    fallback_error = _hostile_market_unavailable("fallback token=secret-fallback")
 
     async def fail_fallback(*_args, **_kwargs):
         raise fallback_error
@@ -1245,14 +1250,33 @@ async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog
             await bot._get_orchestrator_market_snapshots(["BTC/USDC:USDC"])
 
     assert raised.value.__cause__ is fallback_error
-    assert str(raised.value).endswith("fallback_error=RuntimeError")
+    assert str(raised.value).endswith("fallback_error=MarketSnapshotUnavailable")
     rendered = f"{raised.value}\n" + "\n".join(
         record.getMessage() for record in caplog.records
     )
-    assert "error_type=RuntimeError action=try_explicit_fallback" in rendered
+    assert "error_type=MarketSnapshotUnavailable action=try_explicit_fallback" in rendered
     assert "ApiKeySecretError" not in rendered
     assert "secret-primary" not in rendered
     assert "secret-fallback" not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["all_mids", "symbol_tickers"])
+@pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError])
+async def test_hyperliquid_fallback_preserves_deterministic_failures(stage, error_type):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.symbol_ids = {}
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=AsyncMock(return_value={}))
+    original = error_type("invalid connector metadata")
+    bot.cca = SimpleNamespace(fetch=AsyncMock(return_value={}))
+    bot.fetch_tickers_for_symbols = AsyncMock(return_value={})
+    operation = bot.cca.fetch if stage == "all_mids" else bot.fetch_tickers_for_symbols
+    operation.side_effect = original
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+    with pytest.raises(error_type) as caught:
+        await bot._get_live_market_snapshots(["A"], context="test")
+    assert caught.value is original
 
 
 @pytest.mark.asyncio
@@ -2915,7 +2939,7 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0}}
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -7668,7 +7692,8 @@ async def test_fetch_authoritative_state_staged_snapshot_cleans_up_on_cancelled_
 
 
 @pytest.mark.asyncio
-async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail():
+@pytest.mark.parametrize("degraded", [0, 1])
+async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail(degraded):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
     plan = {"balance", "positions", "open_orders", "fills"}
@@ -7680,7 +7705,7 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
             "open_orders": [],
             "pnls_ok": False,
             "pending_pnl_count": 0,
-            "degraded_pnl_count": 1,
+            "degraded_pnl_count": degraded,
         }
     )
     bot._apply_positions_snapshot = MagicMock()
@@ -7697,9 +7722,9 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
     bot._apply_open_orders_snapshot.assert_not_awaited()
     bot.handle_balance_update.assert_not_awaited()
     bot._finalize_authoritative_refresh_consistency.assert_not_called()
-    assert bot._last_authoritative_block_reason == "degraded_pnl"
+    assert bot._last_authoritative_block_reason == ("degraded_pnl" if degraded else "fills_unavailable")
     assert bot._last_authoritative_pending_pnl_count == 0
-    assert bot._last_authoritative_degraded_pnl_count == 1
+    assert bot._last_authoritative_degraded_pnl_count == degraded
 
 
 @pytest.mark.asyncio
@@ -11566,9 +11591,15 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
     signal_mode,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.config = {"live": {"risk_input_max_attempts": 10}}
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
     bot.balance = 100.0
 
-    async def stop_after_supervision():
+    async def stop_after_supervision(**kwargs):
         bot.stop_signal_received = True
 
     async def fake_refresh_authoritative_state():
@@ -11613,7 +11644,7 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
         if signal_mode == "coin"
         else bot._equity_hard_stop_run_coin_red_supervisor
     )
-    selected.assert_awaited_once_with()
+    selected.assert_awaited_once_with(single_pass=True)
     unselected.assert_not_awaited()
     bot._sleep_unless_shutdown.assert_not_awaited()
 
@@ -13523,6 +13554,9 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     from live.state_refresh import AuthoritativeSurfaceUnavailable
 
     bot = Passivbot.__new__(Passivbot)
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
     bot.config = {"live": {"risk_input_max_attempts": 10}}
     bot._monitor_flush_snapshot = AsyncMock()
     bot.balance = 100.0
@@ -13564,7 +13598,10 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
 async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monkeypatch, failure, permanent):
     from live import risk_input_recovery as recovery
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"risk_input_max_attempts": 3}}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.config = {"live": {"risk_input_max_attempts": 3, "hsl_signal_mode": "coin"}}
     bot.balance = bot.balance_raw = 100.0
     bot.stop_signal_received = False
     bot.debug_mode = True
@@ -13596,7 +13633,10 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
 
     async def sleep(seconds, *, stage):
         clock[0] += seconds
-        assert cycle[0] < 6
+        if permanent and failure == "history" and cycle[0] >= 6:
+            bot.stop_signal_received = True
+        else:
+            assert cycle[0] < 6
 
     async def execute(*, prepare_cycle):
         if failure == "late_balance" and (permanent or cycle[0] == 1):
@@ -13611,6 +13651,12 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
     bot.prepare_planning_universe = AsyncMock()
     bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
     bot.execute_to_exchange = AsyncMock(side_effect=execute)
+    if permanent and failure == "history":
+        await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
+        assert bot._risk_input_recovery.attempts >= 3
+        bot.execute_to_exchange.assert_not_awaited()
+        bot.restart_bot_on_too_many_errors.assert_not_awaited()
+        return
     if permanent:
         with pytest.raises(FatalBotException, match="3/3"):
             await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
@@ -13628,11 +13674,14 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
 async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch):
     from live import risk_input_recovery as recovery
     bot = Passivbot.__new__(Passivbot)
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
     bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0}}
     bot.user_info = {"exchange": "fake"}
     bot.stop_signal_received = False
     bot.debug_mode = True

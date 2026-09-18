@@ -86,7 +86,7 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 
 Incomplete fill coverage follows `../error_contract.md`. A required episode boundary is unavailable
 until supported by fill evidence. Startup replay validates all enabled scope tapes before replacing
-existing protective state. The affected HSL scope remains protective and retries after an
+existing protective state. Unavailable HSL evaluation invokes the conservative exit policy below after an
 authoritative refresh. Flat scopes pending startup price replay retain the existing per-pair
 create gate, leaving unrelated scopes available. Ambiguous required held-episode evidence defers
 ordinary shared-account planning: the startup gate runs after portfolio intent construction and
@@ -130,39 +130,52 @@ User-facing behavior and configuration are documented in `../../equity_hard_stop
 
 ### Live risk input recovery
 
-A numeric current raw/sizing balance that is non-finite or non-positive, or an invalid balance
-in the required reconstructed HSL history, is explicitly unavailable for live risk evaluation.
-Python keeps the process alive and refreshes authoritative account/fill state instead of consuming
-the full-bot restart budget. Recovery has its own finite budget: `live.risk_input_max_attempts`
-(default 10, integer >= 1) counts failed attempts, including the first failure, per episode.
-The final allowed failure raises a terminal `FatalBotException`, so cleanup runs and the process
-stops without another full-bot restart. A value of 1 stops at the first failure. There is no
-unlimited setting. Startup remains unready; runtime ordinary planning waits. No balance is
-clamped to a positive substitute, no required history is discarded, and HSL remains enabled.
-Malformed configuration, payload types/shapes, and unrelated validation errors retain their strict
-failure policy. Rust and individual HSL sample consumers keep their positive-balance guards.
+Unavailable current balances, required historical balances, episode evidence, or
+required fill/PnL readiness block ordinary planning. With HSL enabled, recovery
+must not terminate the protection owner, including after
+`live.risk_input_max_attempts` (default 10). That limit escalates diagnostics to
+errors; capped retries continue. With HSL disabled, the limit retains its terminal
+stop behavior. Malformed configuration, payload shapes/types, and malformed Rust
+output retain their strict failure contracts.
 
-Retry delays grow from 5 seconds to 60 seconds for current balances and 300 seconds for history.
-Account refresh, shutdown observation, and independently ready protection continue between replay
-attempts. Scoped cooldown replays observe the same deadline so protective supervision cannot
-bypass the backoff. History balance validation occurs before clearing live protection; existing
-latched/cooldown state is retained on this failure. Protection may act only with its own required
-inputs; the panic planner also requires positive current balances. Deferral does not fabricate
-replacement strategy orders or new HSL state.
+A loss of HSL evaluation readiness conservatively closes exposed HSL-enabled scopes
+and cancels their resting orders, using a fresh protective account snapshot and
+Rust's existing panic planner. This is an explicit live availability policy: it may
+close earlier than the configured RED threshold. It does not invent a drawdown,
+reset losses, disable HSL, or substitute ordinary strategy intent. Configured panic
+execution type still applies. Proven halted scopes retain their existing
+cooldown/manual-ownership policy and independent protection. Recovery advances
+latched RED supervision one wave per pass so flat confirmations and stop finalization
+continue without monopolizing exits in other scopes.
 
-`risk.input.status` reports the cause, bounded balance values (non-finite values are `null`), first
-invalid historical timestamp/value, invalid-row count, replay window, failed-attempt count, limit
-and delay. Every failed attempt emits a warning; exhaustion emits an error with
-`action=stop_without_restart` and zero retry delay. The first and final failures include bounded
-frame chains without raw exception text, payloads, or locals. Polls during backoff spend no attempt
-and emit no repeated warning. Changed reasons share the same count and deadline; they cannot renew
-the budget. Successful startup initialization, a successful runtime execution operation, or a
-successful active HSL supervisor pass emits recovery and resets the episode. Passing the early
-runtime precheck alone does not reset it, since later risk consumers can still reject inputs.
-HSL episode-boundary unavailability uses this same recovery owner and finite budget,
-with delays capped at 60 seconds. Structured causes identify missing opening fills,
-ambiguous ordering, position mismatches, or changed replay observations; scoped
-diagnostics include the side and symbol and elapsed blocked time. Protective owners
-retain their own execution pacing during recovery. Unrelated readiness failures keep
-their existing policy. This state is not persisted across
-process restarts; exhausted recovery never asks the outer restart loop to create a new instance.
+Protective refresh requires positions, orders, and valid current balances; historical
+repair and its backoff do not gate the exit. A new position or resting entry observed
+during backoff is included. Partial fills and successful submissions do not release
+the exit commitment: another fresh account snapshot must show the relevant positions
+and orders gone before exact history recovery may release ordinary planning. No
+order is sent on stale account state or an invalid current balance. Recovery keeps
+refreshing when those inputs are unavailable; this policy cannot execute through an
+exchange outage and does not install exchange-native stops. Transient connector
+failures and unavailable protective snapshots retain the exit commitment and retry
+inside protection rather than entering full-bot restart handling. An incomplete
+protective account read keeps the same execution cadence. Retryable connector errors
+include network failures and already-gone orders; authentication failures and malformed
+requests propagate. Malformed producer output and configuration remain outside that
+recovery policy. A failed required fill fetch remains unavailable even without a more
+specific pending-PnL, degraded-PnL, or coverage diagnosis.
+
+Retries grow from 5 seconds to 60 seconds for current balances and episode evidence,
+and to 300 seconds for history balances. Startup and runtime defer the full historical
+cohort until that deadline; a pending exit uses protective-only account refreshes
+until confirmed complete. Recovery runs the bounded protective owners first, then
+applies one shared execution delay; owners must not each add another delay. Ticker availability is typed across provider and fallback paths; deterministic connector or metadata failures do not enter this recovery. `risk.input.status` records the cause, attempt count,
+limit, elapsed time, next delay, and `protective_exit_and_retry` action. First and
+limit-reaching failures include bounded tracebacks. Polls within backoff do not
+spend attempts; changing reasons does not renew the budget. Successful owning
+operations reset recovery. This state is not persisted: restart must encounter the
+same unavailable exchange-derived inputs before ordinary trading can resume.
+
+A consumed episode-evidence tape is also the boundary-consumption record. Unchanged
+flatten boundaries already represented in that tape must not trigger another replay.
+Corrections or late fills in the consumed window still invalidate the tape and
+request canonical reconstruction before ordinary planning.

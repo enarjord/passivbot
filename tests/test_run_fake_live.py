@@ -1829,3 +1829,58 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
         if latched
         else {"updated": False, "hsl_ready": False}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['episode', 'history_balance'])
+async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure):
+    """Unavailable historical input cannot strand a previously green live position."""
+    from unittest.mock import AsyncMock
+    from live import risk_input_recovery as recovery
+    from live.hsl_episode import EpisodeEvidenceUnavailable
+    import passivbot_rust as pbr
+    assert not getattr(pbr, '__is_stub__', False)
+    user = f'fake_unready_hsl_{tmp_path.name}'
+    _cleanup_fake_user_state(user)
+    cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
+    cfg['live']['hsl_signal_mode'] = 'coin'
+    cfg['live']['risk_input_max_attempts'] = 1
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps(cfg))
+    scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
+    scenario.pop('assertions', None)
+    scenario['run_initial_cycle'] = True
+    scenario_path = tmp_path / 'scenario.hjson'
+    scenario_path.write_text(hjson.dumps(scenario))
+    captured = {}
+
+    async def fail_and_protect(bot):
+        symbol = 'BTC/USDT:USDT'
+        state = bot._hsl_coin_state('long', symbol)
+        assert state['last_metrics']['tier'] == 'green'
+        assert not state['runtime'].red_latched()
+        await bot.refresh_protective_authoritative_state()
+        assert bot.positions[symbol]['long']['size'] == 5.0
+        exc = (EpisodeEvidenceUnavailable('missing_opening_fill', pside='long', symbol=symbol)
+               if failure == 'episode' else recovery.RiskInputUnavailable('hsl_history_balance_unavailable'))
+        bot._equity_hard_stop_check = AsyncMock(side_effect=exc)
+        assert not await recovery.ensure_ready(bot)
+        await recovery.protect_and_wait(bot)
+        # Actual production planner, reconciliation, execution, and fake fills.
+        await recovery.protect_and_wait(bot)
+        assert bot.positions[symbol]['long']['size'] == 0.0
+        assert not bot._risk_input_recovery.protective_exit_pending
+        assert bot._risk_input_recovery.attempts == 1
+        fills = [f for f in bot.cca.fills if f.get('reduceOnly') and f.get('timestamp', 0) >= bot.cca.now_ms]
+        assert fills
+        captured['flat'] = True
+        return {'protected': True}
+
+    monkeypatch.setattr(run_fake_live_module, '_run_fake_cycle', fail_and_protect)
+    try:
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+                                  max_steps=1, output_dir=str(tmp_path), log_level=1, snapshot_each_step=False)
+        assert await _async_main(args) == 0
+        assert captured['flat']
+    finally:
+        _cleanup_fake_user_state(user)

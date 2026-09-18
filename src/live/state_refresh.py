@@ -141,6 +141,8 @@ async def refresh_authoritative_state_staged(bot) -> bool:
                 bot._last_authoritative_block_reason = "degraded_pnl"
             elif bot._last_authoritative_pending_pnl_count:
                 bot._last_authoritative_block_reason = "pending_pnl"
+            else:
+                bot._last_authoritative_block_reason = "fills_unavailable"
         return False
     prepared_balance_snapshot = None
     if "balance" in plan:
