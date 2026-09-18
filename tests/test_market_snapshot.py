@@ -309,3 +309,24 @@ async def test_market_snapshot_provider_uses_explicit_ticker_source_label():
 
     assert out["HYPE/USDC:USDC"].bid == 42.0
     assert out["HYPE/USDC:USDC"].source == "hyperliquid_all_mids"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('path', ['primary', 'missing_symbol'])
+@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported'])
+async def test_market_snapshot_preserves_permanent_connector_errors(path, kind, caplog):
+    from ccxt.base import errors
+    original = getattr(errors, kind)('api_key=private')
+    async def fail(*args):
+        raise original
+    async def empty():
+        return {}
+    provider = MarketSnapshotProvider(
+        exchange_name='bybit', fetch_tickers=fail if path == 'primary' else empty,
+        fetch_tickers_for_symbols=fail,
+    )
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(type(original)) as caught:
+            await provider.get_snapshots(['A'])
+    assert caught.value is original
+    assert 'api_key=private' not in caplog.text

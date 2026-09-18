@@ -315,9 +315,6 @@ async def protect_unready_hsl(bot):
         # A transient reader/connector failure cannot surrender protection to
         # generic full-bot restart handling. Producer/config defects remain strict.
         _report_protective_unavailability(bot, exc)
-    await bot._sleep_unless_shutdown(
-        float(bot.live_value("execution_delay_seconds")), stage="risk_input_protective_exit",
-    )
     return True
 
 
@@ -338,13 +335,15 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
         current_ready = False
     else:
         current_ready = True
+    protected = False
     if current_ready and bot._equity_hard_stop_enabled():
-        protected = False
         try:
-            protected = await bot._run_halted_hsl_protection_if_active()
+            protected = await bot._run_halted_hsl_protection_if_active(pace=False)
         except RiskInputUnavailable as exc:
+            protected = True
             defer(bot, exc)
         except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
+            protected = True
             _report_protective_unavailability(bot, exc)
         try:
             # One wave lets flat RED scopes finalize without a persistent RED
@@ -353,15 +352,19 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
                 cycle_id=cycle_id, loop_timings_ms=loop_timings_ms or {}, single_pass=True,
             )
         except RiskInputUnavailable as exc:
+            protected = True
             defer(bot, exc)
         except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
+            protected = True
             _report_protective_unavailability(bot, exc)
-        if protected or unready_protected:
-            await bot._monitor_flush_snapshot()
-            return
     await bot._monitor_flush_snapshot()
-    if not unready_protected:
-        await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
+    if not bot.stop_signal_received:
+        if protected or unready_protected:
+            await bot._sleep_unless_shutdown(
+                float(bot.live_value("execution_delay_seconds")), stage="risk_input_protective_exit",
+            )
+        else:
+            await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
 
 
 async def protect_before_history_refresh(bot, *, cycle_id=None, loop_timings_ms=None):

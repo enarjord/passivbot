@@ -412,7 +412,7 @@ async def test_protective_failures_share_budget_and_tracebacks_exclude_raw_text(
     from passivbot_exceptions import FatalBotException
     bot, clock = make_bot(monkeypatch)
     bot.config["live"]["risk_input_max_attempts"] = 2
-    def fail():
+    def fail(**kwargs):
         try:
             raise ValueError("api_key=PRIVATE_VALUE")
         except ValueError:
@@ -671,6 +671,9 @@ async def test_unready_exit_does_not_starve_proven_cooldown_protection(monkeypat
         await recovery.protect_and_wait(bot)
     assert bot._run_halted_hsl_protection_if_active.await_count == 2
     assert bot._run_latched_hsl_supervisor_if_active.await_count == 2
+    assert bot._run_halted_hsl_protection_if_active.await_args.kwargs == {"pace": False}
+    assert bot._sleep_unless_shutdown.await_count == 2
+    assert bot._sleep_unless_shutdown.await_args.args == (0.25,)
     assert bot._run_latched_hsl_supervisor_if_active.await_args.kwargs["single_pass"]
     assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
         'target_psides_by_symbol': {'A': {'short'}},
@@ -748,6 +751,7 @@ async def test_single_pass_red_supervision_preserves_confirmations_and_yields(mo
         assert not bot._equity_hard_stop_supervisor_running
         assert state['red_flat_confirmations'] == (n if flat else 0)
     assert state['halted'] == flat
+    hsl.asyncio.sleep.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -886,3 +890,39 @@ async def test_incomplete_protective_account_uses_execution_cadence(monkeypatch,
     assert bot._risk_input_recovery.protective_exit_pending
     bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
     bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage='risk_input_protective_exit')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported', 'RequestTimeout'])
+@pytest.mark.parametrize('path', ['primary', 'missing_symbol'])
+async def test_real_snapshot_provider_preserves_failure_classification_in_protection(monkeypatch, kind, path):
+    from ccxt.base import errors
+    from market_snapshot import MarketSnapshotProvider
+    from passivbot import Passivbot
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'short': {'size': -1.0}}}
+    bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
+    original = getattr(errors, kind)('connector failure')
+    async def fail(*args):
+        raise original
+    async def empty():
+        return {}
+    provider = MarketSnapshotProvider(
+        exchange_name='bybit', fetch_tickers=fail if path == 'primary' else empty,
+        fetch_tickers_for_symbols=fail,
+    )
+    bot._get_orchestrator_market_snapshots = provider.get_snapshots
+    async def plan(**kwargs):
+        return await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, **kwargs)
+    bot.calc_protective_panic_orders_to_cancel_and_create = plan
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    if kind == 'RequestTimeout':
+        await recovery.protect_and_wait(bot)
+        bot._sleep_unless_shutdown.assert_awaited_once()
+    else:
+        with pytest.raises(type(original)) as caught:
+            await recovery.protect_and_wait(bot)
+        assert caught.value is original
+        bot._sleep_unless_shutdown.assert_not_awaited()
+    assert bot._risk_input_recovery.protective_exit_pending
+    bot.execute_order_plan_to_exchange.assert_not_awaited()

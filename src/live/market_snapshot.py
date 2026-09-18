@@ -6,6 +6,8 @@ import math
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
+from ccxt.base.errors import ExchangeError
+
 from live.diagnostic_safety import bounded_exception_type
 from utils import utc_ms
 
@@ -102,6 +104,8 @@ class MarketSnapshotProvider:
                 len(missing),
                 bounded_exception_type(exc),
             )
+            if isinstance(exc, ExchangeError):
+                raise
             raise RuntimeError(
                 f"[market] ticker snapshot fetch failed for {self.exchange_name}; "
                 f"missing={len(missing)}"
@@ -162,6 +166,8 @@ class MarketSnapshotProvider:
                     len(missing_after),
                     bounded_exception_type(exc),
                 )
+                if isinstance(exc, ExchangeError):
+                    raise
                 raise RuntimeError(
                     f"[market] ticker missing-symbol retry failed for {self.exchange_name}; "
                     f"missing={len(missing_after)}"

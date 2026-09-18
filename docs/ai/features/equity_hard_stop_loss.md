@@ -167,7 +167,8 @@ specific pending-PnL, degraded-PnL, or coverage diagnosis.
 Retries grow from 5 seconds to 60 seconds for current balances and episode evidence,
 and to 300 seconds for history balances. Startup and runtime defer the full historical
 cohort until that deadline; a pending exit uses protective-only account refreshes
-until confirmed complete. Protection keeps the configured execution cadence between attempts. `risk.input.status` records the cause, attempt count,
+until confirmed complete. Recovery runs the bounded protective owners first, then
+applies one shared execution delay; owners must not each add another delay. `risk.input.status` records the cause, attempt count,
 limit, elapsed time, next delay, and `protective_exit_and_retry` action. First and
 limit-reaching failures include bounded tracebacks. Polls within backoff do not
 spend attempts; changing reasons does not renew the budget. Successful owning

@@ -7156,9 +7156,9 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
             if not active_red_psides:
                 return
             if not await self.refresh_protective_authoritative_state():
-                await asyncio.sleep(0.5)
                 if single_pass:
                     return
+                await asyncio.sleep(0.5)
                 continue
             validate_current_balances(self)
             for pside in list(active_red_psides):
@@ -7270,9 +7270,9 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
             except Exception as e:
                 logging.error("[risk] RED supervisor execute_to_exchange failed: %s", e)
                 traceback.print_exc()
-            await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
             if single_pass:
                 return
+            await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
     finally:
         self._equity_hard_stop_supervisor_running = False
 
@@ -7292,9 +7292,9 @@ async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool =
             if not active:
                 return
             if not await self.refresh_protective_authoritative_state():
-                await asyncio.sleep(0.5)
                 if single_pass:
                     return
+                await asyncio.sleep(0.5)
                 continue
             validate_current_balances(self)
             for pside, symbol in list(active):
@@ -7419,9 +7419,9 @@ async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool =
             except Exception as e:
                 logging.error("[risk] coin RED supervisor execute_to_exchange failed: %s", e)
                 traceback.print_exc()
-            await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
             if single_pass:
                 return
+            await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
     finally:
         self._equity_hard_stop_supervisor_running = False
 

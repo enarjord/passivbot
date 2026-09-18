@@ -5940,7 +5940,7 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
             bot.stop_signal_received = True
 
     async def stop(seconds, *, stage):
-        if stage == "hsl_cooldown_protection":
+        if stage == "risk_input_protective_exit":
             calls.append("pace")
             assert seconds == 0.25
         else:
@@ -5963,8 +5963,7 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
             "refresh",
             "refresh",
             "plan",
-            "execute",
-            "pace",
+            "execute",  # Shutdown skips the shared pacing delay.
         ]
         assert bot.positions["A"]["short"]["size"] == 0.0
         assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
@@ -6001,7 +6000,8 @@ async def test_deferred_cooldown_protection_requires_ready_scope_and_fresh_accou
 
 
 @pytest.mark.asyncio
-async def test_deferred_cooldown_empty_protective_wave_is_paced():
+@pytest.mark.parametrize("pace", [True, False])
+async def test_deferred_cooldown_empty_protective_wave_is_paced(pace):
     from unittest.mock import AsyncMock
 
     bot = make_coin_bot(policy="panic")
@@ -6017,9 +6017,10 @@ async def test_deferred_cooldown_empty_protective_wave_is_paced():
     bot.execute_order_plan_to_exchange = AsyncMock()
     bot._sleep_unless_shutdown = AsyncMock()
     for _ in range(2):
-        assert await Passivbot._run_halted_hsl_protection_if_active(bot)
-    assert bot._sleep_unless_shutdown.await_count == 2
-    bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
+        assert await Passivbot._run_halted_hsl_protection_if_active(bot, pace=pace)
+    assert bot._sleep_unless_shutdown.await_count == (2 if pace else 0)
+    if pace:
+        bot._sleep_unless_shutdown.assert_awaited_with(0.75, stage="hsl_cooldown_protection")
     assert state["cooldown_repanic_since_ms"] == 180_000
     assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
 

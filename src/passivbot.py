@@ -6195,7 +6195,7 @@ class Passivbot:
         await asyncio.sleep(1.0)
         return True
 
-    async def _run_halted_hsl_protection_if_active(self) -> bool:
+    async def _run_halted_hsl_protection_if_active(self, *, pace: bool = True) -> bool:
         """Protect proven cooldown scopes while unrelated episode evidence is unavailable."""
         coin_mode = self._equity_hard_stop_signal_mode() == "coin"
         scopes = []
@@ -6344,9 +6344,10 @@ class Passivbot:
                 to_cancel.append(order)
                 cancel_keys.add(key)
         await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
-        await self._sleep_unless_shutdown(
-            float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
-        )
+        if pace:
+            await self._sleep_unless_shutdown(
+                float(self.live_value("execution_delay_seconds")), stage="hsl_cooldown_protection"
+            )
         return True
 
     async def _run_latched_hsl_supervisor_if_active(
