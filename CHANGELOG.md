@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Increase NVIDIA Trailing Martingale multi-coin temporal replay batches to at most
+  1,024 candidates, with shorter history chunks preserving per-dispatch work limits.
+  Apple GPU batches and strategy calculations retain their existing behavior.
+
 - Share fill-derived HSL episode evidence across startup replay and live validation,
   preserving exact episode boundaries and opening quantities when history is clipped.
   Keep proven closed episodes through their cooldown horizon without reopening older history.
