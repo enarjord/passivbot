@@ -420,3 +420,40 @@ def test_cuda_multicoin_relation_bytes_preserve_signed_values(cuda, capacity):
     np.testing.assert_array_equal(output.cpu().numpy(), values.cpu().numpy())
     with pytest.raises(ValueError, match="signed int8"):
         library.relations(values.to(torch.int32), output, threads=len(values))
+
+
+@pytest.mark.parametrize("coins", [3, 28, 64])
+@pytest.mark.parametrize("count", [1023, 1025])
+def test_cuda_temporal_batch_increase_preserves_outputs_and_partial_tail(cuda, coins, count):
+    torch, _ = cuda
+    from tools.gpu_proxy_benchmark import _build_case
+
+    proxy, candidates, *_ = _build_case(
+        "tm-multicoin-overhead", candidates=count, dispatch_batch_size=1024,
+        single_bars=256, multicoin_bars=1513, coins=coins, seed=7,
+    )
+    runner = proxy.runners["long"]
+    runner.max_dispatch_candidate_bars = 1024 * coins * 47
+    matrix = proxy._parameter_matrix(candidates, "long")
+    ends = np.resize(np.asarray([1, 123, 1513], dtype=np.int32), count)
+
+    def evaluate(batch):
+        chunks = []
+        for offset in range(0, count, batch):
+            params = matrix[offset:offset + batch]
+            raw = runner.run(params, end_steps=ends[offset:offset + batch])
+            chunks.append({
+                key: value.cpu().numpy().copy()
+                for key, value in raw.items() if isinstance(value, torch.Tensor)
+            })
+        return {key: np.concatenate([chunk[key] for chunk in chunks]) for key in chunks[0]}
+
+    baseline = evaluate(512)
+    assert baseline
+    # Different candidate partitions also change history chunk boundaries. Reuse
+    # the runner to cover buffer reallocation and the one-candidate final batch.
+    for _ in range(2):
+        actual = evaluate(1024)
+        assert actual.keys() == baseline.keys()
+        for key in baseline:
+            np.testing.assert_array_equal(actual[key], baseline[key], err_msg=key)

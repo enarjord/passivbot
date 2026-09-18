@@ -39,6 +39,7 @@ from optimization.gpu.model import (
     MPS_TM_SINGLE_COIN_CHUNK_CANDIDATES,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATE_STEPS,
     MPS_TM_MULTICOIN_CHUNK_CANDIDATES,
+    CUDA_TM_MULTICOIN_CHUNK_CANDIDATES,
     ProxyMarket,
     ProxyRun,
     TRAILING_MARTINGALE_COIN_OVERRIDE_ALLOWANCE_PCT_COLUMN,
@@ -750,7 +751,7 @@ def _mps_single_coin_dispatch_plan(
 
 def _mps_multicoin_dispatch_plan(
     strategy_kind: str, requested_batch_size: int, *, n_bars: int, n_coins: int,
-    n_sides: int, max_candidate_bars: int,
+    n_sides: int, max_candidate_bars: int, device: str = "mps",
 ) -> tuple[bool, int, int]:
     temporal_chunking = (
         strategy_kind == "trailing_martingale"
@@ -760,8 +761,15 @@ def _mps_multicoin_dispatch_plan(
             requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES
         ) > max_candidate_bars
     )
+    # Keep the temporal activation threshold and Apple allocation cap stable.
+    # CUDA can spread more candidates across SMs; shorter history chunks retain
+    # the same per-dispatch work envelope while bounding additional state.
+    chunk_candidates = (
+        CUDA_TM_MULTICOIN_CHUNK_CANDIDATES
+        if device == "cuda" else MPS_TM_MULTICOIN_CHUNK_CANDIDATES
+    )
     dispatch_candidates = (
-        min(requested_batch_size, MPS_TM_MULTICOIN_CHUNK_CANDIDATES)
+        min(requested_batch_size, chunk_candidates)
         if temporal_chunking else requested_batch_size
     )
     dispatch_history = (
@@ -3087,6 +3095,7 @@ class MpsMulticoinProxy:
                 self.strategy_kind, self.batch_size, n_bars=len(values),
                 n_coins=coin_count, n_sides=len(enabled_sides),
                 max_candidate_bars=self.max_dispatch_candidate_bars,
+                device=gpu_device(torch),
             )
         )
         if self.temporal_chunking:
