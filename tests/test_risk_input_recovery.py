@@ -30,11 +30,12 @@ def make_bot(monkeypatch, *, hsl=True):
         _monitor_flush_snapshot=AsyncMock(),
         refresh_authoritative_state=AsyncMock(return_value=True),
     )
+    bot.live_value = lambda key: 5.0
     bot.get_raw_balance = lambda: bot.balance_raw
     bot.get_hysteresis_snapped_balance = lambda: bot.balance
 
     async def sleep(seconds, *, stage):
-        assert stage == "risk_inputs_waiting"
+        assert stage in {"risk_inputs_waiting", "risk_input_protective_exit"}
         clock[0] += seconds
 
     bot._sleep_unless_shutdown = AsyncMock(side_effect=sleep)
@@ -635,7 +636,7 @@ async def test_unready_exit_requires_fresh_account_and_cancels_flat_entries(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('reason', ['pending_pnl', 'degraded_pnl', 'fill_history_coverage', 'balance_consistency_check'])
+@pytest.mark.parametrize('reason', ['pending_pnl', 'degraded_pnl', 'fill_history_coverage', 'balance_consistency_check', 'fills_unavailable'])
 async def test_startup_historical_readiness_failure_still_exits_exposure(monkeypatch, reason):
     bot, clock = make_bot(monkeypatch)
     bot.positions = {'A': {'short': {'size': -1.0}}}
@@ -751,9 +752,9 @@ async def test_single_pass_red_supervision_preserves_confirmations_and_yields(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stage', ['refresh', 'plan', 'execute'])
-@pytest.mark.parametrize('failure', ['network', 'snapshot', 'restart', 'timeout'])
+@pytest.mark.parametrize('failure', ['network', 'snapshot', 'restart', 'timeout', 'order_not_found'])
 async def test_protective_transient_failure_keeps_exit_and_retries(monkeypatch, caplog, stage, failure):
-    from ccxt.base.errors import NetworkError
+    from ccxt.base.errors import NetworkError, OrderNotFound
     from passivbot_exceptions import RestartBotException
     from live.state_refresh import AuthoritativeSurfaceUnavailable
     bot, _ = make_bot(monkeypatch)
@@ -766,7 +767,8 @@ async def test_protective_transient_failure_keeps_exit_and_retries(monkeypatch, 
     assert not await recovery.ensure_ready(bot)
     exc = {'network': NetworkError('api_key=private'),
            'snapshot': AuthoritativeSurfaceUnavailable('protective_planning_inputs', 'api_key=private'),
-           'restart': RestartBotException('api_key=private'), 'timeout': TimeoutError('api_key=private')}[failure]
+           'restart': RestartBotException('api_key=private'), 'timeout': TimeoutError('api_key=private'),
+           'order_not_found': OrderNotFound('api_key=private')}[failure]
     operation = {'refresh': bot.refresh_protective_authoritative_state,
                  'plan': bot.calc_protective_panic_orders_to_cancel_and_create,
                  'execute': bot.execute_order_plan_to_exchange}[stage]
@@ -783,14 +785,16 @@ async def test_protective_transient_failure_keeps_exit_and_retries(monkeypatch, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('kind', ['fatal', 'value', 'type', 'runtime'])
+@pytest.mark.parametrize('kind', ['fatal', 'value', 'type', 'runtime', 'authentication', 'bad_request', 'invalid_order'])
 async def test_protective_producer_defects_still_propagate(monkeypatch, kind):
     from passivbot_exceptions import FatalBotException
+    from ccxt.base.errors import AuthenticationError, BadRequest, InvalidOrder
     bot, _ = make_bot(monkeypatch)
     bot.positions = {'A': {'short': {'size': -1.0}}}
     bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
     error_type = {'fatal': FatalBotException, 'value': ValueError,
-                  'type': TypeError, 'runtime': RuntimeError}[kind]
+                  'type': TypeError, 'runtime': RuntimeError, 'authentication': AuthenticationError,
+                  'bad_request': BadRequest, 'invalid_order': InvalidOrder}[kind]
     bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(side_effect=error_type('invalid producer'))
     with pytest.raises(error_type):
         await recovery.protect_and_wait(bot)
@@ -820,7 +824,8 @@ async def test_protective_reader_unavailability_is_classified_before_rust(monkey
 @pytest.mark.asyncio
 @pytest.mark.parametrize('startup', [True, False])
 @pytest.mark.parametrize('exposed', [False, True])
-async def test_history_fetch_backoff_keeps_protective_refresh_running(monkeypatch, startup, exposed):
+@pytest.mark.parametrize('reason', ['fill_history_coverage', 'fills_unavailable'])
+async def test_history_fetch_backoff_keeps_protective_refresh_running(monkeypatch, startup, exposed, reason):
     from passivbot import Passivbot
     bot, clock = make_bot(monkeypatch)
     bot.config['live']['risk_input_max_attempts'] = 1
@@ -828,7 +833,7 @@ async def test_history_fetch_backoff_keeps_protective_refresh_running(monkeypatc
     history_times, protective_times = [], []
     async def history():
         history_times.append(clock[0])
-        bot._last_authoritative_block_reason = 'fill_history_coverage'
+        bot._last_authoritative_block_reason = reason
         return False
     async def protective():
         protective_times.append(clock[0])
@@ -862,3 +867,22 @@ async def test_history_fetch_backoff_keeps_protective_refresh_running(monkeypatc
         assert bot.execute_order_plan_to_exchange.await_count == 20
     assert bot._risk_input_recovery.attempts == len(history_times)
     bot._equity_hard_stop_check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('unavailable', ['false', 'invalid_balance'])
+async def test_incomplete_protective_account_uses_execution_cadence(monkeypatch, unavailable):
+    bot, clock = make_bot(monkeypatch)
+    bot.positions = {'A': {'short': {'size': -1.0}}}
+    bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
+    bot.live_value = lambda key: 0.25
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock()
+    if unavailable == 'false':
+        bot.refresh_protective_authoritative_state.return_value = False
+    else:
+        bot.balance_raw = 0.0
+    await recovery.protect_and_wait(bot)
+    assert clock[0] == 1000.25
+    assert bot._risk_input_recovery.protective_exit_pending
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage='risk_input_protective_exit')

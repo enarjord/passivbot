@@ -6452,17 +6452,17 @@ class Passivbot:
                     authoritative_block_reason = getattr(
                         self, "_last_authoritative_block_reason", None
                     )
+                    if risk_input_recovery.defer_authoritative_hsl(self):
+                        await risk_input_recovery.protect_and_wait(
+                            self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                        )
+                        continue
                     if authoritative_block_reason in {
                         "pending_pnl",
                         "degraded_pnl",
                         "fill_history_coverage",
                         "balance_consistency_check",
                     }:
-                        if risk_input_recovery.defer_authoritative_hsl(self):
-                            await risk_input_recovery.protect_and_wait(
-                                self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
-                            )
-                            continue
                         if (
                             authoritative_block_reason
                             == "balance_consistency_check"

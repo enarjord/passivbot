@@ -13,7 +13,7 @@ import numpy as np
 
 from config.access import require_live_value
 from passivbot_exceptions import FatalBotException, RestartBotException
-from ccxt.base.errors import BaseError as ExchangeError
+from ccxt.base.errors import NetworkError, OrderNotFound
 from live.diagnostic_safety import bounded_traceback_detail, bounded_exception_type
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from live.event_bus import EventTypes, ReasonCodes, LiveEvent, emit_event, format_console_event
@@ -193,6 +193,7 @@ def defer_authoritative_hsl(bot):
     reason = getattr(bot, "_last_authoritative_block_reason", None)
     if not bot._equity_hard_stop_enabled() or reason not in {
         "pending_pnl", "degraded_pnl", "fill_history_coverage", "balance_consistency_check",
+        "fills_unavailable",
     }:
         return False
     defer(bot, RiskInputUnavailable(ReasonCodes.HSL_EPISODE_EVIDENCE_UNAVAILABLE, cause=reason))
@@ -297,19 +298,20 @@ async def protect_unready_hsl(bot):
     if state is None:
         return False
     try:
-        if not await bot.refresh_protective_authoritative_state():
-            return False
-        validate_current_balances(bot)
-        targets = _unready_hsl_targets(bot)
-        if not targets:
-            state.protective_exit_pending = False
-            return False
-        state.protective_exit_pending = True
-        to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
-            target_psides_by_symbol=targets,
-        )
-        await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
-    except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+        if await bot.refresh_protective_authoritative_state():
+            validate_current_balances(bot)
+            targets = _unready_hsl_targets(bot)
+            if not targets:
+                state.protective_exit_pending = False
+                return False
+            state.protective_exit_pending = True
+            to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
+                target_psides_by_symbol=targets,
+            )
+            await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+    except RiskInputUnavailable as exc:
+        defer(bot, exc)
+    except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
         # A transient reader/connector failure cannot surrender protection to
         # generic full-bot restart handling. Producer/config defects remain strict.
         _report_protective_unavailability(bot, exc)
@@ -326,7 +328,7 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             unready_protected = await protect_unready_hsl(bot)
         except RiskInputUnavailable as exc:
             defer(bot, exc)
-        except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+        except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
             _report_protective_unavailability(bot, exc)
     # The existing panic planner also needs positive current balances. Do not
     # feed it stale/fabricated denominators when the account itself is invalid.
@@ -342,7 +344,7 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             protected = await bot._run_halted_hsl_protection_if_active()
         except RiskInputUnavailable as exc:
             defer(bot, exc)
-        except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+        except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
             _report_protective_unavailability(bot, exc)
         try:
             # One wave lets flat RED scopes finalize without a persistent RED
@@ -352,13 +354,14 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             )
         except RiskInputUnavailable as exc:
             defer(bot, exc)
-        except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+        except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
             _report_protective_unavailability(bot, exc)
         if protected or unready_protected:
             await bot._monitor_flush_snapshot()
             return
     await bot._monitor_flush_snapshot()
-    await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
+    if not unready_protected:
+        await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
 
 
 async def protect_before_history_refresh(bot, *, cycle_id=None, loop_timings_ms=None):

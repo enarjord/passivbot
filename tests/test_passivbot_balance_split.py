@@ -2915,7 +2915,7 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0}}
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -7668,7 +7668,8 @@ async def test_fetch_authoritative_state_staged_snapshot_cleans_up_on_cancelled_
 
 
 @pytest.mark.asyncio
-async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail():
+@pytest.mark.parametrize("degraded", [0, 1])
+async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail(degraded):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
     plan = {"balance", "positions", "open_orders", "fills"}
@@ -7680,7 +7681,7 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
             "open_orders": [],
             "pnls_ok": False,
             "pending_pnl_count": 0,
-            "degraded_pnl_count": 1,
+            "degraded_pnl_count": degraded,
         }
     )
     bot._apply_positions_snapshot = MagicMock()
@@ -7697,9 +7698,9 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fa
     bot._apply_open_orders_snapshot.assert_not_awaited()
     bot.handle_balance_update.assert_not_awaited()
     bot._finalize_authoritative_refresh_consistency.assert_not_called()
-    assert bot._last_authoritative_block_reason == "degraded_pnl"
+    assert bot._last_authoritative_block_reason == ("degraded_pnl" if degraded else "fills_unavailable")
     assert bot._last_authoritative_pending_pnl_count == 0
-    assert bot._last_authoritative_degraded_pnl_count == 1
+    assert bot._last_authoritative_degraded_pnl_count == degraded
 
 
 @pytest.mark.asyncio
@@ -13656,7 +13657,7 @@ async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch
     bot._runtime_manifest_written = True
     bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0}}
     bot.user_info = {"exchange": "fake"}
     bot.stop_signal_received = False
     bot.debug_mode = True

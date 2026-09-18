@@ -157,8 +157,12 @@ order is sent on stale account state or an invalid current balance. Recovery kee
 refreshing when those inputs are unavailable; this policy cannot execute through an
 exchange outage and does not install exchange-native stops. Transient connector
 failures and unavailable protective snapshots retain the exit commitment and retry
-inside protection rather than entering full-bot restart handling. Malformed producer
-output and configuration remain outside that recovery policy.
+inside protection rather than entering full-bot restart handling. An incomplete
+protective account read keeps the same execution cadence. Retryable connector errors
+include network failures and already-gone orders; authentication failures and malformed
+requests propagate. Malformed producer output and configuration remain outside that
+recovery policy. A failed required fill fetch remains unavailable even without a more
+specific pending-PnL, degraded-PnL, or coverage diagnosis.
 
 Retries grow from 5 seconds to 60 seconds for current balances and episode evidence,
 and to 300 seconds for history balances. Startup and runtime defer the full historical
