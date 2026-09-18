@@ -7972,7 +7972,9 @@ def test_halving_flexible_ladders_keep_only_full_history_eligible(fractions, sur
 @pytest.mark.parametrize('batching,compatible,expected_batches', [
     (False, True, [2, 2]), (True, False, [2, 2]), (True, True, [4]),
 ])
-def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching, compatible, expected_batches):
+def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching, compatible, expected_batches, caplog):
+    from optimization.gpu.replay_progress import TemporalReplayProgress
+    caplog.set_level("INFO")
     calls = []
     class Proxy:
         def __init__(self, default, key):
@@ -7984,6 +7986,7 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching,
             return [dict(c, value=c.get('value', self.default)) for c in candidates]
         def evaluate(self, candidates):
             calls.append(len(candidates))
+            TemporalReplayProgress(len(candidates), 10)
             self.last_profile = {'count': len(candidates)}
             return [{'adg_strategy_eq': c.get('value', self.default)} for c in candidates]
     class Suite:
@@ -7999,6 +8002,12 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching,
         (SimpleNamespace(label='second'), [('x', second)], {}),
     ], candidates, batch_compatible_scenarios=batching)
     assert calls == expected_batches
+    messages = [record.getMessage() for record in caplog.records]
+    if len(expected_batches) == 1:
+        assert any("suite_pass=1/1 scenarios=first,second exchange=x history=100.0%" in m for m in messages)
+    else:
+        assert any("suite_pass=1/2 scenarios=first exchange=x history=100.0%" in m for m in messages)
+        assert any("suite_pass=2/2 scenarios=second exchange=x history=100.0%" in m for m in messages)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-2,), (-5,)]
     assert candidates == [{}, {'value': 5}]
     assert sum(p.last_profile.get('count', 0) for p in [first, second]) == 4
@@ -8016,7 +8025,9 @@ def test_gpu_halving_screening_labels_reject_invalid_shapes(labels):
 @pytest.mark.parametrize('fraction,expected_labels', [
     (0.1, ['first', 'last']), (1.0, ['first', 'middle', 'last']),
 ])
-def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(fraction, expected_labels):
+def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(fraction, expected_labels, caplog):
+    from optimization.gpu.replay_progress import TemporalReplayProgress
+    caplog.set_level("INFO")
     calls = []
     class Proxy:
         def __init__(self, label):
@@ -8026,6 +8037,7 @@ def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(frac
             return 10, 20
         def evaluate(self, candidates, **kwargs):
             calls.append((self.label, kwargs, [c['x'] for c in candidates]))
+            TemporalReplayProgress(len(candidates), 10)
             self.last_profile = {'rows': len(candidates)}
             return [{'adg_strategy_eq': c['x']} for c in candidates]
     class Suite:
@@ -8045,6 +8057,10 @@ def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(frac
         history_fraction=fraction, screening_scenarios=['last', 'first'],
     )
     assert [c[0] for c in calls] == expected_labels
+    messages = [record.getMessage() for record in caplog.records]
+    for index, label in enumerate(expected_labels, start=1):
+        assert any(f"suite_pass={index}/{len(expected_labels)} scenarios={label} "
+                   f"exchange=x history={fraction:.1%}" in m for m in messages)
     assert calls[-1][2] == [3, 3]
     assert all(c[1] == (dict(history_start_step=10, trade_start_step=20) if fraction < 1 else {}) for c in calls)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-1,), (-2,)]

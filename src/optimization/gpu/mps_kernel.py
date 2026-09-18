@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from functools import lru_cache
-import logging
 import time
 
 import numpy as np
 import torch
 
+from optimization.gpu.replay_progress import TemporalReplayProgress
 from optimization.gpu.runtime import (
     gpu_device, compile_shader, synchronize, wait_for_cuda_stream,
 )
@@ -2727,6 +2727,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         stop_k = int(end_steps.max().item())
         dispatch_count = 0
         max_dispatch_seconds = 0.0
+        replay_progress = TemporalReplayProgress(batch_size, stop_k - 1)
         replay_started = time.perf_counter()
         next_progress = replay_started + 30.0
         # One SIMD-width group distributes independent, state-heavy replays
@@ -2754,12 +2755,10 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             now = time.perf_counter()
             completed_k = min(begin_k + chunk_bars, stop_k)
             if now >= next_progress and completed_k < stop_k:
-                logging.info(
-                    "GPU temporal replay progress | candidates=%d bars=%d/%d elapsed=%.1fs",
-                    batch_size, completed_k - 1, stop_k - 1, now - replay_started,
-                )
+                replay_progress.log("progress", completed_k - 1, now - replay_started)
                 next_progress = now + 30.0
         self.interrupt_check()
+        replay_progress.log("complete", stop_k - 1, time.perf_counter() - replay_started)
         self._last_temporal_dispatch = {
             "dispatch_count": dispatch_count,
             "temporal_chunk_bars": chunk_bars,
@@ -3400,6 +3399,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             stop = effective_end_step - 1
             count = 0
             longest = 0.0
+            replay_progress = TemporalReplayProgress(batch_size, max(0, stop - begin))
             replay_started = time.perf_counter()
             next_progress = replay_started + 30.0
             for first in range(begin, stop, chunk_bars):
@@ -3419,13 +3419,12 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 count += 1
                 now = time.perf_counter()
                 if now >= next_progress and first + chunk_bars < stop:
-                    logging.info(
-                        "GPU temporal replay progress | candidates=%d bars=%d/%d elapsed=%.1fs",
-                        batch_size, first + chunk_bars - begin, stop - begin,
-                        now - replay_started,
+                    replay_progress.log(
+                        "progress", first + chunk_bars - begin, now - replay_started,
                     )
                     next_progress = now + 30.0
             self.interrupt_check()
+            replay_progress.log("complete", max(0, stop - begin), time.perf_counter() - replay_started)
             return {
                 "dispatch_count": count,
                 "temporal_chunk_bars": chunk_bars,
