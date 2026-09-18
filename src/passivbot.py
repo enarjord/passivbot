@@ -6350,7 +6350,7 @@ class Passivbot:
         return True
 
     async def _run_latched_hsl_supervisor_if_active(
-        self, *, cycle_id: object, loop_timings_ms: dict[str, int]
+        self, *, cycle_id: object, loop_timings_ms: dict[str, int], single_pass: bool = False
     ) -> bool:
         """Run already-latched RED supervision without requiring fill readiness."""
         if not self._equity_hard_stop_enabled():
@@ -6376,7 +6376,10 @@ class Passivbot:
             reason_code=reason_code,
             data={"timings_ms": dict(loop_timings_ms)},
         )
-        await supervisor()
+        if single_pass:
+            await supervisor(single_pass=True)
+        else:
+            await supervisor()
         return True
 
     async def run_execution_loop(self):

@@ -11574,7 +11574,7 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
     bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
     bot.balance = 100.0
 
-    async def stop_after_supervision():
+    async def stop_after_supervision(**kwargs):
         bot.stop_signal_received = True
 
     async def fake_refresh_authoritative_state():
@@ -11619,7 +11619,7 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
         if signal_mode == "coin"
         else bot._equity_hard_stop_run_coin_red_supervisor
     )
-    selected.assert_awaited_once_with()
+    selected.assert_awaited_once_with(single_pass=True)
     unselected.assert_not_awaited()
     bot._sleep_unless_shutdown.assert_not_awaited()
 

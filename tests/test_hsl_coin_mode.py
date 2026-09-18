@@ -5906,6 +5906,9 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     bot._run_latched_hsl_supervisor_if_active = MethodType(
         Passivbot._run_latched_hsl_supervisor_if_active, bot
     )
+    # This fixture exercises cooldown execution; bounded RED waves have their
+    # own confirmation/finalization tests in test_risk_input_recovery.
+    bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock()
     bot._run_halted_hsl_protection_if_active = MethodType(
         Passivbot._run_halted_hsl_protection_if_active, bot
     )

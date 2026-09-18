@@ -669,6 +669,81 @@ async def test_unready_exit_does_not_starve_proven_cooldown_protection(monkeypat
     for _ in range(2):
         await recovery.protect_and_wait(bot)
     assert bot._run_halted_hsl_protection_if_active.await_count == 2
+    assert bot._run_latched_hsl_supervisor_if_active.await_count == 2
+    assert bot._run_latched_hsl_supervisor_if_active.await_args.kwargs["single_pass"]
     assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
         'target_psides_by_symbol': {'A': {'short'}},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('startup', [False, True])
+@pytest.mark.parametrize('exposure', ['position', 'order'])
+async def test_new_exposure_on_successful_history_retry_still_commits_to_exit(monkeypatch, startup, exposure):
+    bot, clock = make_bot(monkeypatch)
+    operation = bot._equity_hard_stop_start_coin_history_replay if startup else bot._equity_hard_stop_check
+    operation.side_effect = invalid_history
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    await recovery.protect_and_wait(bot)
+    assert not bot._risk_input_recovery.protective_exit_pending
+    clock[0] = bot._risk_input_recovery.retry_at
+    operation.side_effect = None
+    if exposure == 'position':
+        bot.positions = {'A': {'short': {'size': -1.0}}}
+    else:
+        bot.open_orders = {'A': [{'position_side': 'short'}]}
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    assert bot._risk_input_recovery.protective_exit_pending
+    assert operation.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+@pytest.mark.parametrize('flat', [True, False])
+async def test_single_pass_red_supervision_preserves_confirmations_and_yields(monkeypatch, mode, flat):
+    import passivbot_hsl as hsl
+    from unittest.mock import Mock
+    state = {'halted': False, 'red_flat_confirmations': 0, 'pending_red_since_ms': 10,
+             'cooldown_repanic_reset_pending': False}
+    bot = SimpleNamespace(
+        stop_signal_received=False, _equity_hard_stop_supervisor_running=False,
+        _hsl_psides=lambda: ['short'], _hsl_state=lambda side: state,
+        _hsl_coin_state=lambda side, symbol: state,
+        _equity_hard_stop_coin={'short': {'A': state}},
+        _equity_hard_stop_enabled=lambda *a, **k: True,
+        _equity_hard_stop_signal_mode=lambda: mode,
+        _equity_hard_stop_runtime_red_latched=lambda side: True,
+        _equity_hard_stop_coin_needs_panic_supervision=lambda *a: not state['halted'],
+        refresh_protective_authoritative_state=AsyncMock(return_value=True),
+        get_raw_balance=lambda: 100.0, get_hysteresis_snapped_balance=lambda: 100.0,
+        get_exchange_time=lambda: 1000,
+        _equity_hard_stop_count_open_positions=lambda side: int(not flat),
+        _equity_hard_stop_has_open_position_symbol=lambda *a: not flat,
+        _equity_hard_stop_count_blocking_open_orders=lambda *a: (0, 0),
+        _equity_hard_stop_count_blocking_open_orders_symbol=lambda *a: (0, 0),
+        _equity_hard_stop_flatten_fill_timestamp_with_refresh=AsyncMock(return_value=20),
+        _equity_hard_stop_compute_stop_event=AsyncMock(return_value={}),
+        _equity_hard_stop_compute_coin_stop_event=AsyncMock(return_value={}),
+        _equity_hard_stop_log_red_progress=Mock(),
+        _calc_upnl_sum_strict=AsyncMock(return_value=0.0),
+        _equity_hard_stop_realized_pnl_now=lambda *a: 0.0,
+        _equity_hard_stop_apply_sample=lambda *a, **k: {'red_active_now': True},
+        _equity_hard_stop_apply_coin_sample=lambda *a: {'red_active_now': True},
+        _equity_hard_stop_set_red_runtime_forced_modes=Mock(),
+        _equity_hard_stop_refresh_halted_runtime_forced_modes=Mock(),
+        _equity_hard_stop_set_coin_runtime_forced_mode=Mock(),
+        calc_protective_panic_orders_to_cancel_and_create=AsyncMock(return_value=([], [])),
+        execute_order_plan_to_exchange=AsyncMock(), live_value=lambda key: 0.25,
+    )
+    async def finalize(*args, **kwargs):
+        state['halted'] = True
+    bot._equity_hard_stop_finalize_red_stop = AsyncMock(side_effect=finalize)
+    bot._equity_hard_stop_finalize_coin_red_stop = AsyncMock(side_effect=finalize)
+    monkeypatch.setattr(hsl.asyncio, 'sleep', AsyncMock())
+    supervisor = hsl._equity_hard_stop_run_coin_red_supervisor if mode == 'coin' else hsl._equity_hard_stop_run_red_supervisor
+    for n in (1, 2):
+        await supervisor(bot, single_pass=True)
+        assert bot.refresh_protective_authoritative_state.await_count == n
+        assert not bot._equity_hard_stop_supervisor_running
+        assert state['red_flat_confirmations'] == (n if flat else 0)
+    assert state['halted'] == flat

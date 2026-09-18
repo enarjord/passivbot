@@ -142,9 +142,6 @@ The earlier incremental entries are preserved in the
   or lets their losses trigger current RED. Cooldown, re-entry fees, delayed closes, manual
   intervention, and no-restart handling retain the required history. Unified HSL waits for the
   entire account to flatten before ending a RED episode.
-- Invalid risk inputs pause ordinary planning while valid protection remains available. Recovery
-  stops terminally after `live.risk_input_max_attempts` failed attempts per episode (default 10),
-  with bounded diagnostics; passing an early check or changing failure reason does not renew it.
 - KuCoin partial closes contribute realized PnL before the whole position closes. KuCoin and
   Gate.io reject incomplete fill-history pagination; OKX reads every pending-order page before
   reconciliation. Bitget retains fills without client order IDs. KuCoin also refreshes expired

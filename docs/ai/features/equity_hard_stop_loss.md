@@ -144,7 +144,9 @@ Rust's existing panic planner. This is an explicit live availability policy: it 
 close earlier than the configured RED threshold. It does not invent a drawdown,
 reset losses, disable HSL, or substitute ordinary strategy intent. Configured panic
 execution type still applies. Proven halted scopes retain their existing
-cooldown/manual-ownership policy and independent protection.
+cooldown/manual-ownership policy and independent protection. Recovery advances
+latched RED supervision one wave per pass so flat confirmations and stop finalization
+continue without monopolizing exits in other scopes.
 
 Protective refresh requires positions, orders, and valid current balances; historical
 repair and its backoff do not gate the exit. A new position or resting entry observed

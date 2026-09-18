@@ -213,8 +213,12 @@ def mark_ready(bot):
 async def ensure_ready(bot, *, startup=False):
     """Run only on a fresh authoritative account/history cohort."""
     state = getattr(bot, "_risk_input_recovery", None)
-    if state is not None and state.protective_exit_pending:
-        return False
+    if state is not None and bot._equity_hard_stop_enabled():
+        # The fresh cohort may contain new exposure since the previous flat
+        # confirmation, including on the same pass that history recovers.
+        state.protective_exit_pending |= bool(_unready_hsl_targets(bot))
+        if state.protective_exit_pending:
+            return False
     try:
         validate_current_balances(bot)
     except RiskInputUnavailable as exc:
@@ -317,22 +321,26 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
     else:
         current_ready = True
     if current_ready and bot._equity_hard_stop_enabled():
+        protected = False
         try:
             protected = await bot._run_halted_hsl_protection_if_active()
-            if not protected and not unready_protected:
-                protected = await bot._run_latched_hsl_supervisor_if_active(
-                    cycle_id=cycle_id, loop_timings_ms=loop_timings_ms or {},
-                )
-            if protected or unready_protected:
-                # Protective owners already pace their execution. Readiness
-                # backoff must not add latency to the next protective wave.
-                await bot._monitor_flush_snapshot()
-                return
         except RiskInputUnavailable as exc:
-            # A protective cooldown restart may itself require replay.
             defer(bot, exc)
         except AuthoritativeSurfaceUnavailable as exc:
             defer_episode_evidence(bot, exc)
+        try:
+            # One wave lets flat RED scopes finalize without a persistent RED
+            # supervisor monopolizing recovery of other exposed scopes.
+            protected |= await bot._run_latched_hsl_supervisor_if_active(
+                cycle_id=cycle_id, loop_timings_ms=loop_timings_ms or {}, single_pass=True,
+            )
+        except RiskInputUnavailable as exc:
+            defer(bot, exc)
+        except AuthoritativeSurfaceUnavailable as exc:
+            defer_episode_evidence(bot, exc)
+        if protected or unready_protected:
+            await bot._monitor_flush_snapshot()
+            return
     await bot._monitor_flush_snapshot()
     await bot._sleep_unless_shutdown(5.0, stage="risk_inputs_waiting")
 
