@@ -29,6 +29,7 @@ from optimization.bounds import Bound, enforce_bounds
 from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_contract import CONTRACT_KEY, recorded_evaluation_contract
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, get_anchor_plan
+from optimization.gpu.replay_progress import suite_replay_context
 from optimization.gpu.metric_registry import (
     reject_configured_exact_only_gpu_metrics,
 )
@@ -1037,7 +1038,7 @@ def _evaluate_gpu_suite_proxies(
                 f"GPU suite scenario {ctx.label!r} has no prepared proxy datasets"
             )
         scenario_rows.append((ctx, exchange_rows))
-    for tasks in groups.values():
+    for pass_index, tasks in enumerate(groups.values(), start=1):
         ctx, exchange, proxy, stage_candidates, _ = tasks[0]
         if len(tasks) > 1:
             stage_candidates = [
@@ -1045,7 +1046,12 @@ def _evaluate_gpu_suite_proxies(
                 for _, _, task_proxy, task_candidates, _ in tasks
                 for candidate in task_proxy.materialize_suite_candidates(task_candidates)
             ]
-        rows = _evaluate_gpu_proxy_history(proxy, stage_candidates, history_fraction)
+        with suite_replay_context(
+            pass_index=pass_index, pass_count=len(groups),
+            labels=[task[0].label for task in tasks],
+            exchanges=[task[1] for task in tasks], history_fraction=history_fraction,
+        ):
+            rows = _evaluate_gpu_proxy_history(proxy, stage_candidates, history_fraction)
         if len(rows) != len(stage_candidates):
             raise RuntimeError(
                 f"GPU suite scenario {ctx.label!r} exchange {exchange!r} "

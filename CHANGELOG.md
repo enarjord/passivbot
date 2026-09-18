@@ -14,6 +14,10 @@ since the latest release tag; these features may already be available when insta
   in monitoring snapshots. Keep maintainer startup/restart safe when no coin-replay
   task exists.
 
+- Identify GPU temporal replays with suite scenario labels, suite-pass position, history
+  fraction, and a replay ID. Explicit start and completion messages distinguish new
+  scenario or candidate-batch passes from a stalled or restarting evaluation.
+
 - Allow GPU successive halving to screen named suite scenarios on partial-history rungs.
   Full-history screens and exact validation retain the complete suite; scenario-specific
   objectives and limits must remain represented in the early subset.
