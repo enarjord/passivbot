@@ -834,7 +834,7 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   evolutionary exact-validation budget. Checkpoints preserve incomplete bootstrap plans and can
   recover a seed result durably flushed immediately before a restart. Anchored fine-tune context
   is checkpoint-owned as well, so resume does not require the original starting-config files.
-- `successive_halving.enabled` opts a non-suite, single-coin Trailing Martingale run into
+- `successive_halving.enabled` opts Trailing Martingale runs (including suites and multicoin) into
   progressively longer recent-history suffixes. The default `history_fractions` are 25%, 50%, and
   100%, measured backwards from the configured end date; each partial suffix receives the normal
   indicator warmup immediately before its scoring boundary. After each partial rung,
@@ -847,8 +847,21 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   probes, or drift evidence. The ladder remains disabled by default because it trades some search
   breadth for throughput and deliberately biases early filtering toward recent market behavior.
   The suffix-window semantics are included in checkpoint identity, so checkpoints made with the
-  former prefix behavior do not resume. EMA Anchor, multicoin, and suite runs fail closed if this
-  opt-in is requested.
+  former prefix behavior do not resume. EMA Anchor remains unsupported. Suite rungs apply the
+  same fraction of each scenario's own configured date range, evaluate all its exchanges and
+  coins, and use the usual suite reducers and overrides before selecting survivors. Multicoin
+  warmup starts at a UTC hour boundary; dense candle tensors are shared across windows,
+  with a bounded hourly-range correction when the timestamp grid requires it. On CUDA,
+  compatible single-side multicoin scenarios share candidate batches during halving,
+  including its full-history rung. This keeps small survivor sets from launching separately
+  for each scenario; scenario defaults, overrides, and reducers are preserved. Apple GPU
+  dispatch and runs without halving retain their existing batching.
+  Fractions and survival rates are configurable, for example `[0.1, 0.33, 1.0]` with
+  `survival_fraction: 0.2`. Survivors round up: 1024 becomes 205, then 41, unless the
+  minimum keeps more. `min_survivors` must cover `validate_per_generation`; lower both
+  explicitly when experimenting with aggressive cuts. Very small final batches may
+  underutilize the GPU. Compare useful full-history exact results per hour and missed good
+  candidates, rather than interpreting theoretical candle-work savings as measured speedups.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
 - `drift_probes` reserves at least part of that validation budget for candidates away from the
   proxy front.

@@ -551,12 +551,9 @@ def validate_gpu_preparation_scope(
     )
     if not isinstance(halving_config, dict):
         raise TypeError("optimize.gpu.successive_halving must be an object")
-    if bool(halving_config.get("enabled")) and (
-        strategy_kind != "trailing_martingale" or suite_enabled
-    ):
+    if bool(halving_config.get("enabled")) and strategy_kind != "trailing_martingale":
         raise ValueError(
-            "optimize.gpu.successive_halving currently requires a non-suite, "
-            "single-coin trailing_martingale optimization"
+            "optimize.gpu.successive_halving requires trailing_martingale"
         )
     if bool(suite_cfg.get("enabled")):
         from optimization.warmup import _apply_config_overrides
@@ -951,13 +948,29 @@ _GPU_SUITE_VIOLATION_KEY = "__gpu_suite_constraint_violation__"
 _GPU_SUITE_METRICS_KEY = "__gpu_suite_metrics__"
 
 
-def _evaluate_gpu_suite_proxies(suite_evaluator, scenario_proxies, candidates) -> list[dict]:
+def _evaluate_gpu_proxy_history(proxy, candidates, history_fraction):
+    fraction = float(history_fraction)
+    if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+        raise ValueError("GPU history fraction must be finite and in (0, 1]")
+    if fraction < 1.0:
+        history_start, trade_start = proxy.recent_window_for_history_fraction(fraction)
+        return proxy.evaluate(
+            candidates, history_start_step=history_start, trade_start_step=trade_start
+        )
+    return proxy.evaluate(candidates)
+
+
+def _evaluate_gpu_suite_proxies(
+    suite_evaluator, scenario_proxies, candidates, *, history_fraction=1.0,
+    batch_compatible_scenarios=False,
+) -> list[dict]:
     """Screen one candidate batch across suite scenarios with canonical reducers."""
 
     from metrics_schema import build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
 
     scenario_rows = []
+    groups = {}
     for ctx, exchange_proxies, parameter_overrides in scenario_proxies:
         scenario_candidates = (
             [dict(candidate, **parameter_overrides) for candidate in candidates]
@@ -966,19 +979,43 @@ def _evaluate_gpu_suite_proxies(suite_evaluator, scenario_proxies, candidates) -
         )
         exchange_rows = []
         for exchange, proxy in exchange_proxies:
-            rows = proxy.evaluate(scenario_candidates)
-            if len(rows) != len(candidates):
-                raise RuntimeError(
-                    f"GPU suite scenario {ctx.label!r} exchange {exchange!r} "
-                    "returned an unexpected proxy row count: "
-                    f"expected {len(candidates)}, got {len(rows)}"
-                )
+            key = (
+                proxy.suite_batch_key()
+                if batch_compatible_scenarios and hasattr(proxy, "suite_batch_key")
+                else None
+            )
+            group_key = ("shared", key) if key is not None else ("separate", len(groups))
+            rows = []
             exchange_rows.append((exchange, rows))
+            groups.setdefault(group_key, []).append(
+                (ctx, exchange, proxy, scenario_candidates, rows)
+            )
+            if hasattr(proxy, "last_profile"):
+                proxy.last_profile = {}
         if not exchange_rows:
             raise ValueError(
                 f"GPU suite scenario {ctx.label!r} has no prepared proxy datasets"
             )
         scenario_rows.append((ctx, exchange_rows))
+    for tasks in groups.values():
+        ctx, exchange, proxy, stage_candidates, _ = tasks[0]
+        if len(tasks) > 1:
+            stage_candidates = [
+                candidate
+                for _, _, task_proxy, task_candidates, _ in tasks
+                for candidate in task_proxy.materialize_suite_candidates(task_candidates)
+            ]
+        rows = _evaluate_gpu_proxy_history(proxy, stage_candidates, history_fraction)
+        if len(rows) != len(stage_candidates):
+            raise RuntimeError(
+                f"GPU suite scenario {ctx.label!r} exchange {exchange!r} "
+                "returned an unexpected proxy row count: "
+                f"expected {len(stage_candidates)}, got {len(rows)}"
+            )
+        offset = 0
+        for _, _, _, task_candidates, target in tasks:
+            target.extend(rows[offset:offset + len(task_candidates)])
+            offset += len(task_candidates)
     results = []
     for index in range(len(candidates)):
         scenario_results = []
@@ -4414,14 +4451,9 @@ def run_backend(
         )
         suite_multicoin_sides = None
     halving_policy = options["successive_halving"]
-    if halving_policy["enabled"] and (
-        suite_enabled
-        or max_coin_count != 1
-        or strategy_kind != "trailing_martingale"
-    ):
+    if halving_policy["enabled"] and strategy_kind != "trailing_martingale":
         raise ValueError(
-            "optimize.gpu.successive_halving currently requires a non-suite, "
-            "single-coin trailing_martingale optimization"
+            "optimize.gpu.successive_halving requires trailing_martingale"
         )
     if max_coin_count > 1:
         multicoin_sides = (
@@ -4813,16 +4845,12 @@ def run_backend(
         ]
 
         def evaluate_proxy(candidates, *, history_fraction=1.0):
-            if not math.isclose(
-                float(history_fraction), 1.0, rel_tol=0.0, abs_tol=1.0e-12
-            ):
-                raise ValueError(
-                    "GPU suite proxy evaluation does not support partial history"
-                )
             return _evaluate_gpu_suite_proxies(
                 evaluator_for_pool,
                 scenario_proxies,
                 candidates,
+                history_fraction=history_fraction,
+                batch_compatible_scenarios=bool(halving_policy["enabled"]),
             )
 
     else:
@@ -4844,16 +4872,7 @@ def run_backend(
         profile_proxies = [proxy]
 
         def evaluate_proxy(candidates, *, history_fraction=1.0):
-            if float(history_fraction) < 1.0:
-                history_start, trade_start = (
-                    proxy.recent_window_for_history_fraction(history_fraction)
-                )
-                return proxy.evaluate(
-                    candidates,
-                    history_start_step=history_start,
-                    trade_start_step=trade_start,
-                )
-            return proxy.evaluate(candidates)
+            return _evaluate_gpu_proxy_history(proxy, candidates, history_fraction)
 
     def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
         objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)
@@ -5163,7 +5182,9 @@ def run_backend(
             proxy_evaluation_policy=(
                 {
                     **halving_policy,
-                    "history_window": "recent_suffix_v1",
+                    "history_window": (
+                        "recent_suffix_v2" if max_coin_count > 1 else "recent_suffix_v1"
+                    ),
                 }
                 if halving_policy["enabled"]
                 else None
@@ -5892,6 +5913,8 @@ def run_backend(
                     return
                 for item in profile_proxies:
                     record = deepcopy(getattr(item, "last_profile", {}))
+                    if not record:
+                        continue
                     record.update(
                         successive_halving_rung=int(rung),
                         history_fraction=float(history_fraction),

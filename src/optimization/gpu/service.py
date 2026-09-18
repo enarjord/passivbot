@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 import hashlib
+import json
 import logging
 import os
 import time
@@ -58,6 +59,7 @@ from optimization.gpu.model import (
     UNSTUCK_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
+    slice_mps_multicoin_data,
     encode_hsl_panic_order_type,
     encode_tm_retracement_base_pct,
     flatten_trailing_martingale_params,
@@ -3446,6 +3448,19 @@ class MpsMulticoinProxy:
             values, timestamps, runs=runs, markets=markets,
             checkpoint_contract=self.checkpoint_contract, cache=prepared_data_cache,
         )
+        # References only: suffixes share the packed tensors and the original
+        # host arrays. Cache scope is one optimization, as for prepared data.
+        self._history_source = (values, runs, markets, btc_values, timestamps)
+        self._history_data_cache = (
+            prepared_data_cache if prepared_data_cache is not None else {}
+        )
+        self.history_warmup_bars = max(
+            self.run.warmup_bars,
+            int(np.ceil(
+                max(backtest_params.get("warmup_minutes") or [0])
+                / candle_interval_minutes
+            )),
+        )
         self.metrics_data = {
             "ts0": self.data["ts0"],
             "n": self.data["n"],
@@ -3463,6 +3478,7 @@ class MpsMulticoinProxy:
             self.metrics_data["btc_prices"] = btc_values
         self.runners = {}
         self.fused_runner = None
+        self._runner_specs = {}
         common_runner_kwargs = {
             "forager_score_hysteresis_pct": self.forager_score_hysteresis_pct,
             "max_realized_loss_pct": float(
@@ -3514,9 +3530,7 @@ class MpsMulticoinProxy:
                 if self.strategy_kind == "trailing_martingale"
                 else MpsEmaAnchorMulticoinFusedRunner
             )
-            self.fused_runner = fused_runner_cls(
-                self.run,
-                self.data,
+            fused_kwargs = dict(
                 long_coin_overrides=per_side_coin_overrides["long"],
                 short_coin_overrides=per_side_coin_overrides["short"],
                 hsl_panic_market_long=str(
@@ -3534,6 +3548,8 @@ class MpsMulticoinProxy:
                 hedge_mode=bool(backtest_params["hedge_mode"]),
                 **common_runner_kwargs,
             )
+            self._runner_specs["fused"] = (fused_runner_cls, fused_kwargs)
+            self.fused_runner = fused_runner_cls(self.run, self.data, **fused_kwargs)
         else:
             runner_cls = (
                 MpsTrailingMartingaleMulticoinRunner
@@ -3555,6 +3571,7 @@ class MpsMulticoinProxy:
                 if self.temporal_chunking:
                     runner_kwargs["max_dispatch_candidate_bars"] = self.max_dispatch_candidate_bars
                     runner_kwargs["interrupt_check"] = self.interrupt_check
+                self._runner_specs[side] = (runner_cls, runner_kwargs)
                 self.runners[side] = runner_cls(
                     self.run,
                     self.data,
@@ -3576,7 +3593,152 @@ class MpsMulticoinProxy:
             couple_unstuck_emas=getattr(self, "couple_unstuck_emas", False),
         )
 
-    def evaluate(self, candidates: list[dict]) -> list[dict]:
+    def suite_batch_key(self):
+        """Identify CUDA scenarios differing only in materializable parameters."""
+        if (
+            gpu_device(self._torch) != "cuda"
+            or self.strategy_kind != "trailing_martingale"
+            or len(self.sides) != 1
+        ):
+            return None
+        runner_cls, kwargs = self._runner_specs[self.sides[0]]
+        runner_settings = {}
+        for key, value in kwargs.items():
+            if isinstance(value, np.ndarray):
+                array = np.ascontiguousarray(value)
+                runner_settings[key] = (
+                    array.shape, array.dtype.str,
+                    hashlib.sha256(memoryview(array).cast("B")).hexdigest(),
+                )
+            elif key == "interrupt_check":
+                runner_settings[key] = id(value)
+            else:
+                runner_settings[key] = value
+        contract = {
+            "execution": {
+                key: value for key, value in self.checkpoint_contract.items()
+                if key != "base_params"
+            },
+            "runner": (runner_cls.__module__, runner_cls.__qualname__),
+            "runner_settings": runner_settings,
+            "coin_overrides": self.coin_override_contract,
+            "needed_metrics": sorted(self.needed_metrics),
+            "couple_unstuck_emas": self.couple_unstuck_emas,
+            "batch_size": self.batch_size,
+            "max_dispatch_candidate_bars": self.max_dispatch_candidate_bars,
+        }
+        return (
+            id(self.data), self.run, self.history_warmup_bars,
+            json.dumps(contract, sort_keys=True),
+        )
+
+    def materialize_suite_candidates(self, candidates: list[dict]) -> list[dict]:
+        """Resolve scenario defaults before executing on a compatible runner."""
+        side = self.sides[0]
+        matrix = self._parameter_matrix(candidates, side)
+        result = []
+        for candidate, row in zip(candidates, matrix):
+            expanded = dict(candidate)
+            expanded.update(
+                (f"{side}_{key}", float(value))
+                for key, value in zip(self.param_keys, row)
+            )
+            # Metric normalization also reads defaults for the disabled side.
+            for pside in ("long", "short"):
+                expanded.setdefault(
+                    f"{pside}_total_wallet_exposure_limit",
+                    self.base_total_wallet_exposure_limits[pside],
+                )
+                expanded.setdefault(f"{pside}_n_positions", self.base_n_positions[pside])
+            result.append(expanded)
+        return result
+
+    def recent_window_for_history_fraction(self, history_fraction: float) -> tuple[int, int]:
+        fraction = float(history_fraction)
+        if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+            raise ValueError("GPU history fraction must be finite and in (0, 1]")
+        n = int(self.data["n"])
+        interval = self.run.interval_ms
+        origin = int(self.data["ts0"])
+        guard = (self.run.guard_ts_ms - origin + interval - 1) // interval
+        full_start = min(
+            n - 3, max(2, guard, self.run.trade_start_idx, self.run.warmup_bars + 1)
+        )
+        suffix_candles = max(2, int(np.ceil((n - full_start) * fraction)))
+        trade_start = max(full_start, n - suffix_candles)
+        start = max(0, trade_start - self.history_warmup_bars - 1)
+        # Start at the first candle in a UTC hour to restrict any packed
+        # range correction to the first closed-hour boundary.
+        hour = ((origin + start * interval) // 3_600_000) * 3_600_000
+        start = max(0, (hour - origin + interval - 1) // interval)
+        return start, trade_start
+
+    def _recent_history_proxy(self, history_start: int, trade_start: int):
+        if self.strategy_kind != "trailing_martingale":
+            raise ValueError("GPU recent history requires trailing_martingale")
+        values, runs, markets, btc, timestamps = self._history_source
+        key = ("recent_suffix_v2", id(self.data))
+        bounds = (history_start, trade_start)
+        cached = self._history_data_cache.get(key)
+        if cached is None or cached[0] != bounds:
+            data, window_runs = slice_mps_multicoin_data(
+                self.data, values, runs, markets, history_start, trade_start
+            )
+            # Retain one window per dataset, shared by all suite scenarios.
+            # Even an arbitrarily long ladder cannot accumulate range copies.
+            cached = (bounds, data, window_runs)
+            self._history_data_cache[key] = cached
+        _, data, window_runs = cached
+        window = copy.copy(self)
+        window.data = data
+        window.run = replace(
+            window_runs[0],
+            first_valid_idx=min(run.first_valid_idx for run in window_runs),
+            last_valid_idx=max(run.last_valid_idx for run in window_runs),
+            trade_start_idx=min(run.trade_start_idx for run in window_runs),
+        )
+        window.metrics_data = {
+            "ts0": data["ts0"], "n": data["n"], "strategy_kind": self.strategy_kind,
+        }
+        if self.btc_analysis_enabled:
+            window.metrics_data.update(_btc_daily_price_context(
+                btc[history_start:], timestamps[history_start:],
+                expected_count=data["n"], expected_days=data["n_days"],
+            ))
+            window.metrics_data["btc_prices"] = btc[history_start:]
+        window.runners = {}
+        window.fused_runner = None
+        for side, (runner_cls, original_kwargs) in self._runner_specs.items():
+            kwargs = dict(original_kwargs)
+            if kwargs.get("btc_prices") is not None:
+                kwargs["btc_prices"] = kwargs["btc_prices"][history_start:]
+            runner = runner_cls(window.run, data, **kwargs)
+            if side == "fused":
+                window.fused_runner = runner
+            else:
+                window.runners[side] = runner
+        window.temporal_chunking, window.dispatch_batch_size, _ = _mps_multicoin_dispatch_plan(
+            self.strategy_kind, self.batch_size, n_bars=data["n"],
+            n_coins=data["n_coins"], n_sides=len(self.sides),
+            max_candidate_bars=self.max_dispatch_candidate_bars, device=gpu_device(self._torch),
+        )
+        return window
+
+    def evaluate(
+        self, candidates: list[dict], *, history_start_step: int | None = None,
+        trade_start_step: int | None = None,
+    ) -> list[dict]:
+        if history_start_step is not None or trade_start_step is not None:
+            if history_start_step is None or trade_start_step is None:
+                raise ValueError(
+                    "history_start_step and trade_start_step must be provided together"
+                )
+            window = self._recent_history_proxy(
+                int(history_start_step), int(trade_start_step)
+            )
+            result = window.evaluate(candidates)
+            self.last_profile = window.last_profile
+            return result
         results: list[dict] = []
         torch = self._torch
         fused_runner = getattr(self, "fused_runner", None)
