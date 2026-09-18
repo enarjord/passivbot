@@ -747,3 +747,71 @@ async def test_single_pass_red_supervision_preserves_confirmations_and_yields(mo
         assert not bot._equity_hard_stop_supervisor_running
         assert state['red_flat_confirmations'] == (n if flat else 0)
     assert state['halted'] == flat
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['refresh', 'plan', 'execute'])
+@pytest.mark.parametrize('failure', ['network', 'snapshot', 'restart', 'timeout'])
+async def test_protective_transient_failure_keeps_exit_and_retries(monkeypatch, caplog, stage, failure):
+    from ccxt.base.errors import NetworkError
+    from passivbot_exceptions import RestartBotException
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'short': {'size': -1.0}}}
+    bot._equity_hard_stop_check.side_effect = invalid_history
+    bot.live_value = lambda key: 0.25
+    bot._sleep_unless_shutdown = AsyncMock()
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    assert not await recovery.ensure_ready(bot)
+    exc = {'network': NetworkError('api_key=private'),
+           'snapshot': AuthoritativeSurfaceUnavailable('protective_planning_inputs', 'api_key=private'),
+           'restart': RestartBotException('api_key=private'), 'timeout': TimeoutError('api_key=private')}[failure]
+    operation = {'refresh': bot.refresh_protective_authoritative_state,
+                 'plan': bot.calc_protective_panic_orders_to_cancel_and_create,
+                 'execute': bot.execute_order_plan_to_exchange}[stage]
+    operation.side_effect = exc
+    with caplog.at_level(logging.WARNING):
+        await recovery.protect_and_wait(bot)
+    assert bot._risk_input_recovery.protective_exit_pending
+    assert 'api_key=private' not in caplog.text
+    bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage='risk_input_protective_exit')
+    operation.side_effect = None
+    await recovery.protect_and_wait(bot)
+    assert bot.execute_order_plan_to_exchange.await_count >= 1
+    assert bot.refresh_protective_authoritative_state.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['fatal', 'value', 'type', 'runtime'])
+async def test_protective_producer_defects_still_propagate(monkeypatch, kind):
+    from passivbot_exceptions import FatalBotException
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'short': {'size': -1.0}}}
+    bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
+    error_type = {'fatal': FatalBotException, 'value': ValueError,
+                  'type': TypeError, 'runtime': RuntimeError}[kind]
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(side_effect=error_type('invalid producer'))
+    with pytest.raises(error_type):
+        await recovery.protect_and_wait(bot)
+    assert bot._risk_input_recovery.protective_exit_pending
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['market', 'snapshot'])
+async def test_protective_reader_unavailability_is_classified_before_rust(monkeypatch, stage):
+    from passivbot import Passivbot
+    from live import planning_gates
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+    bot = SimpleNamespace(positions={'A': {'short': {'size': -1.0}}},
+                          _get_orchestrator_market_snapshots=AsyncMock(return_value={}))
+    def unavailable(*a, **k):
+        raise RuntimeError('live snapshot unavailable')
+    if stage == 'market':
+        bot._get_orchestrator_market_snapshots.side_effect = unavailable
+    else:
+        monkeypatch.setattr(planning_gates, 'build_protective_planning_snapshot', unavailable)
+    with pytest.raises(AuthoritativeSurfaceUnavailable, match='protective_planning_inputs'):
+        await Passivbot.calc_protective_panic_ideal_orders_orchestrator(
+            bot, target_psides_by_symbol={'A': {'short'}},
+        )

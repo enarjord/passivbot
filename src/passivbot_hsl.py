@@ -6442,13 +6442,14 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                     pside, symbol, flatten_ts, boundary_balance, 0.0, 0.0, 0.0,
                     latch_red=False,
                 )
-                state["episode_evidence"] = basis
+                state["episode_evidence"] = basis.window(basis.start_ms, flatten_ts)
                 logging.info(
                     "[risk] HSL[%s:%s] reset current episode after ordinary flat fill | flat_ts=%s",
                     pside,
                     symbol,
                     flatten_ts,
                 )
+            state["episode_evidence"] = basis
     return False
 
 

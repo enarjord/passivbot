@@ -271,3 +271,29 @@ async def test_consumed_historical_boundary_does_not_replay_forever(monkeypatch)
     with pytest.raises(hsl.EpisodeEvidenceUnavailable):
         await bot._equity_hard_stop_check_coin()
     replay.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_partial_boundary_batch_does_not_mark_later_failed_replay_consumed(monkeypatch):
+    from unittest.mock import AsyncMock
+    from live.hsl_episode import EpisodeEvidence
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    rows = [(60_000, 'increase', 1.0, 0.0), (120_000, 'decrease', 1.0, 0.0),
+            (180_000, 'increase', 1.0, 0.0), (240_000, 'decrease', 1.0, 0.0),
+            (240_000, 'increase', 1.0, 0.0)]
+    evidence = EpisodeEvidence.reconstruct(rows)
+    bot._pnls_manager = make_fake_pnls_manager([])
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', 60_000, 100.0, 0.0, 0.0, 0.0)
+    monkeypatch.setattr(hsl, '_equity_hard_stop_live_coin_episode_evidence', lambda *a: evidence)
+    monkeypatch.setattr(hsl, '_equity_hard_stop_coin_episode_evidence', lambda *a, **k: evidence)
+    replay = AsyncMock(return_value=False)
+    monkeypatch.setattr(hsl, '_equity_hard_stop_replay_live_restart', replay)
+    for attempt in (1, 2):
+        with pytest.raises(hsl.AuthoritativeSurfaceUnavailable):
+            await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(bot, 300_000, 100.0)
+        consumed = bot._hsl_coin_state('long', 'A')['episode_evidence']
+        assert [consumed.rows[i][0] for i in consumed.flatten_indices] == [120_000]
+        assert replay.await_count == attempt
+        assert replay.await_args.kwargs['replay_flatten_timestamp_ms'] == 240_000

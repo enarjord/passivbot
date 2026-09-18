@@ -12,8 +12,9 @@ from time import monotonic
 import numpy as np
 
 from config.access import require_live_value
-from passivbot_exceptions import FatalBotException
-from live.diagnostic_safety import bounded_traceback_detail
+from passivbot_exceptions import FatalBotException, RestartBotException
+from ccxt.base.errors import BaseError as ExchangeError
+from live.diagnostic_safety import bounded_traceback_detail, bounded_exception_type
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from live.event_bus import EventTypes, ReasonCodes, LiveEvent, emit_event, format_console_event
 
@@ -275,6 +276,16 @@ def _unready_hsl_targets(bot):
     return targets
 
 
+def _report_protective_unavailability(bot, exc):
+    if isinstance(exc, AuthoritativeSurfaceUnavailable) and exc.surface == "hsl_episode_boundaries":
+        defer_episode_evidence(bot, exc)
+    else:
+        logging.warning(
+            "[risk] HSL protection deferred; retaining exit commitment | error_type=%s",
+            bounded_exception_type(exc),
+        )
+
+
 async def protect_unready_hsl(bot):
     """Close HSL-managed exposure with fresh account state, independently of history.
 
@@ -285,18 +296,23 @@ async def protect_unready_hsl(bot):
     state = getattr(bot, "_risk_input_recovery", None)
     if state is None:
         return False
-    if not await bot.refresh_protective_authoritative_state():
-        return False
-    validate_current_balances(bot)
-    targets = _unready_hsl_targets(bot)
-    if not targets:
-        state.protective_exit_pending = False
-        return False
-    state.protective_exit_pending = True
-    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
-        target_psides_by_symbol=targets,
-    )
-    await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+    try:
+        if not await bot.refresh_protective_authoritative_state():
+            return False
+        validate_current_balances(bot)
+        targets = _unready_hsl_targets(bot)
+        if not targets:
+            state.protective_exit_pending = False
+            return False
+        state.protective_exit_pending = True
+        to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
+            target_psides_by_symbol=targets,
+        )
+        await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+    except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+        # A transient reader/connector failure cannot surrender protection to
+        # generic full-bot restart handling. Producer/config defects remain strict.
+        _report_protective_unavailability(bot, exc)
     await bot._sleep_unless_shutdown(
         float(bot.live_value("execution_delay_seconds")), stage="risk_input_protective_exit",
     )
@@ -310,8 +326,8 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             unready_protected = await protect_unready_hsl(bot)
         except RiskInputUnavailable as exc:
             defer(bot, exc)
-        except AuthoritativeSurfaceUnavailable as exc:
-            defer_episode_evidence(bot, exc)
+        except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+            _report_protective_unavailability(bot, exc)
     # The existing panic planner also needs positive current balances. Do not
     # feed it stale/fabricated denominators when the account itself is invalid.
     try:
@@ -326,8 +342,8 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             protected = await bot._run_halted_hsl_protection_if_active()
         except RiskInputUnavailable as exc:
             defer(bot, exc)
-        except AuthoritativeSurfaceUnavailable as exc:
-            defer_episode_evidence(bot, exc)
+        except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+            _report_protective_unavailability(bot, exc)
         try:
             # One wave lets flat RED scopes finalize without a persistent RED
             # supervisor monopolizing recovery of other exposed scopes.
@@ -336,8 +352,8 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             )
         except RiskInputUnavailable as exc:
             defer(bot, exc)
-        except AuthoritativeSurfaceUnavailable as exc:
-            defer_episode_evidence(bot, exc)
+        except (AuthoritativeSurfaceUnavailable, ExchangeError, OSError, RestartBotException) as exc:
+            _report_protective_unavailability(bot, exc)
         if protected or unready_protected:
             await bot._monitor_flush_snapshot()
             return

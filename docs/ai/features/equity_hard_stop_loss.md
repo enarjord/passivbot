@@ -155,7 +155,10 @@ the exit commitment: another fresh account snapshot must show the relevant posit
 and orders gone before exact history recovery may release ordinary planning. No
 order is sent on stale account state or an invalid current balance. Recovery keeps
 refreshing when those inputs are unavailable; this policy cannot execute through an
-exchange outage and does not install exchange-native stops.
+exchange outage and does not install exchange-native stops. Transient connector
+failures and unavailable protective snapshots retain the exit commitment and retry
+inside protection rather than entering full-bot restart handling. Malformed producer
+output and configuration remain outside that recovery policy.
 
 Retries grow from 5 seconds to 60 seconds for current balances and episode evidence,
 and to 300 seconds for history balances. Protection keeps the configured execution

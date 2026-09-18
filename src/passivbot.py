@@ -16405,10 +16405,18 @@ class Passivbot:
         if not symbols:
             return {}
 
-        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        planning_snapshot = planning_gates.build_protective_planning_snapshot(
-            self, symbols, market_snapshots
-        )
+        try:
+            market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+            planning_snapshot = planning_gates.build_protective_planning_snapshot(
+                self, symbols, market_snapshots
+            )
+        except RuntimeError as exc:
+            # These live readers use RuntimeError for unavailable/stale quotes
+            # and account epochs. Classify before entering Rust, whose output
+            # and validation failures must never become retryable input errors.
+            raise state_refresh.AuthoritativeSurfaceUnavailable(
+                "protective_planning_inputs", "current protective snapshot unavailable"
+            ) from exc
         self._current_planning_snapshot = planning_snapshot
         last_prices = planning_snapshot.last_prices()
         Passivbot._monitor_record_price_ticks(
