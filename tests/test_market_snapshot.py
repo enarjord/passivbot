@@ -313,10 +313,12 @@ async def test_market_snapshot_provider_uses_explicit_ticker_source_label():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('path', ['primary', 'missing_symbol'])
-@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported'])
+@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported', 'ValueError', 'TypeError', 'KeyError'])
 async def test_market_snapshot_preserves_permanent_connector_errors(path, kind, caplog):
     from ccxt.base import errors
-    original = getattr(errors, kind)('api_key=private')
+    import builtins
+    error_type = getattr(builtins, kind, None) or getattr(errors, kind)
+    original = error_type('api_key=private')
     async def fail(*args):
         raise original
     async def empty():

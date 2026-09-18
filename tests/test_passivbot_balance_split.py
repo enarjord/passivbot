@@ -1152,6 +1152,11 @@ async def test_hyperliquid_live_market_snapshot_uses_symbol_fallback_for_hip3():
     assert snap.last == pytest.approx(73.455)
 
 
+def _hostile_market_unavailable(detail):
+    from live.market_snapshot import MarketSnapshotUnavailable
+    return type("ApiKeySecretError", (MarketSnapshotUnavailable,), {})(detail)
+
+
 @pytest.mark.asyncio
 async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplog):
     bot = Passivbot.__new__(Passivbot)
@@ -1159,10 +1164,10 @@ async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplo
     bot.symbol_ids = {}
 
     async def fail_primary(*_args, **_kwargs):
-        raise _hostile_runtime_error("primary token=secret-primary")
+        raise _hostile_market_unavailable("primary token=secret-primary")
 
     async def fail_all_mids(*_args, **_kwargs):
-        raise _hostile_runtime_error("allMids token=secret-mid")
+        raise _hostile_market_unavailable("allMids token=secret-mid")
 
     async def fetch_symbol_tickers(symbols):
         assert symbols == ["BTC/USDC:USDC"]
@@ -1186,8 +1191,8 @@ async def test_hyperliquid_live_market_snapshot_fallback_logs_are_redacted(caplo
 
     assert snapshots["BTC/USDC:USDC"].last == pytest.approx(100.5)
     messages = "\n".join(record.getMessage() for record in caplog.records)
-    assert "error_type=RuntimeError action=try_all_mids" in messages
-    assert "error_type=RuntimeError action=try_symbol_tickers" in messages
+    assert "error_type=MarketSnapshotUnavailable action=try_all_mids" in messages
+    assert "error_type=MarketSnapshotUnavailable action=try_symbol_tickers" in messages
     assert "ApiKeySecretError" not in messages
     assert "secret-primary" not in messages
     assert "secret-mid" not in messages
@@ -1206,7 +1211,7 @@ async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
     bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
 
     async def fail_symbol_tickers(_symbols):
-        raise _hostile_runtime_error("symbol ticker token=secret-symbol")
+        raise _hostile_market_unavailable("symbol ticker token=secret-symbol")
 
     bot.fetch_tickers_for_symbols = fail_symbol_tickers
 
@@ -1217,7 +1222,7 @@ async def test_hyperliquid_symbol_ticker_failure_log_is_redacted(caplog):
             )
 
     messages = "\n".join(record.getMessage() for record in caplog.records)
-    assert "error_type=RuntimeError action=fail_if_incomplete" in messages
+    assert "error_type=MarketSnapshotUnavailable action=fail_if_incomplete" in messages
     assert "ApiKeySecretError" not in messages
     assert "secret-symbol" not in messages
 
@@ -1230,9 +1235,9 @@ async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog
     bot._log_symbols = lambda symbols, limit=12: ",".join(symbols[:limit])
 
     async def fail_primary(*_args, **_kwargs):
-        raise _hostile_runtime_error("primary token=secret-primary")
+        raise _hostile_market_unavailable("primary token=secret-primary")
 
-    fallback_error = _hostile_runtime_error("fallback token=secret-fallback")
+    fallback_error = _hostile_market_unavailable("fallback token=secret-fallback")
 
     async def fail_fallback(*_args, **_kwargs):
         raise fallback_error
@@ -1245,14 +1250,33 @@ async def test_hyperliquid_orchestrator_fallback_preserves_redacted_cause(caplog
             await bot._get_orchestrator_market_snapshots(["BTC/USDC:USDC"])
 
     assert raised.value.__cause__ is fallback_error
-    assert str(raised.value).endswith("fallback_error=RuntimeError")
+    assert str(raised.value).endswith("fallback_error=MarketSnapshotUnavailable")
     rendered = f"{raised.value}\n" + "\n".join(
         record.getMessage() for record in caplog.records
     )
-    assert "error_type=RuntimeError action=try_explicit_fallback" in rendered
+    assert "error_type=MarketSnapshotUnavailable action=try_explicit_fallback" in rendered
     assert "ApiKeySecretError" not in rendered
     assert "secret-primary" not in rendered
     assert "secret-fallback" not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["all_mids", "symbol_tickers"])
+@pytest.mark.parametrize("error_type", [ValueError, TypeError, RuntimeError])
+async def test_hyperliquid_fallback_preserves_deterministic_failures(stage, error_type):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.symbol_ids = {}
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=AsyncMock(return_value={}))
+    original = error_type("invalid connector metadata")
+    bot.cca = SimpleNamespace(fetch=AsyncMock(return_value={}))
+    bot.fetch_tickers_for_symbols = AsyncMock(return_value={})
+    operation = bot.cca.fetch if stage == "all_mids" else bot.fetch_tickers_for_symbols
+    operation.side_effect = original
+    bot._hl_info_url = lambda: "https://example.invalid/info"
+    with pytest.raises(error_type) as caught:
+        await bot._get_live_market_snapshots(["A"], context="test")
+    assert caught.value is original
 
 
 @pytest.mark.asyncio

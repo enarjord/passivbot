@@ -813,8 +813,9 @@ async def test_protective_reader_unavailability_is_classified_before_rust(monkey
     from live.state_refresh import AuthoritativeSurfaceUnavailable
     bot = SimpleNamespace(positions={'A': {'short': {'size': -1.0}}},
                           _get_orchestrator_market_snapshots=AsyncMock(return_value={}))
+    from live.market_snapshot import MarketSnapshotUnavailable
     def unavailable(*a, **k):
-        raise RuntimeError('live snapshot unavailable')
+        raise (MarketSnapshotUnavailable if stage == 'market' else RuntimeError)('live snapshot unavailable')
     if stage == 'market':
         bot._get_orchestrator_market_snapshots.side_effect = unavailable
     else:
@@ -893,25 +894,38 @@ async def test_incomplete_protective_account_uses_execution_cadence(monkeypatch,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported', 'RequestTimeout'])
+@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported', 'RequestTimeout', 'ValueError', 'TypeError', 'RuntimeError', 'KeyError'])
 @pytest.mark.parametrize('path', ['primary', 'missing_symbol'])
-async def test_real_snapshot_provider_preserves_failure_classification_in_protection(monkeypatch, kind, path):
+@pytest.mark.parametrize('exchange', ['bybit', 'hyperliquid'])
+async def test_real_snapshot_provider_preserves_failure_classification_in_protection(monkeypatch, kind, path, exchange):
     from ccxt.base import errors
     from market_snapshot import MarketSnapshotProvider
     from passivbot import Passivbot
     bot, _ = make_bot(monkeypatch)
     bot.positions = {'A': {'short': {'size': -1.0}}}
     bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
-    original = getattr(errors, kind)('connector failure')
+    import builtins
+    error_type = getattr(builtins, kind, None) or getattr(errors, kind)
+    original = error_type('connector failure')
     async def fail(*args):
         raise original
     async def empty():
         return {}
     provider = MarketSnapshotProvider(
-        exchange_name='bybit', fetch_tickers=fail if path == 'primary' else empty,
+        exchange_name=exchange, fetch_tickers=fail if path == 'primary' else empty,
         fetch_tickers_for_symbols=fail,
     )
-    bot._get_orchestrator_market_snapshots = provider.get_snapshots
+    from live import market_data
+    bot.exchange = exchange
+    bot.market_snapshot_provider = provider
+    bot._live_market_snapshot_fetch_max_age_ms = lambda: 5000
+    bot._log_symbols = lambda symbols, limit=12: ','.join(symbols[:limit])
+    bot.symbol_ids = {}
+    bot.cca = SimpleNamespace(fetch=AsyncMock(side_effect=errors.RequestTimeout('network timeout')))
+    bot._hl_info_url = lambda: 'https://example.invalid/info'
+    bot.fetch_tickers_for_symbols = fail
+    bot._get_live_market_snapshots = lambda symbols, **kw: market_data.get_live_market_snapshots(bot, symbols, **kw)
+    bot._get_orchestrator_market_snapshots = lambda symbols: market_data.get_orchestrator_market_snapshots(bot, symbols)
     async def plan(**kwargs):
         return await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, **kwargs)
     bot.calc_protective_panic_orders_to_cancel_and_create = plan
@@ -922,7 +936,24 @@ async def test_real_snapshot_provider_preserves_failure_classification_in_protec
     else:
         with pytest.raises(type(original)) as caught:
             await recovery.protect_and_wait(bot)
-        assert caught.value is original
+        assert caught.value is original or caught.value.__cause__ is original
         bot._sleep_unless_shutdown.assert_not_awaited()
     assert bot._risk_input_recovery.protective_exit_pending
     bot.execute_order_plan_to_exchange.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failed_halted_owner_refresh_uses_shared_execution_cadence(monkeypatch):
+    from passivbot import Passivbot
+    bot, clock = make_bot(monkeypatch)
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_coin = {'short': {'A': {'halted': True}}}
+    bot.positions = {'A': {'short': {'size': -1.0}}}
+    bot._risk_input_recovery = recovery.RecoveryState()
+    bot.refresh_protective_authoritative_state.side_effect = [True, False]
+    bot.live_value = lambda key: 0.25
+    bot._run_halted_hsl_protection_if_active = lambda **kw: Passivbot._run_halted_hsl_protection_if_active(bot, **kw)
+    await recovery.protect_and_wait(bot)
+    assert bot.refresh_protective_authoritative_state.await_count == 2
+    bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage='risk_input_protective_exit')
+    assert clock[0] == 1000.25

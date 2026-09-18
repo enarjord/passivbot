@@ -168,7 +168,7 @@ Retries grow from 5 seconds to 60 seconds for current balances and episode evide
 and to 300 seconds for history balances. Startup and runtime defer the full historical
 cohort until that deadline; a pending exit uses protective-only account refreshes
 until confirmed complete. Recovery runs the bounded protective owners first, then
-applies one shared execution delay; owners must not each add another delay. `risk.input.status` records the cause, attempt count,
+applies one shared execution delay; owners must not each add another delay. Ticker availability is typed across provider and fallback paths; deterministic connector or metadata failures do not enter this recovery. `risk.input.status` records the cause, attempt count,
 limit, elapsed time, next delay, and `protective_exit_and_retry` action. First and
 limit-reaching failures include bounded tracebacks. Polls within backoff do not
 spend attempts; changing reasons does not renew the budget. Successful owning

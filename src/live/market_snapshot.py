@@ -6,10 +6,14 @@ import math
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
-from ccxt.base.errors import ExchangeError
+from ccxt.base.errors import NetworkError
 
 from live.diagnostic_safety import bounded_exception_type
 from utils import utc_ms
+
+
+class MarketSnapshotUnavailable(RuntimeError):
+    """Transient ticker fetch failure or incomplete current quotes."""
 
 
 @dataclass(frozen=True)
@@ -104,9 +108,11 @@ class MarketSnapshotProvider:
                 len(missing),
                 bounded_exception_type(exc),
             )
-            if isinstance(exc, ExchangeError):
+            if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                 raise
-            raise RuntimeError(
+            error_type = (MarketSnapshotUnavailable if isinstance(exc, (NetworkError, OSError))
+                          else RuntimeError)
+            raise error_type(
                 f"[market] ticker snapshot fetch failed for {self.exchange_name}; "
                 f"missing={len(missing)}"
             ) from exc
@@ -166,9 +172,11 @@ class MarketSnapshotProvider:
                     len(missing_after),
                     bounded_exception_type(exc),
                 )
-                if isinstance(exc, ExchangeError):
+                if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                     raise
-                raise RuntimeError(
+                error_type = (MarketSnapshotUnavailable if isinstance(exc, (NetworkError, OSError))
+                              else RuntimeError)
+                raise error_type(
                     f"[market] ticker missing-symbol retry failed for {self.exchange_name}; "
                     f"missing={len(missing_after)}"
                 ) from exc
@@ -234,7 +242,7 @@ class MarketSnapshotProvider:
         )
         if any(symbol not in out for symbol in missing):
             missing_after = [symbol for symbol in missing if symbol not in out]
-            raise RuntimeError(
+            raise MarketSnapshotUnavailable(
                 f"[market] ticker snapshots incomplete | exchange={self.exchange_name} "
                 f"missing={len(missing_after)} symbols={','.join(missing_after[:12])}"
             )

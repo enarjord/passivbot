@@ -103,7 +103,7 @@ from live.event_bus import (
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from runtime_identity import build_runtime_identity, write_runtime_manifest
-from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
+from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -6219,7 +6219,7 @@ class Passivbot:
         if not scopes:
             return False
         if not await self.refresh_protective_authoritative_state():
-            return False
+            return not pace  # Recovery must pace an attempted protective owner.
         risk_input_recovery.validate_current_balances(self)
         now_ms = int(self.get_exchange_time())
         panic_needed = False
@@ -6257,7 +6257,7 @@ class Passivbot:
                 or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
             ):
                 if not await self.refresh_protective_authoritative_state():
-                    return False
+                    return not pace
             now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:
             cooldown_until_ms = state["cooldown_until_ms"]
@@ -16412,11 +16412,16 @@ class Passivbot:
 
         try:
             market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        except MarketSnapshotUnavailable as exc:
+            raise state_refresh.AuthoritativeSurfaceUnavailable(
+                "protective_planning_inputs", "current protective market unavailable"
+            ) from exc
+        try:
             planning_snapshot = planning_gates.build_protective_planning_snapshot(
                 self, symbols, market_snapshots
             )
         except RuntimeError as exc:
-            # These live readers use RuntimeError for unavailable/stale quotes
+            # Snapshot capture uses RuntimeError for unavailable/stale quotes
             # and account epochs. Classify before entering Rust, whose output
             # and validation failures must never become retryable input errors.
             raise state_refresh.AuthoritativeSurfaceUnavailable(
