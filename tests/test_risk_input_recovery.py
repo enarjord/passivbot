@@ -894,7 +894,7 @@ async def test_incomplete_protective_account_uses_execution_cadence(monkeypatch,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported', 'RequestTimeout', 'ValueError', 'TypeError', 'RuntimeError', 'KeyError'])
+@pytest.mark.parametrize('kind', ['AuthenticationError', 'BadRequest', 'NotSupported', 'RequestTimeout', 'MarketSnapshotUnavailable', 'ValueError', 'TypeError', 'RuntimeError', 'KeyError'])
 @pytest.mark.parametrize('path', ['primary', 'missing_symbol'])
 @pytest.mark.parametrize('exchange', ['bybit', 'hyperliquid'])
 async def test_real_snapshot_provider_preserves_failure_classification_in_protection(monkeypatch, kind, path, exchange):
@@ -905,7 +905,9 @@ async def test_real_snapshot_provider_preserves_failure_classification_in_protec
     bot.positions = {'A': {'short': {'size': -1.0}}}
     bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
     import builtins
-    error_type = getattr(builtins, kind, None) or getattr(errors, kind)
+    from live.market_snapshot import MarketSnapshotUnavailable
+    error_type = (MarketSnapshotUnavailable if kind == "MarketSnapshotUnavailable"
+                  else getattr(builtins, kind, None) or getattr(errors, kind))
     original = error_type('connector failure')
     async def fail(*args):
         raise original
@@ -930,7 +932,7 @@ async def test_real_snapshot_provider_preserves_failure_classification_in_protec
         return await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, **kwargs)
     bot.calc_protective_panic_orders_to_cancel_and_create = plan
     bot.execute_order_plan_to_exchange = AsyncMock()
-    if kind == 'RequestTimeout':
+    if kind in {'RequestTimeout', 'MarketSnapshotUnavailable'}:
         await recovery.protect_and_wait(bot)
         bot._sleep_unless_shutdown.assert_awaited_once()
     else:

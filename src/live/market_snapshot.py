@@ -110,7 +110,7 @@ class MarketSnapshotProvider:
             )
             if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                 raise
-            error_type = (MarketSnapshotUnavailable if isinstance(exc, (NetworkError, OSError))
+            error_type = (MarketSnapshotUnavailable if isinstance(exc, (MarketSnapshotUnavailable, NetworkError, OSError))
                           else RuntimeError)
             raise error_type(
                 f"[market] ticker snapshot fetch failed for {self.exchange_name}; "
@@ -174,7 +174,7 @@ class MarketSnapshotProvider:
                 )
                 if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                     raise
-                error_type = (MarketSnapshotUnavailable if isinstance(exc, (NetworkError, OSError))
+                error_type = (MarketSnapshotUnavailable if isinstance(exc, (MarketSnapshotUnavailable, NetworkError, OSError))
                               else RuntimeError)
                 raise error_type(
                     f"[market] ticker missing-symbol retry failed for {self.exchange_name}; "
