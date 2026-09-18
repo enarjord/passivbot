@@ -528,6 +528,7 @@ def get_template_config():
                         },
                         "successive_halving": {
                             "enabled": False,
+                            "screening_scenarios": [],
                             "history_fractions": [0.25, 0.5, 1.0],
                             "min_survivors": 64,
                             "survival_fraction": 0.5,

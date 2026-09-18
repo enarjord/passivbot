@@ -75,6 +75,7 @@ GPU_DEFAULTS = {
     },
     "successive_halving": {
         "enabled": False,
+        "screening_scenarios": [],
         "history_fractions": [0.25, 0.5, 1.0],
         "survival_fraction": 0.5,
         "min_survivors": 64,
@@ -555,6 +556,12 @@ def validate_gpu_preparation_scope(
         raise ValueError(
             "optimize.gpu.successive_halving requires trailing_martingale"
         )
+    if (
+        bool(halving_config.get("enabled"))
+        and halving_config.get("screening_scenarios")
+        and not suite_enabled
+    ):
+        raise ValueError("GPU screening_scenarios requires backtest.suite_enabled")
     if bool(suite_cfg.get("enabled")):
         from optimization.warmup import _apply_config_overrides
 
@@ -960,15 +967,50 @@ def _evaluate_gpu_proxy_history(proxy, candidates, history_fraction):
     return proxy.evaluate(candidates)
 
 
+def _validate_gpu_screening_scenarios(labels, available_labels, suite_evaluator):
+    """A partial suite must retain explicitly selected scoring/limit scenarios."""
+    unknown = set(labels) - set(available_labels)
+    if unknown:
+        raise ValueError(f"GPU screening_scenarios contains unknown labels: {sorted(unknown)}")
+    required = {
+        basis.scenario
+        for basis in suite_evaluator.objective_bases
+        if basis.scenario is not None
+    }
+    required.update(
+        check["scenario"] for check in suite_evaluator.base.limit_checks
+        if check.get("scenario") is not None
+    )
+    missing = required - set(labels)
+    if missing:
+        raise ValueError(
+            "GPU screening_scenarios must include scenarios explicitly selected by "
+            f"objectives or limits: {sorted(missing)}"
+        )
+
+
 def _evaluate_gpu_suite_proxies(
     suite_evaluator, scenario_proxies, candidates, *, history_fraction=1.0,
-    batch_compatible_scenarios=False,
+    batch_compatible_scenarios=False, screening_scenarios=(),
 ) -> list[dict]:
     """Screen one candidate batch across suite scenarios with canonical reducers."""
 
     from metrics_schema import build_scenario_metrics
     from suite_runner import ScenarioResult, SuiteScenario
 
+    if screening_scenarios:
+        _validate_gpu_screening_scenarios(
+            screening_scenarios, [ctx.label for ctx, _, _ in scenario_proxies],
+            suite_evaluator,
+        )
+    # Clear excluded scenarios too: full seed screens may have left profiles behind.
+    for _, exchange_proxies, _ in scenario_proxies:
+        for _, proxy in exchange_proxies:
+            if hasattr(proxy, "last_profile"):
+                proxy.last_profile = {}
+    if screening_scenarios and float(history_fraction) < 1.0:
+        selected = set(screening_scenarios)
+        scenario_proxies = [item for item in scenario_proxies if item[0].label in selected]
     scenario_rows = []
     groups = {}
     for ctx, exchange_proxies, parameter_overrides in scenario_proxies:
@@ -990,8 +1032,6 @@ def _evaluate_gpu_suite_proxies(
             groups.setdefault(group_key, []).append(
                 (ctx, exchange, proxy, scenario_candidates, rows)
             )
-            if hasattr(proxy, "last_profile"):
-                proxy.last_profile = {}
         if not exchange_rows:
             raise ValueError(
                 f"GPU suite scenario {ctx.label!r} has no prepared proxy datasets"
@@ -1129,6 +1169,16 @@ def _resolve_options(config: dict) -> dict:
             + ", ".join(unknown_halving)
         )
     halving["enabled"] = bool(halving["enabled"])
+    screening_scenarios = halving["screening_scenarios"]
+    if (
+        not isinstance(screening_scenarios, list)
+        or any(not isinstance(label, str) or not label.strip() for label in screening_scenarios)
+        or len(set(screening_scenarios)) != len(screening_scenarios)
+    ):
+        raise ValueError(
+            "optimize.gpu.successive_halving.screening_scenarios must be an array "
+            "of unique non-empty scenario labels"
+        )
     try:
         fractions = [float(value) for value in halving["history_fractions"]]
     except (TypeError, ValueError) as exc:
@@ -4455,6 +4505,20 @@ def run_backend(
         raise ValueError(
             "optimize.gpu.successive_halving requires trailing_martingale"
         )
+    screening_scenarios = (
+        halving_policy["screening_scenarios"] if halving_policy["enabled"] else []
+    )
+    if screening_scenarios:
+        if not suite_enabled:
+            raise ValueError("GPU screening_scenarios requires backtest.suite_enabled")
+        _validate_gpu_screening_scenarios(
+            screening_scenarios, [item["ctx"].label for item in suite_inputs],
+            evaluator_for_pool,
+        )
+        logging.info(
+            "GPU partial-suite screening | early_scenarios=%s full_scenarios=%d",
+            screening_scenarios, scenario_count,
+        )
     if max_coin_count > 1:
         multicoin_sides = (
             list(suite_multicoin_sides)
@@ -4851,6 +4915,7 @@ def run_backend(
                 candidates,
                 history_fraction=history_fraction,
                 batch_compatible_scenarios=bool(halving_policy["enabled"]),
+                screening_scenarios=screening_scenarios,
             )
 
     else:

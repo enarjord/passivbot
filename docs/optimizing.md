@@ -765,6 +765,7 @@ GPU-specific settings live under `optimize.gpu`:
       },
       "successive_halving": {
         "enabled": false,
+        "screening_scenarios": [],
         "history_fractions": [0.25, 0.5, 1.0],
         "min_survivors": 64,
         "survival_fraction": 0.5
@@ -862,6 +863,14 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   explicitly when experimenting with aggressive cuts. Very small final batches may
   underutilize the GPU. Compare useful full-history exact results per hour and missed good
   candidates, rather than interpreting theoretical candle-work savings as measured speedups.
+- `successive_halving.screening_scenarios` optionally lists suite scenario labels for all
+  partial-history rungs. The default `[]` evaluates every scenario. A non-empty list requires
+  suite mode and must include any scenario explicitly selected by an objective or limit.
+  Reducers and limits operate on that subset during screening, so partial feasibility is only
+  a promotion heuristic. Every full-history rung, full-history seed screen, and exact CPU
+  validation still evaluates the complete suite. Changing the subset changes checkpoint
+  identity. Choose representative scenarios and measure missed good candidates before relying
+  on aggressive screening; omitted scenarios may expose failures the subset cannot detect.
 - `validate_per_generation` caps exact candidates selected from each proxy generation.
 - `drift_probes` reserves at least part of that validation budget for candidates away from the
   proxy front.

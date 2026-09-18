@@ -869,6 +869,7 @@ def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
     options = _resolve_options(config)
     assert options["successive_halving"] == {
         "enabled": False,
+        "screening_scenarios": [],
         "history_fractions": [0.25, 0.5, 1.0],
         "survival_fraction": 0.5,
         "min_survivors": 64,
@@ -2695,6 +2696,9 @@ def test_gpu_preparation_preflight_halving_requires_tm_but_allows_suite():
         {"enabled": True, "scenarios": []},
         torch_module=_fake_torch_with_mps(),
     )
+    config["optimize"]["gpu"]["successive_halving"]["screening_scenarios"] = ["small"]
+    with pytest.raises(ValueError, match="requires backtest.suite_enabled"):
+        validate_gpu_preparation_scope(config, torch_module=_fake_torch_with_mps())
 
 
 def test_gpu_preparation_preflight_rejects_unmodeled_suite_override_early():
@@ -7002,6 +7006,7 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
         },
         proxy_evaluation_policy={
             "enabled": False,
+            "screening_scenarios": ["small", "large"],
             "history_fractions": [0.25, 0.5, 1.0],
             "history_window": "recent_suffix_v1",
         },
@@ -7009,6 +7014,7 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
     assert contract["version"] == 2
     assert contract["proxy_evaluation"]["enabled"] is False
     assert contract["proxy_evaluation"]["history_window"] == "recent_suffix_v1"
+    assert contract["proxy_evaluation"]["screening_scenarios"] == ["small", "large"]
     ordinary_contract = _gpu_search_checkpoint_contract(
         key_paths=key_paths,
         bounds=bounds,
@@ -7049,6 +7055,9 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
     changed_proxy_policy = copy.deepcopy(contract)
     changed_proxy_policy["proxy_evaluation"]["enabled"] = True
     mutations.append(changed_proxy_policy)
+    changed_screening_scenarios = copy.deepcopy(contract)
+    changed_screening_scenarios["proxy_evaluation"]["screening_scenarios"] = ["small"]
+    mutations.append(changed_screening_scenarios)
     changed_history_window = copy.deepcopy(contract)
     changed_history_window["proxy_evaluation"]["history_window"] = (
         "historical_prefix_v1"
@@ -7994,3 +8003,75 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching,
     assert candidates == [{}, {'value': 5}]
     assert sum(p.last_profile.get('count', 0) for p in [first, second]) == 4
     assert all('stale' not in p.last_profile for p in [first, second])
+
+
+@pytest.mark.parametrize('labels', ['a', None, [None], [['a']], [''], [' '], ['a', 'a']])
+def test_gpu_halving_screening_labels_reject_invalid_shapes(labels):
+    config = _long_only_ema_config()
+    config['optimize']['gpu']['successive_halving'] = {'screening_scenarios': labels}
+    with pytest.raises(ValueError, match='unique non-empty scenario labels'):
+        _resolve_options(config)
+
+
+@pytest.mark.parametrize('fraction,expected_labels', [
+    (0.1, ['first', 'last']), (1.0, ['first', 'middle', 'last']),
+])
+def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(fraction, expected_labels):
+    calls = []
+    class Proxy:
+        def __init__(self, label):
+            self.label = label
+            self.last_profile = {'stale': 99}
+        def recent_window_for_history_fraction(self, value):
+            return 10, 20
+        def evaluate(self, candidates, **kwargs):
+            calls.append((self.label, kwargs, [c['x'] for c in candidates]))
+            self.last_profile = {'rows': len(candidates)}
+            return [{'adg_strategy_eq': c['x']} for c in candidates]
+    class Suite:
+        objective_bases = [SimpleNamespace(scenario='first')]
+        base = SimpleNamespace(limit_checks=[{'scenario': 'last'}])
+        @staticmethod
+        def score_scenario_results(results):
+            assert [r.scenario.label for r in results] == expected_labels
+            values = [r.metrics['stats']['adg_strategy_eq']['mean'] for r in results]
+            return dict(objectives=(-min(values),), unpenalized_objectives=(-min(values),),
+                        constraint_violation=0, suite_metrics={})
+    proxies = [Proxy(label) for label in ['first', 'middle', 'last']]
+    candidates = [{'x': 1}, {'x': 2}]
+    rows = _evaluate_gpu_suite_proxies(
+        Suite(), [(SimpleNamespace(label=p.label), [('x', p)], {'x': 3} if i == 2 else {})
+                  for i, p in enumerate(proxies)], candidates,
+        history_fraction=fraction, screening_scenarios=['last', 'first'],
+    )
+    assert [c[0] for c in calls] == expected_labels
+    assert calls[-1][2] == [3, 3]
+    assert all(c[1] == (dict(history_start_step=10, trade_start_step=20) if fraction < 1 else {}) for c in calls)
+    assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-1,), (-2,)]
+    assert all('stale' not in p.last_profile for p in proxies)
+    if fraction < 1:
+        assert proxies[1].last_profile == {}
+    assert candidates == [{'x': 1}, {'x': 2}]
+
+
+@pytest.mark.parametrize('labels,basis,checks,error', [
+    (['unknown'], None, [], 'unknown labels'),
+    (['first'], 'second', [], 'explicitly selected'),
+    (['first'], None, [{'scenario': 'second'}], 'explicitly selected'),
+])
+def test_partial_scenario_screening_rejects_missing_required_scenarios_before_dispatch(labels, basis, checks, error):
+    suite = SimpleNamespace(objective_bases=[SimpleNamespace(scenario=basis)],
+                            base=SimpleNamespace(limit_checks=checks))
+    with pytest.raises(ValueError, match=error):
+        _evaluate_gpu_suite_proxies(suite, [
+            (SimpleNamespace(label='first'), [('x', object())], {}),
+            (SimpleNamespace(label='second'), [('x', object())], {}),
+        ], [{}], history_fraction=.1, screening_scenarios=labels)
+
+
+def test_halving_scenario_labels_survive_canonical_config_roundtrip():
+    from config_utils import format_config
+    config = _long_only_ema_config()
+    config['optimize']['gpu']['successive_halving']['screening_scenarios'] = ['a', 'b']
+    normalized = format_config(config, verbose=False)
+    assert _resolve_options(normalized)['successive_halving']['screening_scenarios'] == ['a', 'b']
