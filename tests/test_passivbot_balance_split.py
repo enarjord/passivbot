@@ -11566,6 +11566,12 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
     signal_mode,
 ):
     bot = Passivbot.__new__(Passivbot)
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.config = {"live": {"risk_input_max_attempts": 10}}
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
     bot.balance = 100.0
 
     async def stop_after_supervision():
@@ -13523,6 +13529,9 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     from live.state_refresh import AuthoritativeSurfaceUnavailable
 
     bot = Passivbot.__new__(Passivbot)
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
     bot.config = {"live": {"risk_input_max_attempts": 10}}
     bot._monitor_flush_snapshot = AsyncMock()
     bot.balance = 100.0
@@ -13564,7 +13573,10 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
 async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monkeypatch, failure, permanent):
     from live import risk_input_recovery as recovery
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"risk_input_max_attempts": 3}}
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
+    bot.config = {"live": {"risk_input_max_attempts": 3, "hsl_signal_mode": "coin"}}
     bot.balance = bot.balance_raw = 100.0
     bot.stop_signal_received = False
     bot.debug_mode = True
@@ -13596,7 +13608,10 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
 
     async def sleep(seconds, *, stage):
         clock[0] += seconds
-        assert cycle[0] < 6
+        if permanent and failure == "history" and cycle[0] >= 6:
+            bot.stop_signal_received = True
+        else:
+            assert cycle[0] < 6
 
     async def execute(*, prepare_cycle):
         if failure == "late_balance" and (permanent or cycle[0] == 1):
@@ -13611,6 +13626,12 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
     bot.prepare_planning_universe = AsyncMock()
     bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
     bot.execute_to_exchange = AsyncMock(side_effect=execute)
+    if permanent and failure == "history":
+        await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
+        assert bot._risk_input_recovery.attempts >= 3
+        bot.execute_to_exchange.assert_not_awaited()
+        bot.restart_bot_on_too_many_errors.assert_not_awaited()
+        return
     if permanent:
         with pytest.raises(FatalBotException, match="3/3"):
             await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
@@ -13628,6 +13649,9 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
 async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch):
     from live import risk_input_recovery as recovery
     bot = Passivbot.__new__(Passivbot)
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
     bot.runtime_identity = TEST_RUNTIME_IDENTITY
     bot._runtime_manifest_written = True
     bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"

@@ -17,7 +17,10 @@ def make_bot(monkeypatch, *, hsl=True):
         balance=100.0,
         balance_raw=100.0,
         stop_signal_received=False,
-        _equity_hard_stop_enabled=lambda: hsl,
+        _equity_hard_stop_enabled=lambda *a, **k: hsl,
+        positions={},
+        open_orders={},
+        refresh_protective_authoritative_state=AsyncMock(return_value=True),
         _equity_hard_stop_signal_mode=lambda: "coin",
         _equity_hard_stop_start_coin_history_replay=AsyncMock(),
         _equity_hard_stop_initialize_from_history=AsyncMock(),
@@ -313,7 +316,7 @@ async def test_risk_event_sink_failure_preserves_attempt_logs_and_terminal_stop(
     monkeypatch, caplog, raises
 ):
     from passivbot_exceptions import FatalBotException
-    bot, clock = make_bot(monkeypatch)
+    bot, clock = make_bot(monkeypatch, hsl=False)
     bot.config["live"]["risk_input_max_attempts"] = 2
     bot.balance_raw = 0.0
     def fail(*args, **kwargs):
@@ -340,7 +343,7 @@ async def test_risk_event_sink_failure_preserves_attempt_logs_and_terminal_stop(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("startup", [True, False])
 @pytest.mark.parametrize("failure", ["current", "history", "alternating"])
-async def test_budget_exhaustion_is_terminal_and_diagnostics_are_safe(
+async def test_hsl_budget_exhaustion_escalates_but_keeps_recovering(
     monkeypatch, caplog, startup, failure
 ):
     from passivbot_exceptions import FatalBotException
@@ -354,9 +357,7 @@ async def test_budget_exhaustion_is_terminal_and_diagnostics_are_safe(
                 failure == "alternating" and attempt % 2 == 0
             ) else 100.0
             if attempt == 10:
-                with pytest.raises(FatalBotException, match="10/10") as raised:
-                    await recovery.ensure_ready(bot, startup=startup)
-                assert isinstance(raised.value.__cause__, recovery.RiskInputUnavailable)
+                assert not await recovery.ensure_ready(bot, startup=startup)
             else:
                 assert not await recovery.ensure_ready(bot, startup=startup)
                 # Polls and a different reason inside the deadline spend no attempt.
@@ -368,8 +369,8 @@ async def test_budget_exhaustion_is_terminal_and_diagnostics_are_safe(
     assert len(attempts) == 10
     assert attempts[-1].levelno == logging.ERROR
     assert "max_attempts=10" in attempts[-1].message
-    assert "retry_delay_seconds=0.0" in attempts[-1].message
-    assert "stop_without_restart" in attempts[-1].message
+    assert "retry_delay_seconds=0.0" not in attempts[-1].message
+    assert "protective_exit_and_retry" in attempts[-1].message
     assert caplog.text.count("Risk input traceback (") == 2
     assert "src/live/risk_input_recovery.py:" in caplog.text
     assert "in validate_" in caplog.text
@@ -418,8 +419,8 @@ async def test_protective_failures_share_budget_and_tracebacks_exclude_raw_text(
     bot._run_halted_hsl_protection_if_active.side_effect = fail
     with caplog.at_level(logging.WARNING):
         await recovery.protect_and_wait(bot)
-        with pytest.raises(FatalBotException, match="2/2"):
-            await recovery.protect_and_wait(bot)
+        await recovery.protect_and_wait(bot)
+        assert bot._risk_input_recovery.attempts == 2
     assert "PRIVATE_VALUE" not in caplog.text
     assert "ValueError" in caplog.text
     assert "invalid_history" in caplog.text
@@ -470,7 +471,7 @@ async def test_real_pipeline_risk_attempt_delivery_and_failure_fallback(
 ):
     from live.event_bus import ConsoleSummarySink
     from passivbot_exceptions import FatalBotException
-    bot, clock = make_bot(monkeypatch)
+    bot, clock = make_bot(monkeypatch, hsl=False)
     bot.config["live"]["risk_input_max_attempts"] = 2
     bot.balance_raw = 0.0
     class BrokenSink:
@@ -525,9 +526,8 @@ async def test_episode_evidence_uses_bounded_recovery_and_retains_scope(monkeypa
     bot._run_latched_hsl_supervisor_if_active.assert_awaited_once()
     assert not await recovery.ensure_ready(bot, startup=startup)
     clock[0] += 10
-    with pytest.raises(FatalBotException, match='without automatic restart'):
-        await recovery.ensure_ready(bot, startup=startup)
-    assert emitted[-1]['details']['action'] == 'stop_without_restart'
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    assert emitted[-1]['details']['action'] == 'protective_exit_and_retry'
     assert emitted[-1]['details']['blocked_seconds'] == 15.0
 
 
@@ -547,3 +547,128 @@ async def test_episode_evidence_recovery_after_late_fill_and_unrelated_surface_i
     bot._equity_hard_stop_check.side_effect = AuthoritativeSurfaceUnavailable('positions', 'bad')
     with pytest.raises(AuthoritativeSurfaceUnavailable):
         await recovery.ensure_ready(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('startup', [False, True])
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+async def test_green_exposure_exits_before_recovery_even_if_history_recovers(monkeypatch, startup, mode):
+    from live.hsl_episode import EpisodeEvidenceUnavailable
+    bot, clock = make_bot(monkeypatch)
+    bot._equity_hard_stop_signal_mode = lambda: mode
+    bot._hsl_state = lambda side: {'halted': False}
+    bot.positions = {'A': {'short': {'size': -2.0}}, 'UNMANAGED': {'short': {'size': -1.0}}}
+    bot.open_orders = {'A': [{'id': 'entry', 'position_side': 'short', 'reduce_only': False}]}
+    bot._equity_hard_stop_enabled = lambda side=None, symbol=None: symbol != 'UNMANAGED' if mode == 'coin' else True
+    bot.live_value = lambda key: 0.25
+    bot._sleep_unless_shutdown = AsyncMock()
+    operation = bot._equity_hard_stop_start_coin_history_replay if startup and mode == 'coin' else bot._equity_hard_stop_initialize_from_history if startup else bot._equity_hard_stop_check
+    operation.side_effect = EpisodeEvidenceUnavailable('position_mismatch', pside='short', symbol='A')
+    plans = []
+    async def plan(*, target_psides_by_symbol):
+        plans.append(target_psides_by_symbol)
+        return bot.open_orders['A'], [{'symbol': 'A', 'position_side': 'short', 'reduce_only': True}]
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(side_effect=plan)
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    assert not await recovery.ensure_ready(bot, startup=startup)
+    operation.side_effect = None
+    for remaining in (-2.0, -1.0):
+        bot.positions['A']['short']['size'] = remaining
+        assert not await recovery.ensure_ready(bot, startup=startup)
+        await recovery.protect_and_wait(bot)
+        assert bot._risk_input_recovery.protective_exit_pending
+    assert len(plans) == 2
+    assert all(p['A'] == {'short'} for p in plans)
+    assert all(('UNMANAGED' in p) == (mode != 'coin') for p in plans)
+    assert operation.await_count == 1
+    assert bot.execute_order_plan_to_exchange.await_args.kwargs == {'configure_creations': False}
+    # Submitted orders do not release the gate. Only fresh account confirmation does.
+    bot.positions['A']['short']['size'] = 0.0
+    bot.positions['UNMANAGED']['short']['size'] = 0.0
+    bot.open_orders['A'] = []
+    await recovery.protect_and_wait(bot)
+    assert not bot._risk_input_recovery.protective_exit_pending
+    clock[0] = bot._risk_input_recovery.retry_at
+    assert await recovery.ensure_ready(bot, startup=startup)
+    recovery.mark_ready(bot)
+    assert bot._risk_input_recovery is None
+
+
+@pytest.mark.asyncio
+async def test_hsl_recovery_survives_limit_and_new_position_during_backoff(monkeypatch):
+    bot, clock = make_bot(monkeypatch)
+    bot.config['live']['risk_input_max_attempts'] = 1
+    bot._equity_hard_stop_check.side_effect = invalid_history
+    for _ in range(12):
+        assert not await recovery.ensure_ready(bot)
+        clock[0] = bot._risk_input_recovery.retry_at
+    assert bot._risk_input_recovery.attempts == 12
+    async def fresh():
+        bot.positions = {'A': {'short': {'size': -1.0}}}
+        return True
+    bot.refresh_protective_authoritative_state.side_effect = fresh
+    bot.live_value = lambda key: 0.25
+    bot._sleep_unless_shutdown = AsyncMock()
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_and_wait(bot)
+    assert bot._risk_input_recovery.protective_exit_pending
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_awaited_once_with(target_psides_by_symbol={'A': {'short'}})
+
+
+@pytest.mark.asyncio
+async def test_unready_exit_requires_fresh_account_and_cancels_flat_entries(monkeypatch):
+    bot, clock = make_bot(monkeypatch)
+    bot.open_orders = {'A': [{'position_side': 'short', 'id': 'entry'}]}
+    bot._equity_hard_stop_check.side_effect = invalid_history
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=(bot.open_orders['A'], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot.live_value = lambda key: 0.25
+    assert not await recovery.ensure_ready(bot)
+    bot.refresh_protective_authoritative_state.return_value = False
+    await recovery.protect_and_wait(bot)
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    bot.refresh_protective_authoritative_state.return_value = True
+    bot._sleep_unless_shutdown = AsyncMock()
+    await recovery.protect_and_wait(bot)
+    assert bot.execute_order_plan_to_exchange.await_args.args == (bot.open_orders['A'], [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('reason', ['pending_pnl', 'degraded_pnl', 'fill_history_coverage', 'balance_consistency_check'])
+async def test_startup_historical_readiness_failure_still_exits_exposure(monkeypatch, reason):
+    bot, clock = make_bot(monkeypatch)
+    bot.positions = {'A': {'short': {'size': -1.0}}}
+    bot._last_authoritative_block_reason = reason
+    bot.refresh_authoritative_state.return_value = False
+    bot.live_value = lambda key: 0.25
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], [{'reduce_only': True}]))
+    async def execute(*args, **kwargs):
+        bot.stop_signal_received = True
+    bot.execute_order_plan_to_exchange = AsyncMock(side_effect=execute)
+    bot._sleep_unless_shutdown = AsyncMock()
+    await recovery.wait_for_startup(bot)
+    bot._equity_hard_stop_start_coin_history_replay.assert_not_awaited()
+    bot.execute_order_plan_to_exchange.assert_awaited_once()
+    assert bot._risk_input_recovery.protective_exit_pending
+
+
+@pytest.mark.asyncio
+async def test_unready_exit_does_not_starve_proven_cooldown_protection(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'short': {'size': -1.0}}, 'B': {'short': {'size': -2.0}}}
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_coin = {'short': {'B': {'halted': True}}}
+    bot._equity_hard_stop_check.side_effect = invalid_history
+    bot.live_value = lambda key: 0.25
+    bot._sleep_unless_shutdown = AsyncMock()
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    bot._run_halted_hsl_protection_if_active.return_value = True
+    assert not await recovery.ensure_ready(bot)
+    for _ in range(2):
+        await recovery.protect_and_wait(bot)
+    assert bot._run_halted_hsl_protection_if_active.await_count == 2
+    assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
+        'target_psides_by_symbol': {'A': {'short'}},
+    }

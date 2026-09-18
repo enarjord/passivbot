@@ -6451,6 +6451,11 @@ class Passivbot:
                         "fill_history_coverage",
                         "balance_consistency_check",
                     }:
+                        if risk_input_recovery.defer_authoritative_hsl(self):
+                            await risk_input_recovery.protect_and_wait(
+                                self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                            )
+                            continue
                         if (
                             authoritative_block_reason
                             == "balance_consistency_check"
@@ -16368,12 +16373,11 @@ class Passivbot:
                     targets.setdefault(symbol, set()).add(pside)
         return targets
 
-    async def calc_protective_panic_ideal_orders_orchestrator(self):
+    async def calc_protective_panic_ideal_orders_orchestrator(self, *, target_psides_by_symbol=None):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
-        target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(
-            self
-        )
+        if target_psides_by_symbol is None:
+            target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(self)
         self._protective_panic_reconcile_psides_by_symbol = {
             symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
         }
@@ -20136,9 +20140,12 @@ class Passivbot:
         """Determine which existing orders to cancel and which new ones to place."""
         return await reconciler.calc_orders_to_cancel_and_create(self)
 
-    async def calc_protective_panic_orders_to_cancel_and_create(self):
+    async def calc_protective_panic_orders_to_cancel_and_create(self, *, target_psides_by_symbol=None):
         """Determine protective cancels/reduce-only creates for RED panic supervision."""
-        ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator()
+        ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator(
+            **({"target_psides_by_symbol": target_psides_by_symbol}
+               if target_psides_by_symbol is not None else {})
+        )
         actual_symbols = sorted(
             set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
             | set(ideal_orders)

@@ -98,8 +98,11 @@ symbol-scoped requirements are fresh, even if unrelated strategy surfaces are un
 
 Numeric non-positive/non-finite current balances, unusable historical HSL balance denominators,
 and unavailable HSL episode evidence have an explicit live readiness policy in `features/equity_hard_stop_loss.md`: pause ordinary
-planning, retain valid protection, refresh and retry with capped backoff and a finite per-episode
-attempt budget, and expose recovery. Exhaustion stops terminally without full-bot auto-restart.
+planning and refresh with capped backoff. With HSL enabled, conservatively exit exposed
+HSL-managed scopes through the existing Rust panic planner, preserve proven cooldown/manual
+ownership, and continue recovery after the attempt limit rather than terminating protection.
+Without HSL, exhaustion remains terminal. The conservative exit is a documented live
+availability policy and may precede the normal RED threshold.
 This is unavailability, not a substitute input or permission to ignore Rust validation. Shape/type
 errors, malformed configuration, and unrelated validation errors are outside this policy.
 

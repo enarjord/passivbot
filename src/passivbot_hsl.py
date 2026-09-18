@@ -6365,10 +6365,17 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         "revised_episode_replay_unavailable", pside=pside, symbol=symbol,
                     )
                 return True
-            state["episode_evidence"] = basis
             replay = evidence.rows
             boundaries = [replay[index][0] for index in evidence.flatten_indices]
+            if previous is not None:
+                # Replay has already consumed these exact boundaries. The value
+                # comparison above still detects corrections and late arrivals.
+                # Do not repeatedly reconstruct an unchanged historical flatten.
+                consumed = {previous.rows[index][0] for index in previous.flatten_indices}
+                boundaries = [ts for ts in boundaries if ts not in consumed
+                              and (previous.start_ms is None or ts >= previous.start_ms)]
             if not boundaries:
+                state["episode_evidence"] = basis
                 continue
             latest_boundary_ts = max(boundaries)
             for flatten_ts in boundaries:

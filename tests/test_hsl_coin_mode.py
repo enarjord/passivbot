@@ -5215,12 +5215,14 @@ async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavail
 
     bot.get_balance_equity_history = unavailable
 
-    with pytest.raises(
-        hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
-    ):
-        await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
-            bot, 300_000, 900.0
-        )
+    for _ in range(2):
+        with pytest.raises(
+            hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
+        ):
+            await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
+                bot, 300_000, 900.0
+            )
+        assert state.get("episode_evidence") is None
     assert state["runtime"] is previous_runtime
     assert state["last_metrics"] is previous_metrics
     assert state["pnl_reset_timestamp_ms"] is None
@@ -5950,10 +5952,12 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     bot.execute_to_exchange.assert_not_awaited()
     if policy == "panic":
         assert calls == [
+            "refresh",  # Conservative recovery checks fresh exposure first.
             "refresh",
             "plan",
             "execute",
             "pace",
+            "refresh",
             "refresh",
             "plan",
             "execute",

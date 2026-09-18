@@ -238,3 +238,36 @@ async def test_corrected_closed_episode_inside_cooldown_requires_replay(monkeypa
     with pytest.raises(hsl.EpisodeEvidenceUnavailable, match='revised_episode_replay_unavailable'):
         await bot._equity_hard_stop_check_coin()
     replay.assert_awaited_once_with(bot, 'long', 'A')
+
+
+@pytest.mark.asyncio
+async def test_consumed_historical_boundary_does_not_replay_forever(monkeypatch):
+    from unittest.mock import AsyncMock
+    bot = make_coin_bot()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.get_exchange_time = lambda: 600_000
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    events = [
+        dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=0.0),
+        dict(timestamp=180_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', 540_000, 100.0, 0.0, 0.0, 0.0)
+    state = bot._hsl_coin_state('long', 'A')
+    state['episode_evidence'] = hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A')
+    # The input tape was fully consumed by replay, but no reset watermark was
+    # materialized for an old boundary outside the reconstructed price rows.
+    assert state['pnl_reset_timestamp_ms'] is None
+    replay = AsyncMock(return_value=True)
+    monkeypatch.setattr(hsl, '_equity_hard_stop_replay_live_restart', replay)
+    await bot._equity_hard_stop_check_coin()
+    await bot._equity_hard_stop_check_coin()
+    replay.assert_not_awaited()
+    assert state['last_metrics']['timestamp_ms'] == 600_000
+    # A correction still invalidates consumed evidence and requests replay.
+    events[1]['pnl'] = -2.0
+    replay.return_value = False
+    with pytest.raises(hsl.EpisodeEvidenceUnavailable):
+        await bot._equity_hard_stop_check_coin()
+    replay.assert_awaited_once()

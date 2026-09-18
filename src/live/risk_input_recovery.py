@@ -80,6 +80,7 @@ class RecoveryState:
     retry_at: float = 0.0
     max_attempts: int = 10
     blocked_since: float = 0.0
+    protective_exit_pending: bool = False
 
 
 def _emit(bot, *, reason, status, details, level, exc=None):
@@ -150,8 +151,13 @@ def defer(bot, exc):
     state.reason = exc.reason
     state.attempts += 1
     exhausted = state.attempts >= state.max_attempts
+    hsl_enabled = bot._equity_hard_stop_enabled()
+    # History repair must never terminate the owner of live HSL protection.
+    # Commit to reducing exposed HSL scopes before accepting recovery, even if
+    # the next historical read succeeds. No approximate risk sample is invented.
+    state.protective_exit_pending |= hsl_enabled and bool(_unready_hsl_targets(bot))
     cap = 300.0 if exc.reason == ReasonCodes.HSL_HISTORY_BALANCE_UNAVAILABLE else 60.0
-    delay = 0.0 if exhausted else min(cap, 5.0 * 2 ** min(state.attempts - 1, 6))
+    delay = 0.0 if exhausted and not hsl_enabled else min(cap, 5.0 * 2 ** min(state.attempts - 1, 6))
     state.retry_at = now + delay
     _emit(bot, reason=exc.reason, status="failed" if exhausted else "deferred",
           level="error" if exhausted else "warning", details={
@@ -160,9 +166,10 @@ def defer(bot, exc):
         "max_attempts": state.max_attempts,
         "blocked_seconds": max(0.0, now - state.blocked_since),
         "retry_delay_seconds": delay,
-        "action": "stop_without_restart" if exhausted else "block_ordinary_trading_and_retry",
-    }, exc=exc if state.attempts == 1 or exhausted else None)
-    if exhausted:
+        "action": ("protective_exit_and_retry" if hsl_enabled else
+                   "stop_without_restart" if exhausted else "block_ordinary_trading_and_retry"),
+    }, exc=exc if state.attempts in (1, state.max_attempts) else None)
+    if exhausted and not hsl_enabled:
         raise FatalBotException(
             f"Risk input recovery exhausted after {state.attempts}/{state.max_attempts} "
             f"failed attempts: {exc.reason}; stopping without automatic restart"
@@ -180,6 +187,17 @@ def defer_episode_evidence(bot, exc):
     defer(bot, unavailable)
 
 
+def defer_authoritative_hsl(bot):
+    """Route historical account-readiness blockers through the same exit policy."""
+    reason = getattr(bot, "_last_authoritative_block_reason", None)
+    if not bot._equity_hard_stop_enabled() or reason not in {
+        "pending_pnl", "degraded_pnl", "fill_history_coverage", "balance_consistency_check",
+    }:
+        return False
+    defer(bot, RiskInputUnavailable(ReasonCodes.HSL_EPISODE_EVIDENCE_UNAVAILABLE, cause=reason))
+    return True
+
+
 def mark_ready(bot):
     """Reset only after the owner completes its risk-consuming operation."""
     state = getattr(bot, "_risk_input_recovery", None)
@@ -195,6 +213,8 @@ def mark_ready(bot):
 async def ensure_ready(bot, *, startup=False):
     """Run only on a fresh authoritative account/history cohort."""
     state = getattr(bot, "_risk_input_recovery", None)
+    if state is not None and state.protective_exit_pending:
+        return False
     try:
         validate_current_balances(bot)
     except RiskInputUnavailable as exc:
@@ -220,7 +240,74 @@ async def ensure_ready(bot, *, startup=False):
     return True
 
 
+def _unready_hsl_targets(bot):
+    targets = {}
+    positions = getattr(bot, "positions", {})
+    open_orders = getattr(bot, "open_orders", {})
+    coin_mode = bot._equity_hard_stop_signal_mode() == "coin"
+    for symbol in sorted(set(positions) | set(open_orders)):
+        for pside in ("long", "short"):
+            enabled = (bot._equity_hard_stop_enabled(pside, symbol=symbol) if coin_mode
+                       else bot._equity_hard_stop_enabled(pside))
+            if not enabled:
+                continue
+            # Proven halted scopes keep their existing cooldown/manual policy.
+            # Their independent protection owner remains responsible for them.
+            if coin_mode:
+                scope = getattr(bot, "_equity_hard_stop_coin", {}).get(pside, {}).get(symbol, {})
+                ready = (getattr(bot, "_equity_hard_stop_coin_initialized", False)
+                         or (pside, symbol) in getattr(bot, "_equity_hard_stop_coin_replay_ready_pairs", set()))
+            else:
+                scope = bot._hsl_state(pside)
+                ready = True
+            if ready and scope.get("halted", False):
+                continue
+            position = positions.get(symbol, {}).get(pside)
+            has_position = position is not None and float(position["size"]) != 0.0
+            has_orders = any(order["position_side"] == pside
+                             for order in open_orders.get(symbol, []))
+            if has_position or has_orders:
+                targets.setdefault(symbol, set()).add(pside)
+    return targets
+
+
+async def protect_unready_hsl(bot):
+    """Close HSL-managed exposure with fresh account state, independently of history.
+
+    Rust's existing panic planner owns sizing and execution type. A successful
+    submission is not flatness: retain the exit until another authoritative
+    snapshot confirms both positions and resting orders are gone.
+    """
+    state = getattr(bot, "_risk_input_recovery", None)
+    if state is None:
+        return False
+    if not await bot.refresh_protective_authoritative_state():
+        return False
+    validate_current_balances(bot)
+    targets = _unready_hsl_targets(bot)
+    if not targets:
+        state.protective_exit_pending = False
+        return False
+    state.protective_exit_pending = True
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
+        target_psides_by_symbol=targets,
+    )
+    await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+    await bot._sleep_unless_shutdown(
+        float(bot.live_value("execution_delay_seconds")), stage="risk_input_protective_exit",
+    )
+    return True
+
+
 async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
+    unready_protected = False
+    if bot._equity_hard_stop_enabled():
+        try:
+            unready_protected = await protect_unready_hsl(bot)
+        except RiskInputUnavailable as exc:
+            defer(bot, exc)
+        except AuthoritativeSurfaceUnavailable as exc:
+            defer_episode_evidence(bot, exc)
     # The existing panic planner also needs positive current balances. Do not
     # feed it stale/fabricated denominators when the account itself is invalid.
     try:
@@ -232,11 +319,11 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
     if current_ready and bot._equity_hard_stop_enabled():
         try:
             protected = await bot._run_halted_hsl_protection_if_active()
-            if not protected:
+            if not protected and not unready_protected:
                 protected = await bot._run_latched_hsl_supervisor_if_active(
                     cycle_id=cycle_id, loop_timings_ms=loop_timings_ms or {},
                 )
-            if protected:
+            if protected or unready_protected:
                 # Protective owners already pace their execution. Readiness
                 # backoff must not add latency to the next protective wave.
                 await bot._monitor_flush_snapshot()
@@ -254,6 +341,8 @@ async def wait_for_startup(bot):
     # Maintainers do not exist yet; this owner refreshes account/fill inputs.
     authoritative_ready = await bot.refresh_authoritative_state()
     while not bot.stop_signal_received:
+        if not authoritative_ready:
+            defer_authoritative_hsl(bot)
         if authoritative_ready and await ensure_ready(bot, startup=True):
             mark_ready(bot)
             return
