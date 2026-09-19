@@ -1,0 +1,150 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
+from live.hsl_protection import Health, ProtectionHealth, Scope, affected_scopes, evaluate_emergency
+
+
+@pytest.fixture
+def real_rust():
+    import passivbot_rust as pbr
+    assert not getattr(pbr, '__is_stub__', False)
+    return pbr
+
+
+def test_continuous_outage_is_not_renewed_by_reason_changes_or_restart(tmp_path):
+    path = tmp_path / 'protection.json'
+    scope = Scope('coin', 'short', 'A')
+    health = ProtectionHealth(path)
+    health.unavailable(scope, now_ms=1_000_000, reason='timeout', grace_ms=120_000)
+    health.unavailable(scope, now_ms=1_060_000, reason='position_mismatch', grace_ms=120_000)
+    restored = ProtectionHealth(path)
+    assert restored.scopes[scope].unavailable_since_ms == 1_000_000
+    assert restored.payload(1_100_000, 120_000)[0]['grace_remaining_seconds'] == 20.0
+    restored.evaluated_successfully(scope, now_ms=1_110_000)
+    assert ProtectionHealth(path).scopes == {}
+    restored.unavailable(scope, now_ms=1_200_000, reason='timeout', grace_ms=120_000)
+    assert restored.scopes[scope].unavailable_since_ms == 1_200_000
+
+
+def test_exit_commitment_survives_normal_signal_recovery_until_flat(tmp_path):
+    path = tmp_path / 'protection.json'
+    scope = Scope('coin', 'long', 'A')
+    health = ProtectionHealth(path)
+    state = health.unavailable(scope, now_ms=1_000_000, reason='no_history', grace_ms=120_000)
+    state.exit_committed = True
+    health.save()
+    restored = ProtectionHealth(path)
+    restored.evaluated_successfully(scope, now_ms=1_200_000)
+    assert restored.pending_exits() == {scope}
+    restored.confirm_flat(scope, now_ms=1_200_000)
+    assert not restored.pending_exits()
+    assert restored.scopes[scope].exit_confirmed_flat
+    restored.evaluated_successfully(scope, now_ms=1_210_000)
+    assert restored.scopes[scope].exit_confirmed_flat
+    restored.release_flat_hold(scope)
+    assert not restored.scopes[scope].exit_confirmed_flat
+
+
+@pytest.mark.parametrize('content', ['{', '{}', '{"version":1,"scopes":[{}]}'])
+def test_corrupt_journal_does_not_grant_a_fresh_grace(tmp_path, content):
+    path = tmp_path / 'protection.json'
+    path.write_text(content)
+    health = ProtectionHealth(path)
+    state = health.unavailable(Scope('pside', 'long'), now_ms=1_000_000,
+                               reason='history_unavailable', grace_ms=120_000)
+    assert state.unavailable_since_ms == 880_000
+
+
+def test_degraded_but_usable_evaluation_clears_only_its_scope():
+    health = ProtectionHealth()
+    a, b = Scope('coin', 'long', 'A'), Scope('coin', 'long', 'B')
+    for scope in (a, b):
+        health.unavailable(scope, now_ms=1_000_000, reason='timeout', grace_ms=120_000)
+    health.evaluated_successfully(a, now_ms=1_100_000, degraded_reason='coherent_prefix')
+    assert health.scopes[a].status == 'degraded'
+    assert health.scopes[a].unavailable_since_ms is None
+    assert health.scopes[b].unavailable_since_ms == 1_000_000
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+def test_failure_attribution_is_scoped(mode):
+    bot = SimpleNamespace(_equity_hard_stop_signal_mode=lambda: mode,
+                          _equity_hard_stop_enabled=lambda *_: True)
+    scopes = affected_scopes(bot, {'A': {'long'}, 'B': {'short'}},
+                             {'pside': 'long', 'symbol': 'A'})
+    expected = ({Scope('coin', 'long', 'A')} if mode == 'coin' else
+                {Scope('pside', 'long')} if mode == 'pside' else
+                {Scope('unified', 'long'), Scope('unified', 'short')})
+    assert scopes == expected
+
+
+@pytest.mark.parametrize('elapsed,trigger', [(0, False), (119_999, False), (120_000, True), (120_001, True)])
+def test_real_rust_raw_loss_only_triggers_after_grace(real_rust, elapsed, trigger):
+    budget, dd, expired, panic = real_rust.hsl_emergency_signal(
+        True, 10_000.0, 1, -1_000.0, 0.1, elapsed, 120_000, False)
+    assert budget == 10_000.0
+    assert dd == 0.1
+    assert expired == (elapsed >= 120_000)
+    assert panic is trigger
+
+
+def test_real_rust_coin_budget_and_known_realized_loss(real_rust):
+    budget, dd, _, panic = real_rust.hsl_emergency_signal(
+        True, 10_000.0, 10, -50.0, 0.1, 120_000, 120_000, False, 60.0)
+    assert budget == 1_000.0
+    assert dd == 0.11
+    assert panic
+    assert not real_rust.hsl_emergency_signal(
+        True, 10_000.0, 10, -50.0, 0.1, 120_000, 120_000, False)[3]
+
+
+def test_missing_execution_history_exits_after_grace_even_when_profitable(real_rust):
+    assert not real_rust.hsl_emergency_signal(True, 1_000.0, 1, 100.0, 0.1, 119_999, 120_000, True)[3]
+    assert real_rust.hsl_emergency_signal(True, 1_000.0, 1, 100.0, 0.1, 120_000, 120_000, True)[3]
+    assert not real_rust.hsl_emergency_signal(False, 1_000.0, 1, -1000.0, 0.1, 120_000, 120_000, True)[3]
+
+
+def test_emergency_stop_provenance_survives_recovery_but_is_bounded_to_close_window(tmp_path):
+    from live.hsl_protection import emergency_stop_applies
+    path = tmp_path / 'protection.json'
+    scope = Scope('coin', 'long', 'A')
+    health = ProtectionHealth(path)
+    state = health.unavailable(scope, now_ms=1000, reason='history_timeout', grace_ms=0)
+    state.exit_started_ms = 2000
+    state.exit_committed = True
+    health.confirm_flat(scope, now_ms=3000)
+    health.evaluated_successfully(scope, now_ms=4000)
+    health.release_flat_hold(scope)
+    bot = SimpleNamespace(_hsl_protection_health=ProtectionHealth(path),
+                          _equity_hard_stop_signal_mode=lambda: 'coin')
+    assert emergency_stop_applies(bot, 'long', 'A', 2000)
+    assert emergency_stop_applies(bot, 'long', 'A', 3000)
+    assert not emergency_stop_applies(bot, 'long', 'A', 1999)
+    assert not emergency_stop_applies(bot, 'long', 'A', 3001)
+    assert not emergency_stop_applies(bot, 'short', 'A', 2500)
+    assert not emergency_stop_applies(bot, 'long', 'B', 2500)
+
+
+def test_clock_rollback_is_persisted_without_renewing_grace(tmp_path):
+    path = tmp_path / 'protection.json'
+    scope = Scope('coin', 'long', 'A')
+    health = ProtectionHealth(path)
+    health.unavailable(scope, now_ms=1_000_000, reason='timeout', grace_ms=120_000)
+    health.unavailable(scope, now_ms=990_000, reason='timeout', grace_ms=120_000)
+    assert ProtectionHealth(path).scopes[scope].unavailable_since_ms == 870_000
+
+
+def test_deliberate_mode_or_enablement_change_retires_old_scope():
+    from live.hsl_protection import reconcile_config
+    health = ProtectionHealth()
+    health.scopes = {Scope('coin', 'long', 'A'): Health(exit_committed=True),
+                     Scope('pside', 'short'): Health(), Scope('pside', 'long'): Health()}
+    bot = SimpleNamespace(_hsl_protection_health=health,
+                          _equity_hard_stop_signal_mode=lambda: 'pside',
+                          _equity_hard_stop_enabled=lambda side, **kwargs: side == 'long')
+    reconcile_config(bot)
+    assert set(health.scopes) == {Scope('pside', 'long')}

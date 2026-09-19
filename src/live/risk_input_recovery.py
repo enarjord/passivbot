@@ -12,10 +12,12 @@ from time import monotonic
 import numpy as np
 
 from config.access import require_live_value
+from live import hsl_protection
 from passivbot_exceptions import FatalBotException, RestartBotException
 from ccxt.base.errors import NetworkError, OrderNotFound
 from live.diagnostic_safety import bounded_traceback_detail, bounded_exception_type
 from live.state_refresh import AuthoritativeSurfaceUnavailable
+from live.market_snapshot import MarketSnapshotUnavailable
 from live.event_bus import EventTypes, ReasonCodes, LiveEvent, emit_event, format_console_event
 
 
@@ -82,16 +84,19 @@ class RecoveryState:
     max_attempts: int = 10
     blocked_since: float = 0.0
     protective_exit_pending: bool = False
+    normal_evaluation_succeeded: bool = False
 
 
 def _emit(bot, *, reason, status, details, level, exc=None):
     message = " ".join(f"{key}={value}" for key, value in details.items())
     if status != "succeeded":
         requirement = (
-            "Required HSL episode evidence must prove fill order and current position."
+            "HSL episode reconstruction is unavailable; scoped protection remains active."
             if reason == ReasonCodes.HSL_EPISODE_EVIDENCE_UNAVAILABLE
             else "Required reconstructed HSL balances must be finite and positive."
             if reason == ReasonCodes.HSL_HISTORY_BALANCE_UNAVAILABLE
+            else "HSL signal evaluation is unavailable; scoped protection remains active."
+            if reason == ReasonCodes.HSL_SIGNAL_UNAVAILABLE
             else "Current raw and sizing balances must be finite and positive."
         )
         message = f"{requirement} {message}"
@@ -147,16 +152,25 @@ def defer(bot, exc):
             blocked_since=now,
         )
         bot._risk_input_recovery = state
-    elif now < state.retry_at:
+    retry_due = now >= state.retry_at
+    hsl_enabled = bot._equity_hard_stop_enabled()
+    new_scope = False
+    if hsl_enabled:
+        health = hsl_protection.manager(bot)
+        for scope in hsl_protection.affected_scopes(bot, _unready_hsl_targets(bot), exc.details):
+            new_scope |= scope not in health.scopes or health.scopes[scope].unavailable_since_ms is None
+            health.unavailable(scope, now_ms=int(bot.get_exchange_time()),
+                reason=str(exc.details.get("cause") or exc.reason), grace_ms=hsl_protection.grace_ms(bot))
+        state.protective_exit_pending = bool(health.pending_exits())
+        state.normal_evaluation_succeeded = False
+    if not retry_due:
+        if new_scope:
+            _emit(bot, reason=exc.reason, status="deferred", level="warning",
+                  details={**exc.details, "action": "new_scope_protection_grace"})
         return
     state.reason = exc.reason
     state.attempts += 1
     exhausted = state.attempts >= state.max_attempts
-    hsl_enabled = bot._equity_hard_stop_enabled()
-    # History repair must never terminate the owner of live HSL protection.
-    # Commit to reducing exposed HSL scopes before accepting recovery, even if
-    # the next historical read succeeds. No approximate risk sample is invented.
-    state.protective_exit_pending |= hsl_enabled and bool(_unready_hsl_targets(bot))
     cap = 300.0 if exc.reason == ReasonCodes.HSL_HISTORY_BALANCE_UNAVAILABLE else 60.0
     delay = 0.0 if exhausted and not hsl_enabled else min(cap, 5.0 * 2 ** min(state.attempts - 1, 6))
     state.retry_at = now + delay
@@ -167,7 +181,8 @@ def defer(bot, exc):
         "max_attempts": state.max_attempts,
         "blocked_seconds": max(0.0, now - state.blocked_since),
         "retry_delay_seconds": delay,
-        "action": ("protective_exit_and_retry" if hsl_enabled else
+        "action": ("protective_exit_and_retry" if hsl_enabled and state.protective_exit_pending else
+                   "evaluate_emergency_after_grace_and_retry" if hsl_enabled else
                    "stop_without_restart" if exhausted else "block_ordinary_trading_and_retry"),
     }, exc=exc if state.attempts in (1, state.max_attempts) else None)
     if exhausted and not hsl_enabled:
@@ -203,6 +218,12 @@ def defer_authoritative_hsl(bot):
 def mark_ready(bot):
     """Reset only after the owner completes its risk-consuming operation."""
     state = getattr(bot, "_risk_input_recovery", None)
+    if state is not None and bot._equity_hard_stop_enabled():
+        health = hsl_protection.manager(bot)
+        if (not state.normal_evaluation_succeeded or health.pending_exits()
+                or any(item.unavailable_since_ms is not None or item.exit_confirmed_flat
+                       for item in health.scopes.values())):
+            return
     if state is not None:
         _emit(bot, reason=state.reason, status="succeeded", level="info", details={
             "retry_count": state.attempts,
@@ -213,36 +234,121 @@ def mark_ready(bot):
 
 
 async def ensure_ready(bot, *, startup=False):
-    """Run only on a fresh authoritative account/history cohort."""
+    """Evaluate HSL separately from the current inputs needed by ordinary strategy.
+
+    The caller supplies a fresh authoritative cohort. A historical HSL-only
+    failure therefore need not block martingale adds while the grace/fallback
+    owner remains active. Other input consumers keep their own strict gates.
+    """
+    enabled = bot._equity_hard_stop_enabled()
+    health = hsl_protection.manager(bot) if enabled else None
+    if health is not None:
+        hsl_protection.reconcile_config(bot)
     state = getattr(bot, "_risk_input_recovery", None)
-    if state is not None and bot._equity_hard_stop_enabled():
-        # The fresh cohort may contain new exposure since the previous flat
-        # confirmation, including on the same pass that history recovers.
-        state.protective_exit_pending |= bool(_unready_hsl_targets(bot))
-        if state.protective_exit_pending:
-            return False
+    if health is not None and health.pending_exits():
+        if state is None:
+            state = RecoveryState(reason="restored_protective_exit", protective_exit_pending=True)
+            bot._risk_input_recovery = state
+        return False
     try:
         validate_current_balances(bot)
     except RiskInputUnavailable as exc:
         defer(bot, exc)
         return False
-    if state is not None and monotonic() < state.retry_at:
-        return False
+    if not enabled:
+        return state is None or monotonic() >= state.retry_at
+    health.evaluated.clear()
+    bot._hsl_readiness_excluded_pairs = set()
+    failure_seen = False
+    retry_due = state is None or monotonic() >= state.retry_at
+    coin_initialized = (bot._equity_hard_stop_signal_mode() == "coin"
+                        and (getattr(bot, "_equity_hard_stop_coin_initialized", False)
+                             or getattr(bot, "_equity_hard_stop_coin_protective_ready", False)))
+    pside_initialized = (bot._equity_hard_stop_signal_mode() == "pside"
+                         and all(not bot._equity_hard_stop_enabled(side)
+                                 or bot._equity_hard_stop_runtime_initialized(side)
+                                 for side in ("long", "short")))
+    if state is not None:
+        for scope in hsl_protection.affected_scopes(bot, _unready_hsl_targets(bot), {}):
+            if scope not in health.scopes:
+                health.unavailable(scope, now_ms=int(bot.get_exchange_time()),
+                    reason="current_scope_evaluation_pending", grace_ms=hsl_protection.grace_ms(bot))
+    if not retry_due and (coin_initialized or pside_initialized):
+        bot._hsl_readiness_excluded_pairs = {
+            (scope.pside, scope.symbol or None) for scope, item in health.scopes.items()
+            if item.unavailable_since_ms is not None
+        }
+    fills = getattr(bot, "_pnls_manager", None)
+    missing_history = (fills is None or not fills.get_events()) and any(
+        hsl_protection.has_exposure(bot, scope)
+        for scope in hsl_protection.affected_scopes(bot, _unready_hsl_targets(bot), {})
+    )
+    if missing_history:
+        failure_seen = True
+        defer(bot, RiskInputUnavailable(ReasonCodes.HSL_SIGNAL_UNAVAILABLE,
+                                       cause="missing_execution_history"))
     try:
-        if bot._equity_hard_stop_enabled():
-            if startup:
+        if not missing_history and (retry_due or coin_initialized or pside_initialized):
+            unified_hold_pending = False
+            for scope, item in list(health.scopes.items()):
+                if not item.exit_confirmed_flat:
+                    continue
+                # Reopening belongs to the canonical replay/cooldown policy,
+                # never to a successful fetch or an isolated GREEN sample.
+                from passivbot_hsl import _equity_hard_stop_replay_live_restart
+                if await _equity_hard_stop_replay_live_restart(bot, scope.pside, scope.symbol or None):
+                    health.evaluated_successfully(scope, now_ms=int(bot.get_exchange_time()))
+                    health.release_flat_hold(scope)
+                else:
+                    failure_seen = True
+                    defer(bot, RiskInputUnavailable(ReasonCodes.HSL_SIGNAL_UNAVAILABLE,
+                        cause="emergency_stop_replay_pending", pside=scope.pside, symbol=scope.symbol or None))
+                    bot._hsl_readiness_excluded_pairs.add((scope.pside, scope.symbol or None))
+                    unified_hold_pending |= scope.mode == "unified"
+            if startup and retry_due:
                 if bot._equity_hard_stop_signal_mode() == "coin":
                     await bot._equity_hard_stop_start_coin_history_replay()
                 else:
                     await bot._equity_hard_stop_initialize_from_history()
-            else:
-                await bot._equity_hard_stop_check()
+            # Retry once per attributable scope so an unavailable coin cannot
+            # prevent evaluation of independently ready coins later in the loop.
+            while not unified_hold_pending:
+                try:
+                    await bot._equity_hard_stop_check()
+                    break
+                except AuthoritativeSurfaceUnavailable as exc:
+                    if exc.surface != "hsl_episode_boundaries":
+                        raise
+                    defer_episode_evidence(bot, exc)
+                    failure_seen = True
+                    details = getattr(exc, "details", {})
+                    pair = (details.get("pside"), details.get("symbol"))
+                    attributable = ((coin_initialized and bool(pair[1])) or pside_initialized)
+                    if pside_initialized:
+                        pair = (pair[0], None)
+                    if (not attributable or pair[0] not in {"long", "short"}
+                            or pair in bot._hsl_readiness_excluded_pairs):
+                        break
+                    bot._hsl_readiness_excluded_pairs.add(pair)
     except RiskInputUnavailable as exc:
+        failure_seen = True
         defer(bot, exc)
-        return False
     except AuthoritativeSurfaceUnavailable as exc:
+        failure_seen = True
         defer_episode_evidence(bot, exc)
-        return False
+    except (MarketSnapshotUnavailable, NetworkError, TimeoutError) as exc:
+        failure_seen = True
+        defer(bot, RiskInputUnavailable(ReasonCodes.HSL_SIGNAL_UNAVAILABLE,
+                                       cause=bounded_exception_type(exc)))
+    finally:
+        bot._hsl_readiness_excluded_pairs = set()
+    state = getattr(bot, "_risk_input_recovery", None)
+    if state is not None:
+        state.normal_evaluation_succeeded = retry_due and not failure_seen
+        await hsl_protection.evaluate_emergency(bot, _unready_hsl_targets(bot))
+        state.protective_exit_pending = bool(health.pending_exits())
+        if state.protective_exit_pending:
+            return False
     return True
 
 
@@ -288,33 +394,57 @@ def _report_protective_unavailability(bot, exc):
 
 
 async def protect_unready_hsl(bot):
-    """Close HSL-managed exposure with fresh account state, independently of history.
-
-    Rust's existing panic planner owns sizing and execution type. A successful
-    submission is not flatness: retain the exit until another authoritative
-    snapshot confirms both positions and resting orders are gone.
-    """
+    """Run emergency evaluation after grace, then retain exits until confirmed flat."""
     state = getattr(bot, "_risk_input_recovery", None)
     if state is None:
         return False
+    health = hsl_protection.manager(bot)
+    hsl_protection.reconcile_config(bot)
     try:
-        if await bot.refresh_protective_authoritative_state(require_balance=False):
-            targets = _unready_hsl_targets(bot)
+        pending = health.pending_exits()
+        # An existing exit needs no balance. A new emergency decision does.
+        if await bot.refresh_protective_authoritative_state(require_balance=not bool(pending)):
+            candidates = _unready_hsl_targets(bot)
+            for scope in hsl_protection.affected_scopes(bot, candidates, {}):
+                if scope not in health.scopes:
+                    health.unavailable(scope, now_ms=int(bot.get_exchange_time()),
+                        reason="current_scope_evaluation_pending", grace_ms=hsl_protection.grace_ms(bot))
+            if not pending:
+                validate_current_balances(bot)
+                await hsl_protection.evaluate_emergency(bot, candidates)
+                pending = health.pending_exits()
+            for scope in pending:
+                if not hsl_protection.has_exposure(bot, scope) and not hsl_protection.has_orders(bot, scope):
+                    health.confirm_flat(scope, now_ms=int(bot.get_exchange_time()))
+            pending = health.pending_exits()
+            state.protective_exit_pending = bool(pending)
+            targets = hsl_protection.targets_for_scopes(bot, pending, candidates)
             if not targets:
-                state.protective_exit_pending = False
                 return False
-            state.protective_exit_pending = True
             to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
                 target_psides_by_symbol=targets,
             )
             await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+            for scope in pending:
+                health.scopes[scope].execution_blocked = ""
+            # Execute existing commitments before fetching a denominator for
+            # other scopes. A stuck exit must not starve their emergency check,
+            # and a failed balance read must not prevent this close wave.
+            now = int(bot.get_exchange_time())
+            if any(item.unavailable_since_ms is not None and not item.exit_committed
+                   and now - item.unavailable_since_ms >= hsl_protection.grace_ms(bot)
+                   for item in health.scopes.values()):
+                if await bot.refresh_protective_authoritative_state(require_balance=True):
+                    validate_current_balances(bot)
+                    await hsl_protection.evaluate_emergency(bot, _unready_hsl_targets(bot))
+                    state.protective_exit_pending = bool(health.pending_exits())
     except RiskInputUnavailable as exc:
         defer(bot, exc)
     except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
-        # A transient reader/connector failure cannot surrender protection to
-        # generic full-bot restart handling. Producer/config defects remain strict.
+        for scope in health.pending_exits():
+            health.scopes[scope].execution_blocked = bounded_exception_type(exc)
         _report_protective_unavailability(bot, exc)
-    return True
+    return state.protective_exit_pending
 
 
 async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
@@ -371,7 +501,7 @@ async def protect_before_history_refresh(bot, *, cycle_id=None, loop_timings_ms=
     state = getattr(bot, "_risk_input_recovery", None)
     if state is None or not bot._equity_hard_stop_enabled():
         return False
-    if not state.protective_exit_pending and monotonic() >= state.retry_at:
+    if not state.protective_exit_pending:
         return False
     await protect_and_wait(bot, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms)
     return True

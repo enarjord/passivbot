@@ -415,6 +415,7 @@ def get_template_config():
                 "forced_mode_short": "",
                 "hedge_mode": False,
                 "hsl_accept_incomplete_history": False,
+                "hsl_unavailable_grace_seconds": 120.0,
                 "hsl_position_during_cooldown_policy": "panic",
                 "hsl_signal_mode": "coin",
                 "ignored_coins": {

@@ -200,6 +200,7 @@ The code-owned registries live in `src/live/event_bus.py`. Payload and emission 
 - `hsl_raw_red_pending_ema_confirmation`
 - `hsl_red_finalized_without_exchange_order`
 - `hsl_replay_pending`
+- `hsl_signal_unavailable`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
 - `length_mismatch`

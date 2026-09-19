@@ -355,6 +355,12 @@ def _monitor_hsl_payload(self, pside: str) -> dict:
             payload["tier"] = max((c["tier"] for c in coins.values()), key=lambda t: tiers.get(t, 4))
             for field in ("halted", "no_restart_latched"):
                 payload[field] = any(c[field] for c in coins.values())
+    health = getattr(self, "_hsl_protection_health", None)
+    if health is not None:
+        from live.hsl_protection import grace_ms
+        payload["protection_health"] = [row for row in health.payload(
+            int(self.get_exchange_time()), grace_ms(self)
+        ) if row["pside"] == pside]
     recovery = getattr(self, "_risk_input_recovery", None)
     if recovery is not None:
         payload["input_recovery"] = {

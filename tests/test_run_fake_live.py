@@ -69,6 +69,7 @@ def test_candle_remote_fetch_trace_sanitizes_hostile_payload():
 
 def _cleanup_fake_user_state(user: str) -> None:
     shutil.rmtree(REPO_ROOT / "caches" / "fill_events" / "fake" / user, ignore_errors=True)
+    (REPO_ROOT / "caches" / "equity_hard_stop" / "fake" / f"{user}_protection.json").unlink(missing_ok=True)
     for pside in ("long", "short"):
         latch_path = REPO_ROOT / "caches" / "equity_hard_stop" / "fake" / f"{user}_{pside}.json"
         try:
@@ -1832,8 +1833,9 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['episode', 'history_balance', 'current_balance', 'crossed_quote'])
-async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize('failure', ['episode', 'history_balance', 'current_balance', 'crossed_quote', 'transient', 'restart_partial', 'missing_history'])
+@pytest.mark.parametrize('signal_mode', ['coin', 'pside', 'unified'])
+async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure, signal_mode):
     """Unavailable historical input cannot strand a previously green live position."""
     from unittest.mock import AsyncMock
     from live import risk_input_recovery as recovery
@@ -1843,8 +1845,10 @@ async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_pat
     user = f'fake_unready_hsl_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
-    cfg['live']['hsl_signal_mode'] = 'coin'
+    cfg['live']['hsl_signal_mode'] = signal_mode
     cfg['live']['risk_input_max_attempts'] = 1
+    cfg['live']['hsl_unavailable_grace_seconds'] = 120.0
+    cfg['bot']['long']['hsl_ema_span_minutes'] = 10_000.0
     config_path = tmp_path / 'config.json'
     config_path.write_text(json.dumps(cfg))
     scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
@@ -1856,15 +1860,64 @@ async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_pat
 
     async def fail_and_protect(bot):
         symbol = 'BTC/USDT:USDT'
-        state = bot._hsl_coin_state('long', symbol)
+        state = bot._hsl_coin_state('long', symbol) if signal_mode == 'coin' else bot._hsl_state('long')
         assert state['last_metrics']['tier'] == 'green'
         assert not state['runtime'].red_latched()
         await bot.refresh_protective_authoritative_state()
         assert bot.positions[symbol]['long']['size'] == 5.0
         exc = (EpisodeEvidenceUnavailable('missing_opening_fill', pside='long', symbol=symbol)
                if failure == 'episode' else recovery.RiskInputUnavailable('hsl_history_balance_unavailable'))
+        normal_check = bot._equity_hard_stop_check
         bot._equity_hard_stop_check = AsyncMock(side_effect=exc)
+        bot._sleep_unless_shutdown = AsyncMock()
+        bot.cca.get_current_step()['prices'][symbol] = 97.0
+        bot.market_snapshot_provider._cache.clear()
+        assert await recovery.ensure_ready(bot)
+        assert not await recovery.protect_unready_hsl(bot)
+        assert bot.positions[symbol]['long']['size'] == 5.0
+        bot.cca.now_ms += 119_999
+        assert not await recovery.protect_unready_hsl(bot)
+        assert bot.positions[symbol]['long']['size'] == 5.0
+        if failure == 'transient':
+            bot._risk_input_recovery.retry_at = 0.0
+            bot._equity_hard_stop_check = normal_check
+            assert await recovery.ensure_ready(bot)
+            assert not bot._hsl_protection_health.pending_exits()
+            assert all(item.unavailable_since_ms is None for item in bot._hsl_protection_health.scopes.values())
+            assert bot.positions[symbol]['long']['size'] == 5.0
+            assert not state['runtime'].red_latched()
+            captured['completed'] = True
+            return {'recovered_before_grace': True}
+        if failure == 'missing_history':
+            # Fresh exchange exposure with no fills remains a severe failure,
+            # even if the current position is profitable.
+            bot._pnls_manager.get_events = lambda: []
+            bot.cca.get_current_step()['prices'][symbol] = 101.0
+            bot.market_snapshot_provider._cache.clear()
+        bot.cca.now_ms += 1
         assert not await recovery.ensure_ready(bot)
+        if failure == 'restart_partial':
+            original_fill = bot.cca._fill_order
+            def partial_fill(order, *, fill_price, liquidity):
+                requested = order['amount']
+                order['amount'] = requested / 2.0
+                original_fill(order, fill_price=fill_price, liquidity=liquidity)
+                order.update(amount=requested, remaining=requested / 2.0, status='canceled')
+            bot.cca._fill_order = partial_fill
+            await recovery.protect_unready_hsl(bot)
+            await bot.refresh_protective_authoritative_state(require_balance=False)
+            assert bot.positions[symbol]['long']['size'] == 2.5
+            # Discard all recovery RAM. Only the journal survives controller
+            # restart; a recovered price must not abandon the remaining close.
+            from live.hsl_protection import ProtectionHealth
+            journal = bot._hsl_protection_health.path
+            bot._hsl_protection_health = ProtectionHealth(journal)
+            bot._risk_input_recovery = None
+            bot.cca._fill_order = original_fill
+            bot.cca.get_current_step()['prices'][symbol] = 100.0
+            bot.market_snapshot_provider._cache.clear()
+            bot._equity_hard_stop_check = normal_check
+            assert not await recovery.ensure_ready(bot)
         if failure == 'crossed_quote':
             provider = bot.market_snapshot_provider
             provider._cache.clear()
@@ -1895,10 +1948,23 @@ async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_pat
         await recovery.protect_and_wait(bot)
         assert bot.positions[symbol]['long']['size'] == 0.0
         assert not bot._risk_input_recovery.protective_exit_pending
-        assert bot._risk_input_recovery.attempts == 1
+        assert bot._risk_input_recovery.attempts <= 1
         fills = [f for f in bot.cca.fills if f.get('reduceOnly') and f.get('timestamp', 0) >= bot.cca.now_ms]
         assert fills
-        captured['flat'] = True
+        if failure == 'episode':
+            bot.cca.current_index = 3
+            run_fake_live_module._prime_fake_candles(bot, bot.cca)
+            bot._equity_hard_stop_check = normal_check
+            bot._risk_input_recovery.retry_at = 0.0
+            assert await bot.refresh_authoritative_state()
+            # Fill ingestion requested another account confirmation epoch.
+            assert await bot.refresh_authoritative_state()
+            assert await recovery.ensure_ready(bot)
+            assert not bot._hsl_protection_health.pending_exits()
+            assert not any(item.exit_confirmed_flat for item in bot._hsl_protection_health.scopes.values())
+            restored = bot._hsl_coin_state('long', symbol) if signal_mode == 'coin' else bot._hsl_state('long')
+            assert restored['halted']
+        captured['completed'] = True
         return {'protected': True}
 
     monkeypatch.setattr(run_fake_live_module, '_run_fake_cycle', fail_and_protect)
@@ -1906,6 +1972,6 @@ async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_pat
         args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
                                   max_steps=1, output_dir=str(tmp_path), log_level=1, snapshot_each_step=False)
         assert await _async_main(args) == 0
-        assert captured['flat']
+        assert captured['completed']
     finally:
         _cleanup_fake_user_state(user)

@@ -57,7 +57,7 @@ from fill_events_manager import (
 )
 from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
 from live.diagnostic_safety import bounded_traceback_detail as _bounded_traceback_detail
-from live import risk_input_recovery
+from live import risk_input_recovery, hsl_protection
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -6598,6 +6598,9 @@ class Passivbot:
                         self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
                     )
                     continue
+                if (getattr(self, "_risk_input_recovery", None) is not None
+                        and await self._run_halted_hsl_protection_if_active()):
+                    continue
                 if await self._run_latched_hsl_supervisor_if_active(
                     cycle_id=cycle_id,
                     loop_timings_ms=loop_timings_ms,
@@ -11056,6 +11059,8 @@ class Passivbot:
 
     def get_forced_PB_mode(self, pside, symbol=None):
         """Return an explicitly forced mode for the side or symbol, if configured."""
+        if symbol is not None and hsl_protection.holds_after_emergency_exit(self, pside, symbol):
+            return "panic"
         if self._equity_hard_stop_enabled(pside):
             state = self._hsl_state(pside)
             if (
@@ -16929,6 +16934,8 @@ class Passivbot:
         return set(due)
 
     def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
+        if hsl_protection.holds_after_emergency_exit(self, pside, symbol):
+            return "panic"
         if self._equity_hard_stop_enabled(pside):
             state = self._hsl_state(pside)
             if (

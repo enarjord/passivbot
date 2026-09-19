@@ -547,6 +547,19 @@ pub fn hsl_no_restart_triggered(
 }
 
 #[pyfunction]
+#[pyo3(signature = (enabled, balance, budget_divisor, upnl, threshold, unavailable_ms, grace_ms, missing_execution_history, realized_loss_since_peak=None))]
+pub fn hsl_emergency_signal(
+    enabled: bool, balance: f64, budget_divisor: usize, upnl: f64, threshold: f64,
+    unavailable_ms: u64, grace_ms: u64, missing_execution_history: bool,
+    realized_loss_since_peak: Option<f64>,
+) -> PyResult<(f64, f64, bool, bool)> {
+    let signal = ehsl::emergency_signal(enabled, balance, budget_divisor, upnl,
+        realized_loss_since_peak, threshold, unavailable_ms, grace_ms, missing_execution_history)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    Ok((signal.budget, signal.drawdown_raw, signal.grace_elapsed, signal.should_exit))
+}
+
+#[pyfunction]
 #[pyo3(signature = (*, balance, n_positions, peak_realized, last_realized, current_upnl))]
 pub fn hsl_coin_drawdown_signal(
     py: Python<'_>,

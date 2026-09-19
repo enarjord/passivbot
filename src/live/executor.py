@@ -8,6 +8,7 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException
+from live import hsl_protection
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
@@ -183,6 +184,7 @@ def _filter_hsl_replay_pending_creates(
         order
         for order in orders
         if not _order_is_protective_create(order)
+        and not hsl_protection.allows_held_entries(bot, str(order.get("position_side") or ""), str(order.get("symbol") or ""))
         and (
             str(order.get("position_side") or order.get("positionSide") or "").lower(),
             str(order.get("symbol") or ""),

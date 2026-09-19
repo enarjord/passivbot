@@ -1148,6 +1148,8 @@ def test_red_paused_forced_modes_block_entries_without_panic():
 
 def bind_hsl_methods(bot):
     for name in (
+        "_equity_hard_stop_check",
+        "_equity_hard_stop_check_coin",
         "_hsl_psides",
         "_hsl_state",
         "_equity_hard_stop_enabled",
@@ -1227,7 +1229,8 @@ def bind_hsl_methods(bot):
 
 
 def make_coin_bot(policy="panic"):
-    bot = FakeHslBot()
+    from live.hsl_protection import ProtectionHealth
+    bot = FakeHslBot(_hsl_protection_health=ProtectionHealth())
     bind_hsl_methods(bot)
     bot.user = "test_user"
     bot.exchange = "test_exchange"
@@ -1246,6 +1249,7 @@ def make_coin_bot(policy="panic"):
     bot.config = {
         "live": {
             "hsl_signal_mode": "coin",
+            "hsl_unavailable_grace_seconds": 120.0,
             "hsl_position_during_cooldown_policy": policy,
             "pnls_max_lookback_days": 30.0,
         }
@@ -1961,7 +1965,7 @@ async def test_coin_hsl_background_replay_yields_before_one_thousand_rows():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_partial_replay_restarts_if_pending_pair_becomes_held():
+async def test_coin_hsl_partial_replay_defers_if_pending_pair_becomes_held():
     bot = make_coin_bot()
     bot._equity_hard_stop_coin_protective_ready = True
     bot._equity_hard_stop_coin_initialized = False
@@ -1975,8 +1979,8 @@ async def test_coin_hsl_partial_replay_restarts_if_pending_pair_becomes_held():
     }
 
     with pytest.raises(
-        RestartBotException,
-        match="restart required for held-first reconstruction: long:A",
+        hsl.EpisodeEvidenceUnavailable,
+        match="held_scope_replay_pending",
     ):
         await bot._equity_hard_stop_check_coin()
 
@@ -5971,21 +5975,14 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(side_effect=protective_plan)
     bot.execute_order_plan_to_exchange = AsyncMock(side_effect=execute)
     bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
-    await Passivbot.run_execution_loop(bot)
+    from live import risk_input_recovery
+    assert await risk_input_recovery.ensure_ready(bot)
+    for _ in range(2 if policy == "panic" else 1):
+        await bot._run_halted_hsl_protection_if_active(pace=False)
     bot.prepare_planning_universe.assert_not_awaited()
     bot.execute_to_exchange.assert_not_awaited()
     if policy == "panic":
-        assert calls == [
-            "refresh",  # Conservative recovery checks fresh exposure first.
-            "refresh",
-            "plan",
-            "execute",
-            "pace",
-            "refresh",
-            "refresh",
-            "plan",
-            "execute",  # Shutdown skips the shared pacing delay.
-        ]
+        assert calls == ["refresh", "plan", "execute", "refresh", "plan", "execute"]
         assert bot.positions["A"]["short"]["size"] == 0.0
         assert state["cooldown_repanic_start_sizes"] == {"A": 1.0}
         assert state["cooldown_repanic_since_ms"] == 180_000
