@@ -7165,6 +7165,20 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     )
 
 
+async def _equity_hard_stop_execute_close_wave(self) -> bool:
+    """Execute existing panic intent before any balance/history/finalization work."""
+    from ccxt.base.errors import NetworkError, OrderNotFound
+    try:
+        to_cancel, to_create = await self.calc_protective_panic_orders_to_cancel_and_create()
+        await self.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+        return True
+    except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError,
+            RestartBotException) as exc:
+        logging.warning("[risk] HSL close wave unavailable; retaining protection | error_type=%s",
+                        _bounded_hsl_exception_type(exc))
+        return False
+
+
 async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = False) -> None:
     if self._equity_hard_stop_supervisor_running:
         return
@@ -7186,10 +7200,22 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
             ]
             if not active_red_psides:
                 return
-            if not await self.refresh_protective_authoritative_state():
+            if not await self.refresh_protective_authoritative_state(require_balance=False):
                 if single_pass:
                     return
                 await asyncio.sleep(0.5)
+                continue
+            if not await _equity_hard_stop_execute_close_wave(self):
+                if single_pass:
+                    return
+                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
+                continue
+            # Refresh denominators only after the close wave. Flat-stop replay
+            # and an optional fresh signal may wait; already-authorized exits do not.
+            if not await self.refresh_protective_authoritative_state(require_balance=True):
+                if single_pass:
+                    return
+                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 continue
             validate_current_balances(self)
             for pside in list(active_red_psides):
@@ -7239,7 +7265,9 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
             ]
             if not active_red_psides:
                 return
+            panic_reactivated = False
             for pside in active_red_psides:
+                was_active = bool((self._hsl_state(pside).get("last_metrics") or {}).get("red_active_now", True))
                 # B2.1 contract: refresh the sample so recovery is observable
                 # mid-supervision; only red_active_now authorizes continued
                 # panic emission for the episode. Any refresh failure keeps
@@ -7284,23 +7312,12 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
                     self._equity_hard_stop_set_red_paused_runtime_forced_modes(pside)
                 else:
                     self._equity_hard_stop_set_red_runtime_forced_modes(pside)
+                    panic_reactivated |= metrics is not None and not was_active
             self._equity_hard_stop_refresh_halted_runtime_forced_modes()
-            try:
-                to_cancel, to_create = (
-                    await self.calc_protective_panic_orders_to_cancel_and_create()
-                )
-                await self.execute_order_plan_to_exchange(
-                    to_cancel,
-                    to_create,
-                    configure_creations=False,
-                )
-            except (FatalBotException, RiskInputUnavailable):
-                raise
-            except RestartBotException as e:
-                logging.error("[risk] RED supervisor ignored restart request: %s", e)
-            except Exception as e:
-                logging.error("[risk] RED supervisor execute_to_exchange failed: %s", e)
-                traceback.print_exc()
+            if panic_reactivated:
+                # The early wave had no panic intent for a previously recovered
+                # sample. Execute newly reauthorized closes in this same pass.
+                await _equity_hard_stop_execute_close_wave(self)
             if single_pass:
                 return
             await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
@@ -7322,10 +7339,22 @@ async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool =
                         active.append((pside, symbol))
             if not active:
                 return
-            if not await self.refresh_protective_authoritative_state():
+            if not await self.refresh_protective_authoritative_state(require_balance=False):
                 if single_pass:
                     return
                 await asyncio.sleep(0.5)
+                continue
+            if not await _equity_hard_stop_execute_close_wave(self):
+                if single_pass:
+                    return
+                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
+                continue
+            # Refresh denominators only after the close wave. Flat-stop replay
+            # and an optional fresh signal may wait; already-authorized exits do not.
+            if not await self.refresh_protective_authoritative_state(require_balance=True):
+                if single_pass:
+                    return
+                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 continue
             validate_current_balances(self)
             for pside, symbol in list(active):
@@ -7434,22 +7463,6 @@ async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool =
             ]
             if not active:
                 return
-            try:
-                to_cancel, to_create = (
-                    await self.calc_protective_panic_orders_to_cancel_and_create()
-                )
-                await self.execute_order_plan_to_exchange(
-                    to_cancel,
-                    to_create,
-                    configure_creations=False,
-                )
-            except (FatalBotException, RiskInputUnavailable):
-                raise
-            except RestartBotException as e:
-                logging.error("[risk] coin RED supervisor ignored restart request: %s", e)
-            except Exception as e:
-                logging.error("[risk] coin RED supervisor execute_to_exchange failed: %s", e)
-                traceback.print_exc()
             if single_pass:
                 return
             await asyncio.sleep(float(self.live_value("execution_delay_seconds")))

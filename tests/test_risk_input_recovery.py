@@ -81,8 +81,8 @@ async def test_current_balance_blocks_risk_until_valid(monkeypatch, hsl, field, 
     assert not await recovery.ensure_ready(bot)
     bot._equity_hard_stop_check.assert_not_awaited()
     await recovery.protect_and_wait(bot)
-    bot._run_halted_hsl_protection_if_active.assert_not_awaited()
-    bot._run_latched_hsl_supervisor_if_active.assert_not_awaited()
+    assert bot._run_halted_hsl_protection_if_active.await_count == int(hsl)
+    assert bot._run_latched_hsl_supervisor_if_active.await_count == int(hsl)
     setattr(bot, field, 100.0)
     assert await recovery.ensure_ready(bot)
     recovery.mark_ready(bot)
@@ -310,7 +310,7 @@ async def test_current_balance_failure_during_history_backoff_does_not_renew_bud
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-async def test_red_supervisor_returns_to_recovery_when_refresh_invalidates_balance(mode):
+async def test_red_supervisor_executes_close_before_balance_repair(mode):
     from test_hsl_coin_mode import make_coin_bot
     import passivbot_hsl as hsl
     bot = make_coin_bot()
@@ -326,12 +326,16 @@ async def test_red_supervisor_returns_to_recovery_when_refresh_invalidates_balan
         bot.balance_raw = 0.0
         return True
     bot.refresh_protective_authoritative_state = AsyncMock(side_effect=refresh)
-    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock()
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
     supervisor = (hsl._equity_hard_stop_run_coin_red_supervisor if mode == "coin"
                   else hsl._equity_hard_stop_run_red_supervisor)
     with pytest.raises(recovery.RiskInputUnavailable):
         await supervisor(bot)
-    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_awaited_once()
+    bot.execute_order_plan_to_exchange.assert_awaited_once_with([], [], configure_creations=False)
+    assert [call.kwargs for call in bot.refresh_protective_authoritative_state.await_args_list] == [
+        {"require_balance": False}, {"require_balance": True}]
     assert not state["halted"]
     assert not bot._equity_hard_stop_supervisor_running
 
@@ -772,7 +776,7 @@ async def test_single_pass_red_supervision_preserves_confirmations_and_yields(mo
     supervisor = hsl._equity_hard_stop_run_coin_red_supervisor if mode == 'coin' else hsl._equity_hard_stop_run_red_supervisor
     for n in (1, 2):
         await supervisor(bot, single_pass=True)
-        assert bot.refresh_protective_authoritative_state.await_count == n
+        assert bot.refresh_protective_authoritative_state.await_count == 2 * n
         assert not bot._equity_hard_stop_supervisor_running
         assert state['red_flat_confirmations'] == (n if flat else 0)
     assert state['halted'] == flat
@@ -1253,3 +1257,85 @@ async def test_aggregate_replay_failure_blocks_flat_initials_but_keeps_held_adds
     assert executor._filter_hsl_replay_pending_creates(bot, emitter, orders + [close], None) == ([orders[0], close] if held else [close])
     bot._equity_hard_stop_runtime_initialized = lambda side: True
     assert executor._filter_hsl_replay_pending_creates(bot, emitter, orders, None) == orders
+
+
+@pytest.mark.asyncio
+async def test_partial_protective_wave_retains_quote_blockage_for_unexecuted_scope(monkeypatch):
+    from live import hsl_protection
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {symbol: {'long': {'size': 1.0}} for symbol in ('A', 'B')}
+    arm_exit(bot)
+    bot._hsl_protective_unavailable_symbols = {'A'}
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_unready_hsl(bot)
+    health = hsl_protection.manager(bot)
+    assert health.scopes[hsl_protection.Scope('coin', 'long', 'A')].execution_blocked == 'MarketSnapshotUnavailable'
+    assert health.scopes[hsl_protection.Scope('coin', 'long', 'B')].execution_blocked == ''
+    bot._hsl_protective_unavailable_symbols.clear()
+    await recovery.protect_unready_hsl(bot)
+    assert all(item.execution_blocked == '' for item in health.scopes.values())
+
+
+@pytest.mark.asyncio
+async def test_confirmed_flat_scope_clears_quote_outage_without_another_plan(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    arm_exit(bot)
+    bot.positions['A']['long']['size'] = 0.0
+    bot._hsl_protective_unavailable_symbols = {'A', 'B'}
+    bot.positions['B'] = {'long': {'size': 1.0}}
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_unready_hsl(bot)
+    assert bot._hsl_protective_unavailable_symbols == {'B'}
+
+
+@pytest.mark.asyncio
+async def test_outer_refresh_protection_covers_existing_red_without_recovery_state(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    bot._protective_panic_target_psides_by_symbol = lambda: {'A': {'long'}}
+    bot._equity_hard_stop_coin_red_active = lambda: True
+    bot._run_latched_hsl_supervisor_if_active.return_value = True
+    assert await recovery.protect_before_history_refresh(bot)
+    bot._run_latched_hsl_supervisor_if_active.assert_awaited_once()
+    bot.refresh_authoritative_state.assert_not_awaited()
+    # A stale panic mode alone cannot starve repairs after that side is flat.
+    bot.positions = {'A': {'long': {'size': 0.0}, 'short': {'size': -1.0}}}
+    assert not await recovery.protect_before_history_refresh(bot)
+    assert bot._run_latched_hsl_supervisor_if_active.await_count == 1
+    # Explicit panic configuration without an HSL latch still belongs to the
+    # ordinary planner; this pre-refresh owner must not starve that planner.
+    bot.positions['A']['long']['size'] = 1.0
+    bot._equity_hard_stop_coin_red_active = lambda: False
+    assert not await recovery.protect_before_history_refresh(bot)
+
+
+@pytest.mark.asyncio
+async def test_outer_refresh_protection_runs_cooldown_owner_before_repair(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot._run_halted_hsl_protection_if_active.return_value = True
+    assert await recovery.protect_before_history_refresh(bot)
+    bot.refresh_authoritative_state.assert_not_awaited()
+    bot._run_halted_hsl_protection_if_active.return_value = False
+    assert not await recovery.protect_before_history_refresh(bot)
+
+
+@pytest.mark.asyncio
+async def test_known_red_wave_precedes_unready_emergency_balance(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    seen = []
+    async def normal(**kwargs):
+        seen.append('normal_close')
+        return True
+    async def emergency(owner):
+        seen.append('emergency_inputs')
+        return False
+    bot._run_latched_hsl_supervisor_if_active.side_effect = normal
+    monkeypatch.setattr(recovery, 'protect_unready_hsl', emergency)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    bot._protective_panic_target_psides_by_symbol = lambda: {'A': {'long'}}
+    bot._equity_hard_stop_coin_red_active = lambda: True
+    assert await recovery.protect_before_history_refresh(bot)
+    assert seen == ['normal_close']

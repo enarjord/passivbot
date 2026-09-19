@@ -797,8 +797,8 @@ async def test_red_supervisor_uses_protective_refresh_and_order_plan():
         def _equity_hard_stop_runtime_red_latched(self, pside):
             return True
 
-        async def refresh_protective_authoritative_state(self):
-            calls.append("protective_refresh")
+        async def refresh_protective_authoritative_state(self, *, require_balance=True):
+            calls.append(("protective_refresh", require_balance))
             return True
 
         async def update_pos_oos_pnls_ohlcvs(self):
@@ -850,15 +850,11 @@ async def test_red_supervisor_uses_protective_refresh_and_order_plan():
     bot = FakeBot()
     await Passivbot._equity_hard_stop_run_red_supervisor(bot)
 
-    assert calls[:4] == [
-        "protective_refresh",
-        "log_progress",
-        "force_panic",
-        "refresh_halted",
-    ]
-    assert calls[4] == "protective_plan"
-    assert calls[5][0] == "execute_plan"
-    assert calls[5][3] is False
+    assert calls[0] == ("protective_refresh", False)
+    assert calls[1] == "protective_plan"
+    assert calls[2][0] == "execute_plan"
+    assert calls[2][3] is False
+    assert calls[3:] == [("protective_refresh", True), "log_progress", "force_panic", "refresh_halted"]
     assert bot._equity_hard_stop_supervisor_running is False
 
 
@@ -890,7 +886,7 @@ async def test_red_supervisor_propagates_fatal_protective_plan_failure():
         def _equity_hard_stop_runtime_red_latched(self, pside):
             return True
 
-        async def refresh_protective_authoritative_state(self):
+        async def refresh_protective_authoritative_state(self, *, require_balance=True):
             return True
 
         def _equity_hard_stop_count_open_positions(self, pside):
@@ -971,7 +967,7 @@ async def test_red_supervisor_refreshes_late_flatten_fill_and_exits():
         def _equity_hard_stop_runtime_red_latched(self, pside):
             return True
 
-        async def refresh_protective_authoritative_state(self):
+        async def refresh_protective_authoritative_state(self, *, require_balance=True):
             return True
 
         async def update_pnls(self, *, source, since_ms=None):
@@ -1110,7 +1106,7 @@ async def test_coin_red_supervisor_refreshes_late_cooldown_repanic_fill():
         ):
             return bool(state["cooldown_repanic_reset_pending"])
 
-        async def refresh_protective_authoritative_state(self):
+        async def refresh_protective_authoritative_state(self, *, require_balance=True):
             return True
 
         async def update_pnls(self, *, source, since_ms=None):
@@ -1209,7 +1205,7 @@ async def test_coin_red_supervisor_propagates_fatal_protective_plan_failure():
         ):
             return True
 
-        async def refresh_protective_authoritative_state(self):
+        async def refresh_protective_authoritative_state(self, *, require_balance=True):
             return True
 
         def _hsl_coin_state(self, pside, requested_symbol):

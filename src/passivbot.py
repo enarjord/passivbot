@@ -6218,9 +6218,8 @@ class Passivbot:
             ]
         if not scopes:
             return False
-        if not await self.refresh_protective_authoritative_state():
+        if not await self.refresh_protective_authoritative_state(require_balance=False):
             return not pace  # Recovery must pace an attempted protective owner.
-        risk_input_recovery.validate_current_balances(self)
         now_ms = int(self.get_exchange_time())
         panic_needed = False
         cooldown_entry_cancels = []
@@ -6256,7 +6255,7 @@ class Passivbot:
                 or int(getattr(self, "_account_invalidation_generation", 0) or 0) != generation
                 or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
             ):
-                if not await self.refresh_protective_authoritative_state():
+                if not await self.refresh_protective_authoritative_state(require_balance=False):
                     return not pace
             now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:
@@ -6273,7 +6272,7 @@ class Passivbot:
                 for candidate in symbols
                 if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
             ]
-            if symbols and coin_mode and not terminal:
+            if symbols and coin_mode and not terminal and policy != "normal":
                 await self._equity_hard_stop_handle_coin_position_during_cooldown(
                     pside, symbol, now_ms
                 )
@@ -6281,7 +6280,7 @@ class Passivbot:
                     state["halted"]
                     and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
                 )
-            elif symbols and not terminal:
+            elif symbols and not terminal and policy != "normal":
                 await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
                 panic_needed |= bool(
                     state["halted"]
@@ -6290,8 +6289,11 @@ class Passivbot:
                         for item in symbols
                     )
                 )
-            # Flat cooldown scopes still prohibit initials. Held normal scopes
-            # may have resumed above; graceful_stop preserves their existing adds.
+            # Normal-policy reopening belongs to the ordinary HSL evaluator,
+            # whose caller supplies a fresh validated balance. This reduced
+            # protection owner never releases a halt through balance-less replay.
+            # Flat cooldown scopes still prohibit initials; held normal and
+            # graceful-stop scopes retain their existing entry policy.
             if not state["halted"]:
                 # Canonical restart may already prove RED in the new episode.
                 # Keep that current risk in this wave even when another scope
@@ -6371,7 +6373,6 @@ class Passivbot:
                 return False
             reason_code = "hsl_red_supervisor"
             supervisor = self._equity_hard_stop_run_red_supervisor
-        risk_input_recovery.validate_current_balances(self)
         self._emit_live_cycle_degraded(
             cycle_id=cycle_id,
             reason_code=reason_code,
@@ -11067,7 +11068,8 @@ class Passivbot:
                 self._equity_hard_stop_runtime_red_latched(pside)
                 and not state["halted"]
             ):
-                return "panic"
+                return ("panic" if (state.get("last_metrics") or {}).get("red_active_now", True)
+                        else "tp_only_with_active_entry_cancellation")
             if state["halted"]:
                 if symbol is None:
                     return "graceful_stop"
@@ -16389,6 +16391,8 @@ class Passivbot:
     async def calc_protective_panic_ideal_orders_orchestrator(self, *, target_psides_by_symbol=None):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
+        if not hasattr(self, "_hsl_protective_unavailable_symbols"):
+            self._hsl_protective_unavailable_symbols = set()
         if target_psides_by_symbol is None:
             target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(self)
         self._protective_panic_reconcile_psides_by_symbol = {
@@ -16412,15 +16416,64 @@ class Passivbot:
         reconcile_symbols = sorted(target_psides_by_symbol)
         self._protective_panic_reconcile_symbols = reconcile_symbols
         symbols = sorted(position_symbols)
+        self._hsl_protective_unavailable_symbols.difference_update(
+            symbol for symbol in set(reconcile_symbols) - position_symbols
+            if all(float(position.get("size", 0.0)) == 0.0
+                   for position in self.positions.get(symbol, {}).values())
+        )
         if not symbols:
             return {}
 
         try:
             market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         except MarketSnapshotUnavailable as exc:
-            raise state_refresh.AuthoritativeSurfaceUnavailable(
-                "protective_planning_inputs", "current protective market unavailable"
-            ) from exc
+            # A quote outage in one scope must not strand independently ready
+            # exits. Partition inputs before Rust; never discard part of its output.
+            market_snapshots = {}
+            if len(symbols) > 1:
+                async def fetch_one(symbol):
+                    try:
+                        return await self._get_orchestrator_market_snapshots([symbol])
+                    except MarketSnapshotUnavailable:
+                        return {}
+                # Reserve half the fetch-to-hard-TTL headroom for planning.
+                # A stalled probe must not age out independently ready quotes.
+                timeout = max(0.0, float(self._live_market_snapshot_max_age_ms())
+                              - float(self._live_market_snapshot_fetch_max_age_ms())) / 2000.0
+                tasks = [asyncio.create_task(fetch_one(symbol)) for symbol in symbols]
+                try:
+                    await asyncio.wait(tasks, timeout=timeout)
+                finally:
+                    overdue = {task for task in tasks if not task.done()}
+                    for task in overdue:
+                        task.cancel()
+                    # Drain before planning or propagating structural failures:
+                    # no orphaned reader may later mutate the freshness ledger.
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                for task, result in zip(tasks, results):
+                    if task in overdue and isinstance(result, asyncio.CancelledError):
+                        continue
+                    if isinstance(result, BaseException):
+                        raise result
+                    market_snapshots.update(result)
+            unavailable = set(symbols) - set(market_snapshots)
+            self._hsl_protective_unavailable_symbols.update(unavailable)
+            logging.warning("[risk] protective quote unavailable; retaining scoped orders | symbols=%s",
+                            ",".join(sorted(unavailable)))
+            if not market_snapshots:
+                raise state_refresh.AuthoritativeSurfaceUnavailable(
+                    "protective_planning_inputs", "current protective market unavailable"
+                ) from exc
+            symbols = sorted(set(symbols) - unavailable)
+            target_psides_by_symbol = {symbol: psides for symbol, psides in target_psides_by_symbol.items()
+                                       if symbol not in unavailable}
+            self._protective_panic_reconcile_symbols = sorted(target_psides_by_symbol)
+            self._protective_panic_reconcile_psides_by_symbol = {
+                symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
+            }
+            # Singleton quote reads replace the ledger signature. Record the exact
+            # combined input cohort, preserving each quote's original fetched time.
+            self._record_market_snapshot_surface(symbols, market_snapshots)
         try:
             planning_snapshot = planning_gates.build_protective_planning_snapshot(
                 self, symbols, market_snapshots
@@ -16432,6 +16485,7 @@ class Passivbot:
             raise state_refresh.AuthoritativeSurfaceUnavailable(
                 "protective_planning_inputs", "current protective snapshot unavailable"
             ) from exc
+        self._hsl_protective_unavailable_symbols.difference_update(symbols)
         self._current_planning_snapshot = planning_snapshot
         last_prices = planning_snapshot.last_prices()
         Passivbot._monitor_record_price_ticks(
@@ -16942,7 +16996,8 @@ class Passivbot:
                 self._equity_hard_stop_runtime_red_latched(pside)
                 and not state["halted"]
             ):
-                return "panic"
+                return ("panic" if (state.get("last_metrics") or {}).get("red_active_now", True)
+                        else "tp_only_with_active_entry_cancellation")
             if state["halted"]:
                 return self._equity_hard_stop_halted_mode(pside, symbol)
             if self._equity_hard_stop_runtime_tier(pside) == "orange":

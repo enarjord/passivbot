@@ -356,6 +356,9 @@ def _monitor_hsl_payload(self, pside: str) -> dict:
             for field in ("halted", "no_restart_latched"):
                 payload[field] = any(c[field] for c in coins.values())
     health = getattr(self, "_hsl_protection_health", None)
+    payload["protective_quote_unavailable_symbols"] = sorted(
+        getattr(self, "_hsl_protective_unavailable_symbols", set())
+    )
     if health is not None:
         from live.hsl_protection import grace_ms
         payload["protection_health"] = [row for row in health.payload(

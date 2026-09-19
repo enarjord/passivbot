@@ -68,3 +68,153 @@ def test_real_rust_rejects_invalid_exit_inputs(require_real_passivbot_rust_modul
         inputs[0]["balance"] = 100.0
     with pytest.raises(ValueError):
         require_real_passivbot_rust_module.compute_protective_closes_json(json.dumps(inputs))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['unavailable', 'malformed'])
+async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch, require_real_passivbot_rust_module, failure):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    from live.market_snapshot import MarketSnapshotUnavailable
+    from live import planning_gates
+    quote = SimpleNamespace(bid=99.0, ask=101.0)
+    async def quotes(symbols):
+        if 'A' in symbols:
+            if failure == 'malformed':
+                raise ValueError('malformed quote')
+            raise MarketSnapshotUnavailable('quote temporarily unavailable')
+        return {'B': quote}
+    monkeypatch.setattr(Passivbot, '_equity_hard_stop_enabled', lambda *a, **k: False)
+    monkeypatch.setattr(Passivbot, '_monitor_record_price_ticks', lambda *a, **k: None)
+    monkeypatch.setattr(planning_gates, 'build_protective_planning_snapshot',
+                        lambda bot, symbols, snapshots: SimpleNamespace(last_prices=lambda: {'B': 100.0}))
+    bot = SimpleNamespace(
+        positions={symbol: {'long': {'size': 2.0}} for symbol in ('A', 'B')},
+        price_steps={'A': 0.1, 'B': 0.1},
+        _get_orchestrator_market_snapshots=quotes,
+        _record_market_snapshot_surface=lambda *a: None,
+        _live_market_snapshot_max_age_ms=lambda: 10_000,
+        _live_market_snapshot_fetch_max_age_ms=lambda: 5_000,
+        _to_executable_orders=lambda orders, prices: (orders, []),
+        _finalize_reduce_only_orders=lambda orders, prices: orders,
+    )
+    if failure == 'malformed':
+        with pytest.raises(ValueError, match='malformed quote'):
+            await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'A': {'long'}, 'B': {'long'}})
+        return
+    result = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'A': {'long'}, 'B': {'long'}})
+    assert set(result) == {'B'}
+    assert result['B'][0][0] == -2.0
+    assert bot._hsl_protective_unavailable_symbols == {'A'}
+    assert bot._protective_panic_reconcile_psides_by_symbol == {'B': {'long'}}
+    assert bot._protective_panic_reconcile_symbols == ['B']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fault', ['missing', 'nan', 'crossed', 'payload_shape', 'concurrent', 'stalled', 'probe_shape'])
+async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_exits(monkeypatch, require_real_passivbot_rust_module, fault):
+    from types import SimpleNamespace
+    from live.freshness import FreshnessLedger
+    from live.market_snapshot import MarketSnapshotProvider
+    from live import market_data
+    from passivbot import Passivbot
+    from utils import utc_ms
+    tickers = {symbol: {'bid': 99.0, 'ask': 101.0, 'last': 100.0} for symbol in ('A', 'B', 'C')}
+    if fault == 'missing':
+        del tickers['A']
+    elif fault == 'nan':
+        tickers['A']['bid'] = float('nan')
+    elif fault == 'crossed':
+        tickers['A']['ask'] = 98.0
+    async def fetch():
+        return [] if fault == 'payload_shape' else tickers
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    for surface in ('positions', 'open_orders'):
+        ledger.stamp(surface, (), now_ms=utc_ms())
+    bot = SimpleNamespace(
+        positions={symbol: {'long': {'size': 2.0}} for symbol in tickers.keys() | {'A'}},
+        price_steps={symbol: 0.1 for symbol in ('A', 'B', 'C')},
+        _ensure_freshness_ledger=lambda: ledger,
+        _live_market_snapshot_max_age_ms=lambda: 200 if fault == 'stalled' else 10_000,
+        _live_market_snapshot_fetch_max_age_ms=lambda: 100 if fault == 'stalled' else 5_000,
+        config_get=lambda *a: 'fake_protective_quote_partition',
+        _to_executable_orders=lambda orders, prices: (orders, []),
+        _finalize_reduce_only_orders=lambda orders, prices: orders,
+    )
+    bot._market_snapshot_signature = lambda symbols, snapshots: market_data.market_snapshot_signature(bot, symbols, snapshots)
+    bot._record_market_snapshot_surface = lambda symbols, snapshots: market_data.record_market_snapshot_surface(bot, symbols, snapshots)
+    bot._market_snapshot_signature_invalid = lambda symbols: market_data.market_snapshot_signature_invalid(bot, symbols)
+    import asyncio
+    from live.market_snapshot import MarketSnapshotUnavailable
+    started = set()
+    all_started = asyncio.Event()
+    cancelled = asyncio.Event()
+    async def quotes(symbols):
+        if fault in {'concurrent', 'stalled', 'probe_shape'}:
+            if len(symbols) > 1:
+                raise MarketSnapshotUnavailable('batch unavailable')
+            started.add(symbols[0])
+            if len(started) == 3:
+                all_started.set()
+            if symbols[0] == 'A':
+                await all_started.wait()
+                if fault == 'probe_shape':
+                    raise ValueError('structural reader failure')
+                if fault == 'stalled':
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.set()
+                raise MarketSnapshotUnavailable('slow unavailable symbol')
+        snapshots = await provider.get_snapshots(symbols)
+        bot._record_market_snapshot_surface(symbols, snapshots)
+        return snapshots
+    bot._get_orchestrator_market_snapshots = quotes
+    monkeypatch.setattr(Passivbot, '_equity_hard_stop_enabled', lambda *a, **k: False)
+    monkeypatch.setattr(Passivbot, '_monitor_record_price_ticks', lambda *a, **k: None)
+    targets = {symbol: {'long'} for symbol in ('A', 'B', 'C')}
+    if fault == 'payload_shape':
+        with pytest.raises(RuntimeError, match='non-dict'):
+            await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets)
+        return
+    if fault == 'probe_shape':
+        with pytest.raises(ValueError, match='structural reader failure'):
+            await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets)
+        assert started == {'A', 'B', 'C'}
+        assert bot._current_planning_snapshot is None
+        return
+    result = await asyncio.wait_for(Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets), timeout=2.0)
+    assert set(result) == {'B', 'C'}
+    assert all(orders[0][0] == -2.0 for orders in result.values())
+    assert bot._current_planning_snapshot.symbols == ('B', 'C')
+    assert bot._market_snapshot_signature_invalid(['B', 'C']) == []
+    assert bot._hsl_protective_unavailable_symbols == {'A'}
+    if fault in {'concurrent', 'stalled'}:
+        if fault == 'stalled':
+            assert cancelled.is_set()
+        assert started == {'A', 'B', 'C'}
+    else:
+        await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'B': {'long'}})
+        assert bot._hsl_protective_unavailable_symbols == {'A'}
+        tickers['A'] = {'bid': 99.0, 'ask': 101.0, 'last': 100.0}
+        await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'A': {'long'}})
+        assert not bot._hsl_protective_unavailable_symbols
+
+
+@pytest.mark.asyncio
+async def test_flat_target_does_not_clear_opposite_side_quote_outage():
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    bot = SimpleNamespace(
+        positions={'A': {'long': {'size': 0.0}, 'short': {'size': -2.0}}},
+        _hsl_protective_unavailable_symbols={'A'},
+    )
+    assert await Passivbot.calc_protective_panic_ideal_orders_orchestrator(
+        bot, target_psides_by_symbol={'A': {'long'}}) == {}
+    assert bot._hsl_protective_unavailable_symbols == {'A'}
+    bot.positions['A']['short']['size'] = 0.0
+    assert await Passivbot.calc_protective_panic_ideal_orders_orchestrator(
+        bot, target_psides_by_symbol={'A': {'long'}}) == {}
+    assert not bot._hsl_protective_unavailable_symbols
