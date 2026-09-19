@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep HSL reconstruction usable across independent symbols' same-timestamp fills by retaining
+  drawdown across uncertain aggregate flatten boundaries. Recover a later coin episode after an
+  incomplete older opening when current quantity, retained fills, and a cooldown-separated flat
+  gap support it under the `always` restart policy. Both bounded reconstruction paths expose their
+  degraded status while retaining normal drawdown and EMA evaluation.
+
 - Restore committed HSL exits before startup balance/history recovery. Schedule overdue emergency
   scopes after existing protective close attempts, including normal RED and cooldown work, so an
   unfilled close cannot starve another scope. Bound emergency input reads and derive pending exits
