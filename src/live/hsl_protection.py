@@ -24,6 +24,7 @@ from live.state_refresh import AuthoritativeSurfaceUnavailable
 
 _EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS = 5.0
 _EMERGENCY_FILL_REFRESH_RETRY_SECONDS = 10.0
+_EMERGENCY_QUOTE_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True, order=True)
@@ -350,9 +351,12 @@ async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
             continue
         try:
             if scope.mode == "unified":
-                upnl = float(await bot._calc_upnl_sum_strict())
+                upnl = float(await asyncio.wait_for(bot._calc_upnl_sum_strict(),
+                    timeout=_EMERGENCY_QUOTE_TIMEOUT_SECONDS))
             else:
-                upnl = float(await bot._calc_upnl_sum_strict(scope.pside, scope.symbol or None))
+                upnl = float(await asyncio.wait_for(
+                    bot._calc_upnl_sum_strict(scope.pside, scope.symbol or None),
+                    timeout=_EMERGENCY_QUOTE_TIMEOUT_SECONDS))
         except (MarketSnapshotUnavailable, NetworkError, TimeoutError) as exc:
             health.execution_blocked = bounded_exception_type(exc)
             logging.warning("[risk] HSL emergency evaluation waiting for current quotes | pside=%s symbol=%s error_type=%s",

@@ -3825,10 +3825,45 @@ class Passivbot:
         decision["cold_path_required"] = False
         return decision
 
+    async def _load_market_metadata(self, *, verbose=True):
+        """Initialize symbol and execution metadata without account/history refresh."""
+        # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
+        cc_instance = getattr(self, "cca", None)
+        self.markets_dict = await load_markets(
+            self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
+        )
+        if hasattr(self, "refresh_and_log_user_abstraction_state"):
+            await self.refresh_and_log_user_abstraction_state()
+        # ineligible symbols cannot open new positions
+        eligible, _, reasons = filter_markets(
+            self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
+        )
+        self.eligible_symbols = set(eligible)
+        self.ineligible_symbols = reasons
+        # for prettier printing
+        self.max_len_symbol = max([len(s) for s in self.markets_dict])
+        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
+        # await self.init_flags()
+        self.init_coin_overrides()
+        # await self.update_tickers()
+        self.refresh_approved_ignored_coins_lists()
+        self.set_market_specific_settings()
+        self._assert_supported_live_state()
+        # self.set_live_configs()
+        self.set_wallet_exposure_limits()
+
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
+        # A journal commitment needs no new balance or equity reconstruction.
+        # Load only execution metadata before servicing it, even on a cold start.
+        protection_bootstrap = bool(hsl_protection.manager(self).pending_exits())
+        if protection_bootstrap:
+            await self._load_market_metadata(verbose=verbose)
+            await risk_input_recovery.drain_startup_commitments(self)
+            if self.stop_signal_received:
+                return
         readiness_network_attempt = 0
         while True:
             try:
@@ -3882,30 +3917,8 @@ class Passivbot:
                     5 * _attempt,
                 )
                 await asyncio.sleep(5 * _attempt)
-        # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
-        cc_instance = getattr(self, "cca", None)
-        self.markets_dict = await load_markets(
-            self.exchange, 0, verbose=False, cc=cc_instance, quote=self.quote
-        )
-        if hasattr(self, "refresh_and_log_user_abstraction_state"):
-            await self.refresh_and_log_user_abstraction_state()
-        # ineligible symbols cannot open new positions
-        eligible, _, reasons = filter_markets(
-            self.markets_dict, self.exchange, quote=self.quote, verbose=verbose
-        )
-        self.eligible_symbols = set(eligible)
-        self.ineligible_symbols = reasons
-        # for prettier printing
-        self.max_len_symbol = max([len(s) for s in self.markets_dict])
-        self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
-        # await self.init_flags()
-        self.init_coin_overrides()
-        # await self.update_tickers()
-        self.refresh_approved_ignored_coins_lists()
-        self.set_market_specific_settings()
-        self._assert_supported_live_state()
-        # self.set_live_configs()
-        self.set_wallet_exposure_limits()
+        if not protection_bootstrap:
+            await self._load_market_metadata(verbose=verbose)
         authoritative_ready = await self.refresh_authoritative_state()
         while (
             authoritative_ready is False
@@ -6353,7 +6366,7 @@ class Passivbot:
         return True
 
     async def _run_latched_hsl_supervisor_if_active(
-        self, *, cycle_id: object, loop_timings_ms: dict[str, int], single_pass: bool = False
+        self, *, cycle_id: object, loop_timings_ms: dict[str, int], single_pass: bool = False, after_close=None
     ) -> bool:
         """Run already-latched RED supervision without requiring fill readiness."""
         if not self._equity_hard_stop_enabled():
@@ -6379,7 +6392,7 @@ class Passivbot:
             data={"timings_ms": dict(loop_timings_ms)},
         )
         if single_pass:
-            await supervisor(single_pass=True)
+            await supervisor(single_pass=True, **({"after_close": after_close} if after_close else {}))
         else:
             await supervisor()
         return True

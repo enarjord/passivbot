@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Restore committed HSL exits before startup balance/history recovery. Schedule overdue emergency
+  scopes after existing protective close attempts, including normal RED and cooldown work, so an
+  unfilled close cannot starve another scope. Bound emergency input reads and derive pending exits
+  directly from scoped protection state.
+
 - Respect inactive coin sides during HSL emergency evaluation, avoiding zero-budget-divisor
   failures while other scopes recover. Previously committed exits still close residual exposure
   when position sizing becomes inactive.

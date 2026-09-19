@@ -369,7 +369,7 @@ def _monitor_hsl_payload(self, pside: str) -> dict:
         payload["input_recovery"] = {
             "reason": recovery.reason,
             "attempts": recovery.attempts,
-            "protective_exit_pending": recovery.protective_exit_pending,
+            "protective_exit_pending": bool(health and health.pending_exits()),
         }
     return {k: v for k, v in payload.items() if v is not None}
 

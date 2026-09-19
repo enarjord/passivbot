@@ -1961,7 +1961,7 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
             provider._fetch_tickers_for_symbols = selected if original_symbols else None
             await recovery.protect_and_wait(bot)
             assert bot.positions[symbol]['long']['size'] == 5.0
-            assert bot._risk_input_recovery.protective_exit_pending
+            assert bool(bot._hsl_protection_health.pending_exits())
             crossed['active'] = False
         if failure == 'current_balance':
             bot.balance_raw = float('nan')
@@ -1973,7 +1973,7 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
         assert bot.positions[symbol]['long']['size'] == 0.0
         if failure == 'opposite_side':
             assert bot.positions[symbol]['short']['size'] == 0.0
-        assert not bot._risk_input_recovery.protective_exit_pending
+        assert not bool(bot._hsl_protection_health.pending_exits())
         assert bot._risk_input_recovery.attempts <= 1
         fills = [f for f in bot.cca.fills if f.get('reduceOnly') and f.get('timestamp', 0) >= bot.cca.now_ms]
         assert fills
@@ -2025,6 +2025,11 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
     cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
     cfg['live']['hsl_signal_mode'] = signal_mode
     cfg['bot']['long']['hsl_ema_span_minutes'] = 1.0
+    if failure == 'emergency_scope':
+        import copy
+        cfg['bot']['short'] = copy.deepcopy(cfg['bot']['long'])
+        cfg['live']['approved_coins']['short'] = ['BTC']
+
     config_path = tmp_path / 'config.json'
     config_path.write_text(json.dumps(cfg))
     scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
@@ -2071,6 +2076,24 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             bot.refresh_authoritative_state = AsyncMock(side_effect=outer_refresh)
             await asyncio.wait_for(bot.run_execution_loop(), timeout=10.0)
             bot.refresh_authoritative_state.assert_awaited_once()
+        elif failure == 'emergency_scope':
+            from live import risk_input_recovery as recovery, hsl_protection as protection
+            bot.cca._load_boot_position(dict(symbol=symbol, position_side='short', qty=2.0, price=80.0))
+            await bot.refresh_protective_authoritative_state()
+            scope = protection.scope_for(bot, 'short', symbol)
+            protection.manager(bot).unavailable(scope, now_ms=bot.get_exchange_time()-120_000,
+                                                reason='history', grace_ms=120_000)
+            async def blocked_history(*args, **kwargs):
+                assert bot.positions[symbol]['short']['size'] == 0.0, 'normal bookkeeping starved emergency close'
+                raise AuthoritativeSurfaceUnavailable('hsl_episode_boundaries', 'history pending')
+            bot._equity_hard_stop_flatten_fill_timestamp_with_refresh = blocked_history
+            async def yield_sleep(*args, **kwargs):
+                await asyncio.sleep(0)
+            bot._sleep_unless_shutdown = yield_sleep
+            assert await recovery.protect_before_history_refresh(bot)
+            await bot.refresh_protective_authoritative_state(require_balance=False)
+            assert bot.positions[symbol]['short']['size'] == 0.0
+            assert protection.manager(bot).scopes[scope].exit_committed
         elif failure == 'balance':
             bot.balance_raw = bot.balance = float('nan')
             bot._capture_balance_staged_snapshot = AsyncMock(side_effect=RiskInputUnavailable('current_balance_unavailable'))
@@ -2079,7 +2102,7 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             bot._equity_hard_stop_flatten_fill_timestamp_with_refresh = AsyncMock(
                 side_effect=AuthoritativeSurfaceUnavailable('hsl_episode_boundaries', 'history pending'))
             expected = AuthoritativeSurfaceUnavailable
-        if failure not in {'outer_refresh', 'reactivation'}:
+        if failure not in {'outer_refresh', 'reactivation', 'emergency_scope'}:
             supervisor = hsl._equity_hard_stop_run_coin_red_supervisor if signal_mode == 'coin' else hsl._equity_hard_stop_run_red_supervisor
             with pytest.raises(expected):
                 await supervisor(bot, single_pass=True)
@@ -2238,3 +2261,89 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
 async def test_inactive_coin_emergency_eligibility_and_committed_exit_fake_live(tmp_path, monkeypatch):
     await test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(
         tmp_path, monkeypatch, 'inactive_committed', 'coin')
+
+
+@pytest.mark.asyncio
+async def test_cold_start_committed_exit_precedes_balance_and_history_fake_live(tmp_path, monkeypatch):
+    from live.hsl_protection import ProtectionHealth, Scope, Health
+    import passivbot_rust as pbr
+    assert not getattr(pbr, '__is_stub__', False)
+    user = f'fake_hsl_cold_protection_{tmp_path.name}'
+    _cleanup_fake_user_state(user)
+    cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
+    cfg['live']['hsl_signal_mode'] = 'coin'
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps(cfg))
+    scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
+    scenario.pop('assertions', None)
+    scenario['run_initial_cycle'] = True
+    scenario_path = tmp_path / 'scenario.hjson'
+    scenario_path.write_text(hjson.dumps(scenario))
+    setup = run_fake_live_module.setup_bot
+    seen = []
+    symbol = 'BTC/USDT:USDT'
+
+    def setup_cold(config):
+        bot = setup(config)
+        path = tmp_path / 'protection.json'
+        health = ProtectionHealth(path)
+        health.scopes[Scope('coin', 'long', symbol)] = Health(
+            exit_committed=True, exit_started_ms=bot.cca.now_ms)
+        health.save()
+        bot._hsl_protection_journal_path = path
+        # No recovery controller, cached account observation or loaded health.
+        assert getattr(bot, '_risk_input_recovery', None) is None
+        assert not bot.positions
+        # The harness suppresses ordinary startup trading via debug_mode. Enable
+        # execution only inside this deterministic fake exchange close boundary.
+        execute = bot.execute_order_plan_to_exchange
+        async def execute_fake(*args, **kwargs):
+            debug = bot.debug_mode
+            bot.debug_mode = False
+            try:
+                return await execute(*args, **kwargs)
+            finally:
+                bot.debug_mode = debug
+        bot.execute_order_plan_to_exchange = execute_fake
+        original_balance = bot._capture_balance_staged_snapshot
+        async def balance(*args, **kwargs):
+            assert any(fill.get('reduceOnly') for fill in bot.cca.fills), 'balance preceded exit'
+            seen.append('balance_after_exit')
+            return await original_balance(*args, **kwargs)
+        bot._capture_balance_staged_snapshot = balance
+        original_config_gate = bot._exchange_config_write_ready
+        async def config_gate():
+            assert any(fill.get('reduceOnly') for fill in bot.cca.fills), 'config gate preceded exit'
+            seen.append('config_after_exit')
+            return await original_config_gate()
+        bot._exchange_config_write_ready = config_gate
+        original_history = bot.update_pnls
+        async def history(*args, **kwargs):
+            assert any(fill.get('reduceOnly') for fill in bot.cca.fills), 'history preceded exit'
+            seen.append('history_after_exit')
+            return await original_history(*args, **kwargs)
+        bot.update_pnls = history
+        return bot
+
+    async def finished(bot):
+        assert bot.positions[symbol]['long']['size'] == 0.0
+        assert not bot._hsl_protection_health.pending_exits()
+        seen.append('flat')
+        return {'cold_start_protected': True}
+    monkeypatch.setattr(run_fake_live_module, 'setup_bot', setup_cold)
+    monkeypatch.setattr(run_fake_live_module, '_run_fake_cycle', finished)
+    try:
+        import asyncio
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+                                  max_steps=1, output_dir=str(tmp_path), log_level=1, snapshot_each_step=False)
+        assert await asyncio.wait_for(_async_main(args), timeout=20.0) == 0
+        assert {'flat', 'balance_after_exit', 'history_after_exit', 'config_after_exit'} <= set(seen)
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('signal_mode', ['coin', 'pside'])
+async def test_normal_red_does_not_starve_emergency_scope_fake_live(tmp_path, monkeypatch, signal_mode):
+    await test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exchange(
+        tmp_path, monkeypatch, 'emergency_scope', signal_mode)

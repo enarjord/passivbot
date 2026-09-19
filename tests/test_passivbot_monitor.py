@@ -7699,8 +7699,13 @@ def test_coin_hsl_snapshot_reports_actual_cooldown_and_input_recovery():
             'halted': True, 'cooldown_until_ms': 900_000,
             'last_metrics': {'tier': 'red', 'timestamp_ms': 60_000},
         }}},
-        _risk_input_recovery=RecoveryState(reason='hsl_episode_evidence_unavailable', attempts=12, protective_exit_pending=True),
+        _risk_input_recovery=RecoveryState(reason='hsl_episode_evidence_unavailable', attempts=12),
     )
+    from live.hsl_protection import ProtectionHealth, Scope, Health
+    bot._hsl_protection_health = ProtectionHealth()
+    bot._hsl_protection_health.scopes[Scope('coin', 'short', 'A')] = Health(exit_committed=True)
+    bot.config = {'live': {'hsl_unavailable_grace_seconds': 120.0}}
+    bot.get_exchange_time = lambda: 1_000_000
     payload = _monitor_hsl_payload(bot, 'short')
     assert payload['tier'] == 'red' and payload['halted']
     assert payload['coins']['A']['cooldown_until_ms'] == 900_000

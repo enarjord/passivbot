@@ -11659,7 +11659,9 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
         if signal_mode == "coin"
         else bot._equity_hard_stop_run_coin_red_supervisor
     )
-    selected.assert_awaited_once_with(single_pass=True)
+    selected.assert_awaited_once()
+    assert selected.await_args.kwargs["single_pass"]
+    assert callable(selected.await_args.kwargs["after_close"])
     unselected.assert_not_awaited()
     bot._sleep_unless_shutdown.assert_not_awaited()
 

@@ -96,7 +96,19 @@ ordinary planning still requires its own current account, fill, and strategy inp
 already-latched RED supervision and required panic protection for active cooldown positions still
 run during that deferral, using fresh protective account state and the configured execution pacing.
 An already-authorized close wave runs before balance reads, fresh signal evaluation, and flat-stop
-bookkeeping. The outer execution/startup loop checks existing RED and cooldown close work before
+bookkeeping. One protection scheduler owns startup and execution-loop ordering. It restores journal commitments
+before inspecting pending work; the scoped health records, not a separate retry-controller flag,
+are exit authority. Cold startup loads execution metadata and services restored commitments before
+exchange-configuration balance gates, account/history refresh, or candle warmup. Each wave services
+committed exits and existing normal closes, then gives overdue unavailable scopes an evaluation
+opportunity even while another scope remains open. Normal RED supervision yields to this scheduler
+after its close attempt and before balance/history bookkeeping. Emergency balance reads and each
+emergency quote read have five-second deadlines; single-pass normal supervision also bounds its
+balance read to five seconds. Timed-out readers are cancelled and drained before another wave.
+Flat normal stop finalization runs during recovery after ordinary refresh has had an opportunity,
+so a flat latch alone cannot monopolize the pre-refresh gate.
+
+The outer execution/startup loop checks existing RED and cooldown close work before
 its ordinary account/history refresh, even without an emergency recovery journal entry. Once the
 fresh position/order scope has no immediate close work, ordinary repair resumes. These later steps
 may defer reopening but cannot prevent that close attempt. Normal
