@@ -13116,6 +13116,11 @@ class Passivbot:
                                 break
                     if previous is None:
                         continue
+                    # Completed rows can also be corrected under the same
+                    # identity. Their changed structure requires a new account
+                    # observation before optional HSL evidence can consume it.
+                    if event_structure(previous) != event_structure(current):
+                        structural_transition = True
                     previous_needs_enrichment = (
                         fill_event_pnl_pending(previous)
                         or bool(
@@ -13128,8 +13133,6 @@ class Passivbot:
                     )
                     if previous_needs_enrichment and current_is_authoritative:
                         transitions.append((previous, current))
-                        if event_structure(previous) != event_structure(current):
-                            structural_transition = True
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
@@ -13335,10 +13338,6 @@ class Passivbot:
             # when an enabled live risk feature consumes realized PnL.
             if fill_fetch_completed:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
-                # The tail request must start after the current position
-                # observation; concurrent account/fill requests alone do not
-                # rule out an omitted same-size flatten/reopen round trip.
-                self._hsl_fill_tail_observation = hsl_fill_observation
             new_events = []
             seen_new_source_ids: set[str] = set()
             mixed_source_confirmation_required = False
@@ -13371,6 +13370,10 @@ class Passivbot:
                 self._log_new_fill_events(new_events)
             if new_events or mixed_source_confirmation_required:
                 request_account_confirmation()
+            # Certify only an ordered post-position tail with no new or
+            # structurally corrected fills awaiting account confirmation.
+            if fill_fetch_completed and not account_confirmation_requested:
+                self._hsl_fill_tail_observation = hsl_fill_observation
             post_now_ms = self.get_exchange_time()
             post_pnl_required, post_pnl_start_ms = (
                 self._required_pnl_history_start_ms(

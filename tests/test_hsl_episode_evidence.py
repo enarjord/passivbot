@@ -380,6 +380,39 @@ def test_optional_emergency_realized_loss_requires_coherent_current_episode(cond
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == expected
 
 
+@pytest.mark.parametrize('as_object', [False, True])
+def test_optional_loss_rejects_pending_status_with_authoritative_source(as_object):
+    from types import SimpleNamespace
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-30)]]
+    events[-1].update(pnl_status='pending', pnl_source='authoritative')
+    if as_object:
+        events = [SimpleNamespace(**event) for event in events]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot.positions = {'A': {'long': {'size': 4.0}}}
+    bot._fill_history_coverage_status = lambda **kwargs: {'ready': True}
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None
+
+
+@pytest.mark.parametrize('has_prior_flat', [False, True])
+def test_optional_loss_uses_corrected_tape_instead_of_stale_runtime_reset(has_prior_flat):
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-30)]]
+    if has_prior_flat:
+        events[:0] = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=1, pnl=0)
+                      for t,a in [(10_000,'increase'),(20_000,'decrease')]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot.positions = {'A': {'long': {'size': 4.0}}}
+    bot._fill_history_coverage_status = lambda **kwargs: {'ready': True}
+    # A previously consumed flatten was invalidated by the current fill tape.
+    bot._hsl_coin_state('long', 'A')['pnl_reset_timestamp_ms'] = 150_001
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0
+
+
 def test_realized_loss_sample_ignores_ambiguous_future_fill_cohort():
     bot = make_coin_bot()
     events = [

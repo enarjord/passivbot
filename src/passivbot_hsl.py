@@ -1785,9 +1785,12 @@ def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
     # Boundary proof uses observed quantities before consulting old PnL quality.
     # A prior closed episode cannot taint the current episode's optional loss.
     current_events = ordered[flats[-1] + 1:] if flats else ordered
-    if not current_events or any(str(_equity_hard_stop_event_value(event, "pnl_source", "")).lower()
-                                in {"pending", "synthetic_fill_reconstruction_degraded"}
-                                for event in current_events):
+    if not current_events or any(
+        str(_equity_hard_stop_event_value(event, "pnl_status", "complete")).lower() == "pending"
+        or str(_equity_hard_stop_event_value(event, "pnl_source", "")).lower()
+        in {"pending", "synthetic_fill_reconstruction_degraded"}
+        for event in current_events
+    ):
         return None
     evidence = _equity_hard_stop_coin_episode_evidence(
         current_events, pside, symbol, qty_step=_hsl_qty_step_for_symbol(self, symbol))
@@ -1798,12 +1801,11 @@ def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
     coverage = self._fill_history_coverage_status(start_ms=episode_start_ms, end_ms=now_ms)
     if not coverage.get("ready", False):
         return None
-    reset_ms = self._hsl_coin_state(pside, symbol).get("pnl_reset_timestamp_ms")
+    # Runtime watermarks may describe a flatten invalidated by corrected fills.
+    # Optional emergency evidence is derived solely from the current proven tape.
+    reset_ms = episode_start_ms
     if flats:
-        reset_ms = max(reset_ms or 0, episode_start_ms,
-                       _equity_hard_stop_fill_timestamp_ms(ordered[flats[-1]]) + 1)
-    else:
-        reset_ms = max(reset_ms or 0, episode_start_ms)
+        reset_ms = max(reset_ms, _equity_hard_stop_fill_timestamp_ms(ordered[flats[-1]]) + 1)
     try:
         peak, last = self._equity_hard_stop_coin_realized_pnl_peak_last(
             pside, symbol, now_ms, reset_timestamp_ms=reset_ms)

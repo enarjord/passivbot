@@ -4169,7 +4169,9 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     ],
     ids=["mixed_new_source", "same_source_structural_change", "fee_only_change"],
 )
+@pytest.mark.parametrize("previous_status", ["pending", "complete"])
 async def test_update_pnls_confirms_only_structural_enrichment(
+    previous_status,
     current_source_ids,
     current_id,
     current_qty,
@@ -4191,8 +4193,8 @@ async def test_update_pnls_confirms_only_structural_enrichment(
         position_side="long",
         client_order_id="pb-close",
         pnl=0.0,
-        pnl_status="pending",
-        pnl_source=fem.PNL_SOURCE_PENDING,
+        pnl_status=previous_status,
+        pnl_source=(fem.PNL_SOURCE_PENDING if previous_status == "pending" else fem.PNL_SOURCE_AUTHORITATIVE),
     )
     current = SimpleNamespace(
         **{
@@ -4244,9 +4246,17 @@ async def test_update_pnls_confirms_only_structural_enrichment(
     bot.logging_level = 0
     bot._health_rate_limits = 0
 
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    ledger.stamp("positions", now_ms=bot.get_exchange_time())
+    observation = (ledger.epoch, ledger.surfaces["positions"].revision)
     assert await bot.update_pnls(source="staged_blocking") is True
+    assert bot._hsl_fill_tail_observation == (None if expect_confirmation else observation)
 
-    bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
+    if previous_status == "pending":
+        bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
+    else:
+        bot._log_enriched_fill_events.assert_not_called()
     # A mixed aggregate is already accounted by the enrichment path, so it
     # requests confirmation without counting the aggregate as a second fill.
     bot._log_new_fill_events.assert_not_called()
