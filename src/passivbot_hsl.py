@@ -17,6 +17,7 @@ from types import MethodType
 from typing import Any, Iterable, Optional
 
 import passivbot_rust as pbr
+from ccxt.base.errors import NetworkError
 
 from candlestick_manager import candle_range_has_full_coverage
 
@@ -6003,6 +6004,16 @@ def _equity_hard_stop_log_status(self, pside: str, metrics: dict) -> None:
     )
 
 
+async def _equity_hard_stop_scoped_upnl(self, pside, symbol=None):
+    try:
+        return await self._calc_upnl_sum_strict(pside, symbol)
+    except (MarketSnapshotUnavailable, NetworkError, TimeoutError) as exc:
+        raise RiskInputUnavailable(
+            ReasonCodes.HSL_SIGNAL_UNAVAILABLE, cause=_bounded_hsl_exception_type(exc),
+            pside=pside, symbol=symbol,
+        ) from exc
+
+
 async def _equity_hard_stop_check(self) -> Optional[dict]:
     if not self._equity_hard_stop_enabled():
         return None
@@ -6026,7 +6037,7 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
     signal_mode = self._equity_hard_stop_signal_mode()
     realized_pnl_total = self._equity_hard_stop_realized_pnl_now()
     unrealized_pnl_by_pside = {
-        pside: await self._calc_upnl_sum_strict(pside) for pside in self._hsl_psides()
+        pside: await _equity_hard_stop_scoped_upnl(self, pside) for pside in self._hsl_psides()
         if (pside, None) not in getattr(self, "_hsl_readiness_excluded_pairs", set())
     }
     unrealized_pnl_total = (
@@ -6569,7 +6580,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 symbol,
                 ts_ms,
                 balance,
-                float(await self._calc_upnl_sum_strict(pside, symbol)),
+                float(await _equity_hard_stop_scoped_upnl(self, pside, symbol)),
             )
             hsl_protection.record_evaluation(self, pside, symbol)
             if metrics["changed"]:

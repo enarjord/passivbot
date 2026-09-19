@@ -1833,7 +1833,7 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['episode', 'history_balance', 'current_balance', 'crossed_quote', 'transient', 'restart_partial', 'missing_history'])
+@pytest.mark.parametrize('failure', ['episode', 'history_balance', 'current_balance', 'crossed_quote', 'transient', 'restart_partial', 'missing_history', 'sizing_balance'])
 @pytest.mark.parametrize('signal_mode', ['coin', 'pside', 'unified'])
 async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure, signal_mode):
     """Unavailable historical input cannot strand a previously green live position."""
@@ -1895,6 +1895,8 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
             bot.cca.get_current_step()['prices'][symbol] = 101.0
             bot.market_snapshot_provider._cache.clear()
         bot.cca.now_ms += 1
+        if failure == 'sizing_balance':
+            bot.get_hysteresis_snapped_balance = lambda: 0.0
         assert not await recovery.ensure_ready(bot)
         if failure == 'restart_partial':
             original_fill = bot.cca._fill_order

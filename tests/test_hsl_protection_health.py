@@ -161,3 +161,42 @@ def test_corrupt_journal_recovery_restores_grace_only_for_evaluated_scope(tmp_pa
     health.unavailable(b, now_ms=1_200_000, reason="timeout", grace_ms=120_000)
     assert health.scopes[a].unavailable_since_ms == 1_200_000
     assert health.scopes[b].unavailable_since_ms == 1_080_000
+
+
+def test_completed_normal_evaluation_clears_old_quote_blockage():
+    health = ProtectionHealth()
+    scope = Scope('coin', 'long', 'A')
+    state = health.unavailable(scope, now_ms=1000, reason='timeout', grace_ms=120_000)
+    state.execution_blocked = 'MarketSnapshotUnavailable'
+    health.evaluated_successfully(scope, now_ms=2000)
+    assert state.status == 'usable'
+    assert state.execution_blocked == ''
+
+
+@pytest.mark.asyncio
+async def test_recommit_after_flat_confirmation_survives_restart(tmp_path, real_rust):
+    path = tmp_path / 'protection.json'
+    scope = Scope('coin', 'long', 'A')
+    health = ProtectionHealth(path)
+    state = health.unavailable(scope, now_ms=1000, reason='timeout', grace_ms=0)
+    state.exit_committed = True
+    state.exit_started_ms = 1000
+    health.confirm_flat(scope, now_ms=2000)
+    bot = SimpleNamespace(
+        _hsl_protection_health=health,
+        config={'live': {'hsl_unavailable_grace_seconds': 0.0}},
+        positions={'A': {'long': {'size': 1.0}}}, open_orders={},
+        _equity_hard_stop_signal_mode=lambda: 'coin',
+        _equity_hard_stop_enabled=lambda *a, **k: True,
+        _equity_hard_stop_config=lambda *a: {'red_threshold': 0.1},
+        _calc_upnl_sum_strict=AsyncMock(return_value=-100.0),
+        get_exchange_time=lambda: 3000, get_raw_balance=lambda: 100.0,
+        bot_value=lambda *a: 1,
+        _pnls_manager=SimpleNamespace(get_events=lambda: [object()]),
+    )
+    await evaluate_emergency(bot, {'A': {'long'}})
+    restored = ProtectionHealth(path)
+    assert not restored.journal_invalid
+    assert restored.pending_exits() == {scope}
+    assert not restored.scopes[scope].exit_confirmed_flat
+    assert restored.scopes[scope].exit_started_ms == 3000

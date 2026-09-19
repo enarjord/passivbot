@@ -1098,3 +1098,71 @@ async def test_new_position_during_replay_backoff_gets_its_own_grace(monkeypatch
     assert await recovery.ensure_ready(bot)
     health = hsl_protection.manager(bot)
     assert health.scopes[hsl_protection.Scope('coin', 'short', 'B')].unavailable_since_ms == 1_001_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['coin', 'pside'])
+async def test_scoped_quote_failure_keeps_other_scope_evaluating(monkeypatch, mode):
+    from live import hsl_protection
+    from live.market_snapshot import MarketSnapshotUnavailable
+    from passivbot_hsl import _equity_hard_stop_scoped_upnl
+    bot, clock = make_bot(monkeypatch)
+    bot.config['live']['hsl_unavailable_grace_seconds'] = 120.0
+    bot._equity_hard_stop_signal_mode = lambda: mode
+    bot._hsl_state = lambda side: {'halted': False}
+    bot._equity_hard_stop_coin_initialized = True
+    bot.positions = {'A': {'long': {'size': 1.0}}, 'B': {'short': {'size': -1.0}}}
+    health = hsl_protection.manager(bot)
+    seen = []
+    async def upnl(side, symbol=None):
+        if side == 'long':
+            raise MarketSnapshotUnavailable('quote unavailable')
+        return -100.0
+    bot._calc_upnl_sum_strict = upnl
+    async def check():
+        for side, symbol in [('long', 'A'), ('short', 'B')]:
+            key = (side, symbol if mode == 'coin' else None)
+            if key in bot._hsl_readiness_excluded_pairs:
+                continue
+            await _equity_hard_stop_scoped_upnl(bot, *key)
+            seen.append(key)
+            hsl_protection.record_evaluation(bot, *key)
+    bot._equity_hard_stop_check = check
+    assert await recovery.ensure_ready(bot)
+    clock[0] += 121.0
+    assert await recovery.ensure_ready(bot)
+    assert seen == [('short', 'B' if mode == 'coin' else None)] * 2
+    assert not health.pending_exits()
+    assert health.scopes[hsl_protection.scope_for(bot, 'short', 'B')].unavailable_since_ms is None
+
+
+@pytest.mark.asyncio
+async def test_disabled_hsl_retires_persisted_exit_before_reenable(monkeypatch, tmp_path):
+    from live.hsl_protection import ProtectionHealth, Scope, Health
+    path = tmp_path / 'protection.json'
+    previous = ProtectionHealth(path)
+    previous.scopes[Scope('coin', 'long', 'A')] = Health(exit_committed=True, exit_started_ms=100)
+    previous.save()
+    bot, _ = make_bot(monkeypatch, hsl=False)
+    bot._hsl_protection_journal_path = path
+    assert await recovery.ensure_ready(bot)
+    assert not ProtectionHealth(path).pending_exits()
+    bot._equity_hard_stop_enabled = lambda *a, **k: True
+    bot._hsl_protection_health = ProtectionHealth(path)
+    assert await recovery.ensure_ready(bot)
+    assert not bot._hsl_protection_health.pending_exits()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('sizing', [0.0, float('nan')])
+async def test_emergency_uses_raw_balance_without_strategy_sizing_balance(monkeypatch, sizing):
+    from live import hsl_protection
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    bot.balance = sizing
+    assert not await recovery.ensure_ready(bot)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    assert await recovery.protect_unready_hsl(bot)
+    assert hsl_protection.manager(bot).pending_exits() == {hsl_protection.Scope('coin', 'long', 'A')}
+    bot.execute_order_plan_to_exchange.assert_awaited_once()

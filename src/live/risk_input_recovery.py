@@ -39,6 +39,12 @@ def validate_current_balances(bot):
     validate_balances(bot.get_raw_balance(), bot.get_hysteresis_snapped_balance())
 
 
+def validate_emergency_balance(bot):
+    raw = bot.get_raw_balance()
+    if not math.isfinite(raw) or raw <= 0.0:
+        raise RiskInputUnavailable(ReasonCodes.CURRENT_BALANCE_UNAVAILABLE, balance_raw=_number(raw))
+
+
 def validate_balances(raw, sizing):
     if not all(math.isfinite(value) and value > 0.0 for value in (raw, sizing)):
         raise RiskInputUnavailable(
@@ -241,9 +247,8 @@ async def ensure_ready(bot, *, startup=False):
     owner remains active. Other input consumers keep their own strict gates.
     """
     enabled = bot._equity_hard_stop_enabled()
-    health = hsl_protection.manager(bot) if enabled else None
-    if health is not None:
-        hsl_protection.reconcile_config(bot)
+    health = hsl_protection.manager(bot)
+    hsl_protection.reconcile_config(bot)
     state = getattr(bot, "_risk_input_recovery", None)
     if health is not None and health.pending_exits():
         if state is None:
@@ -316,10 +321,13 @@ async def ensure_ready(bot, *, startup=False):
                 try:
                     await bot._equity_hard_stop_check()
                     break
-                except AuthoritativeSurfaceUnavailable as exc:
-                    if exc.surface != "hsl_episode_boundaries":
-                        raise
-                    defer_episode_evidence(bot, exc)
+                except (AuthoritativeSurfaceUnavailable, RiskInputUnavailable) as exc:
+                    if isinstance(exc, RiskInputUnavailable):
+                        defer(bot, exc)
+                    else:
+                        if exc.surface != "hsl_episode_boundaries":
+                            raise
+                        defer_episode_evidence(bot, exc)
                     failure_seen = True
                     details = getattr(exc, "details", {})
                     pair = (details.get("pside"), details.get("symbol"))
@@ -411,7 +419,7 @@ async def protect_unready_hsl(bot):
                     health.unavailable(scope, now_ms=int(bot.get_exchange_time()),
                         reason="current_scope_evaluation_pending", grace_ms=hsl_protection.grace_ms(bot))
             if not pending:
-                validate_current_balances(bot)
+                validate_emergency_balance(bot)
                 await hsl_protection.evaluate_emergency(bot, candidates)
                 pending = health.pending_exits()
             for scope in pending:
@@ -442,7 +450,7 @@ async def protect_unready_hsl(bot):
                            for item in health.scopes.values()):
         try:
             if await bot.refresh_protective_authoritative_state(require_balance=True):
-                validate_current_balances(bot)
+                validate_emergency_balance(bot)
                 await hsl_protection.evaluate_emergency(bot, _unready_hsl_targets(bot))
                 state.protective_exit_pending = bool(health.pending_exits())
         except RiskInputUnavailable as exc:

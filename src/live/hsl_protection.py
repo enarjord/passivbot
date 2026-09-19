@@ -144,6 +144,8 @@ class ProtectionHealth:
         health.last_evaluated_ms = now_ms
         health.unavailable_since_ms = None
         health.emergency_active = False
+        if not health.exit_committed:
+            health.execution_blocked = ""
         self.evaluated.add(scope)
         if changed:
             self.save()
@@ -196,6 +198,8 @@ def manager(bot):
 def reconcile_config(bot):
     """A deliberate change of HSL scope/enablement retires its old recovery policy."""
     health = manager(bot)
+    if not health.scopes:
+        return
     mode = bot._equity_hard_stop_signal_mode()
     obsolete = [scope for scope in health.scopes
                 if scope.mode != mode or not bot._equity_hard_stop_enabled(
@@ -306,6 +310,7 @@ async def evaluate_emergency(bot, candidates):
         health.budget, health.drawdown_raw, health.emergency_active, trigger = result
         if trigger:
             health.exit_committed = True
+            health.exit_confirmed_flat = False
             health.exit_started_ms = now
             health.exit_flat_ms = None
             health_manager.save()
