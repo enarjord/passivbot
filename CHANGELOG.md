@@ -11,6 +11,10 @@ since the latest release tag; these features may already be available when insta
   unfilled close cannot starve another scope. Bound emergency input reads and derive pending exits
   directly from scoped protection state.
 
+- Batch compatible Apple GPU suite scenarios together during Trailing Martingale successive
+  halving so small survivor sets share dispatches. Preserve scenario defaults, reducers,
+  exact validation, and existing GPU work limits. Add a bounded synthetic batching benchmark.
+
 - Respect inactive coin sides during HSL emergency evaluation, avoiding zero-budget-divisor
   failures while other scopes recover. Previously committed exits still close residual exposure
   when position sizing becomes inactive.

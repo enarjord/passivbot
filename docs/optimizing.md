@@ -852,17 +852,21 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   same fraction of each scenario's own configured date range, evaluate all its exchanges and
   coins, and use the usual suite reducers and overrides before selecting survivors. Multicoin
   warmup starts at a UTC hour boundary; dense candle tensors are shared across windows,
-  with a bounded hourly-range correction when the timestamp grid requires it. On CUDA,
+  with a bounded hourly-range correction when the timestamp grid requires it. On CUDA and Apple MPS,
   compatible single-side multicoin scenarios share candidate batches during halving,
   including its full-history rung. This keeps small survivor sets from launching separately
-  for each scenario; scenario defaults, overrides, and reducers are preserved. Apple GPU
-  dispatch and runs without halving retain their existing batching.
+  for each scenario; scenario defaults, overrides, and reducers are preserved. Combined batches
+  still use each device's existing dispatch caps and per-dispatch work envelope. Runs without
+  halving retain their existing batching.
   Fractions and survival rates are configurable, for example `[0.1, 0.33, 1.0]` with
   `survival_fraction: 0.2`. Survivors round up: 1024 becomes 205, then 41, unless the
   minimum keeps more. `min_survivors` must cover `validate_per_generation`; lower both
   explicitly when experimenting with aggressive cuts. Very small final batches may
   underutilize the GPU. Compare useful full-history exact results per hour and missed good
   candidates, rather than interpreting theoretical candle-work savings as measured speedups.
+  A bounded synthetic comparison of separate and combined survivor batches is available with
+  `PYTHONPATH=src python -m tools.gpu_suite_benchmark`. It alternates measurement order,
+  excludes initial compilation, and requires exactly equal metrics before reporting a speedup.
 - `successive_halving.screening_scenarios` optionally lists suite scenario labels for all
   partial-history rungs. The default `[]` evaluates every scenario. A non-empty list requires
   suite mode and must include any scenario explicitly selected by an objective or limit.
