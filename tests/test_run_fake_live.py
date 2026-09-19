@@ -1849,6 +1849,10 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
     cfg['live']['risk_input_max_attempts'] = 1
     cfg['live']['hsl_unavailable_grace_seconds'] = 120.0
     cfg['bot']['long']['hsl_ema_span_minutes'] = 10_000.0
+    if failure == 'opposite_side':
+        import copy
+        cfg['bot']['short'] = copy.deepcopy(cfg['bot']['long'])
+        cfg['live']['approved_coins']['short'] = ['BTC']
     config_path = tmp_path / 'config.json'
     config_path.write_text(json.dumps(cfg))
     scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
@@ -1898,6 +1902,10 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
         if failure == 'sizing_balance':
             bot.get_hysteresis_snapped_balance = lambda: 0.0
         assert not await recovery.ensure_ready(bot)
+        if failure == 'opposite_side':
+            # New exchange exposure arrives after the long-owned unified
+            # commitment. Its own outage grace has not elapsed.
+            bot.cca._load_boot_position(dict(symbol=symbol, position_side='short', qty=1.0, price=97.0))
         if failure == 'restart_partial':
             original_fill = bot.cca._fill_order
             def partial_fill(order, *, fill_price, liquidity):
@@ -1949,6 +1957,8 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
         # Actual production planner, reconciliation, execution, and fake fills.
         await recovery.protect_and_wait(bot)
         assert bot.positions[symbol]['long']['size'] == 0.0
+        if failure == 'opposite_side':
+            assert bot.positions[symbol]['short']['size'] == 0.0
         assert not bot._risk_input_recovery.protective_exit_pending
         assert bot._risk_input_recovery.attempts <= 1
         fills = [f for f in bot.cca.fills if f.get('reduceOnly') and f.get('timestamp', 0) >= bot.cca.now_ms]
@@ -1977,3 +1987,9 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
         assert captured['completed']
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+async def test_unified_emergency_closes_later_opposite_exposure_without_new_grace(tmp_path, monkeypatch):
+    await test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(
+        tmp_path, monkeypatch, 'opposite_side', 'unified')

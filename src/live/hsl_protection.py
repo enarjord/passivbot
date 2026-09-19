@@ -82,6 +82,15 @@ class ProtectionHealth:
                               health.exit_started_ms, health.exit_flat_ms):
                     if stamp is not None and (type(stamp) is not int or stamp < 0):
                         raise ValueError("invalid protection timestamp")
+                if ((health.exit_committed or health.exit_confirmed_flat)
+                        and health.exit_started_ms is None
+                        or health.exit_committed and health.exit_flat_ms is not None
+                        or health.exit_confirmed_flat and health.exit_flat_ms is None
+                        or health.exit_started_ms is not None and not health.exit_committed
+                           and health.exit_flat_ms is None
+                        or health.exit_flat_ms is not None and (
+                            health.exit_started_ms is None or health.exit_flat_ms < health.exit_started_ms)):
+                    raise ValueError("incomplete emergency provenance")
                 for value in (health.budget, health.drawdown_raw):
                     if value is not None and (isinstance(value, bool)
                             or not isinstance(value, (int, float)) or not math.isfinite(value)):
@@ -241,10 +250,15 @@ def affected_scopes(bot, targets, details):
             and (mode == "unified" or side is None or pside == side)}
 
 
+def _scope_matches(scope, pside, symbol):
+    return ((scope.mode == "unified" or scope.pside == pside)
+            and (not scope.symbol or scope.symbol == symbol))
+
+
 def targets_for_scopes(bot, scopes, candidates):
     return {symbol: selected for symbol, psides in candidates.items()
             if (selected := {pside for pside in psides
-                if any(scope.pside == pside and (not scope.symbol or scope.symbol == symbol)
+                if any(_scope_matches(scope, pside, symbol)
                        for scope in scopes)})}
 
 
@@ -328,7 +342,7 @@ def holds_after_emergency_exit(bot, pside, symbol):
     health = getattr(bot, "_hsl_protection_health", None)
     if health is None:
         return False
-    return any(scope.pside == pside and (not scope.symbol or scope.symbol == symbol)
+    return any(_scope_matches(scope, pside, symbol)
                and (state.exit_committed or state.exit_confirmed_flat)
                for scope, state in health.scopes.items())
 
@@ -343,10 +357,10 @@ def emergency_stop_applies(bot, pside, symbol, fill_timestamp_ms):
     health = getattr(bot, "_hsl_protection_health", None)
     if health is None:
         return False
-    state = health.scopes.get(scope_for(bot, pside, symbol))
-    return (state is not None and state.exit_started_ms is not None
-            and state.exit_started_ms <= fill_timestamp_ms
-            and (state.exit_flat_ms is None or fill_timestamp_ms <= state.exit_flat_ms))
+    return any(_scope_matches(scope, pside, symbol) and state.exit_started_ms is not None
+               and state.exit_started_ms <= fill_timestamp_ms
+               and (state.exit_flat_ms is None or fill_timestamp_ms <= state.exit_flat_ms)
+               for scope, state in health.scopes.items())
 
 
 def allows_held_entries(bot, pside, symbol):
@@ -354,5 +368,5 @@ def allows_held_entries(bot, pside, symbol):
     if health is None:
         return False
     state = health.scopes.get(scope_for(bot, pside, symbol))
-    return (state is not None and not state.exit_committed and not state.exit_confirmed_flat
+    return (state is not None and not holds_after_emergency_exit(bot, pside, symbol)
             and float(bot.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)) != 0.0)

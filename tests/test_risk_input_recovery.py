@@ -1102,7 +1102,8 @@ async def test_new_position_during_replay_backoff_gets_its_own_grace(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['coin', 'pside'])
-async def test_scoped_quote_failure_keeps_other_scope_evaluating(monkeypatch, mode):
+@pytest.mark.parametrize('failure', ['quote', 'episode'])
+async def test_scoped_quote_failure_keeps_other_scope_evaluating(monkeypatch, mode, failure):
     from live import hsl_protection
     from live.market_snapshot import MarketSnapshotUnavailable
     from passivbot_hsl import _equity_hard_stop_scoped_upnl
@@ -1124,6 +1125,9 @@ async def test_scoped_quote_failure_keeps_other_scope_evaluating(monkeypatch, mo
             key = (side, symbol if mode == 'coin' else None)
             if key in bot._hsl_readiness_excluded_pairs:
                 continue
+            if failure == 'episode' and side == 'long':
+                from live.hsl_episode import EpisodeEvidenceUnavailable
+                raise EpisodeEvidenceUnavailable('canonical_flatten_replay_unavailable', pside=key[0], symbol=key[1])
             await _equity_hard_stop_scoped_upnl(bot, *key)
             seen.append(key)
             hsl_protection.record_evaluation(bot, *key)

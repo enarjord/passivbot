@@ -5242,11 +5242,12 @@ async def test_delayed_live_coin_boundary_preserves_state_when_replay_is_unavail
 
     for _ in range(2):
         with pytest.raises(
-            hsl.AuthoritativeSurfaceUnavailable, match="canonical replay unavailable"
-        ):
+            hsl.EpisodeEvidenceUnavailable, match="canonical replay unavailable"
+        ) as error:
             await hsl._equity_hard_stop_refresh_live_coin_episode_boundaries(
                 bot, 300_000, 900.0
             )
+        assert error.value.details == {"cause": "canonical_flatten_replay_unavailable", "pside": "long", "symbol": "A"}
         assert state.get("episode_evidence") is None
     assert state["runtime"] is previous_runtime
     assert state["last_metrics"] is previous_metrics

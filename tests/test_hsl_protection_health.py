@@ -36,6 +36,7 @@ def test_exit_commitment_survives_normal_signal_recovery_until_flat(tmp_path):
     health = ProtectionHealth(path)
     state = health.unavailable(scope, now_ms=1_000_000, reason='no_history', grace_ms=120_000)
     state.exit_committed = True
+    state.exit_started_ms = 1_000_000
     health.save()
     restored = ProtectionHealth(path)
     restored.evaluated_successfully(scope, now_ms=1_200_000)
@@ -200,3 +201,39 @@ async def test_recommit_after_flat_confirmation_survives_restart(tmp_path, real_
     assert restored.pending_exits() == {scope}
     assert not restored.scopes[scope].exit_confirmed_flat
     assert restored.scopes[scope].exit_started_ms == 3000
+
+
+@pytest.mark.parametrize('fields', [
+    {'exit_committed': True}, {'exit_confirmed_flat': True},
+    {'exit_confirmed_flat': True, 'exit_started_ms': 1000},
+    {'exit_confirmed_flat': True, 'exit_started_ms': 1000, 'exit_flat_ms': 999},
+    {'exit_committed': True, 'exit_started_ms': 1000, 'exit_flat_ms': 2000},
+    {'exit_flat_ms': 2000}, {'exit_started_ms': 1000},
+])
+def test_semantically_incomplete_emergency_journal_is_rejected(tmp_path, fields):
+    from dataclasses import asdict
+    path = tmp_path / 'protection.json'
+    path.write_text(json.dumps({'version': 1, 'scopes': [
+        {'scope': asdict(Scope('coin', 'long', 'A')), 'health': asdict(Health(**fields))},
+    ]}))
+    restored = ProtectionHealth(path)
+    assert restored.journal_invalid
+    assert not restored.scopes
+    state = restored.unavailable(Scope('coin', 'long', 'A'), now_ms=1_000_000,
+                                  reason='history', grace_ms=120_000)
+    assert state.unavailable_since_ms == 880_000
+
+
+def test_unified_commitment_targets_and_holds_both_enabled_candidate_sides():
+    from live.hsl_protection import targets_for_scopes, holds_after_emergency_exit, emergency_stop_applies
+    health = ProtectionHealth()
+    scope = Scope('unified', 'long')
+    health.scopes[scope] = Health(exit_committed=True, exit_started_ms=1000)
+    bot = SimpleNamespace(_hsl_protection_health=health, _equity_hard_stop_signal_mode=lambda: 'unified')
+    candidates = {'A': {'long', 'short'}, 'B': {'short'}}
+    assert targets_for_scopes(bot, {scope}, candidates) == candidates
+    assert holds_after_emergency_exit(bot, 'short', 'B')
+    assert emergency_stop_applies(bot, 'short', None, 1500)
+    health.confirm_flat(scope, now_ms=2000)
+    assert holds_after_emergency_exit(bot, 'short', 'B')
+    assert not emergency_stop_applies(bot, 'short', None, 2001)

@@ -2315,8 +2315,8 @@ def _equity_hard_stop_coin_events_after_reset(
     }:
         ordered, ambiguous = _equity_hard_stop_order_fill_cohorts(events)
         if ambiguous:
-            raise AuthoritativeSurfaceUnavailable(
-                "hsl_episode_boundaries", f"{pside}:{symbol} reset fill cohort is ambiguous"
+            raise EpisodeEvidenceUnavailable(
+                "reset_fill_cohort_ambiguous", pside=pside, symbol=symbol
             )
         evidence = _equity_hard_stop_coin_episode_evidence(
             ordered, pside, symbol, qty_step=qty_step
@@ -2326,9 +2326,8 @@ def _equity_hard_stop_coin_events_after_reset(
             if evidence.rows[index][0] == boundary_ts
         ), None) if evidence.unavailable is None else None
         if last_boundary_index is None:
-            raise AuthoritativeSurfaceUnavailable(
-                "hsl_episode_boundaries",
-                f"{pside}:{symbol} reset fill cohort cannot prove flatten",
+            raise EpisodeEvidenceUnavailable(
+                "reset_fill_cohort_missing_flatten", pside=pside, symbol=symbol,
             )
         return ordered[last_boundary_index + 1 :]
     return [event for event in events if _equity_hard_stop_fill_timestamp_ms(event) >= reset_ts]
@@ -3895,8 +3894,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 include_entry_seeds=True,
             )
             if boundaries is None:
-                raise AuthoritativeSurfaceUnavailable(
-                    "hsl_episode_boundaries", f"{pside} fill tape cannot prove episode boundaries"
+                raise EpisodeEvidenceUnavailable(
+                    "scope_boundaries_unavailable", pside=pside, symbol=None
                 )
             scope_boundaries_by_pside[pside] = boundaries
         # Validate every enabled scope before replacing existing protective state.
@@ -4655,9 +4654,8 @@ async def _equity_hard_stop_initialize_coin_from_history(
             if replay_pside not in self._hsl_psides() or not replay_symbol:
                 raise ValueError(f"invalid coin HSL replay pair: {replay_pair!r}")
             if not self._equity_hard_stop_symbol_supported_for_coin_replay(replay_symbol):
-                raise AuthoritativeSurfaceUnavailable(
-                    "hsl_episode_boundaries",
-                    f"{replay_pside}:{replay_symbol} is unavailable for coin replay",
+                raise EpisodeEvidenceUnavailable(
+                    "coin_replay_symbol_unavailable", pside=replay_pside, symbol=replay_symbol,
                 )
             if (
                 self._equity_hard_stop_coin_active_pside(replay_pside, replay_symbol)
@@ -4961,8 +4959,8 @@ async def _equity_hard_stop_initialize_coin_from_history(
                             pair_fill_events, pside, symbol, qty_step=qty_step
                         )
                         if replay_ambiguous:
-                            raise AuthoritativeSurfaceUnavailable(
-                                "hsl_episode_boundaries", f"{pside}:{symbol} reset tail is ambiguous"
+                            raise EpisodeEvidenceUnavailable(
+                                "reset_tail_ambiguous", pside=pside, symbol=symbol
                             )
                         reset_baseline_realized -= sum(
                             delta for ts, _action, _qty, delta in replay_events
@@ -6428,9 +6426,8 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         symbol,
                         replay_flatten_timestamp_ms=latest_boundary_ts,
                     ):
-                        raise AuthoritativeSurfaceUnavailable(
-                            "hsl_episode_boundaries",
-                            f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
+                        raise EpisodeEvidenceUnavailable(
+                            "canonical_flatten_replay_unavailable", pside=pside, symbol=symbol,
                         )
                     return True
                 # Later fills can already be present in this refresh, including a
@@ -6464,9 +6461,8 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         self._equity_hard_stop_set_coin_runtime_forced_mode(
                             pside, symbol, "panic"
                         )
-                        raise AuthoritativeSurfaceUnavailable(
-                            "hsl_episode_boundaries",
-                            f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
+                        raise EpisodeEvidenceUnavailable(
+                            "canonical_flatten_replay_unavailable", pside=pside, symbol=symbol,
                         )
                     return True
                 state["pnl_reset_timestamp_ms"] = flatten_ts + 1
