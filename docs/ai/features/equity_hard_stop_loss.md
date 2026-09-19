@@ -24,7 +24,9 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    the proven same-pair fill tail within that timestamp. Other pairs at the same timestamp remain
    included in the account timestamp cohort, matching the incremental live convention.
    Mixed-action fills sharing a millisecond require an unambiguous exchange-provided position
-   chain; list order and locally reconstructed position annotations are not ordering evidence.
+   chain when a flatten is possible; list order and locally reconstructed position annotations
+   are not ordering evidence. Coin mode may use the bounded nonflattening approximation described
+   under live risk-input recovery when every ordering provably stays nonflat.
    Each proven fill boundary evaluates its final risk sample. Distinct boundaries in the same
    minute replace that minute's EMA sample from its prior baseline instead of advancing EMA time
    again. Ordinary polling within the minute remains cached. A RED stop is recorded while flat,
@@ -167,8 +169,38 @@ pair pending coin replay may add under these conditions; initial entries in an
 unreplayed flat pair remain gated by the existing replay policy. Proven halted
 scopes keep their independent cooldown/manual-ownership protection.
 
-After grace, Rust evaluates `max(0, -current_upnl) / budget` against the configured
-RED threshold, without inventing an EMA. Coin budget is current raw balance divided
+Coin evidence can remain usable with an explicitly bounded approximation. If a tied mixed-action
+fill cohort has no position-chain metadata, its pre-cohort quantity is known, and all reductions
+combined leave it strictly nonflat, every possible ordering belongs to the same episode. This
+first approximation also requires monotone realized deltas (all nonpositive or all nonnegative),
+so net minute replay cannot hide an intra-cohort PnL peak. Coin HSL uses a deterministic order,
+retains the existing EMA, and reports `unordered_nonflattening_fill_cohort` as degraded. It never
+invents a fill, PnL value, price, or flat boundary. A possible flatten, contradictory/partial chain
+metadata, mixed-sign realized deltas, missing opening quantity, or position mismatch remains
+unavailable. Monitoring exposes consecutive degraded evaluation counts, reset after usable
+recovery or unavailability. Quality clears when the approximate cohort is trimmed from the active
+evidence window or an exact flatten resets the drawdown episode. Consumed fills remain available
+for correction detection. Aggregate modes keep
+their existing ordering contract. The approximation is reproducible from fills after restart.
+
+After grace, Rust evaluates `max(0, realized_loss - current_upnl) / budget` against the configured
+RED threshold, without inventing an EMA. `realized_loss` is normally zero. Coin mode may supply the
+verified realized peak minus current realized PnL in the currently held episode, using complete
+current-episode coverage, finite non-pending PnL/fees, and a position-matching tape. The current
+account cohort must include a successful tail-capable fill request started after its position
+observation, with no intervening position observation. Concurrent requests sharing an epoch and
+stale cached quantity equality alone are insufficient. If raw loss has not already committed an
+exit, the emergency owner may attempt one ordered fill refresh with a five-second timeout and
+at most one attempt per ten seconds. Failure leaves raw-UPNL evaluation active; a raw-triggered
+close never waits for this optional enrichment. Fetched-fill value errors and fill-cache contract
+failures make this optional evidence unavailable; malformed configuration, unrelated programming
+errors, and fatal producer failures still propagate. If either the repair or tail phase discovers
+new or structurally corrected fills requiring account confirmation, enrichment waits for confirmed positions and balance plus a new ordered tail; equal
+net position size does not prove an unchanged cost basis. A proven last flatten excludes
+previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
+it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
+evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.
+Coin budget is current raw balance divided
 by configured `n_positions`; pside/unified use current raw balance. Pside UPNL is
 side-scoped, coin UPNL is pair-scoped, and unified UPNL is account-wide. Positive
 finite balance and fresh current position/quote inputs are required. An unavailable

@@ -4169,7 +4169,9 @@ async def test_update_pnls_completed_refresh_timing_trigger_cases_stay_debug(
     ],
     ids=["mixed_new_source", "same_source_structural_change", "fee_only_change"],
 )
+@pytest.mark.parametrize("previous_status", ["pending", "complete", "two_phase"])
 async def test_update_pnls_confirms_only_structural_enrichment(
+    previous_status,
     current_source_ids,
     current_id,
     current_qty,
@@ -4191,8 +4193,10 @@ async def test_update_pnls_confirms_only_structural_enrichment(
         position_side="long",
         client_order_id="pb-close",
         pnl=0.0,
-        pnl_status="pending",
-        pnl_source=fem.PNL_SOURCE_PENDING,
+        pnl_status="pending" if previous_status == "pending" else "complete",
+        pnl_source=(fem.PNL_SOURCE_PENDING if previous_status == "pending" else
+                    "synthetic_fill_reconstruction_degraded" if previous_status == "two_phase" else
+                    fem.PNL_SOURCE_AUTHORITATIVE),
     )
     current = SimpleNamespace(
         **{
@@ -4210,6 +4214,9 @@ async def test_update_pnls_confirms_only_structural_enrichment(
     class _Manager:
         def __init__(self):
             self._events = [previous]
+
+        async def refresh_degraded_pnl_events(self, **_kwargs):
+            self._events = [SimpleNamespace(**{**vars(previous), "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE})]
 
         async def refresh_latest(self, **_kwargs):
             self._events = [current]
@@ -4244,9 +4251,19 @@ async def test_update_pnls_confirms_only_structural_enrichment(
     bot.logging_level = 0
     bot._health_rate_limits = 0
 
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    ledger.stamp("positions", now_ms=bot.get_exchange_time())
+    observation = (ledger.epoch, ledger.surfaces["positions"].revision)
     assert await bot.update_pnls(source="staged_blocking") is True
+    assert bot._hsl_fill_tail_observation == (None if expect_confirmation else observation)
 
-    bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
+    if previous_status == "pending":
+        bot._log_enriched_fill_events.assert_called_once_with([(previous, current)])
+    elif previous_status == "two_phase":
+        bot._log_enriched_fill_events.assert_called_once()
+    else:
+        bot._log_enriched_fill_events.assert_not_called()
     # A mixed aggregate is already accounted by the enrichment path, so it
     # requests confirmation without counting the aggregate as a second fill.
     bot._log_new_fill_events.assert_not_called()
@@ -5582,10 +5599,12 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
     assert bot._pnls_manager.history_scope == "all"
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 5
+    assert bot._hsl_fill_tail_observation is None  # No preceding position observation.
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation():
+@pytest.mark.parametrize('observation_change', ['unchanged', 'epoch', 'position', 'concurrent'])
+async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation(observation_change):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
@@ -5631,6 +5650,16 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     bot._trailing_fill_refresh_started_generation = 4
     bot._trailing_fill_fetch_generation = 4
     bot._trailing_fill_refresh_generation = 4
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    if observation_change != 'concurrent':
+        ledger.stamp('positions', now_ms=1_700_000_060_000)
+    started_observation = ((ledger.epoch, ledger.surfaces['positions'].revision)
+                           if observation_change != 'concurrent' else None)
+    if observation_change == 'epoch':
+        bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.begin_epoch()
+    elif observation_change in {'position', 'concurrent'}:
+        bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.stamp('positions', now_ms=1_700_000_060_000)
 
     result = await bot.update_pnls()
 
@@ -5641,6 +5670,8 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     )
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 4
+    assert bot._hsl_fill_tail_observation == started_observation
+    assert (bot._hsl_fill_tail_observation == (ledger.epoch, ledger.surfaces['positions'].revision)) is (observation_change == 'unchanged')
 
 
 @pytest.mark.asyncio
@@ -6022,6 +6053,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     assert result is False
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
     assert bot._trailing_fill_fetch_generation == 7
+    assert getattr(bot, '_hsl_fill_tail_observation', None) is None
 
 
 @pytest.mark.asyncio
@@ -13712,3 +13744,48 @@ async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch
     bot.start_data_maintainers.assert_awaited_once()
     bot._equity_hard_stop_start_coin_history_replay.assert_awaited_once()
     bot.run_execution_loop.assert_not_awaited()  # debug mode
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source', ['direct', 'hsl_emergency'])
+@pytest.mark.parametrize('failure', ['fetched_value', 'config_value', 'runtime', 'type', 'overflow', 'fatal'])
+async def test_optional_fill_refresh_classifies_only_fetched_value_errors(source, failure):
+    from live.state_refresh import AuthoritativeSurfaceUnavailable
+    from passivbot_exceptions import FatalBotException
+    error = (FatalBotException('producer failure') if failure == 'fatal' else
+             TypeError('programming error') if failure == 'type' else
+             OverflowError('programming error') if failure == 'overflow' else
+             RuntimeError('unexpected failure') if failure == 'runtime' else
+             ValueError('malformed fetched fill'))
+    event = SimpleNamespace(timestamp=1_700_000_000_000, id='fill-1', source_ids=['fill-1'])
+    manager = SimpleNamespace(
+        get_events=lambda: [event], get_history_scope=lambda: 'all',
+        refresh_latest=AsyncMock(side_effect=error),
+    )
+    bot = Passivbot.__new__(Passivbot)
+    bot.stop_signal_received = False
+    bot._live_risk_uses_authoritative_pnl = lambda: True
+    bot.config = {'live': {'fills_recent_overlap_minutes': 10.0, 'pnls_max_lookback_days': 'all'}}
+    if failure == 'config_value':
+        bot.config['live']['pnls_max_lookback_days'] = 'invalid'
+    bot._pnls_manager = _with_fill_coverage_api(manager)
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config['live'][key]
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._emit_fills_refresh_summary_event = lambda **kwargs: None
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    bot._shutdown_requested = lambda: False
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+    classified = failure == 'fetched_value' and source == 'hsl_emergency'
+    with pytest.raises(AuthoritativeSurfaceUnavailable if classified else type(error)) as caught:
+        await bot.update_pnls(source=source)
+    if classified:
+        assert caught.value.__cause__ is error
+    elif failure != 'config_value':
+        assert caught.value is error
+    else:
+        manager.refresh_latest.assert_not_awaited()
+    assert bot._hsl_fill_tail_observation is None

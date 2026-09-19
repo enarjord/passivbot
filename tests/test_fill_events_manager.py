@@ -9230,3 +9230,120 @@ async def test_kucoin_repaired_history_survives_overlap_and_delayed_cycle_reconc
     await reloaded.ensure_loaded()
     assert [ev.to_dict() for ev in reloaded._events] == expected
     assert len(list(tmp_path.glob("fills.backup.*"))) == 1
+
+
+@pytest.mark.parametrize('field', ['covered_start_ms', 'oldest_event_ts', 'newest_event_ts'])
+@pytest.mark.parametrize('value', ['invalid', float('nan'), float('inf'), {'invalid': 1}])
+def test_coverage_reports_corrupt_metadata_as_unavailable(tmp_path, field, value):
+    manager = FillEventsManager(exchange='bybit', user='default', fetcher=MagicMock(),
+                                cache_path=tmp_path / 'coverage')
+    manager._loaded = True
+    metadata = manager.cache.load_metadata()
+    metadata.update(history_scope='all', **{field: value})
+    verdict = manager.get_coverage_status(start_ms=1000, end_ms=2000)
+    assert verdict['ready'] is False
+    assert verdict['reason'] == 'malformed_cache_metadata'
+    # Diagnosis must not rewrite corrupt evidence into apparently valid coverage.
+    assert metadata[field] is value
+    metadata[field] = 0
+    assert manager.get_coverage_status(start_ms=1000, end_ms=2000)['ready'] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field', ['oldest_event_ts', 'newest_event_ts'])
+@pytest.mark.parametrize('value', ['invalid', {'invalid': 1}])
+async def test_cold_cache_normalization_classifies_invalid_metadata(tmp_path, sample_events, field, value):
+    cache_path = tmp_path / 'normalization'
+    manager = FillEventsManager(exchange='bitget', user='default',
+                                fetcher=_StaticFetcher(sample_events), cache_path=cache_path,
+                                fee_pct_fallback=0.0)
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+    metadata[field] = value
+    manager.cache.save_metadata(metadata)
+    cold = FillEventsManager(exchange='bitget', user='default',
+                             fetcher=_StaticFetcher([]), cache_path=cache_path,
+                             fee_pct_fallback=0.0)
+    with pytest.raises(fem.FillEventCacheContractError, match=field):
+        await cold.ensure_loaded()
+    assert not cold._loaded
+    assert cold.cache.load_metadata()[field] == value
+    assert cold.get_coverage_status(start_ms=0)['ready'] is False
+
+
+@pytest.mark.parametrize('field', ['covered_start_ms', 'oldest_event_ts', 'newest_event_ts', 'last_refresh_ms'])
+@pytest.mark.parametrize('value', ['invalid', float('nan'), float('inf'), {'invalid': 1}])
+def test_cache_timestamp_reader_classifies_data_errors(field, value):
+    with pytest.raises(fem.FillEventCacheContractError, match=field):
+        fem._cache_metadata_timestamp({field: value}, field)
+    assert fem._cache_metadata_timestamp({field: '123'}, field) == 123
+    assert fem._cache_metadata_timestamp({}, field) == 0
+
+
+@pytest.mark.parametrize('fetcher', [fem.BitunixFetcher, fem.WeexFetcher])
+@pytest.mark.parametrize('field,value', [
+    ('timestamp', {'bad': 1}), ('timestamp', float('inf')),
+    ('timestamp', 10**100), ('amount', {'bad': 1}), ('amount', 10**1000),
+    ('price', {'bad': 1}), ('pnl', {'bad': 1}),
+])
+def test_fetched_numeric_conversion_errors_are_typed(fetcher, field, value):
+    trade = dict(id='fill', order='order', timestamp=1_700_000_000_000,
+                 symbol='BTC/USDT:USDT', side='buy', amount=1.0, price=100.0,
+                 info=dict(positionSide='long', realizedPNL=0.0, realizedPnl=0.0))
+    if field == 'pnl':
+        trade['info'].update(realizedPNL=value, realizedPnl=value)
+    else:
+        trade[field] = value
+    with pytest.raises(fem.FillEventDataError):
+        fetcher._normalize_trade(trade)
+
+
+@pytest.mark.parametrize('field,value', [('timestamp', float('inf')), ('qty', {'bad': 1}), ('price', 10**1000)])
+def test_canonical_fill_numeric_errors_are_typed(sample_events, field, value):
+    event = {**sample_events[0], field: value}
+    with pytest.raises(fem.FillEventDataError):
+        fem.FillEvent.from_dict(event)
+
+
+@pytest.mark.parametrize('fetcher', [fem.BitunixFetcher, fem.WeexFetcher])
+@pytest.mark.parametrize('error_type', [TypeError, OverflowError])
+def test_fill_parser_does_not_reclassify_unrelated_programming_errors(monkeypatch, fetcher, error_type):
+    error = error_type('unexpected decoder bug')
+    def broken_decoder(_value):
+        raise error
+    monkeypatch.setattr(fem, 'custom_id_to_snake', broken_decoder)
+    trade = dict(id='fill', order='order', timestamp=1_700_000_000_000,
+                 symbol='BTC/USDT:USDT', side='buy', amount=1.0, price=100.0,
+                 clientOrderId='client',
+                 info=dict(positionSide='long', realizedPNL=0.0, realizedPnl=0.0))
+    with pytest.raises(error_type) as caught:
+        fetcher._normalize_trade(trade)
+    assert caught.value is error
+
+
+@pytest.mark.parametrize('field,value', [
+    ('execQty', 10**1000), ('execPrice', {'bad': 1}), ('execPnl', 10**1000),
+    ('execQty', float('nan')), ('createdTime', float('inf')), ('createdTime', 10**1000),
+])
+def test_bitget_uta_numeric_errors_use_shared_data_error(field, value):
+    fill = dict(execId='fill', orderId='order', createdTime=1_700_000_000_000,
+                symbol='BTCUSDT', side='buy', posSide='long', tradeSide='open',
+                execQty=1.0, execPrice=100.0, execPnl=0.0)
+    fill[field] = value
+    with pytest.raises(fem.FillEventDataError):
+        fem.normalize_uta_fill_payload(fill, lambda symbol: symbol)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('timestamp', [10**1000, 'bad', {'bad': 1}, None, 0])
+async def test_kucoin_does_not_drop_malformed_timestamp_and_certify_history(timestamp):
+    trade = dict(id='bad', order='order', timestamp=timestamp,
+                 symbol='BTC/USDT:USDT', side='buy', amount=1.0, price=100.0, info={})
+    with pytest.raises(fem.FillEventDataError):
+        KucoinFetcher._normalize_trade(trade)
+    good = {**trade, 'id': 'good', 'timestamp': 1_700_000_000_000}
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(return_value=[good, trade]))
+    fetcher = KucoinFetcher(api=api)
+    with pytest.raises(fem.FillEventDataError):
+        await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
+    api.fetch_my_trades.assert_awaited_once()

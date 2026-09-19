@@ -10,6 +10,8 @@ connectors and a shared fill-event interface.
 
 from __future__ import annotations
 
+from passivbot_exceptions import FillEventDataError
+
 import argparse
 import asyncio
 import errno
@@ -110,7 +112,37 @@ class FillEventCacheDiskFullError(RuntimeError):
 
 
 class FillEventCacheContractError(RuntimeError):
-    """Raised when persisted fill events use an unsafe legacy accounting contract."""
+    """Raised when persisted fills or their metadata violate the cache contract."""
+
+
+def _fill_number(value, converter):
+    try:
+        return converter(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise FillEventDataError("invalid numeric fill value") from exc
+
+
+def _fill_float(value) -> float:
+    return _fill_number(value, float)
+
+
+def _fill_int(value) -> int:
+    return _fill_number(value, int)
+
+
+def _fill_datetime(timestamp) -> str:
+    try:
+        return ts_to_date(timestamp)
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        raise FillEventDataError("invalid fill timestamp") from exc
+
+
+def _cache_metadata_timestamp(metadata: Dict[str, object], key: str) -> int:
+    """Classify invalid persisted bounds at their data boundary, not as code bugs."""
+    try:
+        return int(metadata.get(key, 0) or 0)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise FillEventCacheContractError(f"invalid fill-cache metadata timestamp: {key}") from exc
 
 
 def _is_disk_full_error(exc: BaseException) -> bool:
@@ -1719,13 +1751,13 @@ class FillEvent:
                 if not data.get("source_ids")
                 else [str(x) for x in data.get("source_ids") if x]
             ),
-            timestamp=int(data["timestamp"]),
-            datetime=str(data.get("datetime") or ts_to_date(int(data["timestamp"]))),
+            timestamp=_fill_int(data["timestamp"]),
+            datetime=str(data.get("datetime") or _fill_datetime(_fill_int(data["timestamp"]))),
             symbol=str(data["symbol"]),
             side=str(data["side"]).lower(),
-            qty=float(data["qty"]),
-            price=float(data["price"]),
-            pnl=float(data["pnl"]),
+            qty=_fill_float(data["qty"]),
+            price=_fill_float(data["price"]),
+            pnl=_fill_float(data["pnl"]),
             fee_paid=fee_paid,
             pnl_status=str(data.get("pnl_status") or "complete").lower(),
             pnl_source=(
@@ -1745,14 +1777,14 @@ class FillEvent:
             fee_quality=str(fee_meta.get("fee_quality") or FEE_QUALITY_FALLBACK),
             fee_currency=str(fee_meta.get("fee_currency") or ""),
             fee_conversion_source=str(fee_meta.get("fee_conversion_source") or "none"),
-            fee_notional=float(fee_meta.get("fee_notional") or 0.0),
-            fee_ratio=float(fee_meta.get("fee_ratio") or 0.0),
+            fee_notional=_fill_float(fee_meta.get("fee_notional") or 0.0),
+            fee_ratio=_fill_float(fee_meta.get("fee_ratio") or 0.0),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
             client_order_id=str(data["client_order_id"]),
-            psize=float(data.get("psize", 0.0)),
-            pprice=float(data.get("pprice", 0.0)),
+            psize=_fill_float(data.get("psize", 0.0)),
+            pprice=_fill_float(data.get("pprice", 0.0)),
             c_mult=_payload_contract_multiplier(data),
             raw=_normalize_raw_field(data.get("raw")),
             provenance=(
@@ -2153,8 +2185,8 @@ class FillEventCache:
         oldest = min(timestamps)
         newest = max(timestamps)
 
-        current_oldest = metadata.get("oldest_event_ts", 0)
-        current_newest = metadata.get("newest_event_ts", 0)
+        current_oldest = _cache_metadata_timestamp(metadata, "oldest_event_ts")
+        current_newest = _cache_metadata_timestamp(metadata, "newest_event_ts")
 
         if current_oldest == 0 or oldest < current_oldest:
             metadata["oldest_event_ts"] = oldest
@@ -2185,13 +2217,13 @@ class FillEventCache:
     def get_covered_start_ms(self) -> int:
         """Return earliest open-ended lookback start confirmed against exchange."""
         metadata = self.load_metadata()
-        return int(metadata.get("covered_start_ms", 0) or 0)
+        return _cache_metadata_timestamp(metadata, "covered_start_ms")
 
     def mark_covered_start(self, start_ts: int) -> None:
         """Persist earliest open-ended lookback start confirmed against exchange."""
         metadata = self.load_metadata()
         start_ts = int(start_ts)
-        current = int(metadata.get("covered_start_ms", 0) or 0)
+        current = _cache_metadata_timestamp(metadata, "covered_start_ms")
         if current == 0 or start_ts < current:
             metadata["covered_start_ms"] = start_ts
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -2875,19 +2907,19 @@ class BitgetFetcher(BaseFetcher):
         return event
 
     def _normalize_fill(self, raw: Dict[str, object]) -> Dict[str, object]:
-        timestamp = int(raw["cTime"])
+        timestamp = _fill_int(raw["cTime"])
         side, position_side = deduce_side_pside(raw)
         return {
             "id": raw.get("tradeId"),
             "order_id": raw.get("orderId"),
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
+            "datetime": _fill_datetime(timestamp),
             "symbol": self._resolve_symbol(raw.get("symbol")),
             "symbol_external": raw.get("symbol"),
             "side": side,
-            "qty": float(raw.get("baseVolume", 0.0)),
-            "price": float(raw.get("price", 0.0)),
-            "pnl": float(raw.get("profit", 0.0)),
+            "qty": _fill_float(raw.get("baseVolume", 0.0)),
+            "price": _fill_float(raw.get("price", 0.0)),
+            "pnl": _fill_float(raw.get("profit", 0.0)),
             "fees": self._normalize_fee_detail(raw.get("feeDetail")),
             "pb_order_type": raw.get("pb_order_type", ""),
             "position_side": position_side,
@@ -3455,10 +3487,10 @@ class BinanceFetcher(BaseFetcher):
         self, entry: Dict[str, object], *, income_type: str = "REALIZED_PNL"
     ) -> Dict[str, object]:
         trade_id = entry.get("tradeId") or entry.get("id") or f"income-{entry.get('time')}"
-        timestamp = int(entry.get("time") or entry.get("timestamp") or 0)
+        timestamp = _fill_int(entry.get("time") or entry.get("timestamp") or 0)
         raw_symbol = entry.get("symbol")
         ccxt_symbol = self._resolve_symbol(raw_symbol)
-        income = float(entry.get("income") or entry.get("pnl") or 0.0)
+        income = _fill_float(entry.get("income") or entry.get("pnl") or 0.0)
         pnl = income if income_type == "REALIZED_PNL" else 0.0
         position_side = str(entry.get("positionSide") or entry.get("pside") or "unknown").lower()
         asset = str(entry.get("asset") or _quote_currency_from_symbol(ccxt_symbol) or "")
@@ -3468,7 +3500,7 @@ class BinanceFetcher(BaseFetcher):
         return {
             "id": str(trade_id),
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
+            "datetime": _fill_datetime(timestamp),
             "symbol": ccxt_symbol,
             "side": entry.get("side") or "",
             "qty": 0.0,
@@ -3484,8 +3516,8 @@ class BinanceFetcher(BaseFetcher):
     def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
         info = trade.get("info") or {}
         trade_id = trade.get("id") or info.get("id")
-        timestamp = int(trade.get("timestamp") or info.get("time") or info.get("T") or 0)
-        pnl = float(info.get("realizedPnl") or trade.get("pnl") or 0.0)
+        timestamp = _fill_int(trade.get("timestamp") or info.get("time") or info.get("T") or 0)
+        pnl = _fill_float(info.get("realizedPnl") or trade.get("pnl") or 0.0)
         position_side = str(
             info.get("positionSide") or trade.get("position_side") or "unknown"
         ).lower()
@@ -3509,11 +3541,11 @@ class BinanceFetcher(BaseFetcher):
         return {
             "id": str(trade_id),
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
+            "datetime": _fill_datetime(timestamp),
             "symbol": symbol or "",
             "side": trade.get("side") or "",
-            "qty": float(trade.get("amount") or trade.get("qty") or 0.0),
-            "price": float(trade.get("price") or 0.0),
+            "qty": _fill_float(trade.get("amount") or trade.get("qty") or 0.0),
+            "price": _fill_float(trade.get("price") or 0.0),
             "pnl": pnl,
             "fees": fees,
             "pb_order_type": "",
@@ -5232,7 +5264,7 @@ class FillEventsManager:
                 start_ms = self._events[idx].timestamp
         if last_refresh_overlap_ms is not None:
             metadata = self.cache.load_metadata()
-            last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
+            last_refresh_ms = _cache_metadata_timestamp(metadata, "last_refresh_ms")
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
                 if start_ms is None:
@@ -5634,9 +5666,21 @@ class FillEventsManager:
         """
         metadata = self.cache.load_metadata()
         history_scope = self.get_history_scope()
-        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
-        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
-        metadata_newest = int(metadata.get("newest_event_ts", 0) or 0)
+        try:
+            covered_start_ms = _cache_metadata_timestamp(metadata, "covered_start_ms")
+            metadata_oldest = _cache_metadata_timestamp(metadata, "oldest_event_ts")
+            metadata_newest = _cache_metadata_timestamp(metadata, "newest_event_ts")
+        except FillEventCacheContractError:
+            # These bounds are cache evidence, not caller configuration. An
+            # unusable bound cannot prove coverage; zeroes below are diagnostic
+            # placeholders in an explicitly unavailable verdict only.
+            return {
+                "ready": False,
+                "reason": "malformed_cache_metadata",
+                "history_scope": history_scope,
+                "covered_start_ms": 0,
+                "oldest_event_ts": 0,
+            }
         status: Dict[str, object] = {
             "ready": False,
             "reason": "cache_not_loaded",
@@ -6270,13 +6314,13 @@ class BybitFetcher(BaseFetcher):
         info = trade.get("info", {})
         order_id = str(info.get("orderId", trade.get("order")))
         trade_id = str(trade.get("id") or info.get("execId") or order_id)
-        timestamp = int(trade.get("timestamp") or info.get("execTime", 0))
-        qty = float(trade.get("amount") or info.get("execQty", 0.0))
+        timestamp = _fill_int(trade.get("timestamp") or info.get("execTime", 0))
+        qty = _fill_float(trade.get("amount") or info.get("execQty", 0.0))
         side = str(trade.get("side") or info.get("side", "")).lower()
-        price = float(trade.get("price") or info.get("execPrice", 0.0))
-        closed_size = float(info.get("closedSize") or info.get("closeSize") or 0.0)
+        price = _fill_float(trade.get("price") or info.get("execPrice", 0.0))
+        closed_size = _fill_float(info.get("closedSize") or info.get("closeSize") or 0.0)
         position_side = BybitFetcher._determine_position_side(side, closed_size)
-        pnl = float(trade.get("pnl") or 0.0)
+        pnl = _fill_float(trade.get("pnl") or 0.0)
         client_order_id = info.get("orderLinkId") or trade.get("clientOrderId")
         fee = trade.get("fees") or trade.get("fee")
         symbol = trade.get("symbol") or info.get("symbol")
@@ -6285,7 +6329,7 @@ class BybitFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
+            "datetime": _fill_datetime(timestamp),
             "symbol": symbol,
             "side": side,
             "qty": abs(qty),
@@ -6455,7 +6499,7 @@ class HyperliquidFetcher(BaseFetcher):
         info = trade.get("info", {}) or {}
         trade_id = str(trade.get("id") or info.get("hash") or info.get("tid") or "")
         order_id = str(trade.get("order") or info.get("oid") or "")
-        timestamp = int(
+        timestamp = _fill_int(
             trade.get("timestamp")
             or info.get("time")
             or info.get("tradeTime")
@@ -6464,9 +6508,9 @@ class HyperliquidFetcher(BaseFetcher):
         )
         symbol_raw = trade.get("symbol") or info.get("symbol") or info.get("coin")
         side = str(trade.get("side") or info.get("side") or "").lower()
-        qty = abs(float(trade.get("amount") or info.get("sz") or 0.0))
-        price = float(trade.get("price") or info.get("px") or 0.0)
-        pnl = float(trade.get("pnl") or info.get("closedPnl") or 0.0)
+        qty = abs(_fill_float(trade.get("amount") or info.get("sz") or 0.0))
+        price = _fill_float(trade.get("price") or info.get("px") or 0.0)
+        pnl = _fill_float(trade.get("pnl") or info.get("closedPnl") or 0.0)
         fee = trade.get("fee")
         if fee is None or (isinstance(fee, (dict, list, tuple)) and not fee):
             fee = {"currency": info.get("feeToken"), "cost": info.get("fee")}
@@ -6482,7 +6526,7 @@ class HyperliquidFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "datetime": _fill_datetime(timestamp) if timestamp else "",
             "symbol": str(symbol_raw or ""),
             "side": side,
             "qty": qty,
@@ -6493,7 +6537,7 @@ class HyperliquidFetcher(BaseFetcher):
             "position_side": position_side,
             "client_order_id": str(client_order_id or ""),
             "raw": [{"source": "fetch_my_trades", "data": trade}],
-            "c_mult": float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
+            "c_mult": _fill_float(info.get("contractMultiplier") or info.get("multiplier") or 1.0),
         }
 
 
@@ -6591,7 +6635,7 @@ class BitunixFetcher(BaseFetcher):
         info = trade.get("info") or {}
         trade_id = str(trade.get("id") or info.get("tradeId") or "")
         order_id = str(trade.get("order") or info.get("orderId") or "")
-        timestamp = int(trade.get("timestamp") or info.get("ctime") or 0)
+        timestamp = _fill_int(trade.get("timestamp") or info.get("ctime") or 0)
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or "").lower()
         position_side = str(info.get("positionSide") or "").lower()
@@ -6605,11 +6649,11 @@ class BitunixFetcher(BaseFetcher):
             raise ValueError(
                 f"Bitunix fill has invalid positionSide: {position_side!r}"
             )
-        qty = abs(float(trade.get("amount") or info.get("qty") or 0.0))
-        price = float(trade.get("price") or info.get("price") or 0.0)
+        qty = abs(_fill_float(trade.get("amount") or info.get("qty") or 0.0))
+        price = _fill_float(trade.get("price") or info.get("price") or 0.0)
         if "realizedPNL" not in info:
             raise ValueError("Bitunix fill is missing realizedPNL")
-        pnl = float(info["realizedPNL"])
+        pnl = _fill_float(info["realizedPNL"])
         if not all(math.isfinite(value) for value in (qty, price, pnl)):
             raise ValueError("Bitunix fill has non-finite qty, price, or realizedPNL")
         if qty <= 0.0 or price <= 0.0:
@@ -6624,7 +6668,7 @@ class BitunixFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
+            "datetime": _fill_datetime(timestamp),
             "symbol": symbol,
             "side": side,
             "qty": qty,
@@ -6728,7 +6772,7 @@ class WeexFetcher(BaseFetcher):
         info = trade.get("info") or {}
         trade_id = str(trade.get("id") or info.get("id") or "")
         order_id = str(trade.get("order") or info.get("orderId") or "")
-        timestamp = int(trade.get("timestamp") or info.get("time") or 0)
+        timestamp = _fill_int(trade.get("timestamp") or info.get("time") or 0)
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or info.get("side") or "").lower()
         position_side = str(info.get("positionSide") or "").lower()
@@ -6743,11 +6787,11 @@ class WeexFetcher(BaseFetcher):
         client_order_id = str(
             trade.get("clientOrderId") or info.get("clientOrderId") or ""
         )
-        qty = abs(float(trade.get("amount") or info.get("qty") or 0.0))
-        price = float(trade.get("price") or info.get("price") or 0.0)
+        qty = abs(_fill_float(trade.get("amount") or info.get("qty") or 0.0))
+        price = _fill_float(trade.get("price") or info.get("price") or 0.0)
         if "realizedPnl" not in info:
             raise ValueError("WEEX fill is missing realizedPnl")
-        pnl = float(info["realizedPnl"])
+        pnl = _fill_float(info["realizedPnl"])
         if not all(math.isfinite(value) for value in (qty, price, pnl)):
             raise ValueError("WEEX fill has non-finite qty, price, or realizedPnl")
         if qty <= 0.0 or price <= 0.0:
@@ -6756,7 +6800,7 @@ class WeexFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
+            "datetime": _fill_datetime(timestamp),
             "symbol": symbol,
             "side": side,
             "qty": qty,
@@ -7026,7 +7070,7 @@ class GateioFetcher(BaseFetcher):
         """
         # Parse timestamp from float seconds to ms
         create_time = raw.get("create_time", 0)
-        timestamp_ms = int(float(create_time) * 1000) if create_time else 0
+        timestamp_ms = _fill_int(_fill_float(create_time) * 1000) if create_time else 0
 
         # Get contract and convert to CCXT symbol format (e.g., BNB_USDT -> BNB/USDT:USDT)
         contract = str(raw.get("contract") or "")
@@ -7034,11 +7078,11 @@ class GateioFetcher(BaseFetcher):
         c_mult = _market_contract_size(self.api, symbol=symbol, market_id=contract)
 
         # Determine side from size sign (positive = buy, negative = sell)
-        size = float(raw.get("size") or 0)
+        size = _fill_float(raw.get("size") or 0)
         side = "buy" if size >= 0 else "sell"
 
         # Build fee structure
-        fee_cost = float(raw.get("fee") or 0)
+        fee_cost = _fill_float(raw.get("fee") or 0)
         fee = {"cost": fee_cost, "currency": "USDT"} if fee_cost else None
 
         return {
@@ -7048,7 +7092,7 @@ class GateioFetcher(BaseFetcher):
             "symbol": symbol,
             "side": side,
             "amount": abs(size),
-            "price": float(raw.get("price") or 0),
+            "price": _fill_float(raw.get("price") or 0),
             "fee": fee,
             "c_mult": c_mult,
             "info": raw,  # Keep raw data for _normalize_trade to access
@@ -7138,17 +7182,14 @@ class GateioFetcher(BaseFetcher):
         order_id = str(trade.get("order") or info.get("order_id") or "")
 
         ts_raw = trade.get("timestamp") or info.get("create_time") or 0
-        try:
-            timestamp = int(ensure_millis(float(ts_raw)))
-        except Exception:
-            timestamp = int(float(ts_raw)) if ts_raw else 0
+        timestamp = _fill_int(_fill_number(_fill_float(ts_raw), ensure_millis))
 
         symbol = str(trade.get("symbol") or info.get("contract") or "")
         side = str(trade.get("side") or info.get("side") or "").lower()
-        qty = abs(float(trade.get("amount") or info.get("size") or 0.0))
-        price = float(trade.get("price") or info.get("price") or 0.0)
+        qty = abs(_fill_float(trade.get("amount") or info.get("size") or 0.0))
+        price = _fill_float(trade.get("price") or info.get("price") or 0.0)
         fee = trade.get("fee")
-        c_mult = float(trade.get("c_mult") or info.get("c_mult") or 1.0)
+        c_mult = _fill_float(trade.get("c_mult") or info.get("c_mult") or 1.0)
 
         # Distribute PnL proportionally
         proportion = qty / total_qty if total_qty > 0 else 0
@@ -7168,7 +7209,7 @@ class GateioFetcher(BaseFetcher):
                 detail_cache[trade_id] = (client_order_id, pb_type)
 
         # Determine position side
-        close_size = float(info.get("close_size", 0))
+        close_size = _fill_float(info.get("close_size", 0))
         is_reduce_only = order.get("reduceOnly", False) or order_info.get("is_reduce_only", False)
         is_close = close_size > 0 or is_reduce_only or abs(order_pnl) > 0
         position_side = self._determine_position_side(side, is_close)
@@ -7177,7 +7218,7 @@ class GateioFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "datetime": _fill_datetime(timestamp) if timestamp else "",
             "symbol": symbol,
             "side": side,
             "qty": qty,
@@ -7335,7 +7376,7 @@ class KucoinFetcher(BaseFetcher):
                 start_at += buffer_ms
                 continue
 
-            batch_sorted = sorted(batch, key=lambda x: x.get("timestamp", 0))
+            batch_sorted = sorted(batch, key=lambda x: _fill_float(x.get("timestamp", 0)))
             for trade in batch_sorted:
                 event = self._normalize_trade(trade)
                 ts = event["timestamp"]
@@ -7344,7 +7385,7 @@ class KucoinFetcher(BaseFetcher):
                 key = (event.get("id") or "", event.get("order_id") or "")
                 collected[key] = event
 
-            last_ts = int(batch_sorted[-1].get("timestamp", start_at))
+            last_ts = _fill_int(batch_sorted[-1].get("timestamp", start_at))
             if last_ts <= start_at:
                 start_at = start_at + buffer_ms
             else:
@@ -7636,20 +7677,16 @@ class KucoinFetcher(BaseFetcher):
             or info.get("updatedTime")
             or 0
         )
-        try:
-            timestamp = int(ensure_millis(float(ts_raw)))
-        except Exception:
-            try:
-                timestamp = int(float(ts_raw))
-            except Exception:
-                timestamp = 0
+        timestamp = _fill_int(_fill_number(_fill_float(ts_raw), ensure_millis))
+        if timestamp <= 0:
+            raise FillEventDataError("KuCoin fill timestamp must be positive")
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or info.get("side") or "").lower()
-        qty = abs(float(trade.get("amount") or info.get("size") or info.get("amount") or 0.0))
-        price = float(trade.get("price") or info.get("price") or 0.0)
+        qty = abs(_fill_float(trade.get("amount") or info.get("size") or info.get("amount") or 0.0))
+        price = _fill_float(trade.get("price") or info.get("price") or 0.0)
         fee = trade.get("fees") or trade.get("fee")
         reduce_only = bool(trade.get("reduceOnly") or info.get("closeOrder") or False)
-        close_fee_pay = float(info.get("closeFeePay") or 0.0)
+        close_fee_pay = _fill_float(info.get("closeFeePay") or 0.0)
         position_side = KucoinFetcher._determine_position_side(side, reduce_only, close_fee_pay)
         raw_payload = [{"source": "fetch_my_trades", "data": dict(trade)}]
 
@@ -7657,7 +7694,7 @@ class KucoinFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "datetime": _fill_datetime(timestamp) if timestamp else "",
             "symbol": symbol,
             "side": side,
             "qty": qty,
@@ -8103,7 +8140,7 @@ class OkxFetcher(BaseFetcher):
         """Normalize a raw OKX fill to the canonical fill event format."""
         trade_id = str(raw.get("tradeId") or "")
         order_id = str(raw.get("ordId") or "")
-        timestamp = int(raw.get("ts") or raw.get("fillTime") or 0)
+        timestamp = _fill_int(raw.get("ts") or raw.get("fillTime") or 0)
         inst_id = str(raw.get("instId") or "")
 
         # Convert instId (e.g., "BTC-USDT-SWAP") to CCXT symbol format
@@ -8120,9 +8157,9 @@ class OkxFetcher(BaseFetcher):
                 symbol = f"{base}/{quote}:{quote}"
 
         side = str(raw.get("side") or "").lower()
-        qty = abs(float(raw.get("fillSz") or 0.0))
-        price = float(raw.get("fillPx") or 0.0)
-        pnl = float(raw.get("fillPnl") or 0.0)
+        qty = abs(_fill_float(raw.get("fillSz") or 0.0))
+        price = _fill_float(raw.get("fillPx") or 0.0)
+        pnl = _fill_float(raw.get("fillPnl") or 0.0)
         c_mult = _market_contract_size(self.api, symbol=symbol, market_id=inst_id)
 
         # Position side handling (supports both hedge and net modes)
@@ -8145,7 +8182,7 @@ class OkxFetcher(BaseFetcher):
         fee_ccy = str(raw.get("feeCcy") or "")
         raw_fee = raw.get("fee")
         try:
-            fee_amt = float(raw_fee)
+            fee_amt = _fill_float(raw_fee)
         except (TypeError, ValueError, OverflowError):
             fee_amt = None
         if isinstance(raw_fee, bool) or (fee_amt is not None and not math.isfinite(fee_amt)):
@@ -8162,7 +8199,7 @@ class OkxFetcher(BaseFetcher):
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp) if timestamp else "",
+            "datetime": _fill_datetime(timestamp) if timestamp else "",
             "symbol": symbol,
             "side": side,
             "qty": qty,

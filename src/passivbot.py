@@ -12959,7 +12959,6 @@ class Passivbot:
         if self.stop_signal_received:
             return False
         self._last_fill_refresh_block_reason = None
-
         fill_refresh_attempt_generation = (
             max(
                 int(
@@ -12977,6 +12976,11 @@ class Passivbot:
             fill_refresh_attempt_generation
         )
         refresh_started_ms = utc_ms()
+        ledger = self._ensure_freshness_ledger()
+        position_observation = ledger.surfaces["positions"]
+        hsl_fill_observation = ((ledger.epoch, position_observation.revision)
+                                if position_observation.epoch == ledger.epoch else None)
+        self._hsl_fill_tail_observation = None
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
         before_events_count = 0
@@ -12995,6 +12999,19 @@ class Passivbot:
 
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
+
+        async def refresh_evidence(operation, **kwargs):
+            try:
+                return await operation(**kwargs)
+            except ValueError as exc:
+                if source != "hsl_emergency":
+                    raise
+                # Only fetched-fill parsing belongs to this optional boundary.
+                # Configuration parsing and unrelated orchestration errors remain
+                # outside it and retain their normal propagation policy.
+                raise state_refresh.AuthoritativeSurfaceUnavailable(
+                    "fills", "optional fill refresh returned unusable evidence"
+                ) from exc
 
         await self.init_pnls()  # will do nothing if already initiated
 
@@ -13100,8 +13117,6 @@ class Passivbot:
                 structural_transition = False
                 for current in self._pnls_manager.get_events():
                     current_keys = event_identity_keys(current)
-                    if current_keys & handled_enrichment_keys:
-                        continue
                     previous = existing_by_id.get(
                         str(getattr(current, "id", "") or "")
                     )
@@ -13112,6 +13127,11 @@ class Passivbot:
                                 break
                     if previous is None:
                         continue
+                    # Completed rows can also be corrected under the same
+                    # identity. Their changed structure requires a new account
+                    # observation before optional HSL evidence can consume it.
+                    if event_structure(previous) != event_structure(current):
+                        structural_transition = True
                     previous_needs_enrichment = (
                         fill_event_pnl_pending(previous)
                         or bool(
@@ -13122,10 +13142,12 @@ class Passivbot:
                         not fill_event_pnl_pending(current)
                         and not FillEventsManager.synthetic_pnl_events([current])
                     )
-                    if previous_needs_enrichment and current_is_authoritative:
+                    if (
+                        previous_needs_enrichment
+                        and current_is_authoritative
+                        and not current_keys & handled_enrichment_keys
+                    ):
                         transitions.append((previous, current))
-                        if event_structure(previous) != event_structure(current):
-                            structural_transition = True
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
                     self._log_enriched_fill_events(transitions)
@@ -13184,7 +13206,8 @@ class Passivbot:
             ):
                 degraded_repair_attempted = True
                 try:
-                    await repair_degraded(
+                    await refresh_evidence(
+                        repair_degraded,
                         start_ms=(
                             None
                             if required_pnl_start_ms is None
@@ -13206,7 +13229,8 @@ class Passivbot:
             if needs_full_refresh:
                 # Full refresh with proper lookback window
                 refresh_mode = "full"
-                await self._pnls_manager.refresh(
+                await refresh_evidence(
+                    self._pnls_manager.refresh,
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
@@ -13233,10 +13257,11 @@ class Passivbot:
                 )
                 if age_limit is not None and callable(refresh_for_lookback):
                     fill_fetch_completed = bool(
-                        await refresh_for_lookback(start_ms=int(age_limit))
+                        await refresh_evidence(refresh_for_lookback, start_ms=int(age_limit))
                     )
                 else:
-                    await self._pnls_manager.refresh(
+                    await refresh_evidence(
+                    self._pnls_manager.refresh,
                         start_ms=None if age_limit is None else int(age_limit),
                         end_ms=None,
                     )
@@ -13263,7 +13288,8 @@ class Passivbot:
                 )
                 if since_ms is not None:
                     refresh_mode = "incremental_bounded"
-                    await self._pnls_manager.refresh(
+                    await refresh_evidence(
+                    self._pnls_manager.refresh,
                         start_ms=max(0, int(since_ms)),
                         end_ms=None,
                     )
@@ -13292,7 +13318,8 @@ class Passivbot:
                     overlap_minutes = max(0.0, overlap_minutes)
                     if recovery_start_ms is not None:
                         refresh_mode = "trailing_confirmation_recovery"
-                        await self._pnls_manager.refresh(
+                        await refresh_evidence(
+                    self._pnls_manager.refresh,
                             start_ms=int(recovery_start_ms),
                             end_ms=None,
                         )
@@ -13303,7 +13330,8 @@ class Passivbot:
                             int(exchange_time_ms)
                             - int(overlap_minutes * 60 * 1000),
                         )
-                        await self._pnls_manager.refresh(
+                        await refresh_evidence(
+                    self._pnls_manager.refresh,
                             start_ms=bounded_start_ms,
                             end_ms=None,
                         )
@@ -13313,7 +13341,8 @@ class Passivbot:
                             mark_covered_start(bounded_start_ms)
                         self._pnls_manager.set_history_scope("window")
                     else:
-                        await self._pnls_manager.refresh_latest(
+                        await refresh_evidence(
+                            self._pnls_manager.refresh_latest,
                             overlap=20,
                             last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
                         )
@@ -13363,6 +13392,10 @@ class Passivbot:
                 self._log_new_fill_events(new_events)
             if new_events or mixed_source_confirmation_required:
                 request_account_confirmation()
+            # Certify only an ordered post-position tail with no new or
+            # structurally corrected fills awaiting account confirmation.
+            if fill_fetch_completed and not account_confirmation_requested:
+                self._hsl_fill_tail_observation = hsl_fill_observation
             post_now_ms = self.get_exchange_time()
             post_pnl_required, post_pnl_start_ms = (
                 self._required_pnl_history_start_ms(

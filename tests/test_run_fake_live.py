@@ -2091,3 +2091,130 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
 async def test_red_reactivation_closes_in_same_recovery_wave(tmp_path, monkeypatch, signal_mode):
     await test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exchange(
         tmp_path, monkeypatch, 'reactivation', signal_mode)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['unordered_nonflattening', 'realized_loss', 'stale_reset', 'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'])
+async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, case):
+    from unittest.mock import AsyncMock
+    from live import risk_input_recovery as recovery
+    from live.hsl_episode import EpisodeEvidenceUnavailable
+    from live.hsl_protection import Scope
+    import passivbot_rust as pbr
+    assert not getattr(pbr, '__is_stub__', False)
+    user = f'fake_hsl_evidence_{tmp_path.name}'
+    _cleanup_fake_user_state(user)
+    cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
+    cfg['live']['hsl_signal_mode'] = 'coin'
+    cfg['live']['hsl_unavailable_grace_seconds'] = 120.0
+    cfg['bot']['long']['hsl_ema_span_minutes'] = 10_000.0
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps(cfg))
+    scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
+    scenario.pop('assertions', None)
+    scenario['run_initial_cycle'] = True
+    account = scenario['account']
+    account['balance'] = 170.0
+    account['fills'][0]['price'] = 100.0
+    account['fills'][1].update(amount=1.0, price=70.0, pnl=-30.0)
+    account['fills'][1].pop('info', None)
+    account['fills'][2].update(amount=1.0, price=100.0)
+    account['fills'][2].pop('info', None)
+    if case != 'unordered_nonflattening':
+        account['fills'].pop()
+        account['positions'][0]['qty'] = 4.0
+    scenario_path = tmp_path / 'scenario.hjson'
+    scenario_path.write_text(hjson.dumps(scenario))
+    completed = []
+
+    async def exercise(bot):
+        symbol = 'BTC/USDT:USDT'
+        state = bot._hsl_coin_state('long', symbol)
+        runtime = state['runtime']
+        assert state['last_metrics']['tier'] == 'green'
+        assert state['last_metrics']['realized_pnl'] == pytest.approx(-30.0)
+        if case == 'unordered_nonflattening':
+            assert bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)].status == 'degraded'
+        import asyncio
+        async def yield_sleep(*args, **kwargs):
+            await asyncio.sleep(0)
+        bot._sleep_unless_shutdown = yield_sleep
+        if case != 'unordered_nonflattening':
+            bot._equity_hard_stop_check = AsyncMock(side_effect=EpisodeEvidenceUnavailable(
+                'price_history_unavailable', pside='long', symbol=symbol))
+            assert await recovery.ensure_ready(bot)
+        if case == 'stale_reset':
+            state['pnl_reset_timestamp_ms'] = bot.cca.now_ms
+        elif case in {'invalid_metadata', 'invalid_oldest', 'invalid_newest'}:
+            field = {'invalid_metadata': 'covered_start_ms', 'invalid_oldest': 'oldest_event_ts', 'invalid_newest': 'newest_event_ts'}[case]
+            bot._pnls_manager.cache.load_metadata()[field] = {'invalid': 1}
+        elif case in {'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'}:
+            from fill_events_manager import BitunixFetcher, KucoinFetcher, normalize_uta_fill_payload
+            def malformed_numeric_fill(**kwargs):
+                if case == 'numeric_uta':
+                    return normalize_uta_fill_payload(dict(execId='fill', orderId='order',
+                        createdTime=1_700_000_000_000, symbol='BTCUSDT', side='buy', posSide='long',
+                        tradeSide='open', execQty=10**1000, execPrice=100.0, execPnl=0.0), lambda s: s)
+                if case == 'kucoin_timestamp':
+                    return KucoinFetcher._normalize_trade(dict(id='fill', order='order', timestamp=10**1000))
+                return BitunixFetcher._normalize_trade(dict(id='fill', order='order',
+                    symbol=symbol, side='buy', timestamp={'bad': 1} if case == 'numeric_type' else float('inf'),
+                    info={'positionSide': 'long'}))
+            for method in ('refresh', 'refresh_latest', 'refresh_for_lookback', 'refresh_degraded_pnl_events'):
+                setattr(bot._pnls_manager, method, AsyncMock(side_effect=malformed_numeric_fill))
+        elif case in {'invalid_fill', 'invalid_cache'}:
+            from fill_events_manager import FillEventCacheContractError
+            error = ValueError('malformed fetched fill') if case == 'invalid_fill' else FillEventCacheContractError('invalid fill cache')
+            for method in ('refresh', 'refresh_latest', 'refresh_for_lookback', 'refresh_degraded_pnl_events'):
+                setattr(bot._pnls_manager, method, AsyncMock(side_effect=error))
+        elif case == 'pending_pnl':
+            from dataclasses import replace
+            original_events = bot._pnls_manager.get_events
+            # Coalesced fills can carry pending status with an authoritative source.
+            bot._pnls_manager.get_events = lambda: [
+                replace(event, pnl_status='pending', pnl_source='authoritative')
+                if event.pnl < 0 else event for event in original_events()]
+        bot.cca.now_ms += 120_000
+        if case == 'unordered_nonflattening':
+            assert await recovery.ensure_ready(bot)
+            health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
+            assert health.status == 'degraded'
+            assert health.reason == 'unordered_nonflattening_fill_cohort'
+            assert health.unavailable_since_ms is None
+            assert not health.exit_committed
+            assert state['runtime'] is runtime
+            assert bot.positions[symbol]['long']['size'] == 5.0
+        else:
+            # Exercise the production owner, including its bounded ordered
+            # fill-tail refresh; no test-only enrichment call is inserted.
+            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'}:
+                assert not await recovery.protect_unready_hsl(bot)
+                health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
+                assert health.realized_loss is None
+                assert not health.exit_committed
+                bot.cca.get_current_step()['prices'][symbol] = 97.0
+                bot.market_snapshot_provider._cache.clear()
+            assert await recovery.protect_unready_hsl(bot)
+            health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
+            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'}:
+                assert health.realized_loss is None
+                assert health.drawdown_raw > 0.0
+            else:
+                assert await bot._calc_upnl_sum_strict('long', symbol) == 0.0
+                assert health.realized_loss == pytest.approx(30.0)
+            assert health.exit_committed
+            await recovery.protect_and_wait(bot)
+            await recovery.protect_and_wait(bot)
+            assert bot.positions[symbol]['long']['size'] == 0.0
+        completed.append(True)
+        return {'evidence_case_completed': True}
+
+    monkeypatch.setattr(run_fake_live_module, '_run_fake_cycle', exercise)
+    try:
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+                                  max_steps=1, output_dir=str(tmp_path), log_level=1, snapshot_each_step=False)
+        import asyncio
+        assert await asyncio.wait_for(_async_main(args), timeout=20.0) == 0
+        assert completed
+    finally:
+        _cleanup_fake_user_state(user)

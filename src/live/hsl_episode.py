@@ -39,9 +39,11 @@ class EpisodeEvidence:
     unavailable: str | None
     epsilon: float
     start_ms: int | None = None
+    degraded_reason: str = ""
+    degraded_timestamps: tuple[int, ...] = ()
 
     @classmethod
-    def reconstruct(cls, rows, *, ambiguous=False, epsilon=1e-12):
+    def reconstruct(cls, rows, *, ambiguous=False, epsilon=1e-12, degraded_reason="", degraded_timestamps=()):
         rows = tuple(rows)
         size = 0.0
         start = None
@@ -65,7 +67,7 @@ class EpisodeEvidence:
             sizes.append(size)
         if start is not None:
             episodes.append((start, None))
-        return cls(rows, size, tuple(sizes), tuple(flats), tuple(episodes), tuple(prefix), reason, epsilon)
+        return cls(rows, size, tuple(sizes), tuple(flats), tuple(episodes), tuple(prefix), reason, epsilon, degraded_reason=degraded_reason, degraded_timestamps=tuple(degraded_timestamps))
 
     def window(self, start_ms, end_ms):
         """Project proven evidence without assuming a truncated tape starts flat."""
@@ -74,6 +76,8 @@ class EpisodeEvidence:
         end = bisect_right(timestamps, end_ms)
         end = max(first, end)
         baseline = self.realized_prefix[first]
+        degraded_timestamps = tuple(ts for ts in self.degraded_timestamps
+                                    if (start_ms is None or ts >= start_ms) and ts <= end_ms)
         return EpisodeEvidence(
             rows=self.rows[first:end], ending_size=self.sizes[end],
             sizes=self.sizes[first:end + 1],
@@ -82,6 +86,8 @@ class EpisodeEvidence:
                            if start <= end_ms and (flat is None or flat >= (start_ms or 0))),
             realized_prefix=tuple(value - baseline for value in self.realized_prefix[first:end + 1]),
             unavailable=self.unavailable, epsilon=self.epsilon, start_ms=start_ms,
+            degraded_reason=self.degraded_reason if degraded_timestamps else "",
+            degraded_timestamps=degraded_timestamps,
         )
 
     def matches_position(self, size):

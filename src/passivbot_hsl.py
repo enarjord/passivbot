@@ -35,6 +35,7 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
     _hyperliquid_fill_position_chain,
     _unique_position_chain_order,
+    _normalize_raw_field,
 )
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 from live.market_snapshot import MarketSnapshotUnavailable
@@ -1697,7 +1698,9 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
     if live_start_ms is not None:
         start_ms = live_start_ms if start_ms is None else max(start_ms, live_start_ms)
     reset_events = _equity_hard_stop_coin_events_after_reset(
-        self._pnls_manager.get_events(), pside, symbol, reset_timestamp_ms,
+        [event for event in self._pnls_manager.get_events()
+         if _equity_hard_stop_fill_timestamp_ms(event) <= int(timestamp_ms)],
+        pside, symbol, reset_timestamp_ms,
         qty_step=_hsl_qty_step_for_symbol(self, symbol),
     )
     if reset_timestamp_ms is not None:
@@ -1725,7 +1728,20 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
             pside, symbol
         ),
     )
-    events.sort(key=_equity_hard_stop_fill_timestamp_ms)
+    # Order from the full scoped tape so the pre-cohort quantity remains known
+    # even when the PnL lookback trims older opening fills.
+    ordered, ambiguous = _equity_hard_stop_order_fill_cohorts(
+        reset_events, allow_nonflattening_approximation=True,
+        qty_step=_hsl_qty_step_for_symbol(self, symbol))
+    if ambiguous:
+        # This PnL accumulator is not the episode-readiness owner. Preserve the
+        # existing path that keeps a proven RED latch protective while ambiguous
+        # intervention boundaries prohibit reopening. Optional emergency evidence
+        # separately requires a coherent episode before calling this helper.
+        events.sort(key=_equity_hard_stop_fill_timestamp_ms)
+    else:
+        selected = {id(event) for event in events}
+        events = [event for event in ordered if id(event) in selected]
     current = 0.0
     peak = 0.0
     for event in events:
@@ -1733,6 +1749,69 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
         current += _equity_hard_stop_fee_cost(event)
         peak = max(peak, current)
     return float(peak), float(current)
+
+
+def _equity_hard_stop_coin_evidence_quality(state, timestamp_ms):
+    evidence = state.get("episode_evidence")
+    if evidence is None:
+        return ""
+    # Retain the consumed tape for correction detection, while reporting quality
+    # only for the active drawdown episode, both after replay and during polling.
+    return evidence.window(state.get("pnl_reset_timestamp_ms"), timestamp_ms).degraded_reason
+
+
+def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
+    """Optional current-episode loss, only with fresh tail and coherent fills."""
+    manager = getattr(self, "_pnls_manager", None)
+    ledger = getattr(self, "freshness_ledger", None)
+    if (manager is None or not callable(getattr(self, "_hsl_coin_state", None))
+            or ledger is None or ledger.epoch <= 0
+            or hsl_protection.emergency_evidence_needs_confirmation(self)
+            or getattr(self, "_hsl_fill_tail_observation", None) != (
+                ledger.epoch, ledger.surfaces["positions"].revision)
+            or "positions" not in ledger.surfaces_at_epoch()):
+        return None
+    events = [event for event in manager.get_events()
+              if _equity_hard_stop_fill_pside_optional(event) == pside
+              and _equity_hard_stop_fill_symbol(event) == symbol
+              and _equity_hard_stop_fill_timestamp_ms(event) <= now_ms]
+    if not events:
+        return None
+    ordered, ambiguous, flats = _equity_hard_stop_order_fill_cohorts(
+        events, include_flatten_indices=True, allow_nonflattening_approximation=True,
+        qty_step=_hsl_qty_step_for_symbol(self, symbol))
+    if ambiguous:
+        return None
+    # Boundary proof uses observed quantities before consulting old PnL quality.
+    # A prior closed episode cannot taint the current episode's optional loss.
+    current_events = ordered[flats[-1] + 1:] if flats else ordered
+    if not current_events or any(
+        str(_equity_hard_stop_event_value(event, "pnl_status", "complete")).lower() == "pending"
+        or str(_equity_hard_stop_event_value(event, "pnl_source", "")).lower()
+        in {"pending", "synthetic_fill_reconstruction_degraded"}
+        for event in current_events
+    ):
+        return None
+    evidence = _equity_hard_stop_coin_episode_evidence(
+        current_events, pside, symbol, qty_step=_hsl_qty_step_for_symbol(self, symbol))
+    size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
+    if size == 0.0 or evidence.unavailable or not evidence.matches_position(size):
+        return None
+    episode_start_ms = _equity_hard_stop_fill_timestamp_ms(current_events[0])
+    coverage = self._fill_history_coverage_status(start_ms=episode_start_ms, end_ms=now_ms)
+    if not coverage.get("ready", False):
+        return None
+    # Runtime watermarks may describe a flatten invalidated by corrected fills.
+    # Optional emergency evidence is derived solely from the current proven tape.
+    reset_ms = episode_start_ms
+    if flats:
+        reset_ms = max(reset_ms, _equity_hard_stop_fill_timestamp_ms(ordered[flats[-1]]) + 1)
+    try:
+        peak, last = self._equity_hard_stop_coin_realized_pnl_peak_last(
+            pside, symbol, now_ms, reset_timestamp_ms=reset_ms)
+    except AuthoritativeSurfaceUnavailable:
+        return None
+    return max(0.0, peak - last)
 
 
 def _equity_hard_stop_lookback_ms(self) -> int | None:
@@ -2212,12 +2291,49 @@ def _hsl_compact_sparse_replay_indices(
     return np.flatnonzero(selected).astype(np.int64)
 
 
+def _hsl_nonflattening_cohort_order(cohort, opening_size, epsilon):
+    """Use a conservative PnL order only when every ordering stays nonflat."""
+    rows = []
+    for event in cohort:
+        qty = _equity_hard_stop_fill_replay_qty(event)
+        action = _equity_hard_stop_fill_action(event)
+        try:
+            delta = float(_equity_hard_stop_event_value(event, "pnl", 0.0) or 0.0) + _equity_hard_stop_fee_cost(event)
+        except (TypeError, ValueError):
+            return None
+        if qty is None or qty <= 0.0 or not math.isfinite(qty) or not math.isfinite(delta):
+            return None
+        rows.append((event, qty, action, delta))
+    # Netting a mixed-sign cohort hides an intra-millisecond PnL peak in
+    # minute replay. Keep this first degradation path monotone so live/restart
+    # agree without changing the existing drawdown sampling formulas.
+    if any(delta > 0.0 for _, _, _, delta in rows) and any(delta < 0.0 for _, _, _, delta in rows):
+        return None
+    reductions = sum(qty for _, qty, action, _ in rows if action == "decrease")
+    if opening_size - reductions <= epsilon:
+        return None
+    # Positive realized deltas first gives the largest possible intra-cohort
+    # realized peak. Equal normalized rows commute; no exchange order is asserted.
+    return [row[0] for row in sorted(rows, key=lambda row: (-row[3], row[2], row[1]))]
+
+
+def _hsl_has_position_chain_metadata(event):
+    payload = event if isinstance(event, dict) else vars(event)
+    return any(isinstance(item, dict) and isinstance(item.get("data"), dict)
+               and isinstance(item["data"].get("info"), dict)
+               and "startPosition" in item["data"]["info"]
+               for item in _normalize_raw_field(payload.get("raw")))
+
+
 def _equity_hard_stop_order_fill_cohorts(
-    fill_events, *, include_flatten_indices=False, qty_step=0.0
+    fill_events, *, include_flatten_indices=False, include_quality=False,
+    allow_nonflattening_approximation=False, qty_step=0.0
 ):
-    """Order tied mixed-action fills only with exchange-provided position chains."""
+    """Use proven chains, or a bounded nonflattening approximation, for tied fills."""
     ordered = []
     ambiguous = False
+    degraded_reason = ""
+    degraded_timestamps = []
     known_sizes = {}
     flatten_indices = []
     sizes_complete = True
@@ -2256,7 +2372,19 @@ def _equity_hard_stop_order_fill_cohorts(
                     if anchored is not None and anchored[0] == 0:
                         chain_order = [index - 1 for index in anchored[1:]]
             if chain_order is None:
-                ambiguous = True
+                approximation = None
+                if (allow_nonflattening_approximation and len(pairs) == 1
+                        and sizes_complete and all(chain is None for chain in chains)
+                        and not any(_hsl_has_position_chain_metadata(event) for event in cohort)):
+                    approximation = _hsl_nonflattening_cohort_order(
+                        cohort, known_sizes.get(next(iter(pairs)), 0.0), proof_epsilon,
+                    )
+                if approximation is None:
+                    ambiguous = True
+                else:
+                    cohort = approximation
+                    degraded_reason = "unordered_nonflattening_fill_cohort"
+                    degraded_timestamps.append(int(_ts))
             else:
                 cohort = [cohort[index] for index in chain_order]
         ordered.extend(cohort)
@@ -2287,9 +2415,12 @@ def _equity_hard_stop_order_fill_cohorts(
                 )
                 if was_nonflat and nonflat_pairs == 0:
                     flatten_indices.append(len(ordered) - len(cohort) + offset)
+    result = (ordered, ambiguous)
     if include_flatten_indices:
-        return ordered, ambiguous, flatten_indices
-    return ordered, ambiguous
+        result += (flatten_indices,)
+    if include_quality:
+        result += (degraded_reason, tuple(degraded_timestamps))
+    return result
 
 
 def _equity_hard_stop_coin_events_after_reset(
@@ -2337,11 +2468,11 @@ def _equity_hard_stop_coin_episode_evidence(
     fill_events: list[Any], pside: str, symbol: str, *, qty_step: float = 0.0
 ) -> EpisodeEvidence:
     replay_events: list[tuple[int, str, float, float]] = []
-    fill_events, ambiguous = _equity_hard_stop_order_fill_cohorts([
+    fill_events, ambiguous, degraded_reason, degraded_timestamps = _equity_hard_stop_order_fill_cohorts([
         event for event in fill_events
         if _equity_hard_stop_fill_pside(event) == pside
         and _equity_hard_stop_fill_symbol(event) == symbol
-    ])
+    ], include_quality=True, allow_nonflattening_approximation=True, qty_step=qty_step)
     flat_epsilon = _hsl_flat_epsilon(qty_step)
     for event in fill_events:
         if _equity_hard_stop_fill_pside(event) != pside:
@@ -2373,7 +2504,8 @@ def _equity_hard_stop_coin_episode_evidence(
         )
     replay_events.sort(key=lambda item: item[0])
     return EpisodeEvidence.reconstruct(
-        replay_events, ambiguous=ambiguous, epsilon=flat_epsilon
+        replay_events, ambiguous=ambiguous, epsilon=flat_epsilon, degraded_reason=degraded_reason,
+        degraded_timestamps=degraded_timestamps,
     )
 
 
@@ -3298,7 +3430,9 @@ async def _equity_hard_stop_replay_live_restart(
                 replacement["last_stop_event"] = old.get("last_stop_event")
             old.clear()
             old.update(replacement)
-            hsl_protection.record_evaluation(self, side, symbol if mode == "coin" else None)
+            hsl_protection.record_evaluation(self, side, symbol if mode == "coin" else None,
+                degraded_reason=(_equity_hard_stop_coin_evidence_quality(
+                    replacement, int(self.get_exchange_time())) if mode == "coin" else ""))
             if mode == "coin":
                 forced = self._runtime_forced_modes.setdefault(side, {})
                 forced.pop(symbol, None)
@@ -4803,7 +4937,9 @@ async def _equity_hard_stop_initialize_coin_from_history(
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
             self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
-            hsl_protection.record_evaluation(self, pside, symbol)
+            hsl_protection.record_evaluation(self, pside, symbol,
+                degraded_reason=_equity_hard_stop_coin_evidence_quality(
+                    self._hsl_coin_state(pside, symbol), now_ms))
 
         def mark_protective_ready() -> None:
             nonlocal protective_ready_elapsed_s, watchdog_context_restored
@@ -6591,7 +6727,9 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 balance,
                 float(await _equity_hard_stop_scoped_upnl(self, pside, symbol)),
             )
-            hsl_protection.record_evaluation(self, pside, symbol)
+            if not replay_complete:
+                hsl_protection.record_evaluation(self, pside, symbol,
+                    degraded_reason=_equity_hard_stop_coin_evidence_quality(state, ts_ms))
             if metrics["changed"]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
             self._equity_hard_stop_maybe_emit_raw_red_pending(

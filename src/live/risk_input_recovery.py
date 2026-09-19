@@ -304,7 +304,8 @@ async def ensure_ready(bot, *, startup=False):
                 # never to a successful fetch or an isolated GREEN sample.
                 from passivbot_hsl import _equity_hard_stop_replay_live_restart
                 if await _equity_hard_stop_replay_live_restart(bot, scope.pside, scope.symbol or None):
-                    health.evaluated_successfully(scope, now_ms=int(bot.get_exchange_time()))
+                    # Canonical replay already publishes the completed scoped
+                    # evaluation; releasing its flat hold must not count it twice.
                     health.release_flat_hold(scope)
                 else:
                     failure_seen = True

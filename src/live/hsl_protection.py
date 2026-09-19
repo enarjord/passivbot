@@ -6,6 +6,8 @@ this journal records only availability time and a committed protective exit.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import asyncio
+from time import monotonic
 import json
 import logging
 import math
@@ -13,9 +15,15 @@ import os
 from pathlib import Path
 
 from config.access import require_live_value
+from fill_events_manager import FillEventCacheContractError
 from live.market_snapshot import MarketSnapshotUnavailable
 from live.diagnostic_safety import bounded_exception_type
 from ccxt.base.errors import NetworkError
+from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+
+_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS = 5.0
+_EMERGENCY_FILL_REFRESH_RETRY_SECONDS = 10.0
 
 
 @dataclass(frozen=True, order=True)
@@ -39,6 +47,8 @@ class Health:
     execution_blocked: str = ""
     budget: float | None = None
     drawdown_raw: float | None = None
+    realized_loss: float | None = None
+    degraded_evaluations: int = 0
 
 
 class ProtectionHealth:
@@ -79,7 +89,8 @@ class ProtectionHealth:
                                ("exit_committed", "exit_confirmed_flat", "emergency_active"))
                         or not isinstance(health.execution_blocked, str)
                         or (health.exit_committed and health.exit_confirmed_flat)
-                        or not isinstance(health.reason, str)):
+                        or not isinstance(health.reason, str)
+                        or type(health.degraded_evaluations) is not int or health.degraded_evaluations < 0):
                     raise ValueError("invalid protection scope")
                 for stamp in (health.unavailable_since_ms, health.last_evaluated_ms,
                               health.exit_started_ms, health.exit_flat_ms):
@@ -94,7 +105,7 @@ class ProtectionHealth:
                         or health.exit_flat_ms is not None and (
                             health.exit_started_ms is None or health.exit_flat_ms < health.exit_started_ms)):
                     raise ValueError("incomplete emergency provenance")
-                for value in (health.budget, health.drawdown_raw):
+                for value in (health.budget, health.drawdown_raw, health.realized_loss):
                     if value is not None and (isinstance(value, bool)
                             or not isinstance(value, (int, float)) or not math.isfinite(value)):
                         raise ValueError("invalid protection metric")
@@ -145,6 +156,7 @@ class ProtectionHealth:
             health.unavailable_since_ms = max(0, now_ms - grace_ms)
             changed = True
         health.status = "unavailable"
+        health.degraded_evaluations = 0
         health.reason = reason
         if changed:
             self.save()
@@ -154,7 +166,13 @@ class ProtectionHealth:
         health = self.scopes.setdefault(scope, Health())
         changed = (health.unavailable_since_ms is not None
                    or self.journal_invalid and health.last_evaluated_ms is None)
-        health.status = "degraded" if degraded_reason else "usable"
+        status = "degraded" if degraded_reason else "usable"
+        health.degraded_evaluations = health.degraded_evaluations + 1 if degraded_reason else 0
+        if (health.status, health.reason) != (status, degraded_reason):
+            log = logging.warning if degraded_reason else logging.info
+            log("[risk] HSL evaluation quality | mode=%s pside=%s symbol=%s status=%s reason=%s",
+                scope.mode, scope.pside, scope.symbol or "all", status, degraded_reason or "normal_evaluation")
+        health.status = status
         health.reason = degraded_reason
         health.last_evaluated_ms = now_ms
         health.unavailable_since_ms = None
@@ -283,7 +301,16 @@ def has_orders(bot, scope):
                for order in orders)
 
 
-async def evaluate_emergency(bot, candidates):
+def emergency_evidence_needs_confirmation(bot):
+    """A newly discovered fill can invalidate both cost basis and cash balance."""
+    pending = getattr(bot, "_authoritative_pending_confirmations", {}) or {}
+    ledger = getattr(bot, "freshness_ledger", None)
+    return any(int(pending.get(surface, 0) or 0) > max(0,
+        ledger.surfaces[surface].epoch if ledger is not None else 0
+    ) for surface in ("positions", "balance"))
+
+
+async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
     """Evaluate unavailable scopes with current account and quote evidence only.
 
     A historical fallback never clears the outage clock. Successful normal (or
@@ -294,6 +321,8 @@ async def evaluate_emergency(bot, candidates):
     now = int(bot.get_exchange_time())
     delay = grace_ms(bot)
     active = affected_scopes(bot, candidates, {})
+    previous_pending = health_manager.pending_exits()
+    needs_fill_tail = False
     for scope, health in list(health_manager.scopes.items()):
         if scope not in active or health.unavailable_since_ms is None or health.exit_committed:
             continue
@@ -318,9 +347,14 @@ async def evaluate_emergency(bot, candidates):
         # new flat account does not satisfy this severe missing-history condition.
         fills = getattr(bot, "_pnls_manager", None)
         missing_history = has_exposure(bot, scope) and (fills is None or not fills.get_events())
+        from passivbot_hsl import _equity_hard_stop_emergency_realized_loss
+        health.realized_loss = (_equity_hard_stop_emergency_realized_loss(bot, scope.pside, scope.symbol, now)
+                                if scope.mode == "coin" else None)
+        needs_fill_tail |= (scope.mode == "coin" and health.realized_loss is None
+                            and has_exposure(bot, scope))
         result = pbr.hsl_emergency_signal(
             True, float(bot.get_raw_balance()), divisor, upnl,
-            float(cfg["red_threshold"]), elapsed, delay, missing_history,
+            float(cfg["red_threshold"]), elapsed, delay, missing_history, health.realized_loss,
         )
         if (not isinstance(result, tuple) or len(result) != 4
                 or type(result[2]) is not bool or type(result[3]) is not bool
@@ -342,6 +376,27 @@ async def evaluate_emergency(bot, candidates):
                 scope.mode, scope.pside, scope.symbol or "all", elapsed / 1000.0,
                 health.drawdown_raw, float(cfg["red_threshold"]), missing_history,
             )
+
+    # Raw-current-input RED always wins immediately. Optional historical
+    # enrichment must neither postpone a newly committed close nor become an
+    # unbounded prerequisite for evaluating current loss.
+    update_fills = getattr(bot, "update_pnls", None)
+    if (refresh_fill_tail and needs_fill_tail and callable(update_fills)
+            and not (health_manager.pending_exits() - previous_pending)
+            and monotonic() >= getattr(bot, "_hsl_emergency_fill_retry_at", 0.0)):
+        bot._hsl_emergency_fill_retry_at = monotonic() + _EMERGENCY_FILL_REFRESH_RETRY_SECONDS
+        try:
+            await asyncio.wait_for(update_fills(source="hsl_emergency"),
+                                   timeout=_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS)
+        except (TimeoutError, NetworkError, AuthoritativeSurfaceUnavailable, FillEventCacheContractError) as exc:
+            bot._hsl_fill_tail_observation = None
+            logging.warning("[risk] optional emergency fill-tail refresh unavailable; raw-UPNL protection remains active | error_type=%s",
+                            bounded_exception_type(exc))
+        else:
+            # New fills may have changed cost basis even at unchanged net size.
+            # Let the account owner confirm that change before using this tail.
+            if not emergency_evidence_needs_confirmation(bot):
+                await evaluate_emergency(bot, candidates, refresh_fill_tail=False)
 
 
 def holds_after_emergency_exit(bot, pside, symbol):
