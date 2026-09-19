@@ -202,6 +202,8 @@ it is added once, never combined with an already-inclusive equity drawdown. Unav
 evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.
 New coin emergency decisions use the normal coin signal activity rule: zero configured
 `n_positions` or wallet exposure limit makes that side inactive, including residual exposure.
+Inactive uncommitted outages are retired, so reactivation starts a fresh grace period if the
+signal is still unavailable. Completed emergency provenance remains available for replay.
 No replacement budget divisor is inferred. A previously committed exit still owns its remaining
 exposure and orders when sizing becomes inactive; explicit HSL disablement or signal-mode changes
 retain their documented retirement semantics.
