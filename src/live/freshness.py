@@ -15,6 +15,7 @@ class SurfaceState:
     epoch: int = -1
     signature: Any = None
     changed_epoch: int = -1
+    revision: int = 0
 
 
 class FreshnessLedger:
@@ -42,6 +43,7 @@ class FreshnessLedger:
         if surface not in self.surfaces:
             self.surfaces[surface] = SurfaceState(name=surface)
         state = self.surfaces[surface]
+        state.revision += 1
         changed = state.signature != signature
         state.signature = signature
         state.updated_ms = int(now_ms)

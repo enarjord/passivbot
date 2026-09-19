@@ -1757,7 +1757,8 @@ def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
     ledger = getattr(self, "freshness_ledger", None)
     if (manager is None or not callable(getattr(self, "_hsl_coin_state", None))
             or ledger is None or ledger.epoch <= 0
-            or getattr(self, "_hsl_fill_tail_refresh_epoch", None) != ledger.epoch
+            or getattr(self, "_hsl_fill_tail_observation", None) != (
+                ledger.epoch, ledger.surfaces["positions"].revision)
             or "positions" not in ledger.surfaces_at_epoch()):
         return None
     events = [event for event in manager.get_events()

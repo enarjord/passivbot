@@ -251,3 +251,16 @@ def test_corrupt_journal_repairs_evaluated_scope_durably_without_granting_unknow
     restored.unavailable(b, now_ms=1_200_000, reason='unknown_scope', grace_ms=120_000)
     assert restored.scopes[a].unavailable_since_ms == 1_200_000
     assert restored.scopes[b].unavailable_since_ms == 1_080_000
+
+
+def test_degraded_evaluation_count_is_visible_and_resets_on_recovery():
+    health = ProtectionHealth()
+    scope = Scope('coin', 'long', 'A')
+    for count in range(1, 4):
+        health.evaluated_successfully(scope, now_ms=count * 1000, degraded_reason='unordered_nonflattening_fill_cohort')
+        assert health.payload(count * 1000, 120_000)[0]['degraded_evaluations'] == count
+    health.evaluated_successfully(scope, now_ms=4000)
+    assert health.scopes[scope].degraded_evaluations == 0
+    health.evaluated_successfully(scope, now_ms=5000, degraded_reason='unordered_nonflattening_fill_cohort')
+    health.unavailable(scope, now_ms=6000, reason='history', grace_ms=120_000)
+    assert health.scopes[scope].degraded_evaluations == 0

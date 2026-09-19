@@ -410,7 +410,7 @@ def _mark_emergency_tail_fresh(bot):
     bot.freshness_ledger = FreshnessLedger()
     bot.freshness_ledger.begin_epoch()
     bot.freshness_ledger.stamp('positions', now_ms=180_000)
-    bot._hsl_fill_tail_refresh_epoch = bot.freshness_ledger.epoch
+    bot._hsl_fill_tail_observation = (bot.freshness_ledger.epoch, bot.freshness_ledger.surfaces['positions'].revision)
 
 
 @pytest.mark.parametrize('metadata', ['nan', 'bad', None, 'mixed_sign'])
@@ -456,7 +456,8 @@ def test_optional_loss_ignores_old_closed_episode_pnl_and_coverage(old_quality):
     assert requested and set(requested) == {60_000}
 
 
-def test_optional_loss_rejects_stale_tail_even_when_quantity_matches():
+@pytest.mark.parametrize('new_epoch', [False, True])
+def test_optional_loss_rejects_stale_tail_even_when_quantity_matches(new_epoch):
     bot = make_coin_bot()
     _mark_emergency_tail_fresh(bot)
     bot._pnls_manager = make_fake_pnls_manager([
@@ -466,6 +467,8 @@ def test_optional_loss_rejects_stale_tail_even_when_quantity_matches():
     bot.positions = {'A': {'long': {'size': 4.0}}}
     bot._fill_history_coverage_status = lambda **kwargs: {'ready': True}
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0
-    bot.freshness_ledger.begin_epoch()
-    bot.freshness_ledger.stamp('positions', now_ms=240_000)
+    if new_epoch:
+        bot.freshness_ledger.begin_epoch()
+    # Even an identical size/signature and millisecond gets a new observation.
+    bot.freshness_ledger.stamp('positions', now_ms=180_000)
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 240_000) is None

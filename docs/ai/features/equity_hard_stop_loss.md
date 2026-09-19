@@ -170,15 +170,17 @@ so net minute replay cannot hide an intra-cohort PnL peak. Coin HSL uses a deter
 retains the existing EMA, and reports `unordered_nonflattening_fill_cohort` as degraded. It never
 invents a fill, PnL value, price, or flat boundary. A possible flatten, contradictory/partial chain
 metadata, mixed-sign realized deltas, missing opening quantity, or position mismatch remains
-unavailable. Quality clears when the approximate cohort is trimmed from the active evidence window. Aggregate modes keep
+unavailable. Monitoring exposes consecutive degraded evaluation counts, reset after usable
+recovery or unavailability. Quality clears when the approximate cohort is trimmed from the active evidence window. Aggregate modes keep
 their existing ordering contract. The approximation is reproducible from fills after restart.
 
 After grace, Rust evaluates `max(0, realized_loss - current_upnl) / budget` against the configured
 RED threshold, without inventing an EMA. `realized_loss` is normally zero. Coin mode may supply the
 verified realized peak minus current realized PnL in the currently held episode, using complete
 current-episode coverage, finite non-pending PnL/fees, and a position-matching tape. The current
-account cohort must include a successful tail-capable fill refresh; stale cached quantity equality
-alone is insufficient. A proven last flatten excludes
+account cohort must include a successful tail-capable fill request started after its position
+observation, with no intervening position observation. Concurrent requests sharing an epoch and
+stale cached quantity equality alone are insufficient. A proven last flatten excludes
 previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
 it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
 evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.

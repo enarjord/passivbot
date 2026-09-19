@@ -12975,8 +12975,11 @@ class Passivbot:
             fill_refresh_attempt_generation
         )
         refresh_started_ms = utc_ms()
-        hsl_fill_refresh_epoch = self._ensure_freshness_ledger().epoch
-        self._hsl_fill_tail_refresh_epoch = None
+        ledger = self._ensure_freshness_ledger()
+        position_observation = ledger.surfaces["positions"]
+        hsl_fill_observation = ((ledger.epoch, position_observation.revision)
+                                if position_observation.epoch == ledger.epoch else None)
+        self._hsl_fill_tail_observation = None
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
         before_events_count = 0
@@ -13331,9 +13334,10 @@ class Passivbot:
             # when an enabled live risk feature consumes realized PnL.
             if fill_fetch_completed:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
-                # Optional emergency realized loss must share a fresh account
-                # cohort with a successful tail-capable exchange fill refresh.
-                self._hsl_fill_tail_refresh_epoch = hsl_fill_refresh_epoch
+                # The tail request must start after the current position
+                # observation; concurrent account/fill requests alone do not
+                # rule out an omitted same-size flatten/reopen round trip.
+                self._hsl_fill_tail_observation = hsl_fill_observation
             new_events = []
             seen_new_source_ids: set[str] = set()
             mixed_source_confirmation_required = False

@@ -40,6 +40,7 @@ class Health:
     budget: float | None = None
     drawdown_raw: float | None = None
     realized_loss: float | None = None
+    degraded_evaluations: int = 0
 
 
 class ProtectionHealth:
@@ -80,7 +81,8 @@ class ProtectionHealth:
                                ("exit_committed", "exit_confirmed_flat", "emergency_active"))
                         or not isinstance(health.execution_blocked, str)
                         or (health.exit_committed and health.exit_confirmed_flat)
-                        or not isinstance(health.reason, str)):
+                        or not isinstance(health.reason, str)
+                        or type(health.degraded_evaluations) is not int or health.degraded_evaluations < 0):
                     raise ValueError("invalid protection scope")
                 for stamp in (health.unavailable_since_ms, health.last_evaluated_ms,
                               health.exit_started_ms, health.exit_flat_ms):
@@ -146,6 +148,7 @@ class ProtectionHealth:
             health.unavailable_since_ms = max(0, now_ms - grace_ms)
             changed = True
         health.status = "unavailable"
+        health.degraded_evaluations = 0
         health.reason = reason
         if changed:
             self.save()
@@ -156,6 +159,7 @@ class ProtectionHealth:
         changed = (health.unavailable_since_ms is not None
                    or self.journal_invalid and health.last_evaluated_ms is None)
         status = "degraded" if degraded_reason else "usable"
+        health.degraded_evaluations = health.degraded_evaluations + 1 if degraded_reason else 0
         if (health.status, health.reason) != (status, degraded_reason):
             log = logging.warning if degraded_reason else logging.info
             log("[risk] HSL evaluation quality | mode=%s pside=%s symbol=%s status=%s reason=%s",

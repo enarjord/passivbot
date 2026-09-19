@@ -5582,12 +5582,12 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
     assert bot._pnls_manager.history_scope == "all"
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 5
-    assert bot._hsl_fill_tail_refresh_epoch == bot.freshness_ledger.epoch
+    assert bot._hsl_fill_tail_observation is None  # No preceding position observation.
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('advance_epoch', [False, True])
-async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation(advance_epoch):
+@pytest.mark.parametrize('observation_change', ['unchanged', 'epoch', 'position', 'concurrent'])
+async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation(observation_change):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
@@ -5635,9 +5635,14 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     bot._trailing_fill_refresh_generation = 4
     ledger = bot._ensure_freshness_ledger()
     ledger.begin_epoch()
-    started_epoch = ledger.epoch
-    if advance_epoch:
+    if observation_change != 'concurrent':
+        ledger.stamp('positions', now_ms=1_700_000_060_000)
+    started_observation = ((ledger.epoch, ledger.surfaces['positions'].revision)
+                           if observation_change != 'concurrent' else None)
+    if observation_change == 'epoch':
         bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.begin_epoch()
+    elif observation_change in {'position', 'concurrent'}:
+        bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.stamp('positions', now_ms=1_700_000_060_000)
 
     result = await bot.update_pnls()
 
@@ -5648,8 +5653,8 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     )
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 4
-    assert bot._hsl_fill_tail_refresh_epoch == started_epoch
-    assert (bot._hsl_fill_tail_refresh_epoch == ledger.epoch) is (not advance_epoch)
+    assert bot._hsl_fill_tail_observation == started_observation
+    assert (bot._hsl_fill_tail_observation == (ledger.epoch, ledger.surfaces['positions'].revision)) is (observation_change == 'unchanged')
 
 
 @pytest.mark.asyncio
@@ -6031,7 +6036,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     assert result is False
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
     assert bot._trailing_fill_fetch_generation == 7
-    assert getattr(bot, '_hsl_fill_tail_refresh_epoch', None) is None
+    assert getattr(bot, '_hsl_fill_tail_observation', None) is None
 
 
 @pytest.mark.asyncio
