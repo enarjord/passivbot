@@ -2087,6 +2087,19 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
                 assert bot.positions[symbol]['short']['size'] == 0.0, 'normal bookkeeping starved emergency close'
                 raise AuthoritativeSurfaceUnavailable('hsl_episode_boundaries', 'history pending')
             bot._equity_hard_stop_flatten_fill_timestamp_with_refresh = blocked_history
+            original_balance = bot._capture_balance_staged_snapshot
+            cancelled = []
+            balance_reads = []
+            async def balance_after_closes(*args, **kwargs):
+                balance_reads.append(True)
+                if len(balance_reads) > 1:
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.append(True)
+                return await original_balance(*args, **kwargs)
+            bot._capture_balance_staged_snapshot = balance_after_closes
+            monkeypatch.setattr(hsl, '_SUPERVISOR_BALANCE_TIMEOUT_SECONDS', 0.01)
             async def yield_sleep(*args, **kwargs):
                 await asyncio.sleep(0)
             bot._sleep_unless_shutdown = yield_sleep
@@ -2094,6 +2107,7 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             await bot.refresh_protective_authoritative_state(require_balance=False)
             assert bot.positions[symbol]['short']['size'] == 0.0
             assert protection.manager(bot).scopes[scope].exit_committed
+            assert cancelled == [True]
         elif failure == 'balance':
             bot.balance_raw = bot.balance = float('nan')
             bot._capture_balance_staged_snapshot = AsyncMock(side_effect=RiskInputUnavailable('current_balance_unavailable'))

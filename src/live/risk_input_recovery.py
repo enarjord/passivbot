@@ -467,7 +467,9 @@ def _observe_recovery_scopes(bot, health):
 async def _evaluate_emergency_scopes(bot, health):
     if bot.stop_signal_received or getattr(bot, "_risk_input_recovery", None) is None:
         return
-    _observe_recovery_scopes(bot, health)
+    candidates = _observe_recovery_scopes(bot, health)
+    if not candidates and any(item.exit_confirmed_flat for item in health.scopes.values()):
+        return  # Freshly completed exits yield to ordinary replay; no new signal needs balance.
     now = int(bot.get_exchange_time())
     due = any(item.unavailable_since_ms is not None
               and not item.exit_committed and not item.exit_confirmed_flat

@@ -7317,6 +7317,9 @@ async def _equity_hard_stop_execute_close_wave(self) -> bool:
         return False
 
 
+_SUPERVISOR_BALANCE_TIMEOUT_SECONDS = 5.0
+
+
 async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = False, after_close=None) -> None:
     if self._equity_hard_stop_supervisor_running:
         return
@@ -7356,7 +7359,7 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
             try:
                 balance_ready = await asyncio.wait_for(
                     self.refresh_protective_authoritative_state(require_balance=True),
-                    timeout=5.0 if single_pass else None,
+                    timeout=_SUPERVISOR_BALANCE_TIMEOUT_SECONDS if single_pass else None,
                 )
             except TimeoutError:
                 logging.warning("[risk] HSL supervisor balance refresh timed out; retaining close intent")
@@ -7506,7 +7509,7 @@ async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool =
             try:
                 balance_ready = await asyncio.wait_for(
                     self.refresh_protective_authoritative_state(require_balance=True),
-                    timeout=5.0 if single_pass else None,
+                    timeout=_SUPERVISOR_BALANCE_TIMEOUT_SECONDS if single_pass else None,
                 )
             except TimeoutError:
                 logging.warning("[risk] HSL supervisor balance refresh timed out; retaining close intent")
