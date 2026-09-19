@@ -863,6 +863,11 @@ class BitgetBot(CCXTBot):
     async def _prepare_protective_account(self):
         # Account routing must precede even a balance-independent close cohort.
         await self._detect_account_mode()
+        # CCXT derives hedged from classic posMode or UTA holdMode. A flat
+        # account needs only cancellation before normal mode setup can run.
+        for position in await self.cca.fetch_positions():
+            if float(position["contracts"]) != 0.0 and position.get("hedged") is not True:
+                raise RuntimeError("Bitget protective startup requires existing hedge position mode")
 
     async def update_exchange_config(self):
         # Detect classic vs UTA/elite once, before any balance/position/order call.

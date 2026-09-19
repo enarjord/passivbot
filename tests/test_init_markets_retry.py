@@ -655,27 +655,43 @@ async def test_protective_startup_initializes_account_mode_before_drain(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_bitget_protective_preflight_detects_uta_before_mode_or_account_calls():
+@pytest.mark.parametrize('uta', [True, False])
+@pytest.mark.parametrize('position_mode', ['hedge_mode', 'one_way_mode', None, 'unknown'])
+@pytest.mark.parametrize('contracts', [1.0, 0.0])
+async def test_bitget_protective_preflight_checks_mode_after_routing(uta, position_mode, contracts):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
+    import ccxt.async_support as ccxt
     from exchanges.bitget import BitgetBot
     bot = BitgetBot.__new__(BitgetBot)
     calls = []
     async def detect():
         calls.append('detect')
+        if not uta:
+            raise RuntimeError('{"code":"40084"}')
         return {}
-    async def mode(hedged):
-        assert bot.is_uta and bot.cca.options['uta'] and bot.ccp.options['uta']
-        calls.append('hedge')
-        return {}
+    async def positions():
+        assert bot.is_uta is uta
+        assert bot.cca.options['uta'] is uta and bot.ccp.options['uta'] is uta
+        calls.append('positions')
+        # Exercise the installed parser for both native contracts, without I/O.
+        client = ccxt.bitget()
+        row = {'symbol': 'BTCUSDT', 'total': str(contracts),
+               'holdMode' if uta else 'posMode': position_mode}
+        market = {'id': 'BTCUSDT', 'symbol': 'BTC/USDT:USDT', 'contractSize': 1, 'contract': True}
+        return [client.parse_position(row, market)]
     bot.cca = SimpleNamespace(options={}, private_uta_get_v3_account_assets=detect,
-                              set_position_mode=mode, fetch_balance=AsyncMock(),
-                              fetch_positions=AsyncMock())
+                              set_position_mode=AsyncMock(), fetch_balance=AsyncMock(),
+                              fetch_positions=AsyncMock(side_effect=positions))
     bot.ccp = SimpleNamespace(options={})
-    await bot._prepare_protective_account()
-    assert calls == ['detect']
+    if contracts and position_mode != 'hedge_mode':
+        with pytest.raises(RuntimeError, match='requires existing hedge position mode'):
+            await bot._prepare_protective_account()
+    else:
+        await bot._prepare_protective_account()
+    assert calls == ['detect', 'positions']
     bot.cca.fetch_balance.assert_not_awaited()
-    bot.cca.fetch_positions.assert_not_awaited()
+    bot.cca.set_position_mode.assert_not_awaited()
 
 
 @pytest.mark.asyncio

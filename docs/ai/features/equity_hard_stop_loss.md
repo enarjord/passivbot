@@ -101,7 +101,7 @@ before inspecting pending work; the scoped health records, not a separate retry-
 are exit authority. Cold startup loads execution metadata and performs the required read-only connector routing/position-mode
 preflight before servicing restored commitments. After metadata loads, config reconciliation
 retires disabled or obsolete journal scopes before deciding whether preflight is required. Ordinary exchange-configuration balance gates,
-account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing; OKX detects account configuration; Binance, KuCoin and
+account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing and verifies hedge mode on held positions; OKX detects account configuration; Binance, KuCoin and
 Bitunix verify existing hedge mode; Bybit checks held positions' native position indices.
 Unsupported modes retain the commitment and surface the connector error; no mode write is
 performed by this preflight. Hourly market refresh
