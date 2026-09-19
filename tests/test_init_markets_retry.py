@@ -636,6 +636,9 @@ async def test_protective_startup_initializes_account_mode_before_drain(monkeypa
     async def mode(attempt):
         calls.append('mode')
     bot = _FakeBot(mode)
+    bot._equity_hard_stop_signal_mode = lambda: 'coin'
+    bot._equity_hard_stop_enabled = lambda *a, **kw: True
+    bot.bot_value = lambda *a: 1.0
     bot._prepare_protective_account = AsyncMock(side_effect=lambda: calls.append('mode'))
     health = ProtectionHealth()
     health.scopes[Scope('coin', 'long', 'A')] = Health(exit_committed=True, exit_started_ms=100)
@@ -728,3 +731,33 @@ async def test_okx_protective_preflight_discovers_mode_without_writes(pos_mode):
     else:
         await bot._prepare_protective_account()
     bot.cca.set_position_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['disabled', 'mode'])
+async def test_obsolete_startup_commitment_retires_before_account_preflight(monkeypatch, tmp_path, change):
+    from unittest.mock import AsyncMock
+    import passivbot as pb
+    from live.hsl_protection import ProtectionHealth, Health, Scope
+
+    bot = _FakeBot(AsyncMock())
+    bot._equity_hard_stop_signal_mode = lambda: 'pside' if change == 'mode' else 'coin'
+    bot._equity_hard_stop_enabled = lambda *a, **kw: change != 'disabled'
+    bot._prepare_protective_account = AsyncMock(side_effect=RuntimeError('existing one-way mode'))
+    health = ProtectionHealth(tmp_path / 'protection.json')
+    health.scopes[Scope('coin', 'long', 'A')] = Health(exit_committed=True, exit_started_ms=100)
+    health.save()
+    bot._hsl_protection_health = health
+    monkeypatch.setattr(pb, 'load_markets', AsyncMock(return_value={'A': {'id': 'A'}}))
+    monkeypatch.setattr(pb, 'filter_markets', lambda *a, **kw: ({'A'}, {}, {}))
+    drain = AsyncMock(side_effect=AssertionError('obsolete scope must not execute'))
+    monkeypatch.setattr(pb.risk_input_recovery, 'drain_startup_commitments', drain)
+
+    await Passivbot.init_markets(bot)
+
+    bot._prepare_protective_account.assert_not_awaited()
+    drain.assert_not_awaited()
+    assert bot.update_exchange_config_calls == 1
+    assert bot.refresh_authoritative_state_calls == 1
+    assert not health.scopes
+    assert not ProtectionHealth(health.path).scopes

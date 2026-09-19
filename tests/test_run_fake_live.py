@@ -2093,13 +2093,14 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             async def balance_after_closes(*args, **kwargs):
                 balance_reads.append(True)
                 if len(balance_reads) > 1:
+                    from ccxt.base.errors import RequestTimeout
                     try:
-                        await asyncio.Event().wait()
-                    finally:
+                        await asyncio.wait_for(asyncio.Event().wait(), timeout=0.01)
+                    except TimeoutError as exc:
                         cancelled.append(True)
+                        raise RequestTimeout('balance request timed out') from exc
                 return await original_balance(*args, **kwargs)
             bot._capture_balance_staged_snapshot = balance_after_closes
-            monkeypatch.setattr(hsl, '_SUPERVISOR_READ_TIMEOUT_SECONDS', 0.01)
             async def yield_sleep(*args, **kwargs):
                 await asyncio.sleep(0)
             bot._sleep_unless_shutdown = yield_sleep

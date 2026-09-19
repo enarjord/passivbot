@@ -849,8 +849,6 @@ def compute_live_warmup_windows(
     return per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical
 
 
-# Allow the standard 30-second exchange read window, including cold account reads.
-_HSL_COOLDOWN_READ_TIMEOUT_SECONDS = 30.0
 _HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS = 5.0
 
 
@@ -3875,10 +3873,12 @@ class Passivbot:
                                 and bool(hsl_protection.manager(self).pending_exits()))
         if protection_bootstrap:
             await self._load_market_metadata(verbose=verbose)
-            await self._prepare_protective_account()
-            await risk_input_recovery.drain_startup_commitments(self)
-            if self.stop_signal_received:
-                return
+            hsl_protection.reconcile_config(self)
+            if hsl_protection.manager(self).pending_exits():
+                await self._prepare_protective_account()
+                await risk_input_recovery.drain_startup_commitments(self)
+                if self.stop_signal_received:
+                    return
         readiness_network_attempt = 0
         while True:
             try:
@@ -6246,9 +6246,7 @@ class Passivbot:
             ]
         if not scopes:
             return False
-        if not await asyncio.wait_for(
-            self.refresh_protective_authoritative_state(require_balance=False),
-            timeout=_HSL_COOLDOWN_READ_TIMEOUT_SECONDS if not pace else None):
+        if not await self.refresh_protective_authoritative_state(require_balance=False):
             return not pace  # Recovery must pace an attempted protective owner.
         now_ms = int(self.get_exchange_time())
         panic_needed = False
@@ -6286,10 +6284,7 @@ class Passivbot:
                 or int(getattr(self, "_account_invalidation_generation", 0) or 0) != generation
                 or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
             ):
-                if not await asyncio.wait_for(
-                    self.refresh_protective_authoritative_state(require_balance=False),
-                    timeout=_HSL_COOLDOWN_READ_TIMEOUT_SECONDS if not pace else None,
-                ):
+                if not await self.refresh_protective_authoritative_state(require_balance=False):
                     return not pace
             now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:

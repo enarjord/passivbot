@@ -1448,8 +1448,13 @@ async def test_emergency_balance_timeout_does_not_monopolize_normal_close_waves(
             await asyncio.Event().wait()
         finally:
             cancelled.append(True)
-    monkeypatch.setattr(recovery, "_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS", 0.01)
-    bot.refresh_protective_authoritative_state.side_effect = hung
+    async def transport_timeout(**kwargs):
+        from ccxt.base.errors import RequestTimeout
+        try:
+            await asyncio.wait_for(hung(**kwargs), timeout=0.01)
+        except TimeoutError as exc:
+            raise RequestTimeout("account request timed out") from exc
+    bot.refresh_protective_authoritative_state.side_effect = transport_timeout
     for _ in range(2):
         assert await asyncio.wait_for(recovery.protect_before_history_refresh(bot), timeout=1.0)
     assert cancelled == [True, True]
@@ -1548,7 +1553,6 @@ async def test_stalled_cooldown_reader_yields_to_due_emergency(monkeypatch, bloc
     bot._equity_hard_stop_cooldown_position_policy = lambda: 'manual'
     bot._canonical_open_order_reduce_only = lambda order: False
     monkeypatch.setattr(hsl, '_equity_hard_stop_manual_cooldown_intervention', lambda *a, **kw: None)
-    monkeypatch.setattr(pb, '_HSL_COOLDOWN_READ_TIMEOUT_SECONDS', 0.01)
     monkeypatch.setattr(pb, '_HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS', 0.01)
     cancelled = []
     async def hung():
@@ -1560,7 +1564,11 @@ async def test_stalled_cooldown_reader_yields_to_due_emergency(monkeypatch, bloc
     async def account(*, require_balance):
         reads.append(require_balance)
         if blocked_read == 'account' and len(reads) == 1:
-            await hung()
+            from ccxt.base.errors import RequestTimeout
+            try:
+                await asyncio.wait_for(hung(), timeout=0.01)
+            except TimeoutError as exc:
+                raise RequestTimeout('account request timed out') from exc
         return True
     bot.refresh_protective_authoritative_state.side_effect = account
     async def history(**kwargs):
@@ -1575,4 +1583,55 @@ async def test_stalled_cooldown_reader_yields_to_due_emergency(monkeypatch, bloc
     assert await asyncio.wait_for(recovery.protect_before_history_refresh(bot), timeout=1.0)
     assert cancelled == [blocked_read]
     assert scope in health.pending_exits()
+    bot.execute_order_plan_to_exchange.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('request_timeout_ms,latencies', [(30_000, (0.20, 0.15)), (90_000, (0.50, 0.10))])
+async def test_committed_exit_allows_full_sequential_account_cohort(monkeypatch, request_timeout_ms, latencies):
+    """Scale request seconds by 100: valid sequential reads outlast the old 30s cohort cap."""
+    import asyncio
+    from exchanges.binance import BinanceBot
+    from live import hsl_protection as h
+    bot, _ = make_bot(monkeypatch)
+    bot.cca = SimpleNamespace(timeout=request_timeout_ms)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    arm_exit(bot)
+    calls = []
+    original_wait_for = asyncio.wait_for
+
+    async def scaled_wait_for(awaitable, timeout):
+        return await original_wait_for(awaitable, timeout=None if timeout is None else timeout / 100.0)
+
+    monkeypatch.setattr(asyncio, 'wait_for', scaled_wait_for)
+    async def request(name, latency):
+        await asyncio.wait_for(asyncio.sleep(latency), timeout=bot.cca.timeout / 1000.0)
+        calls.append(name)
+    async def positions():
+        await request('positions', latencies[0])
+        return [], [{'symbol': 'A', 'position_side': 'long', 'size': 1.0}]
+    async def orders(symbols):
+        assert symbols == {'A'}
+        await request('orders', latencies[1])
+        return []
+    async def timed(surface, awaitable, timings):
+        return await awaitable
+    bot.capture_positions_snapshot = positions
+    bot._select_open_order_symbols = lambda symbols, **kw: set(symbols)
+    bot._fetch_open_orders_for_staged_symbols = orders
+    bot._timed_authoritative_fetch = timed
+    async def account(*, require_balance):
+        assert not require_balance
+        snapshot = await BinanceBot.capture_authoritative_state_staged_snapshot(
+            bot, {'positions', 'open_orders'}, {})
+        assert snapshot['positions'][0]['size'] == 1.0
+        assert snapshot['open_orders'] == []
+        return True
+    bot.refresh_protective_authoritative_state.side_effect = account
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock(side_effect=lambda *a, **kw: calls.append('close'))
+
+    assert await recovery._execute_emergency_exits(bot, h.manager(bot))
+
+    assert calls == ['positions', 'orders', 'close']
     bot.execute_order_plan_to_exchange.assert_awaited_once()

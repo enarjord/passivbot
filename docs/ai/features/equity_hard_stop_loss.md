@@ -99,7 +99,8 @@ An already-authorized close wave runs before balance reads, fresh signal evaluat
 bookkeeping. One protection scheduler owns startup and execution-loop ordering. It restores journal commitments
 before inspecting pending work; the scoped health records, not a separate retry-controller flag,
 are exit authority. Cold startup loads execution metadata and performs the required read-only connector routing/position-mode
-preflight before servicing restored commitments. Ordinary exchange-configuration balance gates,
+preflight before servicing restored commitments. After metadata loads, config reconciliation
+retires disabled or obsolete journal scopes before deciding whether preflight is required. Ordinary exchange-configuration balance gates,
 account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing; OKX detects account configuration; Binance, KuCoin and
 Bitunix verify existing hedge mode; Bybit checks held positions' native position indices.
 Unsupported modes retain the commitment and surface the connector error; no mode write is
@@ -107,9 +108,10 @@ performed by this preflight. Hourly market refresh
 never starts a second commitment-draining loop; runtime execution remains the only order owner. Each wave services
 committed exits and existing normal closes, then gives overdue unavailable scopes an evaluation
 opportunity even while another scope remains open. Normal RED supervision yields to this scheduler
-after its close attempt and before balance/history bookkeeping. Protective account reads, including single-pass normal and cooldown supervision, have
-30-second deadlines, matching the standard exchange read window so cold account reads are not
-cut short by a five-second limit. Emergency quote reads and optional cooldown fill-tail repair
+after its close attempt and before balance/history bookkeeping. Protective account reads retain the connector transport timeout per request (30 seconds by
+default, configurable by the client). The scheduler does not impose a whole-cohort cutoff: sequential
+and paginated account requests must each be allowed to finish. Transport timeouts yield to the next
+protective owner; independently ready close attempts still precede balance-dependent evaluation. Emergency quote reads and optional cooldown fill-tail repair
 have five-second deadlines so another due scope cannot wait indefinitely for them. Timed-out readers are cancelled and drained before another wave.
 Flat normal stop finalization runs during recovery after ordinary refresh has had an opportunity,
 so a flat latch alone cannot monopolize the pre-refresh gate.

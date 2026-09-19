@@ -5,7 +5,6 @@ This module schedules retries; it never supplies substitute inputs or strategy i
 from __future__ import annotations
 
 from dataclasses import dataclass
-import asyncio
 import logging
 import math
 from time import monotonic
@@ -416,10 +415,9 @@ async def _execute_emergency_exits(bot, health):
     if not pending:
         return False
     try:
-        if await asyncio.wait_for(
-            bot.refresh_protective_authoritative_state(require_balance=False),
-            timeout=_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS,
-        ):
+        # Transport deadlines apply per request. A whole-cohort cutoff can
+        # repeatedly cancel valid sequential or paginated account reads.
+        if await bot.refresh_protective_authoritative_state(require_balance=False):
             for scope in pending:
                 if not hsl_protection.has_exposure(bot, scope) and not hsl_protection.has_orders(bot, scope):
                     health.confirm_flat(scope, now_ms=int(bot.get_exchange_time()))
@@ -454,11 +452,6 @@ async def _execute_emergency_exits(bot, health):
     return True
 
 
-# A new decision needs balance, but that read must not monopolize repeated close waves.
-# Allow the standard 30-second exchange read window, including cold account reads.
-_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS = 30.0
-
-
 def _observe_recovery_scopes(bot, health):
     candidates = _unready_hsl_targets(bot)
     for scope in hsl_protection.affected_scopes(bot, candidates, {}):
@@ -484,10 +477,7 @@ async def _evaluate_emergency_scopes(bot, health):
     if health.pending_exits() and not due:
         return
     try:
-        ready = await asyncio.wait_for(
-            bot.refresh_protective_authoritative_state(require_balance=True),
-            timeout=_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS,
-        )
+        ready = await bot.refresh_protective_authoritative_state(require_balance=True)
         if ready:
             candidates = _observe_recovery_scopes(bot, health)
             if candidates:
