@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Let HSL recovery exits close positions even when balance is unavailable. Use a minimal
+  Rust panic-close contract independent of history and strategy settings, while retaining
+  fresh positions, open orders, quotes, and strict validation of the complete close batch.
+
 - Keep HSL protection alive when required risk inputs remain unavailable. Conservatively
   close exposed HSL-enabled scopes using fresh account state and the configured panic
   order type, potentially before RED, while ordinary trading waits for confirmed exits

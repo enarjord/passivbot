@@ -54,7 +54,7 @@ async def refresh_authoritative_state(bot) -> bool:
     return await bot._refresh_authoritative_state_staged()
 
 
-async def refresh_protective_authoritative_state(bot) -> bool:
+async def refresh_protective_authoritative_state(bot, *, require_balance: bool = True) -> bool:
     """Refresh only account state required for protective cancels/reduce-only closes."""
     if bot.stop_signal_received:
         return False
@@ -62,7 +62,9 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     bot._last_authoritative_block_reason = None
     bot._last_authoritative_pending_pnl_count = 0
     bot._last_authoritative_degraded_pnl_count = 0
-    plan = {"balance", "positions", "open_orders"}
+    plan = {"positions", "open_orders"}
+    if require_balance:
+        plan.add("balance")
     bot._authoritative_refresh_plan_surfaces = set(plan)
     snapshot = await bot._fetch_authoritative_state_staged_snapshot(plan)
     fetched_balance = snapshot.get("balance")
@@ -70,15 +72,17 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     fetched_positions = snapshot.get("positions")
     fetched_open_orders = snapshot.get("open_orders")
 
-    if isinstance(fetched_balance, DeferredAuthoritativeSurface):
-        bot._last_authoritative_block_reason = fetched_balance.reason
-        return False
+    prepared_balance_snapshot = None
+    if require_balance:
+        if isinstance(fetched_balance, DeferredAuthoritativeSurface):
+            bot._last_authoritative_block_reason = fetched_balance.reason
+            return False
 
-    prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
-    if prepared_balance_snapshot is None:
-        return False
-    if balance_composition is not None:
-        prepared_balance_snapshot["balance_composition"] = balance_composition
+        prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
+        if prepared_balance_snapshot is None:
+            return False
+        if balance_composition is not None:
+            prepared_balance_snapshot["balance_composition"] = balance_composition
     if fetched_positions in [None, False]:
         return False
     if fetched_open_orders in [None, False]:
@@ -92,10 +96,11 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     if not open_orders_ok:
         return False
     _old_positions, fetched_positions_new = bot._apply_positions_snapshot(fetched_positions)
-    bot._commit_balance_snapshot(prepared_balance_snapshot)
-    bot._record_authoritative_surface(
-        "balance", round(float(bot.get_hysteresis_snapped_balance()), 12)
-    )
+    if require_balance:
+        bot._commit_balance_snapshot(prepared_balance_snapshot)
+        bot._record_authoritative_surface(
+            "balance", round(float(bot.get_hysteresis_snapped_balance()), 12)
+        )
     bot._record_authoritative_surface(
         "positions",
         bot._positions_signature(fetched_positions_new),

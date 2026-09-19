@@ -332,3 +332,18 @@ async def test_market_snapshot_preserves_permanent_connector_errors(path, kind, 
             await provider.get_snapshots(['A'])
     assert caught.value is original
     assert 'api_key=private' not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_crossed_quotes_are_unavailable_and_recover_on_next_fetch():
+    from live.market_snapshot import MarketSnapshotUnavailable
+    book = {"bid": 101.0, "ask": 100.0, "last": 100.5}
+    async def fetch():
+        return {"BTC/USDT:USDT": dict(book)}
+    provider = MarketSnapshotProvider(exchange_name="fake", fetch_tickers=fetch)
+    with pytest.raises(MarketSnapshotUnavailable):
+        await provider.get_snapshots(["BTC/USDT:USDT"])
+    assert provider.get_cached("BTC/USDT:USDT", now_ms=0, max_age_ms=10_000) is None
+    book["ask"] = 102.0
+    snapshots = await provider.get_snapshots(["BTC/USDT:USDT"])
+    assert snapshots["BTC/USDT:USDT"].is_valid()

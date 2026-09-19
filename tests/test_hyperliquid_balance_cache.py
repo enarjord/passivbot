@@ -1932,3 +1932,47 @@ async def test_hyperliquid_open_orders_refresh_does_not_republish_same_hip3_effe
     assert ok is True
     assert seen_sources == []
     assert bot.balance_raw == pytest.approx(50.499284)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unified", [True, False])
+async def test_hyperliquid_protective_positions_do_not_consume_balance(stubbed_modules, unified):
+    from unittest.mock import AsyncMock
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot._hl_unified_enabled = unified
+    core_symbol = "BTC/USDC:USDC"
+    hip3_symbol = "XYZ-SP500/USDC:USDC"
+    bot.cca = types.SimpleNamespace(
+        fetch_balance=AsyncMock(side_effect=AssertionError("balance must not be fetched")),
+        fetch_positions=AsyncMock(return_value=[{
+            "symbol": core_symbol, "contracts": 2.0, "side": "short", "entryPrice": 100.0,
+        }]),
+    )
+    hip3_position = {"symbol": hip3_symbol, "position_side": "long", "size": 1.0, "price": 50.0}
+    bot._fetch_hip3_positions = AsyncMock(return_value=[hip3_position])
+    bot.fetch_open_orders = AsyncMock(return_value=[])
+    bot._get_hl_dex_for_symbol = lambda symbol: "xyz" if symbol == hip3_symbol else ""
+    bot._record_hl_live_margin_mode = lambda *args: None
+    bot._preserve_position_timing = lambda *args: None
+    async def timed(_label, coro, _timings):
+        return await coro
+    bot._timed_authoritative_fetch = timed
+    snapshot = await bot.capture_authoritative_state_staged_snapshot({"positions", "open_orders"}, {})
+    assert "balance" not in snapshot
+    assert [(p["symbol"], p["size"]) for p in snapshot["positions"]] == [(core_symbol, -2.0), (hip3_symbol, 1.0)]
+    bot.cca.fetch_balance.assert_not_awaited()
+    bot.cca.fetch_positions.assert_awaited_once_with()
+    bot._fetch_hip3_positions.assert_awaited_once_with()
+    bot.fetch_open_orders.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_protective_positions_propagate_partial_failure(stubbed_modules):
+    from unittest.mock import AsyncMock
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+    bot.cca = types.SimpleNamespace(fetch_positions=AsyncMock(return_value=[]))
+    bot._fetch_hip3_positions = AsyncMock(side_effect=OSError("dex unavailable"))
+    with pytest.raises(OSError, match="dex unavailable"):
+        await bot._fetch_protective_positions()

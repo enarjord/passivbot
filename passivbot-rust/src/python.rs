@@ -4267,6 +4267,17 @@ pub fn get_order_id_type_from_string_alias(name: &str) -> PyResult<u16> {
 // -------- Orchestrator JSON API --------
 
 #[pyfunction]
+pub fn compute_protective_closes_json(input_json: &str) -> PyResult<String> {
+    let inputs: Vec<crate::orchestrator::ProtectiveCloseInput> =
+        serde_json::from_str(input_json)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let orders = crate::orchestrator::compute_protective_closes(&inputs)
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    serde_json::to_string(&orders)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+#[pyfunction]
 pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     let input: crate::orchestrator::OrchestratorInput =
         serde_json::from_str(input_json).map_err(|e| {

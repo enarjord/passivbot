@@ -1832,7 +1832,7 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['episode', 'history_balance'])
+@pytest.mark.parametrize('failure', ['episode', 'history_balance', 'current_balance', 'crossed_quote'])
 async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure):
     """Unavailable historical input cannot strand a previously green live position."""
     from unittest.mock import AsyncMock
@@ -1865,6 +1865,31 @@ async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_pat
                if failure == 'episode' else recovery.RiskInputUnavailable('hsl_history_balance_unavailable'))
         bot._equity_hard_stop_check = AsyncMock(side_effect=exc)
         assert not await recovery.ensure_ready(bot)
+        if failure == 'crossed_quote':
+            provider = bot.market_snapshot_provider
+            provider._cache.clear()
+            crossed = {'active': True}
+            original_bulk = provider._fetch_tickers
+            original_symbols = provider._fetch_tickers_for_symbols
+            def corrupt_quotes(tickers):
+                if crossed['active'] and symbol in tickers:
+                    tickers = dict(tickers)
+                    tickers[symbol] = {**tickers[symbol], 'bid': 101.0, 'ask': 100.0}
+                return tickers
+            async def bulk():
+                return corrupt_quotes(await original_bulk())
+            async def selected(symbols):
+                return corrupt_quotes(await original_symbols(symbols))
+            provider._fetch_tickers = bulk if original_bulk else None
+            provider._fetch_tickers_for_symbols = selected if original_symbols else None
+            await recovery.protect_and_wait(bot)
+            assert bot.positions[symbol]['long']['size'] == 5.0
+            assert bot._risk_input_recovery.protective_exit_pending
+            crossed['active'] = False
+        if failure == 'current_balance':
+            bot.balance_raw = float('nan')
+            bot.balance = float('nan')
+            bot._capture_balance_staged_snapshot = AsyncMock(side_effect=AssertionError('balance is not an exit input'))
         await recovery.protect_and_wait(bot)
         # Actual production planner, reconciliation, execution, and fake fills.
         await recovery.protect_and_wait(bot)

@@ -636,10 +636,11 @@ class FakeCCXTClient:
         self._record_request("fetch_open_orders", symbol=symbol, rows=len(orders))
         return sorted(orders, key=lambda item: (item["timestamp"], item["id"]))
 
-    async def fetch_tickers(self) -> Dict[str, dict]:
+    async def fetch_tickers(self, symbols=None) -> Dict[str, dict]:
         prices = self.get_current_step()["prices"]
-        self._record_request("fetch_tickers", rows=len(prices))
-        return {symbol: self._ticker(symbol, prices[symbol]) for symbol in self.symbols}
+        selected = self.symbols if symbols is None else list(dict.fromkeys(symbols))
+        self._record_request("fetch_tickers", rows=len(selected))
+        return {symbol: self._ticker(symbol, prices[symbol]) for symbol in selected}
 
     async def fetch_ticker(self, symbol: str) -> dict:
         prices = self.get_current_step()["prices"]

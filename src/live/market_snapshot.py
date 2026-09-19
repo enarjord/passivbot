@@ -32,7 +32,7 @@ class MarketSnapshot:
             and math.isfinite(float(self.ask))
             and math.isfinite(float(self.last))
             and float(self.bid) > 0.0
-            and float(self.ask) > 0.0
+            and float(self.ask) >= float(self.bid)
             and float(self.last) > 0.0
         )
 

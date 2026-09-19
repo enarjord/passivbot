@@ -1289,6 +1289,10 @@ def _validate_rust_panic_limit_price(
 ) -> None:
     """Reject panic-limit prices inconsistent with Rust's submitted-book formula."""
     _qty_step, price_step, _min_qty, _min_cost, _c_mult = exchange
+    _validate_rust_panic_price(price, pside, order_book, price_step, context)
+
+
+def _validate_rust_panic_price(price, pside, order_book, price_step, context):
     bid, ask = order_book
     if pside == "long":
         expected_step_count = max(
@@ -2863,6 +2867,48 @@ def _parse_finite_json_float(value: str) -> float:
     if not math.isfinite(parsed):
         raise ValueError(f"non-finite JSON float {value!r}")
     return parsed
+
+
+def parse_and_validate_protective_closes(out_json: object, inputs: list[dict]) -> list[dict]:
+    """Validate the entire minimal Rust exit batch before consuming any order."""
+    try:
+        orders = json.loads(
+            out_json, object_pairs_hook=_reject_duplicate_json_object_keys,
+            parse_constant=_reject_nonstandard_json_constant,
+            parse_float=_parse_finite_json_float,
+        )
+    except (TypeError, ValueError, RecursionError, OverflowError) as exc:
+        raise FatalBotException("Rust protective closes returned malformed JSON") from exc
+    if not isinstance(orders, list):
+        raise FatalBotException("Rust protective closes must be a list")
+    expected = {(item["symbol_idx"], item["pside"]): item for item in inputs
+                if item["position_size"] != 0.0}
+    seen = set()
+    for order in orders:
+        if not isinstance(order, dict):
+            raise FatalBotException("Rust protective close must be a mapping")
+        idx, pside = order.get("symbol_idx"), order.get("pside")
+        if type(idx) is not int or not isinstance(pside, str):
+            raise FatalBotException("Rust protective close has invalid scope")
+        pair = (idx, pside)
+        if pair not in expected or pair in seen:
+            raise FatalBotException("Rust protective close has unexpected or duplicate scope")
+        seen.add(pair)
+        item = expected[pair]
+        qty = _validated_rust_finite_number(order.get("qty"), "protective close qty")
+        price = _validated_rust_finite_number(order.get("price"), "protective close price")
+        if qty != -item["position_size"] or price <= 0.0:
+            raise FatalBotException("Rust protective close must close the whole current position")
+        if (order.get("order_type") != f"close_panic_{pside}"
+                or order.get("execution_type") != item["execution_type"]
+                or order.get("execution_priority") != "risk_critical"):
+            raise FatalBotException("Rust protective close disagrees with submitted execution policy")
+        _validate_rust_panic_price(price, pside,
+            (item["order_book"]["bid"], item["order_book"]["ask"]),
+            item["price_step"], "Rust protective close")
+    if seen != set(expected):
+        raise FatalBotException("Rust protective closes omitted an exposed scope")
+    return orders
 
 
 def parse_and_validate_rust_orchestrator_output(

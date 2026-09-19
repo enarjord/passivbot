@@ -148,12 +148,16 @@ cooldown/manual-ownership policy and independent protection. Recovery advances
 latched RED supervision one wave per pass so flat confirmations and stop finalization
 continue without monopolizing exits in other scopes.
 
-Protective refresh requires positions, orders, and valid current balances; historical
-repair and its backoff do not gate the exit. A new position or resting entry observed
+Recovery exits refresh positions and orders without fetching balance. Their minimal Rust
+planner requires current quotes, tick size, signed position size, and configured panic execution
+type; it does not consume balance, cost basis, strategy settings, candles, or history. The normal
+panic planner shares the same price/quantity primitive. RED finalization and cooldown handling
+retain their separate balance/history requirements; these are not bypassed by the close API.
+Historical repair and its backoff do not gate the recovery exit. A new position or resting entry observed
 during backoff is included. Partial fills and successful submissions do not release
 the exit commitment: another fresh account snapshot must show the relevant positions
 and orders gone before exact history recovery may release ordinary planning. No
-order is sent on stale account state or an invalid current balance. Recovery keeps
+order is sent on stale required position/order/market state. Recovery keeps
 refreshing when those inputs are unavailable; this policy cannot execute through an
 exchange outage and does not install exchange-native stops. Transient connector
 failures and unavailable protective snapshots retain the exit commitment and retry

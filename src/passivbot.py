@@ -7802,9 +7802,9 @@ class Passivbot:
         """Refresh authoritative account state before planning/execution."""
         return await state_refresh.refresh_authoritative_state(self)
 
-    async def refresh_protective_authoritative_state(self) -> bool:
+    async def refresh_protective_authoritative_state(self, *, require_balance: bool = True) -> bool:
         """Refresh only account surfaces needed for protective order execution."""
-        return await state_refresh.refresh_protective_authoritative_state(self)
+        return await state_refresh.refresh_protective_authoritative_state(self, require_balance=require_balance)
 
     async def _refresh_authoritative_state_staged(self) -> bool:
         """Refresh live account state through the staged authoritative cohort."""
@@ -16436,113 +16436,25 @@ class Passivbot:
             source="protective_panic_market_snapshot_staged",
         )
 
-        now_ms = int(self.get_exchange_time())
-        global_bp = {
-            "long": self._bot_params_to_rust_dict("long", None),
-            "short": self._bot_params_to_rust_dict("short", None),
-        }
-        effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
-        config = getattr(self, "config", {})
-        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-        input_dict = {
-            "timestamp_ms": now_ms,
-            "balance": self.get_hysteresis_snapped_balance(),
-            "balance_raw": self.get_raw_balance(),
-            "global": {
-                "filter_by_min_effective_cost": bool(
-                    self.live_value("filter_by_min_effective_cost")
-                ),
-                "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
-                "market_order_near_touch_threshold": float(
-                    self.live_value("market_order_near_touch_threshold")
-                ),
-                "panic_close_market": False,
-                "auto_unstuck_allowed": False,
-                "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
-                "realized_pnl_cumsum_max": 0.0,
-                "realized_pnl_cumsum_last": 0.0,
-                "sort_global": True,
-                "global_bot_params": global_bp,
-                "hedge_mode": effective_hedge_mode,
-                "strategy_kind": strategy_kind,
-            },
-            "symbols": [],
-        }
-        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
-        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
-        input_dict.update(
-            Passivbot._build_orchestrator_runtime_hints(self, symbol_to_idx)
-        )
-
-        if not hasattr(self, "effective_min_cost") or self.effective_min_cost is None:
-            self.effective_min_cost = {}
-        for symbol in symbols:
-            idx = symbol_to_idx[symbol]
-            snap = market_snapshots.get(symbol)
-            mprice = float(last_prices.get(symbol, 0.0))
-            if not math.isfinite(mprice) or mprice <= 0.0:
-                raise RuntimeError(f"invalid market price for {symbol}: {mprice}")
-            bid = float(snap.bid) if snap is not None and snap.is_valid() else mprice
-            ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
-            active = bool(
-                (getattr(self, "markets_dict", {}) or {}).get(symbol, {}).get(
-                    "active", True
-                )
-            )
-            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
-            if effective_min_cost <= 0.0:
-                effective_min_cost = self._calc_effective_min_cost_at_price(
-                    symbol, mprice
-                )
-
-            def side_input(pside: str) -> dict:
-                pos = self.positions.get(symbol, {}).get(
-                    pside, {"size": 0.0, "price": 0.0}
-                )
-                trailing = _trailing_bundle_default_dict()
-                return {
-                    "mode": (
-                        "panic"
-                        if pside in target_psides_by_symbol.get(symbol, set())
-                        else "manual"
+        idx_to_symbol = dict(enumerate(symbols))
+        inputs = []
+        for idx, symbol in idx_to_symbol.items():
+            snap = market_snapshots[symbol]
+            for pside in sorted(target_psides_by_symbol[symbol]):
+                enabled = Passivbot._equity_hard_stop_enabled(self, pside, symbol=symbol)
+                inputs.append({
+                    "symbol_idx": idx,
+                    "pside": pside,
+                    "position_size": float(self.positions[symbol][pside]["size"]),
+                    "order_book": {"bid": float(snap.bid), "ask": float(snap.ask)},
+                    "price_step": float(self.price_steps[symbol]),
+                    "execution_type": (
+                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside, symbol=symbol)
+                        if enabled else "limit"
                     ),
-                    "position": {
-                        "size": float(pos["size"]),
-                        "price": float(pos["price"]),
-                    },
-                    "trailing": {
-                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
-                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
-                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
-                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
-                    },
-                    "last_increase_fill_timestamp_ms": None,
-                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
-                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
-                }
-
-            input_dict["symbols"].append(
-                {
-                    "symbol_idx": int(idx),
-                    "order_book": {"bid": bid, "ask": ask},
-                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
-                    "tradable": active,
-                    "next_candle": None,
-                    "effective_min_cost": float(effective_min_cost),
-                    "emas": {
-                        "m1": {"close": [], "log_range": [], "volume": []},
-                        "h1": {"close": [], "log_range": [], "volume": []},
-                    },
-                    "long": side_input("long"),
-                    "short": side_input("short"),
-                }
-            )
-
-        risk_input_recovery.validate_balances(input_dict["balance_raw"], input_dict["balance"])
-        out, orders = reconciler.parse_and_validate_rust_orchestrator_output(
-            pbr.compute_ideal_orders_json(json.dumps(input_dict)),
-            idx_to_symbol,
-            input_dict,
+                })
+        orders = reconciler.parse_and_validate_protective_closes(
+            pbr.compute_protective_closes_json(json.dumps(inputs)), inputs,
         )
         ideal_orders: dict[str, list] = {}
         for order in orders:

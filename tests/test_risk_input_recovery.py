@@ -71,7 +71,7 @@ async def test_startup_refreshes_zero_to_funded_without_restart(monkeypatch, cap
     bot.balance = bot.balance_raw = 0.0
     refreshes = []
 
-    async def refresh():
+    async def refresh(**kwargs):
         refreshes.append(clock[0])
         if len(refreshes) == 4:
             bot.balance = bot.balance_raw = 100.0
@@ -91,7 +91,7 @@ async def test_startup_refreshes_zero_to_funded_without_restart(monkeypatch, cap
 @pytest.mark.asyncio
 async def test_startup_does_not_replay_on_failed_refresh_and_stops_cleanly(monkeypatch):
     bot, clock = make_bot(monkeypatch)
-    async def refresh():
+    async def refresh(**kwargs):
         if clock[0] >= 1010.0:
             bot.stop_signal_received = True
         return False
@@ -297,7 +297,7 @@ async def test_red_supervisor_returns_to_recovery_when_refresh_invalidates_balan
     bot._equity_hard_stop_runtime_red_latched = lambda pside: pside == "long"
     bot.balance_raw = 100.0
     bot.get_raw_balance = lambda: bot.balance_raw
-    async def refresh():
+    async def refresh(**kwargs):
         bot.balance_raw = 0.0
         return True
     bot.refresh_protective_authoritative_state = AsyncMock(side_effect=refresh)
@@ -604,7 +604,7 @@ async def test_hsl_recovery_survives_limit_and_new_position_during_backoff(monke
         assert not await recovery.ensure_ready(bot)
         clock[0] = bot._risk_input_recovery.retry_at
     assert bot._risk_input_recovery.attempts == 12
-    async def fresh():
+    async def fresh(**kwargs):
         bot.positions = {'A': {'short': {'size': -1.0}}}
         return True
     bot.refresh_protective_authoritative_state.side_effect = fresh
@@ -840,7 +840,7 @@ async def test_history_fetch_backoff_keeps_protective_refresh_running(monkeypatc
         history_times.append(clock[0])
         bot._last_authoritative_block_reason = reason
         return False
-    async def protective():
+    async def protective(**kwargs):
         protective_times.append(clock[0])
         # Keep a partial/unfilled exit beyond its first history retry deadline.
         if clock[0] >= 1020.0:
@@ -881,7 +881,8 @@ async def test_incomplete_protective_account_uses_execution_cadence(monkeypatch,
     bot.positions = {'A': {'short': {'size': -1.0}}}
     bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
     bot.live_value = lambda key: 0.25
-    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock()
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
     if unavailable == 'false':
         bot.refresh_protective_authoritative_state.return_value = False
     else:
@@ -889,7 +890,10 @@ async def test_incomplete_protective_account_uses_execution_cadence(monkeypatch,
     await recovery.protect_and_wait(bot)
     assert clock[0] == 1000.25
     assert bot._risk_input_recovery.protective_exit_pending
-    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    if unavailable == 'false':
+        bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
+    else:
+        bot.calc_protective_panic_orders_to_cancel_and_create.assert_awaited_once()
     bot._sleep_unless_shutdown.assert_awaited_once_with(0.25, stage='risk_input_protective_exit')
 
 
