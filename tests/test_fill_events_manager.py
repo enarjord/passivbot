@@ -9230,3 +9230,20 @@ async def test_kucoin_repaired_history_survives_overlap_and_delayed_cycle_reconc
     await reloaded.ensure_loaded()
     assert [ev.to_dict() for ev in reloaded._events] == expected
     assert len(list(tmp_path.glob("fills.backup.*"))) == 1
+
+
+@pytest.mark.parametrize('field', ['covered_start_ms', 'oldest_event_ts', 'newest_event_ts'])
+@pytest.mark.parametrize('value', ['invalid', float('nan'), float('inf'), {'invalid': 1}])
+def test_coverage_reports_corrupt_metadata_as_unavailable(tmp_path, field, value):
+    manager = FillEventsManager(exchange='bybit', user='default', fetcher=MagicMock(),
+                                cache_path=tmp_path / 'coverage')
+    manager._loaded = True
+    metadata = manager.cache.load_metadata()
+    metadata.update(history_scope='all', **{field: value})
+    verdict = manager.get_coverage_status(start_ms=1000, end_ms=2000)
+    assert verdict['ready'] is False
+    assert verdict['reason'] == 'malformed_cache_metadata'
+    # Diagnosis must not rewrite corrupt evidence into apparently valid coverage.
+    assert metadata[field] is value
+    metadata[field] = 0
+    assert manager.get_coverage_status(start_ms=1000, end_ms=2000)['ready'] is True

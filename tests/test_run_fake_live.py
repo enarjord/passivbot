@@ -2094,7 +2094,7 @@ async def test_red_reactivation_closes_in_same_recovery_wave(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('case', ['unordered_nonflattening', 'realized_loss', 'stale_reset', 'pending_pnl', 'invalid_fill', 'invalid_cache'])
+@pytest.mark.parametrize('case', ['unordered_nonflattening', 'realized_loss', 'stale_reset', 'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata'])
 async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, case):
     from unittest.mock import AsyncMock
     from live import risk_input_recovery as recovery
@@ -2145,6 +2145,8 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
             assert await recovery.ensure_ready(bot)
         if case == 'stale_reset':
             state['pnl_reset_timestamp_ms'] = bot.cca.now_ms
+        elif case == 'invalid_metadata':
+            bot._pnls_manager.cache.load_metadata()['covered_start_ms'] = 'invalid'
         elif case in {'invalid_fill', 'invalid_cache'}:
             from fill_events_manager import FillEventCacheContractError
             error = ValueError('malformed fetched fill') if case == 'invalid_fill' else FillEventCacheContractError('invalid fill cache')
@@ -2170,7 +2172,7 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
         else:
             # Exercise the production owner, including its bounded ordered
             # fill-tail refresh; no test-only enrichment call is inserted.
-            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache'}:
+            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata'}:
                 assert not await recovery.protect_unready_hsl(bot)
                 health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
                 assert health.realized_loss is None
@@ -2179,7 +2181,7 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
                 bot.market_snapshot_provider._cache.clear()
             assert await recovery.protect_unready_hsl(bot)
             health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
-            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache'}:
+            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata'}:
                 assert health.realized_loss is None
                 assert health.drawdown_raw > 0.0
             else:

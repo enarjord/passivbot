@@ -5634,9 +5634,21 @@ class FillEventsManager:
         """
         metadata = self.cache.load_metadata()
         history_scope = self.get_history_scope()
-        covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
-        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
-        metadata_newest = int(metadata.get("newest_event_ts", 0) or 0)
+        try:
+            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+            metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
+            metadata_newest = int(metadata.get("newest_event_ts", 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            # These bounds are cache evidence, not caller configuration. An
+            # unusable bound cannot prove coverage; zeroes below are diagnostic
+            # placeholders in an explicitly unavailable verdict only.
+            return {
+                "ready": False,
+                "reason": "malformed_cache_metadata",
+                "history_scope": history_scope,
+                "covered_start_ms": 0,
+                "oldest_event_ts": 0,
+            }
         status: Dict[str, object] = {
             "ready": False,
             "reason": "cache_not_loaded",

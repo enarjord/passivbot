@@ -613,3 +613,17 @@ async def test_replayed_exact_episode_does_not_report_old_degradation():
     health = bot._hsl_protection_health.scopes[Scope('coin', 'long', 'A')]
     assert health.status == 'usable'
     assert health.degraded_evaluations == 0
+
+
+def test_optional_loss_rejects_corrupt_coverage_with_fresh_tail():
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-30)]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    metadata = bot._pnls_manager.cache.load_metadata()
+    metadata['covered_start_ms'] = 'invalid'
+    bot._pnls_manager.cache.load_metadata = lambda: metadata
+    bot.positions = {'A': {'long': {'size': 4.0}}}
+    bot._fill_history_coverage_status = bot._pnls_manager.get_coverage_status
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None
