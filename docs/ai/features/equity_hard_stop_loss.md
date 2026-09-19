@@ -36,6 +36,7 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 6. Restart reconstruction uses exchange state, fill/PnL history, candles where required, config, and
    current time. Local latch files are diagnostics, not authority. Restart always reconstructs from
    authoritative exchange-derived inputs; no persisted replay state participates in the decision.
+   The emergency availability journal below is a separate, explicit continuity exception.
    Live normal interventions and cooldown expiry use that same reconstruction before releasing a
    halt, retaining entry fees and losses before the next observation. A proven RED stop follows the
    same restart rules regardless of closing order type; terminal no-restart takes precedence.
@@ -130,54 +131,73 @@ User-facing behavior and configuration are documented in `../../equity_hard_stop
 
 ### Live risk input recovery
 
-Unavailable current balances, required historical balances, episode evidence, or
-required fill/PnL readiness block ordinary planning. With HSL enabled, recovery
-must not terminate the protection owner, including after
-`live.risk_input_max_attempts` (default 10). That limit escalates diagnostics to
-errors; capped retries continue. With HSL disabled, the limit retains its terminal
-stop behavior. Malformed configuration, payload shapes/types, and malformed Rust
-output retain their strict failure contracts.
+HSL signal health is scoped by mode, side, and (in coin mode) symbol. A completed
+normal evaluation is usable; explicitly bounded approximate evaluation is degraded;
+a scope without a usable evaluation is unavailable. A failed fetch alone does not
+clear prior evidence. Normal drawdown and EMA formulas are unchanged.
 
-A loss of HSL evaluation readiness conservatively closes exposed HSL-enabled scopes
-and cancels their resting orders, using a fresh protective account snapshot and
-Rust's existing panic planner. This is an explicit live availability policy: it may
-close earlier than the configured RED threshold. It does not invent a drawdown,
-reset losses, disable HSL, or substitute ordinary strategy intent. Configured panic
-execution type still applies. Proven halted scopes retain their existing
-cooldown/manual-ownership policy and independent protection. Recovery advances
-latched RED supervision one wave per pass so flat confirmations and stop finalization
-continue without monopolizing exits in other scopes.
+`live.hsl_unavailable_grace_seconds` defaults to 120 seconds. Only continuous
+unavailability starts this clock. Changing causes, successful fetches, partial replay,
+retry limits, and emergency checks do not reset it. A completed usable/degraded
+normal evaluation clears only its own scope's clock. Independently ready coin/pside
+scopes continue evaluation while an attributed historical failure retries.
 
-Recovery exits refresh positions and orders without fetching balance. Their minimal Rust
-planner requires current quotes, tick size, signed position size, and configured panic execution
-type; it does not consume balance, cost basis, strategy settings, candles, or history. The normal
-panic planner shares the same price/quantity primitive. RED finalization and cooldown handling
-retain their separate balance/history requirements; these are not bypassed by the close API.
-Historical repair and its backoff do not gate the recovery exit. A new position or resting entry observed
-during backoff is included. Partial fills and successful submissions do not release
-the exit commitment: another fresh account snapshot must show the relevant positions
-and orders gone before exact history recovery may release ordinary planning. No
-order is sent on stale required position/order/market state. Recovery keeps
-refreshing when those inputs are unavailable; this policy cannot execute through an
-exchange outage and does not install exchange-native stops. Transient connector
-failures and unavailable protective snapshots retain the exit commitment and retry
-inside protection rather than entering full-bot restart handling. An incomplete
-protective account read keeps the same execution cadence. Retryable connector errors
-include network failures and already-gone orders; authentication failures and malformed
-requests propagate. Malformed producer output and configuration remain outside that
-recovery policy. A failed required fill fetch remains unavailable even without a more
-specific pending-PnL, degraded-PnL, or coverage diagnosis.
+Before grace expires, HSL-specific reconstruction failure does not itself block
+ordinary martingale adds when the ordinary planner's own inputs are valid. Its
+current balance, fill/PnL, market, and strategy requirements remain enforced. A held
+pair pending coin replay may add under these conditions; initial entries in an
+unreplayed flat pair remain gated by the existing replay policy. Proven halted
+scopes keep their independent cooldown/manual-ownership protection.
 
-Retries grow from 5 seconds to 60 seconds for current balances and episode evidence,
-and to 300 seconds for history balances. Startup and runtime defer the full historical
-cohort until that deadline; a pending exit uses protective-only account refreshes
-until confirmed complete. Recovery runs the bounded protective owners first, then
-applies one shared execution delay; owners must not each add another delay. Ticker availability is typed across provider and fallback paths; deterministic connector or metadata failures do not enter this recovery. `risk.input.status` records the cause, attempt count,
-limit, elapsed time, next delay, and `protective_exit_and_retry` action. First and
-limit-reaching failures include bounded tracebacks. Polls within backoff do not
-spend attempts; changing reasons does not renew the budget. Successful owning
-operations reset recovery. This state is not persisted: restart must encounter the
-same unavailable exchange-derived inputs before ordinary trading can resume.
+After grace, Rust evaluates `max(0, -current_upnl) / budget` against the configured
+RED threshold, without inventing an EMA. Coin budget is current raw balance divided
+by configured `n_positions`; pside/unified use current raw balance. Pside UPNL is
+side-scoped, coin UPNL is pair-scoped, and unified UPNL is account-wide. Positive
+finite balance and fresh current position/quote inputs are required. An unavailable
+quote defers only that emergency evaluation; it does not restart grace. Fresh
+exposure with no execution history at all is a severe failure and commits an exit
+after grace even if profitable. An empty, flat new account does not satisfy this
+condition. Invalid Rust output and malformed producer/configuration values remain
+fatal rather than being converted into availability failures.
+
+A threshold-triggered emergency exit is committed until fresh positions and orders
+confirm its entire scope flat and order-free. It uses the configured panic order
+type and the minimal Rust close API: signed size, current book, tick size, and
+execution policy. Existing commitments execute before any balance fetch for other
+scopes; a stuck exit cannot starve another scope's emergency check. Partial fills,
+submissions, and signal recovery do not release a commitment. The next wave uses
+fresh remaining size. Historical repair and its backoff do not gate these closes.
+After confirmation, the scope remains entry-blocked until canonical replay can
+restore its normal cooldown/no-restart policy. No exchange-native stop is installed.
+
+A narrow local continuity journal persists outage clocks and committed/confirmed
+emergency exits across restarts, including the close window needed to attribute an actual
+panic flatten to an emergency decision. Replay accepts that observed stop even when
+its normal EMA never crossed RED, and still derives the flatten/cooldown timestamp
+from fills. The latest emergency close window remains available after recovery. It does not contain reconstructed EMA, equity, or
+ordinary strategy intent. This is the explicit exception to normal exchange-derived
+restart reconstruction: past local unavailability cannot be recovered from exchange
+fills. A restored commitment applies to exposure in that account/scope until fresh
+flat/order confirmation, including exposure found after a restart. Deliberately
+changing signal mode or disabling a scope retires its old journal scope visibly.
+A corrupt/unreadable journal grants no renewed grace when a signal is unavailable;
+fresh emergency inputs/thresholds are still required. A write failure is loud and
+keeps protection running, but restart continuity is then not guaranteed. Losing the
+journal entirely is indistinguishable from a first run and starts new grace.
+
+`live.risk_input_max_attempts` (default 10) escalates diagnostics, never terminates
+HSL protection. With HSL disabled, exhaustion remains terminal. Retry backoff grows
+from 5 to 60 seconds (300 for historical balance failures), while current account
+cohorts continue refreshing. Pending exits use protective refreshes; other emergency
+scopes get a current balance cohort after the existing close wave. Network failures,
+already-gone orders, and unavailable protective snapshots retain commitments and
+retry at execution cadence. Authentication errors and malformed requests propagate.
+
+`risk.input.status` reports reason, attempts, elapsed time and next repair delay;
+first and limit-reaching failures include bounded tracebacks. Monitor HSL payloads
+include per-scope status, reason, last evaluation time, grace remaining, emergency
+budget/loss, commitment, execution blockage, and journal durability. Recovery resets
+only after completed signal evaluation, not because another operation succeeded.
 
 A consumed episode-evidence tape is also the boundary-consumption record. Unchanged
 flatten boundaries already represented in that tape must not trigger another replay.

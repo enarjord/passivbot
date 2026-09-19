@@ -200,6 +200,51 @@ pub fn coin_drawdown_signal(
     })
 }
 
+/// Emergency live protection after continuous signal unavailability. The caller
+/// owns evidence health and elapsed time; Rust owns the loss threshold decision.
+/// This deliberately has no EMA: a missing historical EMA is never fabricated.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmergencySignal {
+    pub budget: f64,
+    pub drawdown_raw: f64,
+    pub grace_elapsed: bool,
+    pub should_exit: bool,
+}
+
+pub fn emergency_signal(
+    enabled: bool,
+    balance: f64,
+    budget_divisor: usize,
+    upnl: f64,
+    realized_loss_since_peak: Option<f64>,
+    threshold: f64,
+    unavailable_ms: u64,
+    grace_ms: u64,
+    missing_execution_history: bool,
+) -> Result<EmergencySignal, String> {
+    if !balance.is_finite() || balance <= 0.0 || budget_divisor == 0 {
+        return Err("emergency HSL requires positive finite balance and budget divisor".into());
+    }
+    if !upnl.is_finite() || !threshold.is_finite() || threshold <= 0.0 {
+        return Err("emergency HSL requires finite UPNL and positive threshold".into());
+    }
+    if realized_loss_since_peak.is_some_and(|loss| !loss.is_finite() || loss < 0.0) {
+        return Err("emergency HSL realized loss must be finite and nonnegative".into());
+    }
+    let budget = balance / budget_divisor as f64;
+    let loss = (realized_loss_since_peak.unwrap_or(0.0) - upnl).max(0.0);
+    let drawdown_raw = loss / budget;
+    if !budget.is_finite() || budget <= 0.0 || !drawdown_raw.is_finite() {
+        return Err("emergency HSL loss calculation overflow".into());
+    }
+    let grace_elapsed = unavailable_ms >= grace_ms;
+    Ok(EmergencySignal {
+        budget, drawdown_raw, grace_elapsed,
+        should_exit: enabled && grace_elapsed
+            && (missing_execution_history || drawdown_raw + 1e-12 >= threshold),
+    })
+}
+
 /// Whether the permanent no-restart halt trips for a finalized RED stop.
 ///
 /// Contract (fable audit plan, clarified 2026-07-06): the no-restart trigger
@@ -973,5 +1018,43 @@ mod tests {
         assert!((p1 - -2.0).abs() < 1e-12);
         let p2 = tracker.update(2_100, -7.0, lookback_ms).unwrap();
         assert!((p2 - -2.0).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod emergency_tests {
+    use super::emergency_signal;
+
+    #[test]
+    fn grace_and_disabled_mode_preserve_smoothing_policy() {
+        for elapsed in [0, 119_999, 120_000] {
+            let signal = emergency_signal(true, 10_000.0, 1, -1_000.0, None,
+                0.1, elapsed, 120_000, false).unwrap();
+            assert_eq!(signal.should_exit, elapsed >= 120_000);
+        }
+        assert!(!emergency_signal(false, 1000.0, 1, -1000.0, None,
+            0.1, 120_000, 120_000, true).unwrap().should_exit);
+    }
+
+    #[test]
+    fn coin_budget_and_coherent_realized_loss_are_not_double_counted() {
+        let raw = emergency_signal(true, 10_000.0, 10, -50.0, None,
+            0.1, 120_000, 120_000, false).unwrap();
+        assert_eq!(raw.budget, 1000.0);
+        assert!(!raw.should_exit);
+        let known = emergency_signal(true, 10_000.0, 10, -50.0, Some(60.0),
+            0.1, 120_000, 120_000, false).unwrap();
+        assert_eq!(known.drawdown_raw, 0.11);
+        assert!(known.should_exit);
+    }
+
+    #[test]
+    fn unavailable_current_inputs_cannot_be_replaced_with_neutral_values() {
+        for bad in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            assert!(emergency_signal(true, bad, 1, -100.0, None,
+                0.1, 120_000, 120_000, false).is_err());
+        }
+        assert!(emergency_signal(true, 1000.0, 0, -100.0, None,
+            0.1, 120_000, 120_000, false).is_err());
     }
 }

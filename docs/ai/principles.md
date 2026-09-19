@@ -21,7 +21,10 @@ Canonical repository-wide invariants; task documents link here instead of restat
 ## Statelessness
 
 - Trading decisions must be reproducible after restart from exchange state and config.
-- Do not add decision-changing local state that cannot be rederived.
+- Do not add decision-changing local state that cannot be rederived, except for the explicitly
+  scoped HSL availability/exit continuity journal in `features/equity_hard_stop_loss.md`. Local
+  outage duration cannot be reconstructed from exchange fills; that journal never supplies EMA
+  history or ordinary strategy intent.
 - Performance caches are allowed only when cache loss, rejection, or rebuild does not change the
   intended decision.
 - A reviewed RAM-only economy gate may reset only toward current Rust intent. It must not preserve

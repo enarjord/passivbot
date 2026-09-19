@@ -17,6 +17,12 @@ class EpisodeEvidenceUnavailable(AuthoritativeSurfaceUnavailable):
             "ambiguous_fill_order_or_values": "fill tape has ambiguous boundaries",
             "missing_opening_fill": "fill tape has ambiguous boundaries: missing opening fill",
             "position_mismatch": "fill tape does not match position",
+            "scope_boundaries_unavailable": "fill tape cannot prove episode boundaries",
+            "canonical_flatten_replay_unavailable": "canonical replay unavailable for flatten",
+            "reset_fill_cohort_ambiguous": "reset fill cohort is ambiguous",
+            "reset_fill_cohort_missing_flatten": "reset fill cohort cannot prove flatten",
+            "reset_tail_ambiguous": "reset tail is ambiguous",
+            "coin_replay_symbol_unavailable": "symbol is unavailable for coin replay",
         }.get(cause, cause)
         super().__init__("hsl_episode_boundaries", description)
 

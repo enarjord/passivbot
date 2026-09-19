@@ -102,13 +102,15 @@ candles; it does not retain per-span contexts or consecutive-use counters.
 Protective panic and reduce-only actions may proceed when their own account-critical and
 symbol-scoped requirements are fresh, even if unrelated strategy surfaces are unavailable.
 
-Numeric non-positive/non-finite current balances, unusable historical HSL balance denominators,
-and unavailable HSL episode evidence have an explicit live readiness policy in `features/equity_hard_stop_loss.md`: pause ordinary
-planning and refresh with capped backoff. With HSL enabled, conservatively exit exposed
-HSL-managed scopes through the existing Rust panic planner, preserve proven cooldown/manual
-ownership, and continue recovery after the attempt limit rather than terminating protection.
-Without HSL, exhaustion remains terminal. The conservative exit is a documented live
-availability policy and may precede the normal RED threshold.
+Numeric non-positive/non-finite current balances, unusable historical HSL denominators,
+and unavailable HSL evidence follow `features/equity_hard_stop_loss.md`. Current ordinary
+strategy inputs remain mandatory, but HSL-only reconstruction failures do not impose a blanket
+entry embargo. Continuous scoped signal unavailability starts a configurable grace period;
+after it expires, Rust evaluates current loss over budget without EMA. A committed emergency
+exit continues independently of history and balance repair until fresh flat/order confirmation.
+Proven cooldown/manual ownership is retained. HSL attempt exhaustion escalates diagnostics,
+without terminating protection; without HSL, exhaustion remains terminal.
+
 This is unavailability, not a substitute input or permission to ignore Rust validation. Shape/type
 errors, malformed configuration, and unrelated validation errors are outside this policy.
 

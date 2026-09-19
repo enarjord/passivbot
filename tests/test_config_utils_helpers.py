@@ -2263,3 +2263,20 @@ def test_risk_input_attempt_budget_default_and_single_attempt():
     assert config["live"]["risk_input_max_attempts"] == 10
     config["live"]["risk_input_max_attempts"] = 1
     validate_config(config, verbose=False)
+
+
+@pytest.mark.parametrize("value", [True, False, -1, "120", None, float("inf"), float("nan")])
+def test_hsl_unavailable_grace_rejects_invalid_values(value):
+    config = get_template_config()
+    config["live"]["hsl_unavailable_grace_seconds"] = value
+    with pytest.raises((TypeError, ValueError), match="hsl_unavailable_grace_seconds"):
+        validate_config(config, verbose=False)
+
+
+def test_hsl_unavailable_grace_default_fractional_and_explicit_zero():
+    config = get_template_config()
+    assert config["live"]["hsl_unavailable_grace_seconds"] == 120.0
+    for value in (0.0, 120.5):
+        config["live"]["hsl_unavailable_grace_seconds"] = value
+        validate_config(config, verbose=False)
+        assert config["live"]["hsl_unavailable_grace_seconds"] == value

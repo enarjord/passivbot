@@ -8,6 +8,7 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException
+from live import hsl_protection
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
@@ -177,12 +178,27 @@ def _filter_hsl_replay_pending_creates(
     pending_pairs = set(
         getattr(bot, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
     )
+    # Replay can fail before discovering its pending set. Derive unknown pairs
+    # from actual creates so a newly selected flat symbol cannot bypass the gate.
+    if getattr(bot, "_risk_input_recovery", None) is not None:
+        mode = bot._equity_hard_stop_signal_mode()
+        ready_pairs = getattr(bot, "_equity_hard_stop_coin_replay_ready_pairs", set())
+        for order in orders:
+            side = str(order.get("position_side") or order.get("positionSide") or "").lower()
+            symbol = str(order.get("symbol") or "")
+            enabled = bot._equity_hard_stop_enabled(side, **({"symbol": symbol} if mode == "coin" else {}))
+            ready = ((getattr(bot, "_equity_hard_stop_coin_initialized", False)
+                      or (side, symbol) in ready_pairs) if mode == "coin"
+                     else bot._equity_hard_stop_runtime_initialized(side))
+            if enabled and not ready:
+                pending_pairs.add((side, symbol))
     if not pending_pairs:
         return orders
     blocked = [
         order
         for order in orders
         if not _order_is_protective_create(order)
+        and not hsl_protection.allows_held_entries(bot, str(order.get("position_side") or ""), str(order.get("symbol") or ""))
         and (
             str(order.get("position_side") or order.get("positionSide") or "").lower(),
             str(order.get("symbol") or ""),
@@ -202,7 +218,7 @@ def _filter_hsl_replay_pending_creates(
         order_count=len(blocked),
         symbols=_symbols_from_orders(blocked),
         wave=order_wave,
-        message="initial-entry creates skipped until coin HSL replay is ready",
+        message="initial-entry creates skipped until HSL replay is ready",
         data={"pending_pairs_count": len(pending_pairs)},
     )
     return [order for order in orders if id(order) not in blocked_ids]

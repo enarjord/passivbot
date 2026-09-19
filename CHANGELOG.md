@@ -10,13 +10,13 @@ since the latest release tag; these features may already be available when insta
   Rust panic-close contract independent of history and strategy settings, while retaining
   fresh positions, open orders, quotes, and strict validation of the complete close batch.
 
-- Keep HSL protection alive when required risk inputs remain unavailable. Conservatively
-  close exposed HSL-enabled scopes using fresh account state and the configured panic
-  order type, potentially before RED, while ordinary trading waits for confirmed exits
-  and input recovery. Preserve proven cooldown/manual ownership. Avoid replaying already
-  consumed fill boundaries, and report coin-level HSL cooldown and input-recovery state
-  in monitoring snapshots. Keep maintainer startup/restart safe when no coin-replay
-  task exists.
+- Keep HSL protection alive through unavailable history with scoped health and a configurable
+  120-second grace period before emergency unrealized-loss evaluation. Brief outages preserve
+  EMA-based behavior and valid martingale adds. Persistent outages can close through the configured
+  panic path; empty fill history despite exposure triggers a controlled exit after grace.
+  Persist outage/exit continuity across restarts, retain partial exits until confirmed flat, and
+  reconstruct cooldown policy before reopening. Expose grace, fallback, and execution health in
+  monitoring. Preserve proven cooldown/manual ownership and avoid replaying consumed boundaries.
 
 - Identify GPU temporal replays with suite scenario labels, suite-pass position, history
   fraction, and a replay ID. Explicit start and completion messages distinguish new

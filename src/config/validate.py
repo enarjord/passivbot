@@ -264,6 +264,13 @@ def validate_config(
         raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
     if fee_conversion_max_age_ms < 0:
         raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
+    hsl_grace = config["live"]["hsl_unavailable_grace_seconds"]
+    if isinstance(hsl_grace, bool) or not isinstance(hsl_grace, (int, float)):
+        raise TypeError("config.live.hsl_unavailable_grace_seconds must be numeric")
+    if not math.isfinite(hsl_grace) or hsl_grace < 0.0:
+        raise ValueError("config.live.hsl_unavailable_grace_seconds must be finite and >= 0")
+    if hsl_grace >= 2**64 / 1000:
+        raise ValueError("config.live.hsl_unavailable_grace_seconds must fit unsigned milliseconds")
     risk_attempts = config["live"]["risk_input_max_attempts"]
     if isinstance(risk_attempts, bool) or not isinstance(risk_attempts, int):
         raise TypeError("config.live.risk_input_max_attempts must be an integer")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from live import hsl_protection
+
 import asyncio
 import json
 import logging
@@ -15,6 +17,7 @@ from types import MethodType
 from typing import Any, Iterable, Optional
 
 import passivbot_rust as pbr
+from ccxt.base.errors import NetworkError
 
 from candlestick_manager import candle_range_has_full_coverage
 
@@ -34,6 +37,7 @@ from fill_events_manager import (
     _unique_position_chain_order,
 )
 from live.state_refresh import AuthoritativeSurfaceUnavailable
+from live.market_snapshot import MarketSnapshotUnavailable
 from live.risk_input_recovery import (
     RiskInputUnavailable,
     validate_current_balances,
@@ -1542,7 +1546,7 @@ async def _calc_upnl_sum_strict(self, pside: Optional[str] = None, symbol: Optio
             continue
         pos_symbol = elm["symbol"]
         if pos_symbol not in last_prices:
-            raise RuntimeError(f"missing last price for {pos_symbol} while evaluating hard stop")
+            raise MarketSnapshotUnavailable(f"missing last price for {pos_symbol} while evaluating hard stop")
         upnl = _calc_hsl_pnl(
             elm["position_side"],
             elm["price"],
@@ -2311,8 +2315,8 @@ def _equity_hard_stop_coin_events_after_reset(
     }:
         ordered, ambiguous = _equity_hard_stop_order_fill_cohorts(events)
         if ambiguous:
-            raise AuthoritativeSurfaceUnavailable(
-                "hsl_episode_boundaries", f"{pside}:{symbol} reset fill cohort is ambiguous"
+            raise EpisodeEvidenceUnavailable(
+                "reset_fill_cohort_ambiguous", pside=pside, symbol=symbol
             )
         evidence = _equity_hard_stop_coin_episode_evidence(
             ordered, pside, symbol, qty_step=qty_step
@@ -2322,9 +2326,8 @@ def _equity_hard_stop_coin_events_after_reset(
             if evidence.rows[index][0] == boundary_ts
         ), None) if evidence.unavailable is None else None
         if last_boundary_index is None:
-            raise AuthoritativeSurfaceUnavailable(
-                "hsl_episode_boundaries",
-                f"{pside}:{symbol} reset fill cohort cannot prove flatten",
+            raise EpisodeEvidenceUnavailable(
+                "reset_fill_cohort_missing_flatten", pside=pside, symbol=symbol,
             )
         return ordered[last_boundary_index + 1 :]
     return [event for event in events if _equity_hard_stop_fill_timestamp_ms(event) >= reset_ts]
@@ -3209,6 +3212,9 @@ async def _equity_hard_stop_replay_live_restart(
         if isinstance(value, MethodType) and value.__self__ is self:
             setattr(staged, name, MethodType(value.__func__, staged))
             rebound_methods.append(name)
+    staged._hsl_protection_health = copy.deepcopy(getattr(self, "_hsl_protection_health", None))
+    if staged._hsl_protection_health is not None:
+        staged._hsl_protection_health.path = None
     staged.positions = copy.deepcopy(self.positions)
     staged.open_orders = copy.deepcopy(self.open_orders)
     staged._equity_hard_stop = {
@@ -3292,6 +3298,7 @@ async def _equity_hard_stop_replay_live_restart(
                 replacement["last_stop_event"] = old.get("last_stop_event")
             old.clear()
             old.update(replacement)
+            hsl_protection.record_evaluation(self, side, symbol if mode == "coin" else None)
             if mode == "coin":
                 forced = self._runtime_forced_modes.setdefault(side, {})
                 forced.pop(symbol, None)
@@ -3741,6 +3748,7 @@ async def _equity_hard_stop_refresh_live_scope_episode_boundaries(self, ts_ms, b
         state = self._hsl_state(pside)
         if (
             not self._equity_hard_stop_enabled(pside)
+            or (pside, None) in getattr(self, "_hsl_readiness_excluded_pairs", set())
             or state["halted"]
             or state["runtime"].red_latched()
             or state["last_metrics"] is None
@@ -3757,9 +3765,7 @@ async def _equity_hard_stop_refresh_live_scope_episode_boundaries(self, ts_ms, b
             realized_by_pside,
         )
         if boundaries is None:
-            raise AuthoritativeSurfaceUnavailable(
-                "hsl_episode_boundaries", f"{pside} fill tape cannot prove episode boundaries"
-            )
+            raise EpisodeEvidenceUnavailable("scope_boundaries_unavailable", pside=pside, symbol=None)
         reset_ts = state.get("pnl_reset_timestamp_ms")
         for row in boundaries:
             boundary_ts = int(row["timestamp"])
@@ -3888,8 +3894,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 include_entry_seeds=True,
             )
             if boundaries is None:
-                raise AuthoritativeSurfaceUnavailable(
-                    "hsl_episode_boundaries", f"{pside} fill tape cannot prove episode boundaries"
+                raise EpisodeEvidenceUnavailable(
+                    "scope_boundaries_unavailable", pside=pside, symbol=None
                 )
             scope_boundaries_by_pside[pside] = boundaries
         # Validate every enabled scope before replacing existing protective state.
@@ -4041,7 +4047,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 stop_source = "panic_fill_flatten"
                 if panic_flatten_marker is not None:
                     marker_ts = int(panic_flatten_marker["timestamp"])
-                    if not _equity_hard_stop_replay_marker_confirms_red(current_metrics):
+                    if not (_equity_hard_stop_replay_marker_confirms_red(current_metrics)
+                            or (scope_flattened_this_row
+                                and hsl_protection.emergency_stop_applies(self, pside, None, marker_ts))):
                         ignored_panic_marker_timestamps.add(marker_ts)
                         logging.warning(
                             "[risk] HSL[%s] ignored historical panic marker without reconstructed RED | "
@@ -4057,7 +4065,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     else:
                         stop_ts = marker_ts
                 if stop_ts is None and scope_flattened_this_row:
-                    if bool(current_metrics.get("red_seen_in_episode")):
+                    emergency_flatten = (bool(row.get("_hsl_scope_flatten_fill"))
+                        and hsl_protection.emergency_stop_applies(self, pside, None, int(ts)))
+                    if bool(current_metrics.get("red_seen_in_episode")) or emergency_flatten:
                         # B2.1: the episode crossed RED and ended by an ordinary
                         # (non-panic) scope-flattening fill; cooldown/no-restart
                         # evidence is canonical from the reconstructed episode.
@@ -4078,7 +4088,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                             if row.get("_hsl_scope_flatten_fill")
                             else (anchor if anchor is not None else int(ts))
                         )
-                        stop_source = "red_episode_flatten"
+                        stop_source = "emergency_episode_flatten" if emergency_flatten else "red_episode_flatten"
                     else:
                         # Ordinary flatten of a RED-free episode: plain episode
                         # reset with no stop accounting.
@@ -4228,6 +4238,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             if current_metrics["tier"] == "red":
                 state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
         self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+        for pside in self._hsl_psides():
+            if self._equity_hard_stop_enabled(pside):
+                hsl_protection.record_evaluation(self, pside)
     finally:
         if hasattr(self, "_set_log_silence_watchdog_context"):
             self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
@@ -4641,9 +4654,8 @@ async def _equity_hard_stop_initialize_coin_from_history(
             if replay_pside not in self._hsl_psides() or not replay_symbol:
                 raise ValueError(f"invalid coin HSL replay pair: {replay_pair!r}")
             if not self._equity_hard_stop_symbol_supported_for_coin_replay(replay_symbol):
-                raise AuthoritativeSurfaceUnavailable(
-                    "hsl_episode_boundaries",
-                    f"{replay_pside}:{replay_symbol} is unavailable for coin replay",
+                raise EpisodeEvidenceUnavailable(
+                    "coin_replay_symbol_unavailable", pside=replay_pside, symbol=replay_symbol,
                 )
             if (
                 self._equity_hard_stop_coin_active_pside(replay_pside, replay_symbol)
@@ -4791,6 +4803,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
             self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
+            hsl_protection.record_evaluation(self, pside, symbol)
 
         def mark_protective_ready() -> None:
             nonlocal protective_ready_elapsed_s, watchdog_context_restored
@@ -4946,8 +4959,8 @@ async def _equity_hard_stop_initialize_coin_from_history(
                             pair_fill_events, pside, symbol, qty_step=qty_step
                         )
                         if replay_ambiguous:
-                            raise AuthoritativeSurfaceUnavailable(
-                                "hsl_episode_boundaries", f"{pside}:{symbol} reset tail is ambiguous"
+                            raise EpisodeEvidenceUnavailable(
+                                "reset_tail_ambiguous", pside=pside, symbol=symbol
                             )
                         reset_baseline_realized -= sum(
                             delta for ts, _action, _qty, delta in replay_events
@@ -5472,6 +5485,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
                             )
                             if boundary_marker is not None and not (
                                 _equity_hard_stop_replay_marker_confirms_red(metrics)
+                                or hsl_protection.emergency_stop_applies(self, pside, symbol, int(flatten_ts))
                             ):
                                 ignored_panic_marker_timestamps.add(int(flatten_ts))
                                 logging.warning(
@@ -5487,13 +5501,16 @@ async def _equity_hard_stop_initialize_coin_from_history(
                                     float(metrics["red_threshold"]),
                                 )
                                 boundary_marker = None
+                            emergency_flatten = hsl_protection.emergency_stop_applies(
+                                self, pside, symbol, int(flatten_ts))
                             if boundary_marker is not None or bool(
                                 metrics.get("red_seen_in_episode")
-                            ):
+                            ) or emergency_flatten:
                                 stop_ts = int(flatten_ts)
                                 stop_source = (
                                     "panic_fill_flatten"
                                     if boundary_marker is not None
+                                    else "emergency_episode_flatten" if emergency_flatten
                                     else "red_episode_flatten"
                                 )
                                 stop_abs_realized = boundary_abs_realized
@@ -5604,7 +5621,8 @@ async def _equity_hard_stop_initialize_coin_from_history(
                             continue
                         stop_ts = int(marker["timestamp"])
                         stop_source = "panic_fill_flatten"
-                        if not _equity_hard_stop_replay_marker_confirms_red(metrics):
+                        if not (_equity_hard_stop_replay_marker_confirms_red(metrics)
+                                or hsl_protection.emergency_stop_applies(self, pside, symbol, stop_ts)):
                             ignored_panic_marker_timestamps.add(stop_ts)
                             logging.warning(
                                 "[risk] HSL[%s:%s] ignored historical coin panic marker without reconstructed RED | "
@@ -5997,6 +6015,16 @@ def _equity_hard_stop_log_status(self, pside: str, metrics: dict) -> None:
     )
 
 
+async def _equity_hard_stop_scoped_upnl(self, pside, symbol=None):
+    try:
+        return await self._calc_upnl_sum_strict(pside, symbol)
+    except (MarketSnapshotUnavailable, NetworkError, TimeoutError) as exc:
+        raise RiskInputUnavailable(
+            ReasonCodes.HSL_SIGNAL_UNAVAILABLE, cause=_bounded_hsl_exception_type(exc),
+            pside=pside, symbol=symbol,
+        ) from exc
+
+
 async def _equity_hard_stop_check(self) -> Optional[dict]:
     if not self._equity_hard_stop_enabled():
         return None
@@ -6020,7 +6048,8 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
     signal_mode = self._equity_hard_stop_signal_mode()
     realized_pnl_total = self._equity_hard_stop_realized_pnl_now()
     unrealized_pnl_by_pside = {
-        pside: await self._calc_upnl_sum_strict(pside) for pside in self._hsl_psides()
+        pside: await _equity_hard_stop_scoped_upnl(self, pside) for pside in self._hsl_psides()
+        if (pside, None) not in getattr(self, "_hsl_readiness_excluded_pairs", set())
     }
     unrealized_pnl_total = (
         float(sum(float(v) for v in unrealized_pnl_by_pside.values()))
@@ -6029,7 +6058,8 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
     )
     out = {}
     for pside in self._hsl_psides():
-        if not self._equity_hard_stop_enabled(pside):
+        if (not self._equity_hard_stop_enabled(pside)
+                or (pside, None) in getattr(self, "_hsl_readiness_excluded_pairs", set())):
             continue
         state = self._hsl_state(pside)
         replay_complete = False
@@ -6079,6 +6109,7 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
             float(unrealized_pnl_by_pside[pside]),
             unrealized_pnl_total=unrealized_pnl_total,
         )
+        hsl_protection.record_evaluation(self, pside)
         if metrics["changed"]:
             self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
         self._equity_hard_stop_maybe_emit_raw_red_pending(pside, metrics)
@@ -6332,7 +6363,8 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
             getattr(self, "_equity_hard_stop_coin", {}).get(pside, {}).items()
         ):
             if (
-                not self._equity_hard_stop_coin_active_pside(pside, symbol)
+                (pside, symbol) in getattr(self, "_hsl_readiness_excluded_pairs", set())
+                or not self._equity_hard_stop_coin_active_pside(pside, symbol)
                 or state["halted"]
                 or state["runtime"].red_latched()
                 or state["last_metrics"] is None
@@ -6394,9 +6426,8 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         symbol,
                         replay_flatten_timestamp_ms=latest_boundary_ts,
                     ):
-                        raise AuthoritativeSurfaceUnavailable(
-                            "hsl_episode_boundaries",
-                            f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
+                        raise EpisodeEvidenceUnavailable(
+                            "canonical_flatten_replay_unavailable", pside=pside, symbol=symbol,
                         )
                     return True
                 # Later fills can already be present in this refresh, including a
@@ -6430,9 +6461,8 @@ async def _equity_hard_stop_refresh_live_coin_episode_boundaries(
                         self._equity_hard_stop_set_coin_runtime_forced_mode(
                             pside, symbol, "panic"
                         )
-                        raise AuthoritativeSurfaceUnavailable(
-                            "hsl_episode_boundaries",
-                            f"{pside}:{symbol} canonical replay unavailable for flatten {flatten_ts}",
+                        raise EpisodeEvidenceUnavailable(
+                            "canonical_flatten_replay_unavailable", pside=pside, symbol=symbol,
                         )
                     return True
                 state["pnl_reset_timestamp_ms"] = flatten_ts + 1
@@ -6489,13 +6519,11 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
             pair
             for pair in pending_pairs
             if self._equity_hard_stop_has_open_position_symbol(*pair)
+            and pair not in getattr(self, "_hsl_readiness_excluded_pairs", set())
         )
         if newly_held_pending:
-            rendered = ",".join(f"{pside}:{symbol}" for pside, symbol in newly_held_pending)
-            raise RestartBotException(
-                "coin HSL replay still pending for newly held pair(s); "
-                f"restart required for held-first reconstruction: {rendered}"
-            )
+            pside, symbol = newly_held_pending[0]
+            raise EpisodeEvidenceUnavailable("held_scope_replay_pending", pside=pside, symbol=symbol)
     for pside in self._hsl_psides():
         if not self._equity_hard_stop_coin_active_pside(pside):
             continue
@@ -6503,6 +6531,8 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
             if not self._equity_hard_stop_coin_active_pside(pside, symbol):
                 continue
             if partial_replay and (pside, symbol) not in ready_pairs:
+                continue
+            if (pside, symbol) in getattr(self, "_hsl_readiness_excluded_pairs", set()):
                 continue
             state = self._hsl_coin_state(pside, symbol)
             replay_complete = False
@@ -6559,8 +6589,9 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 symbol,
                 ts_ms,
                 balance,
-                float(await self._calc_upnl_sum_strict(pside, symbol)),
+                float(await _equity_hard_stop_scoped_upnl(self, pside, symbol)),
             )
+            hsl_protection.record_evaluation(self, pside, symbol)
             if metrics["changed"]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
             self._equity_hard_stop_maybe_emit_raw_red_pending(

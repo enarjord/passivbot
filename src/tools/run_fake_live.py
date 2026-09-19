@@ -711,11 +711,22 @@ async def _run_fake_cycle(bot):
 
 
 async def _run_fake_cycle_ready(bot):
+    from live import risk_input_recovery
+    if getattr(bot, "_risk_input_recovery", None) is not None:
+        if await risk_input_recovery.protect_before_history_refresh(bot):
+            return {"updated": False, "hsl_protection": True}
     if not await bot.update_pos_oos_pnls_ohlcvs():
+        if bot._equity_hard_stop_enabled():
+            risk_input_recovery.defer_authoritative_hsl(bot)
+            await risk_input_recovery.protect_and_wait(bot)
         return {"updated": False}
     if bot._equity_hard_stop_enabled():
+        if bot._equity_hard_stop_signal_mode() != "coin" and _fake_active_red_psides(bot):
+            return await _run_fake_red_supervisor_step(bot)
+        if not await risk_input_recovery.ensure_ready(bot):
+            await risk_input_recovery.protect_and_wait(bot)
+            return {"updated": False, "hsl_protection": True}
         if bot._equity_hard_stop_signal_mode() == "coin":
-            await bot._equity_hard_stop_check()
             if bot._equity_hard_stop_coin_red_active():
                 # Exercise the production coin RED supervisor instead of the legacy
                 # pside stepping shim. The production path uses protective planning
@@ -734,7 +745,6 @@ async def _run_fake_cycle_ready(bot):
                     return await _run_fake_red_supervisor_step(bot)
                 await bot._equity_hard_stop_run_red_supervisor()
                 return {"red_supervisor": True}
-            await bot._equity_hard_stop_check()
             if any(
                 bot._equity_hard_stop_runtime_red_latched(pside)
                 and not bot._hsl_state(pside)["halted"]
@@ -753,7 +763,9 @@ async def _run_fake_cycle_ready(bot):
     refresh_market = getattr(bot, "refresh_market_state_if_needed", None)
     if callable(refresh_market) and not await refresh_market():
         return {"updated": False, "market_ready": False}
-    return await bot.execute_to_exchange(prepare_cycle=False)
+    result = await bot.execute_to_exchange(prepare_cycle=False)
+    risk_input_recovery.mark_ready(bot)
+    return result
 
 def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
     def _load(name: str, default):
