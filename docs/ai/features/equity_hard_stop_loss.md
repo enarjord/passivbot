@@ -100,7 +100,11 @@ its signal-recovery policy. A typed quote outage partitions ready symbols before
 unavailable symbols retain their existing orders and appear in monitor diagnostics. Missing,
 non-finite, non-positive, or crossed quote values are provider-defined availability failures;
 no order consumes those values. Structural fetch errors and invalid Rust output still propagate.
-Each submitted Rust batch is validated atomically.
+Each submitted Rust batch is validated atomically. Singleton recovery probes run concurrently to
+avoid accumulating a timeout per failed symbol. Quote outage diagnostics survive independent
+protective waves and clear only on a valid quote observation or fresh flat target. Normal-policy
+cooldown reopening remains with the ordinary HSL evaluator and its validated current balance;
+the reduced protection owner cannot release a halt using an old balance.
 Cancellation-only waves remove entries from terminal no-restart scopes and resting initials from
 flat cooldown scopes without constructing new intent or changing terminal state. Manual ownership
 begins only after a proven cooldown intervention and persists through

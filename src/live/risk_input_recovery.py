@@ -435,8 +435,14 @@ async def protect_unready_hsl(bot):
                     target_psides_by_symbol=targets,
                 )
                 await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+                unavailable_quotes = getattr(bot, "_hsl_protective_unavailable_symbols", set())
                 for scope in pending:
-                    health.scopes[scope].execution_blocked = ""
+                    attempted_symbols = {symbol for symbol, sides in targets.items()
+                                         if scope.pside in sides and (not scope.symbol or scope.symbol == symbol)}
+                    if attempted_symbols & unavailable_quotes:
+                        health.scopes[scope].execution_blocked = "MarketSnapshotUnavailable"
+                    elif attempted_symbols:
+                        health.scopes[scope].execution_blocked = ""
     except RiskInputUnavailable as exc:
         defer(bot, exc)
     except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:

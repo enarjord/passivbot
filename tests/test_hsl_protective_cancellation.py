@@ -176,44 +176,23 @@ async def test_manual_without_resting_entry_does_not_refresh_fills(signal_mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("active_red", [False, True])
-async def test_terminal_cancel_wave_includes_newly_replayed_current_red(active_red):
+@pytest.mark.parametrize("old_balance", [100.0, float("nan")])
+async def test_terminal_cancel_wave_does_not_reopen_normal_scope_from_old_balance(old_balance):
     bot, state, _ = _protective_bot("coin", _manual_stop_events())
     bot.config["live"]["hsl_position_during_cooldown_policy"] = "normal"
+    bot.balance = bot.balance_raw = old_balance
     bot.positions = {"A": {"long": {"size": 1.0}}}
     terminal = bot._hsl_coin_state("long", "B")
     terminal.update(halted=True, no_restart_latched=True)
     bot.open_orders["B"] = [
         {"id": "terminal", "symbol": "B", "position_side": "long", "reduce_only": False}
     ]
-    protective_close = {"symbol": "A", "position_side": "long", "reduce_only": True}
-    bot.calc_protective_panic_orders_to_cancel_and_create.return_value = (
-        [],
-        [protective_close],
-    )
-
-    async def replay(*args):
-        state["halted"] = False
-        for ts, equity in [(60_000, 100.0), (120_000, 70.0)]:
-            state["runtime"].apply_sample(
-                timestamp_ms=ts,
-                equity=equity,
-                peak_strategy_equity=100.0,
-                red_threshold=0.2,
-                ema_span_minutes=1.0,
-                tier_ratio_yellow=0.5,
-                tier_ratio_orange=0.75,
-                latch_red=True,
-            )
-        state["last_metrics"] = {"red_active_now": active_red}
-        return True
-
-    bot._equity_hard_stop_handle_coin_position_during_cooldown.side_effect = replay
+    bot._equity_hard_stop_handle_coin_position_during_cooldown.side_effect = AssertionError("normal replay requires ordinary readiness")
     assert await Passivbot._run_halted_hsl_protection_if_active(bot)
     cancels, creates = bot.execute_order_plan_to_exchange.await_args.args
     assert [order["id"] for order in cancels] == ["terminal"]
-    assert creates == ([protective_close] if active_red else [])
-    assert bot.calc_protective_panic_orders_to_cancel_and_create.await_count == int(
-        active_red
-    )
+    assert creates == []
+    assert state["halted"]
+    bot._equity_hard_stop_handle_coin_position_during_cooldown.assert_not_awaited()
+    bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
     bot.execute_order_plan_to_exchange.assert_awaited_once()

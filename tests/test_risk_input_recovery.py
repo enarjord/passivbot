@@ -1257,3 +1257,21 @@ async def test_aggregate_replay_failure_blocks_flat_initials_but_keeps_held_adds
     assert executor._filter_hsl_replay_pending_creates(bot, emitter, orders + [close], None) == ([orders[0], close] if held else [close])
     bot._equity_hard_stop_runtime_initialized = lambda side: True
     assert executor._filter_hsl_replay_pending_creates(bot, emitter, orders, None) == orders
+
+
+@pytest.mark.asyncio
+async def test_partial_protective_wave_retains_quote_blockage_for_unexecuted_scope(monkeypatch):
+    from live import hsl_protection
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {symbol: {'long': {'size': 1.0}} for symbol in ('A', 'B')}
+    arm_exit(bot)
+    bot._hsl_protective_unavailable_symbols = {'A'}
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_unready_hsl(bot)
+    health = hsl_protection.manager(bot)
+    assert health.scopes[hsl_protection.Scope('coin', 'long', 'A')].execution_blocked == 'MarketSnapshotUnavailable'
+    assert health.scopes[hsl_protection.Scope('coin', 'long', 'B')].execution_blocked == ''
+    bot._hsl_protective_unavailable_symbols.clear()
+    await recovery.protect_unready_hsl(bot)
+    assert all(item.execution_blocked == '' for item in health.scopes.values())

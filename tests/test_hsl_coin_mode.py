@@ -6116,8 +6116,7 @@ async def test_deferred_cooldown_cancels_entries_by_scope_policy(
             if not held:
                 expected.add("B-entry")
     else:
-        if not (held and policy == "normal" and signal_mode != "coin"):
-            expected.add("A-entry")
+        expected.add("A-entry")
         if not held or policy in {"panic", "tp_only"}:
             expected.add("B-entry")
     did_work = await Passivbot._run_halted_hsl_protection_if_active(bot)

@@ -6272,7 +6272,7 @@ class Passivbot:
                 for candidate in symbols
                 if self._equity_hard_stop_has_open_position_symbol(pside, candidate)
             ]
-            if symbols and coin_mode and not terminal:
+            if symbols and coin_mode and not terminal and policy != "normal":
                 await self._equity_hard_stop_handle_coin_position_during_cooldown(
                     pside, symbol, now_ms
                 )
@@ -6280,7 +6280,7 @@ class Passivbot:
                     state["halted"]
                     and self._runtime_forced_modes.get(pside, {}).get(symbol) == "panic"
                 )
-            elif symbols and not terminal:
+            elif symbols and not terminal and policy != "normal":
                 await self._equity_hard_stop_handle_position_during_cooldown(pside, now_ms)
                 panic_needed |= bool(
                     state["halted"]
@@ -6289,8 +6289,11 @@ class Passivbot:
                         for item in symbols
                     )
                 )
-            # Flat cooldown scopes still prohibit initials. Held normal scopes
-            # may have resumed above; graceful_stop preserves their existing adds.
+            # Normal-policy reopening belongs to the ordinary HSL evaluator,
+            # whose caller supplies a fresh validated balance. This reduced
+            # protection owner never releases a halt through balance-less replay.
+            # Flat cooldown scopes still prohibit initials; held normal and
+            # graceful-stop scopes retain their existing entry policy.
             if not state["halted"]:
                 # Canonical restart may already prove RED in the new episode.
                 # Keep that current risk in this wave even when another scope
@@ -16387,7 +16390,8 @@ class Passivbot:
     async def calc_protective_panic_ideal_orders_orchestrator(self, *, target_psides_by_symbol=None):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
-        self._hsl_protective_unavailable_symbols = set()
+        if not hasattr(self, "_hsl_protective_unavailable_symbols"):
+            self._hsl_protective_unavailable_symbols = set()
         if target_psides_by_symbol is None:
             target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(self)
         self._protective_panic_reconcile_psides_by_symbol = {
@@ -16411,6 +16415,7 @@ class Passivbot:
         reconcile_symbols = sorted(target_psides_by_symbol)
         self._protective_panic_reconcile_symbols = reconcile_symbols
         symbols = sorted(position_symbols)
+        self._hsl_protective_unavailable_symbols.difference_update(set(reconcile_symbols) - position_symbols)
         if not symbols:
             return {}
 
@@ -16421,13 +16426,22 @@ class Passivbot:
             # exits. Partition inputs before Rust; never discard part of its output.
             market_snapshots = {}
             if len(symbols) > 1:
-                for symbol in symbols:
+                async def fetch_one(symbol):
                     try:
-                        market_snapshots.update(await self._get_orchestrator_market_snapshots([symbol]))
+                        return await self._get_orchestrator_market_snapshots([symbol])
                     except MarketSnapshotUnavailable:
-                        continue
+                        return {}
+                # Avoid one full network timeout per unavailable predecessor.
+                # Drain all probes before propagating structural failures so no
+                # orphaned reader can mutate the freshness ledger afterward.
+                results = await asyncio.gather(*(fetch_one(symbol) for symbol in symbols),
+                                               return_exceptions=True)
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
+                    market_snapshots.update(result)
             unavailable = set(symbols) - set(market_snapshots)
-            self._hsl_protective_unavailable_symbols = unavailable
+            self._hsl_protective_unavailable_symbols.update(unavailable)
             logging.warning("[risk] protective quote unavailable; retaining scoped orders | symbols=%s",
                             ",".join(sorted(unavailable)))
             if not market_snapshots:
@@ -16455,6 +16469,7 @@ class Passivbot:
             raise state_refresh.AuthoritativeSurfaceUnavailable(
                 "protective_planning_inputs", "current protective snapshot unavailable"
             ) from exc
+        self._hsl_protective_unavailable_symbols.difference_update(symbols)
         self._current_planning_snapshot = planning_snapshot
         last_prices = planning_snapshot.last_prices()
         Passivbot._monitor_record_price_ticks(
