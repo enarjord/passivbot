@@ -180,15 +180,17 @@ def _filter_hsl_replay_pending_creates(
     )
     # Replay can fail before discovering its pending set. Derive unknown pairs
     # from actual creates so a newly selected flat symbol cannot bypass the gate.
-    if (getattr(bot, "_risk_input_recovery", None) is not None
-            and not getattr(bot, "_equity_hard_stop_coin_initialized", False)
-            and bot._equity_hard_stop_signal_mode() == "coin"):
+    if getattr(bot, "_risk_input_recovery", None) is not None:
+        mode = bot._equity_hard_stop_signal_mode()
         ready_pairs = getattr(bot, "_equity_hard_stop_coin_replay_ready_pairs", set())
         for order in orders:
             side = str(order.get("position_side") or order.get("positionSide") or "").lower()
             symbol = str(order.get("symbol") or "")
-            if ((side, symbol) not in ready_pairs
-                    and bot._equity_hard_stop_enabled(side, symbol=symbol)):
+            enabled = bot._equity_hard_stop_enabled(side, **({"symbol": symbol} if mode == "coin" else {}))
+            ready = ((getattr(bot, "_equity_hard_stop_coin_initialized", False)
+                      or (side, symbol) in ready_pairs) if mode == "coin"
+                     else bot._equity_hard_stop_runtime_initialized(side))
+            if enabled and not ready:
                 pending_pairs.add((side, symbol))
     if not pending_pairs:
         return orders
@@ -216,7 +218,7 @@ def _filter_hsl_replay_pending_creates(
         order_count=len(blocked),
         symbols=_symbols_from_orders(blocked),
         wave=order_wave,
-        message="initial-entry creates skipped until coin HSL replay is ready",
+        message="initial-entry creates skipped until HSL replay is ready",
         data={"pending_pairs_count": len(pending_pairs)},
     )
     return [order for order in orders if id(order) not in blocked_ids]

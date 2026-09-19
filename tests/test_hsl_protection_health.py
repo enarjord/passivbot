@@ -237,3 +237,17 @@ def test_unified_commitment_targets_and_holds_both_enabled_candidate_sides():
     health.confirm_flat(scope, now_ms=2000)
     assert holds_after_emergency_exit(bot, 'short', 'B')
     assert not emergency_stop_applies(bot, 'short', None, 2001)
+
+
+def test_corrupt_journal_repairs_evaluated_scope_durably_without_granting_unknown_scopes_grace(tmp_path):
+    path = tmp_path / 'protection.json'
+    path.write_text('{')
+    health = ProtectionHealth(path)
+    a, b = Scope('coin', 'long', 'A'), Scope('coin', 'long', 'B')
+    health.evaluated_successfully(a, now_ms=1_000_000)
+    restored = ProtectionHealth(path)
+    assert restored.durable
+    restored.unavailable(a, now_ms=1_200_000, reason='new_outage', grace_ms=120_000)
+    restored.unavailable(b, now_ms=1_200_000, reason='unknown_scope', grace_ms=120_000)
+    assert restored.scopes[a].unavailable_since_ms == 1_200_000
+    assert restored.scopes[b].unavailable_since_ms == 1_080_000

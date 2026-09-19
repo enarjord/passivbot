@@ -62,6 +62,9 @@ class ProtectionHealth:
         try:
             if type(payload["version"]) is not int or payload["version"] != 1 or not isinstance(payload["scopes"], list):
                 raise ValueError("invalid protection journal")
+            unverified_scopes = payload.get("unverified_scopes", False)
+            if type(unverified_scopes) is not bool:
+                raise ValueError("invalid journal recovery state")
             loaded = {}
             for row in payload["scopes"]:
                 scope = Scope(**row["scope"])
@@ -97,6 +100,7 @@ class ProtectionHealth:
                         raise ValueError("invalid protection metric")
                 loaded[scope] = health
             self.scopes = loaded
+            self.journal_invalid = unverified_scopes
         except (KeyError, TypeError, ValueError):
             self._invalid_journal()
 
@@ -113,12 +117,13 @@ class ProtectionHealth:
         rows = [{"scope": asdict(scope), "health": asdict(health)}
                 for scope, health in sorted(self.scopes.items())
                 if health.unavailable_since_ms is not None or health.exit_committed
-                or health.exit_confirmed_flat or health.exit_started_ms is not None]
+                or health.exit_confirmed_flat or health.exit_started_ms is not None
+                or self.journal_invalid and health.last_evaluated_ms is not None]
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_suffix(".tmp")
             with temporary.open("w") as handle:
-                json.dump({"version": 1, "scopes": rows}, handle, allow_nan=False)
+                json.dump({"version": 1, "unverified_scopes": self.journal_invalid, "scopes": rows}, handle, allow_nan=False)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary, self.path)
@@ -147,7 +152,8 @@ class ProtectionHealth:
 
     def evaluated_successfully(self, scope: Scope, *, now_ms: int, degraded_reason: str = ""):
         health = self.scopes.setdefault(scope, Health())
-        changed = health.unavailable_since_ms is not None
+        changed = (health.unavailable_since_ms is not None
+                   or self.journal_invalid and health.last_evaluated_ms is None)
         health.status = "degraded" if degraded_reason else "usable"
         health.reason = degraded_reason
         health.last_evaluated_ms = now_ms

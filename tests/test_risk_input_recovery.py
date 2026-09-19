@@ -1231,3 +1231,25 @@ async def test_restored_exit_uses_configured_recovery_diagnostics(monkeypatch):
     assert not await recovery.ensure_ready(bot)
     assert bot._risk_input_recovery.max_attempts == 3
     assert bot._risk_input_recovery.blocked_since == clock[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['pside', 'unified'])
+@pytest.mark.parametrize('held', [False, True])
+async def test_aggregate_replay_failure_blocks_flat_initials_but_keeps_held_adds(monkeypatch, mode, held):
+    from live import executor
+    bot, _ = make_bot(monkeypatch)
+    bot._equity_hard_stop_signal_mode = lambda: mode
+    bot._hsl_state = lambda side: {'halted': False}
+    bot._equity_hard_stop_runtime_initialized = lambda side: False
+    bot.positions = {'A': {'long': {'size': 1.0 if held else 0.0}}, 'B': {'long': {'size': 0.0}}}
+    bot.config['live']['hsl_unavailable_grace_seconds'] = 120.0
+    bot._equity_hard_stop_check.side_effect = invalid_history
+    assert await recovery.ensure_ready(bot)
+    orders = [dict(symbol=symbol, position_side='long', side='buy', qty=1.0, reduce_only=False)
+              for symbol in ('A', 'B')]
+    close = dict(symbol='B', position_side='long', side='sell', qty=1.0, reduce_only=True)
+    emitter = type('Emitter', (), {'_emit_execution_create_filter_event': staticmethod(lambda *a, **k: None)})
+    assert executor._filter_hsl_replay_pending_creates(bot, emitter, orders + [close], None) == ([orders[0], close] if held else [close])
+    bot._equity_hard_stop_runtime_initialized = lambda side: True
+    assert executor._filter_hsl_replay_pending_creates(bot, emitter, orders, None) == orders
