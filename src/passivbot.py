@@ -3828,6 +3828,10 @@ class Passivbot:
         decision["cold_path_required"] = False
         return decision
 
+    def _validate_protective_position_snapshot(self, positions):
+        """Connector checks on the exact captured positions used by a close wave."""
+        return None
+
     async def _prepare_protective_account(self):
         """Read-only connector preflight for restored protective execution.
 

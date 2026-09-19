@@ -13,6 +13,7 @@ from bitget_normalization import (
 )
 from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
+from passivbot_exceptions import FatalBotException
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
@@ -102,9 +103,16 @@ class BitgetBot(CCXTBot):
 
     def _get_position_side_for_order(self, order: dict) -> str:
         """Bitget provides posSide in info."""
+        info = order.get("info") or {}
+        native_modes = {str(info[key]).lower() for key in ("posMode", "holdMode")
+                        if info.get(key) not in (None, "")}
+        native_side = str(info.get("posSide") or "").lower()
+        if native_side == "net" or native_modes == {"one_way_mode"}:
+            if native_modes - {"one_way_mode"} or native_side not in {"", "net"}:
+                raise ValueError("bitget order contains contradictory position-mode evidence")
+            return self._normalize_one_way_position_side(order)
         if not bool(getattr(self, "hedge_mode", True)):
             return self._normalize_one_way_position_side(order)
-        info = order.get("info") or {}
         supplied = {
             str(value).lower()
             for value in (
@@ -863,11 +871,13 @@ class BitgetBot(CCXTBot):
     async def _prepare_protective_account(self):
         # Account routing must precede even a balance-independent close cohort.
         await self._detect_account_mode()
-        # CCXT derives hedged from classic posMode or UTA holdMode. A flat
-        # account needs only cancellation before normal mode setup can run.
-        for position in await self.cca.fetch_positions():
-            if float(position["contracts"]) != 0.0 and position.get("hedged") is not True:
-                raise RuntimeError("Bitget protective startup requires existing hedge position mode")
+
+    def _validate_protective_position_snapshot(self, positions):
+        # CCXT derives hedged from classic posMode or UTA holdMode. Check the
+        # actual close cohort, including positions opened after startup preflight.
+        for position in positions:
+            if float(position["size"]) != 0.0 and position.get("hedged") is not True:
+                raise FatalBotException("Bitget protective execution requires existing hedge position mode")
 
     async def update_exchange_config(self):
         # Detect classic vs UTA/elite once, before any balance/position/order call.

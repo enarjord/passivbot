@@ -28,10 +28,13 @@ class OKXBot(CCXTBot):
         Inspect account configuration to detect portfolio margin (PM) and position mode.
         Startup must know whether OKX is in dual-side or net mode before building orders.
         """
+        self.okx_dual_side = False
         try:
             cfg = await self.cca.private_get_account_config()
-            data = cfg.get("data", [{}])
-            data0 = data[0] if data else {}
+            data = cfg.get("data")
+            if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+                raise ValueError("OKX account configuration requires one explicit mode row")
+            data0 = data[0]
             pos_mode = str(data0.get("posMode", "")).lower()  # "long_short_mode" or "net_mode"
             acct_lv = str(data0.get("acctLv", "")).lower()  # "pm" for portfolio margin accounts
             if pos_mode == "net_mode":
@@ -43,7 +46,9 @@ class OKXBot(CCXTBot):
                 )
             elif pos_mode == "long_short_mode":
                 self.okx_dual_side = True
-            # If unknown, keep default True and let later failures flip it off.
+                self.hedge_mode = True
+            else:
+                raise ValueError("OKX account configuration missing explicit position mode")
             self.okx_pm_account = acct_lv == "pm"
             if self.okx_pm_account:
                 logging.info(

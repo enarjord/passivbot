@@ -8,6 +8,7 @@ from copy import deepcopy
 from collections import defaultdict
 from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
+from passivbot_exceptions import FatalBotException
 from pure_funcs import (
     floatify,
     calc_hash,
@@ -581,13 +582,13 @@ class BybitBot(CCXTBot):
             if to_print:
                 logging.debug(f"{log_symbol}: {to_print.strip()}")
 
-    async def _prepare_protective_account(self):
-        # Bybit exposes position mode per symbol in its position rows rather
-        # than through fetch_position_mode. Flat scopes need only cancellation.
-        for position in await self._do_fetch_positions_paginated():
-            if float(position["contracts"]) != 0.0:
+    def _validate_protective_position_snapshot(self, positions):
+        # Mode is per symbol. Validate the positions actually used for this wave,
+        # including exposure opened after a flat startup observation.
+        for position in positions:
+            if float(position["size"]) != 0.0:
                 if self._strict_position_idx(position["info"]["positionIdx"]) not in {1, 2}:
-                    raise RuntimeError("Bybit protective startup requires existing hedge position mode")
+                    raise FatalBotException("Bybit protective execution requires existing hedge position mode")
 
     async def update_exchange_config(self):
         try:

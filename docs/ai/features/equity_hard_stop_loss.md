@@ -101,10 +101,15 @@ before inspecting pending work; the scoped health records, not a separate retry-
 are exit authority. Cold startup loads execution metadata and performs the required read-only connector routing/position-mode
 preflight before servicing restored commitments. After metadata loads, config reconciliation
 retires disabled or obsolete journal scopes before deciding whether preflight is required. Ordinary exchange-configuration balance gates,
-account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing and verifies hedge mode on held positions; OKX detects account configuration; Binance, KuCoin and
-Bitunix verify existing hedge mode; Bybit checks held positions' native position indices.
-Unsupported modes retain the commitment and surface the connector error; no mode write is
-performed by this preflight. Hourly market refresh
+account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing; OKX requires explicit dual-side account configuration; Binance, KuCoin and
+Bitunix verify existing hedge mode.
+Every protective refresh validates connector prerequisites on its exact captured position cohort
+before applying account state. Bybit checks native position indices, and Bitget requires
+hedge-mode evidence on held positions, while
+explicitly one-way resting orders can still be normalized for cancellation when flat. WEEX requires
+native `COMBINED` evidence on each held position. A position appearing after startup preflight is
+therefore checked before its close wave. Unsupported modes retain the commitment and surface the
+connector error; no mode write is performed by this preflight. Hourly market refresh
 never starts a second commitment-draining loop; runtime execution remains the only order owner. Each wave services
 committed exits and existing normal closes, then gives overdue unavailable scopes an evaluation
 opportunity even while another scope remains open. Normal RED supervision yields to this scheduler

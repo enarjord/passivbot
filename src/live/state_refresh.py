@@ -88,6 +88,10 @@ async def refresh_protective_authoritative_state(bot, *, require_balance: bool =
     if fetched_open_orders in [None, False]:
         return False
 
+    # Validate execution prerequisites on this cohort, not an earlier startup read.
+    validator = getattr(bot, "_validate_protective_position_snapshot", None)
+    if callable(validator):
+        validator(fetched_positions)
     open_orders_ok = await bot._apply_open_orders_snapshot(
         fetched_open_orders,
         allow_followup_positions_refresh=False,
