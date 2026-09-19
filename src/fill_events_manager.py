@@ -110,7 +110,15 @@ class FillEventCacheDiskFullError(RuntimeError):
 
 
 class FillEventCacheContractError(RuntimeError):
-    """Raised when persisted fill events use an unsafe legacy accounting contract."""
+    """Raised when persisted fills or their metadata violate the cache contract."""
+
+
+def _cache_metadata_timestamp(metadata: Dict[str, object], key: str) -> int:
+    """Classify invalid persisted bounds at their data boundary, not as code bugs."""
+    try:
+        return int(metadata.get(key, 0) or 0)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise FillEventCacheContractError(f"invalid fill-cache metadata timestamp: {key}") from exc
 
 
 def _is_disk_full_error(exc: BaseException) -> bool:
@@ -2153,8 +2161,8 @@ class FillEventCache:
         oldest = min(timestamps)
         newest = max(timestamps)
 
-        current_oldest = metadata.get("oldest_event_ts", 0)
-        current_newest = metadata.get("newest_event_ts", 0)
+        current_oldest = _cache_metadata_timestamp(metadata, "oldest_event_ts")
+        current_newest = _cache_metadata_timestamp(metadata, "newest_event_ts")
 
         if current_oldest == 0 or oldest < current_oldest:
             metadata["oldest_event_ts"] = oldest
@@ -2185,13 +2193,13 @@ class FillEventCache:
     def get_covered_start_ms(self) -> int:
         """Return earliest open-ended lookback start confirmed against exchange."""
         metadata = self.load_metadata()
-        return int(metadata.get("covered_start_ms", 0) or 0)
+        return _cache_metadata_timestamp(metadata, "covered_start_ms")
 
     def mark_covered_start(self, start_ts: int) -> None:
         """Persist earliest open-ended lookback start confirmed against exchange."""
         metadata = self.load_metadata()
         start_ts = int(start_ts)
-        current = int(metadata.get("covered_start_ms", 0) or 0)
+        current = _cache_metadata_timestamp(metadata, "covered_start_ms")
         if current == 0 or start_ts < current:
             metadata["covered_start_ms"] = start_ts
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -5232,7 +5240,7 @@ class FillEventsManager:
                 start_ms = self._events[idx].timestamp
         if last_refresh_overlap_ms is not None:
             metadata = self.cache.load_metadata()
-            last_refresh_ms = int(metadata.get("last_refresh_ms", 0) or 0)
+            last_refresh_ms = _cache_metadata_timestamp(metadata, "last_refresh_ms")
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
                 if start_ms is None:
@@ -5635,10 +5643,10 @@ class FillEventsManager:
         metadata = self.cache.load_metadata()
         history_scope = self.get_history_scope()
         try:
-            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
-            metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
-            metadata_newest = int(metadata.get("newest_event_ts", 0) or 0)
-        except (TypeError, ValueError, OverflowError):
+            covered_start_ms = _cache_metadata_timestamp(metadata, "covered_start_ms")
+            metadata_oldest = _cache_metadata_timestamp(metadata, "oldest_event_ts")
+            metadata_newest = _cache_metadata_timestamp(metadata, "newest_event_ts")
+        except FillEventCacheContractError:
             # These bounds are cache evidence, not caller configuration. An
             # unusable bound cannot prove coverage; zeroes below are diagnostic
             # placeholders in an explicitly unavailable verdict only.

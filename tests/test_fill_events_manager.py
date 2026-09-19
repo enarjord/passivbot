@@ -9247,3 +9247,34 @@ def test_coverage_reports_corrupt_metadata_as_unavailable(tmp_path, field, value
     assert metadata[field] is value
     metadata[field] = 0
     assert manager.get_coverage_status(start_ms=1000, end_ms=2000)['ready'] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('field', ['oldest_event_ts', 'newest_event_ts'])
+@pytest.mark.parametrize('value', ['invalid', {'invalid': 1}])
+async def test_cold_cache_normalization_classifies_invalid_metadata(tmp_path, sample_events, field, value):
+    cache_path = tmp_path / 'normalization'
+    manager = FillEventsManager(exchange='bitget', user='default',
+                                fetcher=_StaticFetcher(sample_events), cache_path=cache_path,
+                                fee_pct_fallback=0.0)
+    await manager.refresh()
+    metadata = manager.cache.load_metadata()
+    metadata[field] = value
+    manager.cache.save_metadata(metadata)
+    cold = FillEventsManager(exchange='bitget', user='default',
+                             fetcher=_StaticFetcher([]), cache_path=cache_path,
+                             fee_pct_fallback=0.0)
+    with pytest.raises(fem.FillEventCacheContractError, match=field):
+        await cold.ensure_loaded()
+    assert not cold._loaded
+    assert cold.cache.load_metadata()[field] == value
+    assert cold.get_coverage_status(start_ms=0)['ready'] is False
+
+
+@pytest.mark.parametrize('field', ['covered_start_ms', 'oldest_event_ts', 'newest_event_ts', 'last_refresh_ms'])
+@pytest.mark.parametrize('value', ['invalid', float('nan'), float('inf'), {'invalid': 1}])
+def test_cache_timestamp_reader_classifies_data_errors(field, value):
+    with pytest.raises(fem.FillEventCacheContractError, match=field):
+        fem._cache_metadata_timestamp({field: value}, field)
+    assert fem._cache_metadata_timestamp({field: '123'}, field) == 123
+    assert fem._cache_metadata_timestamp({}, field) == 0
