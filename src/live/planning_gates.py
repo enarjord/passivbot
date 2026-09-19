@@ -287,7 +287,7 @@ def build_protective_planning_snapshot(
     ordered_symbols = tuple(
         sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
     )
-    required = frozenset({"balance", "positions", "open_orders", "market_snapshot"})
+    required = frozenset({"positions", "open_orders", "market_snapshot"})
     ledger = bot._ensure_freshness_ledger()
     current_epoch = int(ledger.epoch)
     required_epoch = max(1, current_epoch)

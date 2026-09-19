@@ -55,6 +55,12 @@ Account-critical surfaces are required before any exchange action:
 2. balance
 3. open orders
 
+Dedicated full-position panic closes and their cancellations are an action-specific exception:
+positions and open orders must be fresh, but balance is not an input to their sizing or decision.
+The reduced Rust close contract accepts only signed size, book, tick size, and execution policy.
+It must emit exactly one full close per exposed target; malformed or incomplete batches are fatal.
+This exception does not apply to ordinary planning, risk evaluation, or stop-event reconstruction.
+
 Market snapshots must be fresh for the symbols acted upon. Candles and EMAs are required only for
 order classes whose strategy or risk decision consumes them. Stale flat-symbol candles must not
 block protective management of held symbols.

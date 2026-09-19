@@ -7478,7 +7478,8 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
 
 
 @pytest.mark.asyncio
-async def test_refresh_protective_authoritative_state_uses_account_critical_surfaces():
+@pytest.mark.parametrize("require_balance", [True, False])
+async def test_refresh_protective_authoritative_state_uses_account_critical_surfaces(require_balance):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
@@ -7549,33 +7550,32 @@ async def test_refresh_protective_authoritative_state_uses_account_critical_surf
     )
     bot.update_pnls = AsyncMock(side_effect=AssertionError("fills not required"))
 
-    ok = await bot.refresh_protective_authoritative_state()
+    if not require_balance:
+        bot._prepare_balance_snapshot = lambda *_: pytest.fail("exit must not consume balance")
+    ok = await bot.refresh_protective_authoritative_state(require_balance=require_balance)
+    expected_plan = {"positions", "open_orders"} | ({"balance"} if require_balance else set())
 
     assert ok is True
     bot._fetch_authoritative_state_staged_snapshot.assert_awaited_once_with(
-        {"balance", "positions", "open_orders"}
+        expected_plan
     )
     bot._apply_open_orders_snapshot.assert_awaited_once_with(
         fetched_orders,
         allow_followup_positions_refresh=False,
         reconcile_balance=False,
     )
-    assert recorded == [
-        (
-            "balance",
-            123.45,
-        ),
+    assert recorded == ([("balance", 123.45)] if require_balance else []) + [
         (
             "positions",
             (("BTC/USDT:USDT", "long", 0.1, 100.0),),
         )
     ]
-    assert bot.balance_raw == pytest.approx(123.45)
+    assert bot.balance_raw == pytest.approx(123.45 if require_balance else 0.0)
     assert cooldown_updates == [(("BTC/USDT:USDT",), 1_700_000_000_000)]
-    assert finalized == [{"balance", "positions", "open_orders"}]
+    assert finalized == [expected_plan]
 
 
-def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
+def test_protective_planning_snapshot_requires_positions_orders_and_prices_only():
     import passivbot as pb_mod
 
     symbol = "BTC/USDT:USDT"
@@ -7602,7 +7602,6 @@ def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
     ledger.begin_epoch(now_ms=now_ms)
     ledger.stamp("positions", (symbol, "long", 0.1), now_ms=now_ms)
     ledger.stamp("open_orders", (), now_ms=now_ms)
-    ledger.stamp("balance", 100.0, now_ms=now_ms)
     ledger.stamp("market_snapshot", (symbol, 99.5, 100.5), now_ms=now_ms)
     bot.freshness_ledger = ledger
     snapshots = {
@@ -7623,7 +7622,6 @@ def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
 
     assert snapshot.account_invalidation_generation == 7
     assert set(snapshot.required_surfaces) == {
-        "balance",
         "positions",
         "open_orders",
         "market_snapshot",
@@ -7631,7 +7629,6 @@ def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
     assert "fills" not in snapshot.required_surfaces
     assert "completed_candles" not in snapshot.required_surfaces
     assert {surface.name: surface.min_epoch for surface in snapshot.surfaces} == {
-        "balance": 1,
         "positions": 1,
         "open_orders": 1,
         "market_snapshot": 1,
@@ -7732,7 +7729,6 @@ async def test_refresh_authoritative_state_staged_does_not_blame_nonblocking_pnl
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: False
     bot._authoritative_staged_refresh_plan = lambda: {
-        "balance",
         "positions",
         "open_orders",
         "fills",
@@ -7762,7 +7758,6 @@ async def test_refresh_authoritative_state_staged_classifies_unproven_fill_cover
     bot._live_risk_uses_authoritative_pnl = lambda: False
     bot._last_fill_refresh_block_reason = "fill_history_coverage"
     bot._authoritative_staged_refresh_plan = lambda: {
-        "balance",
         "positions",
         "open_orders",
         "fills",
@@ -8386,8 +8381,8 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
     class FakeBot:
         exchange = "binance"
         user = "tester"
-        balance = 120.0
-        balance_raw = 120.0
+        balance = float("nan")
+        balance_raw = float("nan")
         positions = {
             symbol: {
                 "long": {"size": 1.0, "price": 100.0},
@@ -8455,11 +8450,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
             raise AssertionError("protective panic path must not load EMA bundles")
 
         def _bot_params_to_rust_dict(self, pside, sym):
-            return {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
-                "wallet_exposure_limit": 1.0,
-            }
+            raise AssertionError("protective exit must not read strategy parameters")
 
         def _strategy_params_to_rust_dict(self, pside, sym):
             return {}
@@ -8481,10 +8472,8 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
 
     def fake_compute(json_str):
         captured["input"] = json.loads(json_str)
-        output = json.loads(
-            _empty_orchestrator_output(captured["input"], {"warnings": []})
-        )
-        output["orders"].append(
+        output = []
+        output.append(
             {
                 "symbol_idx": 0,
                 "pside": "long",
@@ -8509,14 +8498,14 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
     monkeypatch.setattr(
         pb_mod.Passivbot,
         "_equity_hard_stop_enabled",
-        lambda self, pside=None: True,
+        lambda self, pside=None, symbol=None: True,
     )
     monkeypatch.setattr(
         pb_mod.Passivbot,
         "_equity_hard_stop_panic_close_order_type",
-        lambda self, pside: "market",
+        lambda self, pside, symbol=None: "limit",
     )
-    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+    monkeypatch.setattr(pb_mod.pbr, "compute_protective_closes_json", fake_compute, raising=False)
 
     out = await pb_mod.Passivbot.calc_protective_panic_ideal_orders_orchestrator(
         FakeBot()
@@ -8526,17 +8515,11 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
     assert len(out[symbol]) == 1
     assert out[symbol][0][:3] == (-1.0, 100.4, "close_panic_long")
     assert out[symbol][0][4:] == ("limit", "risk_critical")
-    rust_symbol = captured["input"]["symbols"][0]
-    assert rust_symbol["long"]["mode"] == "panic"
-    assert rust_symbol["short"]["mode"] == "manual"
-    assert captured["input"]["global"]["panic_close_market"] is False
-    assert len(captured["input"]["symbols"]) == 1
-    assert rust_symbol["emas"] == {
-        "m1": {"close": [], "log_range": [], "volume": []},
-        "h1": {"close": [], "log_range": [], "volume": []},
-    }
-    assert "unstuck_allowance_long" not in captured["input"]["global"]
-    assert captured["input"]["global"]["realized_pnl_cumsum_last"] == 0.0
+    assert captured["input"] == [{
+        "symbol_idx": 0, "pside": "long", "position_size": 1.0,
+        "order_book": {"bid": 99.5, "ask": 100.5}, "price_step": 0.1,
+        "execution_type": "limit",
+    }]
     assert pb_mod.Passivbot._protective_panic_target_psides_by_symbol(FakeBot()) == {
         symbol: {"long"}
     }

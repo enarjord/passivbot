@@ -610,7 +610,10 @@ async def execute_order_plan(
             )
         seen.add(key)
     low_balance = False
-    if not bot.debug_mode:
+    balance_independent = not configure_creations and all(
+        _order_is_panic(order) and _order_is_reduce_only(order) for order in to_create
+    )
+    if not bot.debug_mode and not balance_independent:
         raw_balance = float(bot.get_raw_balance())
         if not math.isfinite(raw_balance):
             raise RuntimeError(

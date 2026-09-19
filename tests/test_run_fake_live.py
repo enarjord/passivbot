@@ -1832,7 +1832,7 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['episode', 'history_balance'])
+@pytest.mark.parametrize('failure', ['episode', 'history_balance', 'current_balance'])
 async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure):
     """Unavailable historical input cannot strand a previously green live position."""
     from unittest.mock import AsyncMock
@@ -1865,6 +1865,10 @@ async def test_unready_green_hsl_closes_with_real_rust_and_fake_exchange(tmp_pat
                if failure == 'episode' else recovery.RiskInputUnavailable('hsl_history_balance_unavailable'))
         bot._equity_hard_stop_check = AsyncMock(side_effect=exc)
         assert not await recovery.ensure_ready(bot)
+        if failure == 'current_balance':
+            bot.balance_raw = float('nan')
+            bot.balance = float('nan')
+            bot._capture_balance_staged_snapshot = AsyncMock(side_effect=AssertionError('balance is not an exit input'))
         await recovery.protect_and_wait(bot)
         # Actual production planner, reconciliation, execution, and fake fills.
         await recovery.protect_and_wait(bot)

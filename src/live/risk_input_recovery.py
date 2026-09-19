@@ -298,8 +298,7 @@ async def protect_unready_hsl(bot):
     if state is None:
         return False
     try:
-        if await bot.refresh_protective_authoritative_state():
-            validate_current_balances(bot)
+        if await bot.refresh_protective_authoritative_state(require_balance=False):
             targets = _unready_hsl_targets(bot)
             if not targets:
                 state.protective_exit_pending = False

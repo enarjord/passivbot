@@ -2453,29 +2453,83 @@ mod core {
         Ok(())
     }
 
+    /// Minimal contract for a committed full-position protective exit. No account
+    /// balance, historical equity, entry strategy, or position cost basis is consumed.
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ProtectiveCloseInput {
+        pub symbol_idx: usize,
+        pub pside: PositionSide,
+        pub position_size: f64,
+        pub order_book: OrderBook,
+        pub price_step: f64,
+        pub execution_type: ExecutionType,
+    }
+
+    pub fn compute_protective_closes(
+        inputs: &[ProtectiveCloseInput],
+    ) -> Result<Vec<ExecutableOrder>, &'static str> {
+        let mut seen = HashSet::new();
+        let mut orders = Vec::new();
+        for input in inputs {
+            if !seen.insert((input.symbol_idx, input.pside)) {
+                return Err("duplicate protective close scope");
+            }
+            if !input.position_size.is_finite()
+                || (input.pside == PositionSide::Long && input.position_size < 0.0)
+                || (input.pside == PositionSide::Short && input.position_size > 0.0)
+                || !input.price_step.is_finite() || input.price_step <= 0.0
+                || !input.order_book.bid.is_finite() || input.order_book.bid <= 0.0
+                || !input.order_book.ask.is_finite() || input.order_book.ask < input.order_book.bid
+            {
+                return Err("invalid protective close input");
+            }
+            if input.position_size == 0.0 {
+                continue;
+            }
+            let order = panic_close_order(input.symbol_idx, input.pside,
+                input.position_size, &input.order_book, input.price_step)
+                .ok_or("invalid protective close result")?;
+            orders.push(ExecutableOrder {
+                symbol_idx: order.symbol_idx, pside: order.pside,
+                qty: order.qty, price: order.price, order_type: order.order_type,
+                execution_type: input.execution_type,
+                execution_priority: ExecutionPriority::RiskCritical,
+            });
+        }
+        Ok(orders)
+    }
+
     fn calc_panic_close(
+        symbol_idx: usize, pside: PositionSide, pos: &Position,
+        ob: &OrderBook, exchange: &ExchangeParams,
+    ) -> Option<IdealOrder> {
+        panic_close_order(symbol_idx, pside, pos.size, ob, exchange.price_step)
+    }
+
+    fn panic_close_order(
         symbol_idx: usize,
         pside: PositionSide,
-        pos: &Position,
+        position_size: f64,
         ob: &OrderBook,
-        exchange: &ExchangeParams,
+        price_step: f64,
     ) -> Option<IdealOrder> {
-        if pos.size == 0.0 {
+        if position_size == 0.0 {
             return None;
         }
         let qty = match pside {
-            PositionSide::Long => -pos.size.abs(),
-            PositionSide::Short => pos.size.abs(),
+            PositionSide::Long => -position_size.abs(),
+            PositionSide::Short => position_size.abs(),
         };
         let price = match pside {
             PositionSide::Long => {
-                let touch = tolerant_round_dn_preserve_step(ob.ask, exchange.price_step);
-                tolerant_round_dn_preserve_step(touch - exchange.price_step, exchange.price_step)
-                    .max(exchange.price_step)
+                let touch = tolerant_round_dn_preserve_step(ob.ask, price_step);
+                tolerant_round_dn_preserve_step(touch - price_step, price_step)
+                    .max(price_step)
             }
             PositionSide::Short => {
-                let touch = tolerant_round_up_preserve_step(ob.bid, exchange.price_step);
-                tolerant_round_up_preserve_step(touch + exchange.price_step, exchange.price_step)
+                let touch = tolerant_round_up_preserve_step(ob.bid, price_step);
+                tolerant_round_up_preserve_step(touch + price_step, price_step)
             }
         };
         if !(price.is_finite() && price > 0.0 && qty.is_finite() && qty != 0.0) {
@@ -4952,6 +5006,50 @@ mod core {
             );
 
             assert!((order.qty + 1.001).abs() <= f64::EPSILON * 8.0);
+        }
+
+        #[test]
+        fn minimal_protective_close_matches_canonical_panic_and_preserves_dust() {
+            for pside in [PositionSide::Long, PositionSide::Short] {
+                for size in [0.0, 0.000003, 1.0] {
+                    for execution_type in [ExecutionType::Limit, ExecutionType::Market] {
+                        let signed_size = if pside == PositionSide::Long { size } else { -size };
+                        let input = ProtectiveCloseInput {
+                            symbol_idx: 7, pside, position_size: signed_size,
+                            order_book: OrderBook { bid: 99.97, ask: 100.03 },
+                            price_step: 0.1, execution_type,
+                        };
+                        let orders = compute_protective_closes(&[input.clone()]).unwrap();
+                        if size == 0.0 { assert!(orders.is_empty()); continue; }
+                        let old = calc_panic_close(7, pside,
+                            &Position { size: signed_size, price: 123.0 },
+                            &input.order_book,
+                            &ExchangeParams { price_step: 0.1, ..Default::default() }).unwrap();
+                        assert_eq!(orders.len(), 1);
+                        assert_eq!(orders[0].qty, old.qty);
+                        assert_eq!(orders[0].price, old.price);
+                        assert_eq!(orders[0].order_type, old.order_type);
+                        assert_eq!(orders[0].execution_type, execution_type);
+                        assert_eq!(orders[0].execution_priority, ExecutionPriority::RiskCritical);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn minimal_protective_close_rejects_whole_invalid_batch() {
+            let good = ProtectiveCloseInput {
+                symbol_idx: 0, pside: PositionSide::Long, position_size: 1.0,
+                order_book: OrderBook { bid: 99.0, ask: 100.0 },
+                price_step: 0.1, execution_type: ExecutionType::Market,
+            };
+            assert!(compute_protective_closes(&[good.clone(), good.clone()]).is_err());
+            for bad in [f64::NAN, f64::INFINITY, -1.0] {
+                let mut input = good.clone();
+                input.symbol_idx = 1;
+                input.position_size = bad;
+                assert!(compute_protective_closes(&[good.clone(), input]).is_err());
+            }
         }
 
         #[test]
