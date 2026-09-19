@@ -300,6 +300,15 @@ def has_orders(bot, scope):
                for order in orders)
 
 
+def emergency_evidence_needs_confirmation(bot):
+    """A newly discovered fill can invalidate both cost basis and cash balance."""
+    pending = getattr(bot, "_authoritative_pending_confirmations", {}) or {}
+    ledger = getattr(bot, "freshness_ledger", None)
+    return any(int(pending.get(surface, 0) or 0) > max(0,
+        ledger.surfaces[surface].epoch if ledger is not None else 0
+    ) for surface in ("positions", "balance"))
+
+
 async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
     """Evaluate unavailable scopes with current account and quote evidence only.
 
@@ -382,7 +391,10 @@ async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
             logging.warning("[risk] optional emergency fill-tail refresh unavailable; raw-UPNL protection remains active | error_type=%s",
                             bounded_exception_type(exc))
         else:
-            await evaluate_emergency(bot, candidates, refresh_fill_tail=False)
+            # New fills may have changed cost basis even at unchanged net size.
+            # Let the account owner confirm that change before using this tail.
+            if not emergency_evidence_needs_confirmation(bot):
+                await evaluate_emergency(bot, candidates, refresh_fill_tail=False)
 
 
 def holds_after_emergency_exit(bot, pside, symbol):

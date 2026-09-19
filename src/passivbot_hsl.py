@@ -1757,6 +1757,7 @@ def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
     ledger = getattr(self, "freshness_ledger", None)
     if (manager is None or not callable(getattr(self, "_hsl_coin_state", None))
             or ledger is None or ledger.epoch <= 0
+            or hsl_protection.emergency_evidence_needs_confirmation(self)
             or getattr(self, "_hsl_fill_tail_observation", None) != (
                 ledger.epoch, ledger.surfaces["positions"].revision)
             or "positions" not in ledger.surfaces_at_epoch()):
@@ -6717,6 +6718,10 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
             )
             if not replay_complete:
                 evidence = state.get("episode_evidence")
+                if evidence is not None:
+                    # Retain the consumed tape for correction detection, while
+                    # reporting quality only for the active drawdown episode.
+                    evidence = evidence.window(state.get("pnl_reset_timestamp_ms"), ts_ms)
                 hsl_protection.record_evaluation(self, pside, symbol,
                     degraded_reason=evidence.degraded_reason if evidence is not None else "")
             if metrics["changed"]:

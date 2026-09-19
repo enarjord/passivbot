@@ -499,3 +499,58 @@ async def test_completed_degraded_cooldown_replay_is_counted_once(monkeypatch):
     monkeypatch.setattr(hsl, '_equity_hard_stop_replay_live_restart', replay)
     await bot._equity_hard_stop_check_coin()
     assert bot._hsl_protection_health.scopes[Scope('coin', 'long', 'A')].degraded_evaluations == 1
+
+
+@pytest.mark.asyncio
+async def test_incremental_flatten_clears_old_quality_but_retains_correction_evidence():
+    from live.hsl_protection import ProtectionHealth, Scope
+    bot = make_coin_bot()
+    bot._hsl_protection_health = ProtectionHealth()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.positions = {'A': {'long': {'size': 5.0}, 'short': {'size': 0.0}}}
+    bot.bot_value = lambda side, key: 1
+    now = [180_000]
+    bot.get_exchange_time = lambda: now[0]
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-1),
+                              (120_000,'increase',1,0)]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', 60_000, 1000.0, 0.0, 0.0, 0.0)
+    await bot._equity_hard_stop_check_coin()
+    health = bot._hsl_protection_health.scopes[Scope('coin', 'long', 'A')]
+    assert health.status == 'degraded'
+    events.extend([
+        dict(timestamp=240_000, symbol='A', pside='long', action='decrease', qty=5.0, pnl=0.0),
+        dict(timestamp=300_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0),
+    ])
+    now[0] = 360_000
+    await bot._equity_hard_stop_check_coin()
+    await bot._equity_hard_stop_check_coin()
+    assert health.status == 'usable'
+    assert health.degraded_evaluations == 0
+    assert not health.reason
+    # Historical corrections must still be noticed even after quality recovers.
+    assert bot._hsl_coin_state('long', 'A')['episode_evidence'].degraded_timestamps == (120_000,)
+
+
+@pytest.mark.parametrize('surface', ['positions', 'balance'])
+def test_optional_loss_waits_for_account_confirmation_even_at_unchanged_size(surface):
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    bot._pnls_manager = make_fake_pnls_manager([
+        dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+        for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-30),
+                        (121_000,'increase',1,0)]
+    ])
+    bot.positions = {'A': {'long': {'size': 5.0}}}
+    bot._fill_history_coverage_status = lambda **kwargs: {'ready': True}
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0
+    bot._authoritative_pending_confirmations = {surface: bot.freshness_ledger.epoch + 1}
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None
+    bot.freshness_ledger.begin_epoch()
+    bot.freshness_ledger.stamp('positions', now_ms=180_000)
+    bot.freshness_ledger.stamp('balance', now_ms=180_000)
+    # Account confirmation alone does not renew the ordered fill-tail proof.
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None
+    bot._hsl_fill_tail_observation = (bot.freshness_ledger.epoch, bot.freshness_ledger.surfaces['positions'].revision)
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0

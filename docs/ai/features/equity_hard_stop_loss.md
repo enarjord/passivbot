@@ -171,7 +171,9 @@ retains the existing EMA, and reports `unordered_nonflattening_fill_cohort` as d
 invents a fill, PnL value, price, or flat boundary. A possible flatten, contradictory/partial chain
 metadata, mixed-sign realized deltas, missing opening quantity, or position mismatch remains
 unavailable. Monitoring exposes consecutive degraded evaluation counts, reset after usable
-recovery or unavailability. Quality clears when the approximate cohort is trimmed from the active evidence window. Aggregate modes keep
+recovery or unavailability. Quality clears when the approximate cohort is trimmed from the active
+evidence window or an exact flatten resets the drawdown episode. Consumed fills remain available
+for correction detection. Aggregate modes keep
 their existing ordering contract. The approximation is reproducible from fills after restart.
 
 After grace, Rust evaluates `max(0, realized_loss - current_upnl) / budget` against the configured
@@ -183,7 +185,9 @@ observation, with no intervening position observation. Concurrent requests shari
 stale cached quantity equality alone are insufficient. If raw loss has not already committed an
 exit, the emergency owner may attempt one ordered fill refresh with a five-second timeout and
 at most one attempt per ten seconds. Failure leaves raw-UPNL evaluation active; a raw-triggered
-close never waits for this optional enrichment. A proven last flatten excludes
+close never waits for this optional enrichment. If the refresh discovers fills requiring account
+confirmation, enrichment waits for confirmed positions and balance plus a new ordered tail; equal
+net position size does not prove an unchanged cost basis. A proven last flatten excludes
 previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
 it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
 evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.
