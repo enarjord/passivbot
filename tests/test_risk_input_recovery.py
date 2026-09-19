@@ -1339,3 +1339,34 @@ async def test_known_red_wave_precedes_unready_emergency_balance(monkeypatch):
     bot._equity_hard_stop_coin_red_active = lambda: True
     assert await recovery.protect_before_history_refresh(bot)
     assert seen == ['normal_close']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inactive_key", ["n_positions", "total_wallet_exposure_limit"])
+async def test_inactive_coin_scope_skips_new_emergency_but_preserves_committed_exit(monkeypatch, inactive_key):
+    from live import hsl_protection as h
+    from passivbot_hsl import _equity_hard_stop_coin_active_pside
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {"A": {"long": {"size": 1.0}, "short": {"size": -1.0}}}
+    bot.bot_value = lambda side, key: 0 if side == "short" and key == inactive_key else 1
+    assert not _equity_hard_stop_coin_active_pside(bot, "short", "A")
+    health = h.manager(bot)
+    inactive = h.Scope("coin", "short", "A")
+    active = h.Scope("coin", "long", "A")
+    for scope in (inactive, active):
+        health.unavailable(scope, now_ms=0, reason="history", grace_ms=0)
+    assert recovery._unready_hsl_targets(bot) == {"A": {"long"}}
+    assert not h.affected_scopes(bot, {}, {"pside": "short", "symbol": "A"})
+    # Even a caller supplying the inactive candidate cannot divide by zero.
+    await h.evaluate_emergency(bot, {"A": {"long", "short"}}, refresh_fill_tail=False)
+    assert health.pending_exits() == {active}
+    bot._calc_upnl_sum_strict.assert_awaited_once_with("long", "A")
+    health.scopes[inactive].exit_committed = True
+    health.scopes[inactive].exit_started_ms = bot.get_exchange_time()
+    bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_unready_hsl(bot)
+    assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
+        "target_psides_by_symbol": {"A": {"long", "short"}}}
+    assert health.pending_exits() == {active, inactive}

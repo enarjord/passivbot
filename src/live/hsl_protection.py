@@ -257,19 +257,29 @@ def record_evaluation(bot, pside, symbol=None, *, degraded_reason=""):
             now_ms=int(bot.get_exchange_time()), degraded_reason=degraded_reason)
 
 
+def signal_scope_enabled(bot, pside, symbol=None):
+    """Use the normal signal's activity contract for new emergency decisions."""
+    if bot._equity_hard_stop_signal_mode() == "coin":
+        from passivbot_hsl import _equity_hard_stop_coin_active_pside
+        return _equity_hard_stop_coin_active_pside(bot, pside, symbol)
+    return bot._equity_hard_stop_enabled(pside)
+
+
 def affected_scopes(bot, targets, details):
     """Attribute known symbol/side failures narrowly; account failures affect all targets."""
     mode = bot._equity_hard_stop_signal_mode()
     side = details.get("pside")
     symbol = details.get("symbol")
     if mode == "coin" and side in {"long", "short"} and symbol:
-        return {Scope(mode, side, str(symbol))}
+        return ({Scope(mode, side, str(symbol))}
+                if signal_scope_enabled(bot, side, symbol) else set())
     if mode == "coin":
         return {Scope(mode, pside, symbol) for symbol, psides in targets.items()
-                for pside in psides if side is None or pside == side}
+                for pside in psides if (side is None or pside == side)
+                and signal_scope_enabled(bot, pside, symbol)}
     target_sides = {pside for psides in targets.values() for pside in psides}
     return {Scope(mode, pside) for pside in ("long", "short")
-            if bot._equity_hard_stop_enabled(pside)
+            if signal_scope_enabled(bot, pside)
             and pside in target_sides
             and (mode == "unified" or side is None or pside == side)}
 
@@ -279,7 +289,16 @@ def _scope_matches(scope, pside, symbol):
             and (not scope.symbol or scope.symbol == symbol))
 
 
-def targets_for_scopes(bot, scopes, candidates):
+def targets_for_scopes(bot, scopes, candidates=None):
+    # Commitments own remaining exposure/orders even if sizing is later disabled.
+    # Only explicit HSL disablement/mode changes retire them in reconcile_config.
+    if candidates is None:
+        candidates = {
+            symbol: {side for side in ("long", "short")
+                     if float(bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0)) != 0.0
+                     or any(order["position_side"] == side for order in bot.open_orders.get(symbol, []))}
+            for symbol in set(bot.positions) | set(bot.open_orders)
+        }
     return {symbol: selected for symbol, psides in candidates.items()
             if (selected := {pside for pside in psides
                 if any(_scope_matches(scope, pside, symbol)

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Respect inactive coin sides during HSL emergency evaluation, avoiding zero-budget-divisor
+  failures while other scopes recover. Previously committed exits still close residual exposure
+  when position sizing becomes inactive.
+
 - Keep coin HSL evaluating with its existing EMA when unordered same-millisecond fills
   provably cannot flatten the position and their realized deltas are monotone. Report this
   bounded approximation as degraded evidence only while the cohort remains in the active window.
