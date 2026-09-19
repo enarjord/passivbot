@@ -99,13 +99,17 @@ its ordinary account/history refresh, even without an emergency recovery journal
 fresh position/order scope has no immediate close work, ordinary repair resumes. These later steps
 may defer reopening but cannot prevent that close attempt. Normal
 RED still requires `red_active_now` for subsequent panic intent; this ordering change does not alter
-its signal-recovery policy. A typed quote outage partitions ready symbols before Rust planning;
+its signal-recovery policy. Aggregate mode getters honor the recovered sample's pause on panic closes;
+a fresh sample reactivating RED executes a close wave immediately in that same supervisor pass.
+A typed quote outage partitions ready symbols before Rust planning;
 unavailable symbols retain their existing orders and appear in monitor diagnostics. Missing,
 non-finite, non-positive, or crossed quote values are provider-defined availability failures;
 no order consumes those values. Structural fetch errors and invalid Rust output still propagate.
 Each submitted Rust batch is validated atomically. Singleton recovery probes run concurrently to
-avoid accumulating a timeout per failed symbol. Quote outage diagnostics survive independent
-protective waves and clear only on a valid quote observation or fresh flat target. Normal-policy
+avoid accumulating a timeout per failed symbol. Overdue probes are cancelled and drained within
+half the fetch-to-hard-TTL headroom so healthy quotes remain fresh for planning. Quote outage
+diagnostics survive independent protective waves and clear only on a valid quote observation or
+fresh confirmation that every position side of the symbol is flat. Normal-policy
 cooldown reopening remains with the ordinary HSL evaluator and its validated current balance;
 the reduced protection owner cannot release a halt using an old balance.
 Cancellation-only waves remove entries from terminal no-restart scopes and resting initials from

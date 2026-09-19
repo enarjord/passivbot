@@ -7265,7 +7265,9 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
             ]
             if not active_red_psides:
                 return
+            panic_reactivated = False
             for pside in active_red_psides:
+                was_active = bool((self._hsl_state(pside).get("last_metrics") or {}).get("red_active_now", True))
                 # B2.1 contract: refresh the sample so recovery is observable
                 # mid-supervision; only red_active_now authorizes continued
                 # panic emission for the episode. Any refresh failure keeps
@@ -7310,7 +7312,12 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
                     self._equity_hard_stop_set_red_paused_runtime_forced_modes(pside)
                 else:
                     self._equity_hard_stop_set_red_runtime_forced_modes(pside)
+                    panic_reactivated |= metrics is not None and not was_active
             self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+            if panic_reactivated:
+                # The early wave had no panic intent for a previously recovered
+                # sample. Execute newly reauthorized closes in this same pass.
+                await _equity_hard_stop_execute_close_wave(self)
             if single_pass:
                 return
             await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
