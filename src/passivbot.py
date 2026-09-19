@@ -849,6 +849,9 @@ def compute_live_warmup_windows(
     return per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical
 
 
+_HSL_COOLDOWN_READ_TIMEOUT_SECONDS = 5.0
+
+
 class Passivbot:
     UNSTUCK_ALLOWANCE_MATERIALITY_RELATIVE_DELTA = 0.05
     TRAILING_RATIO_MATERIALITY_ABSOLUTE_DELTA = 0.0005
@@ -3825,6 +3828,14 @@ class Passivbot:
         decision["cold_path_required"] = False
         return decision
 
+    async def _prepare_protective_account(self):
+        """Read-only connector preflight for restored protective execution.
+
+        Connectors override this where routing or hedge mode must be discovered.
+        Ordinary configuration writes remain behind their existing readiness gate.
+        """
+        return None
+
     async def _load_market_metadata(self, *, verbose=True):
         """Initialize symbol and execution metadata without account/history refresh."""
         # Reuse existing ccxt session when available (ensures shared options such as fetchMarkets types).
@@ -3858,9 +3869,11 @@ class Passivbot:
         self.init_markets_last_update_ms = utc_ms()
         # A journal commitment needs no new balance or equity reconstruction.
         # Load only execution metadata before servicing it, even on a cold start.
-        protection_bootstrap = bool(hsl_protection.manager(self).pending_exits())
+        protection_bootstrap = (not getattr(self, "_bot_ready", False)
+                                and bool(hsl_protection.manager(self).pending_exits()))
         if protection_bootstrap:
             await self._load_market_metadata(verbose=verbose)
+            await self._prepare_protective_account()
             await risk_input_recovery.drain_startup_commitments(self)
             if self.stop_signal_received:
                 return
@@ -6231,7 +6244,9 @@ class Passivbot:
             ]
         if not scopes:
             return False
-        if not await self.refresh_protective_authoritative_state(require_balance=False):
+        if not await asyncio.wait_for(
+            self.refresh_protective_authoritative_state(require_balance=False),
+            timeout=_HSL_COOLDOWN_READ_TIMEOUT_SECONDS if not pace else None):
             return not pace  # Recovery must pace an attempted protective owner.
         now_ms = int(self.get_exchange_time())
         panic_needed = False
@@ -6261,14 +6276,18 @@ class Passivbot:
             ledger = getattr(self, "freshness_ledger", None)
             epoch = int(getattr(ledger, "epoch", 0))
             generation = int(getattr(self, "_account_invalidation_generation", 0) or 0)
-            await self.update_pnls(source="hsl_cooldown_protection")
+            await asyncio.wait_for(self.update_pnls(source="hsl_cooldown_protection"),
+                                   timeout=_HSL_COOLDOWN_READ_TIMEOUT_SECONDS if not pace else None)
             pending = getattr(self, "_authoritative_pending_confirmations", {})
             if (
                 int(getattr(ledger, "epoch", 0)) != epoch
                 or int(getattr(self, "_account_invalidation_generation", 0) or 0) != generation
                 or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
             ):
-                if not await self.refresh_protective_authoritative_state(require_balance=False):
+                if not await asyncio.wait_for(
+                    self.refresh_protective_authoritative_state(require_balance=False),
+                    timeout=_HSL_COOLDOWN_READ_TIMEOUT_SECONDS if not pace else None,
+                ):
                     return not pace
             now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:

@@ -581,6 +581,14 @@ class BybitBot(CCXTBot):
             if to_print:
                 logging.debug(f"{log_symbol}: {to_print.strip()}")
 
+    async def _prepare_protective_account(self):
+        # Bybit exposes position mode per symbol in its position rows rather
+        # than through fetch_position_mode. Flat scopes need only cancellation.
+        for position in await self._do_fetch_positions_paginated():
+            if float(position["contracts"]) != 0.0:
+                if self._strict_position_idx(position["info"]["positionIdx"]) not in {1, 2}:
+                    raise RuntimeError("Bybit protective startup requires existing hedge position mode")
+
     async def update_exchange_config(self):
         try:
             res = await self.cca.set_position_mode(True)

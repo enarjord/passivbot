@@ -1,9 +1,11 @@
 import pytest
 from passivbot_exceptions import FatalBotException
 from exchanges.ccxt_bot import CCXTBot
+from passivbot import Passivbot
 
 
 class _FakeBot:
+    _load_market_metadata = Passivbot._load_market_metadata
     exchange = "bybit"
     quote = "USDT"
     cca = object()
@@ -603,3 +605,126 @@ async def test_init_markets_with_unavailable_overrides_completes_mode_lookup(mon
     assert bot.min_cost_calls == 1
     assert bot.sizing_symbols == {"AAA/USDT:USDT"}
     assert bot.coin_overrides == {"AAA/USDT:USDT": {}}
+
+
+@pytest.mark.asyncio
+async def test_hourly_market_refresh_does_not_drain_runtime_commitments(monkeypatch):
+    from unittest.mock import AsyncMock
+    import passivbot as pb
+    from live.hsl_protection import ProtectionHealth, Health, Scope
+    bot = _FakeBot(AsyncMock())
+    bot._bot_ready = True
+    health = ProtectionHealth()
+    health.scopes[Scope('coin', 'long', 'A')] = Health(exit_committed=True, exit_started_ms=100)
+    bot._hsl_protection_health = health
+    monkeypatch.setattr(pb, 'load_markets', AsyncMock(return_value={'A': {'id': 'A'}}))
+    monkeypatch.setattr(pb, 'filter_markets', lambda *a, **kw: ({'A'}, {}, {}))
+    drain = AsyncMock(side_effect=AssertionError('runtime refresh must not execute orders'))
+    monkeypatch.setattr(pb.risk_input_recovery, 'drain_startup_commitments', drain)
+    await Passivbot.init_markets(bot)
+    drain.assert_not_awaited()
+    assert health.pending_exits()
+    assert bot.refresh_authoritative_state_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_protective_startup_initializes_account_mode_before_drain(monkeypatch):
+    from unittest.mock import AsyncMock
+    import passivbot as pb
+    from live.hsl_protection import ProtectionHealth, Health, Scope
+    calls = []
+    async def mode(attempt):
+        calls.append('mode')
+    bot = _FakeBot(mode)
+    bot._prepare_protective_account = AsyncMock(side_effect=lambda: calls.append('mode'))
+    health = ProtectionHealth()
+    health.scopes[Scope('coin', 'long', 'A')] = Health(exit_committed=True, exit_started_ms=100)
+    bot._hsl_protection_health = health
+    monkeypatch.setattr(pb, 'load_markets', AsyncMock(return_value={'A': {'id': 'A'}}))
+    monkeypatch.setattr(pb, 'filter_markets', lambda *a, **kw: ({'A'}, {}, {}))
+    async def drain(owner):
+        assert calls == ['mode']
+        owner.stop_signal_received = True
+    monkeypatch.setattr(pb.risk_input_recovery, 'drain_startup_commitments', drain)
+    await Passivbot.init_markets(bot)
+    assert bot.refresh_authoritative_state_calls == 0
+    assert bot.exchange_config_ready_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bitget_protective_preflight_detects_uta_before_mode_or_account_calls():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from exchanges.bitget import BitgetBot
+    bot = BitgetBot.__new__(BitgetBot)
+    calls = []
+    async def detect():
+        calls.append('detect')
+        return {}
+    async def mode(hedged):
+        assert bot.is_uta and bot.cca.options['uta'] and bot.ccp.options['uta']
+        calls.append('hedge')
+        return {}
+    bot.cca = SimpleNamespace(options={}, private_uta_get_v3_account_assets=detect,
+                              set_position_mode=mode, fetch_balance=AsyncMock(),
+                              fetch_positions=AsyncMock())
+    bot.ccp = SimpleNamespace(options={})
+    await bot._prepare_protective_account()
+    assert calls == ['detect']
+    bot.cca.fetch_balance.assert_not_awaited()
+    bot.cca.fetch_positions.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('hedged', [True, False, None])
+@pytest.mark.parametrize('exchange', ['bitunix', 'binance', 'kucoin'])
+async def test_protective_preflight_is_read_only_and_requires_existing_mode(hedged, exchange):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from exchanges.bitunix import BitunixBot
+    from exchanges.binance import BinanceBot
+    from exchanges.kucoin import KucoinBot
+    cls = {'bitunix': BitunixBot, 'binance': BinanceBot, 'kucoin': KucoinBot}[exchange]
+    bot = cls.__new__(cls)
+    bot.cca = SimpleNamespace(fetch_position_mode=AsyncMock(return_value={'hedged': hedged}),
+                              fetch_balance=AsyncMock(), set_position_mode=AsyncMock())
+    if hedged is True:
+        await bot._prepare_protective_account()
+    else:
+        with pytest.raises(RuntimeError, match='existing hedge'):
+            await bot._prepare_protective_account()
+    bot.cca.fetch_balance.assert_not_awaited()
+    bot.cca.set_position_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('position_idx', [0, 1, 2])
+async def test_bybit_protective_preflight_uses_held_position_mode(position_idx):
+    from unittest.mock import AsyncMock
+    from exchanges.bybit import BybitBot
+    bot = BybitBot.__new__(BybitBot)
+    bot._do_fetch_positions_paginated = AsyncMock(return_value=[{
+        'contracts': 1.0, 'info': {'positionIdx': position_idx}}])
+    if position_idx == 0:
+        with pytest.raises(RuntimeError, match='existing hedge'):
+            await bot._prepare_protective_account()
+    else:
+        await bot._prepare_protective_account()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('pos_mode', ['long_short_mode', 'net_mode'])
+async def test_okx_protective_preflight_discovers_mode_without_writes(pos_mode):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from exchanges.okx import OKXBot
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = True
+    bot.cca = SimpleNamespace(private_get_account_config=AsyncMock(return_value={
+        'data': [{'posMode': pos_mode, 'acctLv': '2'}]}), set_position_mode=AsyncMock())
+    if pos_mode == 'net_mode':
+        with pytest.raises(RuntimeError, match='requires'):
+            await bot._prepare_protective_account()
+    else:
+        await bot._prepare_protective_account()
+    bot.cca.set_position_mode.assert_not_awaited()

@@ -639,6 +639,11 @@ class BinanceBot(CCXTBot):
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
 
+    async def _prepare_protective_account(self):
+        current = await self.cca.fetch_position_mode()
+        if current.get("hedged") is not True:
+            raise RuntimeError("Binance protective startup requires existing hedge position mode")
+
     async def update_exchange_config(self):
         try:
             res = await self.cca.set_position_mode(True)

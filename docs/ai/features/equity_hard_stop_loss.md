@@ -98,13 +98,18 @@ run during that deferral, using fresh protective account state and the configure
 An already-authorized close wave runs before balance reads, fresh signal evaluation, and flat-stop
 bookkeeping. One protection scheduler owns startup and execution-loop ordering. It restores journal commitments
 before inspecting pending work; the scoped health records, not a separate retry-controller flag,
-are exit authority. Cold startup loads execution metadata and services restored commitments before
-exchange-configuration balance gates, account/history refresh, or candle warmup. Each wave services
+are exit authority. Cold startup loads execution metadata and performs the required read-only connector routing/position-mode
+preflight before servicing restored commitments. Ordinary exchange-configuration balance gates,
+account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing; OKX detects account configuration; Binance, KuCoin and
+Bitunix verify existing hedge mode; Bybit checks held positions' native position indices.
+Unsupported modes retain the commitment and surface the connector error; no mode write is
+performed by this preflight. Hourly market refresh
+never starts a second commitment-draining loop; runtime execution remains the only order owner. Each wave services
 committed exits and existing normal closes, then gives overdue unavailable scopes an evaluation
 opportunity even while another scope remains open. Normal RED supervision yields to this scheduler
-after its close attempt and before balance/history bookkeeping. Emergency balance reads and each
-emergency quote read have five-second deadlines; single-pass normal supervision also bounds its
-balance read to five seconds. Timed-out readers are cancelled and drained before another wave.
+after its close attempt and before balance/history bookkeeping. Protective account reads and each emergency quote read have five-second deadlines. Single-pass
+normal supervision and cooldown supervision also bound account reads to five seconds; cooldown
+fill-tail repair uses the same deadline so another due scope cannot wait indefinitely for it. Timed-out readers are cancelled and drained before another wave.
 Flat normal stop finalization runs during recovery after ordinary refresh has had an opportunity,
 so a flat latch alone cannot monopolize the pre-refresh gate.
 

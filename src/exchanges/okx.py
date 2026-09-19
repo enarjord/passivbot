@@ -399,6 +399,11 @@ class OKXBot(CCXTBot):
                 else:
                     logging.info(f"{log_symbol}: {to_print}")
 
+    async def _prepare_protective_account(self):
+        await self._detect_account_config()
+        if not self.okx_dual_side:
+            raise RuntimeError("OKX protective startup requires existing hedge position mode")
+
     async def update_exchange_config(self):
         # Detect current account mode; adjust expectations before attempting changes.
         await self._detect_account_config()

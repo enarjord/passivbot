@@ -1528,3 +1528,50 @@ async def test_inactive_interval_does_not_consume_reenabled_scope_grace(monkeypa
     clock[0] += 120.0
     await h.evaluate_emergency(bot, recovery._unready_hsl_targets(bot), refresh_fill_tail=False)
     assert health.pending_exits() == {scope}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('blocked_read', ['account', 'manual_history'])
+async def test_stalled_cooldown_reader_yields_to_due_emergency(monkeypatch, blocked_read):
+    import asyncio
+    import passivbot as pb
+    import passivbot_hsl as hsl
+    from live import hsl_protection as h
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {symbol: {'long': {'size': 1.0}} for symbol in ('A', 'B')}
+    bot.open_orders = {'A': [{'position_side': 'long'}]}
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_coin = {'long': {'A': {
+        'halted': True, 'no_restart_latched': False,
+        'cooldown_repanic_reset_pending': False, 'cooldown_until_ms': 9_000_000,
+    }}}
+    bot._equity_hard_stop_cooldown_position_policy = lambda: 'manual'
+    bot._canonical_open_order_reduce_only = lambda order: False
+    monkeypatch.setattr(hsl, '_equity_hard_stop_manual_cooldown_intervention', lambda *a, **kw: None)
+    monkeypatch.setattr(pb, '_HSL_COOLDOWN_READ_TIMEOUT_SECONDS', 0.01)
+    cancelled = []
+    async def hung():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.append(blocked_read)
+    reads = []
+    async def account(*, require_balance):
+        reads.append(require_balance)
+        if blocked_read == 'account' and len(reads) == 1:
+            await hung()
+        return True
+    bot.refresh_protective_authoritative_state.side_effect = account
+    async def history(**kwargs):
+        await hung()
+    bot.update_pnls = history
+    bot._run_halted_hsl_protection_if_active = lambda **kw: pb.Passivbot._run_halted_hsl_protection_if_active(bot, **kw)
+    health = h.manager(bot)
+    scope = h.Scope('coin', 'long', 'B')
+    health.unavailable(scope, now_ms=0, reason='history', grace_ms=0)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    assert await asyncio.wait_for(recovery.protect_before_history_refresh(bot), timeout=1.0)
+    assert cancelled == [blocked_read]
+    assert scope in health.pending_exits()
+    bot.execute_order_plan_to_exchange.assert_awaited_once()

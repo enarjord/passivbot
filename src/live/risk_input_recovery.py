@@ -416,7 +416,10 @@ async def _execute_emergency_exits(bot, health):
     if not pending:
         return False
     try:
-        if await bot.refresh_protective_authoritative_state(require_balance=False):
+        if await asyncio.wait_for(
+            bot.refresh_protective_authoritative_state(require_balance=False),
+            timeout=_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS,
+        ):
             for scope in pending:
                 if not hsl_protection.has_exposure(bot, scope) and not hsl_protection.has_orders(bot, scope):
                     health.confirm_flat(scope, now_ms=int(bot.get_exchange_time()))

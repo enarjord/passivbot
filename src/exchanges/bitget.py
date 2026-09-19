@@ -860,6 +860,10 @@ class BitgetBot(CCXTBot):
             ideal_orders[x["symbol"]].append(x)
         return ideal_orders
 
+    async def _prepare_protective_account(self):
+        # Account routing must precede even a balance-independent close cohort.
+        await self._detect_account_mode()
+
     async def update_exchange_config(self):
         # Detect classic vs UTA/elite once, before any balance/position/order call.
         await self._detect_account_mode()

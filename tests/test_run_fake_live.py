@@ -2099,7 +2099,7 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
                         cancelled.append(True)
                 return await original_balance(*args, **kwargs)
             bot._capture_balance_staged_snapshot = balance_after_closes
-            monkeypatch.setattr(hsl, '_SUPERVISOR_BALANCE_TIMEOUT_SECONDS', 0.01)
+            monkeypatch.setattr(hsl, '_SUPERVISOR_READ_TIMEOUT_SECONDS', 0.01)
             async def yield_sleep(*args, **kwargs):
                 await asyncio.sleep(0)
             bot._sleep_unless_shutdown = yield_sleep
