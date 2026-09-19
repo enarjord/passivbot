@@ -23,7 +23,7 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
    Coin boundary balance reverses all account PnL/fees strictly after the boundary timestamp and
    the proven same-pair fill tail within that timestamp. Other pairs at the same timestamp remain
    included in the account timestamp cohort, matching the incremental live convention.
-   Mixed-action fills sharing a millisecond require an unambiguous exchange-provided position
+   Mixed-action fills within one pair sharing a millisecond require an unambiguous exchange-provided position
    chain when a flatten is possible; list order and locally reconstructed position annotations
    are not ordering evidence. Coin mode may use the bounded nonflattening approximation described
    under live risk-input recovery when every ordering provably stays nonflat.
@@ -205,8 +205,26 @@ metadata, mixed-sign realized deltas, missing opening quantity, or position mism
 unavailable. Monitoring exposes consecutive degraded evaluation counts, reset after usable
 recovery or unavailability. Quality clears when the approximate cohort is trimmed from the active
 evidence window or an exact flatten resets the drawdown episode. Consumed fills remain available
-for correction detection. Aggregate modes keep
-their existing ordering contract. The approximation is reproducible from fills after restart.
+for correction detection. Aggregate modes reconstruct ordering independently per symbol/side. A mixed-action timestamp
+cohort spanning different pairs has no proven global execution order. Replay treats that cohort
+as indivisible for aggregate boundary purposes: it retains drawdown across possible internal
+flats and recognizes only a flat after the whole cohort. An entry seed is allowed only at the
+cohort's initially flat edge. No PnL or fees are discarded, and list order cannot invent an
+intermediate reset. This conservative continuity can stop earlier than a fully ordered tape;
+`unordered_cross_pair_fill_cohort` remains visible as degraded until a proven scope flatten.
+An ambiguous sequence within a pair, over-close, or final position mismatch still defers. The approximation is reproducible from fills after restart.
+
+An incomplete older coin episode may be excluded under `restart_after_red_policy=always`
+when current exchange quantity and the later fill suffix reconstruct backward to a closing fill
+ending at zero. Reverse quantities must never go negative beyond arithmetic tolerance; forward
+replay of the retained suffix must match the current quantity. A flat gap at least as long as the
+configured cooldown must separate the unknown episode from the earliest retained episode;
+cooldown-connected complete episodes stay included. The retained window still requires canonical
+fill coverage and authoritative PnL. This does not repair the older opening or invent its price,
+PnL, or RED history. The recovered episode reports `position_anchored_episode_suffix` as degraded;
+normal formulas and EMA remain active. Ambiguous ordering, missing retained fills, failed coverage,
+and `threshold`/`never` policies keep their existing deferral behavior. Recompute this evidence
+from current observations on restart and invalidate it when retained fills or positions change.
 
 After grace, Rust evaluates `max(0, realized_loss - current_upnl) / budget` against the configured
 RED threshold, without inventing an EMA. `realized_loss` is normally zero. Coin mode may supply the

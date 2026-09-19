@@ -4,8 +4,9 @@ This reconstructs exchange quantities and PnL prefixes, not risk decisions. Rust
 remains the owner of drawdown, RED, and restart policy evaluation. Consumers must
 build evidence from the authoritative tape before trimming it for price replay.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from bisect import bisect_left, bisect_right
+import math
 
 from live.state_refresh import AuthoritativeSurfaceUnavailable
 
@@ -41,6 +42,7 @@ class EpisodeEvidence:
     start_ms: int | None = None
     degraded_reason: str = ""
     degraded_timestamps: tuple[int, ...] = ()
+    recovered_from_flat_ms: int | None = None
 
     @classmethod
     def reconstruct(cls, rows, *, ambiguous=False, epsilon=1e-12, degraded_reason="", degraded_timestamps=()):
@@ -69,6 +71,42 @@ class EpisodeEvidence:
             episodes.append((start, None))
         return cls(rows, size, tuple(sizes), tuple(flats), tuple(episodes), tuple(prefix), reason, epsilon, degraded_reason=degraded_reason, degraded_timestamps=tuple(degraded_timestamps))
 
+    def recover_closed_prefix(self, current_size, cooldown_ms, *, now_ms=None):
+        """Recover a later episode from current quantity and its complete suffix.
+
+        Only a missing opening in an older episode is recoverable here. Walk
+        backward without clamping: a reduction ending at zero anchors the later
+        tape independently of the corrupt forward prefix. Coverage/freshness
+        remain caller requirements. No price or PnL for the old opening is invented.
+        """
+        if self.unavailable != "missing_opening_fill":
+            return self
+        size = abs(float(current_size))
+        if not math.isfinite(size):
+            return self
+        next_open = None
+        for index in range(len(self.rows) - 1, -1, -1):
+            ts, action, qty, _ = self.rows[index]
+            before = size - qty if action == "increase" else size + qty
+            if before < -self.epsilon:
+                return self
+            if action == "increase" and before <= self.epsilon:
+                next_open = ts
+            if (action == "decrease" and size <= self.epsilon and before > self.epsilon
+                    and next_open is not None and ts < next_open
+                    and ts + cooldown_ms <= next_open):
+                # Earlier episodes may own cooldown until this gap. Find the
+                # separating gap in one reverse pass, then replay the suffix once.
+                suffix = self.reconstruct(self.rows[index + 1:], epsilon=self.epsilon)
+                if suffix.required_start(current_size, cooldown_ms, now_ms=now_ms) is not None:
+                    return replace(suffix,
+                        recovered_from_flat_ms=ts,
+                        degraded_reason="position_anchored_episode_suffix",
+                        degraded_timestamps=(self.rows[index + 1][0],))
+                return self
+            size = max(0.0, before)  # arithmetic epsilon only, never an over-close
+        return self
+
     def window(self, start_ms, end_ms):
         """Project proven evidence without assuming a truncated tape starts flat."""
         timestamps = [row[0] for row in self.rows]
@@ -88,6 +126,7 @@ class EpisodeEvidence:
             unavailable=self.unavailable, epsilon=self.epsilon, start_ms=start_ms,
             degraded_reason=self.degraded_reason if degraded_timestamps else "",
             degraded_timestamps=degraded_timestamps,
+            recovered_from_flat_ms=self.recovered_from_flat_ms,
         )
 
     def matches_position(self, size):

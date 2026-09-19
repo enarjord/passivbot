@@ -2362,3 +2362,97 @@ async def test_cold_start_committed_exit_precedes_balance_and_history_fake_live(
 async def test_normal_red_does_not_starve_emergency_scope_fake_live(tmp_path, monkeypatch, signal_mode):
     await test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exchange(
         tmp_path, monkeypatch, 'emergency_scope', signal_mode)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['cross_pair_held', 'cross_pair_flat', 'closed_prefix'])
+async def test_reconstruction_scope_recovery_with_fake_exchange(tmp_path, monkeypatch, case):
+    """Real startup/history/Rust evaluation must survive both reconstruction cases."""
+    import asyncio
+    import copy
+    from datetime import datetime, timedelta, timezone
+    import passivbot_rust as pbr
+    from live.hsl_protection import Scope
+    assert not getattr(pbr, '__is_stub__', False)
+    mode = 'coin' if case == 'closed_prefix' else 'unified'
+    user = f'fake_reconstruct_{case}_{tmp_path.name}'
+    _cleanup_fake_user_state(user)
+    cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
+    cfg['live']['hsl_signal_mode'] = mode
+    cfg['live']['pnls_max_lookback_days'] = 0.01
+    cfg['bot']['long']['risk']['entry_cooldown_minutes'] = 0.0
+    cfg['bot']['long']['hsl_restart_after_red_policy'] = 'always'
+    cfg['bot']['long']['hsl_red_threshold'] = 0.5
+    cfg['live']['approved_coins']['long'] = ['BTC', 'ETH']
+    cfg.pop('_coins_sources', None)
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps(cfg))
+    scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
+    scenario.pop('assertions', None)
+    scenario.update(run_initial_cycle=True, boot_index=4)
+    btc, eth = 'BTC/USDT:USDT', 'ETH/USDT:USDT'
+    scenario['symbols'][eth] = copy.deepcopy(scenario['symbols'][btc])
+    scenario['replay']['symbols'][eth] = copy.deepcopy(scenario['replay']['symbols'][btc])
+    for series in scenario['replay']['symbols'].values():
+        for row in series['candles']:
+            row[1:5] = [100., 100., 100., 100.]
+    # Ordinary entry indicators need a longer candle prefix than HSL replay.
+    origin = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for series in scenario['replay']['symbols'].values():
+        series['candles'][:0] = [
+            [(origin - timedelta(minutes=i)).isoformat(), 100., 100., 100., 100., 10.]
+            for i in range(120, 0, -1)]
+    scenario['boot_index'] += 120
+    account = scenario['account']
+    account['balance'] = 1000.
+    fills = account['fills']
+    for fill in fills:
+        fill.pop('info', None)
+        fill.update(price=100., pnl=0.)
+    fills[1]['pnl'] = -5.
+    fills[2]['amount'] = 2.
+    symbol = btc if mode == 'coin' else eth
+    fills[2]['symbol'] = symbol
+    account['positions'][0].update(symbol=symbol, qty=2.)
+    if mode == 'coin':
+        fills[0]['amount'] = 3.  # Cache starts inside an older position.
+        fills[2]['timestamp'] = '2026-01-01T00:03:00Z'
+    elif case == 'cross_pair_flat':
+        fills.append(dict(fills[1], id='13', order='13', symbol=eth, amount=2.,
+                          timestamp='2026-01-01T00:03:00Z', pnl=0.))
+        account['positions'] = []
+    scenario_path = tmp_path / 'scenario.hjson'
+    scenario_path.write_text(hjson.dumps(scenario))
+    seen = []
+    original_cycle = run_fake_live_module._run_fake_cycle
+
+    async def exercise(bot):
+        state = bot._hsl_coin_state('long', symbol) if mode == 'coin' else bot._hsl_state('long')
+        assert state['last_metrics'] is not None
+        assert not state['halted']
+        scope = Scope(mode, 'long', symbol if mode == 'coin' else '')
+        health = bot._hsl_protection_health.scopes[scope]
+        assert health.status == ('usable' if case == 'cross_pair_flat' else 'degraded')
+        assert not health.exit_committed
+        for _ in range(2):
+            await bot._equity_hard_stop_check()
+        if case == 'cross_pair_flat':
+            result = await original_cycle(bot)
+            assert any(order['side'] == 'buy' for order in bot.cca.open_orders.values()) or any(
+                fill.get('side') == 'buy' and fill.get('id') not in {'10', '11', '12', '13'}
+                for fill in bot.cca.fills), 'flat bot could not place first entries'
+        else:
+            result = {'reconstruction_ready': True}
+        seen.append((state['last_metrics']['drawdown_raw'], state['pnl_reset_timestamp_ms']))
+        return result
+
+    monkeypatch.setattr(run_fake_live_module, '_run_fake_cycle', exercise)
+    try:
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+                                  max_steps=1, output_dir=str(tmp_path), log_level=1, snapshot_each_step=False)
+        for _ in range(2):  # Same exchange history, fresh bot/Rust state on restart.
+            assert await asyncio.wait_for(_async_main(args), timeout=25.) == 0
+        assert len(seen) == 2
+        assert seen[0] == seen[1]
+    finally:
+        _cleanup_fake_user_state(user)
