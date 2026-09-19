@@ -475,9 +475,9 @@ async def protect_unready_hsl(bot):
     return state.protective_exit_pending
 
 
-async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
+async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None, include_unready=True):
     unready_protected = False
-    if bot._equity_hard_stop_enabled():
+    if include_unready and bot._equity_hard_stop_enabled():
         try:
             unready_protected = await protect_unready_hsl(bot)
         except RiskInputUnavailable as exc:
@@ -517,14 +517,52 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
 
 
 async def protect_before_history_refresh(bot, *, cycle_id=None, loop_timings_ms=None):
-    """Keep the full fill/history cohort behind its deadline while exits continue."""
+    """Attempt existing close intent before the outer balance/history refresh."""
+    if not bot._equity_hard_stop_enabled():
+        return False
     state = getattr(bot, "_risk_input_recovery", None)
-    if state is None or not bot._equity_hard_stop_enabled():
-        return False
-    if not state.protective_exit_pending:
-        return False
-    await protect_and_wait(bot, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms)
-    return True
+    target_getter = getattr(bot, "_protective_panic_target_psides_by_symbol", None)
+    targets = target_getter() if callable(target_getter) else {}
+    # A side can remain in panic mode after flattening while another side holds
+    # the same symbol. Only actual exposure/orders keep the immediate wave pending.
+    pending_panic = any(
+        float(bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0)) != 0.0
+        or any(order.get("position_side") == side for order in bot.open_orders.get(symbol, []))
+        for symbol, sides in targets.items() for side in sides
+    )
+    if pending_panic:
+        if bot._equity_hard_stop_signal_mode() == "coin":
+            pending_panic = bot._equity_hard_stop_coin_red_active()
+        else:
+            pending_panic = any(
+                bot._equity_hard_stop_enabled(side)
+                and bot._equity_hard_stop_runtime_red_latched(side)
+                and not bot._hsl_state(side)["halted"]
+                for side in bot._hsl_psides()
+            )
+    pending_emergency = state is not None and state.protective_exit_pending
+    if pending_panic or pending_emergency:
+        await protect_and_wait(bot, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
+                               include_unready=pending_emergency)
+        return True
+    # A cooldown owner may need to recognize fresh re-entry before it has set a
+    # panic mode. It decides whether its policy requires a close/cancel wave;
+    # inactive, manual, normal, and already-flat scopes allow ordinary repair.
+    try:
+        protected = await bot._run_halted_hsl_protection_if_active(pace=False)
+    except RiskInputUnavailable as exc:
+        protected = True
+        defer(bot, exc)
+    except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
+        protected = True
+        _report_protective_unavailability(bot, exc)
+    if protected:
+        await bot._monitor_flush_snapshot()
+        if not bot.stop_signal_received:
+            await bot._sleep_unless_shutdown(
+                float(bot.live_value("execution_delay_seconds")), stage="risk_input_protective_exit",
+            )
+    return protected
 
 
 async def wait_for_startup(bot):

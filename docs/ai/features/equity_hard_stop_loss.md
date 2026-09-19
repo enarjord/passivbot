@@ -96,7 +96,10 @@ ordinary planning still requires its own current account, fill, and strategy inp
 already-latched RED supervision and required panic protection for active cooldown positions still
 run during that deferral, using fresh protective account state and the configured execution pacing.
 An already-authorized close wave runs before balance reads, fresh signal evaluation, and flat-stop
-bookkeeping. Those later steps may defer reopening but cannot prevent that close attempt. Normal
+bookkeeping. The outer execution/startup loop checks existing RED and cooldown close work before
+its ordinary account/history refresh, even without an emergency recovery journal entry. Once the
+fresh position/order scope has no immediate close work, ordinary repair resumes. These later steps
+may defer reopening but cannot prevent that close attempt. Normal
 RED still requires `red_active_now` for subsequent panic intent; this ordering change does not alter
 its signal-recovery policy. A typed quote outage partitions ready symbols before Rust planning;
 unavailable symbols retain their existing orders and appear in monitor diagnostics. Missing,
