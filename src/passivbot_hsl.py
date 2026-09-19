@@ -1751,6 +1751,15 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
     return float(peak), float(current)
 
 
+def _equity_hard_stop_coin_evidence_quality(state, timestamp_ms):
+    evidence = state.get("episode_evidence")
+    if evidence is None:
+        return ""
+    # Retain the consumed tape for correction detection, while reporting quality
+    # only for the active drawdown episode, both after replay and during polling.
+    return evidence.window(state.get("pnl_reset_timestamp_ms"), timestamp_ms).degraded_reason
+
+
 def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
     """Optional current-episode loss, only with fresh tail and coherent fills."""
     manager = getattr(self, "_pnls_manager", None)
@@ -3419,9 +3428,9 @@ async def _equity_hard_stop_replay_live_restart(
                 replacement["last_stop_event"] = old.get("last_stop_event")
             old.clear()
             old.update(replacement)
-            evidence = replacement.get("episode_evidence") if mode == "coin" else None
             hsl_protection.record_evaluation(self, side, symbol if mode == "coin" else None,
-                degraded_reason=evidence.degraded_reason if evidence is not None else "")
+                degraded_reason=(_equity_hard_stop_coin_evidence_quality(
+                    replacement, int(self.get_exchange_time())) if mode == "coin" else ""))
             if mode == "coin":
                 forced = self._runtime_forced_modes.setdefault(side, {})
                 forced.pop(symbol, None)
@@ -4926,9 +4935,9 @@ async def _equity_hard_stop_initialize_coin_from_history(
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
             self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
-            evidence = self._hsl_coin_state(pside, symbol).get("episode_evidence")
             hsl_protection.record_evaluation(self, pside, symbol,
-                degraded_reason=evidence.degraded_reason if evidence is not None else "")
+                degraded_reason=_equity_hard_stop_coin_evidence_quality(
+                    self._hsl_coin_state(pside, symbol), now_ms))
 
         def mark_protective_ready() -> None:
             nonlocal protective_ready_elapsed_s, watchdog_context_restored
@@ -6717,13 +6726,8 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 float(await _equity_hard_stop_scoped_upnl(self, pside, symbol)),
             )
             if not replay_complete:
-                evidence = state.get("episode_evidence")
-                if evidence is not None:
-                    # Retain the consumed tape for correction detection, while
-                    # reporting quality only for the active drawdown episode.
-                    evidence = evidence.window(state.get("pnl_reset_timestamp_ms"), ts_ms)
                 hsl_protection.record_evaluation(self, pside, symbol,
-                    degraded_reason=evidence.degraded_reason if evidence is not None else "")
+                    degraded_reason=_equity_hard_stop_coin_evidence_quality(state, ts_ms))
             if metrics["changed"]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
             self._equity_hard_stop_maybe_emit_raw_red_pending(

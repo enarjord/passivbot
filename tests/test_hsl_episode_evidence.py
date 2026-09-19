@@ -554,3 +554,29 @@ def test_optional_loss_waits_for_account_confirmation_even_at_unchanged_size(sur
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None
     bot._hsl_fill_tail_observation = (bot.freshness_ledger.epoch, bot.freshness_ledger.surfaces['positions'].revision)
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0
+
+
+@pytest.mark.asyncio
+async def test_replayed_exact_episode_does_not_report_old_degradation():
+    from live.hsl_protection import ProtectionHealth, Scope
+    bot = make_coin_bot()
+    bot._hsl_protection_health = ProtectionHealth()
+    bot.get_exchange_time = lambda: 360_000
+    bot.positions = {'A': {'long': {'size': 5.0}, 'short': {'size': 0.0}}}
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-1),
+                              (120_000,'increase',1,0),(240_000,'decrease',5,0),
+                              (300_000,'increase',5,0)]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    async def history(**kwargs):
+        return {'timeline': [dict(timestamp=t, balance=100.0, realized_pnl=0.0 if t<120_000 else -1.0,
+            realized_pnl_by_coin_pside={'A': {'long': 0.0 if t<120_000 else -1.0, 'short': 0.0}},
+            unrealized_pnl_by_coin_pside={'A': {'long': 0.0, 'short': 0.0}})
+            for t in range(60_000,360_001,60_000)], 'fill_events': events, 'panic_flatten_events': []}
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_coin_from_history()
+    state = bot._hsl_coin_state('long', 'A')
+    assert state['pnl_reset_timestamp_ms'] >= 240_000
+    health = bot._hsl_protection_health.scopes[Scope('coin', 'long', 'A')]
+    assert health.status == 'usable'
+    assert health.degraded_evaluations == 0
