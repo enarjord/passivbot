@@ -538,6 +538,8 @@ def validate_gpu_preparation_scope(
 ) -> None:
     """Fail before historical-data preparation when immutable MPS scope is invalid."""
 
+    from directional_efficiency import reject_gpu_directional_efficiency
+    reject_gpu_directional_efficiency(config)
     reject_configured_exact_only_gpu_metrics(config)
     suite_cfg = suite_cfg or {}
     suite_enabled = bool(suite_cfg.get("enabled"))

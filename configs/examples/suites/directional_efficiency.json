@@ -1,0 +1,47 @@
+{
+    "backtest": {
+        "suite_enabled": true,
+        "scenarios": [
+            {
+                "label": "efficiency_baseline",
+                "overrides": {
+                    "bot.long.forager.directional_efficiency_penalty": 0.0,
+                    "bot.short.forager.directional_efficiency_penalty": 0.0,
+                    "bot.long.risk.directional_efficiency_cooldown_minutes": 0.0,
+                    "bot.short.risk.directional_efficiency_cooldown_minutes": 0.0
+                }
+            },
+            {
+                "label": "efficiency_ranking_only",
+                "overrides": {
+                    "bot.long.forager.directional_efficiency_penalty": 0.5,
+                    "bot.long.forager.directional_efficiency_lookback_minutes": 60,
+                    "bot.short.forager.directional_efficiency_penalty": 0.0,
+                    "bot.long.risk.directional_efficiency_cooldown_minutes": 0.0,
+                    "bot.short.risk.directional_efficiency_cooldown_minutes": 0.0
+                }
+            },
+            {
+                "label": "efficiency_pacing_only",
+                "overrides": {
+                    "bot.long.forager.directional_efficiency_penalty": 0.0,
+                    "bot.short.forager.directional_efficiency_penalty": 0.0,
+                    "bot.long.risk.directional_efficiency_cooldown_minutes": 30.0,
+                    "bot.long.risk.directional_efficiency_lookback_minutes": 60,
+                    "bot.short.risk.directional_efficiency_cooldown_minutes": 0.0
+                }
+            },
+            {
+                "label": "efficiency_combined",
+                "overrides": {
+                    "bot.long.forager.directional_efficiency_penalty": 0.5,
+                    "bot.long.forager.directional_efficiency_lookback_minutes": 60,
+                    "bot.short.forager.directional_efficiency_penalty": 0.0,
+                    "bot.long.risk.directional_efficiency_cooldown_minutes": 30.0,
+                    "bot.long.risk.directional_efficiency_lookback_minutes": 60,
+                    "bot.short.risk.directional_efficiency_cooldown_minutes": 0.0
+                }
+            }
+        ]
+    }
+}

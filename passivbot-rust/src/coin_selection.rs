@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct CoinFeature {
+    pub directional_efficiency_penalty: f64,
     pub index: usize,
     pub enabled: bool,
     pub volume_score: f64,
@@ -44,6 +45,7 @@ impl ForagerPositionSide {
 
 #[derive(Debug, Clone)]
 pub struct ForagerCandidate {
+    pub directional_efficiency_penalty: f64,
     pub index: usize,
     pub enabled: bool,
     pub volume_score: f64,
@@ -245,6 +247,7 @@ fn build_coin_features(
         .map(|candidate| {
             if !candidate.enabled {
                 return Ok(CoinFeature {
+                    directional_efficiency_penalty: 0.0,
                     index: candidate.index,
                     enabled: false,
                     volume_score: 0.0,
@@ -276,6 +279,7 @@ fn build_coin_features(
                 0.0
             };
             Ok(CoinFeature {
+                directional_efficiency_penalty: validate_unit_pct("directional_efficiency_penalty", candidate.directional_efficiency_penalty)?,
                 index: candidate.index,
                 enabled: candidate.enabled,
                 volume_score,
@@ -430,6 +434,7 @@ fn score_forager_candidates(
             let score = cfg.weights.volume * volume_scores[i]
                 + cfg.weights.ema_readiness * ema_readiness_scores[i]
                 + cfg.weights.volatility * volatility_scores[i];
+            let score = score * (1.0 - features[pos].directional_efficiency_penalty);
             ScoredPosition {
                 pos,
                 score,
@@ -662,6 +667,7 @@ impl<'source> FromPyObject<'source> for CoinFeatureInput {
 impl From<CoinFeatureInput> for CoinFeature {
     fn from(value: CoinFeatureInput) -> Self {
         CoinFeature {
+            directional_efficiency_penalty: 0.0,
             index: value.index,
             enabled: value.enabled,
             volume_score: value.volume_score,
@@ -684,6 +690,7 @@ impl<'source> FromPyObject<'source> for ForagerScoreWeights {
 impl<'source> FromPyObject<'source> for ForagerCandidate {
     fn extract(ob: &'source PyAny) -> PyResult<Self> {
         Ok(Self {
+            directional_efficiency_penalty: match ob.downcast::<pyo3::types::PyDict>()?.get_item("directional_efficiency_penalty")? { Some(v) => v.extract::<f64>()?, None => 0.0 },
             index: ob.get_item("index")?.extract::<usize>()?,
             enabled: ob.get_item("enabled")?.extract::<bool>()?,
             volume_score: ob.get_item("volume_score")?.extract::<f64>()?,
@@ -785,6 +792,7 @@ mod tests {
         ask: f64,
     ) -> ForagerCandidate {
         ForagerCandidate {
+            directional_efficiency_penalty: 0.0,
             index,
             enabled: true,
             volume_score: volume,
@@ -799,6 +807,7 @@ mod tests {
 
     fn make_feature(index: usize, volume: f64, volatility: f64, ema_readiness: f64) -> CoinFeature {
         CoinFeature {
+            directional_efficiency_penalty: 0.0,
             index,
             enabled: true,
             volume_score: volume,
@@ -834,6 +843,7 @@ mod tests {
     fn returns_enabled_indices_when_not_forager() {
         let features = vec![
             CoinFeature {
+                directional_efficiency_penalty: 0.0,
                 index: 0,
                 enabled: true,
                 volume_score: 0.1,
@@ -841,6 +851,7 @@ mod tests {
                 ema_readiness_score: 0.1,
             },
             CoinFeature {
+                directional_efficiency_penalty: 0.0,
                 index: 1,
                 enabled: false,
                 volume_score: 1.0,
@@ -848,6 +859,7 @@ mod tests {
                 ema_readiness_score: 1.0,
             },
             CoinFeature {
+                directional_efficiency_penalty: 0.0,
                 index: 2,
                 enabled: true,
                 volume_score: 0.2,
@@ -1067,6 +1079,7 @@ mod tests {
     #[test]
     fn select_forager_candidates_rejects_missing_required_input() {
         let candidates = vec![ForagerCandidate {
+            directional_efficiency_penalty: 0.0,
             ema_lower: f64::NAN,
             ..make_candidate(0, 1.0, 1.0, 90.0, 90.0)
         }];

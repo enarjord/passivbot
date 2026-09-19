@@ -7,6 +7,8 @@ BOT_SHARED_GROUPS = ("risk", "forager", "hsl", "unstuck")
 
 BOT_GROUP_FIELD_MAP = {
     "risk": {
+        "directional_efficiency_lookback_minutes": "risk_directional_efficiency_lookback_minutes",
+        "directional_efficiency_cooldown_minutes": "risk_directional_efficiency_cooldown_minutes",
         "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
@@ -20,6 +22,8 @@ BOT_GROUP_FIELD_MAP = {
         "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
     },
     "forager": {
+        "directional_efficiency_lookback_minutes": "forager_directional_efficiency_lookback_minutes",
+        "directional_efficiency_penalty": "forager_directional_efficiency_penalty",
         "score_weights": "forager_score_weights",
         "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
         "volume_drop_pct": "forager_volume_drop_pct",

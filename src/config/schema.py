@@ -19,6 +19,8 @@ def _get_shared_bot_defaults():
     return {
         "long": {
             "forager": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_penalty": 0.0,
                 "score_weights": {
                     "ema_readiness": 0.21,
                     "volatility": 0.61,
@@ -43,6 +45,8 @@ def _get_shared_bot_defaults():
                 }
             },
             "risk": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_cooldown_minutes": 0.0,
                 "entry_cooldown_minutes": 24.1,
                 "n_positions": 7.0,
                 "position_exposure_enforcer_enabled": False,
@@ -68,6 +72,8 @@ def _get_shared_bot_defaults():
         },
         "short": {
             "forager": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_penalty": 0.0,
                 "score_weights": {
                     "ema_readiness": 0.0,
                     "volatility": 0.0,
@@ -92,6 +98,8 @@ def _get_shared_bot_defaults():
                 }
             },
             "risk": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_cooldown_minutes": 0.0,
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 1.0,
                 "position_exposure_enforcer_enabled": True,

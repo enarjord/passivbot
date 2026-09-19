@@ -143,6 +143,8 @@
     "bot": {
         "long": {
             "forager": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_penalty": 0.0,
                 "score_weights": {
                     "ema_readiness": 0.0,
                     "volatility": 1.0,
@@ -166,6 +168,8 @@
                 }
             },
             "risk": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_cooldown_minutes": 0.0,
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 1.25,
@@ -218,6 +222,8 @@
         },
         "short": {
             "forager": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_penalty": 0.0,
                 "score_weights": {
                     "ema_readiness": 0.0,
                     "volatility": 1.0,
@@ -241,6 +247,8 @@
                 }
             },
             "risk": {
+                "directional_efficiency_lookback_minutes": 60.0,
+                "directional_efficiency_cooldown_minutes": 0.0,
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 10,
                 "total_wallet_exposure_limit": 0,
@@ -415,6 +423,8 @@
         "bounds": {
             "long": {
                 "forager": {
+                    "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+                    "directional_efficiency_penalty": [0.0, 0.0, 1],
                     "score_weights_ema_readiness": [
                         0,
                         1,
@@ -464,6 +474,8 @@
                     ]
                 },
                 "risk": {
+                    "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+                    "directional_efficiency_cooldown_minutes": [0.0, 0.0, 1],
                     "entry_cooldown_minutes": [
                         0.0,
                         60.0,
@@ -644,6 +656,8 @@
             },
             "short": {
                 "forager": {
+                    "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+                    "directional_efficiency_penalty": [0.0, 0.0, 1],
                     "score_weights_ema_readiness": [
                         0,
                         1,
@@ -693,6 +707,8 @@
                     ]
                 },
                 "risk": {
+                    "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+                    "directional_efficiency_cooldown_minutes": [0.0, 0.0, 1],
                     "entry_cooldown_minutes": [
                         0.0,
                         60.0,

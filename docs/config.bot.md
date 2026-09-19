@@ -350,3 +350,12 @@ intervention:
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.
+
+
+## Optional directional-efficiency controls
+
+`forager.directional_efficiency_penalty` penalizes directional markets in ranking, and
+`risk.directional_efficiency_cooldown_minutes` adds delay between position increases when the
+completed trend is adverse. Both default to zero and have independent
+`directional_efficiency_lookback_minutes` settings. See [the experiment guide](directional_efficiency.md)
+for formulas, readiness rules, CPU-only optimization and the ablation suite.
