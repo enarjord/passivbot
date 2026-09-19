@@ -346,6 +346,18 @@ def emergency_evidence_needs_confirmation(bot):
     ) for surface in ("positions", "balance"))
 
 
+def fill_tail_matches_positions(bot):
+    """The fill request must have started after this exact position observation."""
+    ledger = getattr(bot, "freshness_ledger", None)
+    return bool(
+        ledger is not None and ledger.epoch > 0
+        and "positions" in ledger.surfaces_at_epoch()
+        and not emergency_evidence_needs_confirmation(bot)
+        and getattr(bot, "_hsl_fill_tail_observation", None)
+        == (ledger.epoch, ledger.surfaces["positions"].revision)
+    )
+
+
 async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
     """Evaluate unavailable scopes with current account and quote evidence only.
 
