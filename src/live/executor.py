@@ -178,6 +178,18 @@ def _filter_hsl_replay_pending_creates(
     pending_pairs = set(
         getattr(bot, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
     )
+    # Replay can fail before discovering its pending set. Derive unknown pairs
+    # from actual creates so a newly selected flat symbol cannot bypass the gate.
+    if (getattr(bot, "_risk_input_recovery", None) is not None
+            and not getattr(bot, "_equity_hard_stop_coin_initialized", False)
+            and bot._equity_hard_stop_signal_mode() == "coin"):
+        ready_pairs = getattr(bot, "_equity_hard_stop_coin_replay_ready_pairs", set())
+        for order in orders:
+            side = str(order.get("position_side") or order.get("positionSide") or "").lower()
+            symbol = str(order.get("symbol") or "")
+            if ((side, symbol) not in ready_pairs
+                    and bot._equity_hard_stop_enabled(side, symbol=symbol)):
+                pending_pairs.add((side, symbol))
     if not pending_pairs:
         return orders
     blocked = [

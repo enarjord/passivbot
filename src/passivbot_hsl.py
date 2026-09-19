@@ -3213,6 +3213,9 @@ async def _equity_hard_stop_replay_live_restart(
         if isinstance(value, MethodType) and value.__self__ is self:
             setattr(staged, name, MethodType(value.__func__, staged))
             rebound_methods.append(name)
+    staged._hsl_protection_health = copy.deepcopy(getattr(self, "_hsl_protection_health", None))
+    if staged._hsl_protection_health is not None:
+        staged._hsl_protection_health.path = None
     staged.positions = copy.deepcopy(self.positions)
     staged.open_orders = copy.deepcopy(self.open_orders)
     staged._equity_hard_stop = {
@@ -3296,6 +3299,7 @@ async def _equity_hard_stop_replay_live_restart(
                 replacement["last_stop_event"] = old.get("last_stop_event")
             old.clear()
             old.update(replacement)
+            hsl_protection.record_evaluation(self, side, symbol if mode == "coin" else None)
             if mode == "coin":
                 forced = self._runtime_forced_modes.setdefault(side, {})
                 forced.pop(symbol, None)
@@ -4062,7 +4066,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     else:
                         stop_ts = marker_ts
                 if stop_ts is None and scope_flattened_this_row:
-                    if bool(current_metrics.get("red_seen_in_episode")):
+                    emergency_flatten = (bool(row.get("_hsl_scope_flatten_fill"))
+                        and hsl_protection.emergency_stop_applies(self, pside, None, int(ts)))
+                    if bool(current_metrics.get("red_seen_in_episode")) or emergency_flatten:
                         # B2.1: the episode crossed RED and ended by an ordinary
                         # (non-panic) scope-flattening fill; cooldown/no-restart
                         # evidence is canonical from the reconstructed episode.
@@ -4083,7 +4089,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                             if row.get("_hsl_scope_flatten_fill")
                             else (anchor if anchor is not None else int(ts))
                         )
-                        stop_source = "red_episode_flatten"
+                        stop_source = "emergency_episode_flatten" if emergency_flatten else "red_episode_flatten"
                     else:
                         # Ordinary flatten of a RED-free episode: plain episode
                         # reset with no stop accounting.
@@ -4233,6 +4239,9 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             if current_metrics["tier"] == "red":
                 state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
         self._equity_hard_stop_refresh_halted_runtime_forced_modes()
+        for pside in self._hsl_psides():
+            if self._equity_hard_stop_enabled(pside):
+                hsl_protection.record_evaluation(self, pside)
     finally:
         if hasattr(self, "_set_log_silence_watchdog_context"):
             self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
@@ -4796,6 +4805,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
             self._equity_hard_stop_coin_replay_ready_pairs.add(pair)
+            hsl_protection.record_evaluation(self, pside, symbol)
 
         def mark_protective_ready() -> None:
             nonlocal protective_ready_elapsed_s, watchdog_context_restored
@@ -5493,13 +5503,16 @@ async def _equity_hard_stop_initialize_coin_from_history(
                                     float(metrics["red_threshold"]),
                                 )
                                 boundary_marker = None
+                            emergency_flatten = hsl_protection.emergency_stop_applies(
+                                self, pside, symbol, int(flatten_ts))
                             if boundary_marker is not None or bool(
                                 metrics.get("red_seen_in_episode")
-                            ):
+                            ) or emergency_flatten:
                                 stop_ts = int(flatten_ts)
                                 stop_source = (
                                     "panic_fill_flatten"
                                     if boundary_marker is not None
+                                    else "emergency_episode_flatten" if emergency_flatten
                                     else "red_episode_flatten"
                                 )
                                 stop_abs_realized = boundary_abs_realized

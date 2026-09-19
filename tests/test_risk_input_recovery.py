@@ -1166,3 +1166,64 @@ async def test_emergency_uses_raw_balance_without_strategy_sizing_balance(monkey
     assert await recovery.protect_unready_hsl(bot)
     assert hsl_protection.manager(bot).pending_exits() == {hsl_protection.Scope('coin', 'long', 'A')}
     bot.execute_order_plan_to_exchange.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unified_exit_confirmation_waits_for_opposite_side_orders_and_positions(monkeypatch):
+    from live import hsl_protection
+    bot, clock = make_bot(monkeypatch)
+    bot._equity_hard_stop_signal_mode = lambda: 'unified'
+    bot._hsl_state = lambda side: {'halted': False}
+    bot.positions = {'A': {'long': {'size': 0.0}, 'short': {'size': -1.0}}}
+    health = hsl_protection.manager(bot)
+    scope = hsl_protection.Scope('unified', 'long')
+    item = health.unavailable(scope, now_ms=bot.get_exchange_time(), reason='history', grace_ms=0)
+    item.exit_committed = True
+    item.exit_started_ms = bot.get_exchange_time()
+    bot._risk_input_recovery = recovery.RecoveryState(protective_exit_pending=True)
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_unready_hsl(bot)
+    assert item.exit_committed and item.exit_flat_ms is None
+    bot.positions['A']['short']['size'] = 0.0
+    bot.open_orders = {'A': [{'position_side': 'short'}]}
+    await recovery.protect_unready_hsl(bot)
+    assert item.exit_committed and item.exit_flat_ms is None
+    bot.open_orders = {}
+    clock[0] += 60.0
+    await recovery.protect_unready_hsl(bot)
+    assert not item.exit_committed and item.exit_confirmed_flat
+    assert item.exit_flat_ms == bot.get_exchange_time()
+
+
+@pytest.mark.asyncio
+async def test_early_replay_failure_blocks_flat_initials_but_allows_held_adds(monkeypatch):
+    from live import executor
+    bot, _ = make_bot(monkeypatch)
+    bot.config['live']['hsl_unavailable_grace_seconds'] = 120.0
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    bot._equity_hard_stop_check.side_effect = invalid_history
+    assert await recovery.ensure_ready(bot)
+    assert not getattr(bot, '_equity_hard_stop_coin_replay_pending_pairs', set())
+    orders = [
+        {'symbol': 'A', 'position_side': 'long', 'reduce_only': False},
+        {'symbol': 'B', 'position_side': 'long', 'reduce_only': False},
+        {'symbol': 'A', 'position_side': 'long', 'reduce_only': True},
+    ]
+    cls = SimpleNamespace(_emit_execution_create_filter_event=lambda *a, **k: None)
+    filtered = executor._filter_hsl_replay_pending_creates(bot, cls, orders, None)
+    assert filtered == [orders[0], orders[2]]
+    bot._equity_hard_stop_coin_initialized = True
+    assert executor._filter_hsl_replay_pending_creates(bot, cls, orders, None) == orders
+
+
+@pytest.mark.asyncio
+async def test_restored_exit_uses_configured_recovery_diagnostics(monkeypatch):
+    bot, clock = make_bot(monkeypatch)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    arm_exit(bot)
+    bot._risk_input_recovery = None
+    bot.config['live']['risk_input_max_attempts'] = 3
+    assert not await recovery.ensure_ready(bot)
+    assert bot._risk_input_recovery.max_attempts == 3
+    assert bot._risk_input_recovery.blocked_since == clock[0]

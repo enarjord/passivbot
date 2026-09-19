@@ -252,7 +252,9 @@ async def ensure_ready(bot, *, startup=False):
     state = getattr(bot, "_risk_input_recovery", None)
     if health is not None and health.pending_exits():
         if state is None:
-            state = RecoveryState(reason="restored_protective_exit", protective_exit_pending=True)
+            state = RecoveryState(reason="restored_protective_exit", protective_exit_pending=True,
+                                  max_attempts=require_live_value(bot.config, "risk_input_max_attempts"),
+                                  blocked_since=monotonic())
             bot._risk_input_recovery = state
         return False
     try:

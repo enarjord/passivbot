@@ -249,13 +249,15 @@ def targets_for_scopes(bot, scopes, candidates):
 
 
 def has_exposure(bot, scope):
-    return any(float(position.get(scope.pside, {}).get("size", 0.0)) != 0.0
+    sides = ("long", "short") if scope.mode == "unified" else (scope.pside,)
+    return any(float(position.get(side, {}).get("size", 0.0)) != 0.0
                for symbol, position in bot.positions.items()
-               if not scope.symbol or symbol == scope.symbol)
+               if not scope.symbol or symbol == scope.symbol
+               for side in sides)
 
 
 def has_orders(bot, scope):
-    return any(order.get("position_side") == scope.pside
+    return any(scope.mode == "unified" or order.get("position_side") == scope.pside
                for symbol, orders in bot.open_orders.items()
                if not scope.symbol or symbol == scope.symbol
                for order in orders)

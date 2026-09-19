@@ -119,6 +119,10 @@ async def test_staged_restart_keeps_live_protection_until_ready_publish(mode, ou
         halted=True, cooldown_until_ms=400_000,
         last_stop_event={"stop_event_timestamp_ms": 100_000},
     )
+    from live.hsl_protection import ProtectionHealth, scope_for, record_evaluation
+    bot._hsl_protection_health = ProtectionHealth()
+    scope = scope_for(bot, "long", symbol)
+    health = bot._hsl_protection_health.unavailable(scope, now_ms=100_000, reason="history", grace_ms=120_000)
     old_stop = state["last_stop_event"]
     old_runtime = state["runtime"]
     old_maps = bot._runtime_forced_modes
@@ -140,6 +144,8 @@ async def test_staged_restart_keeps_live_protection_until_ready_publish(mode, ou
             "long", {"stop_event_timestamp_ms": 200_000}, symbol=symbol
         )
         staged._emit_live_event("staged", {})
+        record_evaluation(staged, "long", symbol)
+        assert health.unavailable_since_ms == 100_000
         await asyncio.sleep(0)
         assert state["halted"] and state["cooldown_until_ms"] == 400_000
         assert state["runtime"] is old_runtime
@@ -179,6 +185,7 @@ async def test_staged_restart_keeps_live_protection_until_ready_publish(mode, ou
         assert await hsl._equity_hard_stop_replay_live_restart(bot, "long", symbol) is (
             outcome == "ready"
         )
+    assert (health.unavailable_since_ms is None) == (outcome == "ready")
     assert not bot._hsl_live_restart_replay_active
     if outcome == "ready":
         assert state["cooldown_until_ms"] == 500_000
