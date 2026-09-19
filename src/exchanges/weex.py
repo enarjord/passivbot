@@ -12,6 +12,7 @@ from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from exchanges.ipv4_transport import IPv4TransportMixin
 from live.diagnostic_safety import bounded_exchange_error_context
 from passivbot import logging
+from passivbot_exceptions import FatalBotException
 from utils import symbol_to_coin
 
 
@@ -137,6 +138,15 @@ class WeexBot(CCXTBot):
                 "WEEX client order id has no Passivbot order-type marker"
             )
         return custom_id
+
+    def _validate_protective_position_snapshot(self, positions):
+        # The raw position carries its own mode; symbol settings alone cannot
+        # authorize a quantity-based close of an existing split position.
+        for position in positions:
+            if float(position["size"]) != 0.0:
+                mode = str((position.get("info") or {}).get("separatedMode") or "").upper()
+                if mode != "COMBINED":
+                    raise FatalBotException("WEEX protective execution requires explicit COMBINED position mode")
 
     async def update_exchange_config(self):
         """WEEX has no account-wide position-mode endpoint.

@@ -7317,7 +7317,7 @@ async def _equity_hard_stop_execute_close_wave(self) -> bool:
         return False
 
 
-async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = False) -> None:
+async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = False, after_close=None) -> None:
     if self._equity_hard_stop_supervisor_running:
         return
     self._equity_hard_stop_supervisor_running = True
@@ -7343,14 +7343,22 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
                     return
                 await asyncio.sleep(0.5)
                 continue
-            if not await _equity_hard_stop_execute_close_wave(self):
+            closed = await _equity_hard_stop_execute_close_wave(self)
+            if after_close is not None:
+                await after_close()
+            if not closed:
                 if single_pass:
                     return
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 continue
             # Refresh denominators only after the close wave. Flat-stop replay
             # and an optional fresh signal may wait; already-authorized exits do not.
-            if not await self.refresh_protective_authoritative_state(require_balance=True):
+            try:
+                balance_ready = await self.refresh_protective_authoritative_state(require_balance=True)
+            except TimeoutError:
+                logging.warning("[risk] HSL supervisor balance refresh timed out; retaining close intent")
+                balance_ready = False
+            if not balance_ready:
                 if single_pass:
                     return
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
@@ -7463,7 +7471,7 @@ async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = Fals
         self._equity_hard_stop_supervisor_running = False
 
 
-async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool = False) -> None:
+async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool = False, after_close=None) -> None:
     if self._equity_hard_stop_supervisor_running:
         return
     self._equity_hard_stop_supervisor_running = True
@@ -7482,14 +7490,22 @@ async def _equity_hard_stop_run_coin_red_supervisor(self, *, single_pass: bool =
                     return
                 await asyncio.sleep(0.5)
                 continue
-            if not await _equity_hard_stop_execute_close_wave(self):
+            closed = await _equity_hard_stop_execute_close_wave(self)
+            if after_close is not None:
+                await after_close()
+            if not closed:
                 if single_pass:
                     return
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
                 continue
             # Refresh denominators only after the close wave. Flat-stop replay
             # and an optional fresh signal may wait; already-authorized exits do not.
-            if not await self.refresh_protective_authoritative_state(require_balance=True):
+            try:
+                balance_ready = await self.refresh_protective_authoritative_state(require_balance=True)
+            except TimeoutError:
+                logging.warning("[risk] HSL supervisor balance refresh timed out; retaining close intent")
+                balance_ready = False
+            if not balance_ready:
                 if single_pass:
                     return
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))

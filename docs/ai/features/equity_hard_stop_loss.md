@@ -96,7 +96,32 @@ ordinary planning still requires its own current account, fill, and strategy inp
 already-latched RED supervision and required panic protection for active cooldown positions still
 run during that deferral, using fresh protective account state and the configured execution pacing.
 An already-authorized close wave runs before balance reads, fresh signal evaluation, and flat-stop
-bookkeeping. The outer execution/startup loop checks existing RED and cooldown close work before
+bookkeeping. One protection scheduler owns startup and execution-loop ordering. It restores journal commitments
+before inspecting pending work; the scoped health records, not a separate retry-controller flag,
+are exit authority. Cold startup loads execution metadata and performs the required read-only connector routing/position-mode
+preflight before servicing restored commitments. After metadata loads, config reconciliation
+retires disabled or obsolete journal scopes before deciding whether preflight is required. Ordinary exchange-configuration balance gates,
+account/history refresh and candle warmup follow protection. Bitget detects UTA/classic routing; OKX requires explicit dual-side account configuration; Binance, KuCoin and
+Bitunix verify existing hedge mode.
+Every protective refresh validates connector prerequisites on its exact captured position cohort
+before applying account state. Bybit checks native position indices, and Bitget requires
+hedge-mode evidence on held positions, while
+explicitly one-way resting orders can still be normalized for cancellation when flat. WEEX requires
+native `COMBINED` evidence on each held position. A position appearing after startup preflight is
+therefore checked before its close wave. Unsupported modes retain the commitment and surface the
+connector error; no mode write is performed by this preflight. Hourly market refresh
+never starts a second commitment-draining loop; runtime execution remains the only order owner. Each wave services
+committed exits and existing normal closes, then gives overdue unavailable scopes an evaluation
+opportunity even while another scope remains open. Normal RED supervision yields to this scheduler
+after its close attempt and before balance/history bookkeeping. Protective account reads retain the connector transport timeout per request (30 seconds by
+default, configurable by the client). The scheduler does not impose a whole-cohort cutoff: sequential
+and paginated account requests must each be allowed to finish. Transport timeouts yield to the next
+protective owner; independently ready close attempts still precede balance-dependent evaluation. Emergency quote reads and optional cooldown fill-tail repair
+have five-second deadlines so another due scope cannot wait indefinitely for them. Timed-out readers are cancelled and drained before another wave.
+Flat normal stop finalization runs during recovery after ordinary refresh has had an opportunity,
+so a flat latch alone cannot monopolize the pre-refresh gate.
+
+The outer execution/startup loop checks existing RED and cooldown close work before
 its ordinary account/history refresh, even without an emergency recovery journal entry. Once the
 fresh position/order scope has no immediate close work, ordinary repair resumes. These later steps
 may defer reopening but cannot prevent that close attempt. Normal

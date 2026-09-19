@@ -891,3 +891,20 @@ def test_setup_bot_weex_uses_weex_adapter():
             assert setup_bot(config) is mock_bot
             mock_cls.assert_called_once_with(config)
             assert mock_bot._order_churn_gate_enabled_for_connector is True
+
+
+@pytest.mark.parametrize('mode', ['COMBINED', 'SEPARATED', None, 'unknown'])
+@pytest.mark.parametrize('size', [0.0, 1.0])
+def test_weex_protective_snapshot_requires_native_combined_mode(mode, size):
+    from passivbot_exceptions import FatalBotException
+    exchange = _ccxt_exchange()
+    raw = {'symbol': 'BTCUSDT', 'size': str(size), 'openValue': str(size * 100),
+           'side': 'LONG', 'separatedMode': mode}
+    parsed = exchange.parse_position(raw, _market())
+    bot = _bot()
+    positions = bot._normalize_positions([parsed])
+    if size and mode != 'COMBINED':
+        with pytest.raises(FatalBotException, match='explicit COMBINED'):
+            bot._validate_protective_position_snapshot(positions)
+    else:
+        bot._validate_protective_position_snapshot(positions)

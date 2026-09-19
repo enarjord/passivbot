@@ -588,6 +588,11 @@ class KucoinBot(CCXTBot):
         except (KeyError, TypeError, AttributeError):
             return False
 
+    async def _prepare_protective_account(self):
+        current = await self.cca.fetch_position_mode()
+        if current.get("hedged") is not True:
+            raise RuntimeError("KuCoin protective startup requires existing hedge position mode")
+
     async def update_exchange_config(self):
         """Ensure account-level settings (hedge mode) are applied."""
         try:

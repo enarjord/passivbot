@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Restore committed HSL exits before startup balance/history recovery. Schedule overdue emergency
+  scopes after existing protective close attempts, including normal RED and cooldown work, so an
+  unfilled close cannot starve another scope. Bound emergency input reads and derive pending exits
+  directly from scoped protection state. Validate connector position mode on fresh protective
+  snapshots before closing; explicitly one-way resting orders remain cancellable when flat.
+
 - Batch compatible Apple GPU suite scenarios together during Trailing Martingale successive
   halving so small survivor sets share dispatches. Preserve scenario defaults, reducers,
   exact validation, and existing GPU work limits. Add a bounded synthetic batching benchmark.

@@ -75,3 +75,30 @@ def test_deduce_side_pside_rejects_ambiguous_payload(payload):
 def test_deduce_side_pside_uses_explicit_position_side():
     payload = _make_fill(tradeSide="close", side="", posMode="hedge_mode", posSide="short")
     assert deduce_side_pside(payload) == ("buy", "short")
+
+
+@pytest.mark.parametrize('uta', [False, True])
+@pytest.mark.parametrize('side,reduce_only,expected', [('buy',False,'long'), ('sell',False,'short'),
+                                                      ('buy',True,'short'), ('sell',True,'long')])
+def test_native_one_way_resting_orders_parse_with_hedge_runtime_default(uta, side, reduce_only, expected):
+    from exchanges.bitget import BitgetBot
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = uta
+    bot.hedge_mode = True
+    order = {'id': '1', 'symbol': 'BTC/USDT:USDT', 'side': side, 'amount': 1.0,
+             'timestamp': 1, 'reduceOnly': reduce_only,
+             'info': {'posSide': 'net', 'side': side,
+                      'tradeSide': 'close' if reduce_only else 'open',
+                      'reduceOnly': 'YES' if reduce_only else 'NO'}}
+    normalized = bot._normalize_open_orders([order])
+    assert normalized[0]['position_side'] == expected
+    assert bot._canonical_open_order_reduce_only(normalized[0]) is reduce_only
+    assert bot.hedge_mode is True
+
+
+def test_bitget_net_order_rejects_contradictory_hedge_mode():
+    from exchanges.bitget import BitgetBot
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.hedge_mode = True
+    with pytest.raises(ValueError, match='contradictory'):
+        bot._get_position_side_for_order({'info': {'posSide': 'net', 'holdMode': 'hedge_mode'}})

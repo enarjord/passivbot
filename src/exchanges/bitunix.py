@@ -2299,6 +2299,13 @@ class BitunixBot(CCXTBot):
             return False
         return True
 
+    async def _prepare_protective_account(self) -> None:
+        # Ordinary mode writes require a funded balance. A restored reduce-only
+        # exit needs only proof that the existing account is already in hedge mode.
+        current = await self.cca.fetch_position_mode()
+        if current.get("hedged") is not True:
+            raise RuntimeError("Bitunix protective startup requires existing hedge position mode")
+
     async def update_exchange_config(self) -> None:
         current = await self.cca.fetch_position_mode()
         if current.get("hedged") is True:
