@@ -92,6 +92,7 @@ async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch
         positions={symbol: {'long': {'size': 2.0}} for symbol in ('A', 'B')},
         price_steps={'A': 0.1, 'B': 0.1},
         _get_orchestrator_market_snapshots=quotes,
+        _record_market_snapshot_surface=lambda *a: None,
         _to_executable_orders=lambda orders, prices: (orders, []),
         _finalize_reduce_only_orders=lambda orders, prices: orders,
     )
@@ -105,3 +106,58 @@ async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch
     assert bot._hsl_protective_unavailable_symbols == {'A'}
     assert bot._protective_panic_reconcile_psides_by_symbol == {'B': {'long'}}
     assert bot._protective_panic_reconcile_symbols == ['B']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('fault', ['missing', 'nan', 'crossed', 'payload_shape'])
+async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_exits(monkeypatch, require_real_passivbot_rust_module, fault):
+    from types import SimpleNamespace
+    from live.freshness import FreshnessLedger
+    from live.market_snapshot import MarketSnapshotProvider
+    from live import market_data
+    from passivbot import Passivbot
+    from utils import utc_ms
+    tickers = {symbol: {'bid': 99.0, 'ask': 101.0, 'last': 100.0} for symbol in ('A', 'B', 'C')}
+    if fault == 'missing':
+        del tickers['A']
+    elif fault == 'nan':
+        tickers['A']['bid'] = float('nan')
+    elif fault == 'crossed':
+        tickers['A']['ask'] = 98.0
+    async def fetch():
+        return [] if fault == 'payload_shape' else tickers
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    ledger = FreshnessLedger()
+    ledger.begin_epoch()
+    for surface in ('positions', 'open_orders'):
+        ledger.stamp(surface, (), now_ms=utc_ms())
+    bot = SimpleNamespace(
+        positions={symbol: {'long': {'size': 2.0}} for symbol in tickers.keys() | {'A'}},
+        price_steps={symbol: 0.1 for symbol in ('A', 'B', 'C')},
+        _ensure_freshness_ledger=lambda: ledger,
+        _live_market_snapshot_max_age_ms=lambda: 10_000,
+        config_get=lambda *a: 'fake_protective_quote_partition',
+        _to_executable_orders=lambda orders, prices: (orders, []),
+        _finalize_reduce_only_orders=lambda orders, prices: orders,
+    )
+    bot._market_snapshot_signature = lambda symbols, snapshots: market_data.market_snapshot_signature(bot, symbols, snapshots)
+    bot._record_market_snapshot_surface = lambda symbols, snapshots: market_data.record_market_snapshot_surface(bot, symbols, snapshots)
+    bot._market_snapshot_signature_invalid = lambda symbols: market_data.market_snapshot_signature_invalid(bot, symbols)
+    async def quotes(symbols):
+        snapshots = await provider.get_snapshots(symbols)
+        bot._record_market_snapshot_surface(symbols, snapshots)
+        return snapshots
+    bot._get_orchestrator_market_snapshots = quotes
+    monkeypatch.setattr(Passivbot, '_equity_hard_stop_enabled', lambda *a, **k: False)
+    monkeypatch.setattr(Passivbot, '_monitor_record_price_ticks', lambda *a, **k: None)
+    targets = {symbol: {'long'} for symbol in ('A', 'B', 'C')}
+    if fault == 'payload_shape':
+        with pytest.raises(RuntimeError, match='non-dict'):
+            await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets)
+        return
+    result = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets)
+    assert set(result) == {'B', 'C'}
+    assert all(orders[0][0] == -2.0 for orders in result.values())
+    assert bot._current_planning_snapshot.symbols == ('B', 'C')
+    assert bot._market_snapshot_signature_invalid(['B', 'C']) == []
+    assert bot._hsl_protective_unavailable_symbols == {'A'}

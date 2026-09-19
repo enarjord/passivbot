@@ -97,8 +97,10 @@ An already-authorized close wave runs before balance reads, fresh signal evaluat
 bookkeeping. Those later steps may defer reopening but cannot prevent that close attempt. Normal
 RED still requires `red_active_now` for subsequent panic intent; this ordering change does not alter
 its signal-recovery policy. A typed quote outage partitions ready symbols before Rust planning;
-unavailable symbols retain their existing orders and appear in monitor diagnostics. Malformed
-quotes and invalid Rust output remain fatal. Each submitted Rust batch is validated atomically.
+unavailable symbols retain their existing orders and appear in monitor diagnostics. Missing,
+non-finite, non-positive, or crossed quote values are provider-defined availability failures;
+no order consumes those values. Structural fetch errors and invalid Rust output still propagate.
+Each submitted Rust batch is validated atomically.
 Cancellation-only waves remove entries from terminal no-restart scopes and resting initials from
 flat cooldown scopes without constructing new intent or changing terminal state. Manual ownership
 begins only after a proven cooldown intervention and persists through

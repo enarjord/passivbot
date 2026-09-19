@@ -16441,6 +16441,9 @@ class Passivbot:
             self._protective_panic_reconcile_psides_by_symbol = {
                 symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
             }
+            # Singleton quote reads replace the ledger signature. Record the exact
+            # combined input cohort, preserving each quote's original fetched time.
+            self._record_market_snapshot_surface(symbols, market_snapshots)
         try:
             planning_snapshot = planning_gates.build_protective_planning_snapshot(
                 self, symbols, market_snapshots
