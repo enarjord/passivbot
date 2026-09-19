@@ -164,17 +164,21 @@ scopes keep their independent cooldown/manual-ownership protection.
 
 Coin evidence can remain usable with an explicitly bounded approximation. If a tied mixed-action
 fill cohort has no position-chain metadata, its pre-cohort quantity is known, and all reductions
-combined leave it strictly nonflat, every possible ordering belongs to the same episode. Coin
-HSL orders its realized deltas positive-first (the greatest possible intra-cohort realized peak),
+combined leave it strictly nonflat, every possible ordering belongs to the same episode. This
+first approximation also requires monotone realized deltas (all nonpositive or all nonnegative),
+so net minute replay cannot hide an intra-cohort PnL peak. Coin HSL uses a deterministic order,
 retains the existing EMA, and reports `unordered_nonflattening_fill_cohort` as degraded. It never
 invents a fill, PnL value, price, or flat boundary. A possible flatten, contradictory/partial chain
-metadata, missing opening quantity, or position mismatch remains unavailable. Aggregate modes keep
+metadata, mixed-sign realized deltas, missing opening quantity, or position mismatch remains
+unavailable. Quality clears when the approximate cohort is trimmed from the active evidence window. Aggregate modes keep
 their existing ordering contract. The approximation is reproducible from fills after restart.
 
 After grace, Rust evaluates `max(0, realized_loss - current_upnl) / budget` against the configured
 RED threshold, without inventing an EMA. `realized_loss` is normally zero. Coin mode may supply the
 verified realized peak minus current realized PnL in the currently held episode, using complete
-coverage, finite non-pending PnL/fees, and a position-matching tape. A proven last flatten excludes
+current-episode coverage, finite non-pending PnL/fees, and a position-matching tape. The current
+account cohort must include a successful tail-capable fill refresh; stale cached quantity equality
+alone is insufficient. A proven last flatten excludes
 previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
 it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
 evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.

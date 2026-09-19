@@ -7,9 +7,11 @@ since the latest release tag; these features may already be available when insta
 ## Unreleased
 
 - Keep coin HSL evaluating with its existing EMA when unordered same-millisecond fills
-  provably cannot flatten the position. Report this bounded approximation as degraded evidence.
+  provably cannot flatten the position and their realized deltas are monotone. Report this
+  bounded approximation as degraded evidence only while the cohort remains in the active window.
   When EMA reconstruction is unavailable beyond grace, retain verified current-episode realized
-  losses in the coin emergency signal; missing or incoherent evidence falls back to raw UPNL.
+  losses in the coin emergency signal when fresh fill-tail and account evidence agree; missing
+  or incoherent evidence falls back to raw UPNL.
 
 - Attempt already-authorized HSL RED and cooldown closes before balance or history repair.
   A temporary quote outage for one symbol no longer blocks independent protective closes;

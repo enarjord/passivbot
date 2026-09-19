@@ -304,7 +304,7 @@ def test_unordered_cohort_that_cannot_flatten_keeps_episode_with_conservative_pn
     events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0)]
     cohort = [
         dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-10.0),
-        dict(timestamp=120_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=2.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=-2.0),
     ]
     events.extend(reversed(cohort) if reverse else cohort)
     evidence = hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A')
@@ -312,7 +312,7 @@ def test_unordered_cohort_that_cannot_flatten_keeps_episode_with_conservative_pn
     assert evidence.degraded_reason == 'unordered_nonflattening_fill_cohort'
     assert evidence.flatten_indices == ()
     assert evidence.ending_size == 5.0
-    assert evidence.realized_prefix == (0.0, 0.0, 2.0, -8.0)
+    assert evidence.realized_prefix == (0.0, 0.0, -2.0, -12.0)
     assert evidence.window(60_000, 180_000).degraded_reason == evidence.degraded_reason
 
 
@@ -357,6 +357,7 @@ async def test_degraded_nonflattening_cohort_keeps_existing_ema_and_reports_qual
 @pytest.mark.parametrize('condition,expected', [('coherent', 30.0), ('new_episode', 0.0), ('new_episode_uninitialized', 0.0), ('pending', None), ('gap', None), ('position_mismatch', None)])
 def test_optional_emergency_realized_loss_requires_coherent_current_episode(condition, expected):
     bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
     events = [
         dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0),
         dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-30.0),
@@ -392,6 +393,7 @@ def test_realized_loss_sample_ignores_ambiguous_future_fill_cohort():
 
 def test_optional_realized_loss_unavailable_reset_does_not_block_raw_fallback():
     bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
     bot._pnls_manager = make_fake_pnls_manager([
         dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
     ])
@@ -401,3 +403,69 @@ def test_optional_realized_loss_unavailable_reset_does_not_block_raw_fallback():
         raise hsl.EpisodeEvidenceUnavailable('ambiguous_fill_order_or_values', pside='long', symbol='A')
     bot._equity_hard_stop_coin_realized_pnl_peak_last = unavailable
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None
+
+
+def _mark_emergency_tail_fresh(bot):
+    from live.freshness import FreshnessLedger
+    bot.freshness_ledger = FreshnessLedger()
+    bot.freshness_ledger.begin_epoch()
+    bot.freshness_ledger.stamp('positions', now_ms=180_000)
+    bot._hsl_fill_tail_refresh_epoch = bot.freshness_ledger.epoch
+
+
+@pytest.mark.parametrize('metadata', ['nan', 'bad', None, 'mixed_sign'])
+def test_nonflattening_approximation_rejects_invalid_chain_or_hidden_pnl_peak(metadata):
+    events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0)]
+    events.extend([
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-10.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=100.0 if metadata == 'mixed_sign' else 0.0),
+    ])
+    if metadata != 'mixed_sign':
+        for event in events[1:]:
+            event['raw'] = [{'data': {'info': {'startPosition': metadata}}}]
+    assert hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A').unavailable
+
+
+def test_projected_exact_episode_clears_old_cohort_degradation():
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-10),
+                              (120_000,'increase',1,0),(180_000,'decrease',5,0),
+                              (240_000,'increase',2,0)]]
+    evidence = hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A')
+    assert evidence.degraded_timestamps == (120_000,)
+    assert evidence.window(120_000, 150_000).degraded_reason
+    assert not evidence.window(240_000, 300_000).degraded_reason
+
+
+@pytest.mark.parametrize('old_quality', ['pending', 'synthetic_fill_reconstruction_degraded'])
+def test_optional_loss_ignores_old_closed_episode_pnl_and_coverage(old_quality):
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(10_000,'increase',1,0),(20_000,'decrease',1,-100),
+                              (60_000,'increase',5,0),(120_000,'decrease',1,-30)]]
+    events[1]['pnl_source'] = old_quality
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot.positions = {'A': {'long': {'size': 4.0}}}
+    requested = []
+    def coverage(**kwargs):
+        requested.append(kwargs['start_ms'])
+        return {'ready': kwargs['start_ms'] >= 60_000}
+    bot._fill_history_coverage_status = coverage
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0
+    assert requested and set(requested) == {60_000}
+
+
+def test_optional_loss_rejects_stale_tail_even_when_quantity_matches():
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    bot._pnls_manager = make_fake_pnls_manager([
+        dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-30.0),
+    ])
+    bot.positions = {'A': {'long': {'size': 4.0}}}
+    bot._fill_history_coverage_status = lambda **kwargs: {'ready': True}
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == 30.0
+    bot.freshness_ledger.begin_epoch()
+    bot.freshness_ledger.stamp('positions', now_ms=240_000)
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 240_000) is None

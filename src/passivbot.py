@@ -12958,7 +12958,6 @@ class Passivbot:
         if self.stop_signal_received:
             return False
         self._last_fill_refresh_block_reason = None
-
         fill_refresh_attempt_generation = (
             max(
                 int(
@@ -12976,6 +12975,8 @@ class Passivbot:
             fill_refresh_attempt_generation
         )
         refresh_started_ms = utc_ms()
+        hsl_fill_refresh_epoch = self._ensure_freshness_ledger().epoch
+        self._hsl_fill_tail_refresh_epoch = None
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
         before_events_count = 0
@@ -13330,6 +13331,9 @@ class Passivbot:
             # when an enabled live risk feature consumes realized PnL.
             if fill_fetch_completed:
                 self._trailing_fill_fetch_generation = fill_refresh_attempt_generation
+                # Optional emergency realized loss must share a fresh account
+                # cohort with a successful tail-capable exchange fill refresh.
+                self._hsl_fill_tail_refresh_epoch = hsl_fill_refresh_epoch
             new_events = []
             seen_new_source_ids: set[str] = set()
             mixed_source_confirmation_required = False

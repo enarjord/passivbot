@@ -5582,10 +5582,12 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
     assert bot._pnls_manager.history_scope == "all"
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 5
+    assert bot._hsl_fill_tail_refresh_epoch == bot.freshness_ledger.epoch
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation():
+@pytest.mark.parametrize('advance_epoch', [False, True])
+async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_generation(advance_epoch):
     bot = Passivbot.__new__(Passivbot)
     bot._live_risk_uses_authoritative_pnl = lambda: True
     cached_events = [
@@ -5631,6 +5633,11 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     bot._trailing_fill_refresh_started_generation = 4
     bot._trailing_fill_fetch_generation = 4
     bot._trailing_fill_refresh_generation = 4
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    started_epoch = ledger.epoch
+    if advance_epoch:
+        bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.begin_epoch()
 
     result = await bot.update_pnls()
 
@@ -5641,6 +5648,8 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     )
     assert bot._trailing_fill_fetch_generation == 5
     assert bot._trailing_fill_refresh_generation == 4
+    assert bot._hsl_fill_tail_refresh_epoch == started_epoch
+    assert (bot._hsl_fill_tail_refresh_epoch == ledger.epoch) is (not advance_epoch)
 
 
 @pytest.mark.asyncio
@@ -6022,6 +6031,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     assert result is False
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
     assert bot._trailing_fill_fetch_generation == 7
+    assert getattr(bot, '_hsl_fill_tail_refresh_epoch', None) is None
 
 
 @pytest.mark.asyncio
