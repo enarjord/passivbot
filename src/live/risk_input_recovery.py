@@ -427,6 +427,12 @@ async def protect_unready_hsl(bot):
             for scope in pending:
                 if not hsl_protection.has_exposure(bot, scope) and not hsl_protection.has_orders(bot, scope):
                     health.confirm_flat(scope, now_ms=int(bot.get_exchange_time()))
+                    unavailable_quotes = getattr(bot, "_hsl_protective_unavailable_symbols", set())
+                    unavailable_quotes.difference_update(
+                        symbol for symbol in tuple(unavailable_quotes)
+                        if (not scope.symbol or symbol == scope.symbol)
+                        and all(float(position.get("size", 0.0)) == 0.0
+                                for position in bot.positions.get(symbol, {}).values()))
             pending = health.pending_exits()
             state.protective_exit_pending = bool(pending)
             targets = hsl_protection.targets_for_scopes(bot, pending, candidates)

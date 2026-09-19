@@ -1275,3 +1275,17 @@ async def test_partial_protective_wave_retains_quote_blockage_for_unexecuted_sco
     bot._hsl_protective_unavailable_symbols.clear()
     await recovery.protect_unready_hsl(bot)
     assert all(item.execution_blocked == '' for item in health.scopes.values())
+
+
+@pytest.mark.asyncio
+async def test_confirmed_flat_scope_clears_quote_outage_without_another_plan(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    arm_exit(bot)
+    bot.positions['A']['long']['size'] = 0.0
+    bot._hsl_protective_unavailable_symbols = {'A', 'B'}
+    bot.positions['B'] = {'long': {'size': 1.0}}
+    bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
+    bot.execute_order_plan_to_exchange = AsyncMock()
+    await recovery.protect_unready_hsl(bot)
+    assert bot._hsl_protective_unavailable_symbols == {'B'}
