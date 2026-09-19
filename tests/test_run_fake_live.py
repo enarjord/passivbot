@@ -2094,7 +2094,7 @@ async def test_red_reactivation_closes_in_same_recovery_wave(tmp_path, monkeypat
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('case', ['unordered_nonflattening', 'realized_loss', 'stale_reset', 'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow'])
+@pytest.mark.parametrize('case', ['unordered_nonflattening', 'realized_loss', 'stale_reset', 'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'])
 async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, case):
     from unittest.mock import AsyncMock
     from live import risk_input_recovery as recovery
@@ -2148,9 +2148,15 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
         elif case in {'invalid_metadata', 'invalid_oldest', 'invalid_newest'}:
             field = {'invalid_metadata': 'covered_start_ms', 'invalid_oldest': 'oldest_event_ts', 'invalid_newest': 'newest_event_ts'}[case]
             bot._pnls_manager.cache.load_metadata()[field] = {'invalid': 1}
-        elif case in {'numeric_type', 'numeric_overflow'}:
-            from fill_events_manager import BitunixFetcher
+        elif case in {'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'}:
+            from fill_events_manager import BitunixFetcher, KucoinFetcher, normalize_uta_fill_payload
             def malformed_numeric_fill(**kwargs):
+                if case == 'numeric_uta':
+                    return normalize_uta_fill_payload(dict(execId='fill', orderId='order',
+                        createdTime=1_700_000_000_000, symbol='BTCUSDT', side='buy', posSide='long',
+                        tradeSide='open', execQty=10**1000, execPrice=100.0, execPnl=0.0), lambda s: s)
+                if case == 'kucoin_timestamp':
+                    return KucoinFetcher._normalize_trade(dict(id='fill', order='order', timestamp=10**1000))
                 return BitunixFetcher._normalize_trade(dict(id='fill', order='order',
                     symbol=symbol, side='buy', timestamp={'bad': 1} if case == 'numeric_type' else float('inf'),
                     info={'positionSide': 'long'}))
@@ -2181,7 +2187,7 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
         else:
             # Exercise the production owner, including its bounded ordered
             # fill-tail refresh; no test-only enrichment call is inserted.
-            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow'}:
+            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'}:
                 assert not await recovery.protect_unready_hsl(bot)
                 health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
                 assert health.realized_loss is None
@@ -2190,7 +2196,7 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
                 bot.market_snapshot_provider._cache.clear()
             assert await recovery.protect_unready_hsl(bot)
             health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
-            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow'}:
+            if case in {'pending_pnl', 'invalid_fill', 'invalid_cache', 'invalid_metadata', 'invalid_oldest', 'invalid_newest', 'numeric_type', 'numeric_overflow', 'numeric_uta', 'kucoin_timestamp'}:
                 assert health.realized_loss is None
                 assert health.drawdown_raw > 0.0
             else:

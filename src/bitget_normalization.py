@@ -1,4 +1,7 @@
 import json
+import math
+
+from passivbot_exceptions import FillEventDataError
 from typing import Callable, Dict, List
 
 from utils import ts_to_date
@@ -28,16 +31,12 @@ def require_uta_float(fill: dict, field: str, *, positive: bool = False) -> floa
     raw = require_uta_field(fill, field)
     try:
         value = float(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"bitget UTA fill field {field!r} is not numeric; "
-            f"value={raw!r} context={bitget_payload_context(fill)}"
-        ) from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise FillEventDataError(f"bitget UTA fill field {field!r} is not numeric") from exc
+    if not math.isfinite(value):
+        raise FillEventDataError(f"bitget UTA fill field {field!r} must be finite")
     if positive and value <= 0.0:
-        raise ValueError(
-            f"bitget UTA fill field {field!r} must be positive; "
-            f"value={raw!r} context={bitget_payload_context(fill)}"
-        )
+        raise FillEventDataError(f"bitget UTA fill field {field!r} must be positive")
     return value
 
 
@@ -45,16 +44,10 @@ def require_uta_timestamp(fill: dict) -> int:
     raw = require_uta_field(fill, "createdTime")
     try:
         timestamp = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "bitget UTA fill createdTime is not an integer millisecond timestamp; "
-            f"value={raw!r} context={bitget_payload_context(fill)}"
-        ) from exc
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise FillEventDataError("bitget UTA fill createdTime is not an integer millisecond timestamp") from exc
     if timestamp <= 0:
-        raise ValueError(
-            f"bitget UTA fill createdTime must be positive; "
-            f"value={raw!r} context={bitget_payload_context(fill)}"
-        )
+        raise FillEventDataError("bitget UTA fill createdTime must be positive")
     return timestamp
 
 
@@ -109,7 +102,7 @@ def normalize_bitget_fee_detail(fee_detail: object) -> object:
                 item["fee_paid"] = _bitget_fee_paid_from_fee(item["fee"])
             elif item.get("totalDeductionFee") not in (None, ""):
                 item["fee_paid"] = float(item["totalDeductionFee"])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             pass
         normalized.append(item)
     return normalized
@@ -164,6 +157,10 @@ def normalize_uta_fill_payload(
     exec_id = str(require_uta_field(fill, "execId"))
     order_id = str(require_uta_field(fill, "orderId"))
     timestamp = require_uta_timestamp(fill)
+    try:
+        timestamp_date = ts_to_date(timestamp)
+    except (TypeError, ValueError, OverflowError, OSError) as exc:
+        raise FillEventDataError("bitget UTA fill createdTime is out of range") from exc
     symbol_external = str(require_uta_field(fill, "symbol"))
     side, position_side = deduce_uta_side_pside(fill)
     symbol = symbol_resolver(symbol_external)
@@ -177,7 +174,7 @@ def normalize_uta_fill_payload(
         "id": exec_id,
         "order_id": order_id,
         "timestamp": timestamp,
-        "datetime": ts_to_date(timestamp),
+        "datetime": timestamp_date,
         "symbol": symbol,
         "symbol_external": symbol_external,
         "side": side,

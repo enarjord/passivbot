@@ -10,6 +10,8 @@ connectors and a shared fill-event interface.
 
 from __future__ import annotations
 
+from passivbot_exceptions import FillEventDataError
+
 import argparse
 import asyncio
 import errno
@@ -111,10 +113,6 @@ class FillEventCacheDiskFullError(RuntimeError):
 
 class FillEventCacheContractError(RuntimeError):
     """Raised when persisted fills or their metadata violate the cache contract."""
-
-
-class FillEventDataError(ValueError):
-    """Fetched fill values cannot be decoded; unrelated parser bugs are not covered."""
 
 
 def _fill_number(value, converter):
@@ -7184,10 +7182,7 @@ class GateioFetcher(BaseFetcher):
         order_id = str(trade.get("order") or info.get("order_id") or "")
 
         ts_raw = trade.get("timestamp") or info.get("create_time") or 0
-        try:
-            timestamp = _fill_int(ensure_millis(_fill_float(ts_raw)))
-        except Exception:
-            timestamp = _fill_int(_fill_float(ts_raw)) if ts_raw else 0
+        timestamp = _fill_int(_fill_number(_fill_float(ts_raw), ensure_millis))
 
         symbol = str(trade.get("symbol") or info.get("contract") or "")
         side = str(trade.get("side") or info.get("side") or "").lower()
@@ -7381,7 +7376,7 @@ class KucoinFetcher(BaseFetcher):
                 start_at += buffer_ms
                 continue
 
-            batch_sorted = sorted(batch, key=lambda x: x.get("timestamp", 0))
+            batch_sorted = sorted(batch, key=lambda x: _fill_float(x.get("timestamp", 0)))
             for trade in batch_sorted:
                 event = self._normalize_trade(trade)
                 ts = event["timestamp"]
@@ -7390,7 +7385,7 @@ class KucoinFetcher(BaseFetcher):
                 key = (event.get("id") or "", event.get("order_id") or "")
                 collected[key] = event
 
-            last_ts = int(batch_sorted[-1].get("timestamp", start_at))
+            last_ts = _fill_int(batch_sorted[-1].get("timestamp", start_at))
             if last_ts <= start_at:
                 start_at = start_at + buffer_ms
             else:
@@ -7682,13 +7677,9 @@ class KucoinFetcher(BaseFetcher):
             or info.get("updatedTime")
             or 0
         )
-        try:
-            timestamp = _fill_int(ensure_millis(_fill_float(ts_raw)))
-        except Exception:
-            try:
-                timestamp = _fill_int(_fill_float(ts_raw))
-            except Exception:
-                timestamp = 0
+        timestamp = _fill_int(_fill_number(_fill_float(ts_raw), ensure_millis))
+        if timestamp <= 0:
+            raise FillEventDataError("KuCoin fill timestamp must be positive")
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or info.get("side") or "").lower()
         qty = abs(_fill_float(trade.get("amount") or info.get("size") or info.get("amount") or 0.0))

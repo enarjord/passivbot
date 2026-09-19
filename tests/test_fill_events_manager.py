@@ -9319,3 +9319,31 @@ def test_fill_parser_does_not_reclassify_unrelated_programming_errors(monkeypatc
     with pytest.raises(error_type) as caught:
         fetcher._normalize_trade(trade)
     assert caught.value is error
+
+
+@pytest.mark.parametrize('field,value', [
+    ('execQty', 10**1000), ('execPrice', {'bad': 1}), ('execPnl', 10**1000),
+    ('execQty', float('nan')), ('createdTime', float('inf')), ('createdTime', 10**1000),
+])
+def test_bitget_uta_numeric_errors_use_shared_data_error(field, value):
+    fill = dict(execId='fill', orderId='order', createdTime=1_700_000_000_000,
+                symbol='BTCUSDT', side='buy', posSide='long', tradeSide='open',
+                execQty=1.0, execPrice=100.0, execPnl=0.0)
+    fill[field] = value
+    with pytest.raises(fem.FillEventDataError):
+        fem.normalize_uta_fill_payload(fill, lambda symbol: symbol)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('timestamp', [10**1000, 'bad', {'bad': 1}, None, 0])
+async def test_kucoin_does_not_drop_malformed_timestamp_and_certify_history(timestamp):
+    trade = dict(id='bad', order='order', timestamp=timestamp,
+                 symbol='BTC/USDT:USDT', side='buy', amount=1.0, price=100.0, info={})
+    with pytest.raises(fem.FillEventDataError):
+        KucoinFetcher._normalize_trade(trade)
+    good = {**trade, 'id': 'good', 'timestamp': 1_700_000_000_000}
+    api = types.SimpleNamespace(fetch_my_trades=AsyncMock(return_value=[good, trade]))
+    fetcher = KucoinFetcher(api=api)
+    with pytest.raises(fem.FillEventDataError):
+        await fetcher._fetch_trades(1_700_000_000_000, 1_700_000_060_000)
+    api.fetch_my_trades.assert_awaited_once()
