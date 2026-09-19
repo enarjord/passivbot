@@ -9278,3 +9278,44 @@ def test_cache_timestamp_reader_classifies_data_errors(field, value):
         fem._cache_metadata_timestamp({field: value}, field)
     assert fem._cache_metadata_timestamp({field: '123'}, field) == 123
     assert fem._cache_metadata_timestamp({}, field) == 0
+
+
+@pytest.mark.parametrize('fetcher', [fem.BitunixFetcher, fem.WeexFetcher])
+@pytest.mark.parametrize('field,value', [
+    ('timestamp', {'bad': 1}), ('timestamp', float('inf')),
+    ('timestamp', 10**100), ('amount', {'bad': 1}), ('amount', 10**1000),
+    ('price', {'bad': 1}), ('pnl', {'bad': 1}),
+])
+def test_fetched_numeric_conversion_errors_are_typed(fetcher, field, value):
+    trade = dict(id='fill', order='order', timestamp=1_700_000_000_000,
+                 symbol='BTC/USDT:USDT', side='buy', amount=1.0, price=100.0,
+                 info=dict(positionSide='long', realizedPNL=0.0, realizedPnl=0.0))
+    if field == 'pnl':
+        trade['info'].update(realizedPNL=value, realizedPnl=value)
+    else:
+        trade[field] = value
+    with pytest.raises(fem.FillEventDataError):
+        fetcher._normalize_trade(trade)
+
+
+@pytest.mark.parametrize('field,value', [('timestamp', float('inf')), ('qty', {'bad': 1}), ('price', 10**1000)])
+def test_canonical_fill_numeric_errors_are_typed(sample_events, field, value):
+    event = {**sample_events[0], field: value}
+    with pytest.raises(fem.FillEventDataError):
+        fem.FillEvent.from_dict(event)
+
+
+@pytest.mark.parametrize('fetcher', [fem.BitunixFetcher, fem.WeexFetcher])
+@pytest.mark.parametrize('error_type', [TypeError, OverflowError])
+def test_fill_parser_does_not_reclassify_unrelated_programming_errors(monkeypatch, fetcher, error_type):
+    error = error_type('unexpected decoder bug')
+    def broken_decoder(_value):
+        raise error
+    monkeypatch.setattr(fem, 'custom_id_to_snake', broken_decoder)
+    trade = dict(id='fill', order='order', timestamp=1_700_000_000_000,
+                 symbol='BTC/USDT:USDT', side='buy', amount=1.0, price=100.0,
+                 clientOrderId='client',
+                 info=dict(positionSide='long', realizedPNL=0.0, realizedPnl=0.0))
+    with pytest.raises(error_type) as caught:
+        fetcher._normalize_trade(trade)
+    assert caught.value is error

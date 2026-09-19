@@ -13748,11 +13748,13 @@ async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('source', ['direct', 'hsl_emergency'])
-@pytest.mark.parametrize('failure', ['fetched_value', 'config_value', 'runtime', 'fatal'])
+@pytest.mark.parametrize('failure', ['fetched_value', 'config_value', 'runtime', 'type', 'overflow', 'fatal'])
 async def test_optional_fill_refresh_classifies_only_fetched_value_errors(source, failure):
     from live.state_refresh import AuthoritativeSurfaceUnavailable
     from passivbot_exceptions import FatalBotException
     error = (FatalBotException('producer failure') if failure == 'fatal' else
+             TypeError('programming error') if failure == 'type' else
+             OverflowError('programming error') if failure == 'overflow' else
              RuntimeError('unexpected failure') if failure == 'runtime' else
              ValueError('malformed fetched fill'))
     event = SimpleNamespace(timestamp=1_700_000_000_000, id='fill-1', source_ids=['fill-1'])
