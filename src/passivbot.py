@@ -11068,7 +11068,8 @@ class Passivbot:
                 self._equity_hard_stop_runtime_red_latched(pside)
                 and not state["halted"]
             ):
-                return "panic"
+                return ("panic" if (state.get("last_metrics") or {}).get("red_active_now", True)
+                        else "tp_only_with_active_entry_cancellation")
             if state["halted"]:
                 if symbol is None:
                     return "graceful_stop"
@@ -16423,7 +16424,11 @@ class Passivbot:
         reconcile_symbols = sorted(target_psides_by_symbol)
         self._protective_panic_reconcile_symbols = reconcile_symbols
         symbols = sorted(position_symbols)
-        self._hsl_protective_unavailable_symbols.difference_update(set(reconcile_symbols) - position_symbols)
+        self._hsl_protective_unavailable_symbols.difference_update(
+            symbol for symbol in set(reconcile_symbols) - position_symbols
+            if all(float(position.get("size", 0.0)) == 0.0
+                   for position in self.positions.get(symbol, {}).values())
+        )
         if not symbols:
             return {}
 
@@ -16439,12 +16444,23 @@ class Passivbot:
                         return await self._get_orchestrator_market_snapshots([symbol])
                     except MarketSnapshotUnavailable:
                         return {}
-                # Avoid one full network timeout per unavailable predecessor.
-                # Drain all probes before propagating structural failures so no
-                # orphaned reader can mutate the freshness ledger afterward.
-                results = await asyncio.gather(*(fetch_one(symbol) for symbol in symbols),
-                                               return_exceptions=True)
-                for result in results:
+                # Reserve half the fetch-to-hard-TTL headroom for planning.
+                # A stalled probe must not age out independently ready quotes.
+                timeout = max(0.0, float(self._live_market_snapshot_max_age_ms())
+                              - float(self._live_market_snapshot_fetch_max_age_ms())) / 2000.0
+                tasks = [asyncio.create_task(fetch_one(symbol)) for symbol in symbols]
+                try:
+                    await asyncio.wait(tasks, timeout=timeout)
+                finally:
+                    overdue = {task for task in tasks if not task.done()}
+                    for task in overdue:
+                        task.cancel()
+                    # Drain before planning or propagating structural failures:
+                    # no orphaned reader may later mutate the freshness ledger.
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                for task, result in zip(tasks, results):
+                    if task in overdue and isinstance(result, asyncio.CancelledError):
+                        continue
                     if isinstance(result, BaseException):
                         raise result
                     market_snapshots.update(result)
@@ -16988,7 +17004,8 @@ class Passivbot:
                 self._equity_hard_stop_runtime_red_latched(pside)
                 and not state["halted"]
             ):
-                return "panic"
+                return ("panic" if (state.get("last_metrics") or {}).get("red_active_now", True)
+                        else "tp_only_with_active_entry_cancellation")
             if state["halted"]:
                 return self._equity_hard_stop_halted_mode(pside, symbol)
             if self._equity_hard_stop_runtime_tier(pside) == "orange":

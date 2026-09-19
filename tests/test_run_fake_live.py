@@ -2030,7 +2030,20 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
         state = bot._hsl_coin_state('long', symbol) if signal_mode == 'coin' else bot._hsl_state('long')
         assert state['runtime'].red_latched()
         assert bot.positions[symbol]['long']['size'] == 5.0
-        if failure == 'outer_refresh':
+        if failure == 'reactivation':
+            bot.cca.now_ms += 60_000
+            bot.cca.get_current_step()['prices'][symbol] = 100.0
+            bot.market_snapshot_provider._cache.clear()
+            await bot._equity_hard_stop_check()
+            assert not state['last_metrics']['red_active_now']
+            assert bot._orchestrator_mode_override('long', symbol) == 'tp_only_with_active_entry_cancellation'
+            assert bot.get_forced_PB_mode('long', symbol) == 'tp_only_with_active_entry_cancellation'
+            bot.cca.now_ms += 60_000
+            bot.cca.get_current_step()['prices'][symbol] = 90.0
+            bot.market_snapshot_provider._cache.clear()
+            await hsl._equity_hard_stop_run_red_supervisor(bot, single_pass=True)
+            assert state['last_metrics']['red_active_now']
+        elif failure == 'outer_refresh':
             async def yield_sleep(*args, **kwargs):
                 await asyncio.sleep(0)
             bot._sleep_unless_shutdown = yield_sleep
@@ -2052,7 +2065,7 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             bot._equity_hard_stop_flatten_fill_timestamp_with_refresh = AsyncMock(
                 side_effect=AuthoritativeSurfaceUnavailable('hsl_episode_boundaries', 'history pending'))
             expected = AuthoritativeSurfaceUnavailable
-        if failure != 'outer_refresh':
+        if failure not in {'outer_refresh', 'reactivation'}:
             supervisor = hsl._equity_hard_stop_run_coin_red_supervisor if signal_mode == 'coin' else hsl._equity_hard_stop_run_red_supervisor
             with pytest.raises(expected):
                 await supervisor(bot, single_pass=True)
@@ -2071,6 +2084,13 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
         assert captured['completed']
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('signal_mode', ['pside', 'unified'])
+async def test_red_reactivation_closes_in_same_recovery_wave(tmp_path, monkeypatch, signal_mode):
+    await test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exchange(
+        tmp_path, monkeypatch, 'reactivation', signal_mode)
 
 
 @pytest.mark.asyncio

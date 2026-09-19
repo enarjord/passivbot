@@ -93,6 +93,8 @@ async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch
         price_steps={'A': 0.1, 'B': 0.1},
         _get_orchestrator_market_snapshots=quotes,
         _record_market_snapshot_surface=lambda *a: None,
+        _live_market_snapshot_max_age_ms=lambda: 10_000,
+        _live_market_snapshot_fetch_max_age_ms=lambda: 5_000,
         _to_executable_orders=lambda orders, prices: (orders, []),
         _finalize_reduce_only_orders=lambda orders, prices: orders,
     )
@@ -109,7 +111,7 @@ async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('fault', ['missing', 'nan', 'crossed', 'payload_shape', 'concurrent'])
+@pytest.mark.parametrize('fault', ['missing', 'nan', 'crossed', 'payload_shape', 'concurrent', 'stalled', 'probe_shape'])
 async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_exits(monkeypatch, require_real_passivbot_rust_module, fault):
     from types import SimpleNamespace
     from live.freshness import FreshnessLedger
@@ -135,7 +137,8 @@ async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_e
         positions={symbol: {'long': {'size': 2.0}} for symbol in tickers.keys() | {'A'}},
         price_steps={symbol: 0.1 for symbol in ('A', 'B', 'C')},
         _ensure_freshness_ledger=lambda: ledger,
-        _live_market_snapshot_max_age_ms=lambda: 10_000,
+        _live_market_snapshot_max_age_ms=lambda: 200 if fault == 'stalled' else 10_000,
+        _live_market_snapshot_fetch_max_age_ms=lambda: 100 if fault == 'stalled' else 5_000,
         config_get=lambda *a: 'fake_protective_quote_partition',
         _to_executable_orders=lambda orders, prices: (orders, []),
         _finalize_reduce_only_orders=lambda orders, prices: orders,
@@ -147,8 +150,9 @@ async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_e
     from live.market_snapshot import MarketSnapshotUnavailable
     started = set()
     all_started = asyncio.Event()
+    cancelled = asyncio.Event()
     async def quotes(symbols):
-        if fault == 'concurrent':
+        if fault in {'concurrent', 'stalled', 'probe_shape'}:
             if len(symbols) > 1:
                 raise MarketSnapshotUnavailable('batch unavailable')
             started.add(symbols[0])
@@ -156,6 +160,13 @@ async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_e
                 all_started.set()
             if symbols[0] == 'A':
                 await all_started.wait()
+                if fault == 'probe_shape':
+                    raise ValueError('structural reader failure')
+                if fault == 'stalled':
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        cancelled.set()
                 raise MarketSnapshotUnavailable('slow unavailable symbol')
         snapshots = await provider.get_snapshots(symbols)
         bot._record_market_snapshot_surface(symbols, snapshots)
@@ -168,13 +179,21 @@ async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_e
         with pytest.raises(RuntimeError, match='non-dict'):
             await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets)
         return
+    if fault == 'probe_shape':
+        with pytest.raises(ValueError, match='structural reader failure'):
+            await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets)
+        assert started == {'A', 'B', 'C'}
+        assert bot._current_planning_snapshot is None
+        return
     result = await asyncio.wait_for(Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol=targets), timeout=2.0)
     assert set(result) == {'B', 'C'}
     assert all(orders[0][0] == -2.0 for orders in result.values())
     assert bot._current_planning_snapshot.symbols == ('B', 'C')
     assert bot._market_snapshot_signature_invalid(['B', 'C']) == []
     assert bot._hsl_protective_unavailable_symbols == {'A'}
-    if fault == 'concurrent':
+    if fault in {'concurrent', 'stalled'}:
+        if fault == 'stalled':
+            assert cancelled.is_set()
         assert started == {'A', 'B', 'C'}
     else:
         await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'B': {'long'}})
@@ -182,3 +201,20 @@ async def test_provider_quote_partition_keeps_combined_freshness_for_two_ready_e
         tickers['A'] = {'bid': 99.0, 'ask': 101.0, 'last': 100.0}
         await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'A': {'long'}})
         assert not bot._hsl_protective_unavailable_symbols
+
+
+@pytest.mark.asyncio
+async def test_flat_target_does_not_clear_opposite_side_quote_outage():
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    bot = SimpleNamespace(
+        positions={'A': {'long': {'size': 0.0}, 'short': {'size': -2.0}}},
+        _hsl_protective_unavailable_symbols={'A'},
+    )
+    assert await Passivbot.calc_protective_panic_ideal_orders_orchestrator(
+        bot, target_psides_by_symbol={'A': {'long'}}) == {}
+    assert bot._hsl_protective_unavailable_symbols == {'A'}
+    bot.positions['A']['short']['size'] = 0.0
+    assert await Passivbot.calc_protective_panic_ideal_orders_orchestrator(
+        bot, target_psides_by_symbol={'A': {'long'}}) == {}
+    assert not bot._hsl_protective_unavailable_symbols
