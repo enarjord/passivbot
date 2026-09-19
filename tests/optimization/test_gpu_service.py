@@ -3572,15 +3572,17 @@ def _suite_batch_proxy():
     return proxy
 
 
-@pytest.mark.parametrize('changed', ['data', 'run', 'warmup', 'runtime', 'overrides', 'btc', 'metrics', 'coupling', 'batch', 'work_limit'])
-def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed):
+@pytest.mark.parametrize('changed', ['data', 'run', 'warmup', 'runtime', 'overrides', 'btc', 'metrics', 'coupling', 'batch', 'work_limit', 'interrupt'])
+@pytest.mark.parametrize('device', ['cuda', 'mps'])
+def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed, device):
     import copy
     from dataclasses import replace
     from optimization.gpu import service
-    monkeypatch.setattr(service, 'gpu_device', lambda _: 'cuda')
+    monkeypatch.setattr(service, 'gpu_device', lambda _: device)
     first = _suite_batch_proxy()
     second = copy.copy(first)
     original = first.suite_batch_key()
+    assert original is not None
     second.checkpoint_contract = copy.deepcopy(first.checkpoint_contract)
     second.checkpoint_contract['base_params']['long']['n_positions'] = 20
     assert second.suite_batch_key() == original
@@ -3594,17 +3596,22 @@ def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed):
     elif changed == 'metrics': second.needed_metrics = {'sortino_ratio_strategy_eq'}
     elif changed == 'coupling': second.couple_unstuck_emas = True
     elif changed == 'batch': second.batch_size = 512
+    elif changed == 'interrupt':
+        second._runner_specs = copy.deepcopy(first._runner_specs)
+        second._runner_specs['long'][1]['interrupt_check'] = lambda: None
     else: second.max_dispatch_candidate_bars = 1000
     assert second.suite_batch_key() != original
 
 
-def test_suite_batching_does_not_change_apple_or_dual_side_dispatch(monkeypatch):
+@pytest.mark.parametrize('device', ['cuda', 'mps'])
+def test_suite_batching_rejects_unsupported_topologies(monkeypatch, device):
     from optimization.gpu import service
     proxy = _suite_batch_proxy()
-    monkeypatch.setattr(service, 'gpu_device', lambda _: 'mps')
-    assert proxy.suite_batch_key() is None
-    monkeypatch.setattr(service, 'gpu_device', lambda _: 'cuda')
+    monkeypatch.setattr(service, 'gpu_device', lambda _: device)
     proxy.sides = ['long', 'short']
+    assert proxy.suite_batch_key() is None
+    proxy.sides = ['long']
+    proxy.strategy_kind = 'ema_anchor'
     assert proxy.suite_batch_key() is None
 
 

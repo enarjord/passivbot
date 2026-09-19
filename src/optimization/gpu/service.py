@@ -3594,9 +3594,13 @@ class MpsMulticoinProxy:
         )
 
     def suite_batch_key(self):
-        """Identify CUDA scenarios differing only in materializable parameters."""
+        """Identify GPU scenarios differing only in materializable parameters.
+
+        The receiving proxy still splits the combined candidates at its device's
+        dispatch cap; grouping scenarios never expands the work envelope.
+        """
         if (
-            gpu_device(self._torch) != "cuda"
+            gpu_device(self._torch) not in {"cuda", "mps"}
             or self.strategy_kind != "trailing_martingale"
             or len(self.sides) != 1
         ):
