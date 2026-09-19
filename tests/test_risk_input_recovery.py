@@ -1360,7 +1360,7 @@ async def test_inactive_coin_scope_skips_new_emergency_but_preserves_committed_e
     await h.evaluate_emergency(bot, {"A": {"long", "short"}}, refresh_fill_tail=False)
     assert health.pending_exits() == {active}
     bot._calc_upnl_sum_strict.assert_awaited_once_with("long", "A")
-    health.scopes[inactive].exit_committed = True
+    health.scopes.setdefault(inactive, h.Health()).exit_committed = True
     health.scopes[inactive].exit_started_ms = bot.get_exchange_time()
     bot._risk_input_recovery = recovery.RecoveryState()
     bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
@@ -1501,3 +1501,30 @@ async def test_stalled_emergency_quote_does_not_starve_next_scope(monkeypatch):
     await asyncio.wait_for(h.evaluate_emergency(bot, recovery._unready_hsl_targets(bot)), timeout=1.0)
     assert cancelled == ['A']
     assert health.pending_exits() == {h.Scope('coin', 'long', 'B')}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("inactive_key", ["n_positions", "total_wallet_exposure_limit"])
+async def test_inactive_interval_does_not_consume_reenabled_scope_grace(monkeypatch, tmp_path, inactive_key):
+    from live import hsl_protection as h
+    bot, clock = make_bot(monkeypatch)
+    bot.config['live']['hsl_unavailable_grace_seconds'] = 120.0
+    bot._hsl_protection_journal_path = tmp_path / 'protection.json'
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    health = h.manager(bot)
+    scope = h.Scope('coin', 'long', 'A')
+    health.unavailable(scope, now_ms=bot.get_exchange_time(), reason='history', grace_ms=120000)
+    bot.bot_value = lambda side, key: 0 if key == inactive_key else 1
+    h.reconcile_config(bot)
+    assert scope not in h.ProtectionHealth(health.path).scopes
+    clock[0] += 200.0
+    bot.bot_value = lambda *args: 1
+    bot._hsl_protection_health = h.ProtectionHealth(health.path)
+    health = h.manager(bot)
+    health.unavailable(scope, now_ms=bot.get_exchange_time(), reason='history', grace_ms=120000)
+    await h.evaluate_emergency(bot, recovery._unready_hsl_targets(bot), refresh_fill_tail=False)
+    assert not health.pending_exits()
+    bot._calc_upnl_sum_strict.assert_not_awaited()
+    clock[0] += 120.0
+    await h.evaluate_emergency(bot, recovery._unready_hsl_targets(bot), refresh_fill_tail=False)
+    assert health.pending_exits() == {scope}

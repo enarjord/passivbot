@@ -85,7 +85,7 @@ class ProtectionHealth:
                         or not isinstance(scope.symbol, str)
                         or (scope.mode == "coin") != bool(scope.symbol)
                         or scope in loaded
-                        or health.status not in {"usable", "degraded", "unavailable"}
+                        or health.status not in {"usable", "degraded", "unavailable", "inactive"}
                         or any(type(getattr(health, field)) is not bool for field in
                                ("exit_committed", "exit_confirmed_flat", "emergency_active"))
                         or not isinstance(health.execution_blocked, str)
@@ -242,7 +242,23 @@ def reconcile_config(bot):
         logging.warning("[risk] HSL protection scope retired after configuration change | mode=%s pside=%s symbol=%s",
                         scope.mode, scope.pside, scope.symbol or "all")
         del health.scopes[scope]
-    if obsolete:
+    changed = bool(obsolete)
+    for scope, item in list(health.scopes.items()):
+        if (scope.mode == "coin" and not signal_scope_enabled(bot, scope.pside, scope.symbol)
+                and not item.exit_committed and not item.exit_confirmed_flat):
+            if item.exit_started_ms is None:
+                del health.scopes[scope]
+                changed = True
+            elif item.status != "inactive" or item.unavailable_since_ms is not None:
+                # Retain completed emergency provenance for canonical replay,
+                # but inactive time must not consume a later outage's grace.
+                item.status = "inactive"
+                item.reason = "inactive_scope"
+                item.unavailable_since_ms = None
+                item.emergency_active = False
+                item.execution_blocked = ""
+                changed = True
+    if changed:
         health.save()
 
 
@@ -338,6 +354,7 @@ async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
     """
     import passivbot_rust as pbr
     health_manager = manager(bot)
+    reconcile_config(bot)
     now = int(bot.get_exchange_time())
     delay = grace_ms(bot)
     active = affected_scopes(bot, candidates, {})
