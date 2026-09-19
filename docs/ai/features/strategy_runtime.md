@@ -254,3 +254,26 @@ behavior patches.
 - `tests/test_orchestrator_json_api.py`
 - `tests/test_orchestrator_integration.py`
 - `tests/test_auto_unstuck_allowance.py`
+
+
+## Directional Efficiency
+
+The opt-in shared controls are documented in [the experiment guide](../../directional_efficiency.md).
+Rust owns the signed finite-window calculation, ranking score multiplier and adverse-direction
+cooldown. Python supplies completed candle windows through the same compiled calculation.
+`SymbolInput.directional_efficiency` carries current values keyed by integer lookback minutes;
+`forager_directional_efficiency` carries separately bounded completed ranking values. The live
+loader uses the existing Forager staleness budget for the latter only. Backtest fills both from
+history through k, never the next-candle hint.
+
+Missing required input is strict by default. The explicit live
+`allow_missing_directional_efficiency` flag authorizes only this feature's input unavailability;
+it does not authorize missing EMAs or invalid/non-finite values. A missing ranking value excludes
+only a candidate requiring ranking; missing pacing data omits adding orders while independent
+closes remain available. Enabled pacing stages one adding order even while flat so a resting
+initial ladder cannot bypass fill-based delays. Base exposure/loss gates still apply.
+
+Zero controls preserve baseline orders and require no additional candle fetch. Complete window
+warmup is mandatory even when an EMA warmup cap is shorter. Only exact CPU / 1-minute simulation
+is implemented; GPU entry points reject positive controls or bounds. Lookback bounds must be
+integer-stepped. Regression coverage lives in `tests/test_directional_efficiency.py`.

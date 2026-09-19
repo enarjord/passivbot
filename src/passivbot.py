@@ -16588,6 +16588,10 @@ class Passivbot:
             "forager_volume_drop_pct",
             "forager_score_weights",
             "risk_entry_cooldown_minutes",
+            "forager_directional_efficiency_lookback_minutes",
+            "forager_directional_efficiency_penalty",
+            "risk_directional_efficiency_lookback_minutes",
+            "risk_directional_efficiency_cooldown_minutes",
             "n_positions",
             "total_wallet_exposure_limit",
             "wallet_exposure_limit",
@@ -19446,6 +19450,30 @@ class Passivbot:
             symbol: dict(values)
             for symbol, values in forager_m1_log_range_emas.items()
         }
+        from directional_efficiency import load_symbol_values, required_windows
+        efficiency_values = {}
+        efficiency_now_ms = int(utc_ms())
+        for sym in symbols:
+            windows = set()
+            for pside in ("long", "short"):
+                params = {
+                    key: self.bp(pside, key, sym)
+                    for key in (
+                        "forager_directional_efficiency_penalty",
+                        "forager_directional_efficiency_lookback_minutes",
+                        "risk_directional_efficiency_cooldown_minutes",
+                        "risk_directional_efficiency_lookback_minutes",
+                    )
+                }
+                windows.update(required_windows(params))
+            if windows:
+                efficiency_values[sym] = await load_symbol_values(
+                    self.cm, sym, windows, now_ms=efficiency_now_ms,
+                    allow_remote_fetch=sym not in cache_only_symbols,
+                    ranking_max_age_ms=forager_cached_metric_max_age_by_symbol.get(sym, 0),
+                )
+        self._orchestrator_directional_efficiency = efficiency_values
+        self._orchestrator_directional_efficiency_minute = efficiency_now_ms // ONE_MIN_MS
         self._orchestrator_ema_bundle_completed = True
         Passivbot._emit_ema_bundle_completed_event(
             self,
@@ -19688,6 +19716,15 @@ class Passivbot:
                     "tradable": tradable,
                     "allow_missing_strategy_inputs": (
                         symbol in allow_missing_strategy_inputs_symbols
+                    ),
+                    "allow_missing_directional_efficiency": symbol in getattr(self, "_orchestrator_directional_efficiency", {}),
+                    "directional_efficiency": (
+                        getattr(self, "_orchestrator_directional_efficiency", {}).get(symbol, ([], []))[0]
+                        if getattr(self, "_orchestrator_directional_efficiency_minute", -1) == now_ms // ONE_MIN_MS else []
+                    ),
+                    "forager_directional_efficiency": (
+                        getattr(self, "_orchestrator_directional_efficiency", {}).get(symbol, ([], []))[1]
+                        if getattr(self, "_orchestrator_directional_efficiency_minute", -1) == now_ms // ONE_MIN_MS else []
                     ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),

@@ -119,6 +119,8 @@ def normalize_twel_enforcer_policy(value, *, path: str) -> str:
 def validate_bot_config(result: dict) -> None:
     for pside in BOT_POSITION_SIDES:
         bot_side = result["bot"][pside]
+        from directional_efficiency import validate_params
+        validate_params(flatten_shared_bot_side(bot_side), path=f"bot.{pside}")
         _validate_positive_ratio_when_enabled(
             enabled_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_enabled"),
             threshold_value=get_grouped_bot_value(bot_side, "risk_wel_enforcer_threshold"),

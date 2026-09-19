@@ -1541,10 +1541,13 @@ impl<'a> Backtest<'a> {
                     exchange,
                     tradable,
                     allow_missing_strategy_inputs: false,
+                    allow_missing_directional_efficiency: false,
                     next_candle,
                     effective_min_cost,
                     emas,
                     forager_m1: None,
+                    directional_efficiency: self.directional_efficiency_at(idx, k),
+                    forager_directional_efficiency: self.directional_efficiency_at(idx, k),
                     long: orchestrator::SymbolSideInput {
                         mode: mode_long,
                         position: pos_long,
@@ -1600,6 +1603,22 @@ impl<'a> Backtest<'a> {
             peek_hints,
             forager_hysteresis,
         }
+    }
+
+    fn directional_efficiency_at(&self, idx: usize, k: usize) -> Vec<(f64, f64)> {
+        let pair = &self.bot_params[idx];
+        let mut windows = crate::directional_efficiency::required_windows(&pair.long);
+        windows.extend(crate::directional_efficiency::required_windows(&pair.short));
+        windows.sort_unstable();
+        windows.dedup();
+        let Some((first, last)) = self.coin_valid_range(idx) else { return Vec::new(); };
+        windows.into_iter().filter_map(|window| {
+            if k < first.saturating_add(window) || k > last { return None; }
+            let closes: Vec<f64> = (k-window..=k).map(|t| self.hlcvs_value(t, idx, CLOSE)).collect();
+            let value = crate::directional_efficiency::signed_efficiency(&closes)
+                .expect("invalid completed close window for directional efficiency");
+            Some((window as f64, value))
+        }).collect()
     }
 
     fn get_orchestrator_input_cached(
@@ -1661,6 +1680,8 @@ impl<'a> Backtest<'a> {
             sym.order_book.bid = close_price;
             sym.order_book.ask = close_price;
             sym.tradable = self.coin_is_tradeable_at(idx, k);
+            sym.directional_efficiency = self.directional_efficiency_at(idx, k);
+            sym.forager_directional_efficiency.clone_from(&sym.directional_efficiency);
             sym.next_candle = if k + 1 < self.hlcvs.shape()[0] {
                 let tradable_next = self.coin_is_tradeable_at(idx, k + 1);
                 let (low, high) = if tradable_next {
@@ -1918,6 +1939,13 @@ impl<'a> Backtest<'a> {
         };
         let mut trade_activation_logged = vec![false; n_coins];
 
+        for pair in &bot_params {
+            for params in [&pair.long, &pair.short] {
+                crate::directional_efficiency::validate_params(params).expect("invalid directional efficiency configuration");
+                assert!(crate::directional_efficiency::required_windows(params).is_empty() || backtest_params.candle_interval_minutes == 1,
+                    "directional efficiency requires 1 minute backtest candles");
+            }
+        }
         for i in 0..n_coins {
             let mut first = first_valid_idx[i];
             if first >= n_timesteps {
@@ -1944,7 +1972,11 @@ impl<'a> Backtest<'a> {
                 .saturating_add(warm_bars)
                 .min(last)
                 .max(provided_trade_idx);
-            trade_start_idx[i] = trade_idx;
+            let efficiency_warmup = crate::directional_efficiency::required_windows(&bot_params[i].long).into_iter()
+                .chain(crate::directional_efficiency::required_windows(&bot_params[i].short))
+                .max().unwrap_or(0);
+            // Never trade a new listing before its full finite-window history exists.
+            trade_start_idx[i] = trade_idx.max(first.saturating_add(efficiency_warmup));
 
             let expected_trade_idx = first.saturating_add(warm_bars).min(last);
             debug_assert!(
@@ -2088,6 +2120,12 @@ impl<'a> Backtest<'a> {
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
             warmup_bars = calc_warmup_bars(&bot_params, &strategy_params_parsed);
+        }
+
+        for pair in &bot_params {
+            for params in [&pair.long, &pair.short] {
+                warmup_bars = warmup_bars.max(crate::directional_efficiency::required_windows(params).into_iter().max().unwrap_or(0));
+            }
         }
 
         let trailing_enabled: Vec<TrailingEnabled> = strategy_params_parsed

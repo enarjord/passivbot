@@ -4,6 +4,7 @@ mod closes;
 mod coin_selection;
 mod constants;
 mod dynamic;
+mod directional_efficiency;
 mod entries;
 mod equity_hard_stop_loss;
 mod gpu;
@@ -191,5 +192,6 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(select_forager_candidates_py, m)?)?;
     m.add_function(wrap_pyfunction!(calc_ema_anchor_quote_series_py, m)?)?;
 
+    m.add_function(wrap_pyfunction!(directional_efficiency::calc_directional_efficiency, m)?)?;
     Ok(())
 }

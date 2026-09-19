@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add opt-in directional-efficiency ranking and adverse-trend DCA pacing, disabled by default.
+  Share the calculation and order policy between live and exact 1-minute backtests; preserve
+  protective exits when the new candle input is unavailable. Include a four-way ablation suite
+  and reject enabled experiments in unsupported GPU proxies. See
+  [the experiment guide](docs/directional_efficiency.md).
+
 - Let HSL recovery exits close positions even when balance is unavailable. Use a minimal
   Rust panic-close contract independent of history and strategy settings, while retaining
   fresh positions, open orders, quotes, and strict validation of the complete close batch.

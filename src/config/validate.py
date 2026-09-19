@@ -96,6 +96,20 @@ def validate_config(
     )
     validate_optimize_bounds_against_bot_config(config, optimize_bounds)
     validate_bot_config(config)
+    from directional_efficiency import required_windows, validate_params as validate_efficiency, validate_bounds
+    from .shared_bot import flatten_shared_bot_side
+    validate_bounds(config)
+    for pside in BOT_POSITION_SIDES:
+        base = flatten_shared_bot_side(config["bot"][pside])
+        parameter_sets = [base]
+        for coin, override in config.get("coin_overrides", {}).items():
+            if isinstance(override, dict):
+                patch = override.get("bot", {}).get(pside, {})
+                params = {**base, **flatten_shared_bot_side(patch)}
+                validate_efficiency(params, path=f"coin_overrides.{coin}.bot.{pside}")
+                parameter_sets.append(params)
+        if any(required_windows(params) for params in parameter_sets) and config["backtest"]["candle_interval_minutes"] != 1:
+            raise ValueError("directional efficiency requires 1 minute backtest candles")
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")

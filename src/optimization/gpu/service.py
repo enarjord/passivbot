@@ -1845,6 +1845,8 @@ def _candidate_parameter_matrix(
     couple_unstuck_emas: bool = False,
 ) -> np.ndarray:
     """Pack columns directly, preserving base < candidate < fixed override precedence."""
+    from directional_efficiency import reject_gpu_directional_efficiency
+    reject_gpu_directional_efficiency({"base": base_params, "candidates": candidates, "overrides": static_overrides})
     if not candidates:
         return np.asarray([], dtype=np.float64)
     matrix = np.empty(
@@ -1892,6 +1894,8 @@ class MpsSingleCoinProxy:
         interrupt_check=None,
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
     ):
+        from directional_efficiency import reject_gpu_directional_efficiency
+        reject_gpu_directional_efficiency(config)
         try:
             import torch
         except (
@@ -3006,6 +3010,8 @@ class MpsMulticoinProxy:
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
     ):
+        from directional_efficiency import reject_gpu_directional_efficiency
+        reject_gpu_directional_efficiency(config)
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency

@@ -2538,6 +2538,11 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         hsl_orange_tier_mode,
         hsl_panic_close_order_type,
         risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
+        forager_directional_efficiency_lookback_minutes: match dict.get_item("forager_directional_efficiency_lookback_minutes")? { Some(v) => v.extract::<f64>()?, None => 60.0 },
+        forager_directional_efficiency_penalty: match dict.get_item("forager_directional_efficiency_penalty")? { Some(v) => v.extract::<f64>()?, None => 0.0 },
+        risk_directional_efficiency_lookback_minutes: match dict.get_item("risk_directional_efficiency_lookback_minutes")? { Some(v) => v.extract::<f64>()?, None => 60.0 },
+        risk_directional_efficiency_cooldown_minutes: match dict.get_item("risk_directional_efficiency_cooldown_minutes")? { Some(v) => v.extract::<f64>()?, None => 0.0 },
+
         n_positions,
         total_wallet_exposure_limit,
         wallet_exposure_limit,

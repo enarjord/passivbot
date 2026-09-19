@@ -1104,6 +1104,11 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
         def bp(self, pside, key, symbol):
             if key == "unstuck_enabled":
                 return False
+            # This fixture exercises baseline EMA behaviour with the experiment disabled.
+            if key in {"forager_directional_efficiency_penalty", "risk_directional_efficiency_cooldown_minutes"}:
+                return 0.0
+            if key in {"forager_directional_efficiency_lookback_minutes", "risk_directional_efficiency_lookback_minutes"}:
+                return 60.0
             raise KeyError(key)
 
         def bot_value(self, pside, key):
@@ -1249,6 +1254,11 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
         def bp(self, pside, key, symbol):
             if key == "unstuck_enabled":
                 return False
+            # This fixture exercises baseline EMA behaviour with the experiment disabled.
+            if key in {"forager_directional_efficiency_penalty", "risk_directional_efficiency_cooldown_minutes"}:
+                return 0.0
+            if key in {"forager_directional_efficiency_lookback_minutes", "risk_directional_efficiency_lookback_minutes"}:
+                return 60.0
             raise KeyError(key)
 
         def bot_value(self, pside, key):
@@ -1452,6 +1462,11 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
         def bp(self, pside, key, symbol):
             if key == "unstuck_enabled":
                 return False
+            # This fixture exercises baseline EMA behaviour with the experiment disabled.
+            if key in {"forager_directional_efficiency_penalty", "risk_directional_efficiency_cooldown_minutes"}:
+                return 0.0
+            if key in {"forager_directional_efficiency_lookback_minutes", "risk_directional_efficiency_lookback_minutes"}:
+                return 60.0
             raise KeyError(key)
 
         def bot_value(self, pside, key):

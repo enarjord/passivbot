@@ -21,6 +21,8 @@ def _flatten_strategy_bound_items(bounds: dict, prefix: tuple[str, ...] = ()):
 
 SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
     "forager": {
+        "directional_efficiency_lookback_minutes": "forager_directional_efficiency_lookback_minutes",
+        "directional_efficiency_penalty": "forager_directional_efficiency_penalty",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
         "score_weights_volatility": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
@@ -34,6 +36,8 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "red_threshold": "hsl_red_threshold",
     },
     "risk": {
+        "directional_efficiency_lookback_minutes": "risk_directional_efficiency_lookback_minutes",
+        "directional_efficiency_cooldown_minutes": "risk_directional_efficiency_cooldown_minutes",
         "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
@@ -63,6 +67,8 @@ BOT_BOUND_GROUP_BY_KEY = {
 SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     "long": {
         "forager": {
+            "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+            "directional_efficiency_penalty": [0.0, 0.0, 1],
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
@@ -76,6 +82,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "red_threshold": [0.15, 0.15, 0.001]
         },
         "risk": {
+            "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+            "directional_efficiency_cooldown_minutes": [0.0, 0.0, 1],
             "entry_cooldown_minutes": [0, 60, 0.1],
             "n_positions": [7, 7, 1],
             "position_exposure_enforcer_threshold": [1, 1, 0.001],
@@ -94,6 +102,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     },
     "short": {
         "forager": {
+            "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+            "directional_efficiency_penalty": [0.0, 0.0, 1],
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
@@ -107,6 +117,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "red_threshold": [0.01, 0.15, 0.001]
         },
         "risk": {
+            "directional_efficiency_lookback_minutes": [60.0, 60.0, 1],
+            "directional_efficiency_cooldown_minutes": [0.0, 0.0, 1],
             "entry_cooldown_minutes": [0, 60, 0.1],
             "n_positions": [5, 5, 1],
             "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],

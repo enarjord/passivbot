@@ -257,6 +257,9 @@ mod core {
         MissingEma {
             symbol_idx: usize,
         },
+        MissingDirectionalEfficiency {
+            symbol_idx: usize,
+        },
         MissingTrailing {
             symbol_idx: usize,
         },
@@ -424,6 +427,8 @@ mod core {
         /// callers that do not explicitly establish live data unavailability.
         #[serde(default)]
         pub allow_missing_strategy_inputs: bool,
+        #[serde(default)]
+        pub allow_missing_directional_efficiency: bool,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -434,6 +439,10 @@ mod core {
         /// projection; backtest and older callers fall back to `emas.m1`.
         #[serde(default)]
         pub forager_m1: Option<EmaTimeframeBundle>,
+        #[serde(default)]
+        pub directional_efficiency: Vec<(f64, f64)>,
+        #[serde(default)]
+        pub forager_directional_efficiency: Vec<(f64, f64)>,
         pub long: SymbolSideInput,
         pub short: SymbolSideInput,
     }
@@ -2231,6 +2240,7 @@ mod core {
 
     fn unavailable_forager_candidate(index: usize) -> ForagerCandidate {
         ForagerCandidate {
+            directional_efficiency_penalty: 0.0,
             index,
             enabled: false,
             volume_score: 0.0,
@@ -2310,6 +2320,15 @@ mod core {
         Ok(())
     }
 
+    fn directional_efficiency_value(symbol: &SymbolInput, lookback: f64, forager: bool) -> Result<f64, OrchestratorError> {
+        let value = ema_lookup(if forager { &symbol.forager_directional_efficiency } else { &symbol.directional_efficiency }, lookback)
+            .ok_or(OrchestratorError::MissingDirectionalEfficiency { symbol_idx: symbol.symbol_idx })?;
+        if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+            return Err(OrchestratorError::NonFiniteInput { field: "directional_efficiency", symbol_idx: Some(symbol.symbol_idx) });
+        }
+        Ok(value)
+    }
+
     fn build_forager_candidates_into(
         symbols: &[SymbolInput],
         candidate_indices: &[usize],
@@ -2350,6 +2369,16 @@ mod core {
                 },
                 side,
             )?;
+            let directional_efficiency_penalty = if cfg.require_forager && side.bot_params.forager_directional_efficiency_penalty > 0.0 {
+                match directional_efficiency_value(s, side.bot_params.forager_directional_efficiency_lookback_minutes, true) {
+                    Ok(value) => side.bot_params.forager_directional_efficiency_penalty * value.abs(),
+                    Err(err) => {
+                        handle_strategy_input_error(err, s, pside, StrategyInputScope::ForagerSelection, diagnostics)?;
+                        out.push(unavailable_forager_candidate(s.symbol_idx));
+                        continue;
+                    }
+                }
+            } else { 0.0 };
             let volume_score = if volume_required {
                 let value = match ema_lookup(
                     &forager_m1.volume,
@@ -2439,6 +2468,7 @@ mod core {
                 (0.0, 0.0, 0.0, 0.0, 0.0)
             };
             out.push(ForagerCandidate {
+                directional_efficiency_penalty,
                 index: s.symbol_idx,
                 enabled: true,
                 volume_score,
@@ -2576,6 +2606,7 @@ mod core {
     ) -> Result<(), OrchestratorError> {
         let explicitly_unavailable = match &err {
             OrchestratorError::MissingEma { .. } => symbol.allow_missing_strategy_inputs,
+            OrchestratorError::MissingDirectionalEfficiency { .. } => symbol.allow_missing_directional_efficiency,
             OrchestratorError::MissingTrailing { .. } => {
                 !symbol_side_input(symbol, pside).trailing_available
             }
@@ -2841,6 +2872,15 @@ mod core {
                 }),
             },
         );
+        let mut cooldown_minutes = side.bot_params.risk_entry_cooldown_minutes;
+        if wants_entries && side.position.size != 0.0 && side.bot_params.risk_directional_efficiency_cooldown_minutes > 0.0 {
+            let efficiency = directional_efficiency_value(symbol, side.bot_params.risk_directional_efficiency_lookback_minutes, false)?;
+            let adverse_efficiency = match pside {
+                PositionSide::Long => (-efficiency).max(0.0),
+                PositionSide::Short => efficiency.max(0.0),
+            };
+            cooldown_minutes += adverse_efficiency * side.bot_params.risk_directional_efficiency_cooldown_minutes;
+        }
         let mut entries = Vec::new();
         append_strategy_orders_as_ideal(&mut entries, generated.entries, symbol.symbol_idx, pside);
         apply_add_order_gates(
@@ -2848,8 +2888,9 @@ mod core {
             pside,
             input.timestamp_ms,
             side.last_increase_fill_timestamp_ms,
-            side.bot_params.risk_entry_cooldown_minutes,
-            strategy_requires_sequential_entry_staging(&strategy_params),
+            cooldown_minutes,
+            strategy_requires_sequential_entry_staging(&strategy_params)
+                || side.bot_params.risk_directional_efficiency_cooldown_minutes > 0.0,
         );
         let mut closes = Vec::new();
         append_strategy_orders_as_ideal(&mut closes, generated.closes, symbol.symbol_idx, pside);
@@ -2867,7 +2908,7 @@ mod core {
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
         let side = symbol_side_input(symbol, pside);
-        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available)
+        let requests = if (symbol.allow_missing_strategy_inputs || symbol.allow_missing_directional_efficiency || !side.trailing_available)
             && wants_entries
             && wants_closes
         {
@@ -3281,6 +3322,12 @@ mod core {
         // - symbols must be indexed by `symbol_idx` for O(1) access in hot loops
         let n_symbols = input.symbols.len();
         for (pos, s) in input.symbols.iter().enumerate() {
+            for params in [&s.long.bot_params, &s.short.bot_params] {
+                crate::directional_efficiency::validate_params(params).map_err(|details| OrchestratorError::InvalidStrategyParams {
+                    symbol_idx: s.symbol_idx, details: details.to_string(),
+                })?;
+            }
+
             if !(s.order_book.bid.is_finite()
                 && s.order_book.ask.is_finite()
                 && s.order_book.bid > 0.0
@@ -4692,10 +4739,13 @@ mod core {
                 },
                 tradable: true,
                 allow_missing_strategy_inputs: false,
+                allow_missing_directional_efficiency: false,
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,
                 forager_m1: None,
+                directional_efficiency: Vec::new(),
+                forager_directional_efficiency: Vec::new(),
                 long: SymbolSideInput {
                     mode: None,
                     position: Position::default(),

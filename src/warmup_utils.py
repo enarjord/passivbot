@@ -1,4 +1,5 @@
 import math
+from directional_efficiency import required_windows
 from typing import Iterator, Tuple
 
 from config.access import require_config_value, require_live_value
@@ -150,6 +151,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         return max_val, True
 
     max_minutes = 0.0
+    efficiency_floor = 0
     unstuck_gate_sides = set()
     minute_fields = [
         "ema_span_0",
@@ -172,6 +174,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
             ("short", short_params, short_strategy),
         )
         for pside, params, strategy in side_sets:
+            efficiency_floor = max(efficiency_floor, max(required_windows(params), default=0))
             unstuck_gate = _unstuck_gate_may_run(config, coin, pside, params)
             if unstuck_gate:
                 unstuck_gate_sides.add(pside)
@@ -200,6 +203,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         config.get("optimize", {}).get("bounds", {}),
         strategy_kind=config.get("live", {}).get("strategy_kind"),
     )
+    for pside in ("long", "short"):
+        for group, control in (("forager", "penalty"), ("risk", "cooldown_minutes")):
+            control_max, _ = _extract_bound_max(bounds, f"{pside}_{group}_directional_efficiency_{control}")
+            if control_max > 0:
+                window_max, _ = _extract_bound_max(bounds, f"{pside}_{group}_directional_efficiency_lookback_minutes")
+                efficiency_floor = max(efficiency_floor, window_max)
     bound_keys_minutes = [
         "long_forager_volume_ema_span_1m",
         "long_forager_volatility_ema_span_1m",
@@ -234,7 +243,7 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
     if limit > 0:
         warmup_minutes = min(warmup_minutes, limit)
-    return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+    return max(int(math.ceil(warmup_minutes)), int(math.ceil(efficiency_floor)))
 
 
 def compute_per_coin_warmup_minutes(config: dict) -> dict:
@@ -254,6 +263,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     ]
     for coin, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
         max_minutes = 0.0
+        efficiency_floor = max(max(required_windows(long_params), default=0), max(required_windows(short_params), default=0))
         side_sets = (
             ("long", long_params, long_strategy),
             ("short", short_params, short_strategy),
@@ -284,7 +294,7 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
-        per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
+        per_coin[coin] = max(int(math.ceil(warmup_minutes)), efficiency_floor)
     return per_coin
 
 

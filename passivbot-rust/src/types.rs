@@ -603,6 +603,15 @@ pub struct BotParams {
     pub hsl_panic_close_order_type: String,
     #[serde(default)]
     pub risk_entry_cooldown_minutes: f64,
+    #[serde(default = "crate::directional_efficiency::default_lookback")]
+    pub forager_directional_efficiency_lookback_minutes: f64,
+    #[serde(default)]
+    pub forager_directional_efficiency_penalty: f64,
+    #[serde(default = "crate::directional_efficiency::default_lookback")]
+    pub risk_directional_efficiency_lookback_minutes: f64,
+    #[serde(default)]
+    pub risk_directional_efficiency_cooldown_minutes: f64,
+
     pub n_positions: usize,
     pub total_wallet_exposure_limit: f64,
     pub wallet_exposure_limit: f64, // per-position base limit (without excess allowance)
@@ -672,6 +681,11 @@ impl Default for BotParams {
             hsl_orange_tier_mode: default_hsl_orange_tier_mode(),
             hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
             risk_entry_cooldown_minutes: 0.0,
+            forager_directional_efficiency_lookback_minutes: 60.0,
+            forager_directional_efficiency_penalty: 0.0,
+            risk_directional_efficiency_lookback_minutes: 60.0,
+            risk_directional_efficiency_cooldown_minutes: 0.0,
+
             n_positions: 0,
             total_wallet_exposure_limit: 0.0,
             wallet_exposure_limit: 0.0,
