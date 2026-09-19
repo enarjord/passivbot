@@ -7317,7 +7317,8 @@ async def _equity_hard_stop_execute_close_wave(self) -> bool:
         return False
 
 
-_SUPERVISOR_READ_TIMEOUT_SECONDS = 5.0
+# Allow the standard 30-second exchange read window, including cold account reads.
+_SUPERVISOR_READ_TIMEOUT_SECONDS = 30.0
 
 
 async def _equity_hard_stop_run_red_supervisor(self, *, single_pass: bool = False, after_close=None) -> None:

@@ -455,7 +455,8 @@ async def _execute_emergency_exits(bot, health):
 
 
 # A new decision needs balance, but that read must not monopolize repeated close waves.
-_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS = 5.0
+# Allow the standard 30-second exchange read window, including cold account reads.
+_EMERGENCY_ACCOUNT_TIMEOUT_SECONDS = 30.0
 
 
 def _observe_recovery_scopes(bot, health):

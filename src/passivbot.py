@@ -849,7 +849,9 @@ def compute_live_warmup_windows(
     return per_symbol_win, per_symbol_h1_hours, per_symbol_skip_historical
 
 
-_HSL_COOLDOWN_READ_TIMEOUT_SECONDS = 5.0
+# Allow the standard 30-second exchange read window, including cold account reads.
+_HSL_COOLDOWN_READ_TIMEOUT_SECONDS = 30.0
+_HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS = 5.0
 
 
 class Passivbot:
@@ -6277,7 +6279,7 @@ class Passivbot:
             epoch = int(getattr(ledger, "epoch", 0))
             generation = int(getattr(self, "_account_invalidation_generation", 0) or 0)
             await asyncio.wait_for(self.update_pnls(source="hsl_cooldown_protection"),
-                                   timeout=_HSL_COOLDOWN_READ_TIMEOUT_SECONDS if not pace else None)
+                                   timeout=_HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS if not pace else None)
             pending = getattr(self, "_authoritative_pending_confirmations", {})
             if (
                 int(getattr(ledger, "epoch", 0)) != epoch

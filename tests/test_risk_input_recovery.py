@@ -1549,6 +1549,7 @@ async def test_stalled_cooldown_reader_yields_to_due_emergency(monkeypatch, bloc
     bot._canonical_open_order_reduce_only = lambda order: False
     monkeypatch.setattr(hsl, '_equity_hard_stop_manual_cooldown_intervention', lambda *a, **kw: None)
     monkeypatch.setattr(pb, '_HSL_COOLDOWN_READ_TIMEOUT_SECONDS', 0.01)
+    monkeypatch.setattr(pb, '_HSL_COOLDOWN_HISTORY_TIMEOUT_SECONDS', 0.01)
     cancelled = []
     async def hung():
         try:

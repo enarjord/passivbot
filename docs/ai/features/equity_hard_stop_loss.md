@@ -107,9 +107,10 @@ performed by this preflight. Hourly market refresh
 never starts a second commitment-draining loop; runtime execution remains the only order owner. Each wave services
 committed exits and existing normal closes, then gives overdue unavailable scopes an evaluation
 opportunity even while another scope remains open. Normal RED supervision yields to this scheduler
-after its close attempt and before balance/history bookkeeping. Protective account reads and each emergency quote read have five-second deadlines. Single-pass
-normal supervision and cooldown supervision also bound account reads to five seconds; cooldown
-fill-tail repair uses the same deadline so another due scope cannot wait indefinitely for it. Timed-out readers are cancelled and drained before another wave.
+after its close attempt and before balance/history bookkeeping. Protective account reads, including single-pass normal and cooldown supervision, have
+30-second deadlines, matching the standard exchange read window so cold account reads are not
+cut short by a five-second limit. Emergency quote reads and optional cooldown fill-tail repair
+have five-second deadlines so another due scope cannot wait indefinitely for them. Timed-out readers are cancelled and drained before another wave.
 Flat normal stop finalization runs during recovery after ordinary refresh has had an opportunity,
 so a flat latch alone cannot monopolize the pre-refresh gate.
 
