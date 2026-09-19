@@ -2055,3 +2055,86 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
         assert captured['completed']
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('case', ['unordered_nonflattening', 'realized_loss'])
+async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, case):
+    from unittest.mock import AsyncMock
+    from live import risk_input_recovery as recovery
+    from live.hsl_episode import EpisodeEvidenceUnavailable
+    from live.hsl_protection import Scope
+    import passivbot_rust as pbr
+    assert not getattr(pbr, '__is_stub__', False)
+    user = f'fake_hsl_evidence_{tmp_path.name}'
+    _cleanup_fake_user_state(user)
+    cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
+    cfg['live']['hsl_signal_mode'] = 'coin'
+    cfg['live']['hsl_unavailable_grace_seconds'] = 120.0
+    cfg['bot']['long']['hsl_ema_span_minutes'] = 10_000.0
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps(cfg))
+    scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
+    scenario.pop('assertions', None)
+    scenario['run_initial_cycle'] = True
+    account = scenario['account']
+    account['balance'] = 170.0
+    account['fills'][0]['price'] = 100.0
+    account['fills'][1].update(amount=1.0, price=70.0, pnl=-30.0)
+    account['fills'][1].pop('info', None)
+    account['fills'][2].update(amount=1.0, price=100.0)
+    account['fills'][2].pop('info', None)
+    if case == 'realized_loss':
+        account['fills'].pop()
+        account['positions'][0]['qty'] = 4.0
+    scenario_path = tmp_path / 'scenario.hjson'
+    scenario_path.write_text(hjson.dumps(scenario))
+    completed = []
+
+    async def exercise(bot):
+        symbol = 'BTC/USDT:USDT'
+        state = bot._hsl_coin_state('long', symbol)
+        runtime = state['runtime']
+        assert state['last_metrics']['tier'] == 'green'
+        assert state['last_metrics']['realized_pnl'] == pytest.approx(-30.0)
+        if case == 'unordered_nonflattening':
+            assert bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)].status == 'degraded'
+        import asyncio
+        async def yield_sleep(*args, **kwargs):
+            await asyncio.sleep(0)
+        bot._sleep_unless_shutdown = yield_sleep
+        if case == 'realized_loss':
+            bot._equity_hard_stop_check = AsyncMock(side_effect=EpisodeEvidenceUnavailable(
+                'price_history_unavailable', pside='long', symbol=symbol))
+            assert await recovery.ensure_ready(bot)
+        bot.cca.now_ms += 120_000
+        if case == 'unordered_nonflattening':
+            assert await recovery.ensure_ready(bot)
+            health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
+            assert health.status == 'degraded'
+            assert health.reason == 'unordered_nonflattening_fill_cohort'
+            assert health.unavailable_since_ms is None
+            assert not health.exit_committed
+            assert state['runtime'] is runtime
+            assert bot.positions[symbol]['long']['size'] == 5.0
+        else:
+            assert not await recovery.ensure_ready(bot)
+            health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
+            assert await bot._calc_upnl_sum_strict('long', symbol) == 0.0
+            assert health.realized_loss == pytest.approx(30.0)
+            assert health.exit_committed
+            await recovery.protect_and_wait(bot)
+            await recovery.protect_and_wait(bot)
+            assert bot.positions[symbol]['long']['size'] == 0.0
+        completed.append(True)
+        return {'evidence_case_completed': True}
+
+    monkeypatch.setattr(run_fake_live_module, '_run_fake_cycle', exercise)
+    try:
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+                                  max_steps=1, output_dir=str(tmp_path), log_level=1, snapshot_each_step=False)
+        import asyncio
+        assert await asyncio.wait_for(_async_main(args), timeout=20.0) == 0
+        assert completed
+    finally:
+        _cleanup_fake_user_state(user)

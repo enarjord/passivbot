@@ -297,3 +297,107 @@ async def test_partial_boundary_batch_does_not_mark_later_failed_replay_consumed
         assert [consumed.rows[i][0] for i in consumed.flatten_indices] == [120_000]
         assert replay.await_count == attempt
         assert replay.await_args.kwargs['replay_flatten_timestamp_ms'] == 240_000
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_unordered_cohort_that_cannot_flatten_keeps_episode_with_conservative_pnl(reverse):
+    events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0)]
+    cohort = [
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-10.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=2.0),
+    ]
+    events.extend(reversed(cohort) if reverse else cohort)
+    evidence = hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A')
+    assert evidence.unavailable is None
+    assert evidence.degraded_reason == 'unordered_nonflattening_fill_cohort'
+    assert evidence.flatten_indices == ()
+    assert evidence.ending_size == 5.0
+    assert evidence.realized_prefix == (0.0, 0.0, 2.0, -8.0)
+    assert evidence.window(60_000, 180_000).degraded_reason == evidence.degraded_reason
+
+
+@pytest.mark.parametrize('opening', [0.0, 1.0])
+def test_potential_flatten_in_unordered_cohort_stays_unavailable(opening):
+    events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=opening, pnl=0.0)] if opening else []
+    events.extend([
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-10.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+    ])
+    assert hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A').unavailable
+
+
+@pytest.mark.asyncio
+async def test_degraded_nonflattening_cohort_keeps_existing_ema_and_reports_quality():
+    from live.hsl_protection import ProtectionHealth, Scope
+    bot = make_coin_bot()
+    bot._hsl_protection_health = ProtectionHealth()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.positions = {'A': {'long': {'size': 5.0}, 'short': {'size': 0.0}}}
+    bot.bot_value = lambda side, key: 1
+    bot.get_exchange_time = lambda: 180_000
+    events = [dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0)]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', 60_000, 1000.0, 0.0, 0.0, 0.0)
+    state = bot._hsl_coin_state('long', 'A')
+    runtime = state['runtime']
+    state['episode_evidence'] = hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A')
+    events.extend([
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-10.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+    ])
+    await bot._equity_hard_stop_check_coin()
+    assert state['runtime'] is runtime
+    assert state['last_metrics']['elapsed_minutes'] == 2
+    health = bot._hsl_protection_health.scopes[Scope('coin', 'long', 'A')]
+    assert health.status == 'degraded'
+    assert health.reason == 'unordered_nonflattening_fill_cohort'
+    assert health.unavailable_since_ms is None
+
+
+@pytest.mark.parametrize('condition,expected', [('coherent', 30.0), ('new_episode', 0.0), ('new_episode_uninitialized', 0.0), ('pending', None), ('gap', None), ('position_mismatch', None)])
+def test_optional_emergency_realized_loss_requires_coherent_current_episode(condition, expected):
+    bot = make_coin_bot()
+    events = [
+        dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=5.0, pnl=0.0),
+        dict(timestamp=120_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-30.0),
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot.positions = {'A': {'long': {'size': 4.0}, 'short': {'size': 0.0}}}
+    bot._fill_history_coverage_status = lambda **kwargs: {'ready': condition != 'gap'}
+    if condition == 'pending':
+        events[-1]['pnl_source'] = 'pending'
+    elif condition == 'position_mismatch':
+        bot.positions['A']['long']['size'] = 3.0
+    elif condition in {'new_episode', 'new_episode_uninitialized'}:
+        events.extend([
+            dict(timestamp=150_000, symbol='A', pside='long', action='decrease', qty=4.0, pnl=-5.0),
+            dict(timestamp=151_000, symbol='A', pside='long', action='increase', qty=2.0, pnl=0.0),
+        ])
+        bot.positions['A']['long']['size'] = 2.0
+        if condition == 'new_episode':
+            bot._hsl_coin_state('long', 'A')['pnl_reset_timestamp_ms'] = 150_001
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) == expected
+
+
+def test_realized_loss_sample_ignores_ambiguous_future_fill_cohort():
+    bot = make_coin_bot()
+    events = [
+        dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=-0.1),
+        dict(timestamp=240_000, symbol='A', pside='long', action='decrease', qty=1.0, pnl=-20.0),
+        dict(timestamp=240_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+    ]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    assert bot._equity_hard_stop_coin_realized_pnl_peak_last('long', 'A', 180_000) == (0.0, -0.1)
+
+
+def test_optional_realized_loss_unavailable_reset_does_not_block_raw_fallback():
+    bot = make_coin_bot()
+    bot._pnls_manager = make_fake_pnls_manager([
+        dict(timestamp=60_000, symbol='A', pside='long', action='increase', qty=1.0, pnl=0.0),
+    ])
+    bot.positions = {'A': {'long': {'size': 1.0}, 'short': {'size': 0.0}}}
+    bot._fill_history_coverage_status = lambda **kwargs: {'ready': True}
+    def unavailable(*args, **kwargs):
+        raise hsl.EpisodeEvidenceUnavailable('ambiguous_fill_order_or_values', pside='long', symbol='A')
+    bot._equity_hard_stop_coin_realized_pnl_peak_last = unavailable
+    assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 180_000) is None

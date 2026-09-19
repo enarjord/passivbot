@@ -39,6 +39,7 @@ class Health:
     execution_blocked: str = ""
     budget: float | None = None
     drawdown_raw: float | None = None
+    realized_loss: float | None = None
 
 
 class ProtectionHealth:
@@ -94,7 +95,7 @@ class ProtectionHealth:
                         or health.exit_flat_ms is not None and (
                             health.exit_started_ms is None or health.exit_flat_ms < health.exit_started_ms)):
                     raise ValueError("incomplete emergency provenance")
-                for value in (health.budget, health.drawdown_raw):
+                for value in (health.budget, health.drawdown_raw, health.realized_loss):
                     if value is not None and (isinstance(value, bool)
                             or not isinstance(value, (int, float)) or not math.isfinite(value)):
                         raise ValueError("invalid protection metric")
@@ -154,7 +155,12 @@ class ProtectionHealth:
         health = self.scopes.setdefault(scope, Health())
         changed = (health.unavailable_since_ms is not None
                    or self.journal_invalid and health.last_evaluated_ms is None)
-        health.status = "degraded" if degraded_reason else "usable"
+        status = "degraded" if degraded_reason else "usable"
+        if (health.status, health.reason) != (status, degraded_reason):
+            log = logging.warning if degraded_reason else logging.info
+            log("[risk] HSL evaluation quality | mode=%s pside=%s symbol=%s status=%s reason=%s",
+                scope.mode, scope.pside, scope.symbol or "all", status, degraded_reason or "normal_evaluation")
+        health.status = status
         health.reason = degraded_reason
         health.last_evaluated_ms = now_ms
         health.unavailable_since_ms = None
@@ -318,9 +324,12 @@ async def evaluate_emergency(bot, candidates):
         # new flat account does not satisfy this severe missing-history condition.
         fills = getattr(bot, "_pnls_manager", None)
         missing_history = has_exposure(bot, scope) and (fills is None or not fills.get_events())
+        from passivbot_hsl import _equity_hard_stop_emergency_realized_loss
+        health.realized_loss = (_equity_hard_stop_emergency_realized_loss(bot, scope.pside, scope.symbol, now)
+                                if scope.mode == "coin" else None)
         result = pbr.hsl_emergency_signal(
             True, float(bot.get_raw_balance()), divisor, upnl,
-            float(cfg["red_threshold"]), elapsed, delay, missing_history,
+            float(cfg["red_threshold"]), elapsed, delay, missing_history, health.realized_loss,
         )
         if (not isinstance(result, tuple) or len(result) != 4
                 or type(result[2]) is not bool or type(result[3]) is not bool
