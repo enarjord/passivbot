@@ -148,3 +148,16 @@ def test_deliberate_mode_or_enablement_change_retires_old_scope():
                           _equity_hard_stop_enabled=lambda side, **kwargs: side == 'long')
     reconcile_config(bot)
     assert set(health.scopes) == {Scope('pside', 'long')}
+
+
+def test_corrupt_journal_recovery_restores_grace_only_for_evaluated_scope(tmp_path):
+    path = tmp_path / "protection.json"
+    path.write_text("{")
+    health = ProtectionHealth(path)
+    a, b = Scope("coin", "long", "A"), Scope("coin", "long", "B")
+    health.unavailable(a, now_ms=1_000_000, reason="timeout", grace_ms=120_000)
+    health.evaluated_successfully(a, now_ms=1_100_000)
+    health.unavailable(a, now_ms=1_200_000, reason="new_timeout", grace_ms=120_000)
+    health.unavailable(b, now_ms=1_200_000, reason="timeout", grace_ms=120_000)
+    assert health.scopes[a].unavailable_since_ms == 1_200_000
+    assert health.scopes[b].unavailable_since_ms == 1_080_000

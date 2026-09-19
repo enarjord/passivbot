@@ -4044,7 +4044,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 if panic_flatten_marker is not None:
                     marker_ts = int(panic_flatten_marker["timestamp"])
                     if not (_equity_hard_stop_replay_marker_confirms_red(current_metrics)
-                            or hsl_protection.emergency_stop_applies(self, pside, None, marker_ts)):
+                            or (scope_flattened_this_row
+                                and hsl_protection.emergency_stop_applies(self, pside, None, marker_ts))):
                         ignored_panic_marker_timestamps.add(marker_ts)
                         logging.warning(
                             "[risk] HSL[%s] ignored historical panic marker without reconstructed RED | "

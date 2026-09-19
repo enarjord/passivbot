@@ -6135,3 +6135,34 @@ async def test_deferred_cooldown_cancels_entries_by_scope_policy(
         bot.calc_protective_panic_orders_to_cancel_and_create.assert_not_awaited()
         assert bot._current_planning_snapshot is snapshot
     assert bot.positions["B"]["long"]["size"] == float(held)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("signal_mode", ["pside", "unified"])
+async def test_emergency_aggregate_cooldown_waits_for_entire_scope_flat(signal_mode):
+    from live.hsl_protection import ProtectionHealth, Scope, Health
+    bot = _make_aggregate_episode_bot(signal_mode, closing_loss=0.0)
+    events = bot._pnls_manager.get_events()
+    events[:] = [
+        {"timestamp": 60_000, "symbol": "A", "pside": "long", "action": "increase", "qty": 1.0, "pnl": 0.0},
+        {"timestamp": 90_000, "symbol": "B", "pside": "long", "action": "increase", "qty": 1.0, "pnl": 0.0},
+        {"timestamp": 120_500, "symbol": "A", "pside": "long", "action": "decrease", "qty": 1.0, "pnl": 0.0, "pb_order_type": "close_panic_long"},
+        {"timestamp": 240_500, "symbol": "B", "pside": "long", "action": "decrease", "qty": 1.0, "pnl": 0.0, "pb_order_type": "close_panic_long"},
+    ]
+    bot.positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}} for symbol in ("A", "B")}
+    health = ProtectionHealth()
+    health.scopes[Scope(signal_mode, "long")] = Health(exit_started_ms=100_000, exit_flat_ms=250_000, exit_confirmed_flat=True)
+    bot._hsl_protection_health = health
+    original_history = bot.get_balance_equity_history
+
+    async def history(**kwargs):
+        result = await original_history(**kwargs)
+        result["panic_flatten_events"] = [
+            {"timestamp": event["timestamp"], "minute_timestamp": event["timestamp"] // 60_000 * 60_000, "pside": "long", "symbol": event["symbol"]}
+            for event in events if event["action"] == "decrease"
+        ]
+        return result
+
+    bot.get_balance_equity_history = history
+    await bot._equity_hard_stop_initialize_from_history()
+    assert bot._hsl_state("long")["last_stop_event"]["stop_event_timestamp_ms"] == 240_500

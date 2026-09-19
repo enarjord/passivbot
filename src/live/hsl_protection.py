@@ -122,7 +122,10 @@ class ProtectionHealth:
         health = self.scopes.setdefault(scope, Health())
         changed = health.unavailable_since_ms is None or health.reason != reason
         if health.unavailable_since_ms is None:
-            health.unavailable_since_ms = max(0, now_ms - grace_ms) if self.journal_invalid else now_ms
+            health.unavailable_since_ms = (
+                max(0, now_ms - grace_ms)
+                if self.journal_invalid and health.last_evaluated_ms is None else now_ms
+            )
         elif health.unavailable_since_ms > now_ms:
             # Clock rollback must not grant a new window on every restart.
             health.unavailable_since_ms = max(0, now_ms - grace_ms)

@@ -2939,7 +2939,7 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(
     bot.user = "test_user"
     bot.quote = "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0, "hsl_unavailable_grace_seconds": 120.0}}
     bot.debug_mode = False
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
@@ -11577,7 +11577,7 @@ async def test_run_execution_loop_keeps_latched_hsl_supervision_during_coverage_
     bot.positions = {}
     bot.open_orders = {}
     bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.config = {"live": {"risk_input_max_attempts": 10}}
+    bot.config = {"live": {"risk_input_max_attempts": 10, "hsl_unavailable_grace_seconds": 120.0}}
     bot._monitor_flush_snapshot = AsyncMock()
     bot._run_halted_hsl_protection_if_active = AsyncMock(return_value=False)
     bot.balance = 100.0
@@ -13540,7 +13540,7 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     bot.positions = {}
     bot.open_orders = {}
     bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.config = {"live": {"risk_input_max_attempts": 10}}
+    bot.config = {"live": {"risk_input_max_attempts": 10, "hsl_unavailable_grace_seconds": 120.0}}
     bot._monitor_flush_snapshot = AsyncMock()
     bot.balance = 100.0
     bot.stop_signal_received = False
@@ -13561,7 +13561,13 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     bot._emit_live_cycle_degraded = MagicMock()
     bot.refresh_authoritative_state = AsyncMock(return_value=True)
     bot.prepare_planning_universe = AsyncMock()
-    bot.execute_to_exchange = AsyncMock()
+    bot.execute_to_exchange = AsyncMock(return_value=None)
+    bot._authoritative_execution_barrier_state = lambda: (False, {})
+    bot._staged_execution_ready_state = lambda **kwargs: (True, {})
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
 
     async def stop(*args, **kwargs):
         bot.stop_signal_received = True
@@ -13569,10 +13575,10 @@ async def test_execution_loop_defers_unavailable_hsl_boundaries_and_keeps_protec
     bot._sleep_unless_shutdown = AsyncMock(side_effect=stop)
     bot._equity_hard_stop_run_coin_red_supervisor = AsyncMock(side_effect=stop)
     assert await bot.run_execution_loop() is None
-    bot.prepare_planning_universe.assert_not_awaited()
-    bot.execute_to_exchange.assert_not_awaited()
+    assert bot.prepare_planning_universe.await_count == int(not latched)
+    assert bot.execute_to_exchange.await_count == int(not latched)
     assert bot._equity_hard_stop_run_coin_red_supervisor.await_count == int(latched)
-    assert bot._sleep_unless_shutdown.await_count == int(not latched)
+    bot._sleep_unless_shutdown.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -13584,7 +13590,7 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
     bot.positions = {}
     bot.open_orders = {}
     bot.refresh_protective_authoritative_state = AsyncMock(return_value=True)
-    bot.config = {"live": {"risk_input_max_attempts": 3, "hsl_signal_mode": "coin"}}
+    bot.config = {"live": {"risk_input_max_attempts": 3, "hsl_signal_mode": "coin", "hsl_unavailable_grace_seconds": 120.0}}
     bot.balance = bot.balance_raw = 100.0
     bot.stop_signal_received = False
     bot.debug_mode = True
@@ -13625,7 +13631,7 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
         if failure == "late_balance" and (permanent or cycle[0] == 1):
             # Models a refreshed account losing its positive balance during planning.
             recovery.validate_balances(0.0, 0.0)
-        assert cycle[0] >= (2 if failure == "late_balance" else 4)
+        assert cycle[0] >= (1 if failure == "history" else 2 if failure == "late_balance" else 4)
         return {"executed_cycle": cycle[0]}
 
     bot.refresh_authoritative_state = refresh
@@ -13634,10 +13640,11 @@ async def test_execution_loop_risk_inputs_wait_without_planning_or_restart(monke
     bot.prepare_planning_universe = AsyncMock()
     bot.refresh_market_state_if_needed = AsyncMock(return_value=True)
     bot.execute_to_exchange = AsyncMock(side_effect=execute)
-    if permanent and failure == "history":
-        await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
-        assert bot._risk_input_recovery.attempts >= 3
-        bot.execute_to_exchange.assert_not_awaited()
+    if failure == "history":
+        result = await asyncio.wait_for(bot.run_execution_loop(), timeout=10)
+        assert result == {"executed_cycle": 1}
+        assert bot._risk_input_recovery is not None
+        bot.execute_to_exchange.assert_awaited_once()
         bot.restart_bot_on_too_many_errors.assert_not_awaited()
         return
     if permanent:
@@ -13664,7 +13671,7 @@ async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch
     bot._runtime_manifest_written = True
     bot.exchange, bot.user, bot.quote = "fake", "test", "USDT"
     bot.start_time_ms = 1_000_000
-    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0}}
+    bot.config = {"live": {"boot_stagger_seconds": 0, "risk_input_max_attempts": 10, "execution_delay_seconds": 5.0, "hsl_unavailable_grace_seconds": 120.0}}
     bot.user_info = {"exchange": "fake"}
     bot.stop_signal_received = False
     bot.debug_mode = True
@@ -13677,6 +13684,7 @@ async def test_start_bot_waits_for_risk_before_ready_and_maintainers(monkeypatch
     bot._equity_hard_stop_enabled = lambda: True
     bot._equity_hard_stop_signal_mode = lambda: "coin"
     bot._equity_hard_stop_start_coin_history_replay = AsyncMock()
+    bot._equity_hard_stop_check = AsyncMock()
     bot.start_data_maintainers = AsyncMock()
     bot.start_background_candle_warmup = AsyncMock()
     bot.run_execution_loop = AsyncMock()

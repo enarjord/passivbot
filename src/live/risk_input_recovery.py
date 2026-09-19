@@ -400,6 +400,7 @@ async def protect_unready_hsl(bot):
         return False
     health = hsl_protection.manager(bot)
     hsl_protection.reconcile_config(bot)
+    had_pending = bool(health.pending_exits())
     try:
         pending = health.pending_exits()
         # An existing exit needs no balance. A new emergency decision does.
@@ -419,31 +420,35 @@ async def protect_unready_hsl(bot):
             pending = health.pending_exits()
             state.protective_exit_pending = bool(pending)
             targets = hsl_protection.targets_for_scopes(bot, pending, candidates)
-            if not targets:
-                return False
-            to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
-                target_psides_by_symbol=targets,
-            )
-            await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
-            for scope in pending:
-                health.scopes[scope].execution_blocked = ""
-            # Execute existing commitments before fetching a denominator for
-            # other scopes. A stuck exit must not starve their emergency check,
-            # and a failed balance read must not prevent this close wave.
-            now = int(bot.get_exchange_time())
-            if any(item.unavailable_since_ms is not None and not item.exit_committed
-                   and now - item.unavailable_since_ms >= hsl_protection.grace_ms(bot)
-                   for item in health.scopes.values()):
-                if await bot.refresh_protective_authoritative_state(require_balance=True):
-                    validate_current_balances(bot)
-                    await hsl_protection.evaluate_emergency(bot, _unready_hsl_targets(bot))
-                    state.protective_exit_pending = bool(health.pending_exits())
+            if targets:
+                to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
+                    target_psides_by_symbol=targets,
+                )
+                await bot.execute_order_plan_to_exchange(to_cancel, to_create, configure_creations=False)
+                for scope in pending:
+                    health.scopes[scope].execution_blocked = ""
     except RiskInputUnavailable as exc:
         defer(bot, exc)
     except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
         for scope in health.pending_exits():
             health.scopes[scope].execution_blocked = bounded_exception_type(exc)
         _report_protective_unavailability(bot, exc)
+    # This pass is independent of the close wave above: a symbol-specific
+    # cancellation, quote, or submission outage cannot starve another scope.
+    now = int(bot.get_exchange_time())
+    if had_pending and any(item.unavailable_since_ms is not None
+                           and not item.exit_committed and not item.exit_confirmed_flat
+                           and now - item.unavailable_since_ms >= hsl_protection.grace_ms(bot)
+                           for item in health.scopes.values()):
+        try:
+            if await bot.refresh_protective_authoritative_state(require_balance=True):
+                validate_current_balances(bot)
+                await hsl_protection.evaluate_emergency(bot, _unready_hsl_targets(bot))
+                state.protective_exit_pending = bool(health.pending_exits())
+        except RiskInputUnavailable as exc:
+            defer(bot, exc)
+        except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
+            _report_protective_unavailability(bot, exc)
     return state.protective_exit_pending
 
 

@@ -1020,7 +1020,8 @@ async def test_grace_preserves_ordinary_readiness_and_successful_evaluation_rese
 
 
 @pytest.mark.asyncio
-async def test_stuck_exit_does_not_starve_another_emergency_scope(monkeypatch):
+@pytest.mark.parametrize("failure", [None, "refresh", "plan", "execute"])
+async def test_stuck_exit_does_not_starve_another_emergency_scope(monkeypatch, failure):
     from live import hsl_protection
     bot, clock = make_bot(monkeypatch)
     bot.positions = {'A': {'short': {'size': -1.0}}}
@@ -1032,10 +1033,17 @@ async def test_stuck_exit_does_not_starve_another_emergency_scope(monkeypatch):
                        reason='missing_opening_fill', grace_ms=120_000)
     bot.calc_protective_panic_orders_to_cancel_and_create = AsyncMock(return_value=([], []))
     bot.execute_order_plan_to_exchange = AsyncMock()
+    if failure == "refresh":
+        bot.refresh_protective_authoritative_state.side_effect = [OSError("transient"), True, True]
+    elif failure == "plan":
+        bot.calc_protective_panic_orders_to_cancel_and_create.side_effect = [OSError("transient"), ([], [])]
+    elif failure == "execute":
+        bot.execute_order_plan_to_exchange.side_effect = [OSError("transient"), None]
     assert await recovery.protect_unready_hsl(bot)
     assert scope_b in health.pending_exits()
-    assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
-        'target_psides_by_symbol': {'A': {'short'}}}
+    if failure != "refresh":
+        assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
+            "target_psides_by_symbol": {"A": {"short"}}}
     await recovery.protect_unready_hsl(bot)
     assert bot.calc_protective_panic_orders_to_cancel_and_create.await_args.kwargs == {
         'target_psides_by_symbol': {'A': {'short'}, 'B': {'short'}}}
