@@ -84,7 +84,7 @@ class ProtectionHealth:
                         or not isinstance(scope.symbol, str)
                         or (scope.mode == "coin") != bool(scope.symbol)
                         or scope in loaded
-                        or health.status not in {"usable", "degraded", "unavailable"}
+                        or health.status not in {"usable", "degraded", "unavailable", "inactive"}
                         or any(type(getattr(health, field)) is not bool for field in
                                ("exit_committed", "exit_confirmed_flat", "emergency_active"))
                         or not isinstance(health.execution_blocked, str)
@@ -241,7 +241,23 @@ def reconcile_config(bot):
         logging.warning("[risk] HSL protection scope retired after configuration change | mode=%s pside=%s symbol=%s",
                         scope.mode, scope.pside, scope.symbol or "all")
         del health.scopes[scope]
-    if obsolete:
+    changed = bool(obsolete)
+    for scope, item in list(health.scopes.items()):
+        if (scope.mode == "coin" and not signal_scope_enabled(bot, scope.pside, scope.symbol)
+                and not item.exit_committed and not item.exit_confirmed_flat):
+            if item.exit_started_ms is None:
+                del health.scopes[scope]
+                changed = True
+            elif item.status != "inactive" or item.unavailable_since_ms is not None:
+                # Retain completed emergency provenance for canonical replay,
+                # but inactive time must not consume a later outage's grace.
+                item.status = "inactive"
+                item.reason = "inactive_scope"
+                item.unavailable_since_ms = None
+                item.emergency_active = False
+                item.execution_blocked = ""
+                changed = True
+    if changed:
         health.save()
 
 
@@ -257,19 +273,29 @@ def record_evaluation(bot, pside, symbol=None, *, degraded_reason=""):
             now_ms=int(bot.get_exchange_time()), degraded_reason=degraded_reason)
 
 
+def signal_scope_enabled(bot, pside, symbol=None):
+    """Use the normal signal's activity contract for new emergency decisions."""
+    if bot._equity_hard_stop_signal_mode() == "coin":
+        from passivbot_hsl import _equity_hard_stop_coin_active_pside
+        return _equity_hard_stop_coin_active_pside(bot, pside, symbol)
+    return bot._equity_hard_stop_enabled(pside)
+
+
 def affected_scopes(bot, targets, details):
     """Attribute known symbol/side failures narrowly; account failures affect all targets."""
     mode = bot._equity_hard_stop_signal_mode()
     side = details.get("pside")
     symbol = details.get("symbol")
     if mode == "coin" and side in {"long", "short"} and symbol:
-        return {Scope(mode, side, str(symbol))}
+        return ({Scope(mode, side, str(symbol))}
+                if signal_scope_enabled(bot, side, symbol) else set())
     if mode == "coin":
         return {Scope(mode, pside, symbol) for symbol, psides in targets.items()
-                for pside in psides if side is None or pside == side}
+                for pside in psides if (side is None or pside == side)
+                and signal_scope_enabled(bot, pside, symbol)}
     target_sides = {pside for psides in targets.values() for pside in psides}
     return {Scope(mode, pside) for pside in ("long", "short")
-            if bot._equity_hard_stop_enabled(pside)
+            if signal_scope_enabled(bot, pside)
             and pside in target_sides
             and (mode == "unified" or side is None or pside == side)}
 
@@ -279,7 +305,16 @@ def _scope_matches(scope, pside, symbol):
             and (not scope.symbol or scope.symbol == symbol))
 
 
-def targets_for_scopes(bot, scopes, candidates):
+def targets_for_scopes(bot, scopes, candidates=None):
+    # Commitments own remaining exposure/orders even if sizing is later disabled.
+    # Only explicit HSL disablement/mode changes retire them in reconcile_config.
+    if candidates is None:
+        candidates = {
+            symbol: {side for side in ("long", "short")
+                     if float(bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0)) != 0.0
+                     or any(order["position_side"] == side for order in bot.open_orders.get(symbol, []))}
+            for symbol in set(bot.positions) | set(bot.open_orders)
+        }
     return {symbol: selected for symbol, psides in candidates.items()
             if (selected := {pside for pside in psides
                 if any(_scope_matches(scope, pside, symbol)
@@ -318,6 +353,7 @@ async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
     """
     import passivbot_rust as pbr
     health_manager = manager(bot)
+    reconcile_config(bot)
     now = int(bot.get_exchange_time())
     delay = grace_ms(bot)
     active = affected_scopes(bot, candidates, {})

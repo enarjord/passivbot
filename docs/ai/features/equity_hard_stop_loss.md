@@ -200,6 +200,14 @@ net position size does not prove an unchanged cost basis. A proven last flatten 
 previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
 it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
 evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.
+New coin emergency decisions use the normal coin signal activity rule: zero configured
+`n_positions` or wallet exposure limit makes that side inactive, including residual exposure.
+Inactive uncommitted outages are retired, so reactivation starts a fresh grace period if the
+signal is still unavailable. Completed emergency provenance remains available for replay.
+No replacement budget divisor is inferred. A previously committed exit still owns its remaining
+exposure and orders when sizing becomes inactive; explicit HSL disablement or signal-mode changes
+retain their documented retirement semantics.
+
 Coin budget is current raw balance divided
 by configured `n_positions`; pside/unified use current raw balance. Pside UPNL is
 side-scoped, coin UPNL is pair-scoped, and unified UPNL is account-wide. Positive

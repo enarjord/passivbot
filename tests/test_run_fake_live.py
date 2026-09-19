@@ -1869,6 +1869,18 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
         assert not state['runtime'].red_latched()
         await bot.refresh_protective_authoritative_state()
         assert bot.positions[symbol]['long']['size'] == 5.0
+        if failure == 'inactive_committed':
+            from live import hsl_protection as h
+            bot.config['bot']['long']['risk']['n_positions'] = 0
+            assert not bot._equity_hard_stop_coin_active_pside('long', symbol)
+            health = h.manager(bot)
+            scope = h.Scope('coin', 'long', symbol)
+            health.unavailable(scope, now_ms=bot.get_exchange_time()-120_000,
+                               reason='history', grace_ms=120_000)
+            await h.evaluate_emergency(bot, {symbol: {'long'}}, refresh_fill_tail=False)
+            assert not health.pending_exits()
+            bot.config['bot']['long']['risk']['n_positions'] = 1
+            health.evaluated_successfully(scope, now_ms=bot.get_exchange_time())
         exc = (EpisodeEvidenceUnavailable('missing_opening_fill', pside='long', symbol=symbol)
                if failure == 'episode' else recovery.RiskInputUnavailable('hsl_history_balance_unavailable'))
         normal_check = bot._equity_hard_stop_check
@@ -1906,6 +1918,8 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
             # New exchange exposure arrives after the long-owned unified
             # commitment. Its own outage grace has not elapsed.
             bot.cca._load_boot_position(dict(symbol=symbol, position_side='short', qty=1.0, price=97.0))
+        if failure == 'inactive_committed':
+            bot.config['bot']['long']['risk']['n_positions'] = 0
         if failure == 'restart_partial':
             original_fill = bot.cca._fill_order
             def partial_fill(order, *, fill_price, liquidity):
@@ -2218,3 +2232,9 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
         assert completed
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+async def test_inactive_coin_emergency_eligibility_and_committed_exit_fake_live(tmp_path, monkeypatch):
+    await test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(
+        tmp_path, monkeypatch, 'inactive_committed', 'coin')
