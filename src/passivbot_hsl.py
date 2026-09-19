@@ -1763,13 +1763,8 @@ def _equity_hard_stop_coin_evidence_quality(state, timestamp_ms):
 def _equity_hard_stop_emergency_realized_loss(self, pside, symbol, now_ms):
     """Optional current-episode loss, only with fresh tail and coherent fills."""
     manager = getattr(self, "_pnls_manager", None)
-    ledger = getattr(self, "freshness_ledger", None)
     if (manager is None or not callable(getattr(self, "_hsl_coin_state", None))
-            or ledger is None or ledger.epoch <= 0
-            or hsl_protection.emergency_evidence_needs_confirmation(self)
-            or getattr(self, "_hsl_fill_tail_observation", None) != (
-                ledger.epoch, ledger.surfaces["positions"].revision)
-            or "positions" not in ledger.surfaces_at_epoch()):
+            or not hsl_protection.fill_tail_matches_positions(self)):
         return None
     events = [event for event in manager.get_events()
               if _equity_hard_stop_fill_pside_optional(event) == pside
@@ -2527,7 +2522,7 @@ def _equity_hard_stop_coin_observed_evidence(self, events, pside, symbol):
         cooldown_ms = max(0, int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000)))
         recovered = evidence.recover_closed_prefix(
             size, cooldown_ms, now_ms=int(self.get_exchange_time()))
-        if recovered is not evidence:
+        if recovered is not evidence and hsl_protection.fill_tail_matches_positions(self):
             # Prove the separating flat gap too, not just fills since the new
             # opening: an omitted round trip in that gap could still own cooldown.
             coverage = self._fill_history_coverage_status(
@@ -2537,6 +2532,39 @@ def _equity_hard_stop_coin_observed_evidence(self, events, pside, symbol):
             if coverage.get("ready", False):
                 evidence = recovered
     return evidence
+
+
+async def _equity_hard_stop_refresh_coin_recovery_tail(self, start_ms):
+    """Give candidate suffix recovery one ordered tail read before replay I/O."""
+    if hsl_protection.fill_tail_matches_positions(self):
+        return
+    manager = getattr(self, "_pnls_manager", None)
+    if manager is None or not callable(getattr(self, "update_pnls", None)):
+        return
+    now_ms = int(self.get_exchange_time())
+    pairs = _equity_hard_stop_index_coin_fill_events([
+        event for event in manager.get_events()
+        if (start_ms is None or _equity_hard_stop_fill_timestamp_ms(event) >= start_ms)
+        and _equity_hard_stop_fill_timestamp_ms(event) <= now_ms])
+    for (pside, symbol), events in pairs.items():
+        cfg = _equity_hard_stop_config(self, pside, symbol)
+        if not cfg["enabled"] or cfg["restart_after_red_policy"] != "always":
+            continue
+        evidence = _equity_hard_stop_coin_episode_evidence(
+            events, pside, symbol, qty_step=_hsl_qty_step_for_symbol(self, symbol))
+        size = float((self.positions or {}).get(symbol, {}).get(pside, {}).get("size", 0.0))
+        cooldown_ms = max(0, int(round(float(cfg["cooldown_minutes_after_red"]) * 60_000)))
+        if evidence.recover_closed_prefix(size, cooldown_ms, now_ms=now_ms) is evidence:
+            continue
+        try:
+            await asyncio.wait_for(self.update_pnls(), timeout=5.0)
+        except (TimeoutError, NetworkError, AuthoritativeSurfaceUnavailable) as exc:
+            self._hsl_fill_tail_observation = None
+            logging.warning("[risk] coin HSL recovery tail unavailable | error_type=%s",
+                            _bounded_hsl_exception_type(exc))
+        # update_pnls owns certification and account confirmation, even when
+        # size is unchanged. No local success flag substitutes for that proof.
+        return
 
 
 def _equity_hard_stop_coin_input_observation(self, start_ms):
@@ -4505,6 +4533,7 @@ async def _equity_hard_stop_initialize_coin_from_history(
         )
         now_ms = int(self.get_exchange_time())
         configured_start_ms = lookback.balance_history_start_ms(now_ms)
+        await _equity_hard_stop_refresh_coin_recovery_tail(self, configured_start_ms)
         # Capture the authoritative observation before price-history I/O. The
         # retained replay tape cannot prove its own discarded opening fills.
         observation = _equity_hard_stop_coin_input_observation(self, configured_start_ms)

@@ -6,6 +6,7 @@ import pytest
 import passivbot_hsl as hsl
 from live.hsl_episode import EpisodeEvidence
 from test_hsl_coin_mode import make_coin_bot, make_fake_pnls_manager, _make_aggregate_episode_bot
+from test_hsl_episode_evidence import _mark_emergency_tail_fresh
 
 
 def fill(ts, symbol, action, qty=1.0, pnl=0.0, pside='long'):
@@ -117,6 +118,7 @@ def test_suffix_recovery_does_not_replace_other_evidence(reason):
 @pytest.mark.parametrize('policy', ['always', 'never', 'threshold'])
 async def test_coin_prefix_recovery_coverage_replay_and_live(policy):
     bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
     bot.hsl['long'].update(restart_after_red_policy=policy, cooldown_minutes_after_red=1.0)
     now = 10 * 86_400_000
     bot.get_exchange_time = lambda: now
@@ -150,6 +152,7 @@ async def test_coin_prefix_recovery_coverage_replay_and_live(policy):
 
 def test_coin_suffix_requires_coverage_of_the_flat_gap():
     bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
     bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=0.)
     bot.positions = {'A': {'long': {'size': 2.}}}
     events = [fill(10, 'A', 'increase', 3.), fill(20, 'A', 'decrease', 5.),
@@ -167,6 +170,7 @@ def test_coin_suffix_requires_coverage_of_the_flat_gap():
 
 def test_recovered_closed_episode_retains_its_cooldown_after_restart():
     bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
     bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=1.)
     now = 1_000_000
     bot.get_exchange_time = lambda: now
@@ -178,3 +182,98 @@ def test_recovered_closed_episode_retains_its_cooldown_after_restart():
     required, start, pairs = hsl._equity_hard_stop_required_fill_history_scope(bot, now, pnl_start_ms=0)
     assert required and start == now-120_000
     assert pairs == {('long', 'A'): now-120_000}
+
+
+@pytest.mark.parametrize('change', ['missing_tail', 'new_positions', 'new_epoch', 'pending_confirmation'])
+def test_coin_prefix_recovery_rejects_stale_tail_at_equal_quantity(change):
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=0.)
+    bot.positions = {'A': {'long': {'size': 2.}}}
+    events = [fill(10, 'A', 'increase', 3.), fill(20, 'A', 'decrease', 5.),
+              fill(100, 'A', 'increase', 2.)]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    if change == 'missing_tail':
+        bot._hsl_fill_tail_observation = None
+    elif change == 'new_positions':
+        bot.freshness_ledger.stamp('positions', now_ms=180_001)
+    elif change == 'new_epoch':
+        bot.freshness_ledger.begin_epoch()
+        bot.freshness_ledger.stamp('positions', now_ms=180_001)
+    else:
+        bot._authoritative_pending_confirmations = {'positions': bot.freshness_ledger.epoch + 1}
+    assert hsl._equity_hard_stop_coin_observed_evidence(bot, events, 'long', 'A').unavailable == 'missing_opening_fill'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['unified', 'pside'])
+@pytest.mark.parametrize('entry_ts', [60_001, 120_000])
+async def test_aggregate_mixed_realized_signs_do_not_invent_an_equity_peak(mode, entry_ts):
+    """Realizing offsetting UPNL moves balance, not total strategy equity.
+
+    Coin's realized-cumsum peak is a different signal. Aggregate minute samples
+    must not turn offsetting closes into a synthetic realized-only risk peak.
+    """
+    from unittest.mock import AsyncMock
+    bot = _make_aggregate_episode_bot(mode)
+    events = [fill(60_000, 'A', 'increase'), fill(60_000, 'B', 'increase'),
+              fill(120_000, 'A', 'decrease', pnl=100.),
+              fill(120_000, 'B', 'decrease', pnl=-100.),
+              fill(entry_ts, 'C', 'increase')]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot.positions = {'C': {'long': {'size': 1.}}}
+    bot.get_raw_balance = lambda: 1000.
+    bot._equity_hard_stop_realized_pnl_now = lambda pside=None: 0.
+    bot._calc_upnl_sum_strict = AsyncMock(return_value=0.)
+    bot.hsl['long']['red_threshold'] = 0.05
+    bot.get_balance_equity_history = AsyncMock(return_value={
+        'timeline': [dict(timestamp=ts, balance=1000., realized_pnl=0.,
+                          realized_pnl_long=0., realized_pnl_short=0.,
+                          unrealized_pnl_long=0., unrealized_pnl_short=0.,
+                          is_flat=False, is_flat_long=False, is_flat_short=True)
+                     for ts in (60_000, 120_000, 180_000, 240_000)],
+        'fill_events': events, 'panic_flatten_events': []})
+    await bot._equity_hard_stop_initialize_from_history()
+    state = bot._hsl_state('long')
+    assert state['last_metrics']['drawdown_raw'] == 0.
+    assert state['last_metrics']['drawdown_score'] == 0.
+    assert not state['halted']
+    assert state['pnl_reset_timestamp_ms'] is None
+
+
+def test_incomplete_prefix_recovery_requires_positive_gap_even_at_zero_cooldown():
+    # A proven same-ms chain can order these rows. Timestamp-only recovery
+    # windows still cannot exclude the older close while retaining the opening.
+    evidence = EpisodeEvidence.reconstruct([
+        (10, 'increase', 3., 0.), (20, 'decrease', 5., -10.),
+        (20, 'increase', 2., 0.)])
+    assert evidence.recover_closed_prefix(2., 0.) is evidence
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['fresh', 'new_positions', 'pending_confirmation', 'timeout'])
+async def test_coin_initializer_orders_tail_refresh_before_accepting_suffix(outcome):
+    bot = make_coin_bot()
+    _mark_emergency_tail_fresh(bot)
+    bot._hsl_fill_tail_observation = None
+    bot.hsl['long'].update(restart_after_red_policy='always', cooldown_minutes_after_red=0.)
+    bot.positions = {'A': {'long': {'size': 2.}}}
+    events = [fill(10, 'A', 'increase', 3.), fill(20, 'A', 'decrease', 5.),
+              fill(100, 'A', 'increase', 2.)]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    attempted = []
+    async def update():
+        attempted.append(True)
+        if outcome == 'timeout':
+            raise TimeoutError()
+        ledger = bot.freshness_ledger
+        bot._hsl_fill_tail_observation = (ledger.epoch, ledger.surfaces['positions'].revision)
+        if outcome == 'new_positions':
+            ledger.stamp('positions', now_ms=180_001)
+        elif outcome == 'pending_confirmation':
+            bot._authoritative_pending_confirmations = {'positions': ledger.epoch + 1}
+    bot.update_pnls = update
+    await hsl._equity_hard_stop_refresh_coin_recovery_tail(bot, None)
+    assert attempted == [True]
+    evidence = hsl._equity_hard_stop_coin_observed_evidence(bot, events, 'long', 'A')
+    assert (evidence.unavailable is None) == (outcome == 'fresh')

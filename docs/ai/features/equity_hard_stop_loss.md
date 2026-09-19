@@ -212,15 +212,22 @@ flats and recognizes only a flat after the whole cohort. An entry seed is allowe
 cohort's initially flat edge. No PnL or fees are discarded, and list order cannot invent an
 intermediate reset. This conservative continuity can stop earlier than a fully ordered tape;
 `unordered_cross_pair_fill_cohort` remains visible as degraded until a proven scope flatten.
-An ambiguous sequence within a pair, over-close, or final position mismatch still defers. The approximation is reproducible from fills after restart.
+Mixed realized signs across pairs alone do not invalidate aggregate minute samples: their signal
+uses realized plus unrealized equity, not coin mode's realized-cumsum peak. Realizing UPNL does
+not independently establish a new equity peak. An ambiguous sequence within a pair, over-close,
+or final position mismatch still defers. The approximation is reproducible from fills after restart.
 
 An incomplete older coin episode may be excluded under `restart_after_red_policy=always`
 when current exchange quantity and the later fill suffix reconstruct backward to a closing fill
 ending at zero. Reverse quantities must never go negative beyond arithmetic tolerance; forward
 replay of the retained suffix must match the current quantity. A flat gap at least as long as the
-configured cooldown must separate the unknown episode from the earliest retained episode;
-cooldown-connected complete episodes stay included. The retained window still requires canonical
-fill coverage and authoritative PnL. This does not repair the older opening or invent its price,
+configured cooldown, and strictly positive even at zero cooldown, must separate the unknown episode from the earliest retained episode;
+cooldown-connected complete episodes stay included. The retained window and its separating gap still require canonical
+fill coverage and authoritative PnL. Acceptance also requires a successful fill-tail request started
+after the exact current position observation, with no newer position revision or pending account
+confirmation. Coin initialization gives a candidate recovery one ordered tail-refresh opportunity
+with a five-second deadline before capturing replay evidence; timeout leaves scoped protection and
+normal retry policy active. A historical coverage claim or equal final quantity is insufficient. This does not repair the older opening or invent its price,
 PnL, or RED history. The recovered episode reports `position_anchored_episode_suffix` as degraded;
 normal formulas and EMA remain active. Ambiguous ordering, missing retained fills, failed coverage,
 and `threshold`/`never` policies keep their existing deferral behavior. Recompute this evidence
