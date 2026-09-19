@@ -74,7 +74,8 @@ def test_degraded_but_usable_evaluation_clears_only_its_scope():
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 def test_failure_attribution_is_scoped(mode):
     bot = SimpleNamespace(_equity_hard_stop_signal_mode=lambda: mode,
-                          _equity_hard_stop_enabled=lambda *_: True)
+                          _equity_hard_stop_enabled=lambda *_, **kw: True,
+                          bot_value=lambda *args: 1)
     scopes = affected_scopes(bot, {'A': {'long'}, 'B': {'short'}},
                              {'pside': 'long', 'symbol': 'A'})
     expected = ({Scope('coin', 'long', 'A')} if mode == 'coin' else

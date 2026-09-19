@@ -370,8 +370,7 @@ def _unready_hsl_targets(bot):
     coin_mode = bot._equity_hard_stop_signal_mode() == "coin"
     for symbol in sorted(set(positions) | set(open_orders)):
         for pside in ("long", "short"):
-            enabled = (bot._equity_hard_stop_enabled(pside, symbol=symbol) if coin_mode
-                       else bot._equity_hard_stop_enabled(pside))
+            enabled = hsl_protection.signal_scope_enabled(bot, pside, symbol)
             if not enabled:
                 continue
             # Proven halted scopes keep their existing cooldown/manual policy.
@@ -436,7 +435,7 @@ async def protect_unready_hsl(bot):
                                 for position in bot.positions.get(symbol, {}).values()))
             pending = health.pending_exits()
             state.protective_exit_pending = bool(pending)
-            targets = hsl_protection.targets_for_scopes(bot, pending, candidates)
+            targets = hsl_protection.targets_for_scopes(bot, pending)
             if targets:
                 to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create(
                     target_psides_by_symbol=targets,
