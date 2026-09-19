@@ -95,7 +95,7 @@ async def test_manual_proof_refreshes_fill_tail_after_account_observation(
         "last_refresh_ms": clock["fills"],
     }
 
-    async def account():
+    async def account(**kwargs):
         calls.append("account")
         clock["account"] += 10
         bot.freshness_ledger.begin_epoch()

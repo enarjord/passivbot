@@ -471,16 +471,8 @@ async def protect_and_wait(bot, *, cycle_id=None, loop_timings_ms=None):
             defer(bot, exc)
         except (AuthoritativeSurfaceUnavailable, NetworkError, OrderNotFound, OSError, RestartBotException) as exc:
             _report_protective_unavailability(bot, exc)
-    # The existing panic planner also needs positive current balances. Do not
-    # feed it stale/fabricated denominators when the account itself is invalid.
-    try:
-        validate_current_balances(bot)
-    except RiskInputUnavailable:
-        current_ready = False
-    else:
-        current_ready = True
     protected = False
-    if current_ready and bot._equity_hard_stop_enabled():
+    if bot._equity_hard_stop_enabled():
         try:
             protected = await bot._run_halted_hsl_protection_if_active(pace=False)
         except RiskInputUnavailable as exc:

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Attempt already-authorized HSL RED and cooldown closes before balance or history repair.
+  A temporary quote outage for one symbol no longer blocks independent protective closes;
+  unavailable symbols retain their orders and are identified in monitoring.
+
 - Let HSL recovery exits close positions even when balance is unavailable. Use a minimal
   Rust panic-close contract independent of history and strategy settings, while retaining
   fresh positions, open orders, quotes, and strict validation of the complete close batch.

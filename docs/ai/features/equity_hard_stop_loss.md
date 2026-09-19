@@ -89,11 +89,16 @@ Incomplete fill coverage follows `../error_contract.md`. A required episode boun
 until supported by fill evidence. Startup replay validates all enabled scope tapes before replacing
 existing protective state. Unavailable HSL evaluation invokes the conservative exit policy below after an
 authoritative refresh. Flat scopes pending startup price replay retain the existing per-pair
-create gate, leaving unrelated scopes available. Ambiguous required held-episode evidence defers
-ordinary shared-account planning: the startup gate runs after portfolio intent construction and
-cannot make a plan built from unknown HSL episode state authoritative. Independently ready,
+create gate, leaving unrelated scopes available. HSL-only held-episode uncertainty follows the scoped grace policy below;
+ordinary planning still requires its own current account, fill, and strategy inputs. Independently ready,
 already-latched RED supervision and required panic protection for active cooldown positions still
 run during that deferral, using fresh protective account state and the configured execution pacing.
+An already-authorized close wave runs before balance reads, fresh signal evaluation, and flat-stop
+bookkeeping. Those later steps may defer reopening but cannot prevent that close attempt. Normal
+RED still requires `red_active_now` for subsequent panic intent; this ordering change does not alter
+its signal-recovery policy. A typed quote outage partitions ready symbols before Rust planning;
+unavailable symbols retain their existing orders and appear in monitor diagnostics. Malformed
+quotes and invalid Rust output remain fatal. Each submitted Rust batch is validated atomically.
 Cancellation-only waves remove entries from terminal no-restart scopes and resting initials from
 flat cooldown scopes without constructing new intent or changing terminal state. Manual ownership
 begins only after a proven cooldown intervention and persists through

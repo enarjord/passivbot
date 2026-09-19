@@ -68,3 +68,40 @@ def test_real_rust_rejects_invalid_exit_inputs(require_real_passivbot_rust_modul
         inputs[0]["balance"] = 100.0
     with pytest.raises(ValueError):
         require_real_passivbot_rust_module.compute_protective_closes_json(json.dumps(inputs))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['unavailable', 'malformed'])
+async def test_ready_exit_isolated_from_another_symbols_quote_outage(monkeypatch, require_real_passivbot_rust_module, failure):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    from live.market_snapshot import MarketSnapshotUnavailable
+    from live import planning_gates
+    quote = SimpleNamespace(bid=99.0, ask=101.0)
+    async def quotes(symbols):
+        if 'A' in symbols:
+            if failure == 'malformed':
+                raise ValueError('malformed quote')
+            raise MarketSnapshotUnavailable('quote temporarily unavailable')
+        return {'B': quote}
+    monkeypatch.setattr(Passivbot, '_equity_hard_stop_enabled', lambda *a, **k: False)
+    monkeypatch.setattr(Passivbot, '_monitor_record_price_ticks', lambda *a, **k: None)
+    monkeypatch.setattr(planning_gates, 'build_protective_planning_snapshot',
+                        lambda bot, symbols, snapshots: SimpleNamespace(last_prices=lambda: {'B': 100.0}))
+    bot = SimpleNamespace(
+        positions={symbol: {'long': {'size': 2.0}} for symbol in ('A', 'B')},
+        price_steps={'A': 0.1, 'B': 0.1},
+        _get_orchestrator_market_snapshots=quotes,
+        _to_executable_orders=lambda orders, prices: (orders, []),
+        _finalize_reduce_only_orders=lambda orders, prices: orders,
+    )
+    if failure == 'malformed':
+        with pytest.raises(ValueError, match='malformed quote'):
+            await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'A': {'long'}, 'B': {'long'}})
+        return
+    result = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot, target_psides_by_symbol={'A': {'long'}, 'B': {'long'}})
+    assert set(result) == {'B'}
+    assert result['B'][0][0] == -2.0
+    assert bot._hsl_protective_unavailable_symbols == {'A'}
+    assert bot._protective_panic_reconcile_psides_by_symbol == {'B': {'long'}}
+    assert bot._protective_panic_reconcile_symbols == ['B']

@@ -6218,9 +6218,8 @@ class Passivbot:
             ]
         if not scopes:
             return False
-        if not await self.refresh_protective_authoritative_state():
+        if not await self.refresh_protective_authoritative_state(require_balance=False):
             return not pace  # Recovery must pace an attempted protective owner.
-        risk_input_recovery.validate_current_balances(self)
         now_ms = int(self.get_exchange_time())
         panic_needed = False
         cooldown_entry_cancels = []
@@ -6256,7 +6255,7 @@ class Passivbot:
                 or int(getattr(self, "_account_invalidation_generation", 0) or 0) != generation
                 or any(int(pending.get(surface, 0)) > epoch for surface in ACCOUNT_SURFACES)
             ):
-                if not await self.refresh_protective_authoritative_state():
+                if not await self.refresh_protective_authoritative_state(require_balance=False):
                     return not pace
             now_ms = int(self.get_exchange_time())
         for pside, symbol, state in scopes:
@@ -6371,7 +6370,6 @@ class Passivbot:
                 return False
             reason_code = "hsl_red_supervisor"
             supervisor = self._equity_hard_stop_run_red_supervisor
-        risk_input_recovery.validate_current_balances(self)
         self._emit_live_cycle_degraded(
             cycle_id=cycle_id,
             reason_code=reason_code,
@@ -16389,6 +16387,7 @@ class Passivbot:
     async def calc_protective_panic_ideal_orders_orchestrator(self, *, target_psides_by_symbol=None):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
+        self._hsl_protective_unavailable_symbols = set()
         if target_psides_by_symbol is None:
             target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(self)
         self._protective_panic_reconcile_psides_by_symbol = {
@@ -16418,9 +16417,30 @@ class Passivbot:
         try:
             market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         except MarketSnapshotUnavailable as exc:
-            raise state_refresh.AuthoritativeSurfaceUnavailable(
-                "protective_planning_inputs", "current protective market unavailable"
-            ) from exc
+            # A quote outage in one scope must not strand independently ready
+            # exits. Partition inputs before Rust; never discard part of its output.
+            market_snapshots = {}
+            if len(symbols) > 1:
+                for symbol in symbols:
+                    try:
+                        market_snapshots.update(await self._get_orchestrator_market_snapshots([symbol]))
+                    except MarketSnapshotUnavailable:
+                        continue
+            unavailable = set(symbols) - set(market_snapshots)
+            self._hsl_protective_unavailable_symbols = unavailable
+            logging.warning("[risk] protective quote unavailable; retaining scoped orders | symbols=%s",
+                            ",".join(sorted(unavailable)))
+            if not market_snapshots:
+                raise state_refresh.AuthoritativeSurfaceUnavailable(
+                    "protective_planning_inputs", "current protective market unavailable"
+                ) from exc
+            symbols = sorted(set(symbols) - unavailable)
+            target_psides_by_symbol = {symbol: psides for symbol, psides in target_psides_by_symbol.items()
+                                       if symbol not in unavailable}
+            self._protective_panic_reconcile_symbols = sorted(target_psides_by_symbol)
+            self._protective_panic_reconcile_psides_by_symbol = {
+                symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
+            }
         try:
             planning_snapshot = planning_gates.build_protective_planning_snapshot(
                 self, symbols, market_snapshots
