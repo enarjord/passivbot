@@ -2118,9 +2118,9 @@ async def test_coherent_hsl_evidence_with_real_rust_and_fake_exchange(tmp_path, 
             assert state['runtime'] is runtime
             assert bot.positions[symbol]['long']['size'] == 5.0
         else:
-            assert await bot.refresh_protective_authoritative_state()
-            await bot.update_pnls(source='emergency_evidence_test')
-            assert not await recovery.ensure_ready(bot)
+            # Exercise the production owner, including its bounded ordered
+            # fill-tail refresh; no test-only enrichment call is inserted.
+            assert await recovery.protect_unready_hsl(bot)
             health = bot._hsl_protection_health.scopes[Scope('coin', 'long', symbol)]
             assert await bot._calc_upnl_sum_strict('long', symbol) == 0.0
             assert health.realized_loss == pytest.approx(30.0)

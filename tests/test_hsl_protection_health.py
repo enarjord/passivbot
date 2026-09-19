@@ -264,3 +264,40 @@ def test_degraded_evaluation_count_is_visible_and_resets_on_recovery():
     health.evaluated_successfully(scope, now_ms=5000, degraded_reason='unordered_nonflattening_fill_cohort')
     health.unavailable(scope, now_ms=6000, reason='history', grace_ms=120_000)
     assert health.scopes[scope].degraded_evaluations == 0
+
+
+@pytest.mark.asyncio
+async def test_optional_tail_timeout_is_bounded_and_cannot_delay_raw_red(monkeypatch, real_rust):
+    import asyncio
+    import live.hsl_protection as protection
+    monkeypatch.setattr(protection, '_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS', 0.01)
+    health = ProtectionHealth()
+    scope = Scope('coin', 'long', 'A')
+    health.unavailable(scope, now_ms=1000, reason='history', grace_ms=0)
+    cancelled = asyncio.Event()
+    calls = []
+    async def stalled(**kwargs):
+        calls.append(kwargs)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+    bot = SimpleNamespace(
+        _hsl_protection_health=health, config={'live': {'hsl_unavailable_grace_seconds': 0.0}},
+        positions={'A': {'long': {'size': 1.0}}}, open_orders={},
+        _equity_hard_stop_signal_mode=lambda: 'coin', _equity_hard_stop_enabled=lambda *a, **k: True,
+        _equity_hard_stop_config=lambda *a: {'red_threshold': 0.1},
+        _calc_upnl_sum_strict=AsyncMock(return_value=-1.0), get_exchange_time=lambda: 1000,
+        get_raw_balance=lambda: 100.0, bot_value=lambda *a: 1,
+        _pnls_manager=SimpleNamespace(get_events=lambda: [object()]), update_pnls=stalled,
+    )
+    await evaluate_emergency(bot, {'A': {'long'}})
+    assert cancelled.is_set()
+    assert not health.pending_exits()
+    assert health.scopes[scope].emergency_active
+    assert health.scopes[scope].unavailable_since_ms == 1000
+    # Enrichment's retry backoff cannot postpone a fresh raw-loss threshold.
+    bot._calc_upnl_sum_strict.return_value = -20.0
+    await evaluate_emergency(bot, {'A': {'long'}})
+    assert health.pending_exits() == {scope}
+    assert calls == [{'source': 'hsl_emergency'}]

@@ -472,3 +472,30 @@ def test_optional_loss_rejects_stale_tail_even_when_quantity_matches(new_epoch):
     # Even an identical size/signature and millisecond gets a new observation.
     bot.freshness_ledger.stamp('positions', now_ms=180_000)
     assert hsl._equity_hard_stop_emergency_realized_loss(bot, 'long', 'A', 240_000) is None
+
+
+@pytest.mark.asyncio
+async def test_completed_degraded_cooldown_replay_is_counted_once(monkeypatch):
+    from unittest.mock import AsyncMock
+    from live.hsl_protection import ProtectionHealth, Scope, record_evaluation
+    bot = make_coin_bot()
+    bot._hsl_protection_health = ProtectionHealth()
+    bot._equity_hard_stop_coin_initialized = True
+    bot.get_exchange_time = lambda: 180_000
+    bot.positions = {'A': {'long': {'size': 5.0}, 'short': {'size': 0.0}}}
+    events = [dict(timestamp=t, symbol='A', pside='long', action=a, qty=q, pnl=p)
+              for t,a,q,p in [(60_000,'increase',5,0),(120_000,'decrease',1,-10),
+                              (120_000,'increase',1,0)]]
+    bot._pnls_manager = make_fake_pnls_manager(events)
+    bot._equity_hard_stop_apply_coin_metrics_sample('long', 'A', 60_000, 1000.0, 0.0, 0.0, 0.0)
+    state = bot._hsl_coin_state('long', 'A')
+    state['episode_evidence'] = hsl._equity_hard_stop_coin_episode_evidence(events, 'long', 'A')
+    state.update(halted=True, cooldown_until_ms=180_000)
+    bot._equity_hard_stop_handle_coin_position_during_cooldown = AsyncMock(return_value=False)
+    async def replay(owner, side, symbol):
+        state['halted'] = False
+        record_evaluation(owner, side, symbol, degraded_reason=state['episode_evidence'].degraded_reason)
+        return True
+    monkeypatch.setattr(hsl, '_equity_hard_stop_replay_live_restart', replay)
+    await bot._equity_hard_stop_check_coin()
+    assert bot._hsl_protection_health.scopes[Scope('coin', 'long', 'A')].degraded_evaluations == 1

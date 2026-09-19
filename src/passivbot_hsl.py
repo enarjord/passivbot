@@ -6715,9 +6715,10 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 balance,
                 float(await _equity_hard_stop_scoped_upnl(self, pside, symbol)),
             )
-            evidence = state.get("episode_evidence")
-            hsl_protection.record_evaluation(self, pside, symbol,
-                degraded_reason=evidence.degraded_reason if evidence is not None else "")
+            if not replay_complete:
+                evidence = state.get("episode_evidence")
+                hsl_protection.record_evaluation(self, pside, symbol,
+                    degraded_reason=evidence.degraded_reason if evidence is not None else "")
             if metrics["changed"]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
             self._equity_hard_stop_maybe_emit_raw_red_pending(

@@ -180,7 +180,10 @@ verified realized peak minus current realized PnL in the currently held episode,
 current-episode coverage, finite non-pending PnL/fees, and a position-matching tape. The current
 account cohort must include a successful tail-capable fill request started after its position
 observation, with no intervening position observation. Concurrent requests sharing an epoch and
-stale cached quantity equality alone are insufficient. A proven last flatten excludes
+stale cached quantity equality alone are insufficient. If raw loss has not already committed an
+exit, the emergency owner may attempt one ordered fill refresh with a five-second timeout and
+at most one attempt per ten seconds. Failure leaves raw-UPNL evaluation active; a raw-triggered
+close never waits for this optional enrichment. A proven last flatten excludes
 previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
 it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
 evidence leaves raw-UPNL fallback intact. Aggregate emergency formulas remain raw-UPNL based.

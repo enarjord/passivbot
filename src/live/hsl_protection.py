@@ -6,6 +6,8 @@ this journal records only availability time and a committed protective exit.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import asyncio
+from time import monotonic
 import json
 import logging
 import math
@@ -16,6 +18,11 @@ from config.access import require_live_value
 from live.market_snapshot import MarketSnapshotUnavailable
 from live.diagnostic_safety import bounded_exception_type
 from ccxt.base.errors import NetworkError
+from live.state_refresh import AuthoritativeSurfaceUnavailable
+
+
+_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS = 5.0
+_EMERGENCY_FILL_REFRESH_RETRY_SECONDS = 10.0
 
 
 @dataclass(frozen=True, order=True)
@@ -293,7 +300,7 @@ def has_orders(bot, scope):
                for order in orders)
 
 
-async def evaluate_emergency(bot, candidates):
+async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
     """Evaluate unavailable scopes with current account and quote evidence only.
 
     A historical fallback never clears the outage clock. Successful normal (or
@@ -304,6 +311,8 @@ async def evaluate_emergency(bot, candidates):
     now = int(bot.get_exchange_time())
     delay = grace_ms(bot)
     active = affected_scopes(bot, candidates, {})
+    previous_pending = health_manager.pending_exits()
+    needs_fill_tail = False
     for scope, health in list(health_manager.scopes.items()):
         if scope not in active or health.unavailable_since_ms is None or health.exit_committed:
             continue
@@ -331,6 +340,8 @@ async def evaluate_emergency(bot, candidates):
         from passivbot_hsl import _equity_hard_stop_emergency_realized_loss
         health.realized_loss = (_equity_hard_stop_emergency_realized_loss(bot, scope.pside, scope.symbol, now)
                                 if scope.mode == "coin" else None)
+        needs_fill_tail |= (scope.mode == "coin" and health.realized_loss is None
+                            and has_exposure(bot, scope))
         result = pbr.hsl_emergency_signal(
             True, float(bot.get_raw_balance()), divisor, upnl,
             float(cfg["red_threshold"]), elapsed, delay, missing_history, health.realized_loss,
@@ -355,6 +366,23 @@ async def evaluate_emergency(bot, candidates):
                 scope.mode, scope.pside, scope.symbol or "all", elapsed / 1000.0,
                 health.drawdown_raw, float(cfg["red_threshold"]), missing_history,
             )
+
+    # Raw-current-input RED always wins immediately. Optional historical
+    # enrichment must neither postpone a newly committed close nor become an
+    # unbounded prerequisite for evaluating current loss.
+    update_fills = getattr(bot, "update_pnls", None)
+    if (refresh_fill_tail and needs_fill_tail and callable(update_fills)
+            and not (health_manager.pending_exits() - previous_pending)
+            and monotonic() >= getattr(bot, "_hsl_emergency_fill_retry_at", 0.0)):
+        bot._hsl_emergency_fill_retry_at = monotonic() + _EMERGENCY_FILL_REFRESH_RETRY_SECONDS
+        try:
+            await asyncio.wait_for(update_fills(source="hsl_emergency"),
+                                   timeout=_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS)
+        except (TimeoutError, NetworkError, AuthoritativeSurfaceUnavailable) as exc:
+            logging.warning("[risk] optional emergency fill-tail refresh unavailable; raw-UPNL protection remains active | error_type=%s",
+                            bounded_exception_type(exc))
+        else:
+            await evaluate_emergency(bot, candidates, refresh_fill_tail=False)
 
 
 def holds_after_emergency_exit(bot, pside, symbol):
