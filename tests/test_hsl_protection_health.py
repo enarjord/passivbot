@@ -267,7 +267,8 @@ def test_degraded_evaluation_count_is_visible_and_resets_on_recovery():
 
 
 @pytest.mark.asyncio
-async def test_optional_tail_timeout_is_bounded_and_cannot_delay_raw_red(monkeypatch, real_rust):
+@pytest.mark.parametrize("failure", ["timeout", "invalid_fill", "cache", "fatal", "unexpected_value"])
+async def test_optional_tail_timeout_is_bounded_and_cannot_delay_raw_red(monkeypatch, real_rust, failure):
     import asyncio
     import live.hsl_protection as protection
     monkeypatch.setattr(protection, '_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS', 0.01)
@@ -278,6 +279,17 @@ async def test_optional_tail_timeout_is_bounded_and_cannot_delay_raw_red(monkeyp
     calls = []
     async def stalled(**kwargs):
         calls.append(kwargs)
+        from fill_events_manager import FillEventCacheContractError
+        from live.state_refresh import AuthoritativeSurfaceUnavailable
+        from passivbot_exceptions import FatalBotException
+        errors = {
+            'invalid_fill': AuthoritativeSurfaceUnavailable('fills', 'unusable fetched fill'),
+            'cache': FillEventCacheContractError('invalid fill-cache contract'),
+            'fatal': FatalBotException('fatal producer failure'),
+            'unexpected_value': ValueError('invalid configuration'),
+        }
+        if failure in errors:
+            raise errors[failure]
         try:
             await asyncio.Event().wait()
         finally:
@@ -291,8 +303,13 @@ async def test_optional_tail_timeout_is_bounded_and_cannot_delay_raw_red(monkeyp
         get_raw_balance=lambda: 100.0, bot_value=lambda *a: 1,
         _pnls_manager=SimpleNamespace(get_events=lambda: [object()]), update_pnls=stalled,
     )
+    if failure in {'fatal', 'unexpected_value'}:
+        from passivbot_exceptions import FatalBotException
+        with pytest.raises(FatalBotException if failure == 'fatal' else ValueError):
+            await evaluate_emergency(bot, {'A': {'long'}})
+        return
     await evaluate_emergency(bot, {'A': {'long'}})
-    assert cancelled.is_set()
+    assert cancelled.is_set() is (failure == 'timeout')
     assert not health.pending_exits()
     assert health.scopes[scope].emergency_active
     assert health.scopes[scope].unavailable_since_ms == 1000

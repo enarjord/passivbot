@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from config.access import require_live_value
+from fill_events_manager import FillEventCacheContractError
 from live.market_snapshot import MarketSnapshotUnavailable
 from live.diagnostic_safety import bounded_exception_type
 from ccxt.base.errors import NetworkError
@@ -387,7 +388,8 @@ async def evaluate_emergency(bot, candidates, *, refresh_fill_tail=True):
         try:
             await asyncio.wait_for(update_fills(source="hsl_emergency"),
                                    timeout=_EMERGENCY_FILL_REFRESH_TIMEOUT_SECONDS)
-        except (TimeoutError, NetworkError, AuthoritativeSurfaceUnavailable) as exc:
+        except (TimeoutError, NetworkError, AuthoritativeSurfaceUnavailable, FillEventCacheContractError) as exc:
+            bot._hsl_fill_tail_observation = None
             logging.warning("[risk] optional emergency fill-tail refresh unavailable; raw-UPNL protection remains active | error_type=%s",
                             bounded_exception_type(exc))
         else:

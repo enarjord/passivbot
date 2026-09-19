@@ -13000,6 +13000,19 @@ class Passivbot:
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
 
+        async def refresh_evidence(operation, **kwargs):
+            try:
+                return await operation(**kwargs)
+            except ValueError as exc:
+                if source != "hsl_emergency":
+                    raise
+                # Only fetched-fill parsing belongs to this optional boundary.
+                # Configuration parsing and unrelated orchestration errors remain
+                # outside it and retain their normal propagation policy.
+                raise state_refresh.AuthoritativeSurfaceUnavailable(
+                    "fills", "optional fill refresh returned unusable evidence"
+                ) from exc
+
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
@@ -13104,8 +13117,6 @@ class Passivbot:
                 structural_transition = False
                 for current in self._pnls_manager.get_events():
                     current_keys = event_identity_keys(current)
-                    if current_keys & handled_enrichment_keys:
-                        continue
                     previous = existing_by_id.get(
                         str(getattr(current, "id", "") or "")
                     )
@@ -13131,7 +13142,11 @@ class Passivbot:
                         not fill_event_pnl_pending(current)
                         and not FillEventsManager.synthetic_pnl_events([current])
                     )
-                    if previous_needs_enrichment and current_is_authoritative:
+                    if (
+                        previous_needs_enrichment
+                        and current_is_authoritative
+                        and not current_keys & handled_enrichment_keys
+                    ):
                         transitions.append((previous, current))
                         handled_enrichment_keys.update(current_keys)
                 if transitions:
@@ -13191,7 +13206,8 @@ class Passivbot:
             ):
                 degraded_repair_attempted = True
                 try:
-                    await repair_degraded(
+                    await refresh_evidence(
+                        repair_degraded,
                         start_ms=(
                             None
                             if required_pnl_start_ms is None
@@ -13213,7 +13229,8 @@ class Passivbot:
             if needs_full_refresh:
                 # Full refresh with proper lookback window
                 refresh_mode = "full"
-                await self._pnls_manager.refresh(
+                await refresh_evidence(
+                    self._pnls_manager.refresh,
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
@@ -13240,10 +13257,11 @@ class Passivbot:
                 )
                 if age_limit is not None and callable(refresh_for_lookback):
                     fill_fetch_completed = bool(
-                        await refresh_for_lookback(start_ms=int(age_limit))
+                        await refresh_evidence(refresh_for_lookback, start_ms=int(age_limit))
                     )
                 else:
-                    await self._pnls_manager.refresh(
+                    await refresh_evidence(
+                    self._pnls_manager.refresh,
                         start_ms=None if age_limit is None else int(age_limit),
                         end_ms=None,
                     )
@@ -13270,7 +13288,8 @@ class Passivbot:
                 )
                 if since_ms is not None:
                     refresh_mode = "incremental_bounded"
-                    await self._pnls_manager.refresh(
+                    await refresh_evidence(
+                    self._pnls_manager.refresh,
                         start_ms=max(0, int(since_ms)),
                         end_ms=None,
                     )
@@ -13299,7 +13318,8 @@ class Passivbot:
                     overlap_minutes = max(0.0, overlap_minutes)
                     if recovery_start_ms is not None:
                         refresh_mode = "trailing_confirmation_recovery"
-                        await self._pnls_manager.refresh(
+                        await refresh_evidence(
+                    self._pnls_manager.refresh,
                             start_ms=int(recovery_start_ms),
                             end_ms=None,
                         )
@@ -13310,7 +13330,8 @@ class Passivbot:
                             int(exchange_time_ms)
                             - int(overlap_minutes * 60 * 1000),
                         )
-                        await self._pnls_manager.refresh(
+                        await refresh_evidence(
+                    self._pnls_manager.refresh,
                             start_ms=bounded_start_ms,
                             end_ms=None,
                         )
@@ -13320,7 +13341,8 @@ class Passivbot:
                             mark_covered_start(bounded_start_ms)
                         self._pnls_manager.set_history_scope("window")
                     else:
-                        await self._pnls_manager.refresh_latest(
+                        await refresh_evidence(
+                            self._pnls_manager.refresh_latest,
                             overlap=20,
                             last_refresh_overlap_ms=int(overlap_minutes * 60 * 1000),
                         )

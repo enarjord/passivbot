@@ -192,8 +192,10 @@ observation, with no intervening position observation. Concurrent requests shari
 stale cached quantity equality alone are insufficient. If raw loss has not already committed an
 exit, the emergency owner may attempt one ordered fill refresh with a five-second timeout and
 at most one attempt per ten seconds. Failure leaves raw-UPNL evaluation active; a raw-triggered
-close never waits for this optional enrichment. If the refresh discovers fills requiring account
-confirmation, enrichment waits for confirmed positions and balance plus a new ordered tail; equal
+close never waits for this optional enrichment. Fetched-fill value errors and fill-cache contract
+failures make this optional evidence unavailable; malformed configuration, unrelated programming
+errors, and fatal producer failures still propagate. If either the repair or tail phase discovers
+new or structurally corrected fills requiring account confirmation, enrichment waits for confirmed positions and balance plus a new ordered tail; equal
 net position size does not prove an unchanged cost basis. A proven last flatten excludes
 previous closed episodes even before price replay succeeds. This evidence is recomputed each pass;
 it is added once, never combined with an already-inclusive equity drawdown. Unavailable optional
