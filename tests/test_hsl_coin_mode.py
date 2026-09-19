@@ -5935,7 +5935,7 @@ async def test_boundary_deferral_supervises_new_cooldown_position_until_flat(sig
     )
     calls = []
 
-    async def refresh():
+    async def refresh(**kwargs):
         calls.append("refresh")
         return True
 
