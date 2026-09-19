@@ -1289,3 +1289,53 @@ async def test_confirmed_flat_scope_clears_quote_outage_without_another_plan(mon
     bot.execute_order_plan_to_exchange = AsyncMock()
     await recovery.protect_unready_hsl(bot)
     assert bot._hsl_protective_unavailable_symbols == {'B'}
+
+
+@pytest.mark.asyncio
+async def test_outer_refresh_protection_covers_existing_red_without_recovery_state(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    bot._protective_panic_target_psides_by_symbol = lambda: {'A': {'long'}}
+    bot._equity_hard_stop_coin_red_active = lambda: True
+    bot._run_latched_hsl_supervisor_if_active.return_value = True
+    assert await recovery.protect_before_history_refresh(bot)
+    bot._run_latched_hsl_supervisor_if_active.assert_awaited_once()
+    bot.refresh_authoritative_state.assert_not_awaited()
+    # A stale panic mode alone cannot starve repairs after that side is flat.
+    bot.positions = {'A': {'long': {'size': 0.0}, 'short': {'size': -1.0}}}
+    assert not await recovery.protect_before_history_refresh(bot)
+    assert bot._run_latched_hsl_supervisor_if_active.await_count == 1
+    # Explicit panic configuration without an HSL latch still belongs to the
+    # ordinary planner; this pre-refresh owner must not starve that planner.
+    bot.positions['A']['long']['size'] = 1.0
+    bot._equity_hard_stop_coin_red_active = lambda: False
+    assert not await recovery.protect_before_history_refresh(bot)
+
+
+@pytest.mark.asyncio
+async def test_outer_refresh_protection_runs_cooldown_owner_before_repair(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    bot._run_halted_hsl_protection_if_active.return_value = True
+    assert await recovery.protect_before_history_refresh(bot)
+    bot.refresh_authoritative_state.assert_not_awaited()
+    bot._run_halted_hsl_protection_if_active.return_value = False
+    assert not await recovery.protect_before_history_refresh(bot)
+
+
+@pytest.mark.asyncio
+async def test_known_red_wave_precedes_unready_emergency_balance(monkeypatch):
+    bot, _ = make_bot(monkeypatch)
+    seen = []
+    async def normal(**kwargs):
+        seen.append('normal_close')
+        return True
+    async def emergency(owner):
+        seen.append('emergency_inputs')
+        return False
+    bot._run_latched_hsl_supervisor_if_active.side_effect = normal
+    monkeypatch.setattr(recovery, 'protect_unready_hsl', emergency)
+    bot.positions = {'A': {'long': {'size': 1.0}}}
+    bot._protective_panic_target_psides_by_symbol = lambda: {'A': {'long'}}
+    bot._equity_hard_stop_coin_red_active = lambda: True
+    assert await recovery.protect_before_history_refresh(bot)
+    assert seen == ['normal_close']

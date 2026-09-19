@@ -1996,9 +1996,10 @@ async def test_unified_emergency_closes_later_opposite_exposure_without_new_grac
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('failure', ['balance', 'history'])
+@pytest.mark.parametrize('failure', ['balance', 'history', 'outer_refresh'])
 @pytest.mark.parametrize('signal_mode', ['coin', 'pside', 'unified'])
 async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exchange(tmp_path, monkeypatch, failure, signal_mode):
+    import asyncio
     from unittest.mock import AsyncMock
     from live.risk_input_recovery import RiskInputUnavailable
     from live.state_refresh import AuthoritativeSurfaceUnavailable
@@ -2029,7 +2030,21 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
         state = bot._hsl_coin_state('long', symbol) if signal_mode == 'coin' else bot._hsl_state('long')
         assert state['runtime'].red_latched()
         assert bot.positions[symbol]['long']['size'] == 5.0
-        if failure == 'balance':
+        if failure == 'outer_refresh':
+            async def yield_sleep(*args, **kwargs):
+                await asyncio.sleep(0)
+            bot._sleep_unless_shutdown = yield_sleep
+            async def outer_refresh():
+                if bot.positions[symbol]['long']['size'] != 0.0:
+                    # Model a stalled account/history request. Protection must
+                    # execute before this outer owner is allowed to run.
+                    await asyncio.Event().wait()
+                bot.stop_signal_received = True
+                return False
+            bot.refresh_authoritative_state = AsyncMock(side_effect=outer_refresh)
+            await asyncio.wait_for(bot.run_execution_loop(), timeout=10.0)
+            bot.refresh_authoritative_state.assert_awaited_once()
+        elif failure == 'balance':
             bot.balance_raw = bot.balance = float('nan')
             bot._capture_balance_staged_snapshot = AsyncMock(side_effect=RiskInputUnavailable('current_balance_unavailable'))
             expected = RiskInputUnavailable
@@ -2037,9 +2052,10 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             bot._equity_hard_stop_flatten_fill_timestamp_with_refresh = AsyncMock(
                 side_effect=AuthoritativeSurfaceUnavailable('hsl_episode_boundaries', 'history pending'))
             expected = AuthoritativeSurfaceUnavailable
-        supervisor = hsl._equity_hard_stop_run_coin_red_supervisor if signal_mode == 'coin' else hsl._equity_hard_stop_run_red_supervisor
-        with pytest.raises(expected):
-            await supervisor(bot, single_pass=True)
+        if failure != 'outer_refresh':
+            supervisor = hsl._equity_hard_stop_run_coin_red_supervisor if signal_mode == 'coin' else hsl._equity_hard_stop_run_red_supervisor
+            with pytest.raises(expected):
+                await supervisor(bot, single_pass=True)
         await bot.refresh_protective_authoritative_state(require_balance=False)
         assert bot.positions[symbol]['long']['size'] == 0.0
         assert any(f.get('reduceOnly') and f['timestamp'] >= bot.cca.now_ms for f in bot.cca.fills)
