@@ -5,6 +5,7 @@ from typing import Optional
 
 from pure_funcs import sort_dict_keys, str2bool
 
+from .hsl_revised import engine, normalization_template, normalize_revised
 from .log_output import log_config_message
 from .migrations import apply_backward_compatibility_renames
 from .optimize_bounds import get_optimize_bounds_defaults
@@ -492,107 +493,108 @@ def normalize_hsl_risk_unstuck_numerics(
                 raise ValueError(f"{unstuck_path}.{key} must be positive and finite")
             bot_side["unstuck"][key] = value
 
-        _normalize_minimum_span(
-            result,
-            pside=pside,
-            flat_key="hsl_ema_span_minutes",
-            path=f"{hsl_path}.ema_span_minutes",
-            verbose=verbose,
-            tracker=tracker,
-        )
-        _validate_bool(
-            get_grouped_bot_value(bot_side, "hsl_enabled"),
-            path=f"{hsl_path}.enabled",
-        )
-        _validate_string_choice(
-            get_grouped_bot_value(bot_side, "hsl_orange_tier_mode"),
-            path=f"{hsl_path}.orange_tier_mode",
-            allowed=HSL_ORANGE_TIER_MODES,
-        )
-        _validate_string_choice(
-            get_grouped_bot_value(bot_side, "hsl_panic_close_order_type"),
-            path=f"{hsl_path}.panic_close_order_type",
-            allowed=HSL_PANIC_CLOSE_ORDER_TYPES,
-        )
-        red_threshold = _validate_ratio(
-            get_grouped_bot_value(bot_side, "hsl_red_threshold"),
-            path=f"{hsl_path}.red_threshold",
-            min_value=0.0,
-            max_value=1.0,
-            min_inclusive=False,
-        )
-        no_restart = _validate_ratio(
-            get_grouped_bot_value(bot_side, "hsl_no_restart_drawdown_threshold"),
-            path=f"{hsl_path}.no_restart_drawdown_threshold",
-            min_value=0.0,
-            max_value=1.0,
-        )
-        if no_restart < red_threshold:
-            log_config_message(
-                verbose,
-                logging.WARNING,
-                "%s.no_restart_drawdown_threshold=%s is below red_threshold=%s; clamping to red_threshold",
-                hsl_path,
-                no_restart,
-                red_threshold,
-            )
-            _set_grouped_bot_value(
+        if engine(result) == "legacy":
+            _normalize_minimum_span(
                 result,
                 pside=pside,
-                flat_key="hsl_no_restart_drawdown_threshold",
-                value=red_threshold,
+                flat_key="hsl_ema_span_minutes",
+                path=f"{hsl_path}.ema_span_minutes",
+                verbose=verbose,
                 tracker=tracker,
             )
-            if tracker is not None:
-                tracker.update(
-                    ["bot", pside, "hsl", "no_restart_drawdown_threshold"],
+            _validate_bool(
+                get_grouped_bot_value(bot_side, "hsl_enabled"),
+                path=f"{hsl_path}.enabled",
+            )
+            _validate_string_choice(
+                get_grouped_bot_value(bot_side, "hsl_orange_tier_mode"),
+                path=f"{hsl_path}.orange_tier_mode",
+                allowed=HSL_ORANGE_TIER_MODES,
+            )
+            _validate_string_choice(
+                get_grouped_bot_value(bot_side, "hsl_panic_close_order_type"),
+                path=f"{hsl_path}.panic_close_order_type",
+                allowed=HSL_PANIC_CLOSE_ORDER_TYPES,
+            )
+            red_threshold = _validate_ratio(
+                get_grouped_bot_value(bot_side, "hsl_red_threshold"),
+                path=f"{hsl_path}.red_threshold",
+                min_value=0.0,
+                max_value=1.0,
+                min_inclusive=False,
+            )
+            no_restart = _validate_ratio(
+                get_grouped_bot_value(bot_side, "hsl_no_restart_drawdown_threshold"),
+                path=f"{hsl_path}.no_restart_drawdown_threshold",
+                min_value=0.0,
+                max_value=1.0,
+            )
+            if no_restart < red_threshold:
+                log_config_message(
+                    verbose,
+                    logging.WARNING,
+                    "%s.no_restart_drawdown_threshold=%s is below red_threshold=%s; clamping to red_threshold",
+                    hsl_path,
                     no_restart,
                     red_threshold,
                 )
-        _validate_ratio(
-            get_grouped_bot_value(bot_side, "hsl_cooldown_minutes_after_red"),
-            path=f"{hsl_path}.cooldown_minutes_after_red",
-        )
-        tier_ratios = get_grouped_bot_value(bot_side, "hsl_tier_ratios")
-        if not isinstance(tier_ratios, dict):
-            raise TypeError(f"{hsl_path}.tier_ratios must be a dict")
-        yellow = _validate_ratio(
-            tier_ratios.get("yellow"),
-            path=f"{hsl_path}.tier_ratios.yellow",
-            max_value=1.0,
-            min_inclusive=False,
-        )
-        orange = _validate_ratio(
-            tier_ratios.get("orange"),
-            path=f"{hsl_path}.tier_ratios.orange",
-            max_value=1.0,
-            min_inclusive=False,
-        )
-        if not yellow < orange or orange >= 1.0:
-            raise ValueError(
-                f"{hsl_path}.tier_ratios must satisfy 0 < yellow < orange < 1"
-            )
-        restart_after_red_policy = normalize_hsl_restart_after_red_policy(
-            get_grouped_bot_value(bot_side, "hsl_restart_after_red_policy"),
-            path=f"{hsl_path}.restart_after_red_policy",
-        )
-        if tracker is not None:
-            current_restart_policy = get_grouped_bot_value(
-                bot_side, "hsl_restart_after_red_policy"
-            )
-            if current_restart_policy != restart_after_red_policy:
-                tracker.update(
-                    ["bot", pside, "hsl", "restart_after_red_policy"],
-                    current_restart_policy,
-                    restart_after_red_policy,
+                _set_grouped_bot_value(
+                    result,
+                    pside=pside,
+                    flat_key="hsl_no_restart_drawdown_threshold",
+                    value=red_threshold,
+                    tracker=tracker,
                 )
-        _set_grouped_bot_value(
-            result,
-            pside=pside,
-            flat_key="hsl_restart_after_red_policy",
-            value=restart_after_red_policy,
-            tracker=None,
-        )
+                if tracker is not None:
+                    tracker.update(
+                        ["bot", pside, "hsl", "no_restart_drawdown_threshold"],
+                        no_restart,
+                        red_threshold,
+                    )
+            _validate_ratio(
+                get_grouped_bot_value(bot_side, "hsl_cooldown_minutes_after_red"),
+                path=f"{hsl_path}.cooldown_minutes_after_red",
+            )
+            tier_ratios = get_grouped_bot_value(bot_side, "hsl_tier_ratios")
+            if not isinstance(tier_ratios, dict):
+                raise TypeError(f"{hsl_path}.tier_ratios must be a dict")
+            yellow = _validate_ratio(
+                tier_ratios.get("yellow"),
+                path=f"{hsl_path}.tier_ratios.yellow",
+                max_value=1.0,
+                min_inclusive=False,
+            )
+            orange = _validate_ratio(
+                tier_ratios.get("orange"),
+                path=f"{hsl_path}.tier_ratios.orange",
+                max_value=1.0,
+                min_inclusive=False,
+            )
+            if not yellow < orange or orange >= 1.0:
+                raise ValueError(
+                    f"{hsl_path}.tier_ratios must satisfy 0 < yellow < orange < 1"
+                )
+            restart_after_red_policy = normalize_hsl_restart_after_red_policy(
+                get_grouped_bot_value(bot_side, "hsl_restart_after_red_policy"),
+                path=f"{hsl_path}.restart_after_red_policy",
+            )
+            if tracker is not None:
+                current_restart_policy = get_grouped_bot_value(
+                    bot_side, "hsl_restart_after_red_policy"
+                )
+                if current_restart_policy != restart_after_red_policy:
+                    tracker.update(
+                        ["bot", pside, "hsl", "restart_after_red_policy"],
+                        current_restart_policy,
+                        restart_after_red_policy,
+                    )
+            _set_grouped_bot_value(
+                result,
+                pside=pside,
+                flat_key="hsl_restart_after_red_policy",
+                value=restart_after_red_policy,
+                tracker=None,
+            )
 
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),
@@ -649,7 +651,7 @@ def normalize_cliff_edge_thresholds(
 
 
 def ensure_required_bot_params_present(result: dict) -> None:
-    template = get_template_config()["bot"]
+    template = normalization_template(get_template_config(), result)["bot"]
     for pside in BOT_POSITION_SIDES:
         bot_cfg = result["bot"][pside]
         flat_bot_cfg = flatten_shared_bot_side(bot_cfg)
@@ -673,7 +675,7 @@ def ensure_required_bot_params_present(result: dict) -> None:
 def ensure_bot_defaults(
     result: dict, *, verbose: bool = True, tracker: Optional[object] = None
 ) -> None:
-    template_bot = get_template_config()["bot"]
+    template_bot = normalization_template(get_template_config(), result)["bot"]
     for pside in BOT_POSITION_SIDES:
         canonicalize_shared_bot_side(
             result["bot"][pside],
@@ -695,7 +697,7 @@ def ensure_optimize_bounds_for_bot(
 ) -> None:
     del verbose
     bounds = result["optimize"]["bounds"]
-    defaults = get_optimize_bounds_defaults()
+    defaults = normalization_template(get_template_config(), result)["optimize"]["bounds"]
     add_missing_keys_recursively(
         defaults,
         bounds,
@@ -1061,7 +1063,7 @@ def format_bot_config(
 ) -> dict:
     if not isinstance(bot_cfg, dict):
         raise TypeError(f"config.bot must be a dict; got {type(bot_cfg).__name__}")
-    template = get_template_config()
+    template = normalization_template(get_template_config(), {"live": live_cfg or {}})
     result = {
         "bot": deepcopy(bot_cfg),
         "live": deepcopy(live_cfg) if isinstance(live_cfg, dict) else deepcopy(template["live"]),
@@ -1086,6 +1088,7 @@ def format_bot_config(
     migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)
+    normalize_revised(result, template, verbose=verbose)
     ensure_bot_defaults(result, verbose=verbose, tracker=tracker)
     ensure_required_bot_params_present(result)
     normalize_hsl_risk_unstuck_numerics(result, verbose=verbose, tracker=tracker)

@@ -25,6 +25,7 @@ from .migrations import (
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
+from .hsl_revised import normalization_template, normalize_revised
 from .strategy import (
     prune_inactive_strategy_subtrees,
     reject_legacy_flat_strategy_fields,
@@ -66,7 +67,7 @@ def normalize_config(
     )
     coin_sources_input = deepcopy(source_payload.get("backtest", {}).get("coin_sources"))
     live_coin_sources_input = {}
-    template = get_template_config()
+    template = normalization_template(get_template_config(), source_payload)
     result = build_base_config_from_flavor(config, template, flavor, verbose)
     if flavor == "nested_current" and isinstance(config.get("config"), dict):
         source_sections = set(config["config"])
@@ -112,6 +113,7 @@ def normalize_config(
         tracker=tracker,
         explicit_bounds=raw_optimize_snapshot.get("bounds", {}),
     )
+    normalize_revised(result, template, verbose=verbose)
     result["bot"] = format_bot_config(
         result["bot"],
         live_cfg=result["live"],
@@ -170,6 +172,7 @@ def normalize_config(
             raw_optimize_limits_present=raw_optimize_limits_present,
         )
 
+    normalize_revised(result, template, verbose=verbose)
     result["_transform_log"] = existing_log
     if raw_snapshot is not None and "_raw" not in result:
         result["_raw"] = deepcopy(raw_snapshot)

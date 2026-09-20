@@ -36,6 +36,8 @@ def _refresh_shared_bot_runtime_aliases(config: dict) -> None:
 def _apply_config_overrides(config: dict, overrides: dict) -> None:
     if not overrides:
         return
+    from config.hsl_revised import validate_override_paths
+    validate_override_paths(config, overrides)
     for dotted_path, value in overrides.items():
         if not isinstance(dotted_path, str):
             raise ValueError("Override keys must be dotted strings")
@@ -172,7 +174,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
                 hsl_cfg = pside_cfg.get("hsl")
                 if isinstance(hsl_cfg, dict):
                     hsl_cfg["no_restart_drawdown_threshold"] = clamped
-    for pside in sorted(config.get("bot", {})):
+    for pside in (side for side in ("long", "short") if side in config.get("bot", {})):
         config = optimizer_overrides(overrides_list or [], config, pside)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
@@ -188,6 +190,10 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
             forager_cfg["score_weights"] = deepcopy(normalized)
     canonicalize_dead_optimizer_params(config)
     materialize_coupled_scenario_spans(config)
+    from config.hsl_revised import engine, normalize_revised
+    from config.schema import get_template_config
+    if engine(config) == "revised":
+        normalize_revised(config, get_template_config(), verbose=False)
     return config
 
 

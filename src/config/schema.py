@@ -417,6 +417,7 @@ def get_template_config():
                 "hsl_accept_incomplete_history": False,
                 "hsl_unavailable_grace_seconds": 120.0,
                 "hsl_position_during_cooldown_policy": "panic",
+                "hsl_engine": "legacy",
                 "hsl_signal_mode": "coin",
                 "ignored_coins": {
                     "long": [],

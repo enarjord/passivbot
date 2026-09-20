@@ -981,6 +981,10 @@ def build_backtest_payload(
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
+    from config.hsl_revised import require_runtime_support
+    require_runtime_support(config)
+    if runtime_config is not None:
+        require_runtime_support(runtime_config)
     if runtime_config is None:
         runtime_config = compile_runtime_config(config, runtime="backtest", record_step=False)
     if execution_settings is None:
@@ -3166,6 +3170,8 @@ async def main():
         log_config_transforms=True,
         raw_snapshot=raw_snapshot,
     )
+    from config.hsl_revised import require_runtime_support
+    require_runtime_support(config)
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

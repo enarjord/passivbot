@@ -32,7 +32,7 @@ from optimizer_overrides import (
 def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
     strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
     has_flat_keys = any(
-        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+        isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
         for key in optimize_bounds
     )
     if not has_flat_keys:
@@ -41,12 +41,12 @@ def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
     flat_bounds = {
         key: value
         for key, value in optimize_bounds.items()
-        if isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
     }
     nested_bounds = {
         key: value
         for key, value in optimize_bounds.items()
-        if not (isinstance(key, str) and (key.startswith("long_") or key.startswith("short_")))
+        if not (isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")))
     }
     if nested_bounds:
         flat_bounds = {
@@ -90,6 +90,21 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
         resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             raise KeyError(f"optimize bound {bound_key} does not map to a known bot parameter")
+        if config.get("live", {}).get("hsl_engine") == "revised" and "hsl" in resolved:
+            from config.hsl_revised import _number
+            name = resolved[-1]
+            constraints = {"red_threshold": dict(minimum=0, maximum=1, strict=True),
+                           "ema_span_minutes": dict(minimum=1),
+                           "cooldown_minutes_after_red": dict(minimum=0)}
+            if name in constraints:
+                bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+                for endpoint in (bound.low, bound.high):
+                    _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
+        if resolved[:2] == ("bot", "hsl"):
+            value = bot_config["hsl"].get(resolved[-1])
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise KeyError(f"optimize bound {bound_key} must map to a numeric portfolio HSL parameter")
+            continue
         if canonical_key in strategy_path_map or canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
             continue
         try:
@@ -159,7 +174,7 @@ def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:
         resolved = resolve_optimization_bound_path(config, bound_key)
         if resolved is None:
             continue
-        if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS:
+        if canonical_key in OPTIMIZABLE_BOT_KEY_PATHS or resolved[:2] == ("bot", "hsl"):
             key_paths.append((bound_key, resolved))
             continue
         if canonical_key in strategy_path_map:
