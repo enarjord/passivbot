@@ -165,6 +165,20 @@ def latest_variants(fills):
                  if f.revision == max(x.revision for x in group))
 
 
+def causal_fills(pair, now):
+    """Quarantine impossible revisions before selecting canonical content.
+
+    A conflicting revision is indivisible: a future variant cannot make its
+    expired twin authoritative. Earlier usable versions remain available for risk.
+    """
+    end = min(now, pair.fills_at if pair.fills_at is not None else now)
+    versions = {}
+    for f in pair.fills:
+        versions.setdefault((f.identity, f.revision), []).append(f)
+    return tuple(f for group in versions.values() if all(f.timestamp <= end for f in group)
+                 for f in group)
+
+
 def project(snapshot, keys):
     if keys is None:
         return snapshot
@@ -183,7 +197,7 @@ def source_revisions(snapshot):
     result = {("global", i): r for i, r in enumerate(snapshot.revisions)}
     result.update({(p.key, i): r for p in snapshot.pairs for i, r in enumerate(p.revisions)})
     for p in snapshot.pairs:
-        for f in latest_variants(p.fills):
+        for f in latest_variants(causal_fills(p, snapshot.now)):
             result[("fill", p.key, f.identity)] = f.revision
     return result
 
@@ -200,8 +214,9 @@ def fill_identity_times(snapshot):
     result = {}
     for p in snapshot.pairs:
         end = min(snapshot.now, p.fills_at if p.fills_at is not None else snapshot.now)
-        for f in latest_variants(p.fills):
-            if f.timestamp > end:
+        newest = latest_variants(causal_fills(p, snapshot.now))
+        for f in newest:
+            if any(other.identity == f.identity and other != f for other in newest):
                 continue
             times = result.setdefault((p.key, f.identity), set())
             if snapshot.start <= f.timestamp <= end:
@@ -251,7 +266,8 @@ class BoundaryTrace:
 
 def _steps(pair, start, now):
     direction = 1 if pair.position.pside == "long" else -1
-    ordered, reasons = ordered_fills(pair.fills, start, now, direction)
+    causal = causal_fills(pair, now)
+    ordered, reasons = ordered_fills(causal, start, now, direction)
     if any(f.timestamp > pair.position_at for f in ordered):
         reasons.add("post_position_fill")
     end = min(pair.position_at, pair.fills_at if pair.fills_at is not None else now)
@@ -260,7 +276,7 @@ def _steps(pair, start, now):
     # their uncertainty local in time; an older damaged prefix does not taint a
     # later independently reconstructible episode.
     versions = {}
-    for f in pair.fills:
+    for f in causal:
         versions.setdefault(f.identity, []).append(f)
     conflicts = []
     for group in versions.values():
@@ -393,7 +409,7 @@ def estimate_pair(snapshot, key):
     """
     pair = next(p for p in snapshot.pairs if p.key == key)
     direction = 1 if pair.position.pside == "long" else -1
-    all_fills, quality = ordered_fills(pair.fills, snapshot.start, snapshot.now, direction)
+    all_fills, quality = ordered_fills(causal_fills(pair, snapshot.now), snapshot.start, snapshot.now, direction)
     quality.update(snapshot_quality(snapshot, {key}))
     end = min(pair.position_at, pair.fills_at if pair.fills_at is not None else snapshot.now)
     fills = [f for f in all_fills if f.timestamp <= end]
@@ -457,8 +473,9 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
         value = compute(snapshot)
         current = project(observe(), scope_keys)
         revisions = source_revisions(current)
-        regression |= current.now < last_time or any(r < high_water.get(k, r) for k, r in revisions.items())
+        regression = current.now < last_time or any(r < high_water.get(k, r) for k, r in revisions.items())
         high_water.update({k: max(r, high_water.get(k, r)) for k, r in revisions.items()})
+        capture_regression = False
         for k, t in source_times(current).items():
             prior = time_water.get(k)
             if prior is not None and (t is None or t < prior):
@@ -466,8 +483,8 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
             if t is not None:
                 time_water[k] = t if prior is None else max(prior, t)
         current_fills = fill_identity_times(current)
-        missing_identity |= any(k not in current_fills and any(current.start <= t <= current.now for t in ts)
-                                for k, ts in fill_water.items())
+        missing_identity = any(k not in current_fills and any(current.start <= t <= current.now for t in ts)
+                               for k, ts in fill_water.items())
         fill_water.update(current_fills)
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)

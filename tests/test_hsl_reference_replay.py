@@ -690,3 +690,55 @@ def test_disappearance_respects_valid_expiry_but_not_impossible_future_correctio
     result = evaluate_bounded(observe, compute, max_attempts=3, scope_keys={p.key})
     assert result.revalidated == valid
     assert ("missing_fill_identity" in result.reasons) == (not valid)
+
+
+def test_mixed_expired_future_conflict_cannot_clear_known_identity():
+    original = open_frame()
+    p = original.pairs[0]
+    expired = replace(p.fills[0], timestamp=-M, revision=1)
+    future = replace(expired, timestamp=5 * M)
+    conflict = replace(original, pairs=(replace(p, fills=(expired, future)),))
+    missing = replace(original, pairs=(replace(p, fills=()),))
+    observe, _ = observe_sequence(original, conflict, missing, missing)
+    result = evaluate_bounded(observe, compute, max_attempts=3)
+    assert not result.revalidated and "missing_fill_identity" in result.reasons
+
+
+def test_valid_expiry_correction_clears_previously_missing_identity():
+    original = open_frame()
+    p = original.pairs[0]
+    missing = replace(original, pairs=(replace(p, fills=()),))
+    corrected = replace(original, pairs=(replace(p, fills=(replace(p.fills[0], timestamp=-M, revision=1),)),))
+    observe, _ = observe_sequence(original, missing, corrected, corrected)
+    result = evaluate_bounded(observe, compute, max_attempts=3)
+    assert result.revalidated and not result.reasons
+
+
+@pytest.mark.parametrize("mixed", [False, True])
+def test_impossible_correction_preserves_earlier_causal_financial_and_boundary_evidence(mixed):
+    p = closed_tape(fee=-1)
+    p = replace(p, prices=((0, dec(100)), (M, dec(100))))
+    original = frame(p)
+    future = replace(p.fills[-1], timestamp=5 * M, realized=-1000, revision=1)
+    additions = (future, replace(future, timestamp=-M)) if mixed else (future,)
+    changed = replace(original, pairs=(replace(p, fills=(*p.fills, *additions)),))
+    assert compute(changed).history == compute(original).history
+    assert compute(changed).signal == compute(original).signal
+    before = scope_boundaries(original, "unified").boundaries[0]
+    after = scope_boundaries(changed, "unified").boundaries[0]
+    assert after.observation == before.observation and after.consumed == before.consumed
+    assert not after.lifecycle_eligible
+
+
+@pytest.mark.parametrize("damage", ["revision", "capture", "missing"])
+def test_recovered_valid_sources_can_revalidate_within_the_same_bounded_attempt(damage):
+    original = open_frame(revisions=(5,) * 6)
+    if damage == "revision":
+        stale = replace(original, revisions=(4,) * 6)
+    elif damage == "capture":
+        stale = replace(original, balance_at=original.balance_at - 1)
+    else:
+        stale = replace(original, pairs=(replace(original.pairs[0], fills=()),))
+    observe, _ = observe_sequence(original, stale, original, original)
+    result = evaluate_bounded(observe, compute, max_attempts=3)
+    assert result.revalidated and not result.reasons

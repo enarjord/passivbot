@@ -175,6 +175,12 @@ evidence, not a persisted fill ledger: window expiry or a causally valid correct
 outside the window clears that requirement. An impossible future correction cannot
 erase the earlier observation. Fills after their capture/evaluation time are excluded
 from the estimate and cannot certify a lifecycle boundary.
+Impossible revisions are quarantined before canonical selection, as a whole when
+conflicting variants share the revision. Earlier causally usable versions therefore
+retain their financial history and candidate risk samples. A mixed expired/future
+revision cannot clear prior evidence. Missing/regressed-input diagnostics describe
+the current candidate against retained high-water evidence, rather than latching:
+restored inputs or a valid expiry correction can revalidate within the same attempt.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 
