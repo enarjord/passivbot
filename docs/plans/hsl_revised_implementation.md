@@ -23,7 +23,9 @@ one-point series, not the complete no-history estimator.
 
 Subtract common realized/unrealized offsets before combining currency deltas to retain
 small representable changes. Nonpositive historical peaks use the reference impairment
-value of one. Arithmetic outside finite float range saturates with
+value of one. Opposite deltas that individually overflow are combined with power-of-two
+scaling before saturation so their representable residual is not discarded.
+Arithmetic outside finite float range saturates with
 `numeric_range_approximation=true`; the current endpoint is always restored to the budget.
 This is explicit approximation, not a finite-precision claim of exactness for extreme
 history. Invalid minimum inputs, nonfinite observations and reversed timestamps raise

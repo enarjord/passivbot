@@ -77,18 +77,19 @@ pub fn signal(
     // Subtract the common currency offset first: a large realized baseline must
     // not erase an otherwise representable unrealized change or the budget.
     for row in rows {
-        let realized_delta = bounded(
-            row.realized - last.realized,
-            &mut out.numeric_range_approximation,
-        );
-        let unrealized_delta = bounded(
-            row.unrealized - last.unrealized,
-            &mut out.numeric_range_approximation,
-        );
-        let delta = bounded(
-            realized_delta + unrealized_delta,
-            &mut out.numeric_range_approximation,
-        );
+        let realized_delta = row.realized - last.realized;
+        let unrealized_delta = row.unrealized - last.unrealized;
+        let direct = realized_delta + unrealized_delta;
+        let delta = if direct.is_finite() {
+            direct
+        } else {
+            // Opposite oversized deltas may cancel to a representable result.
+            // Do not saturate each independently and erase that residual risk.
+            out.numeric_range_approximation = true;
+            let scaled = (row.realized * 0.25 - last.realized * 0.25)
+                + (row.unrealized * 0.25 - last.unrealized * 0.25);
+            bounded(scaled * 4.0, &mut out.numeric_range_approximation)
+        };
         out.equity.push(bounded(
             budget + delta,
             &mut out.numeric_range_approximation,
@@ -236,5 +237,25 @@ mod tests {
         assert!(signal(&rows(&[f64::NAN]), 1.0, 1.0, 0.1, None).is_err());
         assert!(signal(&rows(&[0.0]), 0.0, 1.0, 0.1, None).is_err());
         assert!(signal(&rows(&[0.0]), 1.0, 0.0, 0.1, None).is_err());
+    }
+
+    #[test]
+    fn opposite_overflowing_deltas_keep_their_finite_residual() {
+        let input = [
+            Observation {
+                timestamp_ms: 0,
+                realized: f64::MAX,
+                unrealized: -f64::MAX / 2.0,
+            },
+            Observation {
+                timestamp_ms: 60_000,
+                realized: -f64::MAX,
+                unrealized: f64::MAX,
+            },
+        ];
+        let r = signal(&input, 1.0, 1.0, 0.1, None).unwrap();
+        assert!(r.numeric_range_approximation);
+        assert!(r.equity[0] > f64::MAX / 3.0);
+        assert!(r.panic[1]);
     }
 }

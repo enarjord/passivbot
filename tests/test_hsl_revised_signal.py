@@ -104,3 +104,12 @@ def test_batch_poll_repeat_and_window_reset_have_no_hidden_state(require_real_pa
     first = pbr.hsl_revised_signal(rows, 1000, 1, .1)
     compare(pbr, rows[1:], 1000, 1, .1)
     assert pbr.hsl_revised_signal(rows, 1000, 1, .1) == first
+
+
+def test_cancelling_oversized_deltas_do_not_erase_representable_loss(require_real_passivbot_rust_module):
+    big = float.fromhex("0x1.fffffffffffffp+1023")
+    result = json.loads(require_real_passivbot_rust_module.hsl_revised_signal(
+        [(0, big, -big / 2), (60_000, -big, big)], 1, 1, .1))
+    assert result["numeric_range_approximation"]
+    assert result["equity"][0] == pytest.approx(big / 2)
+    assert result["panic"][-1]
