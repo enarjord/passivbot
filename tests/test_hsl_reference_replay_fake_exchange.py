@@ -60,13 +60,21 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
     boundary, = trace.boundaries
     assert boundary.timestamp == client.now_ms
     assert float(boundary.observation.pnl) == pytest.approx(client.realized_pnl - client.realized_fees)
+    # The coarse simulator clock ties the fill and observation timestamps. Keep
+    # risk available, but obtain a later position observation for lifecycle use.
+    assert not boundary.lifecycle_eligible
+    assert client.advance_time()
+    clean = snapshot()
+    trace = scope_boundaries(clean, "unified")
+    boundary, = trace.boundaries
+    assert boundary.lifecycle_eligible
     risk = signal([Observation(start, dec(0), dec(0)), boundary.observation],
                   client.balance_total, 1, ".02")
     assert risk.panic[-1]
     evidence = LifecycleEvidence(boundary.timestamp, boundary.timestamp)
     assert permission(client.now_ms, 86_400_000, 120_000, "always", "panic", evidence,
                       exposed=False, red_now=False) == "halted"
-    assert client.advance_time()  # repeated observation does not refresh cooldown
+    # Repeated observation does not refresh cooldown.
     repeated = scope_boundaries(snapshot(), "unified")
     assert repeated.boundaries == trace.boundaries
     fresh = replace(clean, pairs=tuple(replace(p, fills=tuple(replace(f) for f in p.fills))

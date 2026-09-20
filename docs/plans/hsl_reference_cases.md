@@ -151,6 +151,12 @@ the result, and a regression remains unvalidated. Known canonical or conflicting
 variants after the position anchor keep stable snapshots unvalidated until positions
 catch up, without vetoing their risk estimate. Conflicting variants also forbid
 lifecycle certification, even though identity normalization excludes their quantities.
+Equal millisecond fill/position timestamps do not establish ordering either; they
+carry an uncertainty reason until a later position observation resolves the tie.
+Risk estimation continues, but a tied snapshot cannot certify a lifecycle reset.
+Every explicitly requested scope key must have a current position observation,
+including an explicit zero position when flat. An absent pair is unavailable current
+state, not an implicit zero-exposure member of an aggregate.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

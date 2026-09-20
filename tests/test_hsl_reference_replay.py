@@ -533,3 +533,34 @@ def test_known_post_position_fill_stays_unvalidated_until_position_refresh(confl
     observe, _ = observe_sequence(fresh, fresh)
     recovered = evaluate_bounded(observe, compute, scope_keys={p.key})
     assert recovered.revalidated and "post_position_fill" not in recovered.reasons
+
+
+def test_same_timestamp_tail_execution_is_uncertain_until_later_position_observation():
+    a = open_frame(position_at=2 * M)
+    p = a.pairs[0]
+    close = Fill("tied-close", 2 * M, -1, 80, -20)
+    tied = replace(a, pairs=(replace(p, fills=(*p.fills, close)),))
+    observe, _ = observe_sequence(tied, tied)
+    result = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert not result.revalidated and "position_fill_timestamp_tie" in result.reasons
+    assert result.value.signal.panic[-1]
+    # A later observed zero position resolves the ordering without a local latch.
+    fresh = replace(tied, pairs=(replace(tied.pairs[0], position_at=4 * M,
+                                        position=Position(0, 0, 80)),))
+    observe, _ = observe_sequence(fresh, fresh)
+    assert evaluate_bounded(observe, compute, scope_keys={p.key}).revalidated
+    assert scope_boundaries(fresh, "unified").boundaries[0].lifecycle_eligible
+
+
+def test_missing_requested_pair_is_not_a_silent_flat_scope_member():
+    a = open_frame()
+    b = pair("B", size=1, basis=100)
+    full = replace(a, pairs=(*a.pairs, b))
+    keys = {("A", "long"), ("B", "long")}
+    observe, _ = observe_sequence(full, a, a)
+    with pytest.raises(ValueError, match="absent is not flat"):
+        evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs), scope_keys=keys)
+    observed_flat = replace(full, pairs=(*a.pairs, replace(b, position=Position(0, 0, 80))))
+    observe, _ = observe_sequence(observed_flat, observed_flat)
+    result = evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs), scope_keys=keys)
+    assert result.revalidated and result.value == 1

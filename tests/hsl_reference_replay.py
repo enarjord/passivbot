@@ -133,6 +133,8 @@ def snapshot_quality(snapshot, keys=None):
     if any(p.position_at < f.timestamp <= snapshot.now for p in pairs
            for f in latest_variants(p.fills)):
         reasons.add("post_position_fill")
+    if any(f.timestamp == p.position_at for p in pairs for f in latest_variants(p.fills)):
+        reasons.add("position_fill_timestamp_tie")
     return reasons
 
 
@@ -147,6 +149,9 @@ def latest_variants(fills):
 def project(snapshot, keys):
     if keys is None:
         return snapshot
+    keys = frozenset(keys)
+    if not keys.issubset({p.key for p in snapshot.pairs}):
+        raise ValueError("missing current scope positions; absent is not flat")
     # Balance/config revisions are account-wide. Position/mark/history revisions
     # are per pair for scoped evaluation; aggregate tokens would reintroduce churn
     # from unrelated pairs even when all selected content stayed unchanged.
@@ -292,6 +297,8 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             if fill_quality:
                 reasons.update(fill_quality)
                 continue
+            if "position_fill_timestamp_tie" in snapshot_quality(snapshot, {p.key for p in pairs}):
+                reasons.add("position_fill_timestamp_tie")
             if (any(not s.clean_tail for s in group)
                     or any(t >= timestamp for ts in conflicts.values() for t in ts)
                     or any(not s.clean_tail for steps in paths.values() for s in steps
@@ -315,7 +322,9 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
                 reasons.add("estimated_flat")
             tape = tuple((p.key, tuple(consumed[p.key])) for p in pairs)
             boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0)),
-                                       not ambiguous and "post_position_fill" not in reasons))
+                                       not ambiguous and not reasons.intersection({
+                                           "post_position_fill", "position_fill_timestamp_tie"
+                                       })))
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
 
@@ -386,6 +395,7 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     """
     if not isinstance(max_attempts, int) or max_attempts < 1:
         raise ValueError("max_attempts must be a positive integer")
+    scope_keys = None if scope_keys is None else frozenset(scope_keys)
     snapshot = project(observe(), scope_keys)
     high_water = source_revisions(snapshot)
     last_time = snapshot.now
