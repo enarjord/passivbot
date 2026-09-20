@@ -73,7 +73,7 @@ def test_actual_flat_anchors_cooldown_partial_does_not():
 
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_normal_intervention_clears_halt_but_fresh_loss_still_panics(restart):
-    second = Episode((point(220, exposed=False), point(230, -1), point(240, -1, -100)))
+    second = Episode((point(220, -100, exposed=False), point(230, -101), point(240, -101, -100)))
     trace = run(stopped(), second, restart=restart, intervention="normal")
     assert trace[-2].action == "normal" and trace[-2].reason == "normal_intervention"
     assert trace[-1].action == "panic" and trace[-1].red_at == 240
@@ -81,8 +81,8 @@ def test_normal_intervention_clears_halt_but_fresh_loss_still_panics(restart):
 
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_repanic_during_cooldown_anchors_new_flat(restart):
-    second = Episode((point(230, -1), point(240, -1, exposed=False, flatten=True)))
-    third = Episode((point(300, exposed=False), point(439, exposed=False), point(440, exposed=False)))
+    second = Episode((point(230, -101), point(240, -101, exposed=False, flatten=True)))
+    third = Episode((point(300, -101, exposed=False), point(439, -101, exposed=False), point(440, -101, exposed=False)))
     trace = run(stopped(), second, third, restart=restart)
     assert trace[4].reason == "panic_intervention" and trace[4].red_at == 230
     assert trace[5].flat_at == 240
@@ -119,7 +119,7 @@ def test_zero_cooldown_is_no_wait(cooldown, expected):
 
 def test_flatten_risk_before_same_timestamp_reopen():
     first = Episode((point(0, exposed=False), point(100, -100, exposed=False, flatten=True)))
-    second = Episode((point(100, -1), point(150, -1, 200)))
+    second = Episode((point(100, -101), point(150, -101, 200)))
     result = run(first, second)
     assert result[1].action == "halted"
     assert result[2].action == "panic" and result[2].reason == "panic_intervention"
@@ -171,7 +171,7 @@ def test_corrected_historical_loss_can_void_a_previous_stop_without_local_latch(
 
 def test_ordinary_flat_resets_peak_without_creating_cooldown():
     first = Episode((point(0), point(100, 100, exposed=False, flatten=True)))
-    next_episode = Episode((point(100, exposed=False), point(200)))
+    next_episode = Episode((point(100, 100, exposed=False), point(200, 100)))
     assert all(d.action == "normal" for d in run(first, next_episode))
 
 
@@ -243,3 +243,32 @@ def test_generated_multi_episode_replay_matches_reference(seed):
     run(*episodes, start=seed * 60_000, cooldown=180_000,
         span=rng.choice([1, 2.5, 30.5]),
         restart=rng.choice(["always", "never"]), intervention=rng.choice(["panic", "normal"]))
+
+
+def test_completed_episode_rebases_to_common_current_endpoint():
+    loss = Episode((point(0), point(60_000, -100, exposed=False, flatten=True)))
+    recovered = Episode((point(120_000, -100, exposed=False), point(180_000, 0, exposed=False)))
+    trace = replay((loss, recovered), now=180_000, start=0, budget=1000, span=1,
+                   threshold=".095", cooldown=0, restart="never", intervention="panic")
+    assert float(trace[1].raw) == pytest.approx(.1)
+    assert trace[-1].action == "halted"
+
+
+def test_completed_episode_can_end_at_nonpositive_historical_equity():
+    loss = Episode((point(0), point(60_000, -2000, exposed=False, flatten=True)))
+    recovered = Episode((point(120_000, 0, exposed=False),))
+    trace = run(loss, recovered, cooldown=0, restart="never")
+    assert float(trace[1].raw) == pytest.approx(2)
+    assert trace[-1].action == "halted"
+
+
+def test_full_history_cannot_accept_minimal_history_entry_reference():
+    episode = Episode((point(0), point(100)), entry_reference=2000)
+    with pytest.raises(ValueError, match="singleton"):
+        run(episode)
+
+
+def test_future_tail_cannot_be_silently_clipped():
+    episode = Episode((point(0), point(100), point(200, exposed=False, flatten=True)))
+    with pytest.raises(ValueError, match="future"):
+        run(episode, now=100)

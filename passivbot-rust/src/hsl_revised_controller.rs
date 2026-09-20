@@ -1,7 +1,7 @@
 //! Pure replay of revised scoped permission from a reconstructed episode trace.
 //! No persisted or previous controller state is accepted as authority.
 
-use crate::hsl_revised::{signal, Observation};
+use crate::hsl_revised::{signal_with_anchor, Observation};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -102,6 +102,9 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
             return Err("episode reset without supported flatten".into());
         }
         for (index, point) in episode.points.iter().enumerate() {
+            if point.timestamp > input.now {
+                return Err("future HSL trace observation".into());
+            }
             if previous_time.is_some_and(|t| point.timestamp < t) {
                 return Err("unordered HSL trace".into());
             }
@@ -112,6 +115,16 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
         }
         previous_flat = episode.points.last().unwrap().flatten;
     }
+    let current = input
+        .episodes
+        .last()
+        .and_then(|e| e.points.last())
+        .ok_or("no in-window current trace")?;
+    let anchor = Observation {
+        timestamp_ms: current.timestamp,
+        realized: current.pnl,
+        unrealized: current.upnl,
+    };
     let mut decisions = Vec::new();
     let mut red_at = None;
     let mut flat_at = None;
@@ -124,6 +137,9 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
             .collect();
         if points.is_empty() {
             continue;
+        }
+        if episode.entry_reference.is_some() && points.len() > 1 {
+            return Err("entry reference requires a singleton episode".into());
         }
         let reference = if points[0].0 == 0 {
             episode.entry_reference
@@ -138,7 +154,14 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
                 unrealized: p.upnl,
             })
             .collect();
-        let risk = signal(&rows, input.budget, input.span, input.threshold, reference)?;
+        let risk = signal_with_anchor(
+            &rows,
+            input.budget,
+            input.span,
+            input.threshold,
+            reference,
+            &anchor,
+        )?;
         for (index, (_, point)) in points.iter().enumerate() {
             let t = point.timestamp;
             let mut reason = "green";

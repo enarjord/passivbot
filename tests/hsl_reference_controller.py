@@ -55,6 +55,8 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
             raise ValueError("episode reset without supported flatten")
         for i, point in enumerate(episode.points):
             t = point.observation.timestamp
+            if t > now:
+                raise ValueError("future trace observation")
             if previous_time is not None and t < previous_time:
                 raise ValueError("unordered trace")
             if point.flatten and (point.exposed or i != len(episode.points) - 1):
@@ -68,10 +70,12 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
         points = [p for p in episode.points if start <= p.observation.timestamp <= now]
         if not points:
             continue
+        if episode.entry_reference is not None and len(points) > 1:
+            raise ValueError("entry reference requires a singleton episode")
         # Never seed an active interval with an expired synthetic reference.
         reference = episode.entry_reference if points[0] == episode.points[0] else None
         risk = signal([p.observation for p in points], budget, span, threshold,
-                      entry_reference=reference)
+                      entry_reference=reference, anchor=episodes[-1].points[-1].observation)
         for point, raw, ema, red_now in zip(points, risk.raw, risk.ema, risk.panic):
             t = point.observation.timestamp
             reason = "green"
