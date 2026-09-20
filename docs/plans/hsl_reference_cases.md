@@ -136,10 +136,16 @@ prices, configuration, source observation times, and producer revisions. They te
 balance-only, position, mark, fill/fee correction, price, config, and window-rolloff
 changes while a reconstruction is running. An obsolete result cannot replace the
 newer snapshot's result, even if a producer accidentally reuses a version number.
-Fills/prices include fetch-completion times distinct from their event timestamps;
-configuration has its own capture time. Fills captured before the position anchor
-cannot certify a lifecycle boundary. Older fill/price captures remain usable for risk
+Fills include explicit request-start and completion times, distinct from their event
+timestamps. Unknown fill-fetch times stay unknown; they are not defaulted to the
+position timestamp. Prices have a fetch-completion time and configuration its own
+capture time. A fill request begun before the position observation cannot certify a
+lifecycle boundary merely because it completed afterward. Older fill/price captures remain usable for risk
 estimation with reasons, but are not marked revalidated for installing derived state.
+Quality checks use the selected coin/side's keys (`scope_keys`); unified checks the
+whole snapshot. A degraded unrelated pair must not prevent installing a coherent
+coin estimate. Newest conflicting fill variants after the position anchor also forbid
+lifecycle certification, even though identity normalization excludes their quantities.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

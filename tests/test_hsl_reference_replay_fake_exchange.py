@@ -43,7 +43,9 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
                  for e in events]
         p = capture_pair(symbol, Position(direction * state["size"], state["entry_price"],
                                           prices[client.current_index], pside=pside),
-                         client.now_ms, client.now_ms, fills, {})
+                         client.now_ms, client.now_ms, fills, {},
+                         fills_started_at=client.now_ms, fills_at=client.now_ms,
+                         prices_at=client.now_ms)
         return capture(client.now_ms, start, client.balance_total, client.now_ms, [p])
 
     assert client.advance_time()  # open

@@ -39,7 +39,8 @@ class Pair:
     position: Position
     position_at: int
     mark_at: int
-    fills_at: int
+    fills_started_at: int | None
+    fills_at: int | None
     prices_at: int
     fills: tuple
     prices: tuple
@@ -50,7 +51,7 @@ class Pair:
 
 
 def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
-                 fills_at=None, prices_at=None):
+                 fills_started_at=None, fills_at=None, prices_at=None):
     """Capture normalized inputs, with fetch-completion times separate from events.
 
     Fill.sequence is actual per-pair exchange/simulator ordering supplied by the
@@ -63,7 +64,7 @@ def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
                                 realized=_number(f.realized), fee=_number(f.fee)) for f in fills)
     return Pair(symbol, replace(position, size=size, basis=basis, mark=mark,
                                 multiplier=multiplier), position_at, mark_at,
-                position_at if fills_at is None else fills_at,
+                fills_started_at, fills_at,
                 mark_at if prices_at is None else prices_at,
                 copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())))
 
@@ -100,9 +101,13 @@ def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisio
     if any(not now - max_current_age <= t <= now for t in observed):
         raise ValueError("unusable current observation")
     config_at = now if config_at is None else config_at
-    if any(t > now for t in [config_at, *(p.fills_at for p in pairs),
+    if any(t is not None and t > now for t in [config_at, *(p.fills_at for p in pairs),
+                             *(p.fills_started_at for p in pairs),
                              *(p.prices_at for p in pairs)]):
         raise ValueError("future source capture")
+    if any(p.fills_started_at is not None and p.fills_at is not None
+           and p.fills_started_at > p.fills_at for p in pairs):
+        raise ValueError("reversed fill request interval")
     if any(not isinstance(r, int) or r < 0 for r in revisions):
         raise ValueError("invalid producer revision")
     for p in pairs:
@@ -111,11 +116,15 @@ def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisio
     return Snapshot(now, start, balance, balance_at, config_at, pairs, settings, tuple(revisions))
 
 
-def snapshot_quality(snapshot):
+def snapshot_quality(snapshot, keys=None):
+    pairs = snapshot.pairs if keys is None else tuple(p for p in snapshot.pairs if p.key in keys)
     reasons = set()
-    if any(p.fills_at < p.position_at for p in snapshot.pairs):
+    if any(p.fills_started_at is None or p.fills_at is None for p in pairs):
+        reasons.add("fill_capture_unknown")
+    if any(p.fills_started_at is not None and p.fills_started_at < p.position_at
+           for p in pairs):
         reasons.add("fills_before_position")
-    if any(p.prices_at < p.mark_at for p in snapshot.pairs):
+    if any(p.prices_at < p.mark_at for p in pairs):
         reasons.add("prices_before_mark")
     return reasons
 
@@ -173,6 +182,8 @@ def _steps(pair, start, now):
     for group in versions.values():
         newest = [f for f in group if f.revision == max(x.revision for x in group)]
         if any(f != newest[0] for f in newest):
+            if any(pair.position_at < f.timestamp <= now for f in newest):
+                reasons.add("post_position_fill")
             conflicts.extend(f.timestamp for f in newest if start <= f.timestamp <= pair.position_at)
     steps = []
     after = abs(dec(pair.position.size))
@@ -243,8 +254,11 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             if any(timestamp > p.position_at for p in pairs):
                 reasons.add("boundary_after_position_anchor")
                 continue
-            if any(p.fills_at < p.position_at for p in pairs):
-                reasons.add("fills_before_position")
+            fill_quality = snapshot_quality(snapshot, {p.key for p in pairs}) & {
+                "fills_before_position", "fill_capture_unknown"
+            }
+            if fill_quality:
+                reasons.update(fill_quality)
                 continue
             if (any(not s.clean_tail for s in group)
                     or any(t >= timestamp for ts in conflicts.values() for t in ts)
@@ -269,7 +283,7 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
                 reasons.add("estimated_flat")
             tape = tuple((p.key, tuple(consumed[p.key])) for p in pairs)
             boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0)),
-                                       not ambiguous))
+                                       not ambiguous and "post_position_fill" not in reasons))
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
 
@@ -291,7 +305,7 @@ def estimate_pair(snapshot, key):
     pair = next(p for p in snapshot.pairs if p.key == key)
     direction = 1 if pair.position.pside == "long" else -1
     all_fills, quality = ordered_fills(pair.fills, snapshot.start, snapshot.now, direction)
-    quality.update(snapshot_quality(snapshot))
+    quality.update(snapshot_quality(snapshot, {key}))
     fills = [f for f in all_fills if f.timestamp <= pair.position_at]
     if len(fills) != len(all_fills):
         quality.add("post_position_fill")
@@ -325,7 +339,7 @@ class Evaluation:
     reasons: frozenset
 
 
-def evaluate_bounded(observe, compute, max_attempts=2):
+def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     """Deterministic race model, not a production installation/execution gate.
 
     A stable result with nonregressing revisions and compatible source captures
@@ -335,6 +349,7 @@ def evaluate_bounded(observe, compute, max_attempts=2):
     preserving its usable history. It is not permission to install stale state or
     size orders without independently fresh execution inputs. The reference bounds
     evaluation count, not CPU cost of the eventual Rust incremental implementation.
+    scope_keys selects coin/pside source quality; None means the unified scope.
     """
     if not isinstance(max_attempts, int) or max_attempts < 1:
         raise ValueError("max_attempts must be a positive integer")
@@ -348,7 +363,7 @@ def evaluate_bounded(observe, compute, max_attempts=2):
         regression |= current.now < last_time or any(a < b for a, b in zip(current.revisions, high_water))
         high_water = tuple(max(a, b) for a, b in zip(current.revisions, high_water))
         last_time = max(last_time, current.now)
-        quality = snapshot_quality(current)
+        quality = snapshot_quality(current, scope_keys)
         if regression:
             quality.add("revision_regression")
         if current == snapshot:

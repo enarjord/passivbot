@@ -16,7 +16,8 @@ def pair(symbol="A", size=0, basis=0, mark=80, fills=(), prices=None,
     return capture_pair(symbol, Position(size, basis, mark, pside=pside),
                         now if position_at is None else position_at,
                         now if mark_at is None else mark_at, fills,
-                        {} if prices is None else prices)
+                        {} if prices is None else prices,
+                        fills_started_at=now, fills_at=now, prices_at=now)
 
 
 def frame(*pairs, now=4 * M, start=0, balance=100, balance_at=None, **kwargs):
@@ -394,8 +395,11 @@ def test_capture_time_change_invalidates_same_revision_result(source):
         original = replace(original, config_at=3 * M)
         updated = replace(original, config_at=4 * M)
     else:
-        original = replace(original, pairs=(replace(original.pairs[0], **{source + "_at": 3 * M}),))
-        updated = replace(original, pairs=(replace(original.pairs[0], **{source + "_at": 4 * M}),))
+        timing = {source + "_at": 3 * M}
+        if source == "fills":
+            timing["fills_started_at"] = 3 * M
+        original = replace(original, pairs=(replace(original.pairs[0], **timing),))
+        updated = replace(original, pairs=(replace(original.pairs[0], **{k: 4 * M for k in timing}),))
     observe, _ = observe_sequence(original, updated, updated)
     result = evaluate_bounded(observe, compute)
     assert result.revalidated and result.evaluations == 2
@@ -403,12 +407,12 @@ def test_capture_time_change_invalidates_same_revision_result(source):
 
 
 def test_older_fill_capture_cannot_certify_flat_against_newer_position():
-    p = replace(closed_tape(), fills_at=2 * M)
+    p = replace(closed_tape(), fills_started_at=2 * M, fills_at=2 * M)
     trace = scope_boundaries(frame(p), "unified")
     assert not trace.boundaries and "fills_before_position" in trace.reasons
     # A missing earlier execution need not have a post-position event timestamp.
     original = open_frame()
-    stale = replace(original, pairs=(replace(original.pairs[0], fills_at=2 * M),))
+    stale = replace(original, pairs=(replace(original.pairs[0], fills_started_at=2 * M, fills_at=2 * M),))
     observe, _ = observe_sequence(stale, stale)
     result = evaluate_bounded(observe, compute)
     assert not result.revalidated and result.reasons == {"fills_before_position"}
@@ -424,3 +428,51 @@ def test_sparse_grid_uses_ffill_bfill_instead_of_shortening_ema_time():
     assert "filled_price_grid" in a.reasons
     assert "filled_price_grid" not in b.reasons
     assert len(a.history.rows) == 5
+
+
+@pytest.mark.parametrize("timing,reason", [
+    ({}, "fill_capture_unknown"),
+    ({"fills_at": 4 * M}, "fill_capture_unknown"),
+    ({"fills_started_at": 3 * M, "fills_at": 4 * M}, "fills_before_position"),
+])
+def test_fill_fetch_must_be_known_to_start_after_position_observation(timing, reason):
+    original = closed_tape()
+    p = capture_pair("A", original.position, 4 * M, 4 * M, original.fills, {}, **timing)
+    trace = scope_boundaries(frame(p), "unified")
+    assert not trace.boundaries and reason in trace.reasons
+    fresh = replace(p, fills_started_at=4 * M, fills_at=4 * M)
+    assert scope_boundaries(frame(fresh), "unified").boundaries[0].lifecycle_eligible
+
+
+@pytest.mark.parametrize("other_side", ["long", "short"])
+def test_degraded_other_pair_does_not_poison_coin_snapshot_quality(other_side):
+    original = open_frame()
+    bad = replace(pair("B", pside=other_side), fills_started_at=3 * M, prices_at=3 * M)
+    snapshot = replace(original, pairs=(*original.pairs, bad))
+    assert compute(snapshot).reasons == compute(original).reasons
+    observe, _ = observe_sequence(snapshot, snapshot)
+    coin = evaluate_bounded(observe, compute, scope_keys={("A", "long")})
+    assert coin.revalidated and not coin.reasons
+    observe, _ = observe_sequence(snapshot, snapshot)
+    unified = evaluate_bounded(observe, compute)
+    assert not unified.revalidated
+    assert unified.reasons == {"fills_before_position", "prices_before_mark"}
+    long_keys = {p.key for p in snapshot.pairs if p.position.pside == "long"}
+    observe, _ = observe_sequence(snapshot, snapshot)
+    long = evaluate_bounded(observe, compute, scope_keys=long_keys)
+    assert long.revalidated == (other_side == "short")
+
+
+def test_conflicting_post_position_variants_cannot_certify_an_older_flat():
+    initial = closed_tape(close_at=2 * M)
+    # Use a single close to avoid an unrelated same-time ordering ambiguity.
+    tape = [initial.fills[0], Fill("close", 2 * M, -2, 80, -40)]
+    late = Fill("late", 3 * M, 1, 90, 0, revision=1)
+    p = pair(fills=(*tape, late, replace(late, delta=2)), position_at=2 * M)
+    trace = scope_boundaries(frame(p), "unified")
+    assert "post_position_fill" in trace.reasons
+    assert trace.boundaries and not any(b.lifecycle_eligible for b in trace.boundaries)
+    corrected = replace(p, position_at=4 * M, position=Position(1, 90, 80),
+                        fills=(*p.fills, replace(late, revision=2)))
+    recovered = scope_boundaries(frame(corrected), "unified")
+    assert [b.timestamp for b in recovered.boundaries if b.lifecycle_eligible] == [2 * M]
