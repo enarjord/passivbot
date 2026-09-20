@@ -38,6 +38,50 @@ fn bounded(value: f64, approximate: &mut bool) -> f64 {
     }
 }
 
+pub(crate) fn validate_settings(span: f64, threshold: f64) -> Result<(), String> {
+    if !span.is_finite()
+        || span < 1.0
+        || !threshold.is_finite()
+        || !(0.0..=1.0).contains(&threshold)
+    {
+        return Err("invalid revised HSL signal inputs".into());
+    }
+    Ok(())
+}
+
+/// One current observation with an independently reconstructed peak-to-current
+/// currency loss. Keep the loss through division: budget + loss may round back
+/// to budget even though their ratio is representable and relevant to a threshold.
+pub(crate) fn singleton_from_loss(
+    budget: f64,
+    loss: f64,
+    span: f64,
+    threshold: f64,
+) -> Result<Signal, String> {
+    validate_settings(span, threshold)?;
+    if !budget.is_finite() || budget <= 0.0 || !loss.is_finite() {
+        return Err("invalid revised HSL signal inputs".into());
+    }
+    let loss = loss.max(0.0);
+    let total = budget + loss;
+    let mut approximate = false;
+    let peak = bounded(total, &mut approximate);
+    let raw = if total.is_finite() {
+        loss / total
+    } else {
+        // Positive operands: half scaling cannot overflow or cancel a loss.
+        (loss * 0.5) / (budget * 0.5 + loss * 0.5)
+    };
+    Ok(Signal {
+        equity: vec![budget],
+        peaks: vec![peak],
+        raw: vec![raw],
+        ema: vec![raw],
+        panic: vec![raw > threshold],
+        numeric_range_approximation: approximate,
+    })
+}
+
 /// Batch reference semantics: final equity equals current budget, EMA starts at
 /// the first raw drawdown, and updates in the same minute replace that minute's
 /// contribution. Peak tracking still sees each ordered boundary sample.
@@ -62,15 +106,12 @@ pub fn signal_with_anchor(
     entry_reference: Option<f64>,
     anchor: &Observation,
 ) -> Result<Signal, String> {
+    validate_settings(span, threshold)?;
     if !anchor.realized.is_finite()
         || !anchor.unrealized.is_finite()
         || rows.is_empty()
         || !budget.is_finite()
         || budget <= 0.0
-        || !span.is_finite()
-        || span < 1.0
-        || !threshold.is_finite()
-        || !(0.0..=1.0).contains(&threshold)
         || entry_reference.is_some_and(|p| !p.is_finite())
         || rows
             .iter()
@@ -182,6 +223,40 @@ pub fn signal_py(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hsl_revised_sum::currency_sum;
+
+    #[test]
+    fn currency_sum_retains_residuals_across_extreme_permutations() {
+        for (terms, expected) in [
+            ([-1e16, -1.0, 1e16], -1.0),
+            ([1e308, -1e-300, -1e308], -1e-300),
+            ([1e308, 1e308, -1e308], 1e308),
+            ([-1e308, -1e308, 1e308], -1e308),
+        ] {
+            for order in [
+                [0, 1, 2],
+                [0, 2, 1],
+                [1, 0, 2],
+                [1, 2, 0],
+                [2, 0, 1],
+                [2, 1, 0],
+            ] {
+                let mut reasons = std::collections::BTreeSet::new();
+                assert_eq!(
+                    currency_sum(&order.map(|i| terms[i]), &mut reasons),
+                    expected
+                );
+            }
+        }
+        for sign in [-1.0, 1.0] {
+            let mut reasons = std::collections::BTreeSet::new();
+            assert_eq!(
+                currency_sum(&[sign * 1e308; 3], &mut reasons),
+                sign * f64::MAX
+            );
+            assert!(reasons.contains("numeric_range_approximation"));
+        }
+    }
 
     fn rows(values: &[f64]) -> Vec<Observation> {
         values

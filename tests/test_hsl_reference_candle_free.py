@@ -11,6 +11,44 @@ from hsl_reference_candle_free import estimate_candle_free
 from hsl_reference_replay import Settings, capture, capture_pair, estimate_pair
 
 
+REFERENCE_ESTIMATE = estimate_candle_free
+
+
+@pytest.fixture(params=["reference", "rust"], autouse=True)
+def estimator_backend(request, monkeypatch):
+    if request.param == "reference":
+        return
+    import json
+    import sys
+    import passivbot_rust as pbr
+    from test_hsl_revised_snapshot import payload
+    assert hasattr(pbr, "hsl_revised_candle_free"), "rebuild the source-matched extension"
+
+    def compare(snapshot, mode, **kwargs):
+        encoded = json.dumps(dict(snapshot=payload(snapshot, mode, **kwargs),
+                                  slots=snapshot.settings.slots, span=float(snapshot.settings.ema_span),
+                                  threshold=float(snapshot.settings.threshold)), allow_nan=False)
+        try:
+            expected = REFERENCE_ESTIMATE(snapshot, mode, **kwargs)
+        except ValueError:
+            with pytest.raises(ValueError):
+                pbr.hsl_revised_candle_free(encoded)
+            raise
+        actual = json.loads(pbr.hsl_revised_candle_free(encoded))
+        for field in ("realized", "realized_peak", "upnl"):
+            assert actual[field] == pytest.approx(float(getattr(expected, field)))
+        assert expected.reasons <= set(actual["reasons"])
+        if expected.signal is None:
+            assert actual["signal"] is None
+        else:
+            for field in ("equity", "peaks", "raw", "ema"):
+                assert actual["signal"][field] == pytest.approx([float(x) for x in getattr(expected.signal, field)])
+            assert actual["signal"]["panic"] == list(expected.signal.panic)
+            assert len(actual["signal"]["ema"]) == 1
+        return expected
+    monkeypatch.setattr(sys.modules[__name__], "estimate_candle_free", compare)
+
+
 def pair(symbol="TEST", side="long", fills=(), size=1, basis=100, mark=80, **kwargs):
     return capture_pair(symbol, Position(size if side == "long" else -size, basis, mark,
                                          pside=side, **kwargs),

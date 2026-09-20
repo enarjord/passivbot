@@ -113,6 +113,51 @@ edges, corrections, missing flat evidence, very long EMA spans and deterministic
 multi-episode traces. No live loop, backtester, optimizer or execution adapter invokes this
 component yet. Scope composition and lifecycle evidence construction remain required.
 
+## Scoped snapshot preparation and candle-free estimates
+
+`hsl_revised_snapshot.rs` prepares selected coin, side or unified pairs from immutable
+normalized observations. Current balance/position/mark captures must be usable. Historical
+fill defects remain approximation diagnostics: quarantine causally impossible revisions
+before canonical selection, isolate fills after the observed position, and retain usable
+cashflows and current-anchored numerical history independently of lifecycle eligibility.
+
+Supported flatten rows retain their canonical consumed-prefix lengths, including sequenced
+same-time flat/reopen events. Cross-pair timestamp cohorts have no invented global ordering.
+Unknown quantities, contradictory transitions and unsupported capture order can withhold a
+lifecycle boundary without withholding the numeric estimate. An old damaged prefix does
+not permanently taint a later clean suffix. Scope quality uses only selected pair inputs.
+Compensated quantity summation avoids drift across repeated partial fills. Cancellation
+residuals within eight scaled floating-point epsilons are disclosed as
+quantity roundoff rather than contradictory exposure; larger mismatches remain estimated.
+The scale includes the reconstructed suffix and resets at zero. Rounding alone does not
+certify a lifecycle flat: an optional positive exchange `quantity_step` must be available,
+and the entire error allowance must be below half that quantum. Otherwise the rounded
+history remains usable but the boundary is uncertain (`quantity_precision_unavailable`).
+Actual current exposure is never snapped away. Experimental HSL JSON fields use exact float parsing
+so a supplied finite position/cashflow does not change before reconstruction sees it;
+legacy JSON parsing is unchanged. Missing precision is not a signal veto.
+These rows are evidence for the later episode composer, not controller permissions by themselves.
+
+`hsl_revised_candle_free.rs` composes the approved all-candles-absent estimate across selected
+pairs. It preserves known/estimated net realized cashflows and their in-window peak, nets
+currency gains and losses before division, and combines them with current UPNL. The peak
+reference contributes no fabricated past EMA sample. Coin zero-slot scopes remain inactive;
+side/unified budgets use the raw balance. Inactivity never bypasses current-input validation.
+Pair and scoped currency sums use a fixed-size exact binary accumulator, retaining all
+exponent levels and rounding only when a public float value is read. Gross cashflows and
+fees remain separate terms across scope composition, so an already rounded per-pair sum
+cannot erase a small fee when it later cancels another pair. Unrepresentable readouts
+saturate with diagnostics; the underlying accumulator retains the full sum for later
+cancellation. Peak/current cashflow differences and their combination with current UPNL
+are formed before rounding as well. Allocation and per-add work are bounded independently
+of tape length. The helper refuses to discard usable historical
+prices to obtain a singleton result. It is not the mixed-price scope dispatcher.
+
+Parity covers the independent boundary fixtures, corrections and source timing, generated
+historical damage, real offline fake-exchange partial/final fills and current cashflows,
+scope isolation, contract units, extreme currency sums and no-candle realized-loss cases.
+Full fake-live orchestration and live/backtest/optimizer callers are still outstanding.
+
 Still required before offline completion:
 
 - Snapshot-aware composition of the Rust history/price primitives, candle-free/mixed-price
@@ -141,6 +186,12 @@ backtest/optimizer preparation; they must be replaced with real mode-specific ad
 as integration lands. Configuration support does not establish full runtime readiness.
 The scope composer, execution/backtest/optimizer integration, full fake-live testing,
 and final live validation/rollback checklist remain outstanding.
+
+Candle-free evaluation retains its peak-to-current currency loss through division
+by budget plus loss. It does not round the loss away by subtracting two absolute
+equities. The one actual observation seeds raw drawdown and EMA equally, including
+when the loss is smaller than a budget ULP. Signal settings are validated even for
+an inactive zero-slot coin scope; inactivity only removes the budget division.
 
 ## Factual history transport
 

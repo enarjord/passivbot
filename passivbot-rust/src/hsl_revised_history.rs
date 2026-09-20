@@ -1,6 +1,7 @@
 //! Best-effort pair history, independent of legacy episode readiness.
 //! This component does not certify lifecycle boundaries or authorize orders.
 
+use crate::hsl_revised_sum::CurrencySum;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -26,10 +27,17 @@ impl PositionSide {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Position {
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub size: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub basis: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub mark: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub multiplier: f64,
+    /// Optional exchange quantity quantum for judging historical roundoff.
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
+    pub quantity_step: Option<f64>,
     pub inverse: bool,
     pub pside: PositionSide,
 }
@@ -39,6 +47,9 @@ impl Position {
         if [self.size, self.basis, self.mark, self.multiplier]
             .iter()
             .any(|v| !v.is_finite())
+            || self
+                .quantity_step
+                .is_some_and(|q| !q.is_finite() || q <= 0.0)
             || self.mark <= 0.0
             || self.multiplier <= 0.0
             || (self.size != 0.0 && self.basis <= 0.0)
@@ -76,9 +87,13 @@ impl Position {
 pub struct Fill {
     pub identity: String,
     pub timestamp: i64,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub delta: Option<f64>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub price: Option<f64>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub realized: Option<f64>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub fee: Option<f64>,
     pub sequence: Option<i64>,
     pub revision: u64,
@@ -164,6 +179,7 @@ pub struct Input {
     pub fills: Vec<Fill>,
     /// Already normalized historical close samples. Gap filling/resampling is a
     /// separate component; this primitive also accepts an empty history grid.
+    #[serde(deserialize_with = "crate::hsl_revised_json::prices")]
     pub prices: BTreeMap<i64, f64>,
 }
 
@@ -182,6 +198,8 @@ pub struct Event {
     pub before: f64,
     pub after: f64,
     pub basis: f64,
+    pub gross_realized: f64,
+    pub fee: f64,
     pub realized_cumsum: f64,
     pub quantity_estimated: bool,
 }
@@ -217,19 +235,50 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     let fills = canonical_fills(&input.fills, input.start, input.end, p.pside, &mut reasons);
     let mut steps = Vec::with_capacity(fills.len());
     let mut after = p.size.abs();
+    let mut quantity_compensation = 0.0;
+    let mut quantity_scale = after;
     for f in fills.iter().rev() {
         let delta = usable(f.delta).unwrap_or(0.0) * direction;
-        let raw_before = finite(after - delta, &mut reasons);
+        // Compensate repeated decimal lot additions so many partial fills do not
+        // accumulate a fictitious opening discrepancy.
+        let increment = -delta - quantity_compensation;
+        let sum = after + increment;
+        quantity_compensation = if sum.is_finite() {
+            (sum - after) - increment
+        } else {
+            0.0
+        };
+        let mut raw_before = finite(sum, &mut reasons);
+        // Cancellation of decimal lot quantities can leave a few binary ulps.
+        // This is arithmetic roundoff, not evidence of a contradictory episode.
+        // Residual error can originate in a larger later position in this suffix.
+        quantity_scale = quantity_scale.max(after.abs()).max(delta.abs());
+        let tolerance = 8.0 * f64::EPSILON * quantity_scale;
+        let mut rounded_without_precision = false;
+        if raw_before != 0.0 && raw_before.abs() <= tolerance {
+            rounded_without_precision = p.quantity_step.is_none_or(|step| tolerance >= step / 2.0);
+            if rounded_without_precision {
+                reasons.insert("quantity_precision_unavailable".into());
+            }
+            reasons.insert("quantity_roundoff".into());
+            raw_before = 0.0;
+        }
         if raw_before < 0.0 {
             reasons.insert("clamped_quantity".into());
         }
         let before = raw_before.max(0.0);
+        if before == 0.0 {
+            quantity_compensation = 0.0;
+            quantity_scale = 0.0;
+        }
         steps.push((
             f,
             before,
             after,
             delta,
-            raw_before < 0.0 || usable(f.delta).is_none_or(|v| v == 0.0),
+            rounded_without_precision
+                || raw_before < 0.0
+                || usable(f.delta).is_none_or(|v| v == 0.0),
         ));
         after = before;
     }
@@ -245,7 +294,7 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     }
     let opening_quantity = after;
     let opening_basis = basis;
-    let mut cumulative = 0.0;
+    let mut cumulative = CurrencySum::new();
     let mut events = Vec::with_capacity(steps.len());
     for (f, before, after, delta, quantity_estimated) in steps {
         let price = positive(f.price).unwrap_or_else(|| {
@@ -290,7 +339,9 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
             reasons.insert("unknown_fee".into());
             0.0
         });
-        cumulative = finite(cumulative + finite(gross + fee, &mut reasons), &mut reasons);
+        let gross = finite(gross, &mut reasons);
+        cumulative.add(gross);
+        cumulative.add(fee);
         if after == 0.0 {
             basis = 0.0;
         }
@@ -299,7 +350,9 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
             before,
             after,
             basis,
-            realized_cumsum: cumulative,
+            gross_realized: gross,
+            fee,
+            realized_cumsum: cumulative.value(&mut reasons),
             quantity_estimated,
         });
     }
@@ -371,6 +424,7 @@ mod tests {
                 basis: 100.0,
                 mark: 80.0,
                 multiplier: 1.0,
+                quantity_step: None,
                 inverse: false,
                 pside: PositionSide::Long,
             },
