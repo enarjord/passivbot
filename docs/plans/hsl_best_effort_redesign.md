@@ -23,6 +23,28 @@ Current coin HSL uses a realized-PnL peak minus current realized PnL and UPNL, d
 by a slot budget. Changing it to reconstructed equity-peak drawdown is intentional.
 The new calculation is not expected to reproduce old stop timing on all clean tapes.
 
+## Intended policy changes: review against these targets
+
+This is a redesign, not a promise to preserve every current HSL contract. The following
+choices are intentional; implementation must update the affected canonical contracts
+and test the consequences, rather than restore the old behavior as a review fix:
+
+| Topic | Intended policy |
+|---|---|
+| Historical uncertainty | Estimate and evaluate; do not require exact opening/coverage proof. |
+| Missing historical prices | Resample complete coarse candles, then forward-fill gaps and backfill a missing leading segment within the configured lookback. No separate carry-age veto or automatic switch to another signal. |
+| Historical horizon | One configured lookback for all HSL historical influence, including cooldown, no-restart, and unfinished panic state. No extended lifecycle horizon. |
+| `restart_after_red_policy=never` | No restart while the imposing stop remains in the lookback; the restriction expires with that event. It is not an indefinite latch. |
+| Expired panic commitment | Clear the old commitment and reevaluate current exposure; a new threshold breach may immediately require another panic. |
+| Restart authority | Current exchange state, in-window evidence, configuration, and time; no authoritative local journal or flag. Local caches are performance aids. |
+| Unified mode | One portfolio signal, one controller, one explicit portfolio configuration, one portfolio-wide panic decision. |
+
+These choices accept approximation error and finite memory. Review should challenge
+internal contradictions, missing consequences, or implementation feasibility, but not
+assume indefinite lifecycle retention, exact historical prices, or two unified side
+controllers are requirements of the new design. Current-input freshness, valid order
+sizing, and atomic Rust output validation remain required.
+
 ## Authority and minimum inputs
 
 Rust owns historical estimation, drawdown, EMA, and risk decisions. Python owns exchange
@@ -39,6 +61,10 @@ current inputs, the evaluator always returns a boolean, even if history is empty
 { should_panic, raw_drawdown, drawdown_ema, quality, reasons, evidence_age }
 ```
 
+This is one result per decision scope: coin+side in coin mode, side in pside mode,
+and the whole portfolio in unified mode. Rust evaluates all applicable scopes; Python
+does not derive extra side decisions from a unified result.
+
 Quality explains estimates and repairs; it is not a downstream veto on `should_panic`.
 No exact historical coverage or opening-fill certificate is required just to evaluate
 protection. Malformed configuration, programming errors, and malformed Rust order output
@@ -46,10 +72,32 @@ are not converted into healthy-looking `false` decisions.
 
 If essential current inputs cannot be obtained, suspend the actions requiring them,
 report the missing account/market state, and continue recovery. This is outside the
-estimator's minimum-input domain. It must not cancel a committed exit: independently
-executable protection still runs with its own required inputs, including the existing
+estimator's minimum-input domain. A missing input does not itself cancel an unexpired
+panic commitment: independently executable protection still runs with its own required
+inputs, including the existing
 balance-independent full-position close API. HSL historical degradation alone must not
 block otherwise-valid martingale adds; ordinary strategy requirements remain separate.
+
+### Snapshot discipline without a historical-readiness gate
+
+Capture immutable observations with source timestamps and monotonic revisions for
+balance, positions/bases, marks, fills, and configuration. Distinguish exchange event
+time from fetch time; retain the fill-stream watermark used for the estimate. Use
+the existing freshness requirements for essential current inputs, and report their
+observed skew instead of claiming the requests were an atomic exchange snapshot.
+
+Before installing reconstructed state, compare captured revisions with current ones.
+Do not overwrite newer state with an obsolete reconstruction. On a detected change,
+take a new snapshot and perform bounded recomputation; continued changes must lead
+to a cheap current-anchored estimate, not an unbounded replay/retry loop. Reconcile or
+isolate conflicting historical rows, including fills known to postdate the position
+anchor, and refresh in the background. Never count the same transition twice.
+
+The reference suite must specify interleavings and expected approximations. It must
+not require an exact post-position fill-tail certificate or perfectly simultaneous
+requests for the best-effort decision. Refresh current inputs when they cease to be
+usable; otherwise historical mismatch degrades the estimate, not protection itself.
+Protective execution independently refreshes/reconciles remaining exposure and orders.
 
 ## Reconstruction model
 
@@ -84,7 +132,8 @@ Same-timestamp rows are handled deterministically per symbol/side before scope
 aggregation. Prefer actual sequence information when available. Otherwise use a
 documented tie convention or cohort aggregation and report ambiguity; independent
 symbols must not require a provable global fill order. Artificial or ambiguous flats
-must not erase an actual stop commitment or release a cooldown.
+must not erase an in-window stop commitment or release a cooldown; explicit event
+expiry is a separate, intended reset rule.
 
 Approximation is local to this risk estimator. It does not certify fills for unrelated
 consumers such as trailing-entry state, realized-loss gates, or financial reporting.
@@ -110,18 +159,39 @@ Current-budget rebasing is deliberate: the final reconstructed equity is `B_s`.
 Transfers are not fill PnL. Changes in budget, deposits, and collateral valuation still
 need explicit comparison cases; this plan does not claim invariance to changing budget.
 
-| Mode | Signal contributors | Budget | Execution authority retained |
+| Mode | Signal contributors | Budget | Controller and panic scope |
 |---|---|---|---|
-| `coin` | One symbol and position side | Current raw balance / applicable side slot count | That pair's enabled controller |
-| `pside` | All contributors on one position side | Current raw balance | That side's enabled controller |
-| `unified` | Both sides' account strategy PnL | Current raw balance | Existing enabled side controllers, with their own thresholds/EMA parameters |
+| `coin` | One symbol and position side | Current raw balance / applicable side slot count | One controller per pair; close that pair |
+| `pside` | All contributors on one position side | Current raw balance | One controller per side; close that side |
+| `unified` | Both sides' account strategy PnL | Current raw balance | One portfolio controller; close the portfolio |
 
-Unified signal scope does not authorize closing a disabled opposite side. Per-coin
-overrides remain coin-only. TWEL is an activity/sizing input, not a multiplier of the
-coin HSL budget. Do not invent a divisor for an inactive zero-slot side; retain the
-existing rule that an already-committed exit can still own residual exposure.
+Unified panic deliberately covers both sides, including exposure on a side whose
+ordinary entries are disabled. Per-side HSL enablement does not exempt a position
+from an enabled portfolio controller. Per-coin overrides remain coin-only. TWEL is
+an activity/sizing input, not a multiplier of the coin HSL budget. Do not invent a
+divisor for an inactive zero-slot coin side; an unexpired existing panic commitment
+can still own residual exposure. Portfolio activity must not depend on either side's
+slot count when there is portfolio exposure to protect.
 The existing dynamic-tradability backtest slot policy must be represented explicitly
 in scope inputs, rather than silently changed in a reconstruction rewrite.
+
+### Configuration ownership and migration
+
+Keep the signal-mode selector explicit. Controller parameters use the same field
+schema in distinct blocks:
+
+| Mode | Active configuration |
+|---|---|
+| `unified` | `config.bot.hsl`: portfolio enablement, threshold, EMA span, tiers, panic execution, cooldown, and restart policy |
+| `pside` | `config.bot.long.hsl` and `config.bot.short.hsl` |
+| `coin` | Side HSL blocks with resolved per-coin overrides |
+
+Unified mode takes parameters from neither side at runtime. For legacy unified
+configs without an explicit portfolio block, identical fully resolved long/short
+HSL settings may migrate automatically. Differing settings require an explicit
+portfolio choice before startup; do not average them, pick one silently, or let a
+default-generated portfolio block conceal an unresolved legacy conflict. An explicit
+portfolio block is authoritative. This is config migration, not a runtime history gate.
 
 For a fixed snapshot, the batch calculation is the reference. Repeated evaluation
 with identical observations/time must give the same result. Any incremental
@@ -131,18 +201,45 @@ unbounded streaming EMA.
 
 ### Price sampling and EMA
 
-Use the finest available observed price resolution; forward-fill position state on the
-minute grid. Coarse candles and gap filling are explicitly approximate. A candle close
-is only available at its close time: spreading an hourly close backward through its
-hour would introduce future information. Carry forward known prices across gaps with
-visible age; the current endpoint uses the current mark. Do not persist reconstructed
-price rows as exchange candles or fabricate a price path before the first observation.
+Use real 1m prices where available, otherwise the finest complete coarse source in the
+1m/5m/15m/1h ladder. Reuse the existing deterministic zigzag expansion: rising or
+unchanged candles follow open-low-high-close; falling candles follow open-high-low-close,
+with linear segments and turning points near one-third/two-thirds of the interval.
+Keep synthetic minute OHLC extrema consistent with the parent candle.
+
+If no resolution covers an interval, forward-fill from the latest known candle; if
+there is no earlier candle inside the window, backfill from the first available one.
+Apply this to missing intervals, not only the old prefix supported by the current
+resolution ladder. Do not look outside the configured window for a seed. If the whole
+window has no usable candles, use the minimal-history construction below. The endpoint
+always uses the usable current mark and authoritative current position/basis.
+
+Historical price carry has no separate age cutoff inside the lookback and does not
+disable evaluation. The finite window bounds it. A single retained candle may therefore
+support a largely filled historical path; smoothing and peak errors are accepted
+approximation risks, to be exposed in fault comparisons rather than prevented by a new
+readiness gate. Old approximation can affect today's peak; it is not claimed harmless.
+Record source resolution, filled segments, and age without certifying them as observations.
+Never persist estimated rows as factual exchange candles.
+
+Retrospective reconstruction may use a completed candle's full OHLC or a later observed
+price to estimate earlier minutes. The source must have been available by evaluation
+time `T`; a backtest decision at an earlier `T` cannot read a candle completed later.
+This distinguishes approximate historical reconstruction from causal simulation. Do
+not silently feed a pre-expanded future-complete candle to earlier backtest decisions.
 
 Seed `M[0] = D[0]` from the first usable raw drawdown sample in the lookback. No extra
 warmup history is required. EMA spans stay fractional. Repeated polling within one
 minute must not advance the EMA clock multiple times; an updated current sample
-replaces that minute's observation. Exact fill boundaries remain separately available
-for lifecycle handling.
+replaces that minute's observation.
+
+Known fill boundaries also enter the risk sample stream. Evaluate the final sample
+at a scope flatten before its episode reset or later reopening, even within the same
+minute. Recompute that minute's EMA contribution from the prior-minute baseline, not
+from the previous within-minute update. Record a RED crossing before a later fill can
+hide it. This preserves the existing CPU backtest's fill-boundary behavior without
+requiring tick prices. Uncertain fill ordering still uses the documented approximation;
+absence of exact ordering must not block the current risk estimate.
 
 The numeric formula above describes the desired signal, not complete lifecycle logic.
 Nonpositive historical peaks, extreme finite inputs, or inconsistent historical rows
@@ -187,23 +284,57 @@ Reuse the protective executor and scheduler: existing closes precede historical 
 one stuck symbol cannot starve other scopes, and sizing uses fresh remaining exposure.
 Do not create another Python risk controller around the new Rust evaluator.
 
-Signal estimation and lifecycle authority are separate. Estimated flats can help
-reconstruct prices; they cannot prove a cooldown elapsed or erase terminal no-restart
-state. Conversely, unresolved lifecycle history must not prevent evaluating a held
-position's risk or servicing an existing exit. Initial-entry and reopening permissions
-must distinguish an empty new account from a known halted scope.
+### One historical horizon
 
-Preserve durable committed exits across partial fills, signal recovery, restart, and
-the migration. The current availability/exit journal is an explicit persistence
-exception; do not drop it merely because the old raw-loss evaluator is removed.
-New reconstructed equity/EMA remains derived from observations, not an authoritative
-cached result. Diagnostics identify approximation, stale evidence, and missing
-continuity without mislabeling a failed fetch as restored protection.
+For finite lookback `W` at evaluation time `T`, historical HSL inputs and their influence
+are limited to `[T-W, T]`. No extra lifecycle horizon, out-of-window fill seed, permanent
+halt archive, or authoritative local flag is introduced. Current positions, bases,
+balances, and exchange orders remain current facts even if exposure originated earlier.
+An explicitly supported unlimited lookback has no finite expiry; it is not a hidden
+extension of a finite setting.
 
-Existing normal RED pause/reactivation and emergency commitment semantics differ.
-Unifying the estimator must not accidentally choose a new exit-latching policy.
-The integration review must map new panic decisions to a single explicit lifecycle
-rule while honoring commitments already created by the old version.
+For a cooldown anchored by a flattening fill at `t_flat`, with duration `C`, it clears
+at the earlier of its normal deadline and its anchor leaving the window. With the
+inclusive interval above, the predicates are `T >= t_flat + C` or `t_flat < T-W`.
+Clearing means removal, not restarting cooldown from now. `never` and threshold-based
+no-restart restrictions likewise expire when their imposing event leaves the window.
+Document `never` as "no restart while the imposing stop remains in lookback," not an
+indefinite promise. Test exact endpoints consistently across live, replay, and backtest.
+
+An unfinished panic commitment also expires when its imposing event leaves the window,
+even if a position remains partly open. Clear that historical commitment and immediately
+evaluate current exposure. Current losses may create a fresh panic decision. Merely
+polling, retrying, or replaying an old event must not renew its timestamp. Expiry does
+not erase resting exchange orders: reconcile them with fresh state and current Rust
+intent, including cancellation or replacement where required, before new actions.
+
+Flat scopes with in-window cooldowns/no-restart restrictions and scopes with unfinished
+in-window exits remain relevant even without exposure. An old halt with no in-window
+influence is intentionally forgotten, like other out-of-window PnL history. Both an
+uninterrupted bot and a freshly restarted bot must apply this rule; it cannot depend
+on whether a cache happened to retain older rows.
+
+### Restart and execution continuity
+
+Retire the existing emergency journal as authority in each migrated path. Reconstruct
+from current exchange state and available in-window observations, config, and time.
+Local caches may accelerate the same calculation, but must not preserve restrictions
+which equivalent exchange-derived evidence would discard. Missing facts may change a
+best-effort reconstruction; a decision that left no recoverable evidence is not promised
+exact survival on a fresh installation. This deliberately replaces current durable-exit
+semantics, rather than accidentally losing them during refactoring.
+
+Within the window, estimated flats alone do not release a known halt. Lifecycle ambiguity
+must not prevent estimating risk or servicing a currently justified close. Pending
+execution uses current positions/orders and never stale cached order quantities. A
+scope that is flat and has no in-window stop influence is not held indefinitely merely
+because an ancient stop cannot be disproved.
+
+Reference cases must specify in-window panic latching versus signal recovery and the
+observable event used as each expiry anchor. No hidden RAM-only or journal-only decision
+authority may be added to make replay appear exact. Actual fill boundaries and cooldown
+events are distinct from synthetic position seeds. Warnings must disclose uncertainty
+without restoring expired restrictions or introducing a historical-readiness veto.
 
 ## Reference and fault-test plan
 
@@ -221,11 +352,13 @@ follow the reviewed reference. No private account data is needed.
 | Same-time mixed actions | Per-pair tie behavior; cross-pair permutation invariance; no invented cooldown reset |
 | Over-close, impossible basis, malformed historical fields | Bounded repairs and warnings with valid current inputs |
 | Missing/inconsistent PnL or fees | Explicit accounting assumptions; no fabricated profits or double-counted fees |
-| Sparse/coarse/stale/absent candles | Observable price approximation, no lookahead, correct minute clock |
+| Sparse/coarse/stale/absent candles | Zigzag, unbounded-within-window ffill/bfill, causal source availability at evaluation time, and current-mark anchoring |
 | Empty history, held/flat/profitable/losing | Explicit synthetic reference, singleton EMA, no endless new-account replay gate |
-| Temporally mismatched observations | Current anchor and deterministic approximation without demanding perfect simultaneity |
+| Temporally mismatched observations | Immutable timestamps/revisions/watermarks, revalidation, bounded recomputation, and continued current-anchored approximation |
 | Invalid minimum inputs, zero slots, extreme numbers | Operational recovery/activity policy; no fake divisor or healthy-looking false |
-| Restart, cache/journal loss, partial fills | Signal reproducibility with equal evidence; commitment continuity; recovery remains scheduled |
+| Restart, cache/journal loss, partial fills | Equal evidence gives equal decisions without local authority; expiry clears old commitments and reconciles remaining orders |
+| Cooldown/no-restart/panic anchors leave lookback | Explicit forgetting in continuous runs and restart replay; no hidden retention or refreshed old timestamp |
+| Unified asymmetric legacy settings | One portfolio controller; explicit config choice instead of silent selection, averaging, or two side decisions |
 | Manual trades, transfers, budget changes, contract units | Correct attribution, scope, conversion, and denominator behavior |
 
 Acceptance criteria:
@@ -239,16 +372,19 @@ Acceptance criteria:
   combinations of faults. Measure earlier/later/missed stops against clean evidence;
   investigate unexplained misses and material delays first. Do not impose one arbitrary
   timing tolerance across fundamentally different information losses.
-- Restored evidence converges to clean reconstructed signals, without undoing an
-  already-committed exit. Permanently missing facts are reported as limitations.
+- Restored evidence converges to clean reconstructed signals under the same window
+  and lifecycle policy. Restoration does not revive an expired commitment; in-window
+  continuity follows the reviewed latch rule. Permanently missing facts are reported.
 - Test sign symmetry, contract multipliers, scope aggregation, per-side parameters,
-  inactive sides, configured versus tradability-aware budgets, and one-position scope
+  inactive sides, portfolio-wide unified execution, configured versus tradability-aware
+  budgets, and one-position scope
   equivalence when budgets and parameters are identical.
 - Fake-live covers startup, failed refresh with retained evidence, corrections during
   history I/O, partial closes, signal recovery, scheduler fairness, and restart during
   exit. No remote bot or authenticated exchange access is implied.
-- Bound CPU, memory, diagnostics, and fetch work by configured lookback and active
-  scopes. Background repairs cannot delay protective waves. Optimization must preserve
+- Bound CPU, memory, diagnostics, and fetch work by configured lookback and relevant
+  scopes, including flat in-window halts. Background repairs cannot delay protective
+  waves. Optimization must preserve
   the reference calculation and should not introduce another correctness gate.
 
 EMA and quantity clamping do not guarantee small reconstruction errors. The suite
@@ -265,21 +401,27 @@ must expose decision errors rather than declaring every finite result good enoug
    offline comparisons to the existing path. Retain one execution authority. Rebuild
    and verify the Python extension for affected callers.
 4. **Coin integration/replacement.** Change live and backtest/optimizer behavior together;
-   preserve execution and lifecycle guarantees. Update canonical contracts, user docs,
-   schema migration, and changelog in the same PR. Review positive/negative results,
+   retain execution validation and implement the new bounded lifecycle semantics together.
+   Update canonical contracts, user docs, schema migration, and changelog in the same
+   PR. Review positive/negative results,
    not only crash-freedom. Remove the superseded coin path when integration is ready.
 5. **Pside/unified alignment.** Reuse the same evaluator with reviewed scope/budget
-   adapters and parity tests. Until each migration lands, that mode keeps its existing
+   adapters, the explicit portfolio config migration, and parity tests. Until each
+   migration lands, that mode keeps its existing
    behavior, rather than exposing an old/new user option.
 6. **Final cleanup.** Remove remaining superseded replay/readiness and emergency-signal
    paths, temporary comparison hooks, and obsolete grace configuration once no mode
    consumes them. Preserve supported old-config loading with explicit deprecation or
-   migration diagnostics; retire obsolete journal fields without losing exit authority.
+   migration diagnostics; remove obsolete journal authority rather than keeping hidden
+   out-of-window commitments. During staged migration, the legacy journal remains
+   authoritative only for modes which have not migrated.
 
 Stages may be combined when independently reviewable, but no commit may activate two
 controllers for the same scope. Any live shadow trial requires separate deployment
 authorization. Release notes must identify the new coin equity peak, denominator,
-minimal-history behavior, and other reviewed signal changes. Thresholds are not
+minimal-history behavior, finite lifecycle expiry (including `never` and partial exits),
+journal retirement, unified portfolio scope/config, and other reviewed signal changes.
+Thresholds are not
 silently translated or described as numerically equivalent. Rollback is a reviewed
 code revert with journal/config compatibility checked, not a permanent legacy switch.
 
@@ -291,20 +433,22 @@ need explicit review and then reference cases, not a collection of ad hoc live f
 1. **Window versus episode reset:** current HSL resets after confirmed scope flattening.
    Proposed baseline: preserve those resets and apply the shared formula within the
    lookback intersected with the active reset interval; absent proof, evaluate an
-   approximate interval without releasing known halts. Review whether a full rolling
+   approximate interval without releasing unexpired known halts. Review whether a full rolling
    window spanning confirmed episodes is instead intended. Do not change this silently.
 2. **Estimator limits:** settle missing-basis reconciliation, tied fill ordering,
-   earliest usable candle, nonpositive historical peak handling, and the transition
+   nonpositive historical peak handling, and the transition
    between one-point and longer history with explicit expected examples. Keep the
    valid-current-input guarantee; estimates must not require proof of exact history.
-3. **Lifecycle migration:** specify whether all new panic decisions commit until flat
-   or retain normal RED pause/reactivation, how cooldown/no-restart history is recovered
-   when old fills are absent, and what cache/journal loss means. Preserve existing exit
-   commitments and decouple uncertain reopening from protective evaluation.
+3. **In-window lifecycle:** specify panic latching versus normal RED pause/reactivation
+   and reproducible imposing-event anchors using available in-window evidence. Finite
+   expiry of cooldown, `never`, and unfinished panic state, plus retirement of local
+   journal authority, are settled policy choices, not open retention questions.
 4. **Numeric/config compatibility:** the proposed strict `>` comparison differs from
    current tolerance-inclusive `>=`; review the boundary deliberately. Confirm budgets,
    dynamic slot policy, supported contract types, partial-minute behavior, and which
-   existing tier/no-restart consumers must adopt the new signal together.
+   existing tier/no-restart consumers must adopt the new signal together. Unified's
+   single portfolio controller and dedicated `config.bot.hsl` block are intended;
+   review migration correctness, not preservation of two side controllers.
 5. **Feasibility:** verify that batch semantics, changing lookback/budget, and approximate
    history can be implemented at live cadence without hidden decision-changing state.
    Review the cost of a simple implementation before adding incremental machinery.
