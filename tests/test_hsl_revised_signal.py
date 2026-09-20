@@ -106,10 +106,13 @@ def test_batch_poll_repeat_and_window_reset_have_no_hidden_state(require_real_pa
     assert pbr.hsl_revised_signal(rows, 1000, 1, .1) == first
 
 
-def test_cancelling_oversized_deltas_do_not_erase_representable_loss(require_real_passivbot_rust_module):
+@pytest.mark.parametrize("variant", ["both_deltas_overflow", "one_delta_overflows"])
+def test_cancelling_oversized_deltas_do_not_erase_representable_loss(require_real_passivbot_rust_module, variant):
     big = float.fromhex("0x1.fffffffffffffp+1023")
+    rows, expected = ([(0, big, -big / 2), (60_000, -big, big)], big / 2) if variant == "both_deltas_overflow" else (
+        [(0, big, -big), (60_000, -big, 0)], big)
     result = json.loads(require_real_passivbot_rust_module.hsl_revised_signal(
-        [(0, big, -big / 2), (60_000, -big, big)], 1, 1, .1))
+        rows, 1, 1, .1))
     assert result["numeric_range_approximation"]
-    assert result["equity"][0] == pytest.approx(big / 2)
+    assert result["equity"][0] == pytest.approx(expected)
     assert result["panic"][-1]
