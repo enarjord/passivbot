@@ -215,13 +215,63 @@ computing EMA, preserving one observation per minute without a historical-readin
 It rejects an absent grid as outside that experiment's domain rather than silently
 returning zero drawdown. The separate minimal-history oracle remains unchanged; this
 test-helper precondition must not be copied into a production HSL readiness gate.
-Composition of candle-free history with known realized losses still needs explicit
-reference cases before a complete revised evaluator is integrated.
+The candle-free scope experiment below specifies the separate no-price domain. A
+mixed-history dispatcher still needs to compose both domains without discarding
+retained candle-backed observations.
 
 Offline fake-live exchange scenarios cover both sides, partial closes, delayed final
 fills, actual cashflows, and reconstruction from freshly copied exchange evidence.
 No revised logic is connected to order execution and no local decision artifact is
 used as authority.
+
+## Candle-free scope cashflow reference
+
+`tests/hsl_reference_candle_free.py` composes current contract-aware UPNL with usable
+net realized cashflows when no selected pair has historical candles. It is an offline
+reference domain, not another live fallback/controller. The existing reconstruction
+now exposes cumulative cashflows after each canonical fill independently of its price
+sample grid. Known gross PnL and signed fees survive malformed quantity/price fields;
+missing components retain the existing estimator rules and diagnostic reasons.
+
+The minimal construction retains one actual EMA observation. Its entry reference is
+enriched by known realized cashflows:
+
+```text
+R = final cumulative scoped net realized PnL
+R_peak = max(0, cumulative scoped net realized PnL)
+U = current scoped UPNL
+peak_reference = max(B, B + R_peak - R - U)
+current_equity = B
+```
+
+Thus known realized losses are not erased or counted twice. With budget 1,000, realized
+loss/fees 22 and current unrealized loss 20, the drawdown is 42/1,042. Realized profits
+followed by losses retain their peak, and current profits offset losses in currency.
+Without fills, this is exactly the already specified minimal-history calculation.
+There is no reconstructed historical UPNL path in this domain; unknown past unrealized
+peaks remain unknown. Cashflow reference points do not invent past equity observations
+or EMA delay. Even a very long span has a singleton EMA here. This can stop earlier than
+a candle-backed reconstruction and is an explicit approximation requiring comparison.
+
+Aggregate currency cashflows before computing their peak. Actual within-pair sequence
+can reveal an intermediate peak. A tied multi-pair cohort is indivisible; independent
+pair sequence numbers cannot establish an account-wide order. Ambiguity is diagnostic,
+not a veto on the estimate. No cashflow peak certifies a flatten/cooldown boundary.
+The later controller supplies the relevant episode interval; this helper does not reset
+episodes or emit execution permissions. Zero-slot coin scopes are explicitly inactive;
+portfolio scopes do not borrow that inactivity rule.
+
+The helper rejects a supplied historical candle instead of silently discarding it for
+a singleton. That is a test-domain guard, not a production readiness condition. A real
+dispatcher must use retained candles whenever available, including after a failed fetch,
+and must combine candle-backed and candle-free pairs without replacing the entire
+portfolio's usable history. That mixed case remains an integration gate.
+
+Tests cover all modes, both sides, linear/inverse contracts, partial realized losses,
+fees, profits, simultaneous hedge offsets, tied sequences, invalid historical fields,
+deduplication/corrections, exact window boundaries, post-position/future isolation,
+zero slots, cache-free repeatability and restored candle smoothing. Offline fake exchange
+cases supply actual partial-close cashflows for both long and short positions.
 
 ## Remaining coverage before production integration
 
@@ -234,9 +284,9 @@ the comprehensive integration gates in the design are already satisfied. In part
   algebra and boundary extraction do not yet implement that whole controller.
 - Compose multi-pair episode resets and exact flatten samples with the shared timeline;
   preserve the stated per-scope semantics and same-minute ordering.
-- Specify how usable realized-loss evidence is retained when all candles are absent;
-  the minimal-history and reconstructed-history examples are separate here. Do not
-  treat missing candles as permission to discard known losses during integration.
+- Compose candle-free and candle-backed pairs on the same scope timeline without
+  discarding known losses or retained EMA evidence. Compare against the candle-free
+  cashflow reference and complete-data paths, including discontinuities on repair.
 - Carry the immutable snapshot/interleaving cases into actual orchestration, with config
   migration, optimizer surfaces, and source-correction/candle provenance diagnostics
   tested at their real integration boundaries.

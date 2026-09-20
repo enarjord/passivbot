@@ -1,8 +1,8 @@
 # Best-effort HSL reconstruction and shared drawdown design
 
-Status: proposal for architectural review. This PR changes only this plan. It adds no
-implementation, tests, configuration, or runtime behavior. Existing canonical contracts
-remain authoritative until implementation PRs explicitly update them.
+Status: reviewed design, with independent offline reference cases under development.
+Existing canonical contracts remain authoritative until implementation PRs explicitly
+update them for the selected engine. Legacy HSL remains the production default.
 
 ## Problem and intended result
 
@@ -16,8 +16,9 @@ must not discard usable history and defeat a long EMA span.
 The target is one Rust-owned reconstruction and drawdown model for `coin`, `pside`, and
 `unified`. Modes differ in scope and budget, not in whether they can recognize a past
 unrealized equity peak. Coin mode is the first integration step. Temporary comparisons
-against existing HSL support validation; a permanent legacy/new configuration switch
-is not planned.
+against existing HSL support validation. During implementation and live validation,
+one explicit startup-only configuration selector chooses `legacy` or `revised`, with
+`legacy` as default. This is a temporary rollout boundary, not permanent dual maintenance.
 
 Current coin HSL uses a realized-PnL peak minus current realized PnL and UPNL, divided
 by a slot budget. Changing it to reconstructed equity-peak drawdown is intentional.
@@ -604,24 +605,34 @@ must expose decision errors rather than declaring every finite result good enoug
 3. **Shared Rust evaluator.** Validate against the independent oracle and wire bounded
    offline comparisons to the existing path. Retain one execution authority. Rebuild
    and verify the Python extension for affected callers.
-4. **Coin integration/replacement.** Change live and backtest/optimizer behavior together;
+4. **Selectable coin integration.** Implement revised live and backtest/optimizer behavior together;
    retain execution validation and implement the new bounded lifecycle semantics together.
    Include the two restart policies, zero-cooldown semantics, two intervention choices,
    and removed tier/threshold parameter and metric migration when a mode switches.
    Update canonical contracts, user docs, schema migration, and changelog in the same
    PR. Review positive/negative results,
-   not only crash-freedom. Remove the superseded coin path when integration is ready.
+   not only crash-freedom. Preserve the legacy path and default during offline development
+   and the later separately authorized live validation stage.
 5. **Pside/unified alignment.** Reuse the same evaluator with reviewed scope/budget
    adapters, explicit portfolio config/optimizer migration, and parity tests. Until each
-   migration lands, that mode keeps its existing
-   behavior, rather than exposing an old/new user option.
-6. **Final cleanup.** Remove remaining superseded replay/readiness and emergency-signal
+   integration lands, selecting the revised engine for that incomplete mode must fail
+   explicitly rather than silently using the legacy engine. One startup-only selector
+   chooses the engine for all scopes, live, backtest and optimization; no hot switching.
+6. **Offline completion.** Require full revised controller and signal behavior for all
+   modes, rebuilt Rust/reference parity, backtest/optimizer integration, unit and full
+   offline fake-live tests, config migration, diagnostics and documentation. Legacy
+   regression coverage must remain green. All implementation PRs need current-head
+   independent review and green CI. Prepare a live-validation and rollback checklist;
+   offline success does not establish real exchange execution correctness.
+7. **Live validation and final cleanup.** Only after separately authorized live tests
+   succeed, change the default and remove the selector/legacy path. Remove superseded replay/readiness and emergency-signal
    paths, temporary comparison hooks, obsolete grace configuration, removed tier
    consumers/metrics, and the terminal-threshold tracker once no mode
    consumes them. Preserve supported old-config loading with explicit deprecation or
    migration diagnostics; remove obsolete journal authority rather than keeping hidden
    out-of-window commitments. During staged migration, the legacy journal remains
-   authoritative only for modes which have not migrated.
+   authoritative only when the legacy engine is selected. The revised engine never
+   reads it as authority, and engine-specific state must not leak across selection.
 
 Stages may be combined when independently reviewable, but no commit may activate two
 controllers for the same scope. Any live shadow trial requires separate deployment
@@ -632,8 +643,11 @@ explicit unified portfolio scope/config and optimizer migration, close-only valu
 removal of the terminal threshold, zero-cooldown meaning, reduced intervention choices,
 removed optimizer objectives, and other reviewed signal changes.
 Thresholds are not
-silently translated or described as numerically equivalent. Rollback is a reviewed
-code revert with journal/config compatibility checked, not a permanent legacy switch.
+silently translated or described as numerically equivalent. During validation, rollback
+uses an explicit legacy-compatible config and a process restart; revised-only portfolio
+config, policies, metrics and cached optimizer fitness must not be silently reused as
+legacy equivalents. After the legacy path is removed, rollback requires a reviewed code
+revert with journal/config compatibility checked.
 
 ## Architectural review questions and integration gates
 

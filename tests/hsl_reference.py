@@ -156,6 +156,9 @@ class History:
     sizes: tuple
     bases: tuple
     reasons: frozenset
+    # Canonical fill and cumulative net realized cashflow after that exact fill.
+    # Kept independently of prices so candle absence cannot erase known losses.
+    cashflows: tuple = ()
 
 
 def ordered_fills(fills, start, end, direction):
@@ -228,6 +231,7 @@ def reconstruct(position, fills, prices, start, end):
         basis = Decimal(0)
     states = [(start - 1, quantity, basis, Decimal(0))]
     cumulative = Decimal(0)
+    cashflows = []
     for f, before, after, delta in steps:
         price = dec(f.price) if _positive(f.price) else (
             basis if basis > 0 else current_basis if current_basis > 0 else mark)
@@ -246,6 +250,7 @@ def reconstruct(position, fills, prices, start, end):
         if not _usable(f.fee):
             reasons.add("unknown_fee")
         cumulative += gross + fee
+        cashflows.append((f, cumulative))
         if not after:
             basis = Decimal(0)
         states.append((f.timestamp, after, basis, cumulative))
@@ -261,7 +266,7 @@ def reconstruct(position, fills, prices, start, end):
         rows.append(Observation(t, realized, pnl(position, direction * q, b, price)))
         sizes.append(direction * q)
         bases.append(b)
-    return History(tuple(rows), tuple(sizes), tuple(bases), frozenset(reasons))
+    return History(tuple(rows), tuple(sizes), tuple(bases), frozenset(reasons), tuple(cashflows))
 
 
 def _usable(value):
