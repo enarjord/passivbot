@@ -8,6 +8,8 @@ mod entries;
 mod equity_hard_stop_loss;
 mod gpu;
 mod hsl_revised;
+mod hsl_revised_history;
+mod hsl_revised_prices;
 mod orchestrator;
 mod python;
 mod risk;
@@ -102,6 +104,8 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EquityHardStopRuntimePy>()?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised::signal_py, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_revised_history::hsl_revised_history, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_revised_prices::hsl_revised_prices, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_long_no_hsl_source_py, m)?)?;
     m.add_function(wrap_pyfunction!(mps_ema_anchor_short_no_hsl_source_py, m)?)?;
