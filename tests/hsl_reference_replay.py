@@ -212,16 +212,26 @@ def source_times(snapshot):
     return result
 
 
-def fill_identity_times(snapshot):
-    result = {}
+def merge_fill_evidence(retained, snapshot):
+    """Retain observed records for diagnostics; causal revisions supersede older ones.
+
+    Raw identities/contents never become financial input through this record. They
+    preserve evidence of omission/conflict, including quarantined variants. Only a
+    causally possible higher revision can replace the earlier retained record.
+    """
+    current, causal_revisions = {}, {}
     for p in snapshot.pairs:
-        newest = latest_variants(causal_fills(p, snapshot.now))
-        for f in newest:
-            # Conflicting contents still establish that the identity was seen.
-            # Keep possible corrected times; apply only the *current* window when
-            # testing disappearance, including after a configured expansion.
-            result.setdefault((p.key, f.identity), (f.revision, set()))[1].add(f.timestamp)
-    return result
+        for f in p.fills:
+            current.setdefault((p.key, f.identity), set()).add(f)
+        for f in causal_fills(p, snapshot.now):
+            key = p.key, f.identity
+            causal_revisions[key] = max(f.revision, causal_revisions.get(key, f.revision))
+    for key, records in current.items():
+        combined = retained.get(key, set()) | records
+        if key in causal_revisions:
+            combined = {f for f in combined if f.revision >= causal_revisions[key]}
+        retained[key] = combined
+    return current
 
 
 def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
@@ -464,7 +474,9 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     snapshot = project(observe(), scope_keys)
     high_water = source_revisions(snapshot)
     time_water = source_times(snapshot)
-    fill_water = fill_identity_times(snapshot)
+    fill_water = {}
+    merge_fill_evidence(fill_water, snapshot)
+    observed_keys = {p.key for p in snapshot.pairs}
     last_time = snapshot.now
     regression = False
     capture_regression = False
@@ -472,6 +484,10 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     for attempt in range(1, max_attempts + 1):
         value = compute(snapshot)
         current = project(observe(), scope_keys)
+        current_keys = {p.key for p in current.pairs}
+        if not observed_keys.issubset(current_keys):
+            raise ValueError("missing current scope positions; absent is not flat")
+        observed_keys.update(current_keys)
         revisions = source_revisions(current)
         regression = current.now < last_time or any(r < high_water.get(k, r) for k, r in revisions.items())
         high_water.update({k: max(r, high_water.get(k, r)) for k, r in revisions.items()})
@@ -482,17 +498,9 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
                 capture_regression = True
             if t is not None:
                 time_water[k] = t if prior is None else max(prior, t)
-        current_fills = fill_identity_times(current)
-        missing_identity = any(k not in current_fills and any(current.start <= t <= current.now for t in ts)
-                               for k, (_, ts) in fill_water.items())
-        for k, (revision, times) in current_fills.items():
-            previous = fill_water.get(k)
-            if previous is None or revision > previous[0]:
-                fill_water[k] = (revision, times)
-            elif revision == previous[0]:
-                # Same-version observations cannot prove that an earlier possible
-                # timestamp was superseded. Only a higher revision can do that.
-                fill_water[k] = (revision, previous[1] | times)
+        current_fills = merge_fill_evidence(fill_water, current)
+        missing_identity = any(k not in current_fills and any(current.start <= f.timestamp <= current.now for f in rows)
+                               for k, rows in fill_water.items())
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)
         if regression:
@@ -501,9 +509,15 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
             quality.add("source_capture_regression")
         if missing_identity:
             quality.add("missing_fill_identity")
-        if any(len(ts) > 1 and any(current.start <= t <= current.now for t in ts)
-               for _, ts in fill_water.values()):
-            quality.add("conflicting_fill_timestamps")
+        for records in fill_water.values():
+            revisions = {}
+            for f in records:
+                revisions.setdefault(f.revision, set()).add(f)
+            for variants in revisions.values():
+                if len(variants) > 1 and any(current.start <= f.timestamp <= current.now for f in variants):
+                    quality.add("conflicting_fill_contents")
+                    if len({f.timestamp for f in variants}) > 1:
+                        quality.add("conflicting_fill_timestamps")
         if current == snapshot:
             return Evaluation(snapshot, value, attempt, not quality, frozenset(quality))
         snapshot = current

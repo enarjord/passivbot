@@ -190,6 +190,11 @@ revisions cannot overwrite them; same-revision observations retain all possible 
 Only a higher causal revision can supersede that disappearance evidence.
 Conflicting timestamps at the same revision remain an in-window diagnostic until a
 higher revision repairs them or every possible timestamp expires from the window.
+The retained diagnostic record contains complete revision-tagged fill variants,
+including quarantined identities and same-time content conflicts. Partial disappearance
+cannot silently resolve a quantity/price/PnL/fee conflict; higher causal repair or
+window expiry does. Unified evaluation also retains its observed position-key set
+through the bounded attempt, requiring explicit zero observations instead of omission.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

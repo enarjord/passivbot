@@ -805,3 +805,46 @@ def test_same_revision_timestamp_conflict_recovers_only_with_repair_or_expiry(re
     result = evaluate_bounded(observe, compute, max_attempts=3)
     assert result.revalidated == (recovery != "none")
     assert ("conflicting_fill_timestamps" in result.reasons) == (recovery == "none")
+
+
+def test_quarantined_new_identity_cannot_silently_disappear_inside_window():
+    original = open_frame(position_at=2 * M)
+    p = replace(original.pairs[0], fills_started_at=2 * M + 1, fills_at=2 * M + 1)
+    original = replace(original, pairs=(p,))
+    unknown = Fill("quarantined-new", 3 * M, 1, 80, 0, revision=1)
+    changed = replace(original, pairs=(replace(p, fills=(*p.fills, unknown)),))
+    observe, _ = observe_sequence(changed, original, original)
+    result = evaluate_bounded(observe, compute)
+    assert not result.revalidated and "missing_fill_identity" in result.reasons
+    assert result.value.history == compute(original).history
+
+
+@pytest.mark.parametrize("field,value", [("delta", 2), ("fee", -10), ("price", 101), ("realized", -5)])
+def test_same_revision_content_conflict_needs_higher_revision_or_expiry(field, value):
+    original = open_frame()
+    p = original.pairs[0]
+    a = p.fills[0]
+    b = replace(a, **{field: value})
+    conflict = replace(original, pairs=(replace(p, fills=(a, b)),))
+    observe, _ = observe_sequence(conflict, original, original)
+    result = evaluate_bounded(observe, compute)
+    assert not result.revalidated and "conflicting_fill_contents" in result.reasons
+    repaired = replace(original, pairs=(replace(p, fills=(replace(a, revision=1),)),))
+    observe, _ = observe_sequence(conflict, repaired, repaired)
+    assert evaluate_bounded(observe, compute).revalidated
+    expired = replace(original, start=2 * M)
+    observe, _ = observe_sequence(conflict, expired, expired)
+    assert evaluate_bounded(observe, compute).revalidated
+
+
+def test_unified_revalidation_requires_observed_position_members_even_without_fills():
+    original = open_frame()
+    p = replace(original.pairs[0], fills=())
+    original = replace(original, pairs=(p,))
+    missing = replace(original, pairs=())
+    observe, _ = observe_sequence(original, missing, missing)
+    with pytest.raises(ValueError, match="absent is not flat"):
+        evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs))
+    explicit_flat = replace(original, pairs=(after_position(replace(p, position=Position(0, 0, 80))),))
+    observe, _ = observe_sequence(original, explicit_flat, explicit_flat)
+    assert evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs)).revalidated
