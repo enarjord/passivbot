@@ -140,7 +140,10 @@ Fills include explicit request-start and completion times, distinct from their e
 timestamps. Unknown fill-fetch times stay unknown; they are not defaulted to the
 position timestamp. Prices have a fetch-completion time and configuration its own
 capture time. A fill request begun before the position observation cannot certify a
-lifecycle boundary merely because it completed afterward. Older fill/price captures remain usable for risk
+lifecycle boundary merely because it completed afterward. A tied request-start clock
+also needs explicit causal acquisition evidence bound to that exact position and its
+revision; otherwise the request must start strictly later. Fixture acquisition order
+is recorded explicitly, never inferred from equal clock values. Older fill/price captures remain usable for risk
 estimation with reasons, but are not marked revalidated for installing derived state.
 Calculation, comparison, and quality checks project the selected coin/side's keys
 (`scope_keys`); unified uses the whole snapshot. Balance and configuration remain shared
@@ -157,6 +160,10 @@ Risk estimation continues, but a tied snapshot cannot certify a lifecycle reset.
 Every explicitly requested scope key must have a current position observation,
 including an explicit zero position when flat. An absent pair is unavailable current
 state, not an implicit zero-exposure member of an aggregate.
+Direct coin boundary selection enforces the same explicit-current-position requirement.
+Revalidation also tracks high-water capture times for every selected source and shared
+balance/config; repeating an older capture cannot validate it even if producer revisions
+and evaluation time are unchanged.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

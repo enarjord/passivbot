@@ -46,6 +46,8 @@ class Pair:
     prices: tuple
     # position, mark, fills, prices producer revisions for this pair only.
     revisions: tuple
+    # Optional causal acquisition proof, bound to the exact observed position.
+    fills_position_anchor: tuple | None
 
     @property
     def key(self):
@@ -53,22 +55,33 @@ class Pair:
 
 
 def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
-                 fills_started_at=None, fills_at=None, prices_at=None, revisions=(0,) * 4):
+                 fills_started_at=None, fills_at=None, prices_at=None, revisions=(0,) * 4,
+                 fills_after_position=False):
     """Capture normalized inputs, with fetch-completion times separate from events.
 
     Fill.sequence is actual per-pair exchange/simulator ordering supplied by the
     fixture, not a numeric trade ID or local arrival index. Unknown order is None.
     This proposed-contract oracle does not parse/validate connector provenance;
     production normalization must establish it before supplying such a sequence.
+    fills_after_position is explicit causal acquisition evidence: this exact
+    position was observed before initiating the tail request. It is never inferred
+    from equal millisecond timestamps, and is invalidated by position changes.
     """
     size, basis, mark, multiplier = position.validate()
     copied_fills = tuple(replace(f, delta=_number(f.delta), price=_number(f.price),
                                 realized=_number(f.realized), fee=_number(f.fee)) for f in fills)
-    return Pair(symbol, replace(position, size=size, basis=basis, mark=mark,
+    captured = Pair(symbol, replace(position, size=size, basis=basis, mark=mark,
                                 multiplier=multiplier), position_at, mark_at,
                 fills_started_at, fills_at,
                 mark_at if prices_at is None else prices_at,
-                copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())), tuple(revisions))
+                copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())), tuple(revisions), None)
+    # Explicit fixture/acquisition evidence, never inferred from equal clocks.
+    return replace(captured, fills_position_anchor=position_anchor(captured)) if fills_after_position else captured
+
+
+def position_anchor(pair):
+    p = pair.position
+    return (pair.position_at, p.size, p.basis, p.multiplier, p.inverse, p.pside, pair.revisions[0])
 
 
 @dataclass(frozen=True)
@@ -125,7 +138,8 @@ def snapshot_quality(snapshot, keys=None):
     reasons = set()
     if any(p.fills_started_at is None or p.fills_at is None for p in pairs):
         reasons.add("fill_capture_unknown")
-    if any(p.fills_started_at is not None and p.fills_started_at < p.position_at
+    if any(p.fills_started_at is not None and (p.fills_started_at < p.position_at
+           or (p.fills_started_at == p.position_at and p.fills_position_anchor != position_anchor(p)))
            for p in pairs):
         reasons.add("fills_before_position")
     if any(p.prices_at < p.mark_at for p in pairs):
@@ -166,6 +180,14 @@ def source_revisions(snapshot):
     return result
 
 
+def source_times(snapshot):
+    result = {"balance": snapshot.balance_at, "config": snapshot.config_at}
+    for p in snapshot.pairs:
+        for name in ("position_at", "mark_at", "fills_started_at", "fills_at", "prices_at"):
+            result[(p.key, name)] = getattr(p, name)
+    return result
+
+
 def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
     if mode == "unified":
         if pside is not None or symbol is not None:
@@ -175,8 +197,11 @@ def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
         raise ValueError("invalid scope")
     if (mode == "coin") != (symbol is not None):
         raise ValueError("invalid symbol selector")
-    return tuple(p for p in snapshot.pairs if p.position.pside == pside
-                 and (symbol is None or p.symbol == symbol))
+    pairs = tuple(p for p in snapshot.pairs if p.position.pside == pside
+                  and (symbol is None or p.symbol == symbol))
+    if mode == "coin" and not pairs:
+        raise ValueError("missing current coin position; absent is not flat")
+    return pairs
 
 
 @dataclass(frozen=True)
@@ -398,18 +423,28 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     scope_keys = None if scope_keys is None else frozenset(scope_keys)
     snapshot = project(observe(), scope_keys)
     high_water = source_revisions(snapshot)
+    time_water = source_times(snapshot)
     last_time = snapshot.now
     regression = False
+    capture_regression = False
     for attempt in range(1, max_attempts + 1):
         value = compute(snapshot)
         current = project(observe(), scope_keys)
         revisions = source_revisions(current)
         regression |= current.now < last_time or any(r < high_water.get(k, r) for k, r in revisions.items())
         high_water.update({k: max(r, high_water.get(k, r)) for k, r in revisions.items()})
+        for k, t in source_times(current).items():
+            prior = time_water.get(k)
+            if prior is not None and (t is None or t < prior):
+                capture_regression = True
+            if t is not None:
+                time_water[k] = t if prior is None else max(prior, t)
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)
         if regression:
             quality.add("revision_regression")
+        if capture_regression:
+            quality.add("source_capture_regression")
         if current == snapshot:
             return Evaluation(snapshot, value, attempt, not quality, frozenset(quality))
         snapshot = current

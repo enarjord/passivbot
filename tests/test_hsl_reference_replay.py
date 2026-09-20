@@ -7,7 +7,7 @@ import pytest
 
 from hsl_reference import Fill, LifecycleEvidence, MINUTE as M, Observation, Position, dec, permission, signal
 from hsl_reference_replay import (
-    Settings, capture, capture_pair, estimate_pair, evaluate_bounded, scope_boundaries,
+    Settings, capture, capture_pair, estimate_pair, evaluate_bounded, position_anchor, scope_boundaries,
 )
 
 
@@ -17,7 +17,13 @@ def pair(symbol="A", size=0, basis=0, mark=80, fills=(), prices=None,
                         now if position_at is None else position_at,
                         now if mark_at is None else mark_at, fills,
                         {} if prices is None else prices,
-                        fills_started_at=now, fills_at=now, prices_at=now)
+                        fills_started_at=now, fills_at=now, prices_at=now,
+                        fills_after_position=True)
+
+
+def after_position(p):
+    """Fixture explicitly observes this position before starting its tail fetch."""
+    return replace(p, fills_position_anchor=position_anchor(p))
 
 
 def frame(*pairs, now=4 * M, start=0, balance=100, balance_at=None, **kwargs):
@@ -46,6 +52,7 @@ def test_flatten_signal_drives_real_cooldown_anchor_before_reopening():
     p = closed_tape(fee=-1)
     p = replace(p, position=Position(1, 80, 80),
                 fills=(*p.fills, Fill("reopen", 3 * M + 1, 1, 80, 0, -1)))
+    p = after_position(p)
     boundary, = scope_boundaries(frame(p), "coin", pside="long", symbol="A").boundaries
     # This historical final-risk row comes from the actual fill prefix, not an
     # injected flat timestamp or the later same-minute reopened position.
@@ -194,7 +201,7 @@ def test_cross_pair_boundary_cannot_postdate_an_older_position_anchor():
     trace = scope_boundaries(frame(a, b), "unified")
     assert not trace.boundaries
     assert "boundary_after_position_anchor" in trace.reasons
-    fresh = replace(a, position_at=4 * M, fills_at=4 * M)
+    fresh = after_position(replace(a, position_at=4 * M, fills_at=4 * M))
     assert len(scope_boundaries(frame(fresh, b), "unified").boundaries) == 1
 
 
@@ -206,6 +213,7 @@ def test_close_after_position_anchor_is_disclosed_until_positions_catch_up():
     assert "post_position_fill" in trace.reasons
     current = replace(p, position_at=4 * M, fills_at=4 * M,
                       position=replace(p.position, size=dec(0), basis=dec(0)))
+    current = after_position(current)
     assert [b.timestamp for b in scope_boundaries(frame(current), "unified").boundaries] == [3 * M]
 
 
@@ -263,7 +271,7 @@ def test_changed_surface_cannot_install_the_old_result(changed):
     if changed == "balance":
         updated = replace(original, balance=dec(200))
     elif changed == "position":
-        updated = replace(original, pairs=(replace(p, position=replace(p.position, size=dec(2))),))
+        updated = replace(original, pairs=(after_position(replace(p, position=replace(p.position, size=dec(2)))),))
     elif changed == "mark":
         updated = replace(original, pairs=(replace(p, position=replace(p.position, mark=dec(100))),))
     elif changed == "fill":
@@ -343,7 +351,7 @@ def test_post_position_fill_is_isolated_until_position_refresh_then_counted_once
     assert old.history.sizes[-1] == 1 and old.history.rows[-1].pnl == 0
     fresh_pair = replace(ahead.pairs[0], position_at=4 * M,
                          position=replace(p.position, size=dec(2), basis=dec(90)))
-    refreshed = replace(ahead, pairs=(fresh_pair,))
+    refreshed = replace(ahead, pairs=(after_position(fresh_pair),))
     new = compute(refreshed)
     assert "post_position_fill" not in new.reasons
     assert new.history.sizes[-1] == 2 and new.history.rows[-1].pnl == -1
@@ -434,13 +442,14 @@ def test_sparse_grid_uses_ffill_bfill_instead_of_shortening_ema_time():
     ({}, "fill_capture_unknown"),
     ({"fills_at": 4 * M}, "fill_capture_unknown"),
     ({"fills_started_at": 3 * M, "fills_at": 4 * M}, "fills_before_position"),
+    ({"fills_started_at": 4 * M, "fills_at": 4 * M}, "fills_before_position"),
 ])
 def test_fill_fetch_must_be_known_to_start_after_position_observation(timing, reason):
     original = closed_tape()
     p = capture_pair("A", original.position, 4 * M, 4 * M, original.fills, {}, **timing)
     trace = scope_boundaries(frame(p), "unified")
     assert not trace.boundaries and reason in trace.reasons
-    fresh = replace(p, fills_started_at=4 * M, fills_at=4 * M)
+    fresh = after_position(replace(p, fills_started_at=4 * M, fills_at=4 * M))
     assert scope_boundaries(frame(fresh), "unified").boundaries[0].lifecycle_eligible
 
 
@@ -474,6 +483,7 @@ def test_conflicting_post_position_variants_cannot_certify_an_older_flat():
     assert trace.boundaries and not any(b.lifecycle_eligible for b in trace.boundaries)
     corrected = replace(p, position_at=4 * M, position=Position(1, 90, 80),
                         fills=(*p.fills, replace(late, revision=2)))
+    corrected = after_position(corrected)
     recovered = scope_boundaries(frame(corrected), "unified")
     assert [b.timestamp for b in recovered.boundaries if b.lifecycle_eligible] == [2 * M]
 
@@ -496,7 +506,7 @@ def test_scoped_pair_revision_updates_and_regressions_are_not_ignored(source):
     a = open_frame()
     revisions = [0] * 4
     revisions[source] = 1
-    changed = replace(a, pairs=(replace(a.pairs[0], revisions=tuple(revisions)),))
+    changed = replace(a, pairs=(after_position(replace(a.pairs[0], revisions=tuple(revisions))),))
     observe, _ = observe_sequence(a, changed, changed)
     result = evaluate_bounded(observe, compute, scope_keys={("A", "long")})
     assert result.revalidated and result.evaluations == 2
@@ -530,6 +540,7 @@ def test_known_post_position_fill_stays_unvalidated_until_position_refresh(confl
     fresh = replace(ahead, pairs=(replace(p, position_at=4 * M,
                     position=Position(2, 90, 80),
                     fills=(*fills, replace(add, revision=2))),))
+    fresh = replace(fresh, pairs=(after_position(fresh.pairs[0]),))
     observe, _ = observe_sequence(fresh, fresh)
     recovered = evaluate_bounded(observe, compute, scope_keys={p.key})
     assert recovered.revalidated and "post_position_fill" not in recovered.reasons
@@ -547,6 +558,7 @@ def test_same_timestamp_tail_execution_is_uncertain_until_later_position_observa
     # A later observed zero position resolves the ordering without a local latch.
     fresh = replace(tied, pairs=(replace(tied.pairs[0], position_at=4 * M,
                                         position=Position(0, 0, 80)),))
+    fresh = replace(fresh, pairs=(after_position(fresh.pairs[0]),))
     observe, _ = observe_sequence(fresh, fresh)
     assert evaluate_bounded(observe, compute, scope_keys={p.key}).revalidated
     assert scope_boundaries(fresh, "unified").boundaries[0].lifecycle_eligible
@@ -560,7 +572,42 @@ def test_missing_requested_pair_is_not_a_silent_flat_scope_member():
     observe, _ = observe_sequence(full, a, a)
     with pytest.raises(ValueError, match="absent is not flat"):
         evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs), scope_keys=keys)
-    observed_flat = replace(full, pairs=(*a.pairs, replace(b, position=Position(0, 0, 80))))
+    observed_flat = replace(full, pairs=(*a.pairs, after_position(replace(b, position=Position(0, 0, 80)))))
     observe, _ = observe_sequence(observed_flat, observed_flat)
     result = evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs), scope_keys=keys)
     assert result.revalidated and result.value == 1
+
+
+def test_boundary_selector_requires_explicit_current_coin_observation():
+    with pytest.raises(ValueError, match="missing current coin position"):
+        scope_boundaries(frame(pair("A")), "coin", symbol="B", pside="long")
+    explicit = scope_boundaries(frame(pair("B")), "coin", symbol="B", pside="long")
+    assert not explicit.boundaries and not explicit.reasons
+
+
+def test_equal_clock_causal_fill_proof_is_bound_to_the_observed_position():
+    original = open_frame()
+    p = original.pairs[0]
+    assert p.fills_started_at == p.position_at
+    observe, _ = observe_sequence(original, original)
+    assert evaluate_bounded(observe, compute).revalidated
+    changed = replace(original, pairs=(replace(p, position=replace(p.position, size=dec(2))),))
+    observe, _ = observe_sequence(changed, changed)
+    assert not evaluate_bounded(observe, compute).revalidated
+
+
+@pytest.mark.parametrize("source", ["balance_at", "config_at", "position_at", "mark_at",
+                                  "fills_started_at", "fills_at", "prices_at"])
+def test_source_capture_regression_cannot_validate_repeated_older_observation(source):
+    a = open_frame()
+    p = replace(a.pairs[0], position_at=3 * M, mark_at=3 * M,
+                fills_started_at=3 * M + 1000)
+    a = replace(a, pairs=(p,))
+    if source in ("balance_at", "config_at"):
+        stale = replace(a, **{source: getattr(a, source) - 1})
+    else:
+        stale = replace(a, pairs=(replace(p, **{source: getattr(p, source) - 1}),))
+    observe, _ = observe_sequence(a, stale, stale)
+    result = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert not result.revalidated and "source_capture_regression" in result.reasons
+    assert result.value.signal.panic[-1]
