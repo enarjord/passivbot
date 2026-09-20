@@ -256,3 +256,19 @@ def test_engine_cannot_be_changed_by_optimizer_override():
     cfg["optimize"]["fixed_runtime_overrides"]["live.hsl_engine"] = "revised"
     with pytest.raises(ValueError, match="startup selector"):
         prepared(cfg)
+
+
+@pytest.mark.asyncio
+async def test_real_live_entrypoint_guard_precedes_credentials_and_exchange_setup(monkeypatch):
+    import passivbot
+    cfg = source()
+    cfg["live"]["user"] = "offline_test"
+    monkeypatch.setattr(passivbot.sys, "argv", ["passivbot"])
+    monkeypatch.setattr(passivbot, "configure_logging", lambda **kwargs: None)
+    monkeypatch.setattr(passivbot, "load_input_config", lambda *args: (cfg, "", deepcopy(cfg)))
+    def forbidden(*args, **kwargs):
+        pytest.fail("live setup ran before the revised-engine guard")
+    for name in ("load_user_info", "load_markets", "setup_bot", "configure_custom_endpoint_loader", "resolve_live_log_file_settings"):
+        monkeypatch.setattr(passivbot, name, forbidden)
+    with pytest.raises(ValueError, match="runtime integration is not available"):
+        await passivbot._run_live({})

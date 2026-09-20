@@ -22281,6 +22281,8 @@ async def _run_live(startup_context: dict):
         target="live",
         raw_snapshot=raw_snapshot,
     )
+    from config.hsl_revised import require_runtime_support
+    require_runtime_support(config)
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1
