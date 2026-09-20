@@ -12,6 +12,7 @@ Run the focused suite with:
 
 ```sh
 pytest tests/test_hsl_best_effort_reference.py tests/test_hsl_reference_fake_exchange.py
+pytest tests/test_hsl_reference_replay.py tests/test_hsl_reference_replay_fake_exchange.py
 ```
 
 The fake exchange tests use the deterministic, offline `FakeCCXTClient` from the
@@ -91,21 +92,79 @@ RED followed by recovery, partial panic exposure, re-panic flatten anchors, and 
 expiry. `LifecycleEvidence` is an input fixture of exchange-reconstructible event times,
 not a persisted latch. It does not solve uncertain event classification by itself.
 
+## Scope-boundary and snapshot experiments
+
+`tests/hsl_reference_replay.py` extends the corpus without replacing production HSL.
+It derives scope-flat candidates from in-window fill transitions anchored to observed
+positions. Tests compute the boundary's final-risk sample from its consumed fill prefix
+and feed the resulting stop/flat times to the lifecycle algebra; timestamps are no
+longer merely hand-supplied in those cases. Financial inputs within a scope use the
+same settlement currency; no new collateral conversion policy is introduced.
+
+- A partial close does not end an episode. Final flatten rows retain realized PnL and
+  fees, with zero UPNL. Unique same-pair sequences preserve distinct boundaries and
+  cashflow prefixes even within one millisecond, before a reopening can hide the loss.
+- Simultaneous activity across independent pairs is applied as a cohort. Local
+  sequence numbers do not establish a global ordering. Closing one coin while opening
+  another cannot manufacture a portfolio flat; coin/side scopes remain independent.
+  Opposite signed positions are exposure, not a net-flat portfolio.
+- Malformed quantities, conflicting revisions, or clamping may make a boundary
+  unsupported. This is a reason on boundary reconstruction, not a veto on the separate
+  best-effort drawdown signal. Missing history is not certified complete merely because
+  these local checks pass.
+- A contradictory opening followed by a reduction is not sufficient to relabel that
+  reduction as a final close. The delayed-final-fill fake-exchange case verifies this.
+  An inferred flat can delimit a later independently consistent episode for this
+  reference, but is not itself exported as a lifecycle anchor or permission to release
+  an existing halt. Older damage must not permanently contaminate a clean suffix.
+- Boundaries cannot postdate the relevant position anchors. Fills newer than a captured
+  position are isolated and disclosed until refreshed positions catch up, then counted
+  once. Current flat state alone never supplies a missing fill timestamp.
+
+Snapshot experiments capture immutable copies of positions, basis, marks, fills,
+prices, configuration, source observation times, and producer revisions. They test
+balance-only, position, mark, fill/fee correction, price, config, and window-rolloff
+changes while a reconstruction is running. An obsolete result cannot replace the
+newer snapshot's result, even if a producer accidentally reuses a version number.
+
+Recomputation is bounded. Persistent churn returns a result for the latest captured
+snapshot, explicitly marked as not revalidated, while retaining its usable history.
+That diagnostic is neither a risk veto nor permission to install stale replay state or
+size orders without fresh execution inputs. The test model bounds evaluation count;
+it does not claim the eventual full Rust calculation is cheap enough at live cadence.
+Freshness limits are fixture inputs, not new live defaults. Unusable essential current
+state raises instead of returning an older healthy-looking decision. A failed history
+refresh can retain previously usable exchange observations and their EMA smoothing.
+
+The snapshot experiment's `estimate_pair` requires a normalized historical price grid.
+It rejects an absent grid as outside that experiment's domain rather than silently
+returning zero drawdown. The separate minimal-history oracle remains unchanged; this
+test-helper precondition must not be copied into a production HSL readiness gate.
+Composition of candle-free history with known realized losses still needs explicit
+reference cases before a complete revised evaluator is integrated.
+
+Offline fake-live exchange scenarios cover both sides, partial closes, delayed final
+fills, actual cashflows, and reconstruction from freshly copied exchange evidence.
+No revised logic is connected to order execution and no local decision artifact is
+used as authority.
+
 ## Remaining coverage before production integration
 
 This PR supplies reference primitives and a first fault corpus. It does not claim
 the comprehensive integration gates in the design are already satisfied. In particular:
 
-- Resolve ambiguous lifecycle-anchor classification with full exchange traces, then
-  compare Rust and cache-free restart against those traces. The reference permission
-  algebra alone cannot certify a halt/reopen event.
+- Extend boundary-derived lifecycle cases to a complete retrospective controller,
+  including normal-intervention resets and repeated cooldown re-panic across episodes;
+  compare Rust and cache-free restart against the full traces. The reference permission
+  algebra and boundary extraction do not yet implement that whole controller.
 - Compose multi-pair episode resets and exact flatten samples with the shared timeline;
   preserve the stated per-scope semantics and same-minute ordering.
 - Specify how usable realized-loss evidence is retained when all candles are absent;
   the minimal-history and reconstructed-history examples are separate here. Do not
   treat missing candles as permission to discard known losses during integration.
-- Add snapshot-skew/revision interleavings, config migration and optimizer surfaces,
-  and source-correction/candle provenance diagnostics at their real integration boundaries.
+- Carry the immutable snapshot/interleaving cases into actual orchestration, with config
+  migration, optimizer surfaces, and source-correction/candle provenance diagnostics
+  tested at their real integration boundaries.
 - Feed these fixtures through the rebuilt Rust extension and full fake-live loop,
   including protection scheduling, outstanding-order reconciliation, and partial fills.
 
