@@ -126,3 +126,18 @@ Still required before offline completion:
 
 No actual live testing or legacy replacement is part of offline completion. Those are
 subsequent stages with separate authorization.
+
+## Staged configuration boundary
+
+`config.hsl_revised` owns explicit migration and engine-specific hydration.
+`live.hsl_engine` defaults to legacy; revised is a startup-only shared selection.
+Enabled revised restart choices and unified portfolio authority cannot come from
+implicit defaults. CLI/scenario/effective coin configuration and optimizer candidates
+are revalidated, removed paths/metrics fail before pruning, and portfolio bounds map
+to the portfolio block. The saved-fitness contract includes engine and intervention.
+
+Current runtime guards reject every revised mode before live credential lookup or
+backtest/optimizer preparation; they must be replaced with real mode-specific adapters
+as integration lands. Configuration support does not establish full runtime readiness.
+The scope composer, execution/backtest/optimizer integration, full fake-live testing,
+and final live validation/rollback checklist remain outstanding.

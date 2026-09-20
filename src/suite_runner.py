@@ -1312,10 +1312,17 @@ def apply_scenario(
         backtest_section["coin_sources"] = resolved_sources
 
     if scenario.overrides:
+        from config.hsl_revised import validate_override_paths
+        validate_override_paths(cfg, scenario.overrides)
         for dotted_path, value in scenario.overrides.items():
             if not isinstance(dotted_path, str):
                 raise ValueError(f"Scenario '{scenario.label}' override keys must be dotted strings")
             _apply_override(cfg, dotted_path, value, tracker)
+
+    from config.hsl_revised import engine, normalize_revised
+    from config.schema import get_template_config
+    if engine(cfg) == "revised":
+        normalize_revised(cfg, get_template_config(), verbose=False)
 
     if tracker.summary() and not quiet:
         details = tracker.merge_details({"scenario": scenario.label})

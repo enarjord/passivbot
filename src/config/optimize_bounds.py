@@ -151,6 +151,8 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
         for key in bounds
     ):
         return deepcopy(bounds)
+    for key, value in bounds.get("hsl", {}).items():
+        flat[f"hsl_{key}"] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
         side_bounds = bounds.get(pside, {})
         if not isinstance(side_bounds, dict):
@@ -172,6 +174,9 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
 
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
     normalized_kind = normalize_strategy_kind(strategy_kind)
+    if flat_key.startswith("hsl_"):
+        bounds.setdefault("hsl", {})[flat_key.removeprefix("hsl_")] = deepcopy(value)
+        return
     pside, key = flat_key.split("_", 1)
     if pside not in BOT_POSITION_SIDES:
         raise KeyError(flat_key)
@@ -197,7 +202,7 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
         side_bounds.setdefault(group, {})[local_key] = deepcopy(value)
 
 
-def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str) -> None:
+def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio_hsl: bool = False) -> None:
     flat = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
     normalized_kind = normalize_strategy_kind(strategy_kind)
     for key, value in list(flat.items()):
@@ -207,6 +212,9 @@ def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str) -> None:
             elif len(value) == 2:
                 flat[key] = sorted(value)
     rebuilt = get_optimize_bounds_defaults()
+    if portfolio_hsl:
+        for side in BOT_POSITION_SIDES:
+            rebuilt[side].pop("hsl", None)
     for pside in BOT_POSITION_SIDES:
         rebuilt[pside]["strategy"] = {normalized_kind: deepcopy(rebuilt[pside]["strategy"][normalized_kind])}
     for flat_key, value in flat.items():

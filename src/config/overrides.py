@@ -502,7 +502,9 @@ def _validate_effective_coin_config(
             path_prefix=("bot", pside),
             seed_missing_groups=False,
         )
-    validation_input = get_template_config()
+    from .hsl_revised import normalization_template, validate_override_paths
+    validate_override_paths(effective, patch)
+    validation_input = normalization_template(get_template_config(), effective)
     nested_update(validation_input, effective)
     effective = validation_input
     canonical_base = deepcopy(effective)
@@ -539,7 +541,7 @@ def _validate_effective_coin_config(
             deepcopy(normalized_value),
             create_missing=True,
         )
-    for pside in ("long", "short") if retain_derived_hsl_dependents else ():
+    for pside in ("long", "short") if retain_derived_hsl_dependents and effective.get("live", {}).get("hsl_engine") != "revised" else ():
         hsl_patch = patch.get("bot", {}).get(pside, {}).get("hsl")
         if not isinstance(hsl_patch, dict) or not hsl_patch:
             continue

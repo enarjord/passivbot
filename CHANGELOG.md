@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add the startup-only `live.hsl_engine` selector, defaulting to legacy, and explicit
+  revised-HSL configuration migration with portfolio optimizer paths. Revised runtime
+  modes remain unavailable and reject startup until their integration is complete.
+  Enabled revised scopes require an explicit restart choice and a 1–90 day lookback;
+  missing unified portfolio settings and removed or inactive optimization paths fail
+  with migration guidance rather than inheriting an unintended policy.
+
 - Add an isolated experimental Rust drawdown kernel for revised HSL offline comparisons.
   Add companion pair-history and historical candle-projection components with approximation
   diagnostics, plus stateless controller replay over reconstructed episode traces.
