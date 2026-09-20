@@ -92,7 +92,11 @@ numerical episodes. Its experimental JSON binding accepts a complete trace endin
 current evaluation time; stale final samples are rejected instead of retaining expired
 cooldowns. It implements `always`/`never`, zero cooldown, `panic`/`normal` interventions,
 partial-exit continuity and lookback clipping, with no previous-controller-state input.
-A numerical RED that remains reconstructible in the trace survives subsequent recovery;
+Every episode uses currency PnL on the same cumulative basis and rebases against the
+common current endpoint. Episode boundaries reset peaks and EMA, not the equity currency
+offset; completed episodes may end at nonpositive historical equity. Minimal-history entry
+references are accepted only for singleton episodes, and future trace observations are
+rejected rather than clipped. A numerical RED that remains reconstructible in the trace survives subsequent recovery;
 corrected or expired evidence can remove it on the next independent replay.
 
 A supported flatten ends an episode only after its final risk observation. Cooldown starts
