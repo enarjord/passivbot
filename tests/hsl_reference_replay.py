@@ -55,7 +55,7 @@ class Pair:
 
 
 def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
-                 fills_started_at=None, fills_at=None, prices_at=None, revisions=(0,) * 4,
+                 fills_started_at=None, fills_at=None, prices_at, revisions=(0,) * 4,
                  fills_after_position=False):
     """Capture normalized inputs, with fetch-completion times separate from events.
 
@@ -73,7 +73,7 @@ def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
     captured = Pair(symbol, replace(position, size=size, basis=basis, mark=mark,
                                 multiplier=multiplier), position_at, mark_at,
                 fills_started_at, fills_at,
-                mark_at if prices_at is None else prices_at,
+                prices_at,
                 copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())), tuple(revisions), None)
     # Explicit fixture/acquisition evidence, never inferred from equal clocks.
     return replace(captured, fills_position_anchor=position_anchor(captured)) if fills_after_position else captured
@@ -144,6 +144,8 @@ def snapshot_quality(snapshot, keys=None):
         reasons.add("fills_before_position")
     if any(p.prices_at < p.mark_at for p in pairs):
         reasons.add("prices_before_mark")
+    if any(t > p.prices_at for p in pairs for t, _ in p.prices):
+        reasons.add("post_capture_price")
     if any(p.position_at < f.timestamp <= snapshot.now for p in pairs
            for f in latest_variants(p.fills)):
         reasons.add("post_position_fill")
@@ -177,6 +179,9 @@ def project(snapshot, keys):
 def source_revisions(snapshot):
     result = {("global", i): r for i, r in enumerate(snapshot.revisions)}
     result.update({(p.key, i): r for p in snapshot.pairs for i, r in enumerate(p.revisions)})
+    for p in snapshot.pairs:
+        for f in latest_variants(p.fills):
+            result[("fill", p.key, f.identity)] = f.revision
     return result
 
 
@@ -377,7 +382,7 @@ def estimate_pair(snapshot, key):
         quality.add("post_position_fill")
     if len({snapshot.balance_at, pair.position_at, pair.mark_at}) > 1:
         quality.add("snapshot_skew")
-    prices = {t: p for t, p in pair.prices if snapshot.start <= t <= snapshot.now}
+    prices = {t: p for t, p in pair.prices if snapshot.start <= t <= min(snapshot.now, pair.prices_at)}
     if not prices:
         raise ValueError("snapshot experiment requires a historical price grid; use the minimal-history oracle separately")
     expected = set(range(((snapshot.start + MINUTE - 1) // MINUTE) * MINUTE,

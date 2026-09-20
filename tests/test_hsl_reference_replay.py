@@ -446,7 +446,7 @@ def test_sparse_grid_uses_ffill_bfill_instead_of_shortening_ema_time():
 ])
 def test_fill_fetch_must_be_known_to_start_after_position_observation(timing, reason):
     original = closed_tape()
-    p = capture_pair("A", original.position, 4 * M, 4 * M, original.fills, {}, **timing)
+    p = capture_pair("A", original.position, 4 * M, 4 * M, original.fills, {}, prices_at=4 * M, **timing)
     trace = scope_boundaries(frame(p), "unified")
     assert not trace.boundaries and reason in trace.reasons
     fresh = after_position(replace(p, fills_started_at=4 * M, fills_at=4 * M))
@@ -611,3 +611,32 @@ def test_source_capture_regression_cannot_validate_repeated_older_observation(so
     result = evaluate_bounded(observe, compute, scope_keys={p.key})
     assert not result.revalidated and "source_capture_regression" in result.reasons
     assert result.value.signal.panic[-1]
+
+
+def test_fill_identity_revision_regression_is_detected_with_reused_producer_tokens():
+    original = open_frame()
+    p = original.pairs[0]
+    corrected = replace(p.fills[0], fee=-5, revision=5)
+    original = replace(original, pairs=(replace(p, fills=(corrected,)),))
+    stale = replace(original, pairs=(replace(p, fills=(replace(corrected, fee=0, revision=4),)),))
+    observe, _ = observe_sequence(original, stale, stale)
+    result = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert not result.revalidated and "revision_regression" in result.reasons
+    assert result.value.signal.panic[-1]
+
+
+def test_close_after_price_capture_is_isolated_until_a_later_capture():
+    original = open_frame(position_at=2 * M)
+    p = replace(original.pairs[0], mark_at=2 * M, prices_at=2 * M)
+    clean = replace(original, pairs=(p,))
+    ahead = replace(clean, pairs=(replace(p, prices=(*p.prices, (3 * M, dec(1000)))),))
+    observe, _ = observe_sequence(ahead, ahead)
+    result = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert not result.revalidated and "post_capture_price" in result.reasons
+    assert result.value.history == compute(clean).history
+    assert result.value.signal == compute(clean).signal
+    later = replace(ahead, pairs=(replace(ahead.pairs[0], prices_at=4 * M),))
+    observe, _ = observe_sequence(later, later)
+    recovered = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert recovered.revalidated
+    assert recovered.value.signal != result.value.signal

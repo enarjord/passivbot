@@ -164,6 +164,11 @@ Direct coin boundary selection enforces the same explicit-current-position requi
 Revalidation also tracks high-water capture times for every selected source and shared
 balance/config; repeating an older capture cannot validate it even if producer revisions
 and evaluation time are unchanged.
+Canonical per-identity fill revisions also participate in the high-water check, so
+reusing broader producer tokens cannot validate a superseded fill correction.
+Price capture time is explicit. Closes newer than that capture are excluded from the
+estimate and leave it unvalidated until a causally possible capture arrives; retained
+older prices still supply the ffill/bfill risk estimate.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 
