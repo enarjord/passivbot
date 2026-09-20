@@ -773,3 +773,35 @@ def test_corrected_timestamp_is_rechecked_when_lookback_expands():
     observe, _ = observe_sequence(original, expired, expanded, expanded)
     result = evaluate_bounded(observe, compute, max_attempts=3)
     assert not result.revalidated and "missing_fill_identity" in result.reasons
+
+
+@pytest.mark.parametrize("replacement_revision,valid", [(1, False), (2, False), (3, True)])
+def test_only_higher_revision_can_replace_retained_in_window_identity_times(replacement_revision, valid):
+    original = open_frame()
+    p = original.pairs[0]
+    fill = replace(p.fills[0], revision=2)
+    original = replace(original, pairs=(replace(p, fills=(fill,)),))
+    expired = replace(original, pairs=(replace(p, fills=(replace(fill, timestamp=-M, revision=replacement_revision),)),))
+    missing = replace(original, pairs=(replace(p, fills=()),))
+    observe, _ = observe_sequence(original, expired, missing, missing)
+    result = evaluate_bounded(observe, compute, max_attempts=3)
+    assert result.revalidated == valid
+    assert ("missing_fill_identity" in result.reasons) == (not valid)
+
+
+@pytest.mark.parametrize("recovery", ["none", "revision", "expiry"])
+def test_same_revision_timestamp_conflict_recovers_only_with_repair_or_expiry(recovery):
+    original = open_frame()
+    p = original.pairs[0]
+    changed_fill = replace(p.fills[0], timestamp=M + 1)
+    changed = replace(original, pairs=(replace(p, fills=(changed_fill,)),))
+    if recovery == "revision":
+        current = replace(changed, pairs=(replace(p, fills=(replace(changed_fill, revision=1),)),))
+    elif recovery == "expiry":
+        current = replace(changed, start=2 * M)
+    else:
+        current = changed
+    observe, _ = observe_sequence(original, changed, current, current)
+    result = evaluate_bounded(observe, compute, max_attempts=3)
+    assert result.revalidated == (recovery != "none")
+    assert ("conflicting_fill_timestamps" in result.reasons) == (recovery == "none")

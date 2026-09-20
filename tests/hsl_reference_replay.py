@@ -220,7 +220,7 @@ def fill_identity_times(snapshot):
             # Conflicting contents still establish that the identity was seen.
             # Keep possible corrected times; apply only the *current* window when
             # testing disappearance, including after a configured expansion.
-            result.setdefault((p.key, f.identity), set()).add(f.timestamp)
+            result.setdefault((p.key, f.identity), (f.revision, set()))[1].add(f.timestamp)
     return result
 
 
@@ -484,8 +484,15 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
                 time_water[k] = t if prior is None else max(prior, t)
         current_fills = fill_identity_times(current)
         missing_identity = any(k not in current_fills and any(current.start <= t <= current.now for t in ts)
-                               for k, ts in fill_water.items())
-        fill_water.update(current_fills)
+                               for k, (_, ts) in fill_water.items())
+        for k, (revision, times) in current_fills.items():
+            previous = fill_water.get(k)
+            if previous is None or revision > previous[0]:
+                fill_water[k] = (revision, times)
+            elif revision == previous[0]:
+                # Same-version observations cannot prove that an earlier possible
+                # timestamp was superseded. Only a higher revision can do that.
+                fill_water[k] = (revision, previous[1] | times)
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)
         if regression:
@@ -494,6 +501,9 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
             quality.add("source_capture_regression")
         if missing_identity:
             quality.add("missing_fill_identity")
+        if any(len(ts) > 1 and any(current.start <= t <= current.now for t in ts)
+               for _, ts in fill_water.values()):
+            quality.add("conflicting_fill_timestamps")
         if current == snapshot:
             return Evaluation(snapshot, value, attempt, not quality, frozenset(quality))
         snapshot = current

@@ -185,6 +185,11 @@ Revision numbers remain monotonicity evidence even when their financial contents
 quarantined. Conflicted identities retain their possible causal timestamps for detecting
 disappearance. Corrected old timestamps are checked only against the current window:
 they are ignored while expired, but matter again if a configured expansion includes them.
+Retained timestamps are bound to their highest usable identity revision. Lower
+revisions cannot overwrite them; same-revision observations retain all possible times.
+Only a higher causal revision can supersede that disappearance evidence.
+Conflicting timestamps at the same revision remain an in-window diagnostic until a
+higher revision repairs them or every possible timestamp expires from the window.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 
