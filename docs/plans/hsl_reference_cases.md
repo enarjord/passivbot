@@ -142,9 +142,14 @@ position timestamp. Prices have a fetch-completion time and configuration its ow
 capture time. A fill request begun before the position observation cannot certify a
 lifecycle boundary merely because it completed afterward. Older fill/price captures remain usable for risk
 estimation with reasons, but are not marked revalidated for installing derived state.
-Quality checks use the selected coin/side's keys (`scope_keys`); unified checks the
-whole snapshot. A degraded unrelated pair must not prevent installing a coherent
-coin estimate. Newest conflicting fill variants after the position anchor also forbid
+Calculation, comparison, and quality checks project the selected coin/side's keys
+(`scope_keys`); unified uses the whole snapshot. Balance and configuration remain shared
+dependencies; selected pairs carry their own position/mark/fill/price revision tokens.
+An unrelated pair's changes, including changes to aggregate producer tokens, must not
+prevent installing a coherent coin estimate. Selected-pair revisions still invalidate
+the result, and a regression remains unvalidated. Known canonical or conflicting fill
+variants after the position anchor keep stable snapshots unvalidated until positions
+catch up, without vetoing their risk estimate. Conflicting variants also forbid
 lifecycle certification, even though identity normalization excludes their quantities.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.

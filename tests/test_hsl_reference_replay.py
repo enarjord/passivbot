@@ -476,3 +476,60 @@ def test_conflicting_post_position_variants_cannot_certify_an_older_flat():
                         fills=(*p.fills, replace(late, revision=2)))
     recovered = scope_boundaries(frame(corrected), "unified")
     assert [b.timestamp for b in recovered.boundaries if b.lifecycle_eligible] == [2 * M]
+
+
+def test_unrelated_pair_churn_cannot_invalidate_stable_coin_projection():
+    a = open_frame()
+    b = pair("B", size=1, basis=100)
+    initial = replace(a, pairs=(*a.pairs, b))
+    changed_b = replace(b, position=replace(b.position, mark=dec(70)), revisions=(0, 1, 0, 0))
+    # The aggregate mark token changes too; A consumes only its own mark token.
+    changed = replace(initial, pairs=(*a.pairs, changed_b), revisions=(0, 0, 1, 0, 0, 0))
+    observe, calls = observe_sequence(initial, changed)
+    result = evaluate_bounded(observe, compute, scope_keys={("A", "long")})
+    assert result.revalidated and result.evaluations == 1 and len(calls) == 2
+    assert result.snapshot == a and result.value == compute(a)
+
+
+@pytest.mark.parametrize("source", range(4))
+def test_scoped_pair_revision_updates_and_regressions_are_not_ignored(source):
+    a = open_frame()
+    revisions = [0] * 4
+    revisions[source] = 1
+    changed = replace(a, pairs=(replace(a.pairs[0], revisions=tuple(revisions)),))
+    observe, _ = observe_sequence(a, changed, changed)
+    result = evaluate_bounded(observe, compute, scope_keys={("A", "long")})
+    assert result.revalidated and result.evaluations == 2
+    observe, _ = observe_sequence(changed, a, a)
+    result = evaluate_bounded(observe, compute, scope_keys={("A", "long")})
+    assert not result.revalidated and "revision_regression" in result.reasons
+
+
+@pytest.mark.parametrize("global_source", ["balance", "config"])
+def test_coin_projection_retains_shared_global_dependencies(global_source):
+    a = open_frame()
+    changed = replace(a, **({"balance": dec(1000)} if global_source == "balance"
+                           else {"settings": Settings(1000, ".9")}))
+    observe, _ = observe_sequence(a, changed, changed)
+    result = evaluate_bounded(observe, compute, scope_keys={("A", "long")})
+    assert result.revalidated and result.evaluations == 2
+    assert result.value != compute(a)
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_known_post_position_fill_stays_unvalidated_until_position_refresh(conflicting):
+    a = open_frame(position_at=2 * M)
+    p = a.pairs[0]
+    add = Fill("later-add", 3 * M, 1, 80, 0, revision=1)
+    fills = (*p.fills, add, replace(add, delta=2)) if conflicting else (*p.fills, add)
+    ahead = replace(a, pairs=(replace(p, fills=fills),))
+    observe, _ = observe_sequence(ahead, ahead)
+    result = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert not result.revalidated and "post_position_fill" in result.reasons
+    assert result.value.signal.panic[-1]
+    fresh = replace(ahead, pairs=(replace(p, position_at=4 * M,
+                    position=Position(2, 90, 80),
+                    fills=(*fills, replace(add, revision=2))),))
+    observe, _ = observe_sequence(fresh, fresh)
+    recovered = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert recovered.revalidated and "post_position_fill" not in recovered.reasons

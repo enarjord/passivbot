@@ -44,6 +44,8 @@ class Pair:
     prices_at: int
     fills: tuple
     prices: tuple
+    # position, mark, fills, prices producer revisions for this pair only.
+    revisions: tuple
 
     @property
     def key(self):
@@ -51,7 +53,7 @@ class Pair:
 
 
 def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
-                 fills_started_at=None, fills_at=None, prices_at=None):
+                 fills_started_at=None, fills_at=None, prices_at=None, revisions=(0,) * 4):
     """Capture normalized inputs, with fetch-completion times separate from events.
 
     Fill.sequence is actual per-pair exchange/simulator ordering supplied by the
@@ -66,7 +68,7 @@ def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
                                 multiplier=multiplier), position_at, mark_at,
                 fills_started_at, fills_at,
                 mark_at if prices_at is None else prices_at,
-                copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())))
+                copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())), tuple(revisions))
 
 
 @dataclass(frozen=True)
@@ -112,6 +114,8 @@ def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisio
         raise ValueError("invalid producer revision")
     for p in pairs:
         p.position.validate()
+        if len(p.revisions) != 4 or any(not isinstance(r, int) or r < 0 for r in p.revisions):
+            raise ValueError("invalid pair revisions")
     settings = replace(settings, ema_span=dec(settings.ema_span), threshold=dec(settings.threshold))
     return Snapshot(now, start, balance, balance_at, config_at, pairs, settings, tuple(revisions))
 
@@ -126,7 +130,35 @@ def snapshot_quality(snapshot, keys=None):
         reasons.add("fills_before_position")
     if any(p.prices_at < p.mark_at for p in pairs):
         reasons.add("prices_before_mark")
+    if any(p.position_at < f.timestamp <= snapshot.now for p in pairs
+           for f in latest_variants(p.fills)):
+        reasons.add("post_position_fill")
     return reasons
+
+
+def latest_variants(fills):
+    versions = {}
+    for fill in fills:
+        versions.setdefault(fill.identity, []).append(fill)
+    return tuple(f for group in versions.values() for f in group
+                 if f.revision == max(x.revision for x in group))
+
+
+def project(snapshot, keys):
+    if keys is None:
+        return snapshot
+    # Balance/config revisions are account-wide. Position/mark/history revisions
+    # are per pair for scoped evaluation; aggregate tokens would reintroduce churn
+    # from unrelated pairs even when all selected content stayed unchanged.
+    revisions = (snapshot.revisions[0], 0, 0, 0, 0, snapshot.revisions[5])
+    return replace(snapshot, pairs=tuple(p for p in snapshot.pairs if p.key in keys),
+                   revisions=revisions)
+
+
+def source_revisions(snapshot):
+    result = {("global", i): r for i, r in enumerate(snapshot.revisions)}
+    result.update({(p.key, i): r for p in snapshot.pairs for i, r in enumerate(p.revisions)})
+    return result
 
 
 def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
@@ -349,19 +381,21 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     preserving its usable history. It is not permission to install stale state or
     size orders without independently fresh execution inputs. The reference bounds
     evaluation count, not CPU cost of the eventual Rust incremental implementation.
-    scope_keys selects coin/pside source quality; None means the unified scope.
+    scope_keys projects coin/pside calculation, comparison and source quality;
+    None means the unified scope. Only global balance/config remain shared.
     """
     if not isinstance(max_attempts, int) or max_attempts < 1:
         raise ValueError("max_attempts must be a positive integer")
-    snapshot = observe()
-    high_water = snapshot.revisions
+    snapshot = project(observe(), scope_keys)
+    high_water = source_revisions(snapshot)
     last_time = snapshot.now
     regression = False
     for attempt in range(1, max_attempts + 1):
         value = compute(snapshot)
-        current = observe()
-        regression |= current.now < last_time or any(a < b for a, b in zip(current.revisions, high_water))
-        high_water = tuple(max(a, b) for a, b in zip(current.revisions, high_water))
+        current = project(observe(), scope_keys)
+        revisions = source_revisions(current)
+        regression |= current.now < last_time or any(r < high_water.get(k, r) for k, r in revisions.items())
+        high_water.update({k: max(r, high_water.get(k, r)) for k, r in revisions.items()})
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)
         if regression:
