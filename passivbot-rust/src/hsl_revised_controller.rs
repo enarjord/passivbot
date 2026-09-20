@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct Point {
     pub timestamp: i64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub pnl: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub upnl: f64,
     pub exposed: bool,
     /// A supported scope flatten after this risk observation, never an
@@ -22,6 +24,7 @@ pub struct Point {
 #[serde(deny_unknown_fields)]
 pub struct Episode {
     pub points: Vec<Point>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference: Option<f64>,
 }
 
@@ -45,8 +48,11 @@ pub struct Input {
     pub episodes: Vec<Episode>,
     pub now: i64,
     pub start: i64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub budget: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub span: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub threshold: f64,
     pub cooldown_ms: i64,
     pub restart: Restart,
