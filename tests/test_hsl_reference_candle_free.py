@@ -172,6 +172,25 @@ def test_unrelated_pair_history_does_not_affect_coin_domain():
     assert coin(snap(p, other)) == coin(snap(p))
 
 
+@pytest.mark.parametrize("field", ["balance_at", "position_at", "mark_at"])
+def test_fresh_selected_observation_skew_is_visible(field):
+    p = pair()
+    snapshot = (replace(snap(p), balance_at=299_000) if field == "balance_at" else
+                snap(replace(p, **{field: 299_000})))
+    result = coin(snapshot)
+    assert "snapshot_skew" in result.reasons
+    assert result.signal == coin(snap(p)).signal
+
+
+def test_skew_is_scope_local_and_includes_all_selected_pairs():
+    p, other = pair(), replace(pair("OTHER", "short"), mark_at=299_000)
+    snapshot = snap(p, other)
+    assert "snapshot_skew" not in coin(snapshot).reasons
+    assert "snapshot_skew" not in estimate_candle_free(snapshot, "pside", pside="long").reasons
+    assert "snapshot_skew" in estimate_candle_free(snapshot, "pside", pside="short").reasons
+    assert "snapshot_skew" in estimate_candle_free(snapshot, "unified").reasons
+
+
 @pytest.mark.fake_live
 @pytest.mark.parametrize("pside", ["long", "short"])
 def test_fake_exchange_cashflows_without_candles(pside):

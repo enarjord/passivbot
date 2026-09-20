@@ -40,6 +40,9 @@ def estimate_candle_free(snapshot, mode, *, pside=None, symbol=None):
     if budget is None:
         return CandleFreeEstimate(None, dec(0), dec(0), dec(0), frozenset({"inactive_scope"}))
     quality = set(snapshot_quality(snapshot, {p.key for p in pairs}))
+    if len({snapshot.balance_at, *(p.position_at for p in pairs),
+            *(p.mark_at for p in pairs)}) > 1:
+        quality.add("snapshot_skew")
     quality.add("candle_free_reference")
     timelines = []
     upnl = Decimal(0)
