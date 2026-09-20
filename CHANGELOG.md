@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve Bitget UTA linear fill quantities when reported quote values are rounded.
+  Repair previously inferred contract multipliers on cache reload so fully closed positions
+  leave no phantom dust that can block trailing fill confirmation after a new entry.
+
 - Keep HSL reconstruction usable across independent symbols' same-timestamp fills by retaining
   drawdown across uncertain aggregate flatten boundaries. Recover a later coin episode after an
   incomplete older opening when current quantity, a certified post-position fill tail, and a cooldown-separated flat
