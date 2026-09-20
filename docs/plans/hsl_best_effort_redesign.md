@@ -35,6 +35,8 @@ and test the consequences, rather than restore the old behavior as a review fix:
 | Missing historical prices | Resample complete coarse candles, then forward-fill gaps and backfill a missing leading segment within the configured lookback. No separate carry-age veto or automatic switch to another signal. |
 | Historical horizon | One finite 1-90 day lookback for all HSL historical influence, including cooldown, no-restart, and unfinished panic state. No extended lifecycle horizon. Invalid settings fail before startup rather than being clamped. |
 | `restart_after_red_policy=never` | No restart while the imposing stop remains in the lookback; the restriction expires with that event. It is not an indefinite latch. |
+| Restart choices | Only `always` and `never`. Remove `threshold`, `no_restart_drawdown_threshold`, and the separate cross-episode restart drawdown tracker. Zero cooldown means no waiting, not a third restart policy. |
+| Exposure appearing during cooldown | Reuse `live.hsl_position_during_cooldown_policy`, reduced to `panic` (default) or `normal`. Rust owns the scoped intervention; residual exposure from an unfinished panic is not a new intervention. |
 | Expired panic commitment | Clear the old commitment and reevaluate current exposure; a new threshold breach may immediately require another panic. |
 | Restart authority | Current exchange state, in-window exchange evidence, configuration, and time; no authoritative local journal, flag, or RAM-only latch. A past decision which cannot be reconstructed is void, even inside lookback. |
 | Trading tiers | GREEN or RED only. Remove ORANGE/YELLOW trading overlays and tier parameters; diagnostics never authorize a trading intervention. Cooldown/restart permissions remain separately reconstructed. |
@@ -44,7 +46,8 @@ and test the consequences, rather than restore the old behavior as a review fix:
 These choices accept approximation error and finite memory. Review should challenge
 internal contradictions, missing consequences, or implementation feasibility, but not
 assume indefinite lifecycle retention, irrevocable unobservable decisions, ORANGE
-trading overlays, exact historical prices, or two unified side controllers are
+trading overlays, a second terminal drawdown threshold, all five legacy intervention
+choices, exact historical prices, or two unified side controllers are
 requirements of the new design. Current-input freshness, valid order
 sizing, and atomic Rust output validation remain required.
 
@@ -218,6 +221,21 @@ configs containing those fields receive a clear deprecation/migration warning; t
 fields cannot silently keep an ORANGE overlay active. Do not introduce replacement
 configurable warning tiers merely to preserve that surface.
 
+Remove `no_restart_drawdown_threshold` from every revised HSL block, including unified;
+do not add a portfolio version of it. Remove `restart_after_red_policy=threshold`.
+Legacy configs selecting `threshold` fail with an actionable choice of `always` or
+`never`; neither migration nor template hydration may silently select a replacement.
+An otherwise valid `always`/`never` config carrying the obsolete threshold field gets
+a removal warning; that unused field has no trading effect. Reject removed threshold
+bounds/overrides rather than letting them masquerade as active parameters. Apply the
+same checks to effective scenario/CLI configurations and resumed candidates.
+
+For `live.hsl_position_during_cooldown_policy`, retain only `panic` and `normal`, keeping
+`panic` as the default. Removed values `manual`, `tp_only`, and `graceful_stop` fail
+with an explicit migration choice; do not silently map an ownership policy to panic
+or normal trading. This removes those HSL intervention choices, not the independent
+ordinary bot modes bearing the same names.
+
 ### Optimizer, overrides, and resume migration
 
 Add explicit portfolio HSL parameter paths for unified optimization and keep side
@@ -227,15 +245,29 @@ In unified mode, reject legacy side HSL optimization/override paths with an acti
 message rather than optimizing ignored parameters or silently redirecting one side.
 An explicit migration tool may help construct a new configuration, but may not bypass
 the requirement for an explicit portfolio block. Defaults emitted for new unified
-optimizer runs must target the portfolio paths, including no-restart overrides.
+optimizer runs must target the portfolio paths, including restart-policy overrides.
 
-Reject bounds/overrides targeting removed ORANGE/YELLOW behavior. Ordinary legacy
+Reject bounds/overrides targeting removed ORANGE/YELLOW behavior or the removed
+no-restart drawdown threshold. Portfolio restart overrides target the surviving
+`restart_after_red_policy`, never a numeric no-restart threshold. Ordinary legacy
 field warnings must not hide inactive optimization dimensions. Version/fingerprint the
 evaluator and parameter layout: incompatible checkpoints, cached fitness, and prior
 scores cannot be resumed or reused as if the objective semantics were unchanged.
 Explicitly migrated candidate configs may be used only as freshly evaluated seeds.
 Cover same-valued and asymmetric legacy sides, scenario mode changes, and template
 hydration in tests; identical base values do not prove bounds/overrides are compatible.
+
+Migrate metric consumers as well as parameter producers. Reject removed HSL tier
+metrics such as `hard_stop_time_in_yellow_pct` and `hard_stop_time_in_orange_pct` in
+`optimize.scoring`, `optimize.limits`, and their scenario/override variants before a
+fresh run or resume starts. Do not alias them to another metric, leave stale values,
+or export constant zero objectives. Update CPU/GPU metric registries, analysis/export
+schemas, optimizer validation, templates, tests, and active documentation together.
+Remove metrics/state exclusive to the deleted terminal-threshold feature while
+preserving independent general drawdown statistics. Versioned historical artifacts
+may remain readable, but cannot silently supply revised fitness or active objectives.
+Historical release notes remain historical; no compatibility layer restores removed
+trading tiers or a second threshold.
 
 ### Lookback validation
 
@@ -360,6 +392,69 @@ Reuse the protective executor and scheduler: existing closes precede historical 
 one stuck symbol cannot starve other scopes, and sizing uses fresh remaining exposure.
 Do not create another Python risk controller around the new Rust evaluator.
 
+### Two restart policies
+
+Remove the separate persistent cross-episode equity-peak/drawdown calculation used
+only by `no_restart_drawdown_threshold`, and all restart gates consuming it. The
+ordinary HSL equity peak and EMA remain part of the shared signal. Do not replace the
+removed terminal threshold with another latch or hidden accumulated-loss gate.
+
+After a reconstructible HSL stop has flattened its scope:
+
+- `always`: permit restart when cooldown clears, at its deadline or when its anchor
+  leaves lookback, subject to current HSL and ordinary strategy requirements.
+- `never`: do not automatically restart while the imposing stop remains in lookback.
+  Once it leaves the window, reevaluate under current inputs; no local terminal flag.
+
+Cooldown duration zero means no waiting. It does not itself disable restart; `never`
+still forbids automatic reopening while its stop remains in scope. This intentionally
+replaces the documented legacy zero-cooldown/no-auto-restart interpretation. A fresh
+stop may still require another close, even immediately after restart becomes permitted.
+
+Repeated stops under `always` can accumulate substantial losses without a separate
+automatic terminal halt. This is an explicit loss of the second-threshold capability,
+not an unimplemented safeguard. Optional account-wide supervision belongs outside
+this HSL design. The two policies and their window expiry apply in live and backtests.
+
+### Exposure appearing during cooldown
+
+Reuse the existing intervention contract, narrowed to two choices. Python passes the
+normalized `live.hsl_position_during_cooldown_policy` plus the same immutable current
+state and in-window exchange evidence to Rust. Rust reconstructs the halt, classifies
+the intervention, applies the policy, and returns scoped permissions and execution
+intent through the normal authoritative result. Python must not clear a halt or
+substitute close intent in a second controller.
+
+- `panic` (default): close newly appeared exposure in the halted scope. Once that
+  scope is actually flat, anchor its new cooldown to the actual flattening fill;
+  polling, partial fills, and retry attempts do not restart the timer.
+- `normal`: treat newly appeared exposure as an explicit intervention override,
+  clear the applicable halt, and resume ordinary operation with HSL still enabled.
+  Reconstruct the new episode from the available intervention evidence, retaining
+  fees and subsequent losses. Approximation follows the shared estimator; no exact
+  opening/episode certificate is required. A fresh RED result can still panic-close.
+
+The scope is coin+side in coin mode, side in pside mode, and the entire portfolio in
+unified mode. In unified mode, clearing the halt clears the portfolio controller's
+halt, not a hidden side controller. `normal` is an intervention override of the
+applicable halt, including a `never` restriction, not automatic bot permission to
+open an initial position while flat. No exposure appearing means no override.
+
+Residual exposure from an unfinished panic is not a new intervention. Reconstruct
+the distinction from available exchange observations; never infer a new intervention
+merely from seeing a nonzero position on another poll or after restart. Unknown
+historical classification must remain observable and use the same best-effort,
+exchange-derived lifecycle rule in continuous runs and fresh reconstruction; it may
+not create an exact-history readiness gate or an authoritative local intervention flag.
+Concrete ambiguous partial-close/reopen traces must be settled in the reference suite
+before integration, alongside the existing lifecycle-anchor questions.
+
+Backtests do not normally generate operator interventions. Exercise the same Rust
+policy with injected reference traces and offline fake-live scenarios: both choices,
+both restart policies, scope expansion, zero cooldown, partial exits, fresh RED after
+`normal`, intervention fees, delayed/missing fills, and cache-free restart. This is
+shared decision-contract coverage, not a claim that ordinary backtests simulate humans.
+
 ### One historical horizon
 
 For finite lookback `W` at evaluation time `T`, historical HSL inputs and their influence
@@ -372,8 +467,9 @@ when the revised HSL is enabled.
 For a cooldown anchored by a flattening fill at `t_flat`, with duration `C`, it clears
 at the earlier of its normal deadline and its anchor leaving the window. With the
 inclusive interval above, the predicates are `T >= t_flat + C` or `t_flat < T-W`.
-Clearing means removal, not restarting cooldown from now. `never` and threshold-based
-no-restart restrictions likewise expire when their imposing event leaves the window.
+Clearing means removal, not restarting cooldown from now. The `never` restriction
+likewise expires when its imposing event leaves the window; no threshold-based
+no-restart restriction remains.
 Document `never` as "no restart while the imposing stop remains in lookback," not an
 indefinite promise. Test exact endpoints consistently across live, replay, and backtest.
 
@@ -454,6 +550,10 @@ follow the reviewed reference. No private account data is needed.
 | Unified missing block or legacy side settings | Missing explicit portfolio block fails even for identical sides; defaults cannot satisfy explicit presence |
 | Unified optimizer bounds/overrides/resume | Inactive side paths and removed-tier dimensions rejected; layout/semantics checked; migrated seeds reevaluated |
 | Former ORANGE/YELLOW interval | Normal trading apart from independent cooldown/restart restrictions; diagnostics cannot change orders |
+| Removed tier scoring/limits and exports | Early validation of obsolete objectives in fresh/scenario/resumed runs; CPU/GPU registries agree; no constant or stale fitness |
+| Repeated stops and zero cooldown | Only `always`/`never`; no terminal threshold tracker; zero means no wait; exact window expiry and current-risk reevaluation |
+| Legacy threshold/intervention configuration | Explicit migration errors for `threshold` and removed intervention values; no silent policy conversion |
+| Exposure appears during cooldown | Rust-owned `panic`/`normal`, scope-correct override, no override from residual panic exposure, restart parity with exchange-only evidence |
 | Manual trades, transfers, budget changes, contract units | Correct attribution, scope, conversion, and denominator behavior |
 
 Acceptance criteria:
@@ -499,6 +599,8 @@ must expose decision errors rather than declaring every finite result good enoug
    and verify the Python extension for affected callers.
 4. **Coin integration/replacement.** Change live and backtest/optimizer behavior together;
    retain execution validation and implement the new bounded lifecycle semantics together.
+   Include the two restart policies, zero-cooldown semantics, two intervention choices,
+   and removed tier/threshold parameter and metric migration when a mode switches.
    Update canonical contracts, user docs, schema migration, and changelog in the same
    PR. Review positive/negative results,
    not only crash-freedom. Remove the superseded coin path when integration is ready.
@@ -507,7 +609,8 @@ must expose decision errors rather than declaring every finite result good enoug
    migration lands, that mode keeps its existing
    behavior, rather than exposing an old/new user option.
 6. **Final cleanup.** Remove remaining superseded replay/readiness and emergency-signal
-   paths, temporary comparison hooks, and obsolete grace configuration once no mode
+   paths, temporary comparison hooks, obsolete grace configuration, removed tier
+   consumers/metrics, and the terminal-threshold tracker once no mode
    consumes them. Preserve supported old-config loading with explicit deprecation or
    migration diagnostics; remove obsolete journal authority rather than keeping hidden
    out-of-window commitments. During staged migration, the legacy journal remains
@@ -519,7 +622,8 @@ authorization. Release notes must identify the new coin equity peak, denominator
 minimal-history behavior, finite lifecycle expiry (including `never` and partial exits),
 journal/RAM-latch retirement, GREEN/RED-only trading, the 1-90 day lookback validation,
 explicit unified portfolio scope/config and optimizer migration, close-only valuation,
-and other reviewed signal changes.
+removal of the terminal threshold, zero-cooldown meaning, reduced intervention choices,
+removed optimizer objectives, and other reviewed signal changes.
 Thresholds are not
 silently translated or described as numerically equivalent. Rollback is a reviewed
 code revert with journal/config compatibility checked, not a permanent legacy switch.
@@ -544,8 +648,10 @@ need explicit review and then reference cases, not a collection of ad hoc live f
    authority are settled choices, not open retention questions.
 4. **Numeric/config compatibility:** the proposed strict `>` comparison differs from
    current tolerance-inclusive `>=`; review the boundary deliberately. Confirm budgets,
-   dynamic slot policy, supported contract types, boundary sampling, and no-restart
-   consumers. GREEN/RED-only trading, enabled-HSL lookback validation in [1,90] days,
+   dynamic slot policy, supported contract types, boundary sampling, and surviving
+   restart/intervention consumers. Removal of the terminal threshold, two restart and
+   two intervention choices, GREEN/RED-only trading and metric cleanup,
+   enabled-HSL lookback validation in [1,90] days,
    close-only historical valuation, and unified's explicitly supplied `config.bot.hsl`
    are intended. Review migration of every config/optimizer surface, not preservation
    of ORANGE or two unified side controllers.
