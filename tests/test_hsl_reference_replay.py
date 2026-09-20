@@ -38,7 +38,7 @@ def test_partial_close_is_not_flat_and_flat_cashflow_includes_fees(mode, kwargs)
     assert boundary.timestamp == 3 * M
     assert boundary.observation.pnl == -33
     assert boundary.observation.upnl == 0
-    assert boundary.consumed == ((("A", "long"), ("entry", "partial", "final")),)
+    assert boundary.consumed == ((("A", "long"), closed_tape(fee=-1).fills),)
 
 
 def test_flatten_signal_drives_real_cooldown_anchor_before_reopening():
@@ -97,6 +97,8 @@ def test_roundtrip_wholly_within_unsequenced_cohort_has_final_flat_only():
         trace = scope_boundaries(frame(pair(fills=ordering)), "unified")
         assert [b.observation.pnl for b in trace.boundaries] == [-20]
         assert "estimated_fill_order" in trace.reasons
+        assert "estimated_flat" in trace.reasons
+        assert not trace.boundaries[0].lifecycle_eligible
 
 
 def test_unsequenced_cohort_cannot_prove_an_internal_flat_then_reopen():
@@ -191,7 +193,7 @@ def test_cross_pair_boundary_cannot_postdate_an_older_position_anchor():
     trace = scope_boundaries(frame(a, b), "unified")
     assert not trace.boundaries
     assert "boundary_after_position_anchor" in trace.reasons
-    fresh = replace(a, position_at=4 * M)
+    fresh = replace(a, position_at=4 * M, fills_at=4 * M)
     assert len(scope_boundaries(frame(fresh, b), "unified").boundaries) == 1
 
 
@@ -201,7 +203,8 @@ def test_close_after_position_anchor_is_disclosed_until_positions_catch_up():
     trace = scope_boundaries(frame(p), "unified")
     assert not trace.boundaries
     assert "post_position_fill" in trace.reasons
-    current = replace(p, position_at=4 * M, position=replace(p.position, size=dec(0), basis=dec(0)))
+    current = replace(p, position_at=4 * M, fills_at=4 * M,
+                      position=replace(p.position, size=dec(0), basis=dec(0)))
     assert [b.timestamp for b in scope_boundaries(frame(current), "unified").boundaries] == [3 * M]
 
 
@@ -299,7 +302,7 @@ def test_continuous_churn_is_bounded_and_preserves_latest_history():
     assert len(calls) == 3 and result.evaluations == 3
     assert not result.revalidated and result.reasons == {"revision_churn"}
     assert result.snapshot == c and result.value == compute(c)
-    assert len(result.value.history.rows) == 4  # not silently replaced with a singleton
+    assert len(result.value.history.rows) == 5  # not silently replaced with a singleton
     assert result.value.signal.panic[-1]
 
 
@@ -332,7 +335,7 @@ def test_post_position_fill_is_isolated_until_position_refresh_then_counted_once
     original = open_frame(60, position_at=2 * M)
     p = original.pairs[0]
     add = Fill("add", 3 * M, 1, 80, 0, -1)
-    ahead = replace(original, pairs=(replace(p, fills=(*p.fills, add)),))
+    ahead = replace(original, pairs=(replace(p, fills=(*p.fills, add), fills_at=4 * M),))
     old = compute(ahead)
     assert "post_position_fill" in old.reasons
     assert "snapshot_skew" in old.reasons
@@ -358,3 +361,66 @@ def test_invalid_minimum_inputs_are_not_replaced_by_a_previous_healthy_decision(
             frame(pair(), balance="NaN")
         else:
             frame(pair(size=1, basis=0))
+
+
+@pytest.mark.parametrize("field,value", [("price", 101), ("fee", -1), ("revision", 1)])
+def test_consumed_boundary_records_corrections_even_with_same_flat_and_realized_pnl(field, value):
+    original = closed_tape()
+    corrected = replace(original.fills[0], **{field: value})
+    updated = replace(original, fills=(corrected, *original.fills[1:]))
+    before = scope_boundaries(frame(original), "unified")
+    after = scope_boundaries(frame(updated), "unified")
+    assert before.boundaries[0].timestamp == after.boundaries[0].timestamp
+    assert before != after
+
+
+@pytest.mark.parametrize("source", range(6))
+def test_regressed_revision_cannot_be_revalidated_by_repeating_stale_snapshot(source):
+    original = open_frame(revisions=(5,) * 6)
+    versions = list(original.revisions)
+    versions[source] = 4
+    stale = replace(original, revisions=tuple(versions))
+    observe, _ = observe_sequence(original, stale, stale)
+    result = evaluate_bounded(observe, compute)
+    assert not result.revalidated
+    assert result.reasons == {"revision_regression"}
+    assert result.value.signal.panic[-1]  # diagnostic does not veto risk
+
+
+@pytest.mark.parametrize("source", ["fills", "prices", "config"])
+def test_capture_time_change_invalidates_same_revision_result(source):
+    original = open_frame()
+    if source == "config":
+        original = replace(original, config_at=3 * M)
+        updated = replace(original, config_at=4 * M)
+    else:
+        original = replace(original, pairs=(replace(original.pairs[0], **{source + "_at": 3 * M}),))
+        updated = replace(original, pairs=(replace(original.pairs[0], **{source + "_at": 4 * M}),))
+    observe, _ = observe_sequence(original, updated, updated)
+    result = evaluate_bounded(observe, compute)
+    assert result.revalidated and result.evaluations == 2
+    assert result.snapshot == updated
+
+
+def test_older_fill_capture_cannot_certify_flat_against_newer_position():
+    p = replace(closed_tape(), fills_at=2 * M)
+    trace = scope_boundaries(frame(p), "unified")
+    assert not trace.boundaries and "fills_before_position" in trace.reasons
+    # A missing earlier execution need not have a post-position event timestamp.
+    original = open_frame()
+    stale = replace(original, pairs=(replace(original.pairs[0], fills_at=2 * M),))
+    observe, _ = observe_sequence(stale, stale)
+    result = evaluate_bounded(observe, compute)
+    assert not result.revalidated and result.reasons == {"fills_before_position"}
+    assert result.value.signal.panic[-1]
+
+
+def test_sparse_grid_uses_ffill_bfill_instead_of_shortening_ema_time():
+    original = open_frame(settings=Settings(3, ".05"))
+    sparse = replace(original, pairs=(replace(original.pairs[0], prices=((2 * M, dec(80)),)),))
+    dense = replace(sparse, pairs=(replace(sparse.pairs[0], prices=tuple((t, dec(80)) for t in range(0, 5 * M, M))),))
+    a, b = compute(sparse), compute(dense)
+    assert a.history == b.history and a.signal == b.signal
+    assert "filled_price_grid" in a.reasons
+    assert "filled_price_grid" not in b.reasons
+    assert len(a.history.rows) == 5

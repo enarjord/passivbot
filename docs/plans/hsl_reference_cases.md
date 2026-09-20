@@ -102,8 +102,15 @@ longer merely hand-supplied in those cases. Financial inputs within a scope use 
 same settlement currency; no new collateral conversion policy is introduced.
 
 - A partial close does not end an episode. Final flatten rows retain realized PnL and
-  fees, with zero UPNL. Unique same-pair sequences preserve distinct boundaries and
+  fees, with zero UPNL. Actual unique same-pair exchange/simulator sequences preserve distinct boundaries and
   cashflow prefixes even within one millisecond, before a reopening can hide the loss.
+  The normalized `Fill.sequence` input is not an arbitrary trade ID, list index, or
+  arrival counter. Establishing ordering provenance in connectors is a later integration
+  requirement. This follows the redesign's actual-sequence policy; it does not change
+  the stricter position-chain requirement of the existing production HSL path.
+  Unordered mixed-action cohorts may supply an estimated final-risk row, but its
+  `lifecycle_eligible=False` marker forbids using it to release a halt or reset cooldown.
+  Such a row is not proof of an internal flatten/reopening.
 - Simultaneous activity across independent pairs is applied as a cohort. Local
   sequence numbers do not establish a global ordering. Closing one coin while opening
   another cannot manufacture a portfolio flat; coin/side scopes remain independent.
@@ -120,12 +127,21 @@ same settlement currency; no new collateral conversion policy is introduced.
 - Boundaries cannot postdate the relevant position anchors. Fills newer than a captured
   position are isolated and disclosed until refreshed positions catch up, then counted
   once. Current flat state alone never supplies a missing fill timestamp.
+- Consumed boundary evidence retains complete canonical fills, including revision and
+  content, so a correction invalidates equality even when timestamp and cashflow stay
+  unchanged. Repeating unchanged evidence remains idempotent.
 
 Snapshot experiments capture immutable copies of positions, basis, marks, fills,
 prices, configuration, source observation times, and producer revisions. They test
 balance-only, position, mark, fill/fee correction, price, config, and window-rolloff
 changes while a reconstruction is running. An obsolete result cannot replace the
 newer snapshot's result, even if a producer accidentally reuses a version number.
+Fills/prices include fetch-completion times distinct from their event timestamps;
+configuration has its own capture time. Fills captured before the position anchor
+cannot certify a lifecycle boundary. Older fill/price captures remain usable for risk
+estimation with reasons, but are not marked revalidated for installing derived state.
+Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
+if the same older snapshot repeats. The estimate still exposes its current risk result.
 
 Recomputation is bounded. Persistent churn returns a result for the latest captured
 snapshot, explicitly marked as not revalidated, while retaining its usable history.
@@ -136,7 +152,9 @@ Freshness limits are fixture inputs, not new live defaults. Unusable essential c
 state raises instead of returning an older healthy-looking decision. A failed history
 refresh can retain previously usable exchange observations and their EMA smoothing.
 
-The snapshot experiment's `estimate_pair` requires a normalized historical price grid.
+The snapshot experiment's `estimate_pair` requires at least one historical minute close.
+It fills a sparse grid using the existing reference ffill/bfill convention before
+computing EMA, preserving one observation per minute without a historical-readiness veto.
 It rejects an absent grid as outside that experiment's domain rather than silently
 returning zero drawdown. The separate minimal-history oracle remains unchanged; this
 test-helper precondition must not be copied into a production HSL readiness gate.

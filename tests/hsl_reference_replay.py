@@ -9,7 +9,8 @@ from decimal import Decimal
 from itertools import groupby
 
 from hsl_reference import (
-    Fill, Observation, Position, dec, ordered_fills, reconstruct, signal,
+    Candle, Fill, MINUTE, Observation, Position, dec, minute_prices, ordered_fills,
+    reconstruct, signal,
 )
 
 
@@ -38,6 +39,8 @@ class Pair:
     position: Position
     position_at: int
     mark_at: int
+    fills_at: int
+    prices_at: int
     fills: tuple
     prices: tuple
 
@@ -46,12 +49,22 @@ class Pair:
         return self.symbol, self.position.pside
 
 
-def capture_pair(symbol, position, position_at, mark_at, fills, prices):
+def capture_pair(symbol, position, position_at, mark_at, fills, prices, *,
+                 fills_at=None, prices_at=None):
+    """Capture normalized inputs, with fetch-completion times separate from events.
+
+    Fill.sequence is actual per-pair exchange/simulator ordering supplied by the
+    fixture, not a numeric trade ID or local arrival index. Unknown order is None.
+    This proposed-contract oracle does not parse/validate connector provenance;
+    production normalization must establish it before supplying such a sequence.
+    """
     size, basis, mark, multiplier = position.validate()
     copied_fills = tuple(replace(f, delta=_number(f.delta), price=_number(f.price),
                                 realized=_number(f.realized), fee=_number(f.fee)) for f in fills)
     return Pair(symbol, replace(position, size=size, basis=basis, mark=mark,
                                 multiplier=multiplier), position_at, mark_at,
+                position_at if fills_at is None else fills_at,
+                mark_at if prices_at is None else prices_at,
                 copied_fills, tuple(sorted((t, dec(p)) for t, p in prices.items())))
 
 
@@ -68,6 +81,7 @@ class Snapshot:
     start: int
     balance: Decimal
     balance_at: int
+    config_at: int
     pairs: tuple
     settings: Settings
     # balance, positions, marks, fills, prices, config; monotonic producer versions.
@@ -75,7 +89,7 @@ class Snapshot:
 
 
 def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisions=(0,) * 6,
-            max_current_age=120_000):
+            max_current_age=120_000, config_at=None):
     pairs = tuple(sorted(pairs, key=lambda p: p.key))
     balance = dec(balance)
     if start > now or balance <= 0 or max_current_age < 0:
@@ -85,10 +99,25 @@ def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisio
     observed = [balance_at, *(p.position_at for p in pairs), *(p.mark_at for p in pairs)]
     if any(not now - max_current_age <= t <= now for t in observed):
         raise ValueError("unusable current observation")
+    config_at = now if config_at is None else config_at
+    if any(t > now for t in [config_at, *(p.fills_at for p in pairs),
+                             *(p.prices_at for p in pairs)]):
+        raise ValueError("future source capture")
+    if any(not isinstance(r, int) or r < 0 for r in revisions):
+        raise ValueError("invalid producer revision")
     for p in pairs:
         p.position.validate()
     settings = replace(settings, ema_span=dec(settings.ema_span), threshold=dec(settings.threshold))
-    return Snapshot(now, start, balance, balance_at, pairs, settings, tuple(revisions))
+    return Snapshot(now, start, balance, balance_at, config_at, pairs, settings, tuple(revisions))
+
+
+def snapshot_quality(snapshot):
+    reasons = set()
+    if any(p.fills_at < p.position_at for p in snapshot.pairs):
+        reasons.add("fills_before_position")
+    if any(p.prices_at < p.mark_at for p in snapshot.pairs):
+        reasons.add("prices_before_mark")
+    return reasons
 
 
 def selected_pairs(snapshot, mode, *, pside=None, symbol=None):
@@ -116,9 +145,10 @@ class Step:
 @dataclass(frozen=True)
 class Boundary:
     timestamp: int
-    # Exact prefix identities distinguish multiple flats in the same millisecond.
+    # Full canonical prefix distinguishes both tied flats and corrected evidence.
     consumed: tuple
     observation: Observation
+    lifecycle_eligible: bool = True
 
 
 @dataclass(frozen=True)
@@ -213,6 +243,9 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             if any(timestamp > p.position_at for p in pairs):
                 reasons.add("boundary_after_position_anchor")
                 continue
+            if any(p.fills_at < p.position_at for p in pairs):
+                reasons.add("fills_before_position")
+                continue
             if (any(not s.clean_tail for s in group)
                     or any(t >= timestamp for ts in conflicts.values() for t in ts)
                     or any(not s.clean_tail for steps in paths.values() for s in steps
@@ -225,8 +258,18 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
                 history = reconstruct(flat, consumed[pair.key], {}, snapshot.start, timestamp)
                 realized += history.rows[-1].pnl
                 reasons.update(history.reasons)
-            ids = tuple((p.key, tuple(f.identity for f in consumed[p.key])) for p in pairs)
-            boundaries.append(Boundary(timestamp, ids, Observation(timestamp, realized, Decimal(0))))
+            # A mixed unordered cohort supplies an estimated risk row, not proof
+            # of a lifecycle reset. sequence means actual exchange/simulator order,
+            # never an arbitrary ID or Python list index (see capture contract).
+            ambiguous = not exact_order and any(
+                len({(_quantity(s.fill)[0] > 0) for s in group if s.pair == p.key}) > 1
+                for p in pairs
+            )
+            if ambiguous:
+                reasons.add("estimated_flat")
+            tape = tuple((p.key, tuple(consumed[p.key])) for p in pairs)
+            boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0)),
+                                       not ambiguous))
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
 
@@ -240,13 +283,15 @@ class PairEstimate:
 def estimate_pair(snapshot, key):
     """Snapshot experiment for a pair with a supplied historical price grid.
 
-    Scope composition and all-candles-absent composition remain separate reference
-    work. Fills beyond the position anchor are isolated, not counted against an
-    older size and then counted again when positions catch up.
+    Sparse minute closes are normalized with ffill/bfill. Scope composition and
+    all-candles-absent composition remain separate reference work. Fills beyond the
+    position anchor are isolated, not counted against an older size and then counted
+    again when positions catch up.
     """
     pair = next(p for p in snapshot.pairs if p.key == key)
     direction = 1 if pair.position.pside == "long" else -1
     all_fills, quality = ordered_fills(pair.fills, snapshot.start, snapshot.now, direction)
+    quality.update(snapshot_quality(snapshot))
     fills = [f for f in all_fills if f.timestamp <= pair.position_at]
     if len(fills) != len(all_fills):
         quality.add("post_position_fill")
@@ -255,6 +300,14 @@ def estimate_pair(snapshot, key):
     prices = {t: p for t, p in pair.prices if snapshot.start <= t <= snapshot.now}
     if not prices:
         raise ValueError("snapshot experiment requires a historical price grid; use the minimal-history oracle separately")
+    expected = set(range(((snapshot.start + MINUTE - 1) // MINUTE) * MINUTE,
+                         snapshot.now + 1, MINUTE))
+    if not expected.issubset(prices):
+        quality.add("filled_price_grid")
+    # Apply the agreed ffill/bfill convention instead of compressing EMA time or
+    # turning a historical gap into a readiness veto. Inputs are minute closes.
+    prices = minute_prices([Candle(t - MINUTE, 1, p, p, p, p) for t, p in prices.items()],
+                           snapshot.start, snapshot.now)
     history = reconstruct(pair.position, fills, prices, snapshot.start, snapshot.now)
     if snapshot.settings.slots <= 0:
         raise ValueError("pair experiment requires an active coin slot")
@@ -275,7 +328,9 @@ class Evaluation:
 def evaluate_bounded(observe, compute, max_attempts=2):
     """Deterministic race model, not a production installation/execution gate.
 
-    A stable result may be installed for its immutable source snapshot. After
+    A stable result with nonregressing revisions and compatible source captures
+    may be installed for its immutable source snapshot. This does not certify
+    complete exchange history or atomic account observations. After
     bounded churn return an explicitly unvalidated estimate of the latest snapshot,
     preserving its usable history. It is not permission to install stale state or
     size orders without independently fresh execution inputs. The reference bounds
@@ -284,11 +339,20 @@ def evaluate_bounded(observe, compute, max_attempts=2):
     if not isinstance(max_attempts, int) or max_attempts < 1:
         raise ValueError("max_attempts must be a positive integer")
     snapshot = observe()
+    high_water = snapshot.revisions
+    last_time = snapshot.now
+    regression = False
     for attempt in range(1, max_attempts + 1):
         value = compute(snapshot)
         current = observe()
+        regression |= current.now < last_time or any(a < b for a, b in zip(current.revisions, high_water))
+        high_water = tuple(max(a, b) for a, b in zip(current.revisions, high_water))
+        last_time = max(last_time, current.now)
+        quality = snapshot_quality(current)
+        if regression:
+            quality.add("revision_regression")
         if current == snapshot:
-            return Evaluation(snapshot, value, attempt, True, frozenset())
+            return Evaluation(snapshot, value, attempt, not quality, frozenset(quality))
         snapshot = current
     return Evaluation(snapshot, compute(snapshot), max_attempts + 1, False,
-                      frozenset({"revision_churn"}))
+                      frozenset(quality | {"revision_churn"}))
