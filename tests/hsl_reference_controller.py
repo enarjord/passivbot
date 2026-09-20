@@ -100,4 +100,6 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
             decisions.append(Decision(t, action, red_at, flat_at, reason, raw, ema))
     if not decisions:
         raise ValueError("no in-window current trace")
+    if decisions[-1].timestamp != now:
+        raise ValueError("trace must end at the current observation")
     return tuple(decisions)

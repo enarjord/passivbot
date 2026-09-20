@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Add an isolated experimental Rust drawdown kernel for revised HSL offline comparisons.
   Add companion pair-history and historical candle-projection components with approximation
-  diagnostics. Existing live, backtest and optimizer HSL behavior remains unchanged.
+  diagnostics, plus stateless controller replay over reconstructed episode traces.
+  Existing live, backtest and optimizer HSL behavior remains unchanged.
 
 - Preserve Bitget UTA linear fill quantities when reported quote values are rounded.
   Repair previously inferred contract multipliers on cache reload so fully closed positions

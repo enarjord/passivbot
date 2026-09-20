@@ -194,6 +194,9 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
     if decisions.is_empty() {
         return Err("no in-window current trace".into());
     }
+    if decisions.last().unwrap().timestamp != input.now {
+        return Err("HSL trace must end at the current observation".into());
+    }
     Ok(decisions)
 }
 

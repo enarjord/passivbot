@@ -52,7 +52,9 @@ def point(t, pnl=0, upnl=0, *, exposed=True, flatten=False):
     return Point(Observation(t, dec(pnl), dec(upnl)), exposed, flatten)
 
 
-def run(*episodes, now=1000, start=0, cooldown=200, restart="always", intervention="panic", span=1):
+def run(*episodes, now=None, start=0, cooldown=200, restart="always", intervention="panic", span=1):
+    if now is None:
+        now = max((p.observation.timestamp for e in episodes for p in e.points), default=1000)
     return replay(episodes, now=now, start=start, budget=1000, span=span,
                   threshold=".05", cooldown=cooldown, restart=restart, intervention=intervention)
 
@@ -176,7 +178,7 @@ def test_ordinary_flat_resets_peak_without_creating_cooldown():
 @pytest.mark.parametrize("policy", ["always", "never"])
 def test_all_expired_evidence_requires_current_sample(policy):
     with pytest.raises(ValueError, match="no in-window"):
-        run(stopped(), start=201, restart=policy)
+        run(stopped(), start=201, now=1000, restart=policy)
     with pytest.raises(ValueError, match="no in-window"):
         run(restart=policy)
 
@@ -194,3 +196,50 @@ def test_partial_exit_does_not_extend_original_red_time():
                        point(300, -50, -50), point(400, -75, -25)))
     trace = run(episode)
     assert all(d.red_at == 100 and d.flat_at is None for d in trace[1:])
+
+
+def test_current_endpoint_is_required_to_evaluate_expiry():
+    # A stale last trace point must not preserve a cooldown that has now expired.
+    with pytest.raises(ValueError, match="current observation"):
+        run(stopped(), now=1000)
+    trace = run(stopped(), Episode((point(1000, exposed=False),)), now=1000)
+    assert trace[-1].action == "normal"
+
+
+def test_expired_unreconstructible_crossing_does_not_turn_an_ordinary_flat_into_stop():
+    # The remaining flatten is not proof of an expired numerical RED decision.
+    # Exchange-derived stop provenance, if supported later, must be explicit.
+    trace = run(stopped(), Episode((point(300, exposed=False),)), start=151, restart="never")
+    assert trace[-1].action == "normal"
+
+
+def test_red_recovered_before_flat_is_still_a_reconstructible_stop():
+    episode = Episode((point(0), point(60_000, upnl=-100), point(120_000, upnl=0),
+                       point(180_000, exposed=False, flatten=True)))
+    trace = run(episode, cooldown=0, restart="never")
+    assert trace[-1].action == "halted"
+    assert trace[-1].red_at == 60_000
+    assert trace[-1].flat_at == 180_000
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_generated_multi_episode_replay_matches_reference(seed):
+    import random
+    rng = random.Random(seed)
+    episodes = []
+    clock = 0
+    for _ in range(5):
+        points = [point(clock, exposed=False)]
+        realized = 0
+        for _ in range(8):
+            clock += rng.choice([1, 60_000, 120_000])
+            realized -= rng.randrange(0, 6)
+            points.append(point(clock, realized, rng.randrange(-180, 181)))
+        clock += 1
+        points.append(point(clock, realized - rng.randrange(0, 60), exposed=False, flatten=True))
+        episodes.append(Episode(tuple(points)))
+        clock += rng.randrange(1, 200_000)
+    episodes.append(Episode((point(clock, exposed=False),)))
+    run(*episodes, start=seed * 60_000, cooldown=180_000,
+        span=rng.choice([1, 2.5, 30.5]),
+        restart=rng.choice(["always", "never"]), intervention=rng.choice(["panic", "normal"]))

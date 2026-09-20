@@ -85,6 +85,29 @@ exchange cashflows, extreme finite values, causal coarse prices, source conflict
 provenance. The next layer must compose these primitives across immutable scoped snapshots
 and lifecycle boundaries without adding an exact-history readiness gate.
 
+## Pure controller replay
+
+`hsl_revised_controller.rs` replays GREEN/RED permissions over supplied scope-level
+numerical episodes. Its experimental JSON binding accepts a complete trace ending at the
+current evaluation time; stale final samples are rejected instead of retaining expired
+cooldowns. It implements `always`/`never`, zero cooldown, `panic`/`normal` interventions,
+partial-exit continuity and lookback clipping, with no previous-controller-state input.
+A numerical RED that remains reconstructible in the trace survives subsequent recovery;
+corrected or expired evidence can remove it on the next independent replay.
+
+A supported flatten ends an episode only after its final risk observation. Cooldown starts
+at that actual flatten, not at a partial fill or retry. An estimated flat cannot be marked
+as a supported boundary. A surviving generic flat does not prove an expired numerical
+crossing was an HSL stop; unreconstructible decisions remain void. The input builder must
+still establish exchange-derived boundaries and any explicit stop provenance. The binding
+is a pure trace component, not proof that the supplied trace was acquired correctly.
+
+The independent Python controller oracle plus real-extension parity covers intervention
+fees, repeated stops, residual exposure, same-minute boundary order, exact cooldown/window
+edges, corrections, missing flat evidence, very long EMA spans and deterministic generated
+multi-episode traces. No live loop, backtester, optimizer or execution adapter invokes this
+component yet. Scope composition and lifecycle evidence construction remain required.
+
 Still required before offline completion:
 
 - Snapshot-aware composition of the Rust history/price primitives, candle-free/mixed-price
