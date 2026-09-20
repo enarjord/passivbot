@@ -272,3 +272,16 @@ def test_future_tail_cannot_be_silently_clipped():
     episode = Episode((point(0), point(100), point(200, exposed=False, flatten=True)))
     with pytest.raises(ValueError, match="future"):
         run(episode, now=100)
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_minimal_reference_cannot_fabricate_a_stop_on_a_flat_scope(completed):
+    episode = Episode((point(0, exposed=False, flatten=completed),), entry_reference=2000)
+    trace = (episode, Episode((point(100, exposed=False),))) if completed else (episode,)
+    with pytest.raises(ValueError, match="current exposed singleton"):
+        run(*trace, restart="never")
+
+
+def test_expired_reference_does_not_affect_current_history():
+    episode = Episode((point(0), point(100)), entry_reference=2000)
+    assert run(episode, start=1)[-1].action == "normal"

@@ -95,7 +95,8 @@ partial-exit continuity and lookback clipping, with no previous-controller-state
 Every episode uses currency PnL on the same cumulative basis and rebases against the
 common current endpoint. Episode boundaries reset peaks and EMA, not the equity currency
 offset; completed episodes may end at nonpositive historical equity. Minimal-history entry
-references are accepted only for singleton episodes, and future trace observations are
+references are accepted only for the current exposed singleton, never a completed/flat
+episode, and future trace observations are
 rejected rather than clipped. A numerical RED that remains reconstructible in the trace survives subsequent recovery;
 corrected or expired evidence can remove it on the next independent replay.
 

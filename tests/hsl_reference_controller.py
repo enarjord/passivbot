@@ -70,10 +70,11 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
         points = [p for p in episode.points if start <= p.observation.timestamp <= now]
         if not points:
             continue
-        if episode.entry_reference is not None and len(points) > 1:
-            raise ValueError("entry reference requires a singleton episode")
         # Never seed an active interval with an expired synthetic reference.
         reference = episode.entry_reference if points[0] == episode.points[0] else None
+        if reference is not None and (len(points) != 1 or not points[0].exposed
+                                      or points[0].flatten or points[0].observation.timestamp != now):
+            raise ValueError("entry reference requires the current exposed singleton")
         risk = signal([p.observation for p in points], budget, span, threshold,
                       entry_reference=reference, anchor=episodes[-1].points[-1].observation)
         for point, raw, ema, red_now in zip(points, risk.raw, risk.ema, risk.panic):

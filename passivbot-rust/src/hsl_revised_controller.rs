@@ -138,14 +138,19 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
         if points.is_empty() {
             continue;
         }
-        if episode.entry_reference.is_some() && points.len() > 1 {
-            return Err("entry reference requires a singleton episode".into());
-        }
         let reference = if points[0].0 == 0 {
             episode.entry_reference
         } else {
             None
         };
+        if reference.is_some()
+            && (points.len() != 1
+                || !points[0].1.exposed
+                || points[0].1.flatten
+                || points[0].1.timestamp != input.now)
+        {
+            return Err("entry reference requires the current exposed singleton".into());
+        }
         let rows: Vec<_> = points
             .iter()
             .map(|(_, p)| Observation {
