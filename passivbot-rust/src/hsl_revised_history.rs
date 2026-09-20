@@ -217,13 +217,33 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     let fills = canonical_fills(&input.fills, input.start, input.end, p.pside, &mut reasons);
     let mut steps = Vec::with_capacity(fills.len());
     let mut after = p.size.abs();
+    let mut quantity_compensation = 0.0;
     for f in fills.iter().rev() {
         let delta = usable(f.delta).unwrap_or(0.0) * direction;
-        let raw_before = finite(after - delta, &mut reasons);
+        // Compensate repeated decimal lot additions so many partial fills do not
+        // accumulate a fictitious opening discrepancy.
+        let increment = -delta - quantity_compensation;
+        let sum = after + increment;
+        quantity_compensation = if sum.is_finite() {
+            (sum - after) - increment
+        } else {
+            0.0
+        };
+        let mut raw_before = finite(sum, &mut reasons);
+        // Cancellation of decimal lot quantities can leave a few binary ulps.
+        // This is arithmetic roundoff, not evidence of a contradictory episode.
+        let tolerance = 8.0 * f64::EPSILON * after.abs().max(delta.abs());
+        if raw_before != 0.0 && raw_before.abs() <= tolerance {
+            reasons.insert("quantity_roundoff".into());
+            raw_before = 0.0;
+        }
         if raw_before < 0.0 {
             reasons.insert("clamped_quantity".into());
         }
         let before = raw_before.max(0.0);
+        if before == 0.0 {
+            quantity_compensation = 0.0;
+        }
         steps.push((
             f,
             before,

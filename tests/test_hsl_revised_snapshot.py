@@ -196,3 +196,42 @@ def test_scope_sum_preserves_large_cancelling_cashflows():
     result = rust(payload(cases.frame(*pairs)))
     assert result["boundaries"][0]["pnl"] == pytest.approx(1e308)
     assert "numeric_range_approximation" in result["reasons"]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("opening,first,last", [("0.8", "0.1", "0.7"), ("0.3", "0.1", "0.2")])
+def test_quantity_roundoff_cannot_hide_a_real_flat(side, opening, first, last):
+    d = 1 if side == "long" else -1
+    fills = [Fill("open", cases.M, dec(opening)*d, 100, 0),
+             Fill("partial", 2*cases.M, -dec(first)*d, 90, -1),
+             Fill("flat", 3*cases.M, -dec(last)*d, 80, -2)]
+    p = cases.pair(pside=side, fills=fills)
+    result = rust(payload(cases.frame(p)))
+    assert len(result["boundaries"]) == 1
+    assert result["boundaries"][0]["lifecycle_eligible"]
+    assert "uncertain_episode_flat" not in result["reasons"]
+    compare(cases.frame(p), "unified")
+
+
+def test_quantity_tolerance_does_not_hide_a_material_missing_close():
+    fills = [Fill("open", cases.M, ".8000001", 100, 0),
+             Fill("partial", 2*cases.M, "-.1", 90, -1),
+             Fill("last_known", 3*cases.M, "-.7", 80, -2)]
+    p = cases.pair(fills=fills)
+    result = rust(payload(cases.frame(p)))
+    assert not result["boundaries"]
+    assert "clamped_quantity" in result["reasons"]
+    assert "uncertain_episode_flat" in result["reasons"]
+    # Actual residual current exposure cannot be snapped away by historical rounding.
+    p = cases.pair(size=1e-8, basis=100, fills=[])
+    result = rust(payload(cases.frame(p)))
+    assert result["pairs"][0]["history"]["samples"][-1]["size"] == 1e-8
+
+
+def test_many_decimal_partial_fills_do_not_accumulate_false_missing_quantity():
+    fills = [Fill("open", 1, "200", 100, 0)]
+    fills += [Fill(f"close-{i}", i+2, "-.1", 90, -1) for i in range(2000)]
+    result = rust(payload(cases.frame(cases.pair(fills=fills))))
+    assert len(result["boundaries"]) == 1
+    assert result["boundaries"][0]["lifecycle_eligible"]
+    assert result["boundaries"][0]["pnl"] == -2000

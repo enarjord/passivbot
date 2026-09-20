@@ -125,6 +125,9 @@ same-time flat/reopen events. Cross-pair timestamp cohorts have no invented glob
 Unknown quantities, contradictory transitions and unsupported capture order can withhold a
 lifecycle boundary without withholding the numeric estimate. An old damaged prefix does
 not permanently taint a later clean suffix. Scope quality uses only selected pair inputs.
+Compensated quantity summation avoids drift across repeated partial fills. Cancellation
+residuals within eight scaled floating-point epsilons are disclosed as
+quantity roundoff rather than contradictory exposure; larger mismatches remain estimated.
 These rows are evidence for the later episode composer, not controller permissions by themselves.
 
 `hsl_revised_candle_free.rs` composes the approved all-candles-absent estimate across selected
