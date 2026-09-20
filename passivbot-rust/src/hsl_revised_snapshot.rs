@@ -1,6 +1,6 @@
 //! Immutable revised HSL snapshot preparation. Boundary uncertainty is not a risk veto.
-use crate::hsl_revised::currency_sum;
 use crate::hsl_revised_history::{self as history, Fill, History, Position, PositionSide};
+use crate::hsl_revised_sum::CurrencySum;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,8 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[serde(deny_unknown_fields)]
 pub struct PositionAnchor {
     pub position_at: i64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub size: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub basis: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub multiplier: f64,
     pub inverse: bool,
     pub pside: PositionSide,
@@ -27,6 +30,7 @@ pub struct Pair {
     pub fills_at: Option<i64>,
     pub prices_at: i64,
     pub fills: Vec<Fill>,
+    #[serde(deserialize_with = "crate::hsl_revised_json::prices")]
     pub prices: BTreeMap<i64, f64>,
     pub revisions: [u64; 4],
     pub fills_position_anchor: Option<PositionAnchor>,
@@ -56,6 +60,7 @@ pub enum Mode {
 pub struct Input {
     pub now: i64,
     pub start: i64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub balance: f64,
     pub balance_at: i64,
     pub config_at: i64,
@@ -286,6 +291,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
         })
         .collect();
     let mut counts = vec![0; pairs.len()];
+    let mut cashflows = CurrencySum::new();
     let mut timeline = Vec::new();
     for (pi, p) in pairs.iter().enumerate() {
         timeline.extend(
@@ -330,6 +336,8 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
                 uncertain_episode |= e.quantity_estimated;
                 sizes[pi] = e.after;
                 counts[pi] = fi + 1;
+                cashflows.add(e.gross_realized);
+                cashflows.add(e.fee);
             }
             if sizes.iter().any(|q| *q != 0.0) {
                 continue;
@@ -367,15 +375,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             if ambiguous {
                 reasons.insert("estimated_flat".into());
             }
-            let values: Vec<_> = pairs
-                .iter()
-                .zip(&counts)
-                .filter_map(|(p, n)| {
-                    n.checked_sub(1)
-                        .map(|i| p.history.events[i].realized_cumsum)
-                })
-                .collect();
-            let pnl = currency_sum(&values, &mut reasons);
+            let pnl = cashflows.value(&mut reasons);
             let lifecycle_eligible = !ambiguous
                 && ![
                     "post_position_fill",
@@ -443,6 +443,7 @@ mod tests {
                 basis: 0.0,
                 mark: 90.0,
                 multiplier: 1.0,
+                quantity_step: None,
                 inverse: false,
                 pside: PositionSide::Long,
             },

@@ -10,7 +10,8 @@ since the latest release tag; these features may already be available when insta
   Add companion pair-history and historical candle-projection components with approximation
   diagnostics, stateless controller replay, scoped snapshot preparation and candle-free
   estimates retaining known realized cashflows.
-  Existing live, backtest and optimizer HSL behavior remains unchanged.
+  Revised JSON numeric inputs preserve exact float round-trips, preventing a supplied
+  position or cashflow from drifting by an ulp. Legacy HSL and its parsing remain unchanged.
 
 - Preserve Bitget UTA linear fill quantities when reported quote values are rounded.
   Repair previously inferred contract multipliers on cache reload so fully closed positions

@@ -52,7 +52,7 @@ def compare(pbr, position, fills, prices, start=0, end=300_000):
         [float(v) for _, v in expected.cashflows], rel=2e-12, abs=2e-12)
     assert [e["fill"]["identity"] for e in actual["events"]] == [f.identity for f, _ in expected.cashflows]
     # Basis equality may differ by an ulp; it is diagnostic, not a risk veto.
-    assert set(actual["reasons"]) - {"current_basis_reconciliation", "quantity_roundoff"} == set(expected.reasons) - {"current_basis_reconciliation", "quantity_roundoff"}
+    assert set(actual["reasons"]) - {"current_basis_reconciliation", "quantity_roundoff", "quantity_precision_unavailable"} == set(expected.reasons) - {"current_basis_reconciliation", "quantity_roundoff", "quantity_precision_unavailable"}
     return actual
 
 

@@ -27,10 +27,11 @@ def fill_payload(fill):
     return row
 
 
-def payload(snapshot, mode="unified", **kwargs):
+def payload(snapshot, mode="unified", *, quantity_step=None, **kwargs):
     pairs = []
     for p in snapshot.pairs:
         position = asdict(p.position)
+        position["quantity_step"] = quantity_step
         for k in ("size", "basis", "mark", "multiplier"):
             position[k] = number(position[k])
         anchor = None
@@ -53,8 +54,8 @@ def rust(value):
     return json.loads(pbr.hsl_revised_snapshot(json.dumps(value, allow_nan=False)))
 
 
-def compare(snapshot, mode, **kwargs):
-    request = payload(snapshot, mode, **kwargs)
+def compare(snapshot, mode, *, quantity_step=None, **kwargs):
+    request = payload(snapshot, mode, quantity_step=quantity_step, **kwargs)
     try:
         expected = reference_boundaries(snapshot, mode, **kwargs)
     except ValueError:
@@ -207,11 +208,11 @@ def test_quantity_roundoff_cannot_hide_a_real_flat(side, opening, first, last):
              Fill("partial", 2*cases.M, -dec(first)*d, 90, -1),
              Fill("flat", 3*cases.M, -dec(last)*d, 80, -2)]
     p = cases.pair(pside=side, fills=fills)
-    result = rust(payload(cases.frame(p)))
+    result = rust(payload(cases.frame(p), quantity_step=.1))
     assert len(result["boundaries"]) == 1
     assert result["boundaries"][0]["lifecycle_eligible"]
     assert "uncertain_episode_flat" not in result["reasons"]
-    compare(cases.frame(p), "unified")
+    compare(cases.frame(p), "unified", quantity_step=.1)
 
 
 def test_quantity_tolerance_does_not_hide_a_material_missing_close():
@@ -232,7 +233,7 @@ def test_quantity_tolerance_does_not_hide_a_material_missing_close():
 def test_many_decimal_partial_fills_do_not_accumulate_false_missing_quantity():
     fills = [Fill("open", 1, "200", 100, 0)]
     fills += [Fill(f"close-{i}", i+2, "-.1", 90, -1) for i in range(2000)]
-    result = rust(payload(cases.frame(cases.pair(fills=fills))))
+    result = rust(payload(cases.frame(cases.pair(fills=fills)), quantity_step=.1))
     assert len(result["boundaries"]) == 1
     assert result["boundaries"][0]["lifecycle_eligible"]
     assert result["boundaries"][0]["pnl"] == -2000
@@ -244,10 +245,10 @@ def test_larger_later_position_does_not_hide_earlier_small_flat(side):
     quantities = [".1", "-.1", ".3", ".3", "2", "2", ".3"]
     fills = [Fill(str(i), i + 1, dec(q) * d, 100, 0) for i, q in enumerate(quantities)]
     p = cases.pair(pside=side, size=4.9*d, basis=100, fills=fills)
-    result = rust(payload(cases.frame(p)))
+    result = rust(payload(cases.frame(p), quantity_step=.1))
     assert [b["timestamp"] for b in result["boundaries"]] == [2]
     assert result["boundaries"][0]["lifecycle_eligible"]
-    compare(cases.frame(p), "unified")
+    compare(cases.frame(p), "unified", quantity_step=.1)
 
 
 @pytest.mark.parametrize("values", permutations([-1e16, -1, 1e16]))
@@ -261,14 +262,14 @@ def test_small_scope_cashflow_survives_large_finite_cancellation(values):
 @pytest.mark.parametrize("field,value", [
     ("position_at", 0), ("mark_at", 0), ("position_at", 300_001),
     ("mark_at", 300_001), ("basis", 0), ("mark", 0), ("multiplier", 0),
-    ("size", -1), ("start", 300_001), ("balance_at", 0),
+    ("size", -1), ("quantity_step", 0), ("quantity_step", -1), ("start", 300_001), ("balance_at", 0),
     ("balance_at", 300_001), ("config_at", 300_001),
 ])
 def test_inactive_candle_free_scope_still_validates_current_snapshot(field, value):
     import passivbot_rust as pbr
     p = cases.pair("TEST", size=1, basis=100, now=300_000)
     snapshot = payload(cases.frame(p, now=300_000), "coin", symbol="TEST", pside="long")
-    if field in ("basis", "mark", "multiplier", "size"):
+    if field in ("basis", "mark", "multiplier", "size", "quantity_step"):
         snapshot["pairs"][0]["position"][field] = value
     elif field in ("position_at", "mark_at"):
         snapshot["pairs"][0][field] = value
@@ -306,3 +307,88 @@ def test_quantity_roundoff_scale_resets_after_later_episode_opening():
     result = rust(payload(cases.frame(p)))
     assert not result["boundaries"]
     assert "clamped_quantity" in result["reasons"]
+
+
+@pytest.mark.parametrize("step", [None, .0001220703125])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_scale_only_rounding_does_not_certify_a_real_residual_flat(step, side):
+    d = 1 if side == "long" else -1
+    residual = .0001220703125
+    fills = [Fill("old_close", 1, -residual*d, 100, -1),
+             Fill("later_add", 2, 1e12*d, 100, 0)]
+    p = cases.pair(size=(1e12+residual)*d, basis=100, pside=side, fills=fills)
+    result = rust(payload(cases.frame(p), quantity_step=step))
+    assert not result["boundaries"]
+    assert "quantity_precision_unavailable" in result["reasons"]
+    assert result["pairs"][0]["history"]["samples"][-1]["size"] == float(p.position.size)
+
+
+@pytest.mark.parametrize("values", list(permutations([-1e50, -1e30, -1e10, 1e30, 1e50])))
+def test_nested_scope_cancellation_keeps_the_net_loss(values):
+    import passivbot_rust as pbr
+    pairs = [cases.pair(str(i), fills=[Fill("close", 1, -1, 100, value)], mark=100)
+             for i, value in enumerate(values)]
+    request = payload(cases.frame(*pairs, balance=1e11))
+    boundary = rust(request)["boundaries"][0]
+    assert boundary["pnl"] == -1e10
+    result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.05))))
+    assert result["realized"] == -1e10
+    assert result["signal"]["panic"] == [True]
+
+
+@pytest.mark.parametrize("field", ["realized", "fee"])
+@pytest.mark.parametrize("values", list(permutations([-1e16, -1, 1e16])))
+def test_pair_cashflows_keep_small_losses_before_scope_aggregation(field, values):
+    import passivbot_rust as pbr
+    fills = [Fill("open", 1, 3, 100, 0)]
+    fills += [Fill(str(i), i+2, -1, 100, value if field == "realized" else 0,
+                   value if field == "fee" else 0) for i, value in enumerate(values)]
+    request = payload(cases.frame(cases.pair(fills=fills), balance=1000))
+    prepared = rust(request)
+    assert prepared["pairs"][0]["history"]["events"][-1]["realized_cumsum"] == -1
+    assert prepared["boundaries"][0]["pnl"] == -1
+    result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.0005))))
+    assert result["realized"] == -1
+    assert result["signal"]["panic"] == [True]
+
+
+def test_scope_retains_fee_below_one_pairs_rounded_cumulative_precision():
+    import passivbot_rust as pbr
+    pairs = [cases.pair("A", fills=[Fill("close", 1, -1, 100, 1e16, -1)]),
+             cases.pair("B", fills=[Fill("close", 1, -1, 100, -1e16)])]
+    request = payload(cases.frame(*pairs, balance=1000))
+    assert rust(request)["boundaries"][0]["pnl"] == -1
+    result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.0005))))
+    assert result["realized"] == -1
+    assert result["signal"]["panic"] == [True]
+
+
+def test_currency_sum_matches_exact_fraction_oracle_for_generated_scopes():
+    from fractions import Fraction
+    import random
+    rng = random.Random(9173)
+    for _ in range(100):
+        levels = [rng.uniform(-1, 1) * 2**rng.randint(-900, 900) for _ in range(8)]
+        residual = rng.uniform(-1, 1) * 2**rng.randint(-900, 900)
+        values = levels + [-x for x in levels] + [residual]
+        rng.shuffle(values)
+        expected = float(sum((Fraction(x) for x in values), Fraction()))
+        pairs = [cases.pair(str(i), fills=[Fill("close", 1, -1, 100, value)])
+                 for i, value in enumerate(values)]
+        assert rust(payload(cases.frame(*pairs)))["boundaries"][0]["pnl"] == expected
+
+
+@pytest.mark.parametrize("offset_upnl", [False, True])
+def test_small_loss_survives_large_realized_peak_or_offsetting_current_upnl(offset_upnl):
+    import passivbot_rust as pbr
+    if offset_upnl:
+        p = cases.pair(size=1e16, basis=2, mark=3,
+                       fills=[Fill("loss", 1, 1e16, 2, -1e16, -1)])
+    else:
+        p = cases.pair(fills=[Fill("open", 1, 2, 100, 0),
+                             Fill("profit", 2, -1, 100, 1e16),
+                             Fill("fee", 3, -1, 100, 0, -1)])
+    request = payload(cases.frame(p, balance=1000))
+    result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.0005))))
+    assert result["signal"]["raw"] == pytest.approx([1/1001])
+    assert result["signal"]["panic"] == [True]

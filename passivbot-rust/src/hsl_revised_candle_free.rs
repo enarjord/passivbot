@@ -1,7 +1,8 @@
 //! All-candles-absent scope estimate. Known cashflows enrich the single current
 //! observation; cashflow peaks are references, never invented past EMA samples.
-use crate::hsl_revised::{currency_sum as sum, signal, Observation, Signal};
+use crate::hsl_revised::{signal, Observation, Signal};
 use crate::hsl_revised_snapshot::{prepare, select, Input as Snapshot, Mode};
+use crate::hsl_revised_sum::{currency_sum as sum, CurrencySum};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -11,7 +12,9 @@ use std::collections::BTreeSet;
 pub struct Input {
     pub snapshot: Snapshot,
     pub slots: u64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub span: f64,
+    #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub threshold: f64,
 }
 #[derive(Debug, Serialize)]
@@ -64,9 +67,9 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
         );
     }
     timeline.sort_unstable();
-    let mut cumulative = vec![0.0; prepared.pairs.len()];
+    let mut cumulative = CurrencySum::new();
     let mut realized = 0.0;
-    let mut peak: f64 = 0.0;
+    let mut peak = CurrencySum::new();
     let mut cursor = 0;
     while cursor < timeline.len() {
         let t = timeline[cursor].0;
@@ -92,21 +95,31 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
         }
         for group in groups {
             for &(_, pi, fi) in group {
-                cumulative[pi] = prepared.pairs[pi].history.events[fi].realized_cumsum;
+                let event = &prepared.pairs[pi].history.events[fi];
+                cumulative.add(event.gross_realized);
+                cumulative.add(event.fee);
             }
-            realized = sum(&cumulative, &mut reasons);
-            peak = peak.max(realized);
+            realized = cumulative.value(&mut reasons);
+            if cumulative.difference(&peak, &mut reasons) > 0.0 {
+                peak = cumulative.clone();
+            }
         }
         cursor = end;
     }
-    let upnl = sum(
-        &prepared
-            .pairs
-            .iter()
-            .map(|p| p.history.samples.last().unwrap().upnl)
-            .collect::<Vec<_>>(),
-        &mut reasons,
-    );
+    let upnl_terms: Vec<_> = prepared
+        .pairs
+        .iter()
+        .map(|p| p.history.samples.last().unwrap().upnl)
+        .collect();
+    let upnl = sum(&upnl_terms, &mut reasons);
+    // Subtract exact cashflow prefixes before rounding. A large realized baseline
+    // must not erase a small loss since its peak, including after netting UPNL.
+    let realized_peak = peak.value(&mut reasons);
+    peak.subtract(&cumulative);
+    for value in upnl_terms {
+        peak.add(-value);
+    }
+    let reference_delta = peak.value(&mut reasons);
     let current = Observation {
         timestamp_ms: snapshot.now,
         realized,
@@ -118,10 +131,14 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
         &[
             Observation {
                 timestamp_ms: snapshot.now,
-                realized: peak,
+                realized: reference_delta,
                 unrealized: 0.0,
             },
-            current,
+            Observation {
+                timestamp_ms: snapshot.now,
+                realized: 0.0,
+                unrealized: 0.0,
+            },
         ],
         budget,
         input.span,
@@ -142,7 +159,7 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
     Ok(Output {
         signal: Some(result),
         realized,
-        realized_peak: peak,
+        realized_peak,
         upnl,
         reasons,
     })

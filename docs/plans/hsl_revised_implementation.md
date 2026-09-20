@@ -129,8 +129,13 @@ not permanently taint a later clean suffix. Scope quality uses only selected pai
 Compensated quantity summation avoids drift across repeated partial fills. Cancellation
 residuals within eight scaled floating-point epsilons are disclosed as
 quantity roundoff rather than contradictory exposure; larger mismatches remain estimated.
-The scale includes the reconstructed suffix and resets at zero, so a larger later position
-does not hide an earlier real flat or indefinitely relax earlier quantity checks.
+The scale includes the reconstructed suffix and resets at zero. Rounding alone does not
+certify a lifecycle flat: an optional positive exchange `quantity_step` must be available,
+and the entire error allowance must be below half that quantum. Otherwise the rounded
+history remains usable but the boundary is uncertain (`quantity_precision_unavailable`).
+Actual current exposure is never snapped away. Experimental HSL JSON fields use exact float parsing
+so a supplied finite position/cashflow does not change before reconstruction sees it;
+legacy JSON parsing is unchanged. Missing precision is not a signal veto.
 These rows are evidence for the later episode composer, not controller permissions by themselves.
 
 `hsl_revised_candle_free.rs` composes the approved all-candles-absent estimate across selected
@@ -138,9 +143,14 @@ pairs. It preserves known/estimated net realized cashflows and their in-window p
 currency gains and losses before division, and combines them with current UPNL. The peak
 reference contributes no fabricated past EMA sample. Coin zero-slot scopes remain inactive;
 side/unified budgets use the raw balance. Inactivity never bypasses current-input validation.
-Scoped currency sums use compensated addition even when intermediates stay finite.
-An overflowing sum retries with opposite signs cancelling first, preserving small net losses
-without scaling them into underflow; unrepresentable totals saturate with diagnostics. The helper refuses to discard usable historical
+Pair and scoped currency sums use a fixed-size exact binary accumulator, retaining all
+exponent levels and rounding only when a public float value is read. Gross cashflows and
+fees remain separate terms across scope composition, so an already rounded per-pair sum
+cannot erase a small fee when it later cancels another pair. Unrepresentable readouts
+saturate with diagnostics; the underlying accumulator retains the full sum for later
+cancellation. Peak/current cashflow differences and their combination with current UPNL
+are formed before rounding as well. Allocation and per-add work are bounded independently
+of tape length. The helper refuses to discard usable historical
 prices to obtain a singleton result. It is not the mixed-price scope dispatcher.
 
 Parity covers the independent boundary fixtures, corrections and source timing, generated

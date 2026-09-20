@@ -14,9 +14,13 @@ const MAX_WINDOW: i64 = 90 * 24 * 60 * MINUTE;
 pub struct Candle {
     pub start: i64,
     pub minutes: i64,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub open: Option<f64>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub high: Option<f64>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub low: Option<f64>,
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub close: Option<f64>,
     pub available_at: Option<i64>,
 }

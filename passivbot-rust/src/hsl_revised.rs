@@ -38,58 +38,6 @@ fn bounded(value: f64, approximate: &mut bool) -> f64 {
     }
 }
 
-/// Sum already-finite reconstructed currency amounts without discarding small
-/// losses beside large offsetting exposures. Neumaier compensation is required
-/// even when the ordinary running sum never overflows.
-pub(crate) fn currency_sum(
-    values: &[f64],
-    reasons: &mut std::collections::BTreeSet<String>,
-) -> f64 {
-    fn add(total: &mut f64, correction: &mut f64, value: f64) -> bool {
-        let next = *total + value;
-        if !next.is_finite() {
-            return false;
-        }
-        *correction += if total.abs() >= value.abs() {
-            (*total - next) + value
-        } else {
-            (value - next) + *total
-        };
-        *total = next;
-        correction.is_finite()
-    }
-    let (mut total, mut correction) = (0.0, 0.0);
-    if values.iter().all(|&v| add(&mut total, &mut correction, v)) {
-        let result = total + correction;
-        if result.is_finite() {
-            return result;
-        }
-    }
-    reasons.insert("numeric_range_approximation".into());
-    // Retry with opposite signs cancelling before same-sign accumulation. Do not
-    // scale all terms: scaling can underflow a small, representable net loss.
-    let (mut positive, mut negative): (Vec<_>, Vec<_>) =
-        values.iter().copied().partition(|v| *v >= 0.0);
-    positive.sort_by(|a, b| b.total_cmp(a));
-    negative.sort_by(|a, b| a.total_cmp(b));
-    total = 0.0;
-    correction = 0.0;
-    while !positive.is_empty() || !negative.is_empty() {
-        let value = if !negative.is_empty() && (total > 0.0 || positive.is_empty()) {
-            negative.pop().unwrap()
-        } else {
-            positive.pop().unwrap()
-        };
-        if !add(&mut total, &mut correction, value) {
-            // Opposite signs cannot overflow. At this point the remaining terms
-            // have one sign and the net magnitude is outside the currency range.
-            return f64::MAX.copysign(value);
-        }
-    }
-    let mut approximate = true;
-    bounded(total + correction, &mut approximate)
-}
-
 /// Batch reference semantics: final equity equals current budget, EMA starts at
 /// the first raw drawdown, and updates in the same minute replace that minute's
 /// contribution. Peak tracking still sees each ordered boundary sample.
@@ -234,6 +182,7 @@ pub fn signal_py(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hsl_revised_sum::currency_sum;
 
     #[test]
     fn currency_sum_retains_residuals_across_extreme_permutations() {

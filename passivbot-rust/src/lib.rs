@@ -13,6 +13,8 @@ mod hsl_revised_candle_free;
 mod hsl_revised_history;
 mod hsl_revised_prices;
 mod hsl_revised_snapshot;
+mod hsl_revised_sum;
+mod hsl_revised_json;
 mod orchestrator;
 mod python;
 mod risk;
