@@ -31,6 +31,10 @@ def _number(value):
     return result if math.isfinite(result) else None
 
 
+def _identified(value):
+    return isinstance(value, str) and value.strip().lower() not in ("", "none", "null", "nan")
+
+
 def _timestamp(value):
     # Do not truncate fractional timestamps or invent the time of an undated fill.
     if isinstance(value, bool):
@@ -89,16 +93,14 @@ def capture_fills(events: Iterable[FillEvent], multipliers: Mapping[str, float])
     grouped, quality, global_reasons = {}, {}, set()
     for event in events:
         symbol, pside = event.symbol, event.position_side
-        if not isinstance(symbol, str) or not symbol or pside not in ("long", "short"):
+        if not _identified(symbol) or pside not in ("long", "short"):
             global_reasons.add("unattributed_fill")
             continue
         key = symbol, pside
         reasons = quality.setdefault(key, set())
         rows = grouped.setdefault(key, [])
         timestamp = _timestamp(event.timestamp)
-        if (not isinstance(event.id, str)
-                or event.id.strip().lower() in ("", "none", "null", "nan")
-                or timestamp is None or timestamp == 0):
+        if not _identified(event.id) or timestamp is None or timestamp == 0:
             reasons.add("unidentified_or_undated_fill")
             continue
         quantity = _number(event.qty)
@@ -126,6 +128,9 @@ def capture_fills(events: Iterable[FillEvent], multipliers: Mapping[str, float])
             if event.pnl_status == "pending" or event.pnl_source == PNL_SOURCE_PENDING:
                 realized = None
                 reasons.add("pending_realized_pnl")
+            elif event.pnl_status != "complete":
+                realized = None
+                reasons.add("unknown_pnl_completeness")
             elif event.pnl_source not in (
                 PNL_SOURCE_AUTHORITATIVE, PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
             ):

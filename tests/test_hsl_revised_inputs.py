@@ -268,3 +268,31 @@ def test_from_dict_missing_id_sentinel_and_numeric_zero_identity():
     assert source.id == "None"
     assert pair([source]).fills == ()
     assert pair([event(id="0")]).fills[0].identity == "0"
+
+
+@pytest.mark.parametrize("symbol", [None, "None", "NULL", "nan", "   "])
+def test_manager_normalized_missing_symbol_is_not_a_cashflow_scope(symbol):
+    fields = event().to_dict()
+    fields["symbol"] = symbol
+    source = FillEvent.from_dict(fields)
+    tape = capture_fills([source], {SYMBOL:10.})
+    assert tape.pairs == ()
+    assert tape.reasons == ("unattributed_fill",)
+
+
+@pytest.mark.parametrize("status", ["unknown", "estimated", "bad-state", None, ""])
+def test_unknown_pnl_completeness_does_not_certify_an_amount(status):
+    source = event(pnl_status=status, pnl=123.)
+    captured = pair([source])
+    assert captured.payload()[0]["realized"] is None
+    assert captured.payload()[0]["fee"] == -.2
+    assert captured.payload()[0]["delta"] == 2.
+    assert "unknown_pnl_completeness" in captured.reasons
+
+
+def test_unknown_cached_pnl_status_survives_manager_but_is_disclosed_at_transport():
+    fields = event().to_dict()
+    fields["pnl_status"] = "UNRECOGNIZED"
+    source = FillEvent.from_dict(fields)
+    assert source.pnl_status == "unrecognized"
+    assert pair([source]).payload()[0]["realized"] is None
