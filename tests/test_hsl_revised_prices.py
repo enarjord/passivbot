@@ -52,6 +52,10 @@ def test_finest_source_internal_gaps_leading_bfill_and_trailing_ffill(require_re
         by_time = {r["timestamp"]: r for r in actual["rows"]}
         assert by_time[7 * M]["close"] == 123
         assert by_time[7 * M]["resolution_minutes"] == 1
+        # Revised policy deliberately resumes the finest available coarse source
+        # after a true minute. Legacy's prefix-only restriction is not retained.
+        assert by_time[8 * M]["resolution_minutes"] == 5
+        assert not by_time[8 * M]["carried"]
         assert by_time[0]["carried"]
         assert by_time[25 * M]["close"] == 115
         assert {"backfilled_price", "forward_filled_price"} <= set(actual["reasons"])
