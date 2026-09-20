@@ -108,6 +108,33 @@ edges, corrections, missing flat evidence, very long EMA spans and deterministic
 multi-episode traces. No live loop, backtester, optimizer or execution adapter invokes this
 component yet. Scope composition and lifecycle evidence construction remain required.
 
+## Scoped snapshot preparation and candle-free estimates
+
+`hsl_revised_snapshot.rs` prepares selected coin, side or unified pairs from immutable
+normalized observations. Current balance/position/mark captures must be usable. Historical
+fill defects remain approximation diagnostics: quarantine causally impossible revisions
+before canonical selection, isolate fills after the observed position, and retain usable
+cashflows and current-anchored numerical history independently of lifecycle eligibility.
+
+Supported flatten rows retain their canonical consumed-prefix lengths, including sequenced
+same-time flat/reopen events. Cross-pair timestamp cohorts have no invented global ordering.
+Unknown quantities, contradictory transitions and unsupported capture order can withhold a
+lifecycle boundary without withholding the numeric estimate. An old damaged prefix does
+not permanently taint a later clean suffix. Scope quality uses only selected pair inputs.
+These rows are evidence for the later episode composer, not controller permissions by themselves.
+
+`hsl_revised_candle_free.rs` composes the approved all-candles-absent estimate across selected
+pairs. It preserves known/estimated net realized cashflows and their in-window peak, nets
+currency gains and losses before division, and combines them with current UPNL. The peak
+reference contributes no fabricated past EMA sample. Coin zero-slot scopes remain inactive;
+side/unified budgets use the raw balance. The helper refuses to discard usable historical
+prices to obtain a singleton result. It is not the mixed-price scope dispatcher.
+
+Parity covers the independent boundary fixtures, corrections and source timing, generated
+historical damage, real offline fake-exchange partial/final fills and current cashflows,
+scope isolation, contract units, extreme currency sums and no-candle realized-loss cases.
+Full fake-live orchestration and live/backtest/optimizer callers are still outstanding.
+
 Still required before offline completion:
 
 - Snapshot-aware composition of the Rust history/price primitives, candle-free/mixed-price
