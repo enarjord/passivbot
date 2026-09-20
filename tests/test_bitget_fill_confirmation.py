@@ -1,10 +1,11 @@
-"""Bitget attribution metadata must not exclude executions from accounting."""
+"""Bitget fill accounting must preserve executions and confirm position state."""
 
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
-from fill_events_manager import BitgetFetcher, FillEventsManager
+from fill_events_manager import BitgetFetcher, FillEvent, FillEventsManager
 from test_unstucking_safeguards import (
     _dummy_config,
     _make_dummy_bot,
@@ -271,3 +272,82 @@ async def test_flat_start_then_staggered_partial_fill_delivery(tmp_path, mode):
     bot._trailing_fill_fetch_generation = 2
     await bot.update_trailing_data()
     assert bot._trailing_pending_fill_confirmations == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("category", ["USDT-FUTURES", "USDC-FUTURES"])
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize("cached", [False, True])
+async def test_uta_rounded_notional_preserves_quantity_and_restart_confirmation(
+    tmp_path, category, pside, cached
+):
+    api, fetcher, manager = make_manager(tmp_path, "uta", pside)
+    # Rounded quote values must not turn a full close into a dust position.
+    for row, qty, price, value in zip(
+        api.rows,
+        (0.013, 0.013, 0.004, 0.006),
+        (98.765, 100.321, 110.0, 110.0),
+        ("1.284", "1.304", "0.44", "0.66"),
+    ):
+        row.update(category=category, execQty=str(qty), execPrice=str(price), execValue=value)
+        row["feeDetail"] = [{"feeCoin": "USDT", "fee": "0.0001"}]
+
+    if cached:
+        # Persist the old inferred multiplier, including its explicit c_mult field.
+        events = []
+        for row in api.rows:
+            event = FillEvent.from_dict(fetcher._normalize_fill_uta(row))
+            event = replace(
+                event,
+                c_mult=float(row["execValue"])
+                / (float(row["execQty"]) * float(row["execPrice"])),
+            )
+            events.append(event)
+        manager.cache.save(events)
+        await manager.ensure_loaded()  # Repair must not depend on another REST backfill.
+    else:
+        await manager.refresh(start_ms=T0 - 1, end_ms=T0 + 300_000)
+
+    for _ in range(2):
+        events = manager.get_events()
+        assert [e.c_mult for e in events] == [1.0] * 4
+        assert (events[1].psize, events[1].pprice) == (0.0, 0.0)
+        assert events[-1].psize == pytest.approx(0.01)
+        assert events[-1].pprice == pytest.approx(110.0, abs=1e-12)
+        assert {e.id: e.raw[0]["data"] for e in events} == {r["execId"]: r for r in api.rows}
+        assert [e.fee_paid for e in events] == [-0.0001] * 4
+        assert {e.id: e.fee_notional for e in events} == {
+            r["execId"]: float(r["execValue"]) for r in api.rows
+        }
+        bot = make_bot(manager, pside, initial_size=0.01)
+        bot.qty_steps[SYMBOL] = 0.001
+        bot.price_steps[SYMBOL] = 0.0001
+        await bot.update_trailing_data()
+        assert bot._trailing_fill_confirmation_diagnostics == {}
+        assert bot._trailing_pending_fill_confirmations == {}
+        manager = FillEventsManager(
+            exchange="bitget",
+            user="offline_fixture",
+            fetcher=fetcher,
+            cache_path=tmp_path / "cache",
+        )
+        await manager.ensure_loaded()
+
+
+@pytest.mark.parametrize("category", [None, "COIN-FUTURES", "SPOT"])
+def test_uta_multiplier_repair_requires_known_linear_category(tmp_path, category):
+    api, fetcher, manager = make_manager(tmp_path, "uta", "long")
+    row = dict(api.rows[0], execValue="99.99")
+    if category is not None:
+        row["category"] = category
+    payload = fetcher._normalize_fill_uta(row)
+    payload["c_mult"] = 2.0
+    assert FillEvent.from_dict(payload).c_mult == 2.0
+
+
+def test_linear_category_does_not_override_another_fill_source(tmp_path):
+    api, fetcher, manager = make_manager(tmp_path, "uta", "long")
+    payload = fetcher._normalize_fill_uta(dict(api.rows[0], category="USDT-FUTURES"))
+    payload["raw"][0]["source"] = "another_exchange"
+    payload["c_mult"] = 10.0
+    assert FillEvent.from_dict(payload).c_mult == 10.0

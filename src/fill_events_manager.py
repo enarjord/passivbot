@@ -624,6 +624,17 @@ def _raw_quote_value(payload: Dict[str, object]) -> float:
 
 
 def _payload_contract_multiplier(payload: Dict[str, object]) -> float:
+    # Bitget UTA linear execQty is already in base units. Its rounded execValue
+    # is fee/notional evidence, not a contract-size measurement. Apply this on
+    # cache reads too, overriding multipliers previously inferred from that value.
+    raw_rows = _normalize_raw_field(payload.get("raw"))
+    if raw_rows and all(
+        raw.get("source") == "uta_fills"
+        and isinstance(raw.get("data"), dict)
+        and raw["data"].get("category") in ("USDT-FUTURES", "USDC-FUTURES")
+        for raw in raw_rows
+    ):
+        return 1.0
     try:
         explicit = float(payload.get("c_mult") or payload.get("contract_size") or 0.0)
     except Exception:
