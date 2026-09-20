@@ -11,6 +11,15 @@ the legacy prefix-only coarse-candle restriction below does not apply to those
 experimental components. This separation does not weaken legacy runtime readiness
 or permit activating the revised path before its integration gates pass.
 
+`live.hsl_engine` is the startup-only shared selector (`legacy` default, `revised`
+opt-in). It cannot be varied by scenario or optimizer override. At this staged
+checkpoint all revised runtime modes explicitly reject startup/payload execution;
+configuration acceptance is not runtime availability. Live rejects before credential
+lookup; backtest/optimizer entry points reject before preparing an experiment.
+Revised configuration requires explicit restart policy when enabled, explicit
+`bot.hsl` for unified mode, and a finite 1–90 day enabled lookback. Removed fields
+and inactive search dimensions follow the [migration rules](../../configuration.md#experimental-revised-hsl-configuration).
+
 HSL drawdown state is scoped by `live.hsl_signal_mode`:
 
 | Mode | Episode scope | Episode ends when |

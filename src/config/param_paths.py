@@ -77,6 +77,12 @@ def _strategy_path_map_for_config(config: dict) -> dict[str, tuple[str, ...]]:
 
 def resolve_optimizer_key_path(config: dict, key: str) -> tuple[str, ...] | None:
     canonical_key = canonical_optimizer_key(key)
+    if canonical_key.startswith("hsl_"):
+        if config.get("live", {}).get("hsl_engine") == "revised" and config.get("live", {}).get("hsl_signal_mode") == "unified":
+            field = canonical_key.removeprefix("hsl_")
+            if field in {"red_threshold", "ema_span_minutes", "cooldown_minutes_after_red"}:
+                return ("bot", "hsl", field)
+        return None
     strategy_path_map = _strategy_path_map_for_config(config)
     if canonical_key in strategy_path_map:
         return strategy_path_map[canonical_key]

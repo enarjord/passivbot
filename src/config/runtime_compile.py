@@ -28,6 +28,10 @@ def compile_runtime_config(config: dict, runtime: str = "generic", *, record_ste
                 path_prefix=("coin_overrides", pside),
                 seed_missing_groups=False,
             )
+    from .hsl_revised import engine, normalize_revised
+    from .schema import get_template_config
+    if engine(result) == "revised":
+        normalize_revised(result, get_template_config(), verbose=False)
     sync_canonical_strategy_config(result)
     prune_inactive_strategy_subtrees(result)
     prune_inactive_optimize_strategy_bounds(result)

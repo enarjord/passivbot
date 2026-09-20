@@ -26,6 +26,8 @@ def _validate_fixed_runtime_overrides(config: dict) -> None:
     overrides = config.get("optimize", {}).get("fixed_runtime_overrides")
     if not isinstance(overrides, dict):
         raise TypeError("config.optimize.fixed_runtime_overrides must be a dict")
+    from .hsl_revised import validate_override_paths
+    validate_override_paths(config, overrides)
     resolved_sources: dict[tuple[str, ...], str] = {}
     for dotted_path in overrides:
         if not isinstance(dotted_path, str):
@@ -83,6 +85,9 @@ def validate_config(
     from analysis_visibility import validate_visible_metrics_config
     from optimization.config_adapter import validate_optimize_bounds_against_bot_config
 
+    from .hsl_revised import normalize_revised
+    from .schema import get_template_config
+    normalize_revised(config, get_template_config(), verbose=verbose)
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
     require_config_dict(config, "monitor")

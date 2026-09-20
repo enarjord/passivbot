@@ -1269,6 +1269,8 @@ class Passivbot:
 
     def __init__(self, config: dict):
         """Initialise the bot with configuration, user context, and runtime caches."""
+        from config.hsl_revised import require_runtime_support
+        require_runtime_support(config)
         self.config = config
         try:
             lvl_raw = get_optional_config_value(config, "logging.level", 1)

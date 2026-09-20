@@ -2314,6 +2314,10 @@ def update_config_with_args(
 ):
     transform_root = config
     config = effective_config_payload(config)
+    from config.hsl_revised import validate_override_paths
+    supplied = {key: value for key, value in vars(args).items()
+                if value is not None and (key in allowed_keys if allowed_keys is not None else "." in key)}
+    validate_override_paths(config, supplied, allow_engine=True)
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():

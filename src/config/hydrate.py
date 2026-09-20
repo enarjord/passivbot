@@ -26,6 +26,7 @@ PARTIALLY_OPEN_CONFIG_PATHS: set[Path] = {
     ("optimize", "fixed_runtime_overrides"),
 }
 BACKTEST_INHERITED_LIVE_KEYS: tuple[str, ...] = (
+    "hsl_engine",
     "fee_pct_fallback",
     "fee_pct_sanity_abs_max",
     "market_orders_allowed",
@@ -121,6 +122,14 @@ def sync_with_template(
             elif existing_base != base_config_path:
                 tracker.update(["live", "base_config_path"], existing_base, base_config_path)
     template_with_extras = deepcopy(template)
+    # Keep only explicitly supplied revised portfolio authority and its search bounds.
+    if result["live"].get("hsl_engine") == "revised":
+        for section in (("bot",), ("optimize", "bounds")):
+            target, source = template_with_extras, result
+            for key in section:
+                target, source = target[key], source[key]
+            if "hsl" in source:
+                target["hsl"] = deepcopy(source["hsl"])
     template_with_extras.setdefault("live", {})["base_config_path"] = ""
     preserved_live_optimize_bounds = [
         ("optimize", "bounds", key)
@@ -134,9 +143,9 @@ def sync_with_template(
         preserve=TEMPLATE_SYNC_PRESERVE_PATHS + tuple(preserved_live_optimize_bounds),
         tracker=tracker,
     )
-    remove_unused_keys_recursively(template["bot"], result["bot"], verbose=verbose, tracker=tracker)
+    remove_unused_keys_recursively(template_with_extras["bot"], result["bot"], verbose=verbose, tracker=tracker)
     remove_unused_keys_recursively(
-        template["optimize"]["bounds"],
+        template_with_extras["optimize"]["bounds"],
         result["optimize"]["bounds"],
         verbose=verbose,
         tracker=tracker,
@@ -278,4 +287,5 @@ def apply_non_live_adjustments(
     sort_optimize_bounds_in_place(
         result["optimize"]["bounds"],
         strategy_kind=result.get("live", {}).get("strategy_kind"),
+        portfolio_hsl=result["live"].get("hsl_engine") == "revised" and result["live"].get("hsl_signal_mode") == "unified",
     )
