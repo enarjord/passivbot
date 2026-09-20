@@ -41,7 +41,10 @@ HSL has yet been wired into the full live-loop harness.
   An invalid quantity omits only the unknown position transition with a reason;
   independently usable exchange PnL and fees are still retained.
 - Execution identity is deduplicated before reconstruction. Highest supplied revision
-  wins; contradictory rows at the same revision are excluded with a reason. Known
+  wins before applying timestamp membership; a correction moving a row outside the
+  window removes its superseded in-window version. This uses supplied revision
+  metadata, not an extended history-fetch horizon or out-of-window PnL. Contradictory
+  rows at the same revision are excluded with a reason. Known
   sequences retain their relative order even within partially sequenced cohorts.
   Unsequenced rows follow the known subset, with increases before reductions and
   identity as tie-breaker. Ambiguity is disclosed, not a flat certificate.
@@ -50,7 +53,8 @@ HSL has yet been wired into the full live-loop harness.
   positive-peak arithmetic resumes, including values above 1 if equity is negative.
   This is an explicit numeric reference choice for review, not existing runtime behavior.
 - Minute-close sources must be available at evaluation time. Coarse source candles
-  must be fully inside the window; real minutes override coarse estimates. Zigzag
+  must be fully inside the window; real minutes are selected by close timestamp,
+  even if their unused opening precedes the window, and override coarse estimates. Zigzag
   close pivots match the documented open/extrema/close path. Gaps forward-fill and
   the missing prefix backfills. The current endpoint is replaced by the fresh mark.
   A real 1m source needs only a usable close; malformed unused wick/open fields

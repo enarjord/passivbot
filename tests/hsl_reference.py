@@ -162,8 +162,7 @@ def ordered_fills(fills, start, end, direction):
     reasons = set()
     by_id = {}
     for fill in fills:
-        if start <= fill.timestamp <= end:
-            by_id.setdefault(fill.identity, []).append(fill)
+        by_id.setdefault(fill.identity, []).append(fill)
     selected = []
     for versions in by_id.values():
         revision = max(f.revision for f in versions)
@@ -172,6 +171,8 @@ def ordered_fills(fills, start, end, direction):
             reasons.add("conflicting_identity")
             continue
         f = latest[0]
+        if not start <= f.timestamp <= end:
+            continue
         try:
             if not dec(f.delta):
                 raise ValueError("zero delta")
@@ -293,13 +294,16 @@ class Candle:
 def minute_prices(candles, start, end):
     """Close-only grid with coarse zigzag, then in-window ffill/leading bfill.
 
-    The entire coarse source must be within the window and available by end.
+    The entire coarse source must be within the window and available by end;
+    a real minute contributes only its close, whose timestamp must be in-window.
     Empty output explicitly requests the minimal-history branch; no fake candle.
     """
     selected = {}
     for c in candles:
         finish = c.start + c.minutes * MINUTE
-        if c.minutes not in (1, 5, 15, 60) or c.start < start or finish > end:
+        if c.minutes not in (1, 5, 15, 60) or finish > end:
+            continue
+        if (c.minutes == 1 and finish < start) or (c.minutes != 1 and c.start < start):
             continue
         if c.available_at is not None and c.available_at > end:
             continue

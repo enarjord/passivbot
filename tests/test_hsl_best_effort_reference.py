@@ -270,13 +270,30 @@ def test_missing_whole_roundtrip_cannot_be_recovered_from_current_quantity():
     # Equality of endpoint sizes is not a certificate of complete realized PnL.
 
 
-def test_window_clips_fills_before_deduplication_and_reconstruction():
+def test_out_of_window_fills_contribute_no_historical_cashflow():
     position = Position(1, 100, 90)
     retained = Fill("new", 2 * M, 1, 100, 0)
     prefix = Fill("old", 0, 99, 999, -999)
     grid = {M: 100, 2 * M: 90}
     assert reconstruct(position, [prefix, retained], grid, M, 2 * M) == reconstruct(
         position, [retained], grid, M, 2 * M)
+
+
+@pytest.mark.parametrize("old_time,new_time,expected", [(M, 0, 0), (0, M, -21)])
+def test_timestamp_correction_is_resolved_before_window_membership(old_time, new_time, expected):
+    old = Fill("corrected", old_time, 1, 100, -20, -1)
+    corrected = replace(old, timestamp=new_time, revision=1)
+    for tape in permutations([old, corrected]):
+        history = reconstruct(Position(1, 100, 80), tape, {M: 100, 2 * M: 80}, M, 2 * M)
+        assert history.rows[-1].pnl == expected
+
+
+def test_out_of_window_conflicting_revision_does_not_revive_stale_row():
+    retained = Fill("conflict", M, 1, 100, -20, -1, revision=1)
+    conflict = replace(retained, timestamp=0)
+    history = reconstruct(Position(1, 100, 80), [retained, conflict], {M: 100, 2 * M: 80}, M, 2 * M)
+    assert "conflicting_identity" in history.reasons
+    assert history.rows[-1].pnl == 0
 
 
 @pytest.mark.parametrize("inverse", [False, True])
@@ -361,6 +378,14 @@ def test_source_must_be_available_at_evaluation_and_inside_window():
     assert minute_prices([coarse], M, 15 * M) == {}
     assert minute_prices([replace(coarse, available_at=16 * M)], 0, 15 * M) == {}
     assert minute_prices([coarse], 0, 15 * M)
+
+
+def test_one_minute_close_in_window_survives_straddling_open():
+    candles = [Candle(0, 1, 100, 120, 100, 120), Candle(M, 1, 120, 120, 80, 80)]
+    prices = minute_prices(candles, M // 2, 2 * M)
+    assert prices == {M: 120, 2 * M: 80}
+    history = reconstruct(Position(1, 100, 80), [], prices, M // 2, 2 * M)
+    assert signal(history.rows, 100, 1, ".2").panic[-1]
 
 
 def test_empty_candles_take_explicit_minimal_branch_with_current_mark():
