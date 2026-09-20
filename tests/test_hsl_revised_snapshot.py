@@ -392,3 +392,30 @@ def test_small_loss_survives_large_realized_peak_or_offsetting_current_upnl(offs
     result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.0005))))
     assert result["signal"]["raw"] == pytest.approx([1/1001])
     assert result["signal"]["panic"] == [True]
+
+
+@pytest.mark.parametrize("field,value", [("span", 0), ("span", .5), ("threshold", -1),
+                                        ("threshold", 2)])
+def test_inactive_scope_rejects_invalid_signal_configuration(field, value):
+    import passivbot_rust as pbr
+    p = cases.pair("TEST", size=1, basis=100, now=300_000)
+    snapshot = payload(cases.frame(p, now=300_000), "coin", symbol="TEST", pside="long")
+    request = dict(snapshot=snapshot, slots=0, span=1, threshold=.05)
+    request[field] = value
+    with pytest.raises(ValueError, match="invalid revised HSL signal inputs"):
+        pbr.hsl_revised_candle_free(json.dumps(request))
+
+
+@pytest.mark.parametrize("budget,loss", [(1e16, 1.), (1e300, 1e280), (1e-200, 1e-220),
+                                        (1e308, 1e308)])
+def test_candle_free_loss_survives_absolute_peak_rounding(budget, loss):
+    from fractions import Fraction
+    import passivbot_rust as pbr
+    expected = float(Fraction(loss) / (Fraction(budget) + Fraction(loss)))
+    p = cases.pair(fills=[Fill("close", 1, -1, 100, -loss)], mark=100)
+    snapshot = payload(cases.frame(p, balance=budget))
+    request = dict(snapshot=snapshot, slots=1, span=1e9, threshold=expected * .5)
+    result = json.loads(pbr.hsl_revised_candle_free(json.dumps(request)))
+    assert result["signal"]["raw"][0] == pytest.approx(expected, rel=1e-14, abs=0)
+    assert result["signal"]["ema"] == result["signal"]["raw"]
+    assert result["signal"]["panic"] == [True]

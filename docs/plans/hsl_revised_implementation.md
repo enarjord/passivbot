@@ -186,3 +186,9 @@ backtest/optimizer preparation; they must be replaced with real mode-specific ad
 as integration lands. Configuration support does not establish full runtime readiness.
 The scope composer, execution/backtest/optimizer integration, full fake-live testing,
 and final live validation/rollback checklist remain outstanding.
+
+Candle-free evaluation retains its peak-to-current currency loss through division
+by budget plus loss. It does not round the loss away by subtracting two absolute
+equities. The one actual observation seeds raw drawdown and EMA equally, including
+when the loss is smaller than a budget ULP. Signal settings are validated even for
+an inactive zero-slot coin scope; inactivity only removes the budget division.

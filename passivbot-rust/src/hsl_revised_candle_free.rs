@@ -1,6 +1,6 @@
 //! All-candles-absent scope estimate. Known cashflows enrich the single current
 //! observation; cashflow peaks are references, never invented past EMA samples.
-use crate::hsl_revised::{signal, Observation, Signal};
+use crate::hsl_revised::{singleton_from_loss, validate_settings, Signal};
 use crate::hsl_revised_snapshot::{prepare, select, Input as Snapshot, Mode};
 use crate::hsl_revised_sum::{currency_sum as sum, CurrencySum};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -28,6 +28,7 @@ pub struct Output {
 pub fn estimate(input: &Input) -> Result<Output, String> {
     let snapshot = &input.snapshot;
     // Inactivity removes the budget division, not required-current-input validation.
+    validate_settings(input.span, input.threshold)?;
     let prepared = prepare(snapshot)?;
     let selected = select(snapshot)?;
     if matches!(snapshot.mode, Mode::Coin) && input.slots == 0 {
@@ -120,39 +121,8 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
         peak.add(-value);
     }
     let reference_delta = peak.value(&mut reasons);
-    let current = Observation {
-        timestamp_ms: snapshot.now,
-        realized,
-        unrealized: upnl,
-    };
-    // Reuse the shared range-safe currency rebasing. Only its peak is retained;
-    // this reference computation does not contribute an observation to the EMA.
-    let reference = signal(
-        &[
-            Observation {
-                timestamp_ms: snapshot.now,
-                realized: reference_delta,
-                unrealized: 0.0,
-            },
-            Observation {
-                timestamp_ms: snapshot.now,
-                realized: 0.0,
-                unrealized: 0.0,
-            },
-        ],
-        budget,
-        input.span,
-        input.threshold,
-        None,
-    )?;
-    let mut result = signal(
-        &[current],
-        budget,
-        input.span,
-        input.threshold,
-        Some(reference.peaks[1]),
-    )?;
-    result.numeric_range_approximation |= reference.numeric_range_approximation;
+    let mut result = singleton_from_loss(budget, reference_delta, input.span, input.threshold)?;
+    result.numeric_range_approximation |= reasons.contains("numeric_range_approximation");
     if result.numeric_range_approximation {
         reasons.insert("numeric_range_approximation".into());
     }
