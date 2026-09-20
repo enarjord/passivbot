@@ -37,7 +37,7 @@ class Signal:
     panic: tuple
 
 
-def signal(rows, budget, span, threshold, *, entry_reference=None):
+def signal(rows, budget, span, threshold, *, entry_reference=None, anchor=None):
     """Batch-reseeded signal; repeated samples in a minute replace its EMA input.
 
     Rows may include known flatten boundaries as well as minute closes. Consumers
@@ -52,8 +52,10 @@ def signal(rows, budget, span, threshold, *, entry_reference=None):
     with localcontext() as ctx:
         ctx.prec = 80
         values = [dec(r.pnl) + dec(r.upnl) for r in rows]
-        equity = [budget + (x - values[-1]) for x in values]
-        equity[-1] = budget
+        endpoint = values[-1] if anchor is None else dec(anchor.pnl) + dec(anchor.upnl)
+        equity = [budget + (x - endpoint) for x in values]
+        if anchor is None:
+            equity[-1] = budget
         peak = dec(entry_reference) if entry_reference is not None else equity[0]
         alpha = Decimal(2) / (span + 1)
         raw, smooth, peaks = [], [], []

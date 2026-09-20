@@ -48,7 +48,23 @@ pub fn signal(
     threshold: f64,
     entry_reference: Option<f64>,
 ) -> Result<Signal, String> {
-    if rows.is_empty()
+    let anchor = rows.last().ok_or("invalid revised HSL signal inputs")?;
+    signal_with_anchor(rows, budget, span, threshold, entry_reference, anchor)
+}
+
+/// Episode resets clear peak/EMA, while currency rebasing retains the shared
+/// current scope endpoint. A completed episode may end at nonpositive equity.
+pub fn signal_with_anchor(
+    rows: &[Observation],
+    budget: f64,
+    span: f64,
+    threshold: f64,
+    entry_reference: Option<f64>,
+    anchor: &Observation,
+) -> Result<Signal, String> {
+    if !anchor.realized.is_finite()
+        || !anchor.unrealized.is_finite()
+        || rows.is_empty()
         || !budget.is_finite()
         || budget <= 0.0
         || !span.is_finite()
@@ -73,7 +89,7 @@ pub fn signal(
         panic: Vec::with_capacity(rows.len()),
         numeric_range_approximation: false,
     };
-    let last = rows.last().unwrap();
+    let last = anchor;
     // Subtract the common currency offset first: a large realized baseline must
     // not erase an otherwise representable unrealized change or the budget.
     for row in rows {
@@ -96,7 +112,12 @@ pub fn signal(
         ));
     }
     // Exact endpoint identity, including after range-limited history estimation.
-    *out.equity.last_mut().unwrap() = budget;
+    if rows
+        .last()
+        .is_some_and(|r| r.realized == anchor.realized && r.unrealized == anchor.unrealized)
+    {
+        *out.equity.last_mut().unwrap() = budget;
+    }
     let mut peak = entry_reference.unwrap_or(out.equity[0]);
     let alpha = 2.0 / (span + 1.0);
     let mut previous_minute = None;
