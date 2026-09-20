@@ -167,3 +167,36 @@ def test_tiny_inverse_prices_keep_known_loss_direction(require_real_passivbot_ru
     assert result["samples"][-1]["upnl"] < 0
     assert math.isfinite(result["samples"][-1]["upnl"])
     assert "numeric_range_approximation" in result["reasons"]
+
+
+@pytest.mark.fake_live
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_fake_exchange_partial_close_cashflows_and_missing_history(require_real_passivbot_rust_module, pside):
+    from exchanges.fake import FakeCCXTClient
+    symbol = "TEST/USDT:USDT"
+    d = 1 if pside == "long" else -1
+    entry, close = ("buy", "sell") if d == 1 else ("sell", "buy")
+    mark = 80 if d == 1 else 120
+    def action(side, qty):
+        return [{"type": "manual_fill", "symbol": symbol, "position_side": pside,
+                 "side": side, "qty": qty, "reduce_only": side == close}]
+    client = FakeCCXTClient({
+        "name": "hsl_rust_pair_reconstruction", "start_time": "2026-01-01T00:00:00Z",
+        "tick_interval_seconds": 60, "account": {"balance": 1000},
+        "symbols": {symbol: {"qty_step": .1, "price_step": .1, "min_qty": .1,
+                             "min_cost": 1, "taker": .001}},
+        "timeline": [{"t": 0, "prices": {symbol: 100}},
+                     {"t": 1, "prices": {symbol: 100}, "actions": action(entry, 2)},
+                     {"t": 2, "prices": {symbol: mark}, "actions": action(close, 1)}]})
+    start = client.now_ms
+    assert client.advance_time() and client.advance_time()
+    fills = [Fill(e["id"], e["timestamp"], e["qty"] * (1 if e["side"] == "buy" else -1),
+                  e["price"], e["pnl"], -e["fees"]["cost"])
+             for e in client.get_fill_events(start, client.now_ms)]
+    state = client.positions[(symbol, pside)]
+    p = Position(d * state["size"], state["entry_price"], mark, pside=pside)
+    result = compare(require_real_passivbot_rust_module, p, fills, {}, start, client.now_ms)
+    assert result["samples"][-1]["pnl"] == pytest.approx(client.realized_pnl - client.realized_fees)
+    assert result["samples"][-1]["upnl"] == -20
+    compare(require_real_passivbot_rust_module, p, fills[1:], {}, start, client.now_ms)
+    assert run(require_real_passivbot_rust_module, p, fills, {}, start, client.now_ms) == result

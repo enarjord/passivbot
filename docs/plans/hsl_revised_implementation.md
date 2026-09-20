@@ -40,10 +40,55 @@ references, nonpositive peaks, repeated within-minute samples, common currency o
 40 deterministic 100-observation paths, finite-range behavior and input rejection.
 Existing legacy Rust tests run alongside these cases.
 
+## Pair history and candle projection
+
+`hsl_revised_history.rs` implements the independent pair reconstruction rules: select
+canonical fill revisions before window clipping, retain known sequence and deterministic
+ambiguous cohorts, walk signed quantities backward from current exposure, clamp impossible
+historical quantities, then reconstruct average basis and net realized cashflows forward.
+Known realized PnL and signed fees survive missing quantity/price components. Observed current
+size, basis and mark replace the endpoint. Linear and inverse contract units remain explicit.
+The output includes historical samples, canonical fill cashflows/quantity transitions and
+diagnostic reasons; estimated flats are not automatically lifecycle proof.
+
+The experimental `hsl_revised_history` JSON binding accepts one normalized pair and an
+already normalized historical price grid. Malformed historical numeric fill components are
+represented as null, independently of their usable PnL/fee fields. It is not an exchange
+payload parser: identities, timestamps, revision metadata and actual sequence provenance
+are supplied by factual normalization. The later snapshot layer must quarantine impossible
+post-capture revisions and isolate fills after the position anchor before this primitive
+selects revisions. This primitive alone does not establish freshness or coherent acquisition.
+An absent grid returns the current endpoint and independent cashflow trace; it does not
+discard the cashflows or claim zero historical realized losses.
+
+`hsl_revised_prices.rs` supplies a bounded minute-close grid. It selects the finest available
+1m/5m/15m/1h source, expands complete coarse candles along the reviewed zigzag, then fills
+interior/trailing gaps and the missing leading segment within lookback. A real 1m candle
+needs only its valid close. Coarse candles require complete, consistent positive OHLC and
+their entire interval inside lookback. Future/incomplete sources are excluded. Empty history
+is an explicit result for the minimal construction, not an evaluation failure. Generated
+rows disclose source resolution, source candle end and whether the price was carried.
+
+Conflicting equal-resolution contributions at a timestamp are excluded at that resolution;
+uncontested coarser data can still supply the minute. Further duplicates cannot resolve the
+conflict, and input permutation does not change the result. This explicitly extends the
+reference helper's requirement to normalize conflicts before sampling: the estimator chooses
+an available uncontested source rather than failing the whole history. With no such source,
+the normal in-window filling/minimal-history rule applies. These estimated rows never enter
+the factual candle store. The price generator rejects intervals longer than 90 days to bound
+allocation; production's separate enabled-HSL minimum of one day remains a config obligation.
+
+These components remain disconnected from trading. Reconstruction parity cases include
+complete/missing/corrected fills, local clamping, known cashflows, malformed historical fields,
+both contract types and position sides, deterministic fault/repair tapes, actual offline fake
+exchange cashflows, extreme finite values, causal coarse prices, source conflicts and gap
+provenance. The next layer must compose these primitives across immutable scoped snapshots
+and lifecycle boundaries without adding an exact-history readiness gate.
+
 Still required before offline completion:
 
-- Full Rust historical reconstruction, candle-free/mixed-price composition and shared
-  coin/pside/unified adapters, checked against the independent fixtures.
+- Snapshot-aware composition of the Rust history/price primitives, candle-free/mixed-price
+  signals and shared coin/pside/unified adapters, checked against the independent fixtures.
 - Complete exchange-reconstructible controller replay, interventions, cooldown/never
   expiry, known flatten samples and execution permissions.
 - Startup-only engine selection, config migration and optimizer/backtest integration.
