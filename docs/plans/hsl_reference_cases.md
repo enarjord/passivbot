@@ -181,6 +181,10 @@ retain their financial history and candidate risk samples. A mixed expired/futur
 revision cannot clear prior evidence. Missing/regressed-input diagnostics describe
 the current candidate against retained high-water evidence, rather than latching:
 restored inputs or a valid expiry correction can revalidate within the same attempt.
+Revision numbers remain monotonicity evidence even when their financial contents are
+quarantined. Conflicted identities retain their possible causal timestamps for detecting
+disappearance. Corrected old timestamps are checked only against the current window:
+they are ignored while expired, but matter again if a configured expansion includes them.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

@@ -742,3 +742,34 @@ def test_recovered_valid_sources_can_revalidate_within_the_same_bounded_attempt(
     observe, _ = observe_sequence(original, stale, original, original)
     result = evaluate_bounded(observe, compute, max_attempts=3)
     assert result.revalidated and not result.reasons
+
+
+def test_quarantined_revision_still_detects_producer_rollback():
+    original = open_frame()
+    p = original.pairs[0]
+    future = replace(p.fills[0], revision=1, timestamp=5 * M)
+    changed = replace(original, pairs=(replace(p, fills=(*p.fills, future)),))
+    observe, _ = observe_sequence(changed, original, original)
+    result = evaluate_bounded(observe, compute)
+    assert not result.revalidated and "revision_regression" in result.reasons
+    assert result.value.history == compute(original).history
+
+
+def test_new_conflicted_identity_remains_visible_to_disappearance_check():
+    original = open_frame()
+    p = original.pairs[0]
+    a = Fill("new-conflict", 2 * M, 1, 90, 0, revision=1)
+    changed = replace(original, pairs=(replace(p, fills=(*p.fills, a, replace(a, delta=2))),))
+    observe, _ = observe_sequence(changed, original, original)
+    result = evaluate_bounded(observe, compute)
+    assert not result.revalidated and "missing_fill_identity" in result.reasons
+
+
+def test_corrected_timestamp_is_rechecked_when_lookback_expands():
+    original = open_frame()
+    p = original.pairs[0]
+    expired = replace(original, pairs=(replace(p, fills=(replace(p.fills[0], timestamp=-M, revision=1),)),))
+    expanded = replace(original, start=-2 * M, pairs=(replace(p, fills=()),))
+    observe, _ = observe_sequence(original, expired, expanded, expanded)
+    result = evaluate_bounded(observe, compute, max_attempts=3)
+    assert not result.revalidated and "missing_fill_identity" in result.reasons

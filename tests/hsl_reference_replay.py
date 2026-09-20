@@ -197,7 +197,9 @@ def source_revisions(snapshot):
     result = {("global", i): r for i, r in enumerate(snapshot.revisions)}
     result.update({(p.key, i): r for p in snapshot.pairs for i, r in enumerate(p.revisions)})
     for p in snapshot.pairs:
-        for f in latest_variants(causal_fills(p, snapshot.now)):
+        # Observed revision numbers diagnose producer rollback even when the
+        # corresponding contents are quarantined from financial reconstruction.
+        for f in latest_variants(p.fills):
             result[("fill", p.key, f.identity)] = f.revision
     return result
 
@@ -213,14 +215,12 @@ def source_times(snapshot):
 def fill_identity_times(snapshot):
     result = {}
     for p in snapshot.pairs:
-        end = min(snapshot.now, p.fills_at if p.fills_at is not None else snapshot.now)
         newest = latest_variants(causal_fills(p, snapshot.now))
         for f in newest:
-            if any(other.identity == f.identity and other != f for other in newest):
-                continue
-            times = result.setdefault((p.key, f.identity), set())
-            if snapshot.start <= f.timestamp <= end:
-                times.add(f.timestamp)
+            # Conflicting contents still establish that the identity was seen.
+            # Keep possible corrected times; apply only the *current* window when
+            # testing disappearance, including after a configured expansion.
+            result.setdefault((p.key, f.identity), set()).add(f.timestamp)
     return result
 
 
