@@ -1,5 +1,16 @@
 # Equity Hard Stop Loss Episode Contract
 
+## Runtime and experimental component scope
+
+The runtime rules below describe legacy HSL, which remains the trading default.
+The isolated `hsl_revised*` Rust comparison components implement the approved
+[best-effort redesign](../../plans/hsl_best_effort_redesign.md), without live, backtest
+or optimizer trading callers yet. Their historical candle projection deliberately
+uses the finest causal source throughout lookback, including internal/suffix gaps;
+the legacy prefix-only coarse-candle restriction below does not apply to those
+experimental components. This separation does not weaken legacy runtime readiness
+or permit activating the revised path before its integration gates pass.
+
 HSL drawdown state is scoped by `live.hsl_signal_mode`:
 
 | Mode | Episode scope | Episode ends when |
