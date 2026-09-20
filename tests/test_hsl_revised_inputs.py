@@ -239,3 +239,32 @@ async def test_real_manager_fake_exchange_to_rust_and_cache_free_rebuild(tmp_pat
     assert endpoint["size"] == direction
     assert endpoint["upnl"] == -30.
     assert endpoint["pnl"] == pytest.approx(client.realized_pnl - client.realized_fees)
+
+
+@pytest.mark.parametrize("multiplier,current", [(0.3 / 3, .1), (1e-100 / 3, 1e-100 / 3),
+                                                (1e-100, 1e-90)])
+def test_inferred_multiplier_roundoff_keeps_quantities_without_absolute_tolerance(multiplier, current):
+    captured = pair([event(c_mult=multiplier)], multiplier=current)
+    if multiplier == 1e-100 and current == 1e-90:
+        assert captured.payload()[0]["delta"] is None
+    else:
+        assert captured.payload()[0]["delta"] == 2.
+        assert "fill_contract_units_unavailable" not in captured.reasons
+
+
+@pytest.mark.parametrize("changes", [{"timestamp": 0}, {"id": "None"}, {"id": "null"},
+                                      {"id": "nan"}, {"id": "   "}])
+def test_manager_normalized_missing_sentinels_remain_unavailable(changes):
+    source = event(**changes)
+    captured = pair([source])
+    assert captured.fills == ()
+    assert captured.reasons == ("unidentified_or_undated_fill",)
+
+
+def test_from_dict_missing_id_sentinel_and_numeric_zero_identity():
+    fields = event().to_dict()
+    fields["id"] = None
+    source = FillEvent.from_dict(fields)
+    assert source.id == "None"
+    assert pair([source]).fills == ()
+    assert pair([event(id="0")]).fills[0].identity == "0"

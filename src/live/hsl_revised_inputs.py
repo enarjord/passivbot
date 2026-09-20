@@ -96,7 +96,9 @@ def capture_fills(events: Iterable[FillEvent], multipliers: Mapping[str, float])
         reasons = quality.setdefault(key, set())
         rows = grouped.setdefault(key, [])
         timestamp = _timestamp(event.timestamp)
-        if not isinstance(event.id, str) or not event.id or timestamp is None:
+        if (not isinstance(event.id, str)
+                or event.id.strip().lower() in ("", "none", "null", "nan")
+                or timestamp is None or timestamp == 0):
             reasons.add("unidentified_or_undated_fill")
             continue
         quantity = _number(event.qty)
@@ -109,7 +111,7 @@ def capture_fills(events: Iterable[FillEvent], multipliers: Mapping[str, float])
         current_multiplier = _number(multipliers.get(symbol))
         if (fill_multiplier is None or fill_multiplier <= 0
                 or current_multiplier is None or current_multiplier <= 0
-                or fill_multiplier != current_multiplier):
+                or not math.isclose(fill_multiplier, current_multiplier, rel_tol=1e-12, abs_tol=0.0)):
             quantity = None
             reasons.add("fill_contract_units_unavailable")
         price = _number(event.price)
