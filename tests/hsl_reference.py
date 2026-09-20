@@ -177,20 +177,20 @@ def ordered_fills(fills, start, end, direction):
                 raise ValueError("zero delta")
         except (ValueError, ArithmeticError):
             reasons.add("invalid_quantity")
-            continue
+            # Unknown position transition does not erase independent cashflow.
+            # Zero is an estimator-local quantity omission, not a ledger repair.
         selected.append(f)
     ordered = []
     for _, cohort in groupby(sorted(selected, key=lambda f: f.timestamp), key=lambda f: f.timestamp):
         cohort = list(cohort)
         sequences = [f.sequence for f in cohort]
-        if all(s is not None for s in sequences) and len(set(sequences)) == len(cohort):
-            cohort.sort(key=lambda f: f.sequence)
-        else:
-            if len(cohort) > 1:
-                reasons.add("estimated_fill_order")
-            # Deterministic per-pair convention: increases before reductions,
-            # identity breaks remaining ties. Not proof of an intermediate flat.
-            cohort.sort(key=lambda f: (dec(f.delta) * direction < 0, f.identity))
+        if len(cohort) > 1 and (any(s is None for s in sequences) or len(set(sequences)) != len(cohort)):
+            reasons.add("estimated_fill_order")
+        # Retain known relative order even if other rows lack sequences. Place
+        # unknown rows after that ordered subset, increases before reductions.
+        # Equal/absent sequences use identity as final deterministic tie-breaker.
+        cohort.sort(key=lambda f: (f.sequence is None, f.sequence if f.sequence is not None else 0,
+                                   _estimated_delta(f) * direction < 0, f.identity))
         ordered.extend(cohort)
     return ordered, reasons
 
@@ -210,7 +210,7 @@ def reconstruct(position, fills, prices, start, end):
     after = abs(size)
     steps = []
     for f in reversed(ordered):
-        delta = dec(f.delta) * direction
+        delta = _estimated_delta(f) * direction
         before = after - delta
         if before < 0:
             reasons.add("clamped_quantity")
@@ -275,6 +275,10 @@ def _positive(value):
     return _usable(value) and dec(value) > 0
 
 
+def _estimated_delta(fill):
+    return dec(fill.delta) if _usable(fill.delta) else Decimal(0)
+
+
 @dataclass(frozen=True)
 class Candle:
     start: int
@@ -299,14 +303,16 @@ def minute_prices(candles, start, end):
             continue
         if c.available_at is not None and c.available_at > end:
             continue
-        if not all(_positive(v) for v in (c.open, c.high, c.low, c.close)):
-            continue
-        o, h, l, close = map(dec, (c.open, c.high, c.low, c.close))
-        if not l <= min(o, close) <= max(o, close) <= h:
-            continue
         if c.minutes == 1:
-            path = [close]
+            if not _positive(c.close):
+                continue
+            path = [dec(c.close)]
         else:
+            if not all(_positive(v) for v in (c.open, c.high, c.low, c.close)):
+                continue
+            o, h, l, close = map(dec, (c.open, c.high, c.low, c.close))
+            if not l <= min(o, close) <= max(o, close) <= h:
+                continue
             a, b, last = c.minutes // 3, 2 * c.minutes // 3, c.minutes - 1
             waypoints = [(0, o), (a, l if close >= o else h),
                          (b, h if close >= o else l), (last, close)]
@@ -342,7 +348,6 @@ class LifecycleEvidence:
     """
     red_at: int | None = None
     flat_at: int | None = None
-    reopened_at: int | None = None
 
 
 def permission(now, lookback, cooldown, restart, intervention, evidence, *, exposed, red_now):
@@ -352,10 +357,9 @@ def permission(now, lookback, cooldown, restart, intervention, evidence, *, expo
     if lookback <= 0 or cooldown < 0:
         raise ValueError("invalid duration")
     start = now - lookback
-    red_at, flat_at, reopened = evidence.red_at, evidence.flat_at, evidence.reopened_at
+    red_at, flat_at = evidence.red_at, evidence.flat_at
     red_at = red_at if red_at is not None and start <= red_at <= now else None
     flat_at = flat_at if flat_at is not None and start <= flat_at <= now else None
-    reopened = reopened if reopened is not None and start <= reopened <= now else None
     if red_now and exposed:
         return "panic"
     if red_at is None and flat_at is None:
@@ -367,6 +371,8 @@ def permission(now, lookback, cooldown, restart, intervention, evidence, *, expo
     halted = red_at is not None if restart == "never" else now < flat_at + cooldown
     if not halted:
         return "normal"
-    if exposed and reopened is not None and reopened >= flat_at:
+    # A proven flat followed by fresh current exposure establishes reappearance
+    # without needing its opening fill. An unfinished panic never reaches here.
+    if exposed:
         return "panic" if intervention == "panic" else "normal"
     return "halted"

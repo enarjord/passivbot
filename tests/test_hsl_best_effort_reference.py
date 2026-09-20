@@ -236,6 +236,27 @@ def test_unknown_realized_loss_is_estimated_from_basis_without_double_fee():
     assert reconstruct(position, fills, prices, 0, 4 * M).rows[-1].pnl == -13
 
 
+def test_invalid_quantity_retains_independent_known_pnl_and_fee():
+    position, fills, prices = clean_tape()
+    fills[-1] = replace(fills[-1], delta="NaN")
+    history = reconstruct(position, fills, prices, 0, 4 * M)
+    assert "invalid_quantity" in history.reasons
+    assert history.rows[-1].pnl == -13
+    assert history.rows[-1].upnl == -45
+    assert signal(history.rows, 1000, 1, ".05").panic[-1]
+
+
+def test_partial_sequence_preserves_the_known_close_then_reopen():
+    tape = [Fill("known-close", M, -1, 90, -10, sequence=1),
+            Fill("known-add", M, 1, 80, 0, sequence=2),
+            Fill("unknown-add", M, 1, 100, 0)]
+    for order in permutations(tape):
+        history = reconstruct(Position(2, 90, 90), list(order), {0: 90, M: 90, 2 * M: 90}, 0, 2 * M)
+        assert history.bases[1] == 90
+        assert history.rows[-1].pnl == -10
+        assert "estimated_fill_order" in history.reasons
+
+
 def test_missing_whole_roundtrip_cannot_be_recovered_from_current_quantity():
     position = Position(1, 100, 100)
     full = [Fill("open", M, 1, 100, 0), Fill("close", 2 * M, -1, 50, -50),
@@ -293,6 +314,22 @@ def test_invalid_current_inputs_remain_errors(p):
 def test_close_only_ignores_recovered_wick():
     prices = minute_prices([Candle(0, 1, 100, 150, 20, 100)], 0, M)
     assert set(prices.values()) == {100}
+
+
+@pytest.mark.parametrize("field,value", [("open", "NaN"), ("low", None), ("high", -1)])
+def test_real_minute_valid_close_survives_unusable_wick_fields(field, value):
+    damaged = replace(Candle(M, 1, 100, 110, 70, 80), **{field: value})
+    prices = minute_prices([Candle(0, 1, 100, 100, 100, 100), damaged], 0, 2 * M)
+    assert prices[2 * M] == 80
+    history = reconstruct(Position(1, 100, 80), [Fill("open", 0, 1, 100, 0)], prices, 0, 3 * M)
+    assert history.rows[-2].upnl == -20
+
+
+@pytest.mark.parametrize("intervention,expected", [("panic", "panic"), ("normal", "normal")])
+@pytest.mark.parametrize("restart", ["always", "never"])
+def test_proven_flat_and_current_exposure_needs_no_reopening_fill(intervention, expected, restart):
+    assert permit(30, LifecycleEvidence(10, 20), intervention=intervention,
+                  restart=restart, exposed=True) == expected
 
 
 @pytest.mark.parametrize("minutes", [5, 15, 60])
@@ -362,7 +399,7 @@ def test_zero_cooldown_only_controls_waiting(restart, expected):
 
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_two_intervention_choices_override_scope_halt_but_not_fresh_red(restart):
-    evidence = LifecycleEvidence(10, 20, 25)
+    evidence = LifecycleEvidence(10, 20)
     assert permit(30, evidence, restart=restart, exposed=True) == "panic"
     assert permit(30, evidence, restart=restart, intervention="normal", exposed=True) == "normal"
     assert permit(30, evidence, restart=restart, intervention="normal", exposed=True, red=True) == "panic"
@@ -370,7 +407,7 @@ def test_two_intervention_choices_override_scope_halt_but_not_fresh_red(restart)
 
 
 def test_partial_close_is_not_intervention_or_new_cooldown_anchor():
-    evidence = LifecycleEvidence(10, None, None)
+    evidence = LifecycleEvidence(10, None)
     for now in (15, 30, 100):
         assert permit(now, evidence, intervention="normal", exposed=True) == "panic"
     assert permit(111, evidence, exposed=True) == "normal"

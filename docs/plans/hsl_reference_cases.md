@@ -38,10 +38,13 @@ HSL has yet been wired into the full live-loop harness.
 - Missing gross realized PnL is estimated from the reconstructed reduction and basis.
   Fees are signed balance impacts, added exactly once. Unknown fee impact is omitted
   with a reason; this is uncertainty, not proof that no fee was paid.
+  An invalid quantity omits only the unknown position transition with a reason;
+  independently usable exchange PnL and fees are still retained.
 - Execution identity is deduplicated before reconstruction. Highest supplied revision
   wins; contradictory rows at the same revision are excluded with a reason. Known
-  sequence wins within a timestamp; otherwise per-pair increases precede reductions
-  with identity as tie-breaker. Ambiguity is disclosed, not a flat certificate.
+  sequences retain their relative order even within partially sequenced cohorts.
+  Unsequenced rows follow the known subset, with increases before reductions and
+  identity as tie-breaker. Ambiguity is disclosed, not a flat certificate.
 - A nonpositive historical running peak has no meaningful ratio. The reference
   assigns raw drawdown 1 to that segment until a positive peak exists. Later normal
   positive-peak arithmetic resumes, including values above 1 if equity is negative.
@@ -50,6 +53,8 @@ HSL has yet been wired into the full live-loop harness.
   must be fully inside the window; real minutes override coarse estimates. Zigzag
   close pivots match the documented open/extrema/close path. Gaps forward-fill and
   the missing prefix backfills. The current endpoint is replaced by the fresh mark.
+  A real 1m source needs only a usable close; malformed unused wick/open fields
+  cannot discard it. Coarse synthesis requires usable OHLC because it consumes them.
 - In the explicit minimal-history case, seed an entry-value peak reference, not an
   extra EMA observation. With loss L and budget B, the singleton signal is L/(B+L).
   Adding actual history can legitimately change the decision by restoring smoothing.
@@ -57,6 +62,8 @@ HSL has yet been wired into the full live-loop harness.
   stop timestamp. These need not be identical; tests cover exact inclusive-window
   endpoints. Zero cooldown affects waiting only. All lifecycle calls recompute from
   supplied exchange-reconstructible evidence with no prior-decision argument.
+  A proven flat plus fresh current exposure is enough to apply intervention policy;
+  a delayed or missing reopening fill is not another readiness requirement.
 
 ## What these tests establish
 
