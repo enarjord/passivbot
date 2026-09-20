@@ -225,6 +225,13 @@ Remove `no_restart_drawdown_threshold` from every revised HSL block, including u
 do not add a portfolio version of it. Remove `restart_after_red_policy=threshold`.
 Legacy configs selecting `threshold` fail with an actionable choice of `always` or
 `never`; neither migration nor template hydration may silently select a replacement.
+For enabled revised HSL, an existing config which omits `restart_after_red_policy`
+also requires that explicit migration choice. Record presence in the effective
+user-supplied block/overrides before default hydration; a template-provided value
+cannot satisfy this requirement. Newly generated configs explicitly write `always`.
+Disabled HSL blocks do not require migration until enabled, including enablement by
+scenario or CLI override. Apply these rules to the active side/coin or portfolio
+block, and test omitted, explicitly supplied, hydrated, and overridden policies.
 An otherwise valid `always`/`never` config carrying the obsolete threshold field gets
 a removal warning; that unused field has no trading effect. Reject removed threshold
 bounds/overrides rather than letting them masquerade as active parameters. Apply the
