@@ -640,3 +640,53 @@ def test_close_after_price_capture_is_isolated_until_a_later_capture():
     recovered = evaluate_bounded(observe, compute, scope_keys={p.key})
     assert recovered.revalidated
     assert recovered.value.signal != result.value.signal
+
+
+def test_disappearing_in_window_fill_cannot_validate_an_older_tape():
+    p = closed_tape()
+    p = replace(p, fills=(*p.fills[:-1], replace(p.fills[-1], revision=5)))
+    full = frame(p)
+    missing = replace(full, pairs=(replace(p, fills=p.fills[:-1]),))
+    observe, _ = observe_sequence(full, missing, missing)
+    result = evaluate_bounded(observe, lambda s: scope_boundaries(s, "unified"))
+    assert not result.revalidated and "missing_fill_identity" in result.reasons
+    # Expiry is deliberately different: outside lookback means ignored.
+    expired = replace(missing, start=3 * M + 1)
+    observe, _ = observe_sequence(full, expired, expired)
+    assert evaluate_bounded(observe, lambda s: scope_boundaries(s, "unified")).revalidated
+
+
+@pytest.mark.parametrize("after", ["capture", "evaluation"])
+def test_future_fill_is_excluded_and_cannot_certify_lifecycle(after):
+    original = open_frame(position_at=2 * M)
+    p = original.pairs[0]
+    if after == "capture":
+        p = replace(p, fills_started_at=2 * M + 1, fills_at=2 * M + 1)
+        event_at = 3 * M
+    else:
+        event_at = 5 * M
+    clean = replace(original, pairs=(p,))
+    impossible = replace(clean, pairs=(replace(p, fills=(*p.fills, Fill("future", event_at, -1, 80, -20))),))
+    observe, _ = observe_sequence(impossible, impossible)
+    result = evaluate_bounded(observe, compute, scope_keys={p.key})
+    assert not result.revalidated and "post_capture_fill" in result.reasons
+    assert result.value.history == compute(clean).history
+    boundary_pair = closed_tape()
+    boundary_pair = replace(boundary_pair, fills=(*boundary_pair.fills,
+                                                   Fill("future", 5 * M, 1, 80, 0)))
+    trace = scope_boundaries(frame(boundary_pair), "unified")
+    assert "post_capture_fill" in trace.reasons
+    assert not any(b.lifecycle_eligible for b in trace.boundaries)
+
+
+@pytest.mark.parametrize("corrected_timestamp,valid", [(-M, True), (5 * M, False)])
+def test_disappearance_respects_valid_expiry_but_not_impossible_future_correction(corrected_timestamp, valid):
+    original = open_frame()
+    p = original.pairs[0]
+    corrected = replace(p.fills[0], timestamp=corrected_timestamp, revision=1)
+    changed = replace(original, pairs=(replace(p, fills=(corrected,)),))
+    missing = replace(original, pairs=(replace(p, fills=()),))
+    observe, _ = observe_sequence(original, changed, missing, missing)
+    result = evaluate_bounded(observe, compute, max_attempts=3, scope_keys={p.key})
+    assert result.revalidated == valid
+    assert ("missing_fill_identity" in result.reasons) == (not valid)

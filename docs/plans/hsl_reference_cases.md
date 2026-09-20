@@ -169,6 +169,12 @@ reusing broader producer tokens cannot validate a superseded fill correction.
 Price capture time is explicit. Closes newer than that capture are excluded from the
 estimate and leave it unvalidated until a causally possible capture arrives; retained
 older prices still supply the ffill/bfill risk estimate.
+The bounded attempt also remembers identities previously observed inside the window.
+Their unexplained disappearance cannot validate an older tape. This is attempt-local
+evidence, not a persisted fill ledger: window expiry or a causally valid correction
+outside the window clears that requirement. An impossible future correction cannot
+erase the earlier observation. Fills after their capture/evaluation time are excluded
+from the estimate and cannot certify a lifecycle boundary.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

@@ -151,6 +151,9 @@ def snapshot_quality(snapshot, keys=None):
         reasons.add("post_position_fill")
     if any(f.timestamp == p.position_at for p in pairs for f in latest_variants(p.fills)):
         reasons.add("position_fill_timestamp_tie")
+    if any(f.timestamp > min(snapshot.now, p.fills_at if p.fills_at is not None else snapshot.now)
+           for p in pairs for f in latest_variants(p.fills)):
+        reasons.add("post_capture_fill")
     return reasons
 
 
@@ -190,6 +193,19 @@ def source_times(snapshot):
     for p in snapshot.pairs:
         for name in ("position_at", "mark_at", "fills_started_at", "fills_at", "prices_at"):
             result[(p.key, name)] = getattr(p, name)
+    return result
+
+
+def fill_identity_times(snapshot):
+    result = {}
+    for p in snapshot.pairs:
+        end = min(snapshot.now, p.fills_at if p.fills_at is not None else snapshot.now)
+        for f in latest_variants(p.fills):
+            if f.timestamp > end:
+                continue
+            times = result.setdefault((p.key, f.identity), set())
+            if snapshot.start <= f.timestamp <= end:
+                times.add(f.timestamp)
     return result
 
 
@@ -238,7 +254,8 @@ def _steps(pair, start, now):
     ordered, reasons = ordered_fills(pair.fills, start, now, direction)
     if any(f.timestamp > pair.position_at for f in ordered):
         reasons.add("post_position_fill")
-    ordered = [f for f in ordered if f.timestamp <= pair.position_at]
+    end = min(pair.position_at, pair.fills_at if pair.fills_at is not None else now)
+    ordered = [f for f in ordered if f.timestamp <= end]
     # Conflicting current revisions have no canonical position transition. Keep
     # their uncertainty local in time; an older damaged prefix does not taint a
     # later independently reconstructible episode.
@@ -278,6 +295,7 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
     """
     pairs = selected_pairs(snapshot, mode, pside=pside, symbol=symbol)
     paths, conflicts, reasons = {}, {}, set()
+    reasons.update(snapshot_quality(snapshot, {p.key for p in pairs}))
     for pair in pairs:
         paths[pair.key], quality, conflicts[pair.key] = _steps(pair, snapshot.start, snapshot.now)
         reasons.update(quality)
@@ -353,7 +371,7 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             tape = tuple((p.key, tuple(consumed[p.key])) for p in pairs)
             boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0)),
                                        not ambiguous and not reasons.intersection({
-                                           "post_position_fill", "position_fill_timestamp_tie"
+                                           "post_position_fill", "position_fill_timestamp_tie", "post_capture_fill"
                                        })))
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
@@ -377,8 +395,9 @@ def estimate_pair(snapshot, key):
     direction = 1 if pair.position.pside == "long" else -1
     all_fills, quality = ordered_fills(pair.fills, snapshot.start, snapshot.now, direction)
     quality.update(snapshot_quality(snapshot, {key}))
-    fills = [f for f in all_fills if f.timestamp <= pair.position_at]
-    if len(fills) != len(all_fills):
+    end = min(pair.position_at, pair.fills_at if pair.fills_at is not None else snapshot.now)
+    fills = [f for f in all_fills if f.timestamp <= end]
+    if any(f.timestamp > pair.position_at for f in all_fills):
         quality.add("post_position_fill")
     if len({snapshot.balance_at, pair.position_at, pair.mark_at}) > 1:
         quality.add("snapshot_skew")
@@ -429,9 +448,11 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
     snapshot = project(observe(), scope_keys)
     high_water = source_revisions(snapshot)
     time_water = source_times(snapshot)
+    fill_water = fill_identity_times(snapshot)
     last_time = snapshot.now
     regression = False
     capture_regression = False
+    missing_identity = False
     for attempt in range(1, max_attempts + 1):
         value = compute(snapshot)
         current = project(observe(), scope_keys)
@@ -444,12 +465,18 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
                 capture_regression = True
             if t is not None:
                 time_water[k] = t if prior is None else max(prior, t)
+        current_fills = fill_identity_times(current)
+        missing_identity |= any(k not in current_fills and any(current.start <= t <= current.now for t in ts)
+                                for k, ts in fill_water.items())
+        fill_water.update(current_fills)
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)
         if regression:
             quality.add("revision_regression")
         if capture_regression:
             quality.add("source_capture_regression")
+        if missing_identity:
+            quality.add("missing_fill_identity")
         if current == snapshot:
             return Evaluation(snapshot, value, attempt, not quality, frozenset(quality))
         snapshot = current
