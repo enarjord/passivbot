@@ -129,13 +129,18 @@ not permanently taint a later clean suffix. Scope quality uses only selected pai
 Compensated quantity summation avoids drift across repeated partial fills. Cancellation
 residuals within eight scaled floating-point epsilons are disclosed as
 quantity roundoff rather than contradictory exposure; larger mismatches remain estimated.
+The scale includes the reconstructed suffix and resets at zero, so a larger later position
+does not hide an earlier real flat or indefinitely relax earlier quantity checks.
 These rows are evidence for the later episode composer, not controller permissions by themselves.
 
 `hsl_revised_candle_free.rs` composes the approved all-candles-absent estimate across selected
 pairs. It preserves known/estimated net realized cashflows and their in-window peak, nets
 currency gains and losses before division, and combines them with current UPNL. The peak
 reference contributes no fabricated past EMA sample. Coin zero-slot scopes remain inactive;
-side/unified budgets use the raw balance. The helper refuses to discard usable historical
+side/unified budgets use the raw balance. Inactivity never bypasses current-input validation.
+Scoped currency sums use compensated addition even when intermediates stay finite.
+An overflowing sum retries with opposite signs cancelling first, preserving small net losses
+without scaling them into underflow; unrepresentable totals saturate with diagnostics. The helper refuses to discard usable historical
 prices to obtain a singleton result. It is not the mixed-price scope dispatcher.
 
 Parity covers the independent boundary fixtures, corrections and source timing, generated

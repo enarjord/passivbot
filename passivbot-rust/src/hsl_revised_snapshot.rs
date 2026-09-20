@@ -1,4 +1,5 @@
 //! Immutable revised HSL snapshot preparation. Boundary uncertainty is not a risk veto.
+use crate::hsl_revised::currency_sum;
 use crate::hsl_revised_history::{self as history, Fill, History, Position, PositionSide};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -374,15 +375,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
                         .map(|i| p.history.events[i].realized_cumsum)
                 })
                 .collect();
-            let mut pnl: f64 = values.iter().sum();
-            if !pnl.is_finite() {
-                reasons.insert("numeric_range_approximation".into());
-                let scale = values.iter().map(|v| v.abs()).fold(0.0, f64::max);
-                pnl = values.iter().map(|v| v / scale).sum::<f64>() * scale;
-                if !pnl.is_finite() {
-                    pnl = f64::MAX.copysign(pnl);
-                }
-            }
+            let pnl = currency_sum(&values, &mut reasons);
             let lifecycle_eligible = !ambiguous
                 && ![
                     "post_position_fill",

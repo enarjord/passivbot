@@ -1,6 +1,7 @@
 """Real-extension parity for immutable snapshot and scope-boundary reconstruction."""
 from dataclasses import asdict, replace
 import json
+from itertools import permutations
 
 import pytest
 
@@ -235,3 +236,73 @@ def test_many_decimal_partial_fills_do_not_accumulate_false_missing_quantity():
     assert len(result["boundaries"]) == 1
     assert result["boundaries"][0]["lifecycle_eligible"]
     assert result["boundaries"][0]["pnl"] == -2000
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_larger_later_position_does_not_hide_earlier_small_flat(side):
+    d = 1 if side == "long" else -1
+    quantities = [".1", "-.1", ".3", ".3", "2", "2", ".3"]
+    fills = [Fill(str(i), i + 1, dec(q) * d, 100, 0) for i, q in enumerate(quantities)]
+    p = cases.pair(pside=side, size=4.9*d, basis=100, fills=fills)
+    result = rust(payload(cases.frame(p)))
+    assert [b["timestamp"] for b in result["boundaries"]] == [2]
+    assert result["boundaries"][0]["lifecycle_eligible"]
+    compare(cases.frame(p), "unified")
+
+
+@pytest.mark.parametrize("values", permutations([-1e16, -1, 1e16]))
+def test_small_scope_cashflow_survives_large_finite_cancellation(values):
+    pairs = [cases.pair(str(i), fills=[Fill("close", cases.M, -1, 100, value)], mark=100)
+             for i, value in enumerate(values)]
+    result = rust(payload(cases.frame(*pairs)))
+    assert result["boundaries"][0]["pnl"] == -1
+
+
+@pytest.mark.parametrize("field,value", [
+    ("position_at", 0), ("mark_at", 0), ("position_at", 300_001),
+    ("mark_at", 300_001), ("basis", 0), ("mark", 0), ("multiplier", 0),
+    ("size", -1), ("start", 300_001), ("balance_at", 0),
+    ("balance_at", 300_001), ("config_at", 300_001),
+])
+def test_inactive_candle_free_scope_still_validates_current_snapshot(field, value):
+    import passivbot_rust as pbr
+    p = cases.pair("TEST", size=1, basis=100, now=300_000)
+    snapshot = payload(cases.frame(p, now=300_000), "coin", symbol="TEST", pside="long")
+    if field in ("basis", "mark", "multiplier", "size"):
+        snapshot["pairs"][0]["position"][field] = value
+    elif field in ("position_at", "mark_at"):
+        snapshot["pairs"][0][field] = value
+    else:
+        snapshot[field] = value
+    request = dict(snapshot=snapshot, slots=0, span=1, threshold=.05)
+    with pytest.raises(ValueError):
+        pbr.hsl_revised_candle_free(json.dumps(request))
+
+
+@pytest.mark.parametrize("values", permutations([-1e16, -1, 1e16]))
+@pytest.mark.parametrize("component", ["upnl", "realized"])
+def test_small_scope_loss_still_panics_after_large_finite_cancellation(values, component):
+    import passivbot_rust as pbr
+    pairs = []
+    for i, value in enumerate(values):
+        if component == "upnl":
+            p = cases.pair(str(i), size=abs(value), basis=2, mark=1 if value < 0 else 3)
+        else:
+            p = cases.pair(str(i), fills=[Fill("close", cases.M, -1, 100, value)], mark=100)
+        pairs.append(p)
+    snapshot = payload(cases.frame(*pairs, balance=1000))
+    request = dict(snapshot=snapshot, slots=1, span=10000, threshold=.0005)
+    result = json.loads(pbr.hsl_revised_candle_free(json.dumps(request)))
+    assert result[component] == -1
+    assert result["signal"]["raw"] == pytest.approx([1 / 1001])
+    assert result["signal"]["panic"] == [True]
+
+
+def test_quantity_roundoff_scale_resets_after_later_episode_opening():
+    fills = [Fill("old_open", 1, ".8000001", 100, 0),
+             Fill("old_close", 2, "-.8", 90, -1),
+             Fill("new_open", 3, "1000000000000", 100, 0)]
+    p = cases.pair(size=1e12, basis=100, fills=fills)
+    result = rust(payload(cases.frame(p)))
+    assert not result["boundaries"]
+    assert "clamped_quantity" in result["reasons"]

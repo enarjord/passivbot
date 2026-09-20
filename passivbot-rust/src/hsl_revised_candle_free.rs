@@ -1,6 +1,6 @@
 //! All-candles-absent scope estimate. Known cashflows enrich the single current
 //! observation; cashflow peaks are references, never invented past EMA samples.
-use crate::hsl_revised::{signal, Observation, Signal};
+use crate::hsl_revised::{currency_sum as sum, signal, Observation, Signal};
 use crate::hsl_revised_snapshot::{prepare, select, Input as Snapshot, Mode};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
@@ -22,24 +22,11 @@ pub struct Output {
     pub upnl: f64,
     pub reasons: BTreeSet<String>,
 }
-fn sum(values: &[f64], reasons: &mut BTreeSet<String>) -> f64 {
-    let mut value = values.iter().sum::<f64>();
-    if !value.is_finite() {
-        reasons.insert("numeric_range_approximation".into());
-        let scale = values.iter().map(|v| v.abs()).fold(0.0, f64::max);
-        value = values.iter().map(|v| v / scale).sum::<f64>() * scale;
-        if !value.is_finite() {
-            value = f64::MAX.copysign(value);
-        }
-    }
-    value
-}
 pub fn estimate(input: &Input) -> Result<Output, String> {
     let snapshot = &input.snapshot;
+    // Inactivity removes the budget division, not required-current-input validation.
+    let prepared = prepare(snapshot)?;
     let selected = select(snapshot)?;
-    if !snapshot.balance.is_finite() || snapshot.balance <= 0.0 {
-        return Err("invalid current balance".into());
-    }
     if matches!(snapshot.mode, Mode::Coin) && input.slots == 0 {
         return Ok(Output {
             signal: None,
@@ -59,7 +46,6 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
             return Err("candle-free estimate cannot discard historical prices".into());
         }
     }
-    let prepared = prepare(snapshot)?;
     let mut reasons = prepared.reasons;
     reasons.insert("candle_free_reference".into());
     let budget = if matches!(snapshot.mode, Mode::Coin) {

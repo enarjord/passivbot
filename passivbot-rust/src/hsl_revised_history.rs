@@ -218,6 +218,7 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     let mut steps = Vec::with_capacity(fills.len());
     let mut after = p.size.abs();
     let mut quantity_compensation = 0.0;
+    let mut quantity_scale = after;
     for f in fills.iter().rev() {
         let delta = usable(f.delta).unwrap_or(0.0) * direction;
         // Compensate repeated decimal lot additions so many partial fills do not
@@ -232,7 +233,9 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
         let mut raw_before = finite(sum, &mut reasons);
         // Cancellation of decimal lot quantities can leave a few binary ulps.
         // This is arithmetic roundoff, not evidence of a contradictory episode.
-        let tolerance = 8.0 * f64::EPSILON * after.abs().max(delta.abs());
+        // Residual error can originate in a larger later position in this suffix.
+        quantity_scale = quantity_scale.max(after.abs()).max(delta.abs());
+        let tolerance = 8.0 * f64::EPSILON * quantity_scale;
         if raw_before != 0.0 && raw_before.abs() <= tolerance {
             reasons.insert("quantity_roundoff".into());
             raw_before = 0.0;
@@ -243,6 +246,7 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
         let before = raw_before.max(0.0);
         if before == 0.0 {
             quantity_compensation = 0.0;
+            quantity_scale = 0.0;
         }
         steps.push((
             f,
