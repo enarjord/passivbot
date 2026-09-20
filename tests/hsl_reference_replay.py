@@ -499,7 +499,9 @@ def evaluate_bounded(observe, compute, max_attempts=2, *, scope_keys=None):
             if t is not None:
                 time_water[k] = t if prior is None else max(prior, t)
         current_fills = merge_fill_evidence(fill_water, current)
-        missing_identity = any(k not in current_fills and any(current.start <= f.timestamp <= current.now for f in rows)
+        # Future timestamps are quarantined anomalies, not expired history. Their
+        # unexplained omission cannot validate an older tape before time catches up.
+        missing_identity = any(k not in current_fills and any(current.start <= f.timestamp for f in rows)
                                for k, rows in fill_water.items())
         last_time = max(last_time, current.now)
         quality = snapshot_quality(current, scope_keys)

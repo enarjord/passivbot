@@ -195,6 +195,8 @@ including quarantined identities and same-time content conflicts. Partial disapp
 cannot silently resolve a quantity/price/PnL/fee conflict; higher causal repair or
 window expiry does. Unified evaluation also retains its observed position-key set
 through the bounded attempt, requiring explicit zero observations instead of omission.
+Future-dated records are quarantined anomalies, not expired history. Their unexplained
+omission remains diagnostic until explicit higher causal repair or eventual window expiry.
 Monotonic revision regressions (and evaluation-time regressions) stay unvalidated even
 if the same older snapshot repeats. The estimate still exposes its current risk result.
 

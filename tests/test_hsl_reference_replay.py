@@ -848,3 +848,22 @@ def test_unified_revalidation_requires_observed_position_members_even_without_fi
     explicit_flat = replace(original, pairs=(after_position(replace(p, position=Position(0, 0, 80))),))
     observe, _ = observe_sequence(original, explicit_flat, explicit_flat)
     assert evaluate_bounded(observe, lambda s: sum(abs(p.position.size) for p in s.pairs)).revalidated
+
+
+@pytest.mark.parametrize("recovery", ["none", "correction", "expiry"])
+def test_future_identity_omission_requires_repair_or_window_expiry(recovery):
+    original = open_frame()
+    p = original.pairs[0]
+    future = Fill("future-identity", 5 * M, -1, 80, -20, revision=1)
+    quarantined = replace(original, pairs=(replace(p, fills=(*p.fills, future)),))
+    if recovery == "correction":
+        corrected = replace(original, pairs=(replace(p, fills=(*p.fills, replace(future, timestamp=-M, revision=2))),))
+        observe, _ = observe_sequence(quarantined, corrected, original, original)
+    elif recovery == "expiry":
+        expired = frame(pair(size=1, basis=100, now=6 * M), now=6 * M, start=5 * M + 1)
+        observe, _ = observe_sequence(quarantined, original, expired, expired)
+    else:
+        observe, _ = observe_sequence(quarantined, original, original)
+    result = evaluate_bounded(observe, lambda s: scope_boundaries(s, "unified"), max_attempts=3)
+    assert result.revalidated == (recovery != "none")
+    assert ("missing_fill_identity" in result.reasons) == (recovery == "none")
