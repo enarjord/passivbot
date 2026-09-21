@@ -530,6 +530,12 @@ def _validate_gpu_suite_override_paths(
             )
 
 
+def _reject_revised_hsl(config: dict) -> None:
+    from config.hsl_revised import engine
+    if engine(config) == "revised":
+        raise ValueError("GPU optimization does not implement revised HSL; use a CPU backend")
+
+
 def validate_gpu_preparation_scope(
     config: dict,
     suite_cfg: dict | None = None,
@@ -538,6 +544,7 @@ def validate_gpu_preparation_scope(
 ) -> None:
     """Fail before historical-data preparation when immutable MPS scope is invalid."""
 
+    _reject_revised_hsl(config)
     reject_configured_exact_only_gpu_metrics(config)
     suite_cfg = suite_cfg or {}
     suite_enabled = bool(suite_cfg.get("enabled"))
@@ -4412,9 +4419,7 @@ def run_backend(
     resume: bool = False,
     interrupt_check: InterruptCheck | None = None,
 ) -> dict[str, Any]:
-    from config.hsl_revised import engine
-    if engine(config) == "revised":
-        raise ValueError("GPU optimization does not implement revised HSL; use a CPU backend")
+    _reject_revised_hsl(config)
 
     del duplicate_counter
     del constraint_fitness_cls

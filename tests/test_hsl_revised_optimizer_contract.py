@@ -126,3 +126,16 @@ def test_gpu_rejects_revised_before_loading_gpu_runtime(monkeypatch):
             overrides_list=None, duplicate_counter=None, starting_configs_path=None,
             constraint_fitness_cls=None, ignore_sigint_in_worker=None,
             get_starting_configs=None, configs_to_individuals=None)
+
+
+@pytest.mark.parametrize("through_cli", [False, True])
+def test_gpu_preparation_rejects_revised_before_torch_probe(monkeypatch, through_cli):
+    from optimize import _run_gpu_preparation_preflight
+    from optimization.backends.gpu_backend import validate_gpu_preparation_scope
+    cfg, _, _ = inputs()
+    fixed_side_bounds(cfg)
+    cfg["optimize"]["backend"] = "gpu"
+    monkeypatch.setitem(sys.modules, "torch", None)
+    preflight = _run_gpu_preparation_preflight if through_cli else validate_gpu_preparation_scope
+    with pytest.raises(ValueError, match="GPU optimization does not implement revised HSL"):
+        preflight(cfg, {"enabled": False})

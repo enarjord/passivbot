@@ -2129,13 +2129,14 @@ class SuiteEvaluator:
 
         if unstuck_ema_spans_coupled(scenario_config):
             scenario_config = apply_coupled_unstuck_ema_spans(deepcopy(scenario_config))
-        from config.hsl_revised import validate_optimizer_metrics
-        validate_optimizer_metrics(scenario_config, [
-            *(spec.metric for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
-              if basis.scenario is None or basis.scenario == ctx.label),
-            *(check["metric"] for check in self.base.limit_checks
-              if check.get("scenario") is None or check["scenario"] == ctx.label),
-        ])
+        from config.hsl_revised import engine, validate_optimizer_metrics
+        if engine(scenario_config) == "revised":
+            validate_optimizer_metrics(scenario_config, [
+                *(spec.metric for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
+                  if basis.scenario is None or basis.scenario == ctx.label),
+                *(check["metric"] for check in self.base.limit_checks
+                  if check.get("scenario") is None or check["scenario"] == ctx.label),
+            ])
         return scenario_config
 
     def _build_scenario_candidate_config(
