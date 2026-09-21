@@ -480,6 +480,10 @@ class Owner:
         was_running, self._running = self._running, True
         bot = self.bot
         try:
+            from utils import utc_ms
+            bot._begin_live_event_cycle(loop_start_ms=int(utc_ms()))
+            bot.execution_scheduled = False
+            bot.state_change_detected_by_symbol = set()
             self.poll_inputs()
             plan = None
             completed_plan = self._ordinary is not None and self._ordinary.done()
@@ -527,9 +531,6 @@ class Owner:
         try:
             while not bot.stop_signal_received:
                 started = int(utc_ms())
-                bot._begin_live_event_cycle(loop_start_ms=started)
-                bot.execution_scheduled = False
-                bot.state_change_detected_by_symbol = set()
                 result = await self.cycle()
                 if not result['updated'] and not result.get('current_io_unavailable'):
                     await bot._sleep_unless_shutdown(.5, stage='revised_current_inputs')

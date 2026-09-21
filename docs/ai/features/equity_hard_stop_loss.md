@@ -581,12 +581,15 @@ uses the wave's own planning snapshot even when background ordinary preparation 
 an await. History-only flat pairs can use their latest factual fill price when no candle/quote
 survives; that price never substitutes for the current mark of a held position.
 
-The standard offline fake runner calls the same finite production owner pass. At each scenario
+The standard offline fake runner calls the same finite production owner pass, including event-cycle
+initialization and clearing transient per-cycle execution state. At each scenario
 step it allows at most eight passes with bounded waits for background work; incomplete preparation
 is explicitly reported instead of blocking protection or being declared ready. Scheduling cadence
 uses scenario time, while account/quote TTLs and source acquisition timestamps remain UTC. Source
 candle opens and query bounds remain on the exchange timeline, so availability conversion occurs
 exactly once. Fake artifacts expose passive revised scope diagnostics rather than legacy side state.
+Artifact comparison excludes only diagnostic wall-clock capture/expiry/age fields; native actions,
+exchange-time lifecycle anchors and approximation evidence remain part of determinism checks.
 
 Public revised live activation remains gated. Offline integration may exercise this path with
 an explicit test-local bypass; this does not authorize live deployment or replace legacy HSL.
