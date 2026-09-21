@@ -42,9 +42,10 @@ class CandleSourceReader:
 
     The owner must reuse this instance across scopes/cycles. A timed-out coroutine
     may resist cancellation; retain it until completion, refuse another read of
-    that source, and bound total live reads across symbols. Late rows are never
-    published as the timed-out call's result. Normal manager cache updates remain
-    ordinary historical observations for a later capture.
+    that source, and bound total live reads across symbols. A timed-out manager
+    coroutine's return value is never consumed. Cache fallback is a separate fresh
+    observation and may see canonical cache updates completed meanwhile; its
+    actual capture time is recorded for Rust's causal availability checks.
     """
     def __init__(self, manager, *, max_pending_reads=8):
         if type(max_pending_reads) is not int or max_pending_reads < 1:

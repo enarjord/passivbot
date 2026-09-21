@@ -393,9 +393,14 @@ and attempt a bounded cache-only read; independent resolutions survive. The call
 reuses one `CandleSourceReader` per manager across scopes and cycles. It retains
 unfinished reads, refuses another read of the same symbol/timeframe/source kind,
 and caps total pending reads (eight by default, configurable on construction).
-Timed-out results never become that acquisition's returned tape. Their ordinary
-manager cache updates may be observed in a later independently captured snapshot.
-Pending-read count is diagnostic; it never supplies a trading decision.
+A timed-out coroutine's return value is never consumed or allowed to extend its
+read deadline. Cache fallback is a separate fresh observation: it may include
+canonical cache updates completed meanwhile, including an update from the timed-out
+fetch. Rows are copied and stamped at that actual cache capture time. There is no
+shared atomic cutoff across resolutions; Rust rejects sources unavailable at the
+chosen evaluation time, and the eventual runtime caller owns final snapshot
+revalidation. Freezing a pre-fetch cache is not required. Pending-read count is
+diagnostic; it never supplies a trading decision.
 
 Invalid producer shapes, programming errors and cancellation propagate. Acquisition
 wrappers are cancelled and awaited; underlying cancellation-resistant reads remain

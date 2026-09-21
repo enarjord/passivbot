@@ -311,7 +311,9 @@ finest-source projector. Expected fetch failures perform bounded cache-only read
 timeout/cancellation and malformed producer behavior have explicit offline coverage.
 One reusable reader per manager enforces deadlines without waiting for resistant
 cancellation, caps outstanding reads, and prevents duplicate work for a stuck source.
-Late results cannot replace the timed-out capture; late programming errors remain fatal.
+A timed-out coroutine's direct result is discarded. Fresh cache fallback may observe
+canonical updates completed meanwhile, with its actual capture time retained for
+causal validation. Late programming errors remain fatal.
 The left-edge 1m source bucket is requested only for its in-window closing observation.
 Native coarse cache reads without an exchange cannot masquerade as minute data.
 

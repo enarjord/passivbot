@@ -293,3 +293,45 @@ async def test_outer_cancellation_does_not_wait_for_resistant_read():
 def test_read_capacity_requires_positive_integer(limit):
     with pytest.raises(ValueError,match='max_pending_reads'):
         CandleSourceReader(None,max_pending_reads=limit)
+
+
+@pytest.mark.asyncio
+async def test_fresh_cache_capture_may_observe_updates_after_remote_deadline():
+    updated=asyncio.Event()
+    manager=SimpleNamespace(exchange=SimpleNamespace(timeframes={'1m':1}),
+        cached=rows(1),clock=20*M)
+    manager._now_ms=lambda:manager.clock
+    async def get(symbol,**kw):
+        if kw['allow_remote_fetch']:
+            try: await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                # Simulate a canonical manager update before the fetch unwinds.
+                manager.cached=rows(2)
+                manager.clock=21*M
+                updated.set()
+                return rows(999)  # direct late return must never be consumed
+        await updated.wait()
+        manager.clock=22*M
+        return manager.cached
+    manager.get_candles=get
+    reader=CandleSourceReader(manager)
+    result=await reader.acquire('TEST',start=0,end=20*M,timeout_seconds=.01,
+        allow_remote_fetch=True)
+    assert result.failures[0].error_type == 'TimeoutError'
+    assert result.payload()[0]['close'] == 102
+    assert result.payload()[0]['available_at'] == 22*M
+    assert all(c['close'] != 1099 for c in result.payload())
+    # This is a new cache observation, not a retained manager-array reference.
+    manager.cached['c'][:]=500
+    assert result.payload()[0]['close'] == 102
+
+    # A caller cannot evaluate these newly captured rows at an earlier instant.
+    # Source skew is explicit; the price kernel owns the causal cutoff.
+    import json
+    import passivbot_rust as pbr
+    before=json.loads(pbr.hsl_revised_prices(json.dumps(dict(
+        start=0,end=20*M,candles=result.payload()))))
+    after=json.loads(pbr.hsl_revised_prices(json.dumps(dict(
+        start=0,end=22*M,candles=result.payload()))))
+    assert before['rows'] == []
+    assert after['rows'][-1]['close'] == 102
