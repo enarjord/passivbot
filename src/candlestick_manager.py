@@ -7431,6 +7431,7 @@ class CandlestickManager:
         max_lookback_candles: Optional[int] = None,
         allow_remote_fetch: bool = True,
         allow_provisional_internal_gaps: bool = False,
+        standardize: bool = True,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -7439,7 +7440,9 @@ class CandlestickManager:
         - If `end_ts` provided but `start_ts` is None: end_ts - window
         - If `max_age_ms` == 0: force refresh (no-op when exchange is None)
         - Negative `max_age_ms` raises ValueError
-        - Applies gap standardization (1m only)
+        - Applies gap standardization (1m only) unless `standardize=False`.
+          For 1m this returns a detached copy of retained source rows, without
+          filling gaps or adding a price seed from outside the requested range.
         - If `force_refetch_gaps` is True: clears known gaps in the requested range
           before fetching, forcing a retry of all gaps regardless of retry count
         - If `fill_leading_gaps` is True: synthesize zero-candles even before the
@@ -7492,7 +7495,7 @@ class CandlestickManager:
         if out_tf is not None:
             # parse timeframe to ms (bucket size)
             period_ms = _tf_to_ms(out_tf)
-            if period_ms > ONE_MIN_MS and self.exchange is not None:
+            if period_ms > ONE_MIN_MS and (self.exchange is not None or not standardize):
                 now = self._now_ms()
                 finalized_end = (int(now) // period_ms) * period_ms - period_ms
                 if end_ts is None:
@@ -7589,7 +7592,7 @@ class CandlestickManager:
                             self._tf_range_cache[symbol] = sym_cache
                             return out_disk
 
-                if not allow_remote_fetch:
+                if not allow_remote_fetch or self.exchange is None:
                     return (
                         self._slice_ts_range(disk_arr, start_ts, end_ts)
                         if isinstance(disk_arr, np.ndarray) and disk_arr.size
@@ -8752,6 +8755,12 @@ class CandlestickManager:
                                 unresolved_end,
                                 reason=GAP_REASON_FETCH_FAILED,
                             )
+
+        if not standardize:
+            # Historical estimators may own their own gap/resolution policy.
+            # Preserve the existing fetch/cache path but return only its sparse
+            # source observations, never an outside-window carry seed.
+            return sub.copy()
 
         # Standardize gaps: synthesize zero-candles where missing.
         # To help seed forward-fill, include one candle before start_ts if available.

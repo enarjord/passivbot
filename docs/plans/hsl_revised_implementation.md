@@ -301,3 +301,21 @@ shorts, partials, contract units, fees, same-bar flatten/reopen, disabled-side u
 exposure, raw balance, dynamic slots, delisting, exact lookback edges, source-column
 mapping and exclusion of future prices. Runtime dispatch, final sparse-history policy,
 execution/metrics and full revised fake-live remain subsequent integration work.
+
+## Source-resolution acquisition
+
+The revised candle reader captures immutable source tapes from the real candle
+manager across supported resolutions and the full requested window. It bypasses
+return-time 1m standardization so an internal coarse source can reach the Rust
+finest-source projector. Expected fetch failures perform bounded cache-only reads;
+timeout/cancellation and malformed producer behavior have explicit offline coverage.
+One reusable reader per manager enforces deadlines without waiting for resistant
+cancellation, caps outstanding reads, and prevents duplicate work for a stuck source.
+A timed-out coroutine's direct result is discarded. Fresh cache fallback may observe
+canonical updates completed meanwhile, with its actual capture time retained for
+causal validation. Late programming errors remain fatal.
+The left-edge 1m source bucket is requested only for its in-window closing observation.
+Native coarse cache reads without an exchange cannot masquerade as minute data.
+
+This is historical-data plumbing. Runtime scheduling, whole-snapshot revalidation,
+the final mixed-history dispatcher and full revised fake-live remain to be connected.
