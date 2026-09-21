@@ -165,7 +165,7 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
         _cleanup_fake_user_state(user)
 
 
-@pytest.mark.parametrize('change', ['balance', 'position', 'quote', 'stale_quote', 'policy', 'disabled', 'generation', 'restart'])
+@pytest.mark.parametrize('change', ['balance', 'position', 'quote', 'stale_quote', 'policy', 'disabled', 'generation', 'restart', 'open_orders'])
 def test_revised_wave_is_not_execution_authority_after_inputs_change(monkeypatch, change):
     from dataclasses import replace
     from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
@@ -181,7 +181,9 @@ def test_revised_wave_is_not_execution_authority_after_inputs_change(monkeypatch
     order = {'symbol': SYMBOL, 'position_side': 'long'}
     instance.bind(wave, (), (order,))
     assert instance.admit(order)
-    if change == 'balance':
+    if change == 'open_orders':
+        bot.open_orders[SYMBOL] = [dict(id='new-order', qty=1., price=100.)]
+    elif change == 'balance':
         bot.get_raw_balance = lambda: 999.
     elif change == 'position':
         bot.positions[SYMBOL]['long']['size'] = 9.
@@ -591,7 +593,8 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
-async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize('stage', ['warmup_trading_ready_candles', '_exchange_config_write_ready', 'update_exchange_config'])
+async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, monkeypatch, mode, stage):
     import asyncio
     import config.hsl_revised as config_hsl
     from passivbot import Passivbot
@@ -635,8 +638,9 @@ async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, 
             # Retain the harness's start_bot return boundary; otherwise normal
             # startup would enter the perpetual production execution loop.
             bot.debug_mode = True
-        # The dependency is now released. Its candle warmup behavior is covered
-        # separately; this test's fake dependency only controls completion time.
+        # The dependency is now released; ordinary warmup/configuration behavior
+        # has separate coverage. This dependency only controls completion time.
+        return True
 
     async def verify(bot):
         assert warmup_entered
@@ -644,7 +648,8 @@ async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, 
         assert any(f['reduceOnly'] for f in bot.cca.fills)
         return {'protected_during_startup': True}
 
-    monkeypatch.setattr(Passivbot, 'warmup_trading_ready_candles', stalled_warmup)
+    from exchanges.fake import FakeBot
+    monkeypatch.setattr(FakeBot, stage, stalled_warmup)
     monkeypatch.setattr(runner, '_run_fake_cycle', verify)
     try:
         args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
@@ -882,3 +887,81 @@ async def test_deferred_cancellation_has_no_submission_provenance(monkeypatch, a
     assert not calls and not recorded
     assert EventTypes.EXECUTION_CANCEL_SENT not in events
     assert not bot.state_change_detected_by_symbol
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['universe', 'market', 'reconcile'])
+@pytest.mark.parametrize('change', ['position', 'balance', 'order', 'unchanged_confirmation'])
+async def test_pending_planner_requires_unchanged_account_facts(stage, change):
+    import asyncio
+    from test_hsl_revised_runtime import bot as make_bot, NOW, SYMBOL
+    bot = make_bot()
+    instance = hsl_revised_live.owner(bot)
+    entered, release = asyncio.Event(), asyncio.Event()
+    reached = []
+    async def step(name):
+        reached.append(name)
+        if stage == name:
+            entered.set()
+            await release.wait()
+        return True
+    bot.prepare_planning_universe = lambda: step('universe')
+    bot.refresh_market_state_if_needed = lambda: step('market')
+    bot._staged_execution_ready_state = lambda **kwargs: (True, {})
+    bot._current_planning_snapshot = object()
+    async def reconcile():
+        await step('reconcile')
+        return [], []
+    bot.calc_orders_to_cancel_and_create = reconcile
+    task = asyncio.create_task(instance._ordinary_plan())
+    await asyncio.wait_for(entered.wait(), 1.)
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch(now_ms=NOW+1)
+    ledger.stamp('positions', now_ms=NOW+1)
+    if change == 'position':
+        bot.positions['NEW/USDT:USDT'] = {'long': dict(size=1., price=100.)}
+    elif change == 'balance':
+        bot.get_raw_balance = lambda: 900.
+    elif change == 'order':
+        bot.open_orders[SYMBOL] = [dict(id='expected-own-order', qty=1., price=100.)]
+    else:
+        # Harmless confirming reads and planner flat padding must not starve a
+        # slow, otherwise coherent plan; only changed account facts invalidate it.
+        bot.positions['FLAT/USDT:USDT'] = {'long': dict(size=0., price=0.)}
+        bot.open_orders['FLAT/USDT:USDT'] = []
+    release.set()
+    result = await task
+    assert (result is not None) == (change == 'unchanged_confirmation')
+    if change != 'unchanged_confirmation' and stage != 'reconcile':
+        assert 'reconcile' not in reached
+
+
+@pytest.mark.asyncio
+async def test_next_planner_cannot_run_while_previous_plan_is_writing():
+    import asyncio
+    from types import SimpleNamespace
+    plans = []
+    async def noop(*args, **kwargs):
+        await asyncio.sleep(0)
+        return True
+    bot = SimpleNamespace(stop_signal_received=False,
+        _begin_live_event_cycle=lambda **kwargs: None,
+        refresh_protective_authoritative_state=noop,
+        _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None,
+        live_value=lambda key: .05)
+    instance = hsl_revised_live.Owner(bot)
+    instance.remember_position = lambda: None
+    instance.schedule_history = instance.schedule_sources = lambda: None
+    instance.protect = noop
+    async def plan():
+        plans.append(True)
+        return [], [dict(symbol='TEST/USDT:USDT')], object()
+    async def write(*args):
+        assert len(plans) == 1
+        await asyncio.sleep(0)
+        # The old scheduling order started a second planner during this await.
+        assert len(plans) == 1
+        bot.stop_signal_received = True
+    instance._ordinary_plan = plan
+    bot.execute_order_plan_to_exchange = write
+    await asyncio.wait_for(instance.run(), 1.)

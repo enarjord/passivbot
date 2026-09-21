@@ -41,7 +41,7 @@ def bot(mode="coin", *, side="long", events=()):
     positions = {SYMBOL: {pside: dict(size=(10. if side == "long" else -10.) if side == pside else 0.,
                                      price=100. if side == pside else 0.)
                          for pside in ("long", "short")}}
-    value = SimpleNamespace(config=config, positions=positions, inverse=False, coin_overrides={},
+    value = SimpleNamespace(config=config, positions=positions, open_orders={}, inverse=False, coin_overrides={},
         c_mults={SYMBOL: 1.}, qty_steps={SYMBOL: .1},
         _ensure_freshness_ledger=lambda: ledger, get_raw_balance=lambda: 1000.,
         _pnls_manager=SimpleNamespace(get_events=lambda *, start_ms: [e for e in events if e.timestamp >= start_ms]))

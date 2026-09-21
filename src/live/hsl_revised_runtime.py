@@ -40,6 +40,17 @@ def observe_positions(bot):
         int(getattr(bot, '_account_invalidation_generation', 0)))
 
 
+def observe_open_orders(bot):
+    """Immutable complete order facts, ignoring bucket/order iteration and flat padding.
+
+    Keep the complete normalized row rather than inferring a venue-independent
+    subset of reconciliation inputs. A harmless metadata change may defer a plan;
+    it must never let changed resting orders inherit its permission.
+    """
+    return tuple(sorted((symbol, json.dumps(order, sort_keys=True, allow_nan=False))
+                        for symbol, orders in bot.open_orders.items() for order in orders))
+
+
 @dataclass(frozen=True)
 class FillObservation:
     """Immutable normalized facts copied at successful remote-fetch completion."""

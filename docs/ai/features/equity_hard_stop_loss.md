@@ -531,6 +531,8 @@ mandatory. Historical fill/candle damage is estimated by Rust with scoped diagno
 strategy consumers retain their own fill, PnL, candle and EMA requirements.
 
 Protection receives a finite execution wave during startup preparation and each outer-loop pass.
+Startup loads execution metadata and read-only connector preflight before supervising ordinary
+configuration-readiness, configuration writes, account preparation and candle warmup.
 Ordinary preparation, fill repair and candle acquisition run as owned background tasks; writes are
 serialized across connector batch tasks. Hourly preparation never starts another writer once the
 main owner is running. Each attempted write requires fresh balance, position and open-order
@@ -551,7 +553,10 @@ positions discards it. These are observation caches, never persisted lifecycle a
 Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,
 current account freshness, pending confirmations, generation, balance and positions are checked,
 and Rust recomputes scoped permission from current observations. Changed permission or execution
-policy defers that write. A receipt from a previous owner cannot authorize execution. The executor
+policy or changed open-order facts defers that write. A receipt from a previous owner cannot
+authorize execution. Ordinary preparation checks its complete starting account facts after each
+awaited phase and discards a mixed-cohort result. Unchanged confirming reads do not starve slow
+preparation. A replacement planner starts only after the preceding plan finishes writing. The executor
 uses the wave's own planning snapshot even when background ordinary preparation completes during
 an await. History-only flat pairs can use their latest factual fill price when no candle/quote
 survives; that price never substitutes for the current mark of a held position.

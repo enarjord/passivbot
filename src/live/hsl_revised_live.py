@@ -75,6 +75,7 @@ class Wave:
     decisions: tuple
     unavailable: tuple
     positions: str
+    open_orders: tuple
     balance: float
     generation: int
 
@@ -118,7 +119,7 @@ class Owner:
             max_current_age_ms=max_age, position_observation=self._position_observation,
             use_observed_fills=True)
         decisions = runtime.evaluate(requests)
-        return Wave(decisions, unavailable, runtime.observe_positions(bot).payload, bot.get_raw_balance(),
+        return Wave(decisions, unavailable, runtime.observe_positions(bot).payload, runtime.observe_open_orders(bot), bot.get_raw_balance(),
                     int(getattr(bot, "_account_invalidation_generation", 0)))
 
     def remember_position(self):
@@ -158,7 +159,8 @@ class Owner:
         # A revised panic is not a durable commitment and cannot take legacy's
         # account-generation bypass. Changed size/basis also requires replanning.
         if (wave.generation != int(getattr(bot, "_account_invalidation_generation", 0))
-                or wave.positions != runtime.observe_positions(bot).payload or wave.balance != bot.get_raw_balance()):
+                or wave.positions != runtime.observe_positions(bot).payload
+                or wave.open_orders != runtime.observe_open_orders(bot) or wave.balance != bot.get_raw_balance()):
             return False
         return True
 
@@ -350,16 +352,34 @@ class Owner:
             self.sources[symbol] = await self._reader.acquire(
                 symbol, start=start, end=now, timeout_seconds=15., allow_remote_fetch=True)
 
+    def account_facts(self):
+        bot = self.bot
+        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_raw_balance())
+
+    @staticmethod
+    def same_account_facts(before, after):
+        # Observation timestamps may advance on a confirming unchanged read.
+        # Changing facts or invalidation still void the entire prepared universe.
+        return (before[0].payload == after[0].payload and before[0].generation == after[0].generation
+                and before[1:] == after[1:])
+
     async def _ordinary_plan(self):
         bot = self.bot
+        account = self.account_facts()
         await bot.prepare_planning_universe()
+        if not self.same_account_facts(account, self.account_facts()):
+            return None
         if not await bot.refresh_market_state_if_needed():
+            return None
+        if not self.same_account_facts(account, self.account_facts()):
             return None
         ready, _ = bot._staged_execution_ready_state(
             include_market_snapshot=False, context='revised ordinary planning')
         if not ready:
             return None
         cancels, creates = await bot.calc_orders_to_cancel_and_create()
+        if not self.same_account_facts(account, self.account_facts()):
+            return None
         return cancels, creates, bot._current_planning_snapshot
 
     def cancel_inputs(self):
@@ -450,12 +470,12 @@ class Owner:
                     # A pending limit panic never monopolizes the owner. Other
                     # RED scopes and ordinary ready scopes get a pass each wave.
                     await self.protect()
-                    if ordinary is None:
-                        ordinary = asyncio.create_task(self._ordinary_plan())
                     if plan is not None:
                         cancels, creates, snapshot = plan
                         bot._current_planning_snapshot = snapshot
                         await bot.execute_order_plan_to_exchange(cancels, creates)
+                    if ordinary is None:
+                        ordinary = asyncio.create_task(self._ordinary_plan())
                 except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
                     logging.warning('[risk] revised current I/O unavailable | error_type=%s', type(exc).__name__)
                 bot._last_loop_duration_ms = int(utc_ms()) - started

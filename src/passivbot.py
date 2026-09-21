@@ -3879,6 +3879,11 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
+        if hsl_revised_live.selected(self) and not getattr(self, "_bot_ready", False):
+            await self._load_market_metadata(verbose=verbose)
+            await self._prepare_protective_account()
+            return await hsl_revised_live.owner(self).during_preparation(
+                self._init_markets_account_config(verbose=verbose, metadata_loaded=True))
         # A journal commitment needs no new balance or equity reconstruction.
         # Load only execution metadata before servicing it, even on a cold start.
         protection_bootstrap = (not hsl_revised_live.selected(self)
@@ -3892,6 +3897,11 @@ class Passivbot:
                 await risk_input_recovery.drain_startup_commitments(self)
                 if self.stop_signal_received:
                     return
+        return await self._init_markets_account_config(
+            verbose=verbose, metadata_loaded=protection_bootstrap)
+
+    async def _init_markets_account_config(self, *, verbose, metadata_loaded):
+        """Ordinary startup/maintenance work supervised by the selected protection owner."""
         readiness_network_attempt = 0
         while True:
             try:
@@ -3945,7 +3955,7 @@ class Passivbot:
                     5 * _attempt,
                 )
                 await asyncio.sleep(5 * _attempt)
-        if not protection_bootstrap:
+        if not metadata_loaded:
             await self._load_market_metadata(verbose=verbose)
         authoritative_ready = await self.refresh_authoritative_state()
         while (
@@ -3963,16 +3973,10 @@ class Passivbot:
             authoritative_ready = await self.refresh_authoritative_state()
         self._assert_supported_live_state()
         self.set_market_specific_settings()
-        if hsl_revised_live.selected(self):
-            await hsl_revised_live.owner(self).during_preparation(self.update_effective_min_cost())
-        else:
-            await self.update_effective_min_cost()
+        await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
-            if hsl_revised_live.selected(self):
-                await hsl_revised_live.owner(self).during_preparation(self.update_first_timestamps())
-            else:
-                await self.update_first_timestamps()
+            await self.update_first_timestamps()
 
     def log_once(self, msg: str):
         if not hasattr(self, "log_once_set"):
