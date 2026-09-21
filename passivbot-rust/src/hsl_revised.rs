@@ -106,7 +106,16 @@ pub fn signal_with_anchor(
     entry_reference: Option<f64>,
     anchor: &Observation,
 ) -> Result<Signal, String> {
-    signal_with_references(rows, budget, span, threshold, entry_reference, None, anchor)
+    signal_with_references(
+        rows,
+        budget,
+        span,
+        threshold,
+        entry_reference,
+        None,
+        &[],
+        anchor,
+    )
 }
 
 /// A reference relative to current budget preserves small losses which would
@@ -118,6 +127,7 @@ pub(crate) fn signal_with_references(
     threshold: f64,
     entry_reference: Option<f64>,
     entry_reference_delta: Option<f64>,
+    point_references: &[Option<f64>],
     anchor: &Observation,
 ) -> Result<Signal, String> {
     validate_settings(span, threshold)?;
@@ -129,6 +139,9 @@ pub(crate) fn signal_with_references(
         || entry_reference.is_some_and(|p| !p.is_finite())
         || entry_reference_delta.is_some_and(|p| !p.is_finite())
         || (entry_reference.is_some() && entry_reference_delta.is_some())
+        || (!point_references.is_empty() && point_references.len() != rows.len())
+        || point_references.iter().flatten().any(|r| !r.is_finite())
+        || (entry_reference.is_some() && point_references.iter().any(Option::is_some))
         || rows
             .iter()
             .any(|r| !r.realized.is_finite() || !r.unrealized.is_finite())
@@ -194,6 +207,13 @@ pub(crate) fn signal_with_references(
         peak = peak.max(equity);
         if let Some(relative_peak) = &mut peak_delta {
             *relative_peak = relative_peak.max(deltas[index]);
+            if let Some(reference) = point_references.get(index).copied().flatten() {
+                *relative_peak = relative_peak.max(reference);
+                peak = bounded(
+                    budget + *relative_peak,
+                    &mut out.numeric_range_approximation,
+                );
+            }
         }
         let drawdown = if peak > 0.0 && peak_delta.is_some() {
             let relative_peak = peak_delta.unwrap();
@@ -277,8 +297,8 @@ mod tests {
             realized: 0.0,
             unrealized: -1.0,
         };
-        let risk =
-            signal_with_references(&[row], 1e16, 10_000.5, 0.0, None, Some(1.0), &row).unwrap();
+        let risk = signal_with_references(&[row], 1e16, 10_000.5, 0.0, None, Some(1.0), &[], &row)
+            .unwrap();
         assert_eq!(risk.raw[0], 1e-16);
         assert_eq!(risk.ema[0], risk.raw[0]);
         assert!(risk.panic[0]);

@@ -37,7 +37,7 @@ class Signal:
     panic: tuple
 
 
-def signal(rows, budget, span, threshold, *, entry_reference=None, anchor=None):
+def signal(rows, budget, span, threshold, *, entry_reference=None, point_references=None, anchor=None):
     """Batch-reseeded signal; repeated samples in a minute replace its EMA input.
 
     Rows may include known flatten boundaries as well as minute closes. Consumers
@@ -61,8 +61,13 @@ def signal(rows, budget, span, threshold, *, entry_reference=None, anchor=None):
         raw, smooth, peaks = [], [], []
         previous_minute = None
         baseline = None
-        for row, value in zip(rows, equity):
+        refs = [None] * len(rows) if point_references is None else point_references
+        if len(refs) != len(rows):
+            raise ValueError("invalid reference count")
+        for row, value, reference in zip(rows, equity, refs):
             peak = max(peak, value)
+            if reference is not None:
+                peak = max(peak, budget + dec(reference))
             # An entirely nonpositive historical segment cannot define a ratio.
             # Represent complete impairment until a positive peak exists. This
             # explicit reference choice affects old EMA samples, not current B.

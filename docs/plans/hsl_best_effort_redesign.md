@@ -387,6 +387,17 @@ position gives zero in this minimal case. The reference seeds the peak only; it 
 not an invented earlier zero-drawdown EMA observation or proof of an entry inside the
 lookback. Past unobserved realized losses cannot be recovered this way.
 
+### Combining uneven historical prices
+
+Preserve every selected pair's usable historical closes on one common minute grid,
+using the agreed forward/backward fill policy. When only some pairs lack any historical
+prices, use each absent pair's current mark as an explicitly diagnosed estimator-local
+historical price. This retains the other pairs' evidence without claiming observed
+past prices for the missing pair. If all pairs lack prices, do not create a minute
+history: evaluate current and known scope-flat observations, enriching their peaks with
+retained cashflows known by each observation. Reset that cashflow peak on scope flatten;
+never import a later profit peak into an earlier risk sample.
+
 ### Missing opening with usable candles
 
 When the reconstructed initial quantity is nonzero before the first retained fill,
