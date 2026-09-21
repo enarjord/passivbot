@@ -120,7 +120,7 @@ impl Report {
         }
     }
 
-    fn advance(&mut self, now: i64) {
+    pub(super) fn advance(&mut self, now: i64) {
         if let Some(previous) = self.timestamp {
             let minutes = (now - previous).max(0) as f64 / 60_000.0;
             self.summary.observed_minutes += minutes;

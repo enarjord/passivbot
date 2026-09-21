@@ -1266,6 +1266,17 @@ mod tests {
                     equities.timestamps_ms.last().copied(),
                     Some(panic.timestamp_ms)
                 );
+                assert_eq!(
+                    bt.strategy_equity_series.len(),
+                    equities.timestamps_ms.len()
+                );
+                for emas in &bt.revised_hsl_report.signal_emas {
+                    assert_eq!(
+                        emas.len() + 1,
+                        bt.strategy_equity_series.len(),
+                        "terminal strategy sample must not duplicate a stale EMA"
+                    );
+                }
                 let metrics = bt.revised_hsl_report.metrics(1000.0, 3.0);
                 // RED at bar 2 close and the real flatten at bar 3 open coincide.
                 assert_eq!(metrics.flatten_time_minutes_mean, 0.0, "{mode}");

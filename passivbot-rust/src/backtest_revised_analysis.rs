@@ -22,6 +22,12 @@ impl Backtest<'_> {
             self.strategy_equity_series_pside[side].push(value);
             self.strategy_equity_timestamps_ms_pside[side].push(timestamp);
         }
+        if at_fill_boundary {
+            // Record terminal strategy equity and elapsed time, but there is no
+            // fresh bar-close signal. Repeating the preceding EMA biases tails.
+            self.revised_hsl_report.advance(timestamp as i64);
+            return;
+        }
         // EMA diagnostics describe the actual enabled signal scopes. Unified
         // contributes once to the portfolio, never to invented side controllers.
         let mut emas = [0.0_f64; 3];
@@ -33,14 +39,7 @@ impl Backtest<'_> {
                 }
             }
         }
-        // A fill-depleted account stops at the bar's open. There is no later
-        // bar-close evaluation or elapsed minute to include in its report.
-        let observed_at = timestamp
-            + if at_fill_boundary {
-                0
-            } else {
-                self.interval_ms
-            };
+        let observed_at = timestamp + self.interval_ms;
         self.revised_hsl_report
             .record_bar_signals(observed_at as i64, emas);
     }

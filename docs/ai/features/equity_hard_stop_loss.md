@@ -456,7 +456,8 @@ and unfinished partial exits are included in final statistics. A fill-proven fla
 execution latency at the fill timestamp even if it exhausts the balance or leaves account equity at or below the
 configured liquidation floor. No boundary or bar-close replay grants a terminal account a restart.
 Terminal diagnostics stop
-at that opening-fill timestamp rather than inventing the unobserved bar-close minute. This observation
+at that opening-fill timestamp rather than inventing the unobserved bar-close minute or duplicating
+the preceding signal EMA. The terminal strategy-equity point remains available. This observation
 never supplies a restart permission for the liquidating account. Ordinary/manual panic fills outside
 observed HSL RED are excluded.
 Duration/loss summaries are read without consuming pending episodes, so detailed and compact runs
