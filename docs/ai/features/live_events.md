@@ -438,12 +438,13 @@ does not produce a second console line.
 
 Staged revised HSL emits `hsl.status` with `engine=revised` and one bounded aggregate per
 qualitative scope/action/availability/estimate change, including stale/current observation recovery. This is passive observation, never a gate
-or retained trading permission. Numeric metrics refresh on every completed evaluation in the
+or retained trading permission. Numeric metrics refresh after each protective execution wave in the
 monitor snapshot even when no new status event is emitted. Sink/projection failure cannot inhibit
 risk evaluation or exchange execution.
 
 Connector admission evaluates current risk without diagnostic projection or synchronous event sinks.
-Normal planning/protection captures report observations outside that write-boundary check.
+Decision captures are separate from reporting. A protective wave reports after its order work,
+including when no exit work remains, so synchronous HSL sinks cannot age its inputs before a write.
 Diagnostic expiry uses the actual held-position mark timestamps consumed by evaluated scopes;
 quotes cached for disabled scopes cannot expire another scope's display. The bounded legacy
 aggregate preserves last RED attention, while a stale or failed GREEN observation is labelled
@@ -466,9 +467,9 @@ An observation becomes visibly stale when its captured input TTL expires (includ
 retained position timestamp used by evaluation), account confirmation is
 pending, or its account generation changes. The last decision remains labeled as an observation;
 monitor reads do not initialize an HSL owner, perform I/O, or reevaluate risk. Diagnostic state is
-replaced on every completed evaluation and is not persisted as restart authority. A first projection
+replaced after each protective wave and is not persisted as restart authority. A first projection
 failure is explicitly diagnostic-unavailable, and unavailable-scope fallback logs retain warning
-severity even when the structured sink fails.
+severity when event emission fails or the configured console sink reports a write failure.
 
 ## HSL Replay Timing
 

@@ -524,7 +524,7 @@ provenance. These tests validate simulation integration, not live exchange behav
 
 ## Staged live observation visibility
 
-The revised owner now publishes passive scoped diagnostics from each completed evaluation. Monitor
+The revised owner now publishes passive scoped diagnostics after each protective execution wave. Monitor
 snapshots retain bounded GREEN/RED/inactive/unavailable scope rows, complete counts, approximation
 reasons and raw/EMA/selected drawdown. Unified presentation has one portfolio scope. Input expiry,
 pending account confirmation and generation changes label prior observations as stale; the
