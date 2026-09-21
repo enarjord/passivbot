@@ -1,7 +1,7 @@
 """Revised HSL live orchestration, separate from legacy recovery authority.
 
-The public runtime guard stays closed while this owner is integrated. Nothing in
-this module persists a permission: a wave carries an immutable observation and
+Explicit revised selection chooses this owner. Nothing in this module persists
+a permission: a wave carries an immutable observation and
 must be admitted again from current facts immediately before a connector write.
 """
 from dataclasses import dataclass, replace

@@ -1,5 +1,9 @@
 # Equity Hard Stop Loss Reference
 
+This guide describes `live.hsl_engine=legacy`, the default. For the opt-in engine, see
+[Revised Equity Hard Stop Loss](hsl_revised.md), including its different signal,
+portfolio controller, finite-window restart and best-effort history policies.
+
 This file tracks implementation notes, parity surfaces, and remaining edge cases for HSL.
 
 See also:

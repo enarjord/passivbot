@@ -18,11 +18,8 @@ import tools.run_fake_live as runner
 @pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write', 'slow_projection', 'slow_sink'])
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_path, monkeypatch, mode, path, side):
-    import config.hsl_revised as config_hsl
     import passivbot_rust as pbr
     assert not getattr(pbr, '__is_stub__', False)
-    # Only this offline test bypasses the public activation gate.
-    monkeypatch.setattr(config_hsl, 'require_runtime_support', lambda *args, **kwargs: None)
     user = f'fake_revised_live_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
@@ -239,8 +236,6 @@ def test_revised_wave_is_not_execution_authority_after_inputs_change(monkeypatch
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monkeypatch, mode):
     import asyncio
-    import config.hsl_revised as config_hsl
-    monkeypatch.setattr(config_hsl, 'require_runtime_support', lambda *args, **kwargs: None)
     user = f'fake_revised_green_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
@@ -300,9 +295,7 @@ async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monk
 @pytest.mark.parametrize('obstacle', ['unfilled_limit', 'missing_quote'])
 async def test_revised_other_coin_closes_while_first_coin_is_pending(tmp_path, monkeypatch, obstacle):
     from copy import deepcopy
-    import config.hsl_revised as config_hsl
     from live.market_snapshot import MarketSnapshotUnavailable
-    monkeypatch.setattr(config_hsl, 'require_runtime_support', lambda *args, **kwargs: None)
     user = f'fake_revised_fair_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
@@ -501,8 +494,6 @@ def test_fill_receipt_is_atomic_and_clipped_before_first_consumer(change):
 async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tmp_path, monkeypatch, mode, restart, partial):
     import asyncio
     from copy import deepcopy
-    import config.hsl_revised as config_hsl
-    monkeypatch.setattr(config_hsl, 'require_runtime_support', lambda *args, **kwargs: None)
     symbol = 'BTC/USDT:USDT'
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
                             target='canonical', runtime=None, verbose=False)
@@ -628,9 +619,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
 @pytest.mark.parametrize('stage', ['warmup_trading_ready_candles', '_exchange_config_write_ready', 'update_exchange_config', 'warmup_transient_failure'])
 async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, monkeypatch, mode, stage):
     import asyncio
-    import config.hsl_revised as config_hsl
     from passivbot import Passivbot
-    monkeypatch.setattr(config_hsl, 'require_runtime_support', lambda *args, **kwargs: None)
     user = f'fake_revised_startup_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),

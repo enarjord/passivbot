@@ -1,5 +1,9 @@
 # Equity Hard Stop Loss
 
+This guide describes `live.hsl_engine=legacy`, the default. For the opt-in engine, see
+[Revised Equity Hard Stop Loss](hsl_revised.md), including its different signal,
+portfolio controller, finite-window restart and best-effort history policies.
+
 Passivbot includes a side-specific Equity Hard Stop Loss (HSL) that acts as a circuit breaker when strategy drawdown becomes too severe.
 
 HSL is configured separately for each `pside`:

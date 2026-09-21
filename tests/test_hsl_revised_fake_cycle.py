@@ -19,8 +19,6 @@ import tools.run_fake_live as runner
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 @pytest.mark.parametrize('side', ['long', 'short'])
 async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkeypatch, mode, side, case, entrypoint):
-    import config.hsl_revised as config_hsl
-    monkeypatch.setattr(config_hsl, 'require_runtime_support', lambda *args, **kwargs: None)
     user = f'fake_revised_cli_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
@@ -67,12 +65,8 @@ async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkey
             import os
             import subprocess
             import sys
-            # Test-only guard bypass, then the actual public CLI parser/main.
-            # The supplied fake scenario is the only client; no credentials.
-            code = ("import config.hsl_revised as h; "
-                    "h.require_runtime_support = lambda *a, **k: None; "
-                    "import tools.run_fake_live as r; raise SystemExit(r.main())")
-            completed = subprocess.run([sys.executable, '-c', code, str(config_path),
+            # Exercise the unmodified public CLI with the local fake exchange.
+            completed = subprocess.run([sys.executable, '-m', 'tools.run_fake_live', str(config_path),
                 str(scenario_path), '--user', user, '--max-steps', '4',
                 '--output-dir', str(output), '--log-level', '1', '--snapshot-each-step'],
                 cwd=REPO_ROOT, env={**os.environ, 'PYTHONPATH': str(REPO_ROOT / 'src')},

@@ -1273,7 +1273,7 @@ class Passivbot:
     def __init__(self, config: dict):
         """Initialise the bot with configuration, user context, and runtime caches."""
         from config.hsl_revised import require_runtime_support
-        require_runtime_support(config)
+        require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
         self.config = config
         try:
             lvl_raw = get_optional_config_value(config, "logging.level", 1)
@@ -22364,7 +22364,7 @@ async def _run_live(startup_context: dict):
         raw_snapshot=raw_snapshot,
     )
     from config.hsl_revised import require_runtime_support
-    require_runtime_support(config)
+    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1
