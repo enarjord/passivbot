@@ -1082,6 +1082,19 @@ def execute_tui_command(
     return False
 
 
+def _hsl_summary(hsl):
+    if hsl.get("engine") == "revised":
+        counts = hsl.get("counts") or {}
+        return (f"HSL revised {hsl.get('signal_mode', '-')} | {hsl.get('observation_status', '-')} | "
+                f"GREEN={counts.get('green', 0)} RED={counts.get('red', 0)} "
+                f"unavailable={counts.get('unavailable', 0)} estimated={counts.get('estimated', 0)}")
+    long_hsl, short_hsl = hsl.get("long") or {}, hsl.get("short") or {}
+    return (f"HSL     long={long_hsl.get('tier', '-')} halted={long_hsl.get('halted', False)} "
+            f"score={_fmt_float((long_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)} | "
+            f"short={short_hsl.get('tier', '-')} halted={short_hsl.get('halted', False)} "
+            f"score={_fmt_float((short_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)}")
+
+
 def render_screen(
     state: MonitorTuiState,
     *,
@@ -1134,9 +1147,6 @@ def render_screen(
     if view_state.last_error:
         header_lines.append(f"last_error={view_state.last_error}")
 
-    long_hsl = hsl.get("long", {}) if isinstance(hsl.get("long"), dict) else {}
-    short_hsl = hsl.get("short", {}) if isinstance(hsl.get("short"), dict) else {}
-
     summary_lines = [
         (
             f"Account raw={_fmt_float(account.get('balance_raw'), 2)} "
@@ -1152,13 +1162,19 @@ def render_screen(
             f"canceled={_fmt_int(health.get('orders_cancelled'))} "
             f"errors={_fmt_int(health.get('errors_last_hour'))} limits={_fmt_int(health.get('rate_limits'))}"
         ),
-        (
-            f"HSL     long={long_hsl.get('tier', '-')} halted={long_hsl.get('halted', False)} "
-            f"score={_fmt_float((long_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)} | "
-            f"short={short_hsl.get('tier', '-')} halted={short_hsl.get('halted', False)} "
-            f"score={_fmt_float((short_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)}"
-        ),
+        _hsl_summary(hsl),
     ]
+    if hsl.get("engine") == "revised":
+        for row in hsl.get("scopes", [])[:3]:
+            label = " ".join(str(value) for value in (row.get("symbol"), row.get("pside")) if value) or "portfolio"
+            summary_lines.append(
+                f"  {label}: {row.get('action') or row.get('availability')} "
+                f"DD={_fmt_float(row.get('score'), 4)} threshold={_fmt_float(row.get('threshold'), 4)} "
+                f"quality={'estimated' if row.get('estimated') else row.get('availability', '-')}"
+            )
+        omitted = max(0, hsl.get("scope_count", 0) - 3)
+        if omitted:
+            summary_lines.append(f"  {omitted} more HSL scopes (full bounded table in snapshot)")
 
     rows = _active_position_rows(snapshot)[:8]
     positions_lines = _render_positions_twe_summary(rows)

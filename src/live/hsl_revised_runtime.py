@@ -120,6 +120,7 @@ class Unavailable:
 
 @dataclass(frozen=True)
 class Decision:
+    threshold: float
     scope: Scope
     action: str | None
     execution_type: str
@@ -420,6 +421,6 @@ def _evaluate(requests):
                     or (flat is not None and (red is None or flat < red))):
                 raise InvalidHslOutput("invalid revised HSL decision envelope")
         reasons = tuple(sorted(set(request.reasons) | set(output["reasons"])))
-        decisions.append(Decision(request.scope, None if decision is None else decision["action"],
+        decisions.append(Decision(submitted["threshold"], request.scope, None if decision is None else decision["action"],
             request.execution_type, json.dumps(output, allow_nan=False), reasons))
     return tuple(decisions)

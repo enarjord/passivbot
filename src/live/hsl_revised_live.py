@@ -72,6 +72,7 @@ def matches(scope, symbol, side):
 
 @dataclass(frozen=True)
 class Wave:
+    captured_ms: int
     decisions: tuple
     unavailable: tuple
     positions: str
@@ -99,7 +100,6 @@ class Owner:
         self.bot = bot
         self.sources = {}
         self.quotes = {}
-        self._diagnostic = None
         self._waves = {}
         self._quote_tasks = {}
         self._quote_started = {}
@@ -122,8 +122,11 @@ class Owner:
             max_current_age_ms=max_age, position_observation=self._position_observation,
             use_observed_fills=True)
         decisions = runtime.evaluate(requests)
-        return Wave(decisions, unavailable, runtime.observe_positions(bot).payload, runtime.observe_open_orders(bot), bot.get_raw_balance(),
+        wave = Wave(now_utc, decisions, unavailable, runtime.observe_positions(bot).payload,
+                    runtime.observe_open_orders(bot), bot.get_raw_balance(),
                     int(getattr(bot, "_account_invalidation_generation", 0)))
+        self.report(wave)
+        return wave
 
     def remember_position(self):
         from utils import utc_ms
@@ -139,16 +142,8 @@ class Owner:
         return now_utc, max_age
 
     def report(self, wave):
-        signature = (tuple((d.scope, d.action, d.reasons) for d in wave.decisions), wave.unavailable)
-        if signature != self._diagnostic:
-            for d in wave.decisions:
-                logging.info("[risk] revised HSL | mode=%s side=%s symbol=%s action=%s estimates=%s",
-                             d.scope.mode, d.scope.pside, d.scope.symbol, d.action,
-                             ",".join(d.reasons) or "none")
-            for item in wave.unavailable:
-                logging.warning("[risk] revised HSL cannot evaluate current inputs | scope=%s reason=%s",
-                                item.scope, item.reason)
-            self._diagnostic = signature
+        from live.hsl_revised_diagnostics import record
+        record(self.bot, wave)
 
     def _account_matches(self, wave, now):
         bot = self.bot
@@ -219,7 +214,6 @@ class Owner:
         symbols.update(symbol for symbol, orders in bot.open_orders.items() if orders)
         quotes = await self.acquire_quotes(symbols)
         wave = self.capture(quotes)
-        self.report(wave)
         targets, execution_types = {}, {}
         for symbol in sorted(symbols):
             for side in ("long", "short"):
