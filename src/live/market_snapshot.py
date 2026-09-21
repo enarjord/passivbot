@@ -66,6 +66,7 @@ class MarketSnapshotProvider:
         self._cache: dict[str, MarketSnapshot] = {}
         self._fetch_task: Optional[asyncio.Task] = None
         self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
+        self._pending_failure: Optional[Exception] = None
 
     def get_cached(self, symbol: str, *, now_ms: int, max_age_ms: int) -> Optional[MarketSnapshot]:
         snap = self._cache.get(symbol)
@@ -81,6 +82,12 @@ class MarketSnapshotProvider:
         ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
         if not ordered_symbols:
             return {}
+
+        # A previous reader timeout must not erase a connector/programming error,
+        # including when this read could otherwise use the cache.
+        if self._pending_failure is not None:
+            failure, self._pending_failure = self._pending_failure, None
+            raise failure
 
         now = utc_ms()
         out: dict[str, MarketSnapshot] = {}
@@ -268,14 +275,11 @@ class MarketSnapshotProvider:
             def finished(done):
                 if self._fetch_task is done:
                     self._fetch_task = None
-                if not done.cancelled():
-                    # Retrieve even when every waiter timed out. Awaiting callers
-                    # still receive the original failure through their shield.
-                    done.exception()
+                self._record_completed_failure(done)
             task.add_done_callback(finished)
         # A protection reader's deadline belongs to that reader, not to another
         # planning reader sharing the same underlying exchange request.
-        return await asyncio.shield(task)
+        return await self._await_shared(task)
 
     async def _fetch_tickers_for_symbols_shared(self, symbols: list[str]) -> dict[str, Any]:
         if self._fetch_tickers_for_symbols is None:
@@ -288,16 +292,38 @@ class MarketSnapshotProvider:
             def finished(done):
                 if self._symbol_fetch_tasks.get(key) is done:
                     self._symbol_fetch_tasks.pop(key, None)
-                if not done.cancelled():
-                    done.exception()
+                self._record_completed_failure(done)
             task.add_done_callback(finished)
-        return await asyncio.shield(task)
+        return await self._await_shared(task)
+
+    def _record_completed_failure(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        failure = task.exception()
+        if (failure is not None
+                and not isinstance(failure, (NetworkError, OSError, MarketSnapshotUnavailable))
+                and self._pending_failure is None):
+            # Bounded, provider-owned delivery: an abandoned fatal fetch must
+            # reach caller policy on the next read, even for another symbol.
+            self._pending_failure = failure
+
+    async def _await_shared(self, task: asyncio.Task) -> dict[str, Any]:
+        try:
+            return await asyncio.shield(task)
+        except Exception as exc:
+            if self._pending_failure is exc:
+                self._pending_failure = None  # delivered to this active reader
+            raise
+
+    def pending_tasks(self) -> tuple[asyncio.Task, ...]:
+        """Expose owned I/O so lifecycle cleanup can wait before closing clients."""
+        return tuple(task for task in (self._fetch_task, *self._symbol_fetch_tasks.values())
+                     if task is not None and not task.done())
 
     def cancel_pending(self) -> None:
         """Owner shutdown, unlike an individual read timeout, cancels shared I/O."""
-        for task in (self._fetch_task, *self._symbol_fetch_tasks.values()):
-            if task is not None and not task.done():
-                task.cancel()
+        for task in self.pending_tasks():
+            task.cancel()
 
     @staticmethod
     def _coerce_positive(value: Any) -> Optional[float]:

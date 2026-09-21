@@ -7535,7 +7535,8 @@ class Passivbot:
             status="started",
             message="shutdown requested; closing background tasks and sessions",
         )
-        maintainer_tasks = []
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        maintainer_tasks = list(snapshots.pending_tasks()) if snapshots is not None else []
         try:
             self.stop_data_maintainers(verbose=False)
             for task_map_name in ("maintainers", "WS_ohlcvs_1m_tasks"):
@@ -8770,9 +8771,10 @@ class Passivbot:
             getattr(self, "maintainers", None),
             getattr(self, "WS_ohlcvs_1m_tasks", None),
         )
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        tasks: list[asyncio.Task] = list(snapshots.pending_tasks()) if snapshots is not None else []
         self.stop_data_maintainers(verbose=False)
-        tasks: list[asyncio.Task] = []
-        seen: set[int] = set()
+        seen: set[int] = {id(task) for task in tasks}
         for task_map in task_maps:
             if not isinstance(task_map, dict):
                 continue
