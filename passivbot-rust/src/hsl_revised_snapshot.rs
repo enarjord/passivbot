@@ -55,9 +55,27 @@ pub enum Mode {
     Pside,
     Unified,
 }
+/// Explicitly observed flat coin with an empty retained fill tape. This carries
+/// no invented quote; it cannot be used to discard retained history or exposure.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FlatCoin {
+    pub symbol: String,
+    pub pside: PositionSide,
+    pub position_at: i64,
+    pub fills_at: i64,
+    pub history_start: i64,
+}
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
+    #[serde(default)]
+    pub flat_coin: Option<FlatCoin>,
+    /// True only for a producer with one execution sequence across every pair.
+    #[serde(default)]
+    pub global_fill_sequence: bool,
+    #[serde(default = "history::default_fills_before_price")]
+    pub fills_before_same_time_price: bool,
     pub now: i64,
     pub start: i64,
     #[serde(deserialize_with = "crate::hsl_revised_json::number")]
@@ -132,7 +150,20 @@ pub(crate) fn select(input: &Input) -> Result<Vec<&Pair>, String> {
         })
         .collect();
     pairs.sort_by_key(|p| (&p.symbol, side_key(p.position.pside)));
-    if matches!(input.mode, Mode::Coin) && pairs.is_empty() {
+    if let Some(flat) = &input.flat_coin {
+        if !matches!(input.mode, Mode::Coin)
+            || !pairs.is_empty()
+            || input.symbol.as_ref() != Some(&flat.symbol)
+            || input.pside != Some(flat.pside)
+            || flat.history_start != input.start
+            || flat.position_at < input.now.saturating_sub(input.max_current_age_ms)
+            || flat.position_at > input.now
+            || flat.fills_at != flat.position_at
+        {
+            return Err("invalid explicit flat coin observation".into());
+        }
+    }
+    if matches!(input.mode, Mode::Coin) && pairs.is_empty() && input.flat_coin.is_none() {
         return Err("missing current coin position; absent is not flat".into());
     }
     Ok(pairs)
@@ -187,8 +218,16 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     let mut capture_known = true;
     let mut capture_after_position = true;
     for p in &selected {
-        if !fresh(p.position_at) || !fresh(p.mark_at) {
+        if !fresh(p.position_at)
+            || p.mark_at > input.now
+            || (p.position.size != 0.0 && !fresh(p.mark_at))
+        {
             return Err("unusable current position/mark observation".into());
+        }
+        if p.position.size == 0.0 && !fresh(p.mark_at) {
+            // Current UPNL is exactly zero for a confirmed-flat pair. Its last
+            // factual close still values retained history after a delisting.
+            reasons.insert("stale_flat_mark".into());
         }
         if p.prices_at > input.now
             || p.fills_at.is_some_and(|t| t > input.now)
@@ -260,6 +299,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             .map(|(t, p)| (*t, *p))
             .collect();
         let h = history::reconstruct(&history::Input {
+            fills_before_same_time_price: input.fills_before_same_time_price,
             start: input.start,
             end: input.now,
             position: p.position.clone(),
@@ -315,7 +355,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             .iter()
             .filter_map(|v| pairs[v.1].history.events[v.2].fill.sequence)
             .collect();
-        let exact = one_pair && sequences.len() == cohort.len();
+        let exact = (one_pair || input.global_fill_sequence) && sequences.len() == cohort.len();
         let mut ordered = cohort.to_vec();
         if exact {
             ordered.sort_by_key(|v| pairs[v.1].history.events[v.2].fill.sequence);

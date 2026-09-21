@@ -1,3 +1,6 @@
+#[path = "backtest_hsl_revised.rs"]
+mod revised_inputs;
+
 use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
 use crate::entries::{

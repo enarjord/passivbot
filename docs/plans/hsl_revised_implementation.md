@@ -263,6 +263,45 @@ resampling and in-window carrying. These are transport helpers; no runtime calle
 is activated yet. Offline tests include the real fill manager over the fake exchange,
 contract quantities, fees, both sides, partial closes and cache-free reconstruction.
 
+## Backtest factual input adapter
+
+`backtest_hsl_revised.rs` captures the simulator's actual fills and current positions
+for the shared price, snapshot and trace components. It preserves native contract
+quantities, gross PnL and signed fees, and uses simulator execution sequence rather
+than reconstructed fill after-states. Raw current balance and the existing configured
+versus dynamic-tradability slot counts remain separate scope-budget inputs. Unified
+observations include both sides even when ordinary entries are disabled.
+
+A simulator candle is valued at its end, matching the revised live price projector.
+Fills retain their existing bar-open timestamp labels and actual execution sequence.
+An explicit sample phase values the preceding candle close before fills bearing the
+same boundary label; the final current observation still includes all captured fills.
+The simulator declares its global execution sequence, allowing cross-pair flats and
+reopens within one bar to retain their exact order. Live inputs default to ordinary
+fill-before-sample timing and per-pair sequencing; unrelated exchange sequence numbers
+never imply a portfolio-wide ordering. The post-bar position follows the bar's fills. No future candle is read. This
+adapter accepts 1m simulation data; selecting another interval is an explicit input
+error. The legacy simulator remains unchanged.
+
+Only in-window fills and close observations are retained. A real 1m close exactly
+at the inclusive left edge is retained even though its source candle opened one
+minute earlier; no earlier close sample, fill, or coarse interpolation is imported. Existing Rust
+projection supplies the approved within-window forward/backfill. Flat pre-listing or
+expired pairs with no retained fills have no aggregate scope contribution. An
+explicitly selected coin instead carries fresh flat-position and empty in-window tape
+proof, bound to the selected coin, side and window. The shared consumer returns a
+neutral current trace without requiring or inventing an unavailable quote; bare
+absence, stale proof and a contradictory retained pair are still rejected. Flat delisted pairs
+with retained fills remain reconstructible from their last factual close; a stale
+mark is disclosed but cannot change their zero current UPNL. Held positions still
+require current valid valuation. Positions and balance always require freshness.
+
+Tests drive the real simulator fill handlers into shared reconstruction, including
+shorts, partials, contract units, fees, same-bar flatten/reopen, disabled-side unified
+exposure, raw balance, dynamic slots, delisting, exact lookback edges, source-column
+mapping and exclusion of future prices. Runtime dispatch, final sparse-history policy,
+execution/metrics and full revised fake-live remain subsequent integration work.
+
 ## Source-resolution acquisition
 
 The revised candle reader captures immutable source tapes from the real candle

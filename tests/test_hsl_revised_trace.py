@@ -292,3 +292,46 @@ def test_reopen_time_precedes_later_sample_cooldown_expiry(opening, intervention
     panicked = intervention == "panic" and opening < 5*M
     assert results[-1]["action"] == ("halted" if panicked else "normal")
     assert results[-1]["red_at"] == (opening if panicked else None)
+
+
+@pytest.mark.parametrize("side,quantity,entry", [("long", 1, 80), ("short", -1, 120)])
+def test_explicit_simulator_phase_prevents_pre_entry_profit(side, quantity, entry):
+    p = cases.pair(size=quantity, basis=entry, mark=entry, pside=side,
+                   fills=[Fill("entry", M, quantity, entry, 0, 0, sequence=0)],
+                   prices={M: 100, 2*M: entry, 3*M: entry})
+    request = payload(cases.frame(p), "coin", pside=side, symbol="A")
+    request["fills_before_same_time_price"] = False
+    actual = rust_trace(request)
+    points = actual["episodes"][0]["points"]
+    assert points[0]["timestamp"] == M
+    assert points[0]["exposed"] is False
+    assert all(p["upnl"] == 0 for p in points)
+    # Independent hand calculation: position first appears at its entry price,
+    # there are no fees or subsequent price changes, hence no loss or RED.
+    import passivbot_rust as pbr
+    result = json.loads(pbr.hsl_revised_controller(json.dumps(dict(
+        now=4*M, start=0, budget=100, span=1, threshold=.01,
+        cooldown_ms=M, restart="always", intervention="panic",
+        episodes=actual["episodes"]))))
+    assert all(r["action"] == "normal" and r["raw"] == 0 for r in result)
+
+
+def test_global_order_is_explicit_and_preserves_aggregate_flat_prefix():
+    a = cases.pair(size=1, basis=90, mark=90,
+        fills=[Fill("a0", M, 1, 100, 0, 0, sequence=0),
+               Fill("a1", 2*M, -1, 90, -10, 0, sequence=2),
+               Fill("a2", 2*M, 1, 90, 0, 0, sequence=4)], prices={M:100, 2*M:90, 3*M:90})
+    b = cases.pair(symbol="B", fills=[
+        Fill("b0", M, 1, 100, 0, 0, sequence=1),
+        Fill("b1", 2*M, -1, 80, -20, 0, sequence=3)], prices={M:100, 2*M:80, 3*M:80})
+    request = payload(cases.frame(a,b))
+    assert len(rust_trace(request)["episodes"]) == 1
+    request["global_fill_sequence"] = True
+    actual = rust_trace(request)
+    assert len(actual["episodes"]) == 2
+    end = actual["episodes"][0]["points"][-1]
+    assert end["flatten"] and end["timestamp"] == 2*M
+    assert actual["episodes"][1]["opened_at"] == 2*M
+    # Duplicate cross-pair sequence values cannot establish total order.
+    request["pairs"][1]["fills"][1]["sequence"] = 2
+    assert len(rust_trace(request)["episodes"]) == 1
