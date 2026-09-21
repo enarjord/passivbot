@@ -184,11 +184,12 @@ def test_scope_pair_order_does_not_change_trace(order):
     assert trace == compare(cases.frame(*pairs))[0]
 
 
-def test_missing_flat_fill_keeps_risk_but_no_cooldown_certificate():
+def test_missing_flat_fill_keeps_risk_and_estimates_current_flat_time():
     p = closed()
     p = replace(p, fills=p.fills[:-1])
     trace, _ = compare(cases.frame(p))
-    assert not any(x["flatten"] for e in trace["episodes"] for x in e["points"])
+    assert [x["timestamp"] for e in trace["episodes"] for x in e["points"] if x["flatten"]] == [p.fills[-1].timestamp]
+    assert "current_flat_timestamp_estimate" in trace["reasons"]
 
 
 def test_prices_must_be_normalized_without_silently_discarding_other_pairs_history():

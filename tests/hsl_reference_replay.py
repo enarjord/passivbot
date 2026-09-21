@@ -33,6 +33,13 @@ def _quantity(fill):
         return Decimal(0), False
 
 
+def _zero_quantity(fill):
+    try:
+        return dec(fill.delta) == 0
+    except (ValueError, ArithmeticError):
+        return False
+
+
 @dataclass(frozen=True)
 class Pair:
     symbol: str
@@ -315,8 +322,8 @@ def _steps(pair, start, now):
 def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
     """Supported scope flats from observed positions and in-window fills.
 
-    No exact-history gate: uncertainty may suppress a lifecycle boundary but never
-    the separate current risk calculation. Absence of a detected gap is not proof
+    Historical uncertainty may suppress an internal lifecycle boundary, never
+    current risk evaluation or authoritative current flatness. Absence of a detected gap is not proof
     that all exchange fills were delivered. Cross-pair simultaneous fills are a
     cohort; per-pair sequence numbers do not prove a global exchange ordering.
     """
@@ -400,6 +407,25 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
                                        not ambiguous and not reasons.intersection({
                                            "post_position_fill", "position_fill_timestamp_tie", "post_capture_fill"
                                        })))
+    # A fresh exchange-flat scope does not need its missing closing fill to
+    # finish protection. Use the last retained fill as a disclosed time estimate;
+    # never manufacture an observation-time anchor or move an already known flat
+    # merely because a later fee-only record exists.
+    if pairs and all(dec(p.position.size) == 0 for p in pairs):
+        terminal_known = any(b.lifecycle_eligible and all(
+            all(_zero_quantity(step.fill)
+                for step in paths[key][len(prefix):])
+            for key, prefix in b.consumed) for b in boundaries)
+        if not terminal_known and timeline:
+            timestamp = max(s.fill.timestamp for s in timeline)
+            tape = tuple((p.key, tuple(s.fill for s in paths[p.key])) for p in pairs)
+            realized = sum((reconstruct(p.position, dict(tape)[p.key], {}, snapshot.start,
+                                        snapshot.now).rows[-1].pnl for p in pairs), Decimal(0))
+            reasons.add("current_flat_timestamp_estimate")
+            if boundaries and boundaries[-1].timestamp == timestamp and boundaries[-1].consumed == tape:
+                boundaries[-1] = replace(boundaries[-1], lifecycle_eligible=True)
+            else:
+                boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0))))
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
 

@@ -10,6 +10,11 @@ since the latest release tag; these features may already be available when insta
   coin-side, one whole position side or the whole unified portfolio. Complete current-account
   confirmation and freshness checks remain required.
 
+- Let fresh exchange-flat positions complete revised HSL protection when closing fills are
+  missing or ambiguous. If the final boundary cannot be reconstructed, use the latest retained
+  fill in that scope as a disclosed cooldown timestamp estimate; repeated reads and restarts
+  do not renew it. Delayed history can correct the anchor. Legacy HSL is unchanged.
+
 - Enable the opt-in revised HSL engine for backtests and CPU optimization in coin, pside and
   unified modes, including scenario evaluation and checkpoint resume. Legacy remains the default;
   revised live startup and GPU optimization remain explicitly guarded.
