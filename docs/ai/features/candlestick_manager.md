@@ -380,16 +380,27 @@ price seed. The 1m returned array is detached from the mutable cache. Native coa
 cache reads remain native even with no exchange object; they must not relabel 1m
 rows as 5m/15m/1h. Existing callers retain standardization by default.
 
-The staged `live.hsl_revised_candles.acquire_sources` reader requests supported
+The staged `live.hsl_revised_candles.CandleSourceReader.acquire` reader requests supported
 1m/5m/15m/1h sources over the full estimator window. A real 1m close at the inclusive
 left edge belongs to the window although its source bucket opened one minute earlier.
 Rust rejects earlier closes and coarse buckets straddling the boundary, selects the
 finest available source, and applies estimator-local gap carrying. Manager-persisted
 verified no-trade observations remain usable under the existing cache contract.
 
-Each source read is bounded by the caller's timeout. Expected exchange/transport/read
-failures retain type-only diagnostics and attempt a bounded cache-only read; independent
-resolutions survive. Invalid producer shapes, programming errors and cancellation
-propagate, with all sibling reads cancelled and awaited. No source projection is
-written into factual caches. The caller owns background scheduling and coherent
-current-state capture; this staged reader alone does not activate revised trading.
+Each source read has a caller-supplied deadline which does not await resistant
+cancellation. Expected exchange/transport/read failures retain type-only diagnostics
+and attempt a bounded cache-only read; independent resolutions survive. The caller
+reuses one `CandleSourceReader` per manager across scopes and cycles. It retains
+unfinished reads, refuses another read of the same symbol/timeframe/source kind,
+and caps total pending reads (eight by default, configurable on construction).
+Timed-out results never become that acquisition's returned tape. Their ordinary
+manager cache updates may be observed in a later independently captured snapshot.
+Pending-read count is diagnostic; it never supplies a trading decision.
+
+Invalid producer shapes, programming errors and cancellation propagate. Acquisition
+wrappers are cancelled and awaited; underlying cancellation-resistant reads remain
+tracked within the fixed capacity until completion. Late exceptions are consumed;
+unexpected late programming failures are raised on the next acquisition instead of
+silently hidden. No source projection is written into factual caches. The caller owns
+background scheduling and coherent current-state capture; this staged reader alone
+does not activate revised trading.

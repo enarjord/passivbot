@@ -24,13 +24,87 @@ class Failure:
 class Sources:
     tapes: tuple[CandleTape, ...]
     failures: tuple[Failure, ...]
+    pending_reads: int
 
     def payload(self):
         return [row for tape in self.tapes for row in tape.payload()]
 
 
-async def acquire_sources(manager, symbol, *, start, end, timeout_seconds,
-                          allow_remote_fetch=False):
+_IO_ERRORS = (TimeoutError, OSError, OhlcvFetchError, ExchangeError)
+
+
+class CandleReadBusy(TimeoutError):
+    """An earlier resistant read owns this source or the reader's bounded capacity."""
+
+
+class CandleSourceReader:
+    """One reusable reader per manager, holding I/O tasks but no trading state.
+
+    The owner must reuse this instance across scopes/cycles. A timed-out coroutine
+    may resist cancellation; retain it until completion, refuse another read of
+    that source, and bound total live reads across symbols. Late rows are never
+    published as the timed-out call's result. Normal manager cache updates remain
+    ordinary historical observations for a later capture.
+    """
+    def __init__(self, manager, *, max_pending_reads=8):
+        if type(max_pending_reads) is not int or max_pending_reads < 1:
+            raise ValueError("max_pending_reads must be a positive integer")
+        self.manager = manager
+        self.max_pending_reads = max_pending_reads
+        self._pending = {}
+        self._fatal = None
+
+    @property
+    def pending_reads(self):
+        return sum(not task.done() for task in self._pending.values())
+
+    def _finished(self, key, task):
+        if self._pending.get(key) is task:
+            del self._pending[key]
+        # Retrieve every late exception. Programming failures remain fatal on
+        # the next acquisition rather than becoming silent background errors.
+        if not task.cancelled():
+            error = task.exception()
+            if error is not None and not isinstance(error, _IO_ERRORS) and self._fatal is None:
+                self._fatal = error
+
+    def _raise_late_failure(self):
+        if self._fatal is not None:
+            raise self._fatal
+
+    async def _read(self, symbol, timeframe, remote, timeout, **kwargs):
+        for key, task in list(self._pending.items()):
+            if task.done():
+                self._finished(key, task)
+        self._raise_late_failure()
+        key = (symbol, timeframe, remote)
+        if key in self._pending or len(self._pending) >= self.max_pending_reads:
+            raise CandleReadBusy("candle source read still pending")
+        task = asyncio.create_task(self.manager.get_candles(
+            symbol, timeframe=None if timeframe == "1m" else timeframe,
+            allow_remote_fetch=remote, standardize=False, strict=False, **kwargs))
+        self._pending[key] = task
+        task.add_done_callback(lambda done: self._finished(key, done))
+        try:
+            done, _ = await asyncio.wait((task,), timeout=timeout)
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        if not done:
+            task.cancel()
+            raise TimeoutError("candle source read deadline exceeded")
+        return task.result()
+
+    async def acquire(self, symbol, *, start, end, timeout_seconds, allow_remote_fetch=False):
+        self._raise_late_failure()
+        result = await _acquire_sources(self, symbol, start=start, end=end,
+            timeout_seconds=timeout_seconds, allow_remote_fetch=allow_remote_fetch)
+        self._raise_late_failure()
+        return result
+
+
+async def _acquire_sources(reader, symbol, *, start, end, timeout_seconds,
+                           allow_remote_fetch):
     """Read the supported source resolutions across the whole requested window.
 
     Each independent resolution gets a bounded manager read. Expected I/O failure
@@ -47,11 +121,11 @@ async def acquire_sources(manager, symbol, *, start, end, timeout_seconds,
             or isinstance(timeout_seconds, bool)
             or not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
         raise ValueError("invalid revised HSL candle acquisition bounds")
+    manager = reader.manager
     advertised = getattr(manager.exchange, "timeframes", None)
     supported = set(advertised) if isinstance(advertised, dict) and advertised else None
     ladder = [(tf, minutes) for tf, minutes in [("1m", 1), ("5m", 5), ("15m", 15), ("1h", 60)]
               if supported is None or tf in supported]
-    expected_errors = (TimeoutError, OSError, OhlcvFetchError, ExchangeError)
 
     async def one(timeframe, minutes):
         failures = []
@@ -59,23 +133,19 @@ async def acquire_sources(manager, symbol, *, start, end, timeout_seconds,
         # belongs to the inclusive window. Request that preceding source bucket.
         # Rust excludes earlier closes and coarse buckets crossing the edge.
         async def read(remote):
-            return await asyncio.wait_for(manager.get_candles(
-                symbol, start_ts=max(0, start - 60_000) if minutes == 1 else start,
-                end_ts=end, strict=False,
-                timeframe=None if timeframe == "1m" else timeframe,
-                allow_remote_fetch=remote, standardize=False,
-            ), timeout=timeout_seconds)
+            return await reader._read(symbol, timeframe, remote, timeout_seconds,
+                start_ts=max(0, start - 60_000) if minutes == 1 else start, end_ts=end)
 
         try:
             rows = await read(allow_remote_fetch)
-        except expected_errors as exc:
+        except _IO_ERRORS as exc:
             failures.append(Failure(timeframe, "fetch" if allow_remote_fetch else "cache",
                                     bounded_exception_type(exc)))
             if not allow_remote_fetch:
                 return None, failures
             try:
                 rows = await read(False)
-            except expected_errors as exc:
+            except _IO_ERRORS as exc:
                 failures.append(Failure(timeframe, "cache", bounded_exception_type(exc)))
                 return None, failures
         # Keep parsing outside the I/O exception boundary. Invalid producer shape
@@ -86,11 +156,12 @@ async def acquire_sources(manager, symbol, *, start, end, timeout_seconds,
     try:
         results = await asyncio.gather(*tasks)
     except BaseException:
-        # Structured cleanup only: never leave fetches running after a fatal
-        # producer error or cancellation, and never convert it to healthy data.
+        # Cancel acquisition wrappers without awaiting cancellation-resistant
+        # manager reads. The reusable reader tracks those within its fixed cap.
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         raise
     return Sources(tuple(tape for tape, _ in results if tape is not None),
-                   tuple(failure for _, failures in results for failure in failures))
+                   tuple(failure for _, failures in results for failure in failures),
+                   reader.pending_reads)

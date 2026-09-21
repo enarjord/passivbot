@@ -6,9 +6,14 @@ import numpy as np
 import pytest
 
 from candlestick_manager import CANDLE_DTYPE, CandlestickManager, OhlcvFetchError
-from live.hsl_revised_candles import acquire_sources
+from live.hsl_revised_candles import CandleSourceReader
 
 M = 60_000
+
+
+async def acquire_sources(manager, symbol, **kwargs):
+    # One-shot fixture. Repeated-cycle tests below deliberately reuse one reader.
+    return await CandleSourceReader(manager).acquire(symbol, **kwargs)
 
 
 def rows(*minutes):
@@ -179,3 +184,112 @@ async def test_inclusive_left_edge_keeps_only_the_in_window_close(tmp_path):
     assert actual['rows'][0]['close'] == 101
     assert not actual['rows'][0]['carried']
     assert all(row['timestamp'] >= 2*M for row in actual['rows'])
+
+
+@pytest.mark.asyncio
+async def test_resistant_read_expires_uses_cache_and_cannot_accumulate_on_retry():
+    release=asyncio.Event(); calls=[]
+    async def get(symbol, **kw):
+        calls.append((symbol,kw['allow_remote_fetch']))
+        if not kw['allow_remote_fetch']:
+            return rows(1)
+        try: await release.wait()
+        except asyncio.CancelledError: await release.wait()
+        return rows(999)
+    manager=SimpleNamespace(exchange=SimpleNamespace(timeframes={'1m':1}),
+        get_candles=get,_now_ms=lambda:20*M)
+    reader=CandleSourceReader(manager)
+    task=asyncio.create_task(reader.acquire('TEST',start=0,end=M,
+        timeout_seconds=.01,allow_remote_fetch=True))
+    try:
+        done,_=await asyncio.wait((task,),timeout=1)
+        assert task in done, 'deadline must not wait for resistant cancellation'
+        result=task.result()
+        assert result.payload()[0]['close'] == 101
+        assert result.failures[0].error_type == 'TimeoutError'
+        assert result.pending_reads == 1
+        for _ in range(5):
+            retry=await reader.acquire('TEST',start=0,end=M,timeout_seconds=.01,
+                allow_remote_fetch=True)
+            assert retry.payload()[0]['close'] == 101
+            assert retry.failures[0].error_type == 'CandleReadBusy'
+        assert calls.count(('TEST',True)) == 1
+    finally:
+        release.set()
+        await task
+        await asyncio.gather(*list(reader._pending.values()),return_exceptions=True)
+    assert reader.pending_reads == 0
+    assert result.payload()[0]['close'] == 101  # late rows cannot mutate published capture
+
+
+@pytest.mark.asyncio
+async def test_resistant_read_capacity_is_bounded_across_symbols():
+    release=asyncio.Event(); calls=[]
+    async def get(symbol,**kw):
+        calls.append(symbol)
+        try: await release.wait()
+        except asyncio.CancelledError: await release.wait()
+        return rows(0)
+    manager=SimpleNamespace(exchange=SimpleNamespace(timeframes={'1m':1}),
+        get_candles=get,_now_ms=lambda:20*M)
+    reader=CandleSourceReader(manager,max_pending_reads=2)
+    try:
+        for symbol in ('A','B','C','D'):
+            result=await reader.acquire(symbol,start=0,end=M,timeout_seconds=.01)
+            assert not result.tapes
+            assert result.pending_reads <= 2
+        assert calls == ['A','B']
+        assert result.failures[0].error_type == 'CandleReadBusy'
+    finally:
+        release.set()
+        await asyncio.gather(*list(reader._pending.values()),return_exceptions=True)
+    # Completion frees capacity for later acquisitions; no stale task latch.
+    assert (await reader.acquire('C',start=0,end=M,timeout_seconds=1)).payload()
+
+
+@pytest.mark.asyncio
+async def test_late_programming_failure_is_fatal_on_next_capture():
+    release=asyncio.Event()
+    async def get(symbol,**kw):
+        if not kw['allow_remote_fetch']: return rows(1)
+        try: await release.wait()
+        except asyncio.CancelledError: await release.wait()
+        raise ValueError('late producer failure')
+    manager=SimpleNamespace(exchange=SimpleNamespace(timeframes={'1m':1}),
+        get_candles=get,_now_ms=lambda:20*M)
+    reader=CandleSourceReader(manager)
+    try:
+        await reader.acquire('TEST',start=0,end=M,timeout_seconds=.01,allow_remote_fetch=True)
+    finally:
+        release.set()
+        await asyncio.gather(*list(reader._pending.values()),return_exceptions=True)
+    with pytest.raises(ValueError,match='late producer failure'):
+        await reader.acquire('TEST',start=0,end=M,timeout_seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_outer_cancellation_does_not_wait_for_resistant_read():
+    release=asyncio.Event();started=asyncio.Event()
+    async def get(symbol,**kw):
+        started.set()
+        try: await release.wait()
+        except asyncio.CancelledError: await release.wait()
+        return rows(0)
+    manager=SimpleNamespace(exchange=SimpleNamespace(timeframes={'1m':1}),
+        get_candles=get,_now_ms=lambda:20*M)
+    reader=CandleSourceReader(manager)
+    task=asyncio.create_task(reader.acquire('TEST',start=0,end=M,timeout_seconds=10))
+    try:
+        await started.wait();task.cancel()
+        done,_=await asyncio.wait((task,),timeout=1)
+        assert task in done and task.cancelled()
+        assert reader.pending_reads == 1
+    finally:
+        release.set()
+        await asyncio.gather(task,*list(reader._pending.values()),return_exceptions=True)
+
+
+@pytest.mark.parametrize('limit',[0,-1,1.5,True])
+def test_read_capacity_requires_positive_integer(limit):
+    with pytest.raises(ValueError,match='max_pending_reads'):
+        CandleSourceReader(None,max_pending_reads=limit)
