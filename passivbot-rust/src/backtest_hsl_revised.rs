@@ -965,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn revised_simulator_fill_tie_requires_sequence_and_matching_anchor() {
+    fn revised_simulator_fill_tie_distinguishes_exact_and_current_flat_timing() {
         let c = candles(3, 1);
         let btc = Array1::from_elem(3, 1.0);
         let mut bt = make(&c, &btc);
@@ -994,12 +994,13 @@ mod tests {
                 result.reasons.contains("position_fill_timestamp_tie"),
                 !eligible
             );
+            assert!(result
+                .boundaries
+                .last()
+                .is_some_and(|b| b.lifecycle_eligible));
             assert_eq!(
-                result
-                    .boundaries
-                    .last()
-                    .is_some_and(|b| b.lifecycle_eligible),
-                eligible
+                result.reasons.contains("current_flat_timestamp_estimate"),
+                !eligible
             );
         }
     }

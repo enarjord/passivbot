@@ -148,8 +148,10 @@ Same-timestamp rows are handled deterministically per symbol/side before scope
 aggregation. Prefer actual sequence information when available. Otherwise use a
 documented tie convention or cohort aggregation and report ambiguity; independent
 symbols must not require a provable global fill order. Artificial or ambiguous flats
-must not be presented as proof that a reconstructible in-window stop ended. Apply
-the current reconstructed lifecycle policy; a prior local flag cannot overrule it.
+alone must not be presented as proof that a reconstructible in-window stop ended.
+Fresh exchange positions establishing that every selected position is flat are a separate
+authority: when the final historical boundary is unavailable, use the latest retained scoped
+fill timestamp as a disclosed estimate for cooldown. Apply this reconstructed lifecycle policy; a prior local flag cannot overrule it.
 Explicit event expiry is a separate, intended reset rule.
 
 Approximation is local to this risk estimator. It does not certify fills for unrelated
@@ -436,7 +438,14 @@ only by `no_restart_drawdown_threshold`, and all restart gates consuming it. The
 ordinary HSL equity peak and EMA remain part of the shared signal. Do not replace the
 removed terminal threshold with another latch or hidden accumulated-loss gate.
 
-After a reconstructible HSL stop has flattened its scope:
+After a reconstructible HSL stop has flattened its scope, fresh exchange positions establish
+flatness independently of fill delivery. Prefer the reconstructed closing boundary; when it is
+unavailable, anchor remaining cooldown to the latest causal in-window fill in that scope, of any
+action type. This estimate may permit earlier restart than the unknown actual deadline. It is
+fixed by exchange evidence, never renewed to the current observation time. No retained fill means
+no historical cooldown anchor. Later history can replace the estimate; diagnostics do not gate
+trading. Coin uses its coin-side, pside its whole side, unified the whole portfolio; every selected
+position must be zero, without netting opposing exposure. With either supported or estimated timing:
 
 - `always`: permit restart when cooldown clears, at its deadline or when its anchor
   leaves lookback, subject to current HSL and ordinary strategy requirements.
