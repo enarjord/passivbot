@@ -1087,7 +1087,7 @@ def _hsl_summary(hsl):
         counts = hsl.get("counts") or {}
         return (f"HSL revised {hsl.get('signal_mode', '-')} | {hsl.get('observation_status', '-')} | "
                 f"GREEN={counts.get('green', 0)} RED={counts.get('red', 0)} "
-                f"unavailable={counts.get('unavailable', 0)} estimated={counts.get('estimated', 0)}")
+                f"inactive={counts.get('inactive', 0)} unavailable={counts.get('unavailable', 0)} estimated={counts.get('estimated', 0)}")
     long_hsl, short_hsl = hsl.get("long") or {}, hsl.get("short") or {}
     return (f"HSL     long={long_hsl.get('tier', '-')} halted={long_hsl.get('halted', False)} "
             f"score={_fmt_float((long_hsl.get('last_metrics') or {}).get('drawdown_score'), 4)} | "
@@ -1168,7 +1168,7 @@ def render_screen(
         for row in hsl.get("scopes", [])[:3]:
             label = " ".join(str(value) for value in (row.get("symbol"), row.get("pside")) if value) or "portfolio"
             summary_lines.append(
-                f"  {label}: {row.get('action') or row.get('availability')} "
+                f"  {label}: {row.get('action') or row.get('tier') or row.get('availability')} "
                 f"DD={_fmt_float(row.get('score'), 4)} threshold={_fmt_float(row.get('threshold'), 4)} "
                 f"quality={'estimated' if row.get('estimated') else row.get('availability', '-')}"
             )

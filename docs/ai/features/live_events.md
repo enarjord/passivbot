@@ -437,7 +437,7 @@ does not produce a second console line.
 ## Revised HSL Observations
 
 Staged revised HSL emits `hsl.status` with `engine=revised` and one bounded aggregate per
-qualitative scope/action/availability/estimate change. This is passive observation, never a gate
+qualitative scope/action/availability/estimate change, including stale/current observation recovery. This is passive observation, never a gate
 or retained trading permission. Numeric metrics refresh on every completed evaluation in the
 monitor snapshot even when no new status event is emitted. Sink/projection failure cannot inhibit
 risk evaluation or exchange execution.
@@ -445,17 +445,22 @@ risk evaluation or exchange execution.
 The revised monitor `hsl` section has `schema_version=1`, `signal_mode`, `observation_status`,
 `captured_at_ms`, `age_ms`, current account availability, complete scope counts and up to 128 scoped
 rows. RED scopes come first, then unavailable and estimated scopes. `omitted_scopes` discloses
-truncation. Status events carry at most three rows; console summaries carry counts. Rows identify
+truncation. Status events carry at most three rows; console summaries carry counts. A top-level aggregate tier
+keeps RED visible to existing risk reports and startup previews without inventing an aggregate
+drawdown score for independent scopes. Rows identify
 symbol/position side where applicable, native action, GREEN/RED or diagnostic inactive status,
 raw/EMA/selected drawdown, configured threshold, RED/flat evidence times and approximation reasons.
 There is one portfolio scope in unified mode; side and coin modes retain their native topology.
 Unavailable input is never displayed as GREEN. Removed legacy tiers do not reappear in revised
 payloads; legacy monitor payloads keep their existing shape.
 
-An observation becomes visibly stale when its captured input TTL expires, account confirmation is
+An observation becomes visibly stale when its captured input TTL expires (including the exact
+retained position timestamp used by evaluation), account confirmation is
 pending, or its account generation changes. The last decision remains labeled as an observation;
 monitor reads do not initialize an HSL owner, perform I/O, or reevaluate risk. Diagnostic state is
-replaced on every completed evaluation and is not persisted as restart authority.
+replaced on every completed evaluation and is not persisted as restart authority. A first projection
+failure is explicitly diagnostic-unavailable, and unavailable-scope fallback logs retain warning
+severity even when the structured sink fails.
 
 ## HSL Replay Timing
 

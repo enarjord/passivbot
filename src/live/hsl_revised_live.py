@@ -73,6 +73,7 @@ def matches(scope, symbol, side):
 @dataclass(frozen=True)
 class Wave:
     captured_ms: int
+    position_observed_ms: int
     decisions: tuple
     unavailable: tuple
     positions: str
@@ -122,7 +123,7 @@ class Owner:
             max_current_age_ms=max_age, position_observation=self._position_observation,
             use_observed_fills=True)
         decisions = runtime.evaluate(requests)
-        wave = Wave(now_utc, decisions, unavailable, runtime.observe_positions(bot).payload,
+        wave = Wave(now_utc, self._position_observation.observed_ms, decisions, unavailable, runtime.observe_positions(bot).payload,
                     runtime.observe_open_orders(bot), bot.get_raw_balance(),
                     int(getattr(bot, "_account_invalidation_generation", 0)))
         self.report(wave)
