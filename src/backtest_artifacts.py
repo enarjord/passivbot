@@ -85,6 +85,7 @@ class BacktestArtifact:
     coins: list[str]
     coin_index: dict[str, int]
     market_settings: dict
+    hsl_report: dict | None = None
 
     def candles_for_coin(self, coin: str) -> pd.DataFrame:
         if coin not in self.coin_index:
@@ -120,6 +121,7 @@ class BacktestArtifact:
             "coins": self.coins,
             "coin_index": self.coin_index,
             "market_settings": self.market_settings,
+            "hsl_report": self.hsl_report,
             "candles_for_coin": self.candles_for_coin,
             "plot_fills_for_coin": lambda coin, **kwargs: plot_fills_for_coin(
                 self, coin=coin, **kwargs
@@ -134,6 +136,11 @@ def load_backtest_artifact(artifact_dir: str | Path) -> BacktestArtifact:
     dataset = _load_json(artifact_dir / "dataset.json")
     config = _load_json(artifact_dir / "config.json")
     analysis = _load_json(artifact_dir / "analysis.json")
+    report_path = artifact_dir / "hsl_report.json"
+    hsl_report = None
+    if report_path.exists():
+        from hsl_revised_reporting import revised_report
+        hsl_report = revised_report({"revised": _load_json(report_path)})
 
     fills = _normalize_timestamp_column(_read_csv_if_exists(artifact_dir / "fills.csv"))
     balance_and_equity = _normalize_timestamp_column(
@@ -173,6 +180,7 @@ def load_backtest_artifact(artifact_dir: str | Path) -> BacktestArtifact:
         coins=coins,
         coin_index=coin_index,
         market_settings=market_settings,
+        hsl_report=hsl_report,
     )
 
 

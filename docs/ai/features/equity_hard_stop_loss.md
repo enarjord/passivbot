@@ -472,3 +472,22 @@ coin scopes, per-side for pside, one portfolio value for unified. Side EMA diagn
 when no side controller exists; they must not be offered as active side-HSL objectives in unified
 optimization. Strategy-equity artifacts require exact alignment with equity timestamps; there is
 no account-equity substitution on the revised path. The existing legacy analysis path is unchanged.
+
+
+### Revised backtest report consumers
+
+The versioned `hsl_report.json` artifact preserves the native report even when plots are disabled.
+It records engine, mode, detailed/metrics-only status, dataset coin order, effective native policies
+for observed scopes, summary, samples and lifecycle events. Artifact workspaces expose `hsl_report`;
+older artifacts have no report. Compact runs keep summaries/policies and explicitly omit samples.
+
+Revised plots use native raw drawdown, drawdown EMA and controller actions, with one figure per
+observed coin-side, side, or portfolio scope. Thresholds come from the native effective policy,
+including coin overrides. Native sequence numbers order samples and lifecycle transitions together,
+including instantaneous RED/flat/restart observations at zero cooldown. GREEN/RED plots preserve
+that order; event
+markers use actual observation times, not reconstructed historical transition times. Missing native
+samples never fall back to account-equity reconstruction or legacy tier formulas. A missing native
+decision is serialized as a null action, never GREEN permission; entirely inactive scopes have no
+signal plot, and inactive samples leave gaps in otherwise active traces. These consumers
+are observational and do not open revised public runtime guards.

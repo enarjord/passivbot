@@ -25,11 +25,12 @@ pub struct Summary {
 
 #[derive(Debug, Serialize)]
 pub struct Sample {
+    pub sequence: u64,
     pub timestamp: i64,
     pub side: Option<usize>,
     pub coin: Option<usize>,
     pub phase: &'static str,
-    pub action: Action,
+    pub action: Option<Action>,
     pub raw: Option<f64>,
     pub ema: Option<f64>,
     pub red_at: Option<i64>,
@@ -39,6 +40,7 @@ pub struct Sample {
 
 #[derive(Debug, Serialize)]
 pub struct Event {
+    pub sequence: u64,
     pub observed_at: i64,
     pub side: Option<usize>,
     pub coin: Option<usize>,
@@ -107,6 +109,7 @@ pub(super) struct Report {
     pub events: Vec<Event>,
     timestamp: Option<i64>,
     detailed: bool,
+    sequence: u64,
     stats: LifecycleStats,
     // One bar-close maximum per signal category: global, long, short.
     pub signal_emas: [Vec<f64>; 3],
@@ -173,12 +176,14 @@ impl Report {
             self.summary.worst_raw = self.summary.worst_raw.max(d.raw);
             self.summary.worst_ema = self.summary.worst_ema.max(d.ema);
         }
+        self.sequence += 1;
         self.samples.push(Sample {
+            sequence: self.sequence,
             timestamp: now,
             side: key.0,
             coin: key.1,
             phase,
-            action,
+            action: decision.map(|d| d.action),
             raw: decision.map(|d| d.raw),
             ema: decision.map(|d| d.ema),
             red_at: decision.and_then(|d| d.red_at),
@@ -213,7 +218,9 @@ impl Report {
         scope.halt_started.get_or_insert(now);
         scope.exit_started = Some(now);
         scope.red = true;
+        self.sequence += 1;
         self.events.push(Event {
+            sequence: self.sequence,
             observed_at: now,
             side: key.0,
             coin: key.1,
@@ -249,7 +256,9 @@ impl Report {
         scope.exit_started = None;
         scope.restarted_without_retrigger = true;
         scope.red = false;
+        self.sequence += 1;
         self.events.push(Event {
+            sequence: self.sequence,
             observed_at: now,
             side: key.0,
             coin: key.1,
@@ -283,7 +292,9 @@ impl Report {
                         .push((now - start).max(0) as f64 / 60_000.0);
                 }
                 Self::finish_loss(&mut self.stats, scope);
+                self.sequence += 1;
                 self.events.push(Event {
+                    sequence: self.sequence,
                     observed_at: now,
                     side: key.0,
                     coin: key.1,
@@ -333,7 +344,9 @@ impl Report {
                 *scope.consumed.entry((now, "flat")).or_insert(0) += 1;
                 scope.watermark = Some(now);
                 if self.detailed {
+                    self.sequence += 1;
                     self.events.push(Event {
+                        sequence: self.sequence,
                         observed_at: now,
                         side: key.0,
                         coin: key.1,
@@ -437,8 +450,19 @@ impl Backtest<'_> {
             serde_json::to_value(&self.revised_hsl_report.samples).map_err(|e| e.to_string())?;
         let events =
             serde_json::to_value(&self.revised_hsl_report.events).map_err(|e| e.to_string())?;
+        let scopes = self
+            .revised_hsl_report
+            .scopes
+            .keys()
+            .map(|&(side, coin)| {
+                Ok(serde_json::json!({
+                    "side": side, "coin": coin, "policy": self.revised_policy(side, coin)?,
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         Ok(Some(serde_json::json!({
             "schema_version": 1, "engine": "revised", "mode": config.mode,
+            "detailed": self.revised_hsl_report.detailed, "scopes": scopes,
             "coins": self.backtest_params.coins, "summary": summary,
             "samples": samples, "events": events,
         })))
