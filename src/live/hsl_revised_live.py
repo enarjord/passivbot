@@ -97,7 +97,11 @@ class Owner:
         import asyncio
         self._write_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
-        self._next_sources = 0.
+        from time import monotonic
+        self._schedule_clock = monotonic
+        self._next_sources = self._next_history = 0.
+        self._ordinary = None
+        self._cycle_running = False
         self._running = False
         self.bot = bot
         self.sources = {}
@@ -321,8 +325,7 @@ class Owner:
             task.result()  # Unexpected failures remain fatal, including late ones.
         # Ordinary fill consumers keep their own readiness gates. This task only
         # refreshes their canonical manager; it does not stamp synthetic readiness.
-        from time import monotonic
-        now = monotonic()
+        now = self._schedule_clock()
         kwargs = {}
         if now >= getattr(self, '_next_history_window', 0.):
             end = int(self.bot.get_exchange_time())
@@ -353,18 +356,18 @@ class Owner:
     def schedule_sources(self):
         import asyncio
         from live.hsl_revised_candles import CandleSourceReader
-        from time import monotonic
         task = getattr(self, '_source_task', None)
         if task is not None:
             if not task.done():
                 return
             task.result()
-        now = monotonic()
+        now = self._schedule_clock()
         if now < self._next_sources:
             return
         self._next_sources = now + 60.
         if not hasattr(self, '_reader'):
-            self._reader = CandleSourceReader(self.bot.cm)
+            from utils import utc_ms
+            self._reader = CandleSourceReader(self.bot.cm, observation_clock=lambda: int(utc_ms()))
         self._source_task = asyncio.create_task(self._read_sources())
 
     async def _read_sources(self):
@@ -420,7 +423,7 @@ class Owner:
         return cancels, creates, bot._current_planning_snapshot
 
     def cancel_inputs(self):
-        for task in (getattr(self, '_fill_task', None), getattr(self, '_source_task', None),
+        for task in (self._ordinary, getattr(self, '_fill_task', None), getattr(self, '_source_task', None),
                      *self._quote_tasks.values()):
             if task is not None:
                 task.cancel()
@@ -466,78 +469,87 @@ class Owner:
                 task.cancel()
                 task.add_done_callback(_retrieve_on_shutdown)
 
-    async def run(self):
-        """Serialized writes with periodic protection while preparation is pending."""
+    async def cycle(self):
+        """One finite production pass; offline scenario stepping uses this same owner.
+
+        Background task ownership spans passes. A caller must not overlap cycles;
+        slow ordinary work never becomes a prerequisite for the protective pass.
+        """
         import asyncio
-        from time import monotonic
-        from utils import utc_ms
         from live.state_refresh import AuthoritativeSurfaceUnavailable
         from ccxt.base.errors import NetworkError
+        if self._cycle_running:
+            raise RuntimeError("revised HSL execution cycle is already running")
+        self._cycle_running = True
+        was_running, self._running = self._running, True
+        bot = self.bot
+        reports = []
+        try:
+            from utils import utc_ms
+            bot._begin_live_event_cycle(loop_start_ms=int(utc_ms()))
+            bot.execution_scheduled = False
+            bot.state_change_detected_by_symbol = set()
+            self.poll_inputs()
+            plan = None
+            completed_plan = self._ordinary is not None and self._ordinary.done()
+            # Retrieve completed failures before any fallible account refresh.
+            if completed_plan:
+                completed, self._ordinary = self._ordinary, None
+                try:
+                    plan = completed.result()
+                except RuntimeError as exc:
+                    handled, details = bot._handle_staged_execution_precondition_error(exc)
+                    if not handled:
+                        raise
+                    bot._log_staged_execution_defer(details)
+            if not await bot.refresh_protective_authoritative_state(require_balance=True):
+                return dict(updated=False, ordinary_completed=completed_plan)
+            self.remember_position()
+            now = self._schedule_clock()
+            if now >= self._next_history:
+                self.schedule_history()
+                self._next_history = now + 5.
+            self.schedule_sources()
+            protective_work = await self.protect(deferred_reports=reports)
+            if plan is not None:
+                cancels, creates, snapshot = plan
+                bot._current_planning_snapshot = snapshot
+                await bot.execute_order_plan_to_exchange(cancels, creates)
+            if self._ordinary is None:
+                self._ordinary = asyncio.create_task(self._ordinary_plan())
+            return dict(updated=True, ordinary_completed=completed_plan,
+                        ordinary_executed=plan is not None, protective_work=protective_work)
+        except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
+            logging.warning('[risk] revised current I/O unavailable | error_type=%s', type(exc).__name__)
+            return dict(updated=False, current_io_unavailable=True)
+        finally:
+            self._running = was_running
+            self._cycle_running = False
+            for wave in reports:
+                self.report(wave)
+
+    async def run(self):
+        """Serialized writes with periodic protection while preparation is pending."""
+        from utils import utc_ms
         bot = self.bot
         if self._running:
             raise RuntimeError("revised HSL execution owner is already running")
         self._running = True
-        ordinary = None
-        next_history = 0.
         try:
             while not bot.stop_signal_received:
                 started = int(utc_ms())
-                bot._begin_live_event_cycle(loop_start_ms=started)
-                bot.execution_scheduled = False
-                bot.state_change_detected_by_symbol = set()
-                reports = []
-                try:
-                    self.poll_inputs()
-                    plan = None
-                    # Completed producer failures must surface even when the next
-                    # account refresh cannot succeed. Plans still need fresh input
-                    # admission below; a blocked cycle may discard a valid plan.
-                    if ordinary is not None and ordinary.done():
-                        completed, ordinary = ordinary, None
-                        try:
-                            plan = completed.result()
-                        except RuntimeError as exc:
-                            handled, details = bot._handle_staged_execution_precondition_error(exc)
-                            if not handled:
-                                raise
-                            bot._log_staged_execution_defer(details)
-                    if not await bot.refresh_protective_authoritative_state(require_balance=True):
-                        await bot._sleep_unless_shutdown(.5, stage='revised_current_inputs')
-                        continue
-                    self.remember_position()
-                    now = monotonic()
-                    if now >= next_history:
-                        self.schedule_history()
-                        next_history = now + 5.
-                    self.schedule_sources()
-                    # A pending limit panic never monopolizes the owner. Other
-                    # RED scopes and ordinary ready scopes get a pass each wave.
-                    await self.protect(deferred_reports=reports)
-                    if plan is not None:
-                        cancels, creates, snapshot = plan
-                        bot._current_planning_snapshot = snapshot
-                        await bot.execute_order_plan_to_exchange(cancels, creates)
-                    if ordinary is None:
-                        ordinary = asyncio.create_task(self._ordinary_plan())
-                except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
-                    logging.warning('[risk] revised current I/O unavailable | error_type=%s', type(exc).__name__)
-                finally:
-                    # Neither protective nor ready ordinary writes wait for passive reporting.
-                    for wave in reports:
-                        self.report(wave)
+                result = await self.cycle()
+                if not result['updated'] and not result.get('current_io_unavailable'):
+                    await bot._sleep_unless_shutdown(.5, stage='revised_current_inputs')
+                    continue
                 bot._last_loop_duration_ms = int(utc_ms()) - started
                 bot._maybe_log_health_summary()
                 await bot._sleep_unless_shutdown(
                     max(.05, float(bot.live_value('execution_delay_seconds'))),
                     stage='revised_execution_delay')
         finally:
-            # Keep every task owned; cancellation-resistant reads are not replaced
-            # with overlapping retries. Shutdown never waits indefinitely on them.
             self._running = False
             self.cancel_inputs()
-            if ordinary is not None:
-                ordinary.cancel()
-                ordinary.add_done_callback(_retrieve_on_shutdown)
 
 
 def _retrieve_on_shutdown(task):

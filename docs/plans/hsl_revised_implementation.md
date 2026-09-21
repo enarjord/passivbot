@@ -536,3 +536,18 @@ qualitative changes without repeating unchanged numeric samples on the console.
 
 This completes staged structured-monitor integration. Full fake-CLI stepping, admission-throughput
 validation, remaining activation gates and the live-validation/rollback checklist remain pending.
+
+
+### Shared offline execution stepping
+
+The staged revised owner exposes one finite production pass, used by both its runtime loop and the
+standard fake runner. The runner settles bounded background work at each scenario timestamp and
+reports pending preparation explicitly; it does not replace the evaluator, planner, reconciler or
+executor. Revised artifact traces use the passive scope observations. Unit and actual CLI coverage
+exercise ordinary entries and protective market closes for coin, pside and unified modes on both
+position sides. The tests alone bypass the public activation guard.
+
+Candle acquisition has an explicit observation clock. The live owner supplies UTC while the fake
+manager keeps scenario time for source/query timestamps; the runtime adapter converts availability
+into exchange time exactly once. This preserves history with positive and negative clock offsets.
+Remaining fault coverage, full throughput and final activation gates still apply.

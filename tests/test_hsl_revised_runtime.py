@@ -690,3 +690,36 @@ def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
         assert json.loads(actual.payload) == json.loads(pbr.hsl_revised_evaluate(request.payload))
         for pair in json.loads(request.payload)['snapshot']['pairs']:
             assert set(pair['prices'].values()) == ({75.} if pair['symbol'] == other else {140.})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offset", [-86_400_000, 86_400_000])
+async def test_owner_candle_acquisition_uses_utc_with_exchange_timeline_manager(monkeypatch, offset):
+    import asyncio
+    import utils
+    from live.hsl_revised_live import owner
+    utc_now = NOW - offset
+    monkeypatch.setattr(utils, 'utc_ms', lambda: utc_now)
+    value = bot()
+    value.get_exchange_time = lambda: NOW
+    calls = []
+    async def read(symbol, **kwargs):
+        calls.append(kwargs)
+        return [dict(ts=NOW-60_000, o=100., h=100., l=100., c=100.)]
+    value.cm = SimpleNamespace(exchange=SimpleNamespace(timeframes={'1m': 1}),
+                              _now_ms=lambda: NOW, get_candles=read)
+    instance = owner(value)
+    instance.schedule_sources()
+    await asyncio.wait_for(instance._source_task, 1.)
+    assert calls[0]['end_ts'] == NOW
+    assert instance.sources[SYMBOL].payload()[0]['available_at'] == utc_now
+    for surface in ('balance', 'positions'):
+        value._ensure_freshness_ledger().stamp(surface, now_ms=utc_now-200)
+    marks = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=utc_now-100)}
+    requests, unavailable = capture(value, marks, instance.sources,
+        symbols={'long': [SYMBOL], 'short': []}, now_ms=NOW, utc_now_ms=utc_now,
+        max_current_age_ms=10_000)
+    assert not unavailable
+    prices = json.loads(requests[0].payload)['snapshot']['pairs'][0]['prices']
+    assert prices[str(NOW)] == 100.
+    assert max(map(int, prices)) == NOW
