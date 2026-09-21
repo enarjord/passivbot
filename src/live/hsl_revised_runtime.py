@@ -130,79 +130,91 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
             and fills_started_ms > fills_completed_ms):
         raise ValueError("reversed observed fill capture interval")
 
+    scoped_keys = {}
+    for scope, _, _ in policies:
+        keys = []
+        for symbol in ((scope.symbol,) if scope.symbol else sorted(relevant)):
+            for side in ((scope.pside,) if scope.pside else ("long", "short")):
+                size = bot.positions.get(symbol, {}).get(side, {"size": 0.0})["size"]
+                history = by_pair.get((symbol, side))
+                # A complete observed account plus empty retained tape makes
+                # this aggregate contributor zero. Do not duplicate a minute
+                # grid/quote requirement for an empty opposite side.
+                if (scope.mode != "coin" and _finite(size) and size == 0
+                        and (history is None or not history.fills)):
+                    continue
+                keys.append((symbol, side))
+        scoped_keys[scope] = keys
+
     pairs, pair_problems, pair_reasons = {}, {}, {}
     projected = {}
     for scope, _, _ in policies:
-        selected_symbols = (scope.symbol,) if scope.symbol is not None else sorted(relevant)
-        selected_sides = (scope.pside,) if scope.pside else ("long", "short")
-        for symbol in selected_symbols:
-            for side in selected_sides:
-                key = (symbol, side)
-                if key in pairs or key in pair_problems:
-                    continue
-                # Complete account snapshot absence means flat; no price/basis is
-                # invented for exposure. Flat pairs still retain their cashflows.
-                position = bot.positions.get(symbol, {}).get(side, {"size": 0.0, "price": 0.0})
-                size, basis = position["size"], position["price"]
-                if (not _finite(size) or (size != 0 and not _finite(basis, positive=True))
-                        or (side == "long" and size < 0) or (side == "short" and size > 0)):
-                    pair_problems[key] = "current_position_unavailable"
-                    continue
-                multiplier = bot.c_mults.get(symbol)
-                if not _finite(multiplier, positive=True):
-                    pair_problems[key] = "current_contract_metadata_unavailable"
-                    continue
-                if symbol not in projected:
-                    source = candle_sources.get(symbol)
-                    candles = [{**row, "available_at": row["available_at"] + offset}
-                               for row in source.payload()] if source is not None else []
-                    projected[symbol] = json.loads(pbr.hsl_revised_prices(json.dumps(
-                        dict(candles=candles, start=start, end=now_ms), allow_nan=False)))
-                prices = projected[symbol]
-                quote = quotes.get(symbol)
-                quote_valid = (quote is not None and quote.is_valid()
-                               and 0 < quote.fetched_ms <= utc_now_ms)
-                if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
-                    mark, mark_at = quote.last, quote.fetched_ms + offset
-                    flat_price_reason = None
-                elif size == 0 and prices["rows"]:
-                    # Flat UPNL is zero. A retained source close can value this
-                    # history without requiring a live quote from a delisted market.
-                    last = prices["rows"][-1]
-                    mark, mark_at = last["close"], last["source_end"]
-                    flat_price_reason = "flat_historical_close"
-                else:
-                    pair_problems[key] = "current_mark_unavailable"
-                    continue
-                fills = by_pair.get(key)
-                reasons = set(tape.reasons) | set(prices["reasons"])
-                if flat_price_reason:
-                    reasons.add(flat_price_reason)
-                if fills is not None:
-                    reasons.update(fills.reasons)
+        for symbol, side in scoped_keys[scope]:
+            key = (symbol, side)
+            if key in pairs or key in pair_problems:
+                continue
+            # Complete account snapshot absence means flat; no price/basis is
+            # invented for exposure. Flat pairs still retain their cashflows.
+            position = bot.positions.get(symbol, {}).get(side, {"size": 0.0, "price": 0.0})
+            size, basis = position["size"], position["price"]
+            if (not _finite(size) or (size != 0 and not _finite(basis, positive=True))
+                    or (side == "long" and size < 0) or (side == "short" and size > 0)):
+                pair_problems[key] = "current_position_unavailable"
+                continue
+            multiplier = bot.c_mults.get(symbol)
+            if not _finite(multiplier, positive=True):
+                pair_problems[key] = "current_contract_metadata_unavailable"
+                continue
+            if symbol not in projected:
                 source = candle_sources.get(symbol)
-                if source is not None:
-                    for source_tape in source.tapes:
-                        reasons.update(source_tape.reasons)
-                    for failure in source.failures:
-                        reasons.add("candle_" + failure.stage + "_unavailable:" + failure.timeframe)
-                pair_reasons[key] = reasons
-                pairs[key] = dict(
-                    symbol=symbol, position=dict(size=size, basis=basis if size != 0 else 0.0,
-                        mark=mark, multiplier=multiplier, inverse=bot.inverse, pside=side,
-                        quantity_step=bot.qty_steps.get(symbol)),
-                    position_at=position_state.updated_ms + offset,
-                    mark_at=mark_at,
-                    fills_started_at=None if fills_started_ms is None else fills_started_ms + offset,
-                    fills_at=None if fills_completed_ms is None else fills_completed_ms + offset,
-                    prices_at=now_ms, prices={str(row["timestamp"]): row["close"] for row in prices["rows"]},
-                    fills=fills.payload() if fills is not None else [],
-                    revisions=[position_state.revision, 0, 0, 0],
-                    fills_position_anchor=None)
+                candles = [{**row, "available_at": row["available_at"] + offset}
+                           for row in source.payload()] if source is not None else []
+                projected[symbol] = json.loads(pbr.hsl_revised_prices(json.dumps(
+                    dict(candles=candles, start=start, end=now_ms), allow_nan=False)))
+            prices = projected[symbol]
+            quote = quotes.get(symbol)
+            quote_valid = (quote is not None and quote.is_valid()
+                           and 0 < quote.fetched_ms <= utc_now_ms)
+            if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
+                mark, mark_at = quote.last, quote.fetched_ms + offset
+                flat_price_reason = None
+            elif size == 0 and prices["rows"]:
+                # Flat UPNL is zero. A retained source close can value this
+                # history without requiring a live quote from a delisted market.
+                last = prices["rows"][-1]
+                mark, mark_at = last["close"], last["source_end"]
+                flat_price_reason = "flat_historical_close"
+            else:
+                pair_problems[key] = "current_mark_unavailable"
+                continue
+            fills = by_pair.get(key)
+            reasons = set(tape.reasons) | set(prices["reasons"])
+            if flat_price_reason:
+                reasons.add(flat_price_reason)
+            if fills is not None:
+                reasons.update(fills.reasons)
+            source = candle_sources.get(symbol)
+            if source is not None:
+                for source_tape in source.tapes:
+                    reasons.update(source_tape.reasons)
+                for failure in source.failures:
+                    reasons.add("candle_" + failure.stage + "_unavailable:" + failure.timeframe)
+            pair_reasons[key] = reasons
+            pairs[key] = dict(
+                symbol=symbol, position=dict(size=size, basis=basis if size != 0 else 0.0,
+                    mark=mark, multiplier=multiplier, inverse=bot.inverse, pside=side,
+                    quantity_step=bot.qty_steps.get(symbol)),
+                position_at=position_state.updated_ms + offset,
+                mark_at=mark_at,
+                fills_started_at=None if fills_started_ms is None else fills_started_ms + offset,
+                fills_at=None if fills_completed_ms is None else fills_completed_ms + offset,
+                prices_at=now_ms, prices={str(row["timestamp"]): row["close"] for row in prices["rows"]},
+                fills=fills.payload() if fills is not None else [],
+                revisions=[position_state.revision, 0, 0, 0],
+                fills_position_anchor=None)
     requests, unavailable = [], []
     for scope, policy, slots in policies:
-        keys = [(symbol, side) for symbol in ((scope.symbol,) if scope.symbol else sorted(relevant))
-                for side in ((scope.pside,) if scope.pside else ("long", "short"))]
+        keys = scoped_keys[scope]
         problems = sorted({pair_problems[key] for key in keys if key in pair_problems})
         if problems:
             unavailable.append(Unavailable(scope, ",".join(problems)))

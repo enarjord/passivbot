@@ -193,6 +193,13 @@ pairs may retain an older factual market snapshot or a retained source candle cl
 live quote is unavailable; that historical price never values current exposure. Out-of-window
 flat symbols are excluded.
 
+Empty aggregate-side contributors do not duplicate price grids or require quotes; retained
+cashflows and any exposure still participate. Candle scalar transport uses shallow copies
+of immutable records. `tests/hsl_revised_live_benchmark.py` measures capture and evaluation
+separately and reports a full decision digest for comparisons. This synthetic workload is
+not a completed live-latency gate; JSON transport and larger active/history scopes still
+need evaluation during orchestration integration.
+
 Capture and evaluation are synchronous, with no intervening await. Callers still need bounded
 asynchronous acquisition, current-state revalidation at execution, scoped diagnostics and
 protective scheduling. This adapter alone does not open the public live guard or constitute

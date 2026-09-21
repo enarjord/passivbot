@@ -274,6 +274,38 @@ def test_out_of_window_fill_does_not_introduce_old_flat_symbols_or_quality():
     assert "invalid_fill_quantity" not in result[0].reasons
 
 
+def test_empty_aggregate_side_does_not_duplicate_price_history():
+    import passivbot_rust as pbr
+    value = bot("unified")
+    requests, unavailable = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW,
+        utc_now_ms=NOW, max_current_age_ms=10_000)
+    assert not unavailable
+    request, = requests
+    payload = json.loads(request.payload)
+    assert len(payload["snapshot"]["pairs"]) == 1
+    baseline = json.loads(pbr.hsl_revised_evaluate(request.payload))
+    flat = deepcopy(payload["snapshot"]["pairs"][0])
+    flat["position"].update(size=0., basis=0., pside="short")
+    payload["snapshot"]["pairs"].append(flat)
+    assert json.loads(pbr.hsl_revised_evaluate(json.dumps(payload))) == baseline
+
+
+def test_empty_aggregate_side_retains_cashflows_even_without_exposure():
+    value = bot("unified", events=[event(timestamp=NOW-60_000, position_side="short",
+        qty=0., price=100., pnl=-200., fee_paid=0., c_mult=1.)])
+    requests, unavailable = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW,
+        utc_now_ms=NOW, max_current_age_ms=10_000)
+    assert not unavailable and len(json.loads(requests[0].payload)["snapshot"]["pairs"]) == 2
+    assert json.loads(evaluate(requests)[0].payload)["decision"]["raw"] == pytest.approx(300/1300)
+
+
+def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
+    value = bot("unified")
+    value.positions = {}
+    result, unavailable = run(value, {}, symbols=["UNUSED"])
+    assert not unavailable and result[0].action == "normal"
+
+
 @pytest.mark.parametrize("field,value", [("action", "orange"), ("raw", float("nan")),
                                         ("timestamp", NOW-1), ("action", [])])
 def test_malformed_native_decision_is_fatal(field, value, monkeypatch):
