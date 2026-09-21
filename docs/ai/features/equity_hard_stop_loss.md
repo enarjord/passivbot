@@ -550,6 +550,11 @@ mandatory. Historical fill/candle damage is estimated by Rust with scoped diagno
 strategy consumers retain their own fill, PnL, candle and EMA requirements.
 
 Protection receives a finite execution wave during startup preparation and each outer-loop pass.
+Passive HSL diagnostic projection and synchronous event sinks run after that wave's protective
+execution, including empty waves. Capturing a decision or checking write admission does not emit
+diagnostics; a slow sink cannot consume a captured protective order's freshness budget.
+A failed configured console sink retains the bounded status fallback, including warning severity
+for unavailable scopes.
 Startup loads execution metadata and read-only connector preflight before supervising ordinary
 configuration-readiness, configuration writes, account preparation and candle warmup.
 Ordinary preparation, fill repair and candle acquisition run as owned background tasks; writes are

@@ -28,7 +28,9 @@ since the latest release tag; these features may already be available when insta
 - Show staged revised-HSL scope decisions, drawdown, approximation quality and input freshness in
   structured status events and monitor snapshots, dashboard and TUI. Unified mode displays one
   portfolio scope; unavailable or stale observations cannot appear as current GREEN protection.
-  Public revised activation remains gated and the legacy monitor format is unchanged.
+  Report after protective execution so diagnostic work cannot delay its writes, and retain
+  unavailable warnings when the configured console sink fails. Public revised activation remains
+  gated and the legacy monitor format is unchanged.
 
 - Connect staged revised-HSL live protection to the actual execution loop and startup preparation.
   History repair and ordinary planning run in the background while current inputs support scoped

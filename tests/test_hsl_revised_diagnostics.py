@@ -13,6 +13,12 @@ from passivbot_monitor import _monitor_hsl_section
 from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
 
 
+def capture_report(owner, quotes=None):
+    wave = owner.capture(quotes)
+    owner.report(wave)
+    return wave
+
+
 @pytest.fixture
 def observed(monkeypatch):
     import utils
@@ -27,7 +33,7 @@ def observed(monkeypatch):
         events = []
         bot._emit_live_event = lambda *args, **kwargs: events.append((args, kwargs)) or True
         owner = hsl_revised_live.owner(bot)
-        wave = owner.capture(quotes())
+        wave = capture_report(owner, quotes())
         return bot, owner, wave, events
     return build
 
@@ -53,7 +59,7 @@ def test_monitor_topology_is_native_scope_and_numeric_evidence(observed, mode):
 def test_same_state_refreshes_numbers_without_repeating_status(observed):
     bot, owner, wave, events = observed()
     original = diagnostics.snapshot(bot, now_ms=NOW)['scopes'][0]['score']
-    owner.capture({SYMBOL: replace(quotes()[SYMBOL], bid=80., ask=80., last=80.)})
+    capture_report(owner, {SYMBOL: replace(quotes()[SYMBOL], bid=80., ask=80., last=80.)})
     assert diagnostics.snapshot(bot, now_ms=NOW)['scopes'][0]['score'] > original
     assert len(events) == 1
     # Readers cannot mutate the diagnostic store or Rust decisions.
@@ -91,9 +97,9 @@ def test_sink_or_projection_failure_does_not_change_native_permission(observed, 
         raise OSError('diagnostic sink failure')
     bot._emit_live_event = failure
     bot._hsl_revised_diagnostic_event = None
-    assert owner.capture(quotes()).permission(SYMBOL, 'long') == wave.permission(SYMBOL, 'long')
+    assert capture_report(owner, quotes()).permission(SYMBOL, 'long') == wave.permission(SYMBOL, 'long')
     monkeypatch.setattr(diagnostics, '_row', failure)
-    assert owner.capture(quotes()).permission(SYMBOL, 'long') == wave.permission(SYMBOL, 'long')
+    assert capture_report(owner, quotes()).permission(SYMBOL, 'long') == wave.permission(SYMBOL, 'long')
     assert diagnostics.snapshot(bot, now_ms=NOW)['observation_status'] == 'diagnostic_unavailable'
 
 
@@ -118,7 +124,7 @@ def test_large_scope_table_keeps_complete_counts_and_bounded_priority_sample(obs
 def test_current_input_absence_is_not_misreported_green(observed):
     bot, owner, _, _ = observed()
     bot.positions[SYMBOL]['long']['price'] = float('nan')
-    owner.capture()
+    capture_report(owner)
     row, = diagnostics.snapshot(bot, now_ms=NOW)['scopes']
     assert row['availability'] == 'unavailable' and row['tier'] is None
     assert row['score'] is None and row['unavailable_reason']
@@ -187,7 +193,7 @@ def test_inactive_scopes_are_visible_in_tui_and_overview(observed):
     from monitor_tui import MonitorTuiState, render_screen
     bot, owner, _, _ = observed()
     bot.config['bot']['long']['risk']['n_positions'] = 0
-    owner.capture()
+    capture_report(owner)
     payload = diagnostics.snapshot(bot, now_ms=NOW)
     assert payload['tier'] == 'inactive'
     state = MonitorTuiState(relay_url='http://127.0.0.1:8765', exchange='fake', user='example')
@@ -206,7 +212,7 @@ def test_expiry_uses_retained_position_observation_not_newer_ledger_stamp(observ
     bot.get_exchange_time = lambda: later
     for name in ('balance', 'positions', 'open_orders'):
         bot.freshness_ledger.stamp(name, now_ms=later)
-    wave = owner.capture({SYMBOL: replace(quotes()[SYMBOL], fetched_ms=later)})
+    wave = capture_report(owner, {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=later)})
     assert wave.position_observed_ms == original.position_observed_ms == NOW-200
     data = diagnostics.snapshot(bot, now_ms=NOW+10_000)
     assert data['account_unavailable'] == []
@@ -220,7 +226,7 @@ def test_unavailable_scope_fallback_remains_warning_without_event_sink(observed,
     bot._emit_live_event = None
     bot.positions[SYMBOL]['long']['price'] = float('nan')
     with caplog.at_level(logging.WARNING):
-        owner.capture()
+        capture_report(owner)
     assert any(row.levelno == logging.WARNING and 'revised HSL' in row.message
                and 'unavailable=1' in row.message for row in caplog.records)
 
@@ -232,27 +238,27 @@ def test_initial_projection_failure_is_distinct_from_not_evaluated(observed, mon
     def fail(*args, **kwargs):
         raise ValueError('broken diagnostics')
     monkeypatch.setattr(diagnostics, '_row', fail)
-    wave = owner.capture()
+    wave = capture_report(owner)
     assert wave.permission(SYMBOL, 'long')[0] == 'panic'
     assert diagnostics.snapshot(bot, now_ms=NOW)['observation_status'] == 'diagnostic_unavailable'
     monkeypatch.setattr(diagnostics, '_row', original)
-    owner.capture()
+    capture_report(owner)
     assert diagnostics.snapshot(bot, now_ms=NOW)['observation_status'] == 'current'
 
 
 def test_account_freshness_recovery_emits_once_without_numeric_churn(observed):
     bot, owner, _, events = observed()
     bot._authoritative_pending_confirmations = {'open_orders': 1}
-    owner.capture()
+    capture_report(owner)
     assert events[-1][1]['data']['observation_status'] == 'stale'
     assert events[-1][1]['data']['account_unavailable'] == ['open_orders']
     bot.freshness_ledger.begin_epoch()
     bot.freshness_ledger.stamp('open_orders', now_ms=NOW)
-    owner.capture()
+    capture_report(owner)
     assert events[-1][1]['data']['observation_status'] == 'current'
     assert events[-1][1]['data']['account_unavailable'] == []
     assert len(events) == 3
-    owner.capture()
+    capture_report(owner)
     assert len(events) == 3
 
 
@@ -263,7 +269,7 @@ def test_unused_disabled_position_quote_does_not_expire_evaluated_scopes(observe
     bot.positions[other] = {'short': {'size': -1., 'price': 100.}}
     owner.quotes[other] = replace(quotes()[SYMBOL], symbol=other, fetched_ms=NOW-100_000)
     bot.c_mults[other] = 1.
-    wave = owner.capture()
+    wave = capture_report(owner)
     assert len(wave.decisions) == 1 and not wave.unavailable
     assert wave.mark_observed_ms == (NOW-100,)
     payload = diagnostics.snapshot(bot, now_ms=NOW)
@@ -275,7 +281,7 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
     from live.smoke_report import _risk_event_group, _summarize_hsl_status
     from tools.hsl_startup_preview import _bounded_hsl_data, _status_from_event
     bot, owner, _, events = observed('unified')
-    wave = owner.capture({SYMBOL: replace(quotes()[SYMBOL], bid=100., ask=100., last=100.)})
+    wave = capture_report(owner, {SYMBOL: replace(quotes()[SYMBOL], bid=100., ask=100., last=100.)})
     clean = replace(wave, decisions=tuple(replace(d, reasons=()) for d in wave.decisions))
     assert clean.decisions[0].action == 'normal'
     bot._authoritative_pending_confirmations = {'open_orders': 1}
@@ -316,8 +322,10 @@ def test_connector_admission_does_not_run_diagnostics_or_sinks(observed, monkeyp
     owner.bind(wave, (), (order,))
     assert owner.admit(order)
     assert not calls and clock == [NOW]
-    # Normal observation capture still refreshes diagnostics outside admission.
-    owner.capture()
+    # Neither planning captures nor admission run diagnostic work.
+    fresh = owner.capture()
+    assert not calls and clock == [NOW]
+    owner.report(fresh)
     assert calls == [slow_stage]
 
 
@@ -329,7 +337,43 @@ def test_inactive_scope_is_visible_in_console_and_fallback(observed, caplog):
     bot.config['bot']['long']['risk']['n_positions'] = 0
     bot._emit_live_event = None
     with caplog.at_level(logging.INFO):
-        owner.capture()
+        capture_report(owner)
     event = LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
     assert 'inactive=1' in format_console_event(event)
     assert any('inactive=1' in record.message for record in caplog.records)
+
+
+def test_configured_console_sink_failure_keeps_unavailable_warning(observed, caplog):
+    import logging
+    from live.event_bus import LiveEventPipeline, LiveEvent, EventTypes, EventRoute
+    bot, owner, _, _ = observed()
+    class FailedConsole:
+        def write(self, event):
+            raise OSError('private-sink-detail')
+    pipeline = LiveEventPipeline(console_sink=FailedConsole(),
+        routes={EventTypes.HSL_STATUS: EventRoute(console=True, structured=False, monitor=False)})
+    bot._live_event_pipeline = pipeline
+    emitted = []
+    def emit(event_type, **kwargs):
+        result = pipeline.emit(LiveEvent(event_type, **kwargs))
+        emitted.append(result)
+        return result
+    bot._emit_live_event = emit
+    bot.positions[SYMBOL]['long']['price'] = float('nan')
+    with caplog.at_level(logging.WARNING):
+        capture_report(owner)
+    assert emitted and emitted[0] is not None
+    assert pipeline.sink_error_counters['console'] >= 1
+    assert any('revised HSL' in record.message and 'unavailable=1' in record.message
+               and record.levelno == logging.WARNING for record in caplog.records)
+    assert 'private-sink-detail' not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_protective_wave_reports_even_when_scope_has_no_exit_work(observed):
+    bot, owner, _, events = observed()
+    bot.positions[SYMBOL]['long'].update(size=0., price=0.)
+    assert not await owner.protect()
+    result = diagnostics.snapshot(bot, now_ms=NOW)
+    assert result['counts']['green'] == 1
+    assert events[-1][1]['data']['counts']['green'] == 1

@@ -109,7 +109,7 @@ class Owner:
         self._quote_cursor = 0
         self._position_observation = None
 
-    def capture(self, quotes=None, *, report=True):
+    def capture(self, quotes=None):
         # Factual caches only. The adapter clips every observation again to the
         # current window; neither prior GREEN nor prior RED is an input.
         bot = self.bot
@@ -129,8 +129,6 @@ class Owner:
                     decisions, unavailable, runtime.observe_positions(bot).payload,
                     runtime.observe_open_orders(bot), bot.get_raw_balance(),
                     int(getattr(bot, "_account_invalidation_generation", 0)))
-        if report:
-            self.report(wave)
         return wave
 
     def remember_position(self):
@@ -176,9 +174,9 @@ class Owner:
         wave = self._waves.get(order.get("_hsl_revised_wave"))
         if not isinstance(wave, Wave) or not self._account_matches(wave, int(utc_ms())):
             return False
-        # Diagnostics and synchronous event sinks cannot spend the write-boundary
-        # freshness budget. Regular planning/protection captures report separately.
-        current = self.capture(report=False)
+        # Capture is side-effect free with respect to diagnostic sinks. Reporting
+        # happens after the protective wave, outside the write freshness budget.
+        current = self.capture()
         now = int(utc_ms())
         # A long synchronous reconstruction can consume the remaining freshness
         # budget even without an await. Recheck at the actual write boundary.
@@ -221,22 +219,27 @@ class Owner:
         symbols.update(symbol for symbol, orders in bot.open_orders.items() if orders)
         quotes = await self.acquire_quotes(symbols)
         wave = self.capture(quotes)
-        targets, execution_types = {}, {}
-        for symbol in sorted(symbols):
-            for side in ("long", "short"):
-                action, execution_type = wave.permission(symbol, side)
-                if action in {"panic", "halted"}:
-                    targets.setdefault(symbol, set()).add(side)
-                    execution_types[symbol, side] = execution_type
-        if not targets:
-            return False
-        bot._record_market_snapshot_surface(sorted(quotes), quotes)
-        cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
-            target_psides_by_symbol=targets, market_snapshots=quotes,
-            execution_types=execution_types)
-        self.bind(wave, cancels, creates)
-        await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
-        return bool(cancels or creates)
+        try:
+            targets, execution_types = {}, {}
+            for symbol in sorted(symbols):
+                for side in ("long", "short"):
+                    action, execution_type = wave.permission(symbol, side)
+                    if action in {"panic", "halted"}:
+                        targets.setdefault(symbol, set()).add(side)
+                        execution_types[symbol, side] = execution_type
+            if not targets:
+                return False
+            bot._record_market_snapshot_surface(sorted(quotes), quotes)
+            cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
+                target_psides_by_symbol=targets, market_snapshots=quotes,
+                execution_types=execution_types)
+            self.bind(wave, cancels, creates)
+            await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
+            return bool(cancels or creates)
+        finally:
+            # Synchronous projection/logging must not age a wave before its
+            # protective writes. Report even when no targets or orders remain.
+            self.report(wave)
 
     def history_symbols(self):
         bot = self.bot
