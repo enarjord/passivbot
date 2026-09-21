@@ -180,6 +180,15 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
         else:
             assert bot.positions[symbol][side]['size'] == 0.
             assert any(f.get('reduceOnly') for f in bot.cca.fills)
+        if path == 'wave':
+            # A just-observed position delta can require one newer confirmation.
+            await bot.refresh_protective_authoritative_state()
+            monitor = await bot._build_monitor_snapshot()
+            expected_equity = bot.get_raw_balance() + sum(
+                position['upnl'] for sides in monitor['positions'].values()
+                for position in sides.values() if position['size'] != 0.)
+            assert monitor['account']['equity'] == pytest.approx(expected_equity)
+            assert monitor['health']['equity'] == pytest.approx(expected_equity)
         assert not hasattr(bot, '_hsl_protection_health')
         completed.append(True)
         return {'revised_closed': True}
