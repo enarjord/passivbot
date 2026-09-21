@@ -114,7 +114,10 @@ uses only its consumed cashflow prefix. None of these components activates tradi
    closed-episode evidence preserves the full configured lookback.
    Ambiguous or delayed held evidence also preserves or restores the full requirement before fills
    become authoritative. PnL blockers are evaluated against each held pair's own canonical episode
-   boundary; the aggregate earliest boundary exists only to fetch and prove coverage. Coin stop
+   boundary; the aggregate earliest boundary exists only to fetch and prove coverage. Replay
+   also preserves each pair's required scope: another pair's longer coverage window must
+   not resurrect an expired, flat `always` episode. Its own cooldown horizon remains the frozen
+   lower bound for later fill observations until canonical reconstruction replaces it. Coin stop
    finalization consumes pair metrics and must not add an account-wide PnL dependency. Coin mode
    evaluates each configured coin's effective HSL enablement, restart policy, and cooldown.
    `threshold`, `never`, pside, and unified modes remain full-lookback strict.
