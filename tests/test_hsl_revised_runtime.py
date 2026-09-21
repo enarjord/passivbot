@@ -723,3 +723,30 @@ async def test_owner_candle_acquisition_uses_utc_with_exchange_timeline_manager(
     prices = json.loads(requests[0].payload)['snapshot']['pairs'][0]['prices']
     assert prices[str(NOW)] == 100.
     assert max(map(int, prices)) == NOW
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+@pytest.mark.parametrize('side', ['long', 'short'])
+def test_targeted_permission_keeps_the_complete_relevant_scope(mode, side):
+    other = 'PEER/USDT:USDT'
+    value = bot(mode, side=side)
+    value.positions[other] = deepcopy(value.positions[SYMBOL])
+    value.c_mults[other], value.qty_steps[other] = 1., .1
+    marks = {**quotes(side), other: replace(quotes(side)[SYMBOL], symbol=other, last=100., bid=100., ask=100.)}
+    kwargs = dict(symbols={'long': [other, SYMBOL], 'short': [SYMBOL, other]},
+                  now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)
+    full, absent = capture(value, marks, {}, **kwargs)
+    selected, selected_absent = capture(value, marks, {}, target=(SYMBOL, side), **kwargs)
+    assert not absent and not selected_absent
+    assert len(selected) == 1
+    assert selected[0].payload == next(r.payload for r in full if r.scope.symbol in (None, SYMBOL))
+    expected = next(d for d in evaluate(full) if d.scope.symbol in (None, SYMBOL))
+    assert evaluate(selected) == (expected,)
+    pairs = json.loads(selected[0].metadata)['snapshot']['pairs']
+    assert {p['symbol'] for p in pairs} == ({SYMBOL} if mode == 'coin' else {SYMBOL, other})
+    # Only coin has an independent peer. Aggregate modes must keep its missing
+    # current quote as unavailability rather than silently evaluating a subset.
+    del marks[other]
+    selected, selected_absent = capture(value, marks, {}, target=(SYMBOL, side), **kwargs)
+    assert bool(selected) == (mode == 'coin')
+    assert bool(selected_absent) == (mode != 'coin')
