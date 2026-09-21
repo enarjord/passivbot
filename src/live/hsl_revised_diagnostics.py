@@ -89,9 +89,9 @@ def record(bot, wave):
             status='degraded' if counts['unavailable'] or counts['estimated'] else 'ok',
             cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
         if emitted is None:
-            logging.log(logging.WARNING if counts['unavailable'] else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d unavailable=%d estimated=%d',
+            logging.log(logging.WARNING if counts['unavailable'] else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d',
                          data['signal_mode'], data['observation_status'], counts['green'], counts['red'],
-                         counts['unavailable'], counts['estimated'])
+                         counts['inactive'], counts['unavailable'], counts['estimated'])
     except Exception as exc:
         # Optional diagnostics must never inhibit or fabricate a trading decision.
         bot._hsl_revised_diagnostic_failed = True
