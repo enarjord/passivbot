@@ -14,12 +14,24 @@ def require_real_passivbot_rust_module():
     import passivbot_rust as pbr
     assert not getattr(pbr, "__is_stub__", False)
     assert hasattr(pbr, "hsl_revised_prices"), "rebuild the source-matched Rust extension"
+    assert hasattr(pbr, "hsl_revised_price_grid"), "rebuild the source-matched Rust extension"
     return pbr
 
 
 def run(pbr, candles, start, end):
-    return json.loads(pbr.hsl_revised_prices(json.dumps(
-        {"candles": [asdict(c) for c in candles], "start": start, "end": end})))
+    values = [asdict(c) for c in candles]
+    # Every existing independent projection case also checks the compact live
+    # transport: prices, last factual source time and diagnostics must agree.
+    compact = pbr.hsl_revised_price_grid(start, end, [
+        (c["start"], c["minutes"], c["open"], c["high"], c["low"], c["close"], c["available_at"])
+        for c in values])
+    result = json.loads(pbr.hsl_revised_prices(json.dumps(
+        {"candles": values, "start": start, "end": end})))
+    assert compact[0] == {str(row["timestamp"]): row["close"] for row in result["rows"]}
+    last = result["rows"][-1] if result["rows"] else None
+    assert compact[1] == ((last["close"], last["source_end"]) if last else None)
+    assert compact[2] == result["reasons"]
+    return result
 
 
 def compare(pbr, candles, start, end):

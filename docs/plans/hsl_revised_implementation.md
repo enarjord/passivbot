@@ -194,10 +194,13 @@ live quote is unavailable; that historical price never values current exposure. 
 flat symbols are excluded.
 
 Empty aggregate-side contributors do not duplicate price grids or require quotes; retained
-cashflows and any exposure still participate. Candle scalar transport uses shallow copies
-of immutable records. `tests/hsl_revised_live_benchmark.py` measures capture and evaluation
+cashflows and any exposure still participate. Candle scalar transport uses immutable observations directly. The compact
+`hsl_revised_price_grid` binding calls the same native projection as the detailed JSON
+interface, returning only the required price map, last factual source end/close and quality
+reasons. It avoids a JSON roundtrip and unused per-minute provenance; the detailed interface
+remains available for diagnostics and independent reference comparisons. `tests/hsl_revised_live_benchmark.py` measures capture and evaluation
 separately and reports a full decision digest for comparisons. This synthetic workload is
-not a completed live-latency gate; JSON transport and larger active/history scopes still
+not a completed live-latency gate; request serialization and larger active/history scopes still
 need evaluation during orchestration integration.
 
 Capture and evaluation are synchronous, with no intervening await. Callers still need bounded

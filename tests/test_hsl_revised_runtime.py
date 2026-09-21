@@ -493,3 +493,36 @@ def test_undated_other_coin_diagnostic_does_not_cross_coin_scope():
     result, unavailable = run(value)
     assert not unavailable and len(result) == 1
     assert "unidentified_or_undated_fill" not in result[0].reasons
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("history", ["empty", "damaged", "closed"])
+def test_compact_price_transport_preserves_complete_decisions(mode, side, history, monkeypatch):
+    import live.hsl_revised_runtime as runtime
+    sign = 1 if side == "long" else -1
+    events = [] if history == "empty" else [
+        event(id="open", timestamp=NOW-180_000, position_side=side,
+              side="buy" if sign > 0 else "sell", qty=sign*10., price=100., c_mult=1., fee_paid=0.),
+        event(id="close", timestamp=NOW-120_000, position_side=side,
+              side="sell" if sign > 0 else "buy", qty=-sign*10. if history == "closed" else None,
+              price=100.-sign*20., pnl=-200., c_mult=1., fee_paid=-1.)]
+    value = bot(mode, side=side, events=events)
+    if history == "closed":
+        value.positions = {}
+    coarse = capture_candles([dict(ts=NOW-900_000, o=100., h=120., l=80., c=100.)],
+                            minutes=15, observed_at=NOW)
+    fine = capture_candles([dict(ts=NOW-60_000, o=100., h=100., l=100., c=100.)],
+                          minutes=1, observed_at=NOW)
+    sources = {SYMBOL: Sources((coarse, fine), (), 0)}
+    options = dict(fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
+    actual = run(value, quotes(side), sources, **options)
+    def json_projection(start, end, rows):
+        keys = ("start", "minutes", "open", "high", "low", "close", "available_at")
+        out = json.loads(runtime.pbr.hsl_revised_prices(json.dumps(dict(
+            start=start, end=end, candles=[dict(zip(keys, row)) for row in rows]))))
+        last = out["rows"][-1] if out["rows"] else None
+        return ({str(row["timestamp"]): row["close"] for row in out["rows"]},
+                (last["close"], last["source_end"]) if last else None, out["reasons"])
+    monkeypatch.setattr(runtime.pbr, "hsl_revised_price_grid", json_projection)
+    assert run(value, quotes(side), sources, **options) == actual
