@@ -20,6 +20,13 @@ since the latest release tag; these features may already be available when insta
   separately per scope, without substituting legacy signals or account-equity reconstruction.
   Artifact workspaces expose the report; public revised activation remains gated.
 
+- Reject revised-HSL optimizer objectives and limits that refer to nonexistent unified-mode side
+  controllers or disabled policies, including portfolio metrics when every controller is disabled.
+  Coin mode resolves overrides for actual dataset
+  members, including combined-dataset market identities; scenario selection remains respected.
+  General side-performance metrics remain available. GPU optimization rejects revised HSL rather
+  than using legacy proxy behavior; public revised activation remains gated.
+
 - Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
   halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL
   enablement and BTC collateral changes, and preserve compact reports and subset policies. Removed
