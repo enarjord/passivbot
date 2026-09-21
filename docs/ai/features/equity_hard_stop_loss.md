@@ -551,8 +551,9 @@ strategy consumers retain their own fill, PnL, candle and EMA requirements.
 
 Protection receives a finite execution wave during startup preparation and each outer-loop pass.
 Passive HSL diagnostic projection and synchronous event sinks run after that wave's protective
-execution, including empty waves. Capturing a decision or checking write admission does not emit
-diagnostics; a slow sink cannot consume a captured protective order's freshness budget.
+and ready ordinary execution, including empty waves. Capturing a decision or checking write
+admission does not emit diagnostics; reporting cannot consume either class of order's
+freshness budget before that pass submits it.
 A failed configured console sink retains the bounded status fallback, including warning severity
 for unavailable scopes. Freshness is sampled after diagnostic projection; stale observations
 emit degraded status even when their last decision was GREEN. Recovery from skipped refresh

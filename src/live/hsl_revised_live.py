@@ -207,11 +207,12 @@ class Owner:
         for order in (*cancels, *creates):
             order["_hsl_revised_wave"] = token
 
-    async def protect(self):
+    async def protect(self, *, deferred_reports=None):
         """One finite wave over all currently evaluable RED scopes.
 
         Account refresh belongs to the caller. This does not wait for flattening,
         history repair, cooldown, or another scope's close to fill.
+        An outer execution pass may collect reports until its ordinary writes finish.
         """
         bot = self.bot
         symbols = {symbol for symbol, sides in bot.positions.items()
@@ -239,7 +240,10 @@ class Owner:
         finally:
             # Synchronous projection/logging must not age a wave before its
             # protective writes. Report even when no targets or orders remain.
-            self.report(wave)
+            if deferred_reports is None:
+                self.report(wave)
+            else:
+                deferred_reports.append(wave)
 
     def history_symbols(self):
         bot = self.bot
@@ -481,6 +485,7 @@ class Owner:
                 bot._begin_live_event_cycle(loop_start_ms=started)
                 bot.execution_scheduled = False
                 bot.state_change_detected_by_symbol = set()
+                reports = []
                 try:
                     self.poll_inputs()
                     plan = None
@@ -507,7 +512,7 @@ class Owner:
                     self.schedule_sources()
                     # A pending limit panic never monopolizes the owner. Other
                     # RED scopes and ordinary ready scopes get a pass each wave.
-                    await self.protect()
+                    await self.protect(deferred_reports=reports)
                     if plan is not None:
                         cancels, creates, snapshot = plan
                         bot._current_planning_snapshot = snapshot
@@ -516,6 +521,10 @@ class Owner:
                         ordinary = asyncio.create_task(self._ordinary_plan())
                 except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
                     logging.warning('[risk] revised current I/O unavailable | error_type=%s', type(exc).__name__)
+                finally:
+                    # Neither protective nor ready ordinary writes wait for passive reporting.
+                    for wave in reports:
+                        self.report(wave)
                 bot._last_loop_duration_ms = int(utc_ms()) - started
                 bot._maybe_log_health_summary()
                 await bot._sleep_unless_shutdown(

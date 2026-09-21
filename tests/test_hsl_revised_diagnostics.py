@@ -434,3 +434,60 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(observed,
     assert all(e[1]['data']['counts']['green'] == 1 for e in events)
     capture_report(owner)
     assert len(events) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('slow_stage', ['projection', 'sink'])
+async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(observed, monkeypatch, slow_stage):
+    import asyncio
+    import utils
+    bot, owner, _, _ = observed()
+    clock = [NOW]
+    monkeypatch.setattr(utils, 'utc_ms', lambda: clock[0])
+    bot.get_exchange_time = lambda: clock[0]
+    bot.positions[SYMBOL]['long'].update(size=0., price=0.)
+    planned, admitted, report_order = [], [], []
+
+    async def refresh(**kwargs):
+        for surface in ('balance', 'positions', 'open_orders'):
+            bot.freshness_ledger.stamp(surface, now_ms=clock[0])
+        owner.quotes = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=clock[0])}
+        return True
+
+    async def ordinary():
+        await refresh()
+        wave = owner.capture()
+        order = dict(symbol=SYMBOL, position_side='long')
+        owner.bind(wave, (), (order,))
+        planned.append(True)
+        return (), (order,), None
+
+    async def execute(cancels, creates):
+        admitted.append(owner.admit(creates[0]))
+        bot.stop_signal_received = True
+
+    async def sleep(*args, **kwargs):
+        await asyncio.sleep(0)
+
+    original = diagnostics._row if slow_stage == 'projection' else bot._emit_live_event
+    def slow(*args, **kwargs):
+        report_order.append((bool(planned), bool(admitted)))
+        clock[0] += 20_000
+        return original(*args, **kwargs)
+    if slow_stage == 'projection':
+        monkeypatch.setattr(diagnostics, '_row', slow)
+    else:
+        bot._emit_live_event = slow
+    bot.stop_signal_received = False
+    bot._begin_live_event_cycle = lambda **kwargs: None
+    bot.refresh_protective_authoritative_state = refresh
+    bot._sleep_unless_shutdown = sleep
+    bot._maybe_log_health_summary = lambda: None
+    bot.live_value = lambda key: .05
+    bot.execute_order_plan_to_exchange = execute
+    owner.schedule_history = owner.schedule_sources = lambda: None
+    owner._ordinary_plan = ordinary
+    await owner.run()
+    assert admitted == [True]
+    assert any(ready for ready, _ in report_order)
+    assert all(written for ready, written in report_order if ready)
