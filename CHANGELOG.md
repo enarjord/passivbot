@@ -21,7 +21,8 @@ since the latest release tag; these features may already be available when insta
   Artifact workspaces expose the report; public revised activation remains gated.
 
 - Reject revised-HSL optimizer objectives and limits that refer to nonexistent unified-mode side
-  controllers or disabled coin/pside policies. Coin mode resolves overrides for actual dataset
+  controllers or disabled policies, including portfolio metrics when every controller is disabled.
+  Coin mode resolves overrides for actual dataset
   members, including combined-dataset market identities; scenario selection remains respected.
   General side-performance metrics remain available. GPU optimization rejects revised HSL rather
   than using legacy proxy behavior; public revised activation remains gated.

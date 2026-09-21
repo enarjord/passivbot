@@ -267,12 +267,19 @@ def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
         name, _ = split_metric_stat_suffix(canonical_metric_name(name))
         if name.startswith(("hard_stop_time_in_yellow", "hard_stop_time_in_orange")):
             raise ValueError(f"{metric} is removed for revised HSL; choose a supported objective/limit")
-        side_signal = name.endswith(("_long", "_short")) and (
+        signal = (
             name.startswith("hard_stop_")
-            or name.startswith("drawdown_worst_ema_strategy_eq_")
-            or name.startswith("drawdown_worst_mean_1pct_ema_strategy_eq_")
+            or name.startswith("drawdown_worst_ema_strategy_eq")
+            or name.startswith("drawdown_worst_mean_1pct_ema_strategy_eq")
         )
+        side_signal = signal and name.endswith(("_long", "_short"))
         if _mode(config) == "unified" and side_signal:
             raise ValueError(f"{metric} has no side controller in revised unified HSL; use the portfolio metric")
         if side_signal and not _side_has_enabled_policy(config, name.rsplit("_", 1)[1], markets_by_exchange):
             raise ValueError(f"{metric} has no enabled side controller in this revised HSL scenario")
+        if signal and not side_signal:
+            enabled = (config["bot"]["hsl"]["enabled"] if _mode(config) == "unified"
+                       else any(_side_has_enabled_policy(config, side, markets_by_exchange)
+                                for side in ("long", "short")))
+            if not enabled:
+                raise ValueError(f"{metric} has no enabled controller in this revised HSL scenario")

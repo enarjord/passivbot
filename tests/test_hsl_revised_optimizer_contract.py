@@ -189,6 +189,60 @@ def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
     assert evaluator.shared_hlcvs_np == {}
 
 
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("metric", ["hard_stop_triggers", "hard_stop_restarts_mean",
+    "drawdown_worst_ema_hsl", "drawdown_worst_mean_1pct_ema_hsl_max",
+    "usd_drawdown_worst_ema_hsl"])
+def test_disabled_portfolio_signal_metrics_are_rejected(mode, metric):
+    cfg, markets, _ = inputs(mode)
+    for side in ("long", "short"):
+        cfg["bot"][side]["hsl"]["enabled"] = False
+    if mode == "unified":
+        cfg["bot"]["hsl"]["enabled"] = False
+    with pytest.raises(ValueError, match="no enabled controller"):
+        validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
+    validate_optimizer_metrics(cfg, ["drawdown_worst_strategy_eq", "adg"])
+    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    policy["enabled"] = True
+    validate_optimizer_metrics(cfg, [metric], markets_by_exchange={"binance": markets})
+
+
+@pytest.mark.parametrize("override_enabled", [False, True])
+def test_portfolio_metric_uses_effective_combined_coin_policies(override_enabled):
+    cfg, markets, _ = inputs("coin")
+    cfg["bot"]["long"]["hsl"]["enabled"] = not override_enabled
+    cfg["backtest"]["coins"] = {"combined": ["AAA"]}
+    cfg["coin_overrides"] = {"AAA": {"bot": {"long": {"hsl": {"enabled": override_enabled}}}},
+                             "OUTSIDE": {"bot": {"short": {"hsl": {"enabled": True}}}}}
+    if override_enabled:
+        validate_optimizer_metrics(cfg, ["hard_stop_triggers"], markets_by_exchange={"combined": markets})
+    else:
+        with pytest.raises(ValueError, match="no enabled controller"):
+            validate_optimizer_metrics(cfg, ["hard_stop_triggers"], markets_by_exchange={"combined": markets})
+
+
+@pytest.mark.parametrize("section", ["scoring", "limits"])
+@pytest.mark.parametrize("scenario", ["active", "inactive", None])
+def test_suite_portfolio_metrics_only_require_the_consumed_scenarios(section, scenario):
+    cfg, _, _ = inputs("unified")
+    fixed_side_bounds(cfg)
+    cfg["optimize"]["fixed_runtime_overrides"] = {}
+    cfg["optimize"]["scoring"] = ["adg"]
+    cfg["optimize"]["limits"] = []
+    cfg["optimize"][section] = [dict(metric="drawdown_worst_ema_hsl", scenario=scenario,
+        **({"goal": "min"} if section == "scoring" else {"penalize_if": "greater_than", "value": 5}))]
+    active = SimpleNamespace(label="active", config=cfg, overrides={}, msss={})
+    inactive = SimpleNamespace(label="inactive", config=cfg,
+        overrides={"bot.hsl.enabled": False}, msss={})
+    suite = SuiteEvaluator(Evaluator({}, {}, {}, cfg), [active, inactive], {"default": "mean"})
+    suite.build_scenario_candidate_config(cfg, active)
+    if scenario == "active":
+        suite.build_scenario_candidate_config(cfg, inactive)
+    else:
+        with pytest.raises(ValueError, match="no enabled controller"):
+            suite.build_scenario_candidate_config(cfg, inactive)
+
+
 @pytest.mark.parametrize("base_enabled,override_enabled", [(False, True), (True, False)])
 def test_combined_suite_validates_actual_source_market_policy(base_enabled, override_enabled):
     cfg, markets, _ = inputs("coin")
