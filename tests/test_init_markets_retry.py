@@ -6,6 +6,7 @@ from passivbot import Passivbot
 
 class _FakeBot:
     _load_market_metadata = Passivbot._load_market_metadata
+    _init_markets_account_config = Passivbot._init_markets_account_config
     exchange = "bybit"
     quote = "USDT"
     cca = object()

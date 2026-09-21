@@ -12,7 +12,7 @@ from time import monotonic
 import numpy as np
 
 from config.access import require_live_value
-from live import hsl_protection
+from live import hsl_protection, hsl_revised_live
 from passivbot_exceptions import FatalBotException, RestartBotException
 from ccxt.base.errors import NetworkError, OrderNotFound
 from live.diagnostic_safety import bounded_traceback_detail, bounded_exception_type
@@ -244,6 +244,9 @@ async def ensure_ready(bot, *, startup=False):
     failure therefore need not block martingale adds while the grace/fallback
     owner remains active. Other input consumers keep their own strict gates.
     """
+    if hsl_revised_live.selected(bot):
+        validate_current_balances(bot)
+        return True
     enabled = bot._equity_hard_stop_enabled()
     health = restore_protection(bot)
     state = getattr(bot, "_risk_input_recovery", None)
@@ -584,6 +587,8 @@ async def drain_startup_commitments(bot):
 
 
 async def wait_for_startup(bot):
+    if hsl_revised_live.selected(bot):
+        return
     # Maintainers do not exist yet; this owner refreshes account/fill inputs.
     while not bot.stop_signal_received:
         if await protect_before_history_refresh(bot):

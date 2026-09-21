@@ -521,3 +521,54 @@ Side-specific revised HSL optimizer metrics require an enabled policy for that s
 selected scenario. Coin mode uses effective policies of actual dataset members, including
 resolved overrides; an enabled policy for a coin outside the dataset does not qualify.
 General side equity/performance metrics remain valid when HSL is disabled.
+
+### Staged revised live execution
+
+The revised live owner (`live/hsl_revised_live.py`) uses the shared Rust evaluator and the minimal
+full-position close API. It has no legacy recovery journal, retained RED commitment, or prior
+permission as a decision input. Current balance, positions, orders and held-symbol quotes remain
+mandatory. Historical fill/candle damage is estimated by Rust with scoped diagnostics; other
+strategy consumers retain their own fill, PnL, candle and EMA requirements.
+
+Protection receives a finite execution wave during startup preparation and each outer-loop pass.
+Startup loads execution metadata and read-only connector preflight before supervising ordinary
+configuration-readiness, configuration writes, account preparation and candle warmup.
+Ordinary preparation, fill repair and candle acquisition run as owned background tasks; writes are
+serialized across connector batch tasks. Hourly preparation never starts another writer once the
+main owner is running. Account refreshes serialize their complete fetch/commit transactions across
+startup, maintenance and protection; a write cannot consume an in-progress account transaction.
+Startup retries completed candle-source acquisitions on the same bounded cadence as runtime.
+Transient network/cache/candle warmup failures are observable and leave later repair active;
+unexpected warmup failures remain fatal. Each attempted write requires fresh balance, position and open-order
+confirmation before the next admission, including after ambiguous failure. Deferred cancellations
+do not create submission telemetry or cancellation provenance. An unfilled limit close or
+unavailable quote on one coin cannot occupy another coin's protection turn. Quotes have a bounded wave time slice and a separate network deadline. Resistant
+reads retain their bounded slots instead of spawning overlapping retries. Known I/O failures stay
+observable; malformed native output and unexpected programming errors propagate fatally.
+
+A successful remote fill fetch atomically captures its immutable normalized tape, manager identity
+and actual acquisition interval. A later cache read cannot renew that timestamp. Unchanged retained
+facts can reuse the receipt while another request is pending; changed facts or manager replacement
+cannot inherit it. Completeness diagnostics, including undated/unattributed rows and quality-only
+corrections, participate in receipt validation. Expired numeric rows are excluded from the
+comparison. An earlier actual, unchanged and still-fresh position observation may precede the fill fetch; account invalidation or changed
+positions discards it. These are observation caches, never persisted lifecycle authority.
+
+Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,
+current account freshness, pending confirmations, generation, balance and positions are checked,
+and Rust recomputes scoped permission from current observations. Changed permission or execution
+policy or changed open-order facts defers that write. A receipt from a previous owner cannot
+authorize execution. Ordinary preparation checks its complete starting account facts after each
+awaited phase and discards a mixed-cohort result. Enabled ordinary fill consumers also bind the
+canonical fill signature and readiness to their plan and connector receipt, including PnL/fee-only
+enrichment. This does not impose ordinary fill requirements on protective closes or otherwise
+valid plans without those consumers. A failed or incomplete background fill refresh requires a
+new authoritative fill confirmation before ordinary fill consumers resume; an older successful
+stamp cannot survive that failure. Account-only protection remains independent. Unchanged confirming reads do not starve slow
+preparation. A replacement planner starts only after the preceding plan finishes writing. The executor
+uses the wave's own planning snapshot even when background ordinary preparation completes during
+an await. History-only flat pairs can use their latest factual fill price when no candle/quote
+survives; that price never substitutes for the current mark of a held position.
+
+Public revised runtime activation remains gated. Offline integration may exercise this path with
+an explicit test-local bypass; this does not authorize live deployment or replace legacy HSL.

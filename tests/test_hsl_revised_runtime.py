@@ -41,7 +41,7 @@ def bot(mode="coin", *, side="long", events=()):
     positions = {SYMBOL: {pside: dict(size=(10. if side == "long" else -10.) if side == pside else 0.,
                                      price=100. if side == pside else 0.)
                          for pside in ("long", "short")}}
-    value = SimpleNamespace(config=config, positions=positions, inverse=False, coin_overrides={},
+    value = SimpleNamespace(config=config, positions=positions, open_orders={}, inverse=False, coin_overrides={},
         c_mults={SYMBOL: 1.}, qty_steps={SYMBOL: .1},
         _ensure_freshness_ledger=lambda: ledger, get_raw_balance=lambda: 1000.,
         _pnls_manager=SimpleNamespace(get_events=lambda *, start_ms: [e for e in events if e.timestamp >= start_ms]))
@@ -388,7 +388,14 @@ def test_damaged_retained_fill_cannot_supply_empty_flat_proof(changes):
     if "timestamp" in changes:
         value._pnls_manager.get_events = lambda **_: [event(c_mult=1., **changes)]
         result, unavailable = run(value, {}, fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
-    assert not result and unavailable
+        assert not result and unavailable
+    else:
+        assert not unavailable
+        assert {'flat_historical_fill_price', 'invalid_fill_quantity'} <= set(result[0].reasons)
+        requests, _ = capture(value, {}, {}, symbols={'long': [SYMBOL], 'short': []},
+            now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000,
+            fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
+        assert 'flat_coin' not in json.loads(requests[0].payload)['snapshot']
 
 
 def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
@@ -526,3 +533,72 @@ def test_compact_price_transport_preserves_complete_decisions(mode, side, histor
                 (last["close"], last["source_end"]) if last else None, out["reasons"])
     monkeypatch.setattr(runtime.pbr, "hsl_revised_price_grid", json_projection)
     assert run(value, quotes(side), sources, **options) == actual
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+def test_actual_unchanged_position_read_can_precede_fill_tail_without_forged_time(mode):
+    from live.hsl_revised_runtime import observe_positions
+    events = [event(id='open', timestamp=NOW-180_000, qty=10., price=100., c_mult=1., fee_paid=0.),
+              event(id='close', timestamp=NOW-120_000, side='sell', qty=-10., price=80.,
+                    pnl=-200., c_mult=1., fee_paid=0.)]
+    value = bot(mode, events=events)
+    value.positions = {}
+    policy = value.config['bot']['hsl'] if mode == 'unified' else value.config['bot']['long']['hsl']
+    policy['restart_after_red_policy'] = 'never'
+    actual_read = observe_positions(value)
+    assert actual_read.observed_ms == NOW-200
+    value._ensure_freshness_ledger().stamp('positions', now_ms=NOW-10)
+    kwargs = dict(fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
+    without_read, = run(value, **kwargs)[0]
+    assert 'fills_before_position' in without_read.reasons
+    decision, = run(value, position_observation=actual_read, **kwargs)[0]
+    assert decision.action == 'halted'
+    assert 'fills_before_position' not in decision.reasons
+    # Fresh acquisition reconstructs the same halt without the earlier read.
+    fresh, = run(value, fills_started_ms=NOW-5, fills_completed_ms=NOW-1)[0]
+    assert fresh.action == decision.action
+
+
+@pytest.mark.parametrize('change', ['position', 'generation', 'timestamp'])
+def test_position_read_cannot_be_reused_for_different_current_facts(change):
+    from live.hsl_revised_runtime import observe_positions
+    value = bot()
+    observed = observe_positions(value)
+    if change == 'position':
+        value.positions[SYMBOL]['long']['size'] = 9.
+    elif change == 'generation':
+        value._account_invalidation_generation = 1
+    else:
+        observed = replace(observed, observed_ms=NOW)
+    with pytest.raises(ValueError, match='does not match current account facts'):
+        run(value, position_observation=observed)
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+def test_flat_retained_fills_do_not_require_a_delisted_market_quote(mode):
+    events = [event(id='open', timestamp=NOW-180_000, qty=10., price=100., c_mult=1., fee_paid=0.),
+              event(id='close', timestamp=NOW-120_000, side='sell', qty=-10., price=80.,
+                    pnl=-200., c_mult=1., fee_paid=0.)]
+    value = bot(mode, events=events)
+    value.positions = {}
+    policy = value.config['bot']['hsl'] if mode == 'unified' else value.config['bot']['long']['hsl']
+    policy['restart_after_red_policy'] = 'never'
+    decisions, unavailable = run(value, {}, fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
+    assert not unavailable
+    assert decisions[0].action == 'halted'
+    assert 'flat_historical_fill_price' in decisions[0].reasons
+    value.positions = {SYMBOL: {'long': dict(size=1., price=100.), 'short': dict(size=0., price=0.)}}
+    decisions, unavailable = run(value, {}, fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
+    assert not decisions and unavailable[0].reason == 'current_mark_unavailable'
+
+
+@pytest.mark.parametrize('surface', ['balance', 'positions'])
+def test_recent_but_invalidated_account_observation_is_not_current(surface):
+    value = bot()
+    value._authoritative_pending_confirmations = {surface: 1}
+    decisions, unavailable = run(value)
+    assert not decisions
+    assert unavailable[0].reason == f'current_{surface}_unavailable'
+    value._ensure_freshness_ledger().stamp(surface, now_ms=NOW-10, epoch=1)
+    decisions, unavailable = run(value)
+    assert not unavailable and decisions[0].action == 'panic'

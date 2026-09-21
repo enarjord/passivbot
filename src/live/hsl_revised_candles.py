@@ -55,6 +55,11 @@ class CandleSourceReader:
         self._pending = {}
         self._fatal = None
 
+    def cancel_pending(self):
+        """Request shutdown without abandoning resistant reads or waiting forever."""
+        for task in self._pending.values():
+            task.cancel()
+
     @property
     def pending_reads(self):
         return sum(not task.done() for task in self._pending.values())

@@ -4,15 +4,88 @@ This adapter does no I/O and has no previous-decision input. Capture and evaluat
 run without an await; async acquisition belongs before capture, execution after it.
 Public runtime activation remains separately gated while orchestration is integrated.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from collections import Counter
 import json
 import math
 
 import passivbot_rust as pbr
 
 from config.hsl_revised import FIELDS, engine
-from live.hsl_revised_inputs import capture_fills
+from live.hsl_revised_inputs import FillTape, capture_fills
 from passivbot_exceptions import FatalBotException
+
+
+@dataclass(frozen=True)
+class PositionObservation:
+    """An actual complete position read, never a reconstructed timestamp.
+
+    A later identical account read need not erase an earlier still-fresh read
+    which precedes a fill-tail fetch. The owner must discard this factual cache
+    on account invalidation; the adapter also checks values and observation times.
+    Omitted flat rows and the planner's explicit zero-size rows mean the same
+    thing in a complete account response.
+    """
+    payload: str
+    observed_ms: int
+    generation: int
+
+
+def observe_positions(bot):
+    return PositionObservation(
+        json.dumps(sorted((symbol, side, position['size'], position['price'])
+                          for symbol, sides in bot.positions.items()
+                          for side, position in sides.items() if position['size'] != 0)),
+        bot._ensure_freshness_ledger().surfaces['positions'].updated_ms,
+        int(getattr(bot, '_account_invalidation_generation', 0)))
+
+
+def observe_open_orders(bot):
+    """Immutable complete order facts, ignoring bucket/order iteration and flat padding.
+
+    Keep the complete normalized row rather than inferring a venue-independent
+    subset of reconciliation inputs. A harmless metadata change may defer a plan;
+    it must never let changed resting orders inherit its permission.
+    """
+    return tuple(sorted((symbol, json.dumps(order, sort_keys=True, allow_nan=False))
+                        for symbol, orders in bot.open_orders.items() for order in orders))
+
+
+@dataclass(frozen=True)
+class FillObservation:
+    """Immutable normalized facts copied at successful remote-fetch completion."""
+    manager: object
+    start_ms: int
+    tape: FillTape
+    interval: tuple[int, int]
+
+
+def observe_fills(bot, interval):
+    now = int(bot.get_exchange_time())
+    start = max(0, now - math.floor(float(bot.config['live']['pnls_max_lookback_days']) * 86_400_000 + .5))
+    manager = bot._pnls_manager
+    return FillObservation(manager, start,
+        capture_fills(manager.get_events(start_ms=start), bot.c_mults), interval)
+
+
+def observed_fill_interval(bot, tape, start, now):
+    observation = getattr(bot, '_hsl_revised_fill_observation', None)
+    if (observation is None or observation.manager is not bot._pnls_manager
+            or bot._pnls_manager is None or start < observation.start_ms):
+        return None
+
+    def retained_facts(value):
+        # Event order is not execution sequence. Expired facts cannot invalidate
+        # the receipt of retained facts. Completeness diagnostics are facts too:
+        # undated/unattributed rows and quality-only corrections cannot inherit a
+        # successful acquisition interval from a different canonical tape.
+        return (value.reasons, {
+            (pair.symbol, pair.pside): (pair.reasons, Counter(
+                fill for fill in pair.fills if start <= fill.timestamp <= now))
+            for pair in value.pairs
+            if pair.reasons or any(start <= fill.timestamp <= now for fill in pair.fills)})
+
+    return observation.interval if retained_facts(tape) == retained_facts(observation.tape) else None
 
 
 @dataclass(frozen=True)
@@ -87,7 +160,8 @@ def _policies(bot, pairs):
 
 
 def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
-            max_current_age_ms, fills_started_ms=None, fills_completed_ms=None):
+            max_current_age_ms, fills_started_ms=None, fills_completed_ms=None,
+            position_observation=None, use_observed_fills=False):
     """Copy a current account cohort and canonical history into immutable requests.
 
     ``quotes`` are factual MarketSnapshots (UTC fetch times). Candle open and
@@ -121,9 +195,24 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     offset = now_ms - utc_now_ms
     ledger = bot._ensure_freshness_ledger()
     balance_state, position_state = (ledger.surfaces[key] for key in ("balance", "positions"))
+    if position_observation is not None:
+        current = observe_positions(bot)
+        if (not isinstance(position_observation, PositionObservation)
+                or position_observation.payload != current.payload
+                or position_observation.generation != current.generation
+                or type(position_observation.observed_ms) is not int
+                or not 0 < position_observation.observed_ms <= current.observed_ms):
+            raise ValueError("position observation does not match current account facts")
+        position_state = replace(position_state, updated_ms=position_observation.observed_ms)
     balance = bot.get_raw_balance()
     events = bot._pnls_manager.get_events(start_ms=start) if bot._pnls_manager is not None else []
     tape = capture_fills(events, bot.c_mults)
+    if use_observed_fills:
+        if fills_started_ms is not None or fills_completed_ms is not None:
+            raise ValueError('cannot combine observed fills with a supplied fill interval')
+        interval = observed_fill_interval(bot, tape, start, now_ms)
+        if interval is not None:
+            fills_started_ms, fills_completed_ms = interval
     by_pair = {(p.symbol, p.pside): p for p in tape.pairs}
     # Old flat history is intentionally outside the configured authority window.
     relevant = {(p.symbol, p.pside) for p in tape.pairs
@@ -142,10 +231,13 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     def fresh(timestamp):
         return type(timestamp) is int and timestamp > 0 and 0 <= utc_now_ms - timestamp <= max_current_age_ms
 
+    pending = getattr(bot, '_authoritative_pending_confirmations', {})
+    balance_invalidated = int(pending.get('balance', 0)) > balance_state.epoch
+    positions_invalidated = int(pending.get('positions', 0)) > position_state.epoch
     problem = None
-    if not _finite(balance, positive=True) or not fresh(balance_state.updated_ms):
+    if balance_invalidated or not _finite(balance, positive=True) or not fresh(balance_state.updated_ms):
         problem = "current_balance_unavailable"
-    elif not fresh(position_state.updated_ms):
+    elif positions_invalidated or not fresh(position_state.updated_ms):
         problem = "current_positions_unavailable"
     if problem:
         return (), tuple(Unavailable(scope, problem) for scope, _, _ in policies)
@@ -208,6 +300,8 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 projected[symbol] = pbr.hsl_revised_price_grid(start, now_ms, candles)
             prices, last_price, price_reasons = projected[symbol]
             quote = quotes.get(symbol)
+            flat_fill_prices = [(fill.timestamp, fill.price) for fill in history.fills
+                                if start <= fill.timestamp <= now_ms and _finite(fill.price, positive=True)] if history else []
             quote_valid = (quote is not None and quote.is_valid()
                            and 0 < quote.fetched_ms <= utc_now_ms)
             if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
@@ -218,6 +312,13 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 # history without requiring a live quote from a delisted market.
                 mark, mark_at = last_price
                 flat_price_reason = "flat_historical_close"
+            elif size == 0 and flat_fill_prices:
+                # A flat position has zero current UPNL. Its latest factual fill
+                # price suffices for sparse replay when a delisted market has
+                # neither quotes nor candles. The tie-break selects a price,
+                # never an execution ordering or a mark for held exposure.
+                mark_at, mark = max(flat_fill_prices)
+                flat_price_reason = "flat_historical_fill_price"
             else:
                 pair_problems[key] = "current_mark_unavailable"
                 continue

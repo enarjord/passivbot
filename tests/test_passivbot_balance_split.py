@@ -6054,6 +6054,7 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     assert bot._pnls_manager.refresh_for_lookback.await_count == 2
     assert bot._trailing_fill_fetch_generation == 7
     assert getattr(bot, '_hsl_fill_tail_observation', None) is None
+    assert bot._hsl_revised_fill_capture_interval is None  # Cache-only repair did not fetch.
 
 
 @pytest.mark.asyncio
@@ -13791,3 +13792,54 @@ async def test_optional_fill_refresh_classifies_only_fetched_value_errors(source
     else:
         manager.refresh_latest.assert_not_awaited()
     assert bot._hsl_fill_tail_observation is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('result_kind', ['complete', 'pending', 'failed'])
+@pytest.mark.parametrize('engine', ['legacy', 'revised'])
+async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pending(monkeypatch, result_kind, engine):
+    from test_hsl_revised_inputs import event as make_event
+    clock = [1_700_000_060_000]
+    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: clock[0])
+    event = make_event(timestamp=clock[0]-60_000, id='fill', source_ids=['fill'],
+                       pnl_status='pending' if result_kind == 'pending' else 'complete')
+    bot = Passivbot.__new__(Passivbot)
+    async def remote(**kwargs):
+        assert bot._hsl_revised_fill_capture_interval is None
+        clock[0] += 75
+        if result_kind == 'failed':
+            raise ValueError('synthetic invalid fill payload')
+    manager = SimpleNamespace(get_events=lambda **kwargs: [event], get_history_scope=lambda: 'all',
+                              refresh=AsyncMock(), refresh_latest=AsyncMock(side_effect=remote))
+    bot._pnls_manager = _with_fill_coverage_api(manager)
+    bot.stop_signal_received = False
+    bot.config = {'live': {'fills_recent_overlap_minutes': 10., 'pnls_max_lookback_days': 1., 'hsl_engine': engine}}
+    bot.c_mults = {event.symbol: event.c_mult}
+    bot.live_value = lambda key: bot.config['live'][key]
+    bot.get_exchange_time = lambda: clock[0]
+    bot._live_risk_uses_authoritative_pnl = lambda: True
+    async def local_initialization():
+        clock[0] += 50
+    bot.init_pnls = AsyncMock(side_effect=local_initialization)
+    bot._log_new_fill_events = lambda *a: None
+    bot._monitor_record_event = lambda *a, **kw: None
+    bot._monitor_record_error = lambda *a, **kw: None
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+    bot._hsl_revised_fill_capture_interval = (123, 456)
+    if result_kind == 'failed':
+        with pytest.raises(ValueError, match='synthetic invalid'):
+            await bot.update_pnls()
+        assert bot._hsl_revised_fill_capture_interval is None
+    else:
+        assert await bot.update_pnls() is (result_kind == 'complete')
+        assert bot._hsl_revised_fill_capture_interval == (1_700_000_060_050, 1_700_000_060_125)
+        if engine == 'revised':
+            observed = bot._hsl_revised_fill_observation
+            assert observed.manager is bot._pnls_manager
+            assert observed.interval == bot._hsl_revised_fill_capture_interval
+            assert observed.tape.pairs[0].fills[0].delta == event.qty
+            from dataclasses import replace
+            event = replace(event, qty=999.)
+            assert observed.tape.pairs[0].fills[0].delta != event.qty

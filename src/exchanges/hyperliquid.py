@@ -16,6 +16,7 @@ from live.balance_composition import (
     normalize_hyperliquid_unified_balance_composition,
 )
 from passivbot import logging
+from live import hsl_revised_live
 from passivbot_exceptions import FatalBotException
 from utils import MarketIdentifierResolutionError, symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
@@ -1724,6 +1725,7 @@ class HyperliquidBot(CCXTBot):
             elm["position_side"] = "long" if "long" in elm["info"]["dir"].lower() else "short"
         return sorted(fetched, key=lambda x: x["timestamp"])
 
+    @hsl_revised_live.connector_write("cancel")
     async def execute_cancellation(self, order: dict) -> dict:
         """Hyperliquid: Cancel order with vault support."""
         params = (
