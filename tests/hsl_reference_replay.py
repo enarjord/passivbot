@@ -112,8 +112,9 @@ def capture(now, start, balance, balance_at, pairs, settings=Settings(), revisio
         raise ValueError("invalid minimum snapshot")
     if len({p.key for p in pairs}) != len(pairs) or len(revisions) != 6:
         raise ValueError("invalid snapshot shape")
-    observed = [balance_at, *(p.position_at for p in pairs), *(p.mark_at for p in pairs)]
-    if any(not now - max_current_age <= t <= now for t in observed):
+    observed = [balance_at, *(p.position_at for p in pairs),
+                *(p.mark_at for p in pairs if p.position.size != 0)]
+    if any(not now - max_current_age <= t <= now for t in observed) or any(p.mark_at > now for p in pairs):
         raise ValueError("unusable current observation")
     config_at = now if config_at is None else config_at
     if any(t is not None and t > now for t in [config_at, *(p.fills_at for p in pairs),

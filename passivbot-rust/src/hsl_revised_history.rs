@@ -99,6 +99,14 @@ pub struct Fill {
     pub revision: u64,
 }
 
+pub fn default_fills_before_price() -> bool {
+    true
+}
+
+pub fn fill_precedes_price(fill: i64, price: i64, end: i64, before: bool) -> bool {
+    fill < price || (fill == price && (before || price == end))
+}
+
 fn usable(value: Option<f64>) -> Option<f64> {
     value.filter(|v| v.is_finite())
 }
@@ -173,6 +181,10 @@ pub fn canonical_fills(
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
+    /// Historical candle samples normally observe all fills at their timestamp.
+    /// The simulator explicitly phases a bar's fills after its opening boundary.
+    #[serde(default = "default_fills_before_price")]
+    pub fills_before_same_time_price: bool,
     pub start: i64,
     pub end: i64,
     pub position: Position,
@@ -374,7 +386,14 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     let mut samples = Vec::with_capacity(prices.len());
     let mut consumed = 0;
     for (timestamp, price) in prices {
-        while consumed < events.len() && events[consumed].fill.timestamp <= timestamp {
+        while consumed < events.len()
+            && fill_precedes_price(
+                events[consumed].fill.timestamp,
+                timestamp,
+                input.end,
+                input.fills_before_same_time_price,
+            )
+        {
             consumed += 1;
         }
         let (mut size, mut basis, realized) = if consumed == 0 {
@@ -417,6 +436,7 @@ mod tests {
     #[test]
     fn empty_history_keeps_current_position_and_mark() {
         let input = Input {
+            fills_before_same_time_price: true,
             start: 0,
             end: 60_000,
             position: Position {
