@@ -1972,8 +1972,11 @@ fn run_backtest_core<'py>(
         }
 
         let strategy_equity_series = backtest.strategy_equity_series_for_artifacts();
+        // Revised strategy-equity observations are not integrated yet. Do not
+        // label collateral-inclusive account equity as strategy-only performance.
+        let equity_columns = if backtest_params.equity_hard_stop_loss.revised.is_some() { 3 } else { 4 };
         let equities_array =
-            Array2::from_shape_fn((equities.timestamps_ms.len(), 4), |(i, j)| match j {
+            Array2::from_shape_fn((equities.timestamps_ms.len(), equity_columns), |(i, j)| match j {
                 0 => equities.timestamps_ms[i] as f64,
                 1 => equities.usd_total_equity[i],
                 2 => equities.btc_total_equity[i],

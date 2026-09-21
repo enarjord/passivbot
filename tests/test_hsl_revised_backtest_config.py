@@ -178,3 +178,20 @@ def test_cached_payload_cannot_change_selected_engine_or_policy():
     cached["equity_hard_stop_loss"]["engine"] = "legacy"
     with pytest.raises(ValueError, match="engine differs"):
         prep_backtest_args(cfg, mss, "binance", backtest_params=cached)
+
+
+def test_revised_artifact_never_substitutes_btc_collateral_equity_for_strategy():
+    from backtest import process_forager_fills
+
+    args = list(payload("unified"))
+    args[-1]["btc_collateral_cap"] = 0.5
+    args[1] = np.linspace(50000.0, 90000.0, len(args[0]))
+    result = run(args)
+    assert result[1].shape[1] == 3
+    assert np.ptp(result[1][:, 1]) > 1.0
+    _, _, frame = process_forager_fills(
+        result[0], args[-1]["coins"], args[0], result[1], balance_sample_divider=1
+    )
+    # The historical artifact schema may keep an unavailable column, but it
+    # cannot contain account equity mislabeled as strategy performance.
+    assert frame["strategy_equity"].isna().all()
