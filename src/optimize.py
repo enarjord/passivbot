@@ -1704,6 +1704,11 @@ class Evaluator:
             self.key_paths,
             overrides_list,
         )
+        from config.hsl_revised import validate_optimizer_metrics
+        validate_optimizer_metrics(config, [
+            *(spec.metric for spec in self.scoring_specs),
+            *(check["metric"] for check in self.limit_checks),
+        ])
         individual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             if individual_hash in self.seen_hashes:
@@ -2124,6 +2129,13 @@ class SuiteEvaluator:
 
         if unstuck_ema_spans_coupled(scenario_config):
             scenario_config = apply_coupled_unstuck_ema_spans(deepcopy(scenario_config))
+        from config.hsl_revised import validate_optimizer_metrics
+        validate_optimizer_metrics(scenario_config, [
+            *(spec.metric for spec, basis in zip(self.base.scoring_specs, self.objective_bases)
+              if basis.scenario is None or basis.scenario == ctx.label),
+            *(check["metric"] for check in self.base.limit_checks
+              if check.get("scenario") is None or check["scenario"] == ctx.label),
+        ])
         return scenario_config
 
     def _build_scenario_candidate_config(

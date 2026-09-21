@@ -230,3 +230,24 @@ def normalize_revised(config, template, *, verbose=True):
 def require_runtime_support(config, supported_modes=()):
     if engine(config) == "revised" and _mode(config) not in supported_modes:
         raise ValueError(f"revised HSL {_mode(config)} runtime integration is not available in this build; legacy remains the default")
+
+
+def validate_optimizer_metrics(config, metrics):
+    """Validate only objectives/limits consuming this effective scenario's results."""
+    if engine(config) != "revised":
+        return
+    from .metrics import canonical_metric_name, canonicalize_metric_name, split_metric_stat_suffix
+
+    for metric in metrics:
+        name = canonicalize_metric_name(metric)
+        name = name.removesuffix("_usd").removesuffix("_btc")
+        name, _ = split_metric_stat_suffix(canonical_metric_name(name))
+        if name.startswith(("hard_stop_time_in_yellow", "hard_stop_time_in_orange")):
+            raise ValueError(f"{metric} is removed for revised HSL; choose a supported objective/limit")
+        side_signal = name.endswith(("_long", "_short")) and (
+            name.startswith("hard_stop_")
+            or name.startswith("drawdown_worst_ema_strategy_eq_")
+            or name.startswith("drawdown_worst_mean_1pct_ema_strategy_eq_")
+        )
+        if _mode(config) == "unified" and side_signal:
+            raise ValueError(f"{metric} has no side controller in revised unified HSL; use the portfolio metric")

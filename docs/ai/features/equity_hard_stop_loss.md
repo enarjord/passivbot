@@ -501,3 +501,18 @@ explicit restart choice. Saved optimizer contracts retain fixed HSL policy and e
 values owned by the candidate vector, including portfolio bounds. Runtime activation gates are
 independent of this serialization contract. CPU result writers separately preserve prepared coin
 membership as resume provenance for single runs; suite results retain scenario ownership instead.
+
+### Revised optimizer metric consumers
+
+CPU candidate evaluation validates the metrics that consume each effective configuration before
+simulating its dataset. Revised unified mode has no side controllers: side HSL event
+counters and side signal-EMA metrics are invalid objectives/limits, including their aliases. General
+long/short performance metrics remain valid because they observe positions, not side controllers.
+Suite objectives/limits selecting one scenario are validated against only that scenario; aggregate
+objectives/limits must be meaningful for every contributing scenario. This check does not substitute
+zero for a missing or inactive signal. The existing saved-fitness contract records the selected
+engine, fixed policy and source-verified implementation identity.
+
+The GPU backend does not implement revised HSL and rejects that engine before loading GPU runtime
+services. CPU policy candidates already reach the staged native simulator; this does not open the
+public revised backtest/optimizer or live activation guards.

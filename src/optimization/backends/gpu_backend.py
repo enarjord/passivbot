@@ -4412,6 +4412,10 @@ def run_backend(
     resume: bool = False,
     interrupt_check: InterruptCheck | None = None,
 ) -> dict[str, Any]:
+    from config.hsl_revised import engine
+    if engine(config) == "revised":
+        raise ValueError("GPU optimization does not implement revised HSL; use a CPU backend")
+
     del duplicate_counter
     del constraint_fitness_cls
     del record_individual_result
