@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Avoid duplicate revised-HSL snapshot reconstruction when selected prices already have the
+  required minute grid. Each evaluation still rebuilds from current facts; sparse and damaged
+  histories keep their existing approximation path. Public revised activation remains gated.
+
 - Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
   halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL
   enablement and BTC collateral changes, and preserve compact reports and subset policies. Removed

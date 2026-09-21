@@ -3,7 +3,7 @@
 use crate::hsl_revised::validate_settings;
 use crate::hsl_revised_controller::{self as controller, Decision, Intervention, Restart};
 use crate::hsl_revised_snapshot::{self as snapshot, Input as Snapshot, Mode};
-use crate::hsl_revised_trace::compose_with_cashflow_peaks;
+use crate::hsl_revised_trace::{compose_prepared, compose_with_cashflow_peaks};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -125,6 +125,43 @@ fn normalize(snapshot: &mut Snapshot, reasons: &mut BTreeSet<String>) -> Result<
     Ok(false)
 }
 
+/// True only when normalization would leave every selected price and source
+/// timestamp unchanged. Validation/reconstruction always runs before this check.
+fn already_normalized(snapshot: &Snapshot) -> Result<bool, String> {
+    let selected = snapshot::select(snapshot)?;
+    if selected.is_empty() {
+        return Ok(false);
+    }
+    let offset = (60_000 - snapshot.start.rem_euclid(60_000)) % 60_000;
+    let first = snapshot
+        .start
+        .checked_add(offset)
+        .filter(|t| *t <= snapshot.now)
+        .unwrap_or(snapshot.now);
+    Ok(selected.iter().all(|pair| {
+        if pair.prices_at != snapshot.now {
+            return false;
+        }
+        let mut expected = Some(first);
+        for (&timestamp, &price) in &pair.prices {
+            if expected != Some(timestamp) || !price.is_finite() || price <= 0.0 {
+                return false;
+            }
+            expected = if timestamp == snapshot.now {
+                None
+            } else {
+                Some(
+                    timestamp
+                        .checked_add(60_000)
+                        .filter(|t| *t <= snapshot.now)
+                        .unwrap_or(snapshot.now),
+                )
+            };
+        }
+        expected.is_none()
+    }))
+}
+
 pub fn evaluate(mut input: Input) -> Result<Output, String> {
     validate_settings(input.span, input.threshold)?;
     input
@@ -138,7 +175,8 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
     }
     // Validate current observations before inactivity or price approximation.
     // Historical defects remain diagnostic, never an old readiness certificate.
-    let mut reasons = snapshot::prepare(&input.snapshot)?.reasons;
+    let prepared = snapshot::prepare(&input.snapshot)?;
+    let mut reasons = prepared.reasons.clone();
     if matches!(input.snapshot.mode, Mode::Coin) && input.slots == 0 {
         reasons.insert("inactive_scope".into());
         return Ok(Output {
@@ -154,8 +192,13 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
     } else {
         input.snapshot.balance
     };
-    let candle_free = normalize(&mut input.snapshot, &mut reasons)?;
-    let trace = compose_with_cashflow_peaks(&input.snapshot, candle_free)?;
+    let trace = if already_normalized(&input.snapshot)? {
+        compose_prepared(&input.snapshot, prepared, false)?
+    } else {
+        drop(prepared); // Do not retain an unused full history during reconstruction.
+        let candle_free = normalize(&mut input.snapshot, &mut reasons)?;
+        compose_with_cashflow_peaks(&input.snapshot, candle_free)?
+    };
     reasons.extend(trace.reasons);
     let episodes = trace.episodes.len();
     let replay = controller::replay_with_events(&controller::Input {
@@ -200,9 +243,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn selected_sparse_prices_reach_current_permission() {
-        let input: Input = serde_json::from_value(json!({
+    fn fixture() -> Input {
+        serde_json::from_value(json!({
             "snapshot": {
                 "now": 180000, "start": 0, "balance": 1000,
                 "balance_at": 180000, "config_at": 0, "max_current_age_ms": 120000,
@@ -218,13 +260,78 @@ mod tests {
             "slots": 1, "span": 1, "threshold": 0.05, "cooldown_ms": 0,
             "restart": "always", "intervention": "panic"
         }))
-        .unwrap();
-        let output = evaluate(input).unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn selected_sparse_prices_reach_current_permission() {
+        let output = evaluate(fixture()).unwrap();
         assert_eq!(output.observations, 4);
         assert!(output.reasons.contains("backfilled_price"));
         assert!(output.reasons.contains("forward_filled_price"));
         let decision = output.decision.unwrap();
         assert_eq!(decision.action, controller::Action::Panic);
         assert!((decision.raw - 100.0 / 1100.0).abs() < 1e-14);
+    }
+    #[test]
+    fn dense_reuse_matches_full_normalization_and_reconstruction() {
+        for (start, now) in [(0, 180_000), (1, 180_001), (179_999, 180_001), (1, 1)] {
+            let mut input = fixture();
+            let snapshot = &mut input.snapshot;
+            snapshot.start = start;
+            snapshot.now = now;
+            snapshot.balance_at = now;
+            let pair = &mut snapshot.pairs[0];
+            pair.position_at = now;
+            pair.mark_at = now;
+            pair.prices_at = now;
+            pair.fills_started_at = Some(now);
+            pair.fills_at = Some(now);
+            pair.prices = BTreeMap::from([(start, 110.0), (now, 100.0)]);
+            normalize(snapshot, &mut BTreeSet::new()).unwrap();
+            assert!(already_normalized(snapshot).unwrap());
+            let reused =
+                compose_prepared(snapshot, snapshot::prepare(snapshot).unwrap(), false).unwrap();
+            let mut reasons = BTreeSet::new();
+            assert!(!normalize(snapshot, &mut reasons).unwrap());
+            assert!(reasons.is_empty());
+            let rebuilt = compose_with_cashflow_peaks(snapshot, false).unwrap();
+            assert_eq!(
+                serde_json::to_value(reused).unwrap(),
+                serde_json::to_value(rebuilt).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn changed_or_incomplete_price_inputs_use_full_normalization() {
+        for change in 0..6 {
+            let mut input = fixture();
+            let snapshot = &mut input.snapshot;
+            normalize(snapshot, &mut BTreeSet::new()).unwrap();
+            assert!(already_normalized(snapshot).unwrap());
+            let pair = &mut snapshot.pairs[0];
+            match change {
+                0 => {
+                    pair.prices.remove(&60_000);
+                }
+                1 => {
+                    pair.prices.insert(30_000, 100.0);
+                }
+                2 => {
+                    pair.prices.insert(60_000, f64::NAN);
+                }
+                3 => {
+                    pair.prices.insert(60_000, 0.0);
+                }
+                4 => {
+                    pair.prices_at -= 1;
+                }
+                _ => {
+                    pair.prices.clear();
+                }
+            }
+            assert!(!already_normalized(snapshot).unwrap());
+        }
     }
 }
