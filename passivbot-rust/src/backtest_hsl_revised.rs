@@ -71,6 +71,7 @@ impl Backtest<'_> {
         let first_row =
             ((start as i128 - self.first_timestamp_ms as i128 + 59_999).max(0) / 60_000) as usize;
         let mut pairs = Vec::new();
+        let mut flat_coin = None;
         let mut reasons = BTreeSet::new();
         for idx in 0..self.n_coins {
             let coin = &self.backtest_params.coins[idx];
@@ -118,7 +119,17 @@ impl Backtest<'_> {
                     });
                 }
                 if position.size == 0.0 && fills.is_empty() && !self.coin_is_valid_at(idx, k) {
-                    // A pre-listing/expired flat pair has no scope contribution.
+                    // Preserve explicit flat proof for a requested coin without
+                    // manufacturing a mark for a market that has no quote.
+                    if matches!(mode, snapshot::Mode::Coin) {
+                        flat_coin = Some(snapshot::FlatCoin {
+                            symbol: coin.clone(),
+                            pside: side,
+                            position_at: now,
+                            fills_at: now,
+                            history_start: start,
+                        });
+                    }
                     continue;
                 }
                 let current_valid = self.coin_is_valid_at(idx, k);
@@ -201,6 +212,9 @@ impl Backtest<'_> {
         }
         Ok(Inputs {
             snapshot: snapshot::Input {
+                flat_coin,
+                global_fill_sequence: true,
+                fills_before_same_time_price: false,
                 now,
                 start,
                 balance: self.balance.usd_total_balance,
@@ -531,5 +545,114 @@ mod tests {
         assert!(bt
             .revised_hsl_inputs(2, snapshot::Mode::Unified, None, None)
             .is_err());
+    }
+    #[test]
+    fn intrabar_entry_never_acquires_the_preceding_close_profit() {
+        for side in [PositionSide::Long, PositionSide::Short] {
+            let mut data = candles(4, 1);
+            let entry = if side == PositionSide::Long {
+                80.0
+            } else {
+                120.0
+            };
+            for k in 1..4 {
+                data[[k, 0, CLOSE]] = entry;
+            }
+            let btc = Array1::from_elem(4, 20_000.0);
+            let mut bt = make(&data, &btc);
+            let qty = if side == PositionSide::Long {
+                1.0
+            } else {
+                -1.0
+            };
+            fill(&mut bt, 1, 0, side, qty, entry);
+            let input = bt
+                .revised_hsl_inputs(2, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap();
+            let trace = crate::hsl_revised_trace::compose(&input.snapshot).unwrap();
+            let points = &trace.episodes[0].points;
+            let preceding_close = points
+                .iter()
+                .find(|p| p.timestamp == (FIRST + 60_000) as i64)
+                .unwrap();
+            assert!(!preceding_close.exposed);
+            assert_eq!(preceding_close.upnl, 0.0);
+            assert!(points.iter().all(|p| p.upnl == 0.0));
+            assert!(points.last().unwrap().exposed);
+        }
+    }
+
+    #[test]
+    fn globally_sequenced_cross_pair_flat_and_reopen_survive_scope_composition() {
+        for mode in [snapshot::Mode::Pside, snapshot::Mode::Unified] {
+            let data = candles(4, 2);
+            let btc = Array1::from_elem(4, 20_000.0);
+            let mut bt = make(&data, &btc);
+            fill(&mut bt, 0, 0, PositionSide::Long, 1.0, 100.0);
+            fill(&mut bt, 0, 1, PositionSide::Long, 1.0, 200.0);
+            fill(&mut bt, 1, 0, PositionSide::Long, -1.0, 90.0);
+            fill(&mut bt, 1, 1, PositionSide::Long, -1.0, 190.0);
+            fill(&mut bt, 1, 0, PositionSide::Long, 1.0, 90.0);
+            let side = if matches!(mode, snapshot::Mode::Pside) {
+                Some(PositionSide::Long)
+            } else {
+                None
+            };
+            let mut input = bt.revised_hsl_inputs(2, mode, side, None).unwrap();
+            let trace = crate::hsl_revised_trace::compose(&input.snapshot).unwrap();
+            assert_eq!(trace.episodes.len(), 2);
+            assert_eq!(
+                trace.episodes[0].points.last().unwrap().timestamp,
+                (FIRST + 60_000) as i64
+            );
+            assert!(trace.episodes[0].points.last().unwrap().flatten);
+            assert_eq!(trace.episodes[1].opened_at, Some((FIRST + 60_000) as i64));
+            // Same integer sequence values from separate exchange streams do
+            // not establish global ordering without the explicit contract.
+            input.snapshot.global_fill_sequence = false;
+            assert!(snapshot::prepare(&input.snapshot)
+                .unwrap()
+                .boundaries
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn explicitly_selected_flat_coin_needs_no_invented_prelisting_or_expired_quote() {
+        for before_listing in [true, false] {
+            let data = candles(6, 1);
+            let btc = Array1::from_elem(6, 20_000.0);
+            let mut bt = make(&data, &btc);
+            if before_listing {
+                bt.coin_first_valid_idx[0] = 4;
+            } else {
+                bt.coin_last_valid_idx[0] = 1;
+            }
+            let input = bt
+                .revised_hsl_inputs(
+                    2,
+                    snapshot::Mode::Coin,
+                    Some(PositionSide::Long),
+                    Some("C0"),
+                )
+                .unwrap();
+            assert!(input.snapshot.pairs.is_empty());
+            assert!(input.snapshot.flat_coin.is_some());
+            let trace = crate::hsl_revised_trace::compose(&input.snapshot).unwrap();
+            let point = &trace.episodes[0].points[0];
+            assert!(!point.exposed);
+            assert_eq!(point.pnl, 0.0);
+            assert_eq!(point.upnl, 0.0);
+            assert_eq!(point.timestamp, input.snapshot.now);
+            assert!(bt
+                .revised_hsl_inputs(
+                    2,
+                    snapshot::Mode::Coin,
+                    Some(PositionSide::Long),
+                    Some("UNKNOWN")
+                )
+                .and_then(|i| snapshot::prepare(&i.snapshot))
+                .is_err());
+        }
     }
 }

@@ -442,3 +442,28 @@ def test_confirmed_flat_can_replay_cooldown_with_old_factual_mark(pside):
     request["pairs"][0]["mark_at"] = 9*M
     with pytest.raises(ValueError, match="position/mark"):
         rust(request)
+
+
+def test_explicit_flat_coin_proof_is_neutral_but_absence_is_not_flat():
+    request = payload(cases.frame(), "coin", pside="long", symbol="A")
+    with pytest.raises(ValueError, match="absent is not flat"):
+        rust(request)
+    proof = dict(symbol="A", pside="long", position_at=request["now"],
+                 fills_at=request["now"], history_start=request["start"])
+    request["flat_coin"] = proof
+    assert rust(request)["pairs"] == []
+    import passivbot_rust as pbr
+    trace = json.loads(pbr.hsl_revised_trace(json.dumps(request)))
+    assert trace["episodes"][0]["points"] == [dict(
+        timestamp=request["now"], pnl=0, upnl=0, exposed=False, flatten=False)]
+    for changes in [dict(symbol="B"), dict(pside="short"),
+                    dict(position_at=request["now"]-120_001),
+                    dict(position_at=request["now"]+1),
+                    dict(fills_at=request["now"]-1), dict(history_start=-1)]:
+        request["flat_coin"] = {**proof, **changes}
+        with pytest.raises(ValueError, match="explicit flat"):
+            rust(request)
+    request["flat_coin"] = proof
+    request["pairs"] = payload(cases.frame(cases.pair()))["pairs"]
+    with pytest.raises(ValueError, match="explicit flat"):
+        rust(request)

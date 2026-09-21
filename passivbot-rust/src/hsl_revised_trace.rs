@@ -100,9 +100,17 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
         .filter(|b| b.lifecycle_eligible)
         .peekable();
     for (sample_index, &timestamp) in timestamps.iter().enumerate() {
-        // A flatten's exact consumed prefix precedes any same-time reopen/candle
-        // observation. Distinct proven flats in one timestamp remain distinct.
-        while boundaries.peek().is_some_and(|b| b.timestamp <= timestamp) {
+        // A flatten's exact consumed prefix precedes any same-time reopen.
+        // A producer's explicit pre-fill candle phase stays before that prefix.
+        // Distinct proven flats in one timestamp remain distinct.
+        while boundaries.peek().is_some_and(|b| {
+            crate::hsl_revised_history::fill_precedes_price(
+                b.timestamp,
+                timestamp,
+                input.now,
+                input.fills_before_same_time_price,
+            )
+        }) {
             let boundary = boundaries.next().unwrap();
             let targets: Vec<_> = boundary.consumed.iter().map(|c| c.count).collect();
             let opening = consume(&prepared, &mut counts, &targets, &mut cashflows);
@@ -135,9 +143,14 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
             .pairs
             .iter()
             .map(|p| {
-                p.history
-                    .events
-                    .partition_point(|e| e.fill.timestamp <= timestamp)
+                p.history.events.partition_point(|e| {
+                    crate::hsl_revised_history::fill_precedes_price(
+                        e.fill.timestamp,
+                        timestamp,
+                        input.now,
+                        input.fills_before_same_time_price,
+                    )
+                })
             })
             .collect();
         let opening = consume(&prepared, &mut counts, &targets, &mut cashflows);

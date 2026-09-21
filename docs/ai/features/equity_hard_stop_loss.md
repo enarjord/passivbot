@@ -337,3 +337,18 @@ A consumed episode-evidence tape is also the boundary-consumption record. Unchan
 flatten boundaries already represented in that tape must not trigger another replay.
 Corrections or late fills in the consumed window still invalidate the tape and
 request canonical reconstruction before ordinary planning.
+
+### Experimental revised simulator observation ordering
+
+Revised simulator input labels retain bar-open fill timestamps and bar-end candle
+prices. Explicit observation phase places the preceding close before intrabar fills
+with the same timestamp label; the current endpoint includes all captured fills.
+Only a producer declaring one global execution sequence may use it to distinguish
+cross-pair flatten/reopen transitions within a timestamp. Ordinary exchange inputs
+continue to use per-pair sequences and atomic cross-pair cohorts.
+
+A selected coin with a freshly confirmed flat position and an empty retained fill
+tape may supply explicit coin/side/window-bound flat proof instead of a fabricated
+quote. This produces a neutral current trace. It cannot replace a retained pair,
+ignore fills, excuse stale positions or turn an unobserved coin into a flat one.
+These input contracts do not activate the staged revised runtime.
