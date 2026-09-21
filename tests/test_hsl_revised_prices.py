@@ -126,3 +126,26 @@ def test_interval_allocation_bounds(require_real_passivbot_rust_module, start, e
 def test_small_intervals_and_maximum_endpoint(require_real_passivbot_rust_module):
     assert not run(require_real_passivbot_rust_module, [], 2**63 - 2, 2**63 - 1)["rows"]
     compare(require_real_passivbot_rust_module, [Candle(0, 1, None, None, None, 100)], 1, 2 * M - 1)
+
+
+@pytest.mark.parametrize('seed', range(80))
+def test_mixed_resolution_projection_matches_independent_reference_after_shuffle(
+    require_real_passivbot_rust_module, seed
+):
+    import random
+    rng = random.Random(seed)
+    candles, canonical = [], {}
+    for _ in range(45):
+        minutes = rng.choice([1, 5, 15, 60])
+        start = rng.randrange(30) * minutes * M
+        candle = canonical.setdefault((start, minutes), Candle(
+            start, minutes, 100, 140, 60, rng.randrange(80, 121),
+            rng.choice([None, 20*M, 35*M, 80*M])))
+        candles.append(candle)
+        if rng.random() < .3:
+            candles.append(candle)
+    start, end = rng.randrange(4)*M + rng.choice([0, 1]), rng.randrange(25, 80)*M
+    original = compare(require_real_passivbot_rust_module, candles, start, end)
+    rng.shuffle(candles)
+    shuffled = compare(require_real_passivbot_rust_module, candles, start, end)
+    assert shuffled == original  # Includes selected source times and all diagnostics.

@@ -59,9 +59,9 @@ pub fn minute_prices(input: &Input) -> Result<Prices, String> {
         .filter(|v| (0..=MAX_WINDOW).contains(v))
         .ok_or("invalid revised HSL price interval (maximum 90 days)")?;
     let mut reasons = BTreeSet::new();
-    // None is a disputed resolution at a timestamp, not an empty value which
-    // a later duplicate can overwrite. Finer/coarser independent sources survive.
-    let mut candidates: BTreeMap<i64, BTreeMap<i64, Option<Price>>> = BTreeMap::new();
+    // Collect contiguous scalar rows rather than allocating a tree for every
+    // timestamp/resolution. Sorting below preserves finest-source arbitration.
+    let mut candidates = Vec::with_capacity(input.candles.len());
     for candle in &input.candles {
         if ![1, 5, 15, 60].contains(&candle.minutes) {
             reasons.insert("unsupported_candle_resolution".into());
@@ -127,38 +127,48 @@ pub fn minute_prices(input: &Input) -> Result<Prices, String> {
                 source_end: finish,
                 carried: false,
             };
-            let resolutions = candidates.entry(timestamp).or_default();
-            match resolutions.get_mut(&candle.minutes) {
-                None => {
-                    resolutions.insert(candle.minutes, Some(row));
-                }
-                Some(existing) => {
-                    if existing.as_ref().is_some_and(|old| {
-                        old.close != row.close || old.source_end != row.source_end
-                    }) {
-                        *existing = None;
-                        reasons.insert("candle_conflict".into());
-                    }
-                }
-            }
+            candidates.push(row);
         }
     }
-    let selected: BTreeMap<_, _> = candidates
-        .into_iter()
-        .filter_map(|(t, candidates)| candidates.into_values().flatten().next().map(|p| (t, p)))
-        .collect();
+    candidates.sort_unstable_by_key(|row| (row.timestamp, row.resolution_minutes));
+    let mut selected: Vec<Price> = Vec::new();
+    for group in candidates
+        .chunk_by(|a, b| a.timestamp == b.timestamp && a.resolution_minutes == b.resolution_minutes)
+    {
+        let first = &group[0];
+        if group
+            .iter()
+            .any(|row| row.close != first.close || row.source_end != first.source_end)
+        {
+            // Any disagreement disputes the entire resolution, including later
+            // duplicates. Still inspect coarser groups for their diagnostics.
+            reasons.insert("candle_conflict".into());
+        } else if selected
+            .last()
+            .is_none_or(|row| row.timestamp != first.timestamp)
+        {
+            selected.push(first.clone());
+        }
+    }
+    drop(candidates);
     let mut rows = Vec::with_capacity((window / MINUTE + 1) as usize);
-    if let Some((&first_time, first)) = selected.first_key_value() {
+    if let Some(first) = selected.first() {
+        let first_time = first.timestamp;
         let mut previous = first;
+        let mut next = 0;
         let offset = (MINUTE - input.start.rem_euclid(MINUTE)) % MINUTE;
         let mut timestamp = input.start.checked_add(offset);
         while let Some(t) = timestamp.filter(|t| *t <= input.end) {
-            if let Some(observed) = selected.get(&t) {
+            while next < selected.len() && selected[next].timestamp < t {
+                next += 1;
+            }
+            let observed = selected.get(next).filter(|row| row.timestamp == t);
+            if let Some(observed) = observed {
                 previous = observed;
             }
             let mut row = previous.clone();
             row.timestamp = t;
-            row.carried = !selected.contains_key(&t);
+            row.carried = observed.is_none();
             if row.carried {
                 reasons.insert(
                     if t < first_time {
