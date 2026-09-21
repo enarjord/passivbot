@@ -155,8 +155,8 @@ HSL settings live under `bot.long.hsl` and `bot.short.hsl`. Use grouped names su
 `orange_tier_mode`, and `panic_close_order_type`; do not prefix these leaves with `hsl_`.
 `live.hsl_engine` defaults to `legacy`. The experimental `revised` selection has
 separate [configuration migration rules](#experimental-revised-hsl-configuration)
-and is available for backtests and CPU optimization. Live startup remains guarded
-until the separate execution-readiness gate is complete.
+and is available for live execution, backtests and CPU optimization. See the
+[live validation and rollback checklist](hsl_revised_live_validation.md) before an operator-approved trial.
 
 `live.hsl_signal_mode` selects `coin` (default), `pside`, or `unified` signal construction.
 
@@ -750,10 +750,12 @@ ignored by persistence helpers to keep user configs tidy.
 The startup-only selector `live.hsl_engine` accepts `legacy` (default) or `revised`.
 It applies to live, backtest and optimization together, and cannot be changed by
 scenario or fixed optimizer overrides. Revised `coin`, `pside` and `unified` modes
-are available in backtests and CPU optimization (`deap` and `pymoo`), including
-scenario evaluation and checkpoint resume. The GPU backend rejects revised HSL.
-**Live revised startup remains explicitly guarded before credential lookup.** There
-is no silent legacy fallback, and existing configs continue using legacy HSL.
+are available in live execution, the offline fake runner, backtests and CPU optimization
+(`deap` and `pymoo`), including scenario evaluation and checkpoint resume. The GPU backend
+rejects revised HSL. There is no silent legacy fallback; existing configs continue using legacy
+HSL. Offline validation does not establish exchange-specific live readiness. Follow the
+[live validation and rollback checklist](hsl_revised_live_validation.md) for a separately
+authorized trial; selecting revised does not switch an already-running process.
 Use `backtest.offline=true` with a complete local market-data cache for offline runs;
 selecting the revised engine alone does not disable public market-data downloads.
 

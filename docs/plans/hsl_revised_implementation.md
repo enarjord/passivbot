@@ -2,8 +2,11 @@
 
 This temporary implementation record follows the
 [reviewed design](hsl_best_effort_redesign.md). Legacy HSL remains the trading default;
-the revised evaluator has an internal simulator execution caller; public backtest, optimizer
-and live activation remain gated until their consumer integrations are complete.
+revised coin, pside and unified modes are explicitly selectable for live execution, the offline
+fake runner, backtests and CPU optimization. GPU optimization remains unsupported. The
+chronological checkpoints below describe earlier integration gates; this current status
+supersedes their temporary activation restrictions. Actual live exchange trials and any
+legacy replacement remain separate operator-approved work.
 
 ## Shared numerical kernel
 
@@ -545,9 +548,28 @@ standard fake runner. The runner settles bounded background work at each scenari
 reports pending preparation explicitly; it does not replace the evaluator, planner, reconciler or
 executor. Revised artifact traces use the passive scope observations. Unit and actual CLI coverage
 exercise ordinary entries and protective market closes for coin, pside and unified modes on both
-position sides. The tests alone bypass the public activation guard.
+position sides. The final activation tests use the public CLI without replacing its engine guard.
 
 Candle acquisition has an explicit observation clock. The live owner supplies UTC while the fake
 manager keeps scenario time for source/query timestamps; the runtime adapter converts availability
 into exchange time exactly once. This preserves history with positive and negative clock offsets.
 Remaining fault coverage, full throughput and final activation gates still apply.
+
+
+## Offline qualification and explicit live opt-in
+
+The public constructor and live entry point accept the revised engine in all three modes, while
+legacy remains the default. Configuration tests stop at explicit offline sentinels before
+credential or external setup. Fake-runner tests exercise the unmodified CLI for ordinary entries
+and panic closes in both directions, using the same finite owner pass as production. The full
+reference/revised suite, native Rust tests, source-verified extension parity, simulator/optimizer
+smokes and advancing-clock admission probe constitute offline evidence, not live verification.
+
+Fresh current flat positions override missing closing fills; the latest causal retained fill
+supplies an approximate cooldown anchor without renewing it on repeated reads. Late history can
+correct the anchor. The finite lookback, explicit unified policy, fresh minimum inputs and
+stateless restart contracts continue to apply. Diagnostics never authorize a write.
+
+The [live validation and rollback checklist](../hsl_revised_live_validation.md) is the next
+operator handoff. Actual exchange runs, changing production defaults and removing legacy code
+are outside this implementation milestone.

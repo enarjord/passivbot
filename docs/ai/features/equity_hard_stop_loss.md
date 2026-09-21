@@ -5,17 +5,17 @@
 The runtime rules below describe legacy HSL, which remains the trading default.
 The `hsl_revised*` Rust components implement the approved
 [best-effort redesign](../../plans/hsl_best_effort_redesign.md). Backtests and CPU
-optimization can explicitly select this engine; live activation remains guarded. Their historical candle projection deliberately
+optimization and live execution can explicitly select this engine. Its historical candle projection deliberately
 uses the finest causal source throughout lookback, including internal/suffix gaps;
 the legacy prefix-only coarse-candle restriction below does not apply to those
-experimental components. This separation does not weaken legacy runtime readiness
-or permit activating the revised path before its integration gates pass.
+experimental components. This separation does not weaken legacy runtime readiness.
+Offline qualification is distinct from operator-approved live exchange validation.
 
 `live.hsl_engine` is the startup-only shared selector (`legacy` default, `revised`
 opt-in). It cannot be varied by scenario or optimizer override. Backtest payloads and
-CPU optimizer entry points support coin, pside and unified modes; the GPU backend
-rejects revised selection. Live rejects before credential lookup until its separate
-execution-readiness gate is complete.
+CPU optimizer and live entry points support coin, pside and unified modes; the GPU backend
+rejects revised selection. The [live validation checklist](../../hsl_revised_live_validation.md)
+defines operator checks and rollback; no default or running process changes implicitly.
 Revised configuration requires explicit restart policy when enabled, explicit
 `bot.hsl` for unified mode, and a finite 1–90 day enabled lookback. Removed fields
 and inactive search dimensions follow the [migration rules](../../configuration.md#experimental-revised-hsl-configuration).

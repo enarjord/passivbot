@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Enable explicit revised HSL live selection with `live.hsl_engine=revised` for coin, pside and
+  unified signals alongside the legacy default. The standard offline fake CLI now exercises the
+  same path without an activation bypass. Add an operator live-validation and rollback checklist;
+  offline qualification does not establish live exchange readiness.
+
 - Let fresh exchange-flat positions complete revised HSL protection when closing fills are
   missing or ambiguous. If the final boundary cannot be reconstructed, use the latest retained
   fill in that scope as a disclosed cooldown timestamp estimate; repeated reads and restarts
@@ -17,7 +22,7 @@ since the latest release tag; these features may already be available when insta
 
 - Enable the opt-in revised HSL engine for backtests and CPU optimization in coin, pside and
   unified modes, including scenario evaluation and checkpoint resume. Legacy remains the default;
-  revised live startup and GPU optimization remain explicitly guarded.
+  GPU optimization remains explicitly unsupported.
 - Reduce revised HSL live snapshot overhead by retaining immutable projected minute prices in
   Rust across capture and evaluation, with unchanged reconstruction and freshness requirements.
 
@@ -26,83 +31,76 @@ since the latest release tag; these features may already be available when insta
   while waiting for a closing fill that already occurred.
 
 - Reduce revised-HSL historical price-projection overhead while preserving source selection,
-  conflict handling, gap filling and diagnostics. This is a staged performance improvement;
-  revised runtime activation remains guarded.
+  conflict handling, gap filling and diagnostics.
 
 - Exercise staged revised HSL through the standard offline fake runner and command-line parser,
   using the production execution pass for both ordinary orders and protective closes. Emit scoped
   revised traces and preserve candle acquisition time separately from simulated exchange time.
-  Public revised activation remains gated; legacy remains the default.
+  Legacy remains the default.
 
 - Show staged revised-HSL scope decisions, drawdown, approximation quality and input freshness in
   structured status events and monitor snapshots, dashboard and TUI. Unified mode displays one
   portfolio scope; unavailable or stale observations cannot appear as current GREEN protection.
   Report after protective execution so diagnostic work cannot delay its writes, and retain
-  unavailable warnings when the configured console sink fails. Public revised activation remains
-  gated and the legacy monitor format is unchanged.
+  unavailable warnings when the configured console sink fails. The legacy monitor format is unchanged.
 
 - Connect staged revised-HSL live protection to the actual execution loop and startup preparation.
   History repair and ordinary planning run in the background while current inputs support scoped
   panic closes. Recheck each write against current Rust permissions; reconstruct restart and
-  partial-close behavior from exchange observations. Public activation remains gated and legacy
-  HSL stays the default.
+  partial-close behavior from exchange observations. Legacy HSL stays the default.
 
 - Reduce staged revised-HSL live snapshot cost by transporting candle scalars and the compact
   native price grid directly, preserving projected closes, factual source times, diagnostics and
-  complete decisions. Public activation remains gated pending execution-loop validation.
+  complete decisions.
 
 - Add staged live observation transport for revised HSL: evaluate canonical fills and source
   candles with fresh account observations through the shared Rust evaluator, isolating unavailable
-  current inputs by scope and preserving historical approximation diagnostics. Revised live
-  activation remains gated while execution-loop integration is completed.
+  current inputs by scope and preserving historical approximation diagnostics.
 
 - Preserve explicit revised-HSL portfolio policies and optimizer bounds when cleaning or exporting
   configs and recording fitness contracts. Do not restore removed legacy tier fields or invent
   missing unified/restart choices. Preserve prepared coin membership in single-run CPU optimizer
-  results so unchanged runs can resume. Revised runtime activation remains gated.
+  results so unchanged runs can resume.
 
 - Avoid duplicate revised-HSL snapshot reconstruction when selected prices already have the
   required minute grid. Each evaluation still rebuilds from current facts; sparse and damaged
-  histories keep their existing approximation path. Public revised activation remains gated.
+  histories keep their existing approximation path.
 
 - Save staged revised-HSL native reports with backtest artifacts, including effective scope
   policies and explicit compact/detail status. Plot native drawdown, EMA and GREEN/RED state
   separately per scope, without substituting legacy signals or account-equity reconstruction.
-  Artifact workspaces expose the report; public revised activation remains gated.
+  Artifact workspaces expose the report.
 
 - Reject revised-HSL optimizer objectives and limits that refer to nonexistent unified-mode side
   controllers or disabled policies, including portfolio metrics when every controller is disabled.
   Coin mode resolves overrides for actual dataset
   members, including combined-dataset market identities; scenario selection remains respected.
   General side-performance metrics remain available. GPU optimization rejects revised HSL rather
-  than using legacy proxy behavior; public revised activation remains gated.
+  than using legacy proxy behavior.
 
 - Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
   halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL
   enablement and BTC collateral changes, and preserve compact reports and subset policies. Removed
-  yellow/orange metrics stay absent; public revised activation remains gated.
+  yellow/orange metrics stay absent.
 
 - Stage explicit revised-HSL backtest policy transport for coin, side, and portfolio scopes.
   Native simulations reject invalid policy inputs before running and retain the revised report
-  in compact results. Public revised backtest/optimizer activation remains gated until the
-  remaining consumer integrations and offline readiness checks are complete.
+  in compact results.
 
 - Add revised-HSL lifecycle diagnostics and separate simulator reports, including
   instantaneous zero-cooldown stops, replay deduplication and one portfolio counter
-  in unified mode. Reports do not supply trading state; revised activation remains gated.
+  in unified mode. Reports do not supply trading state.
 
 - Connect the internal revised-HSL simulator path to scoped permissions, full-position
-  panic orders and fill-time cooldown reconstruction. This remains an offline integration
-  checkpoint: public revised runtime activation is still disabled and legacy stays default.
+  panic orders and fill-time cooldown reconstruction. Legacy stays the default.
 
 - Add a shared experimental revised-HSL snapshot evaluator for complete, sparse and
   candle-free histories, including scoped cashflow peaks and restart permissions.
-  The legacy default and revised runtime startup guards remain unchanged.
+  The legacy default remains unchanged.
 
 - Seed experimental revised HSL's incomplete initial episode from estimated entry value,
   including when candles exist, so flat/backfilled history cannot hide an existing loss.
-  The estimate adds no EMA sample and resets at a supported flatten. Legacy behavior and
-  revised-runtime startup guards remain unchanged.
+  The estimate adds no EMA sample and resets at a supported flatten. Legacy behavior remains unchanged.
 
 - Add immutable factual fill and candle transport for the experimental revised HSL,
   preserving native contract quantities, signed fees and historical uncertainty.
@@ -110,8 +108,7 @@ since the latest release tag; these features may already be available when insta
   observations for Rust's whole-window projection, without changing the active trading path.
 
 - Add the startup-only `live.hsl_engine` selector, defaulting to legacy, and explicit
-  revised-HSL configuration migration with portfolio optimizer paths. Revised runtime
-  modes remain unavailable and reject startup until their integration is complete.
+  revised-HSL configuration migration with portfolio optimizer paths.
   Enabled revised scopes require an explicit restart choice and a 1–90 day lookback;
   missing unified portfolio settings and removed or inactive optimization paths fail
   with migration guidance rather than inheriting an unintended policy.

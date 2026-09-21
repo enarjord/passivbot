@@ -174,13 +174,27 @@ def test_unimplemented_runtime_mode_is_explicitly_rejected(mode):
     require_runtime_support(prepared(get_template_config()))
 
 
-def test_live_guard_precedes_credential_lookup(monkeypatch):
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_live_constructor_accepts_revised_before_offline_credential_sentinel(monkeypatch, mode):
+    import passivbot
+    class OfflineBoundary(Exception):
+        pass
+    def stop_before_credentials(*args):
+        raise OfflineBoundary()
+    monkeypatch.setattr(passivbot, "load_user_info", stop_before_credentials)
+    with pytest.raises(OfflineBoundary):
+        passivbot.Passivbot(prepared(source(mode)))
+
+
+def test_live_constructor_rejects_unknown_engine_before_credentials(monkeypatch):
     import passivbot
     def forbidden(*args):
-        pytest.fail("credential lookup ran before experimental-engine guard")
+        pytest.fail("unknown engine reached credential lookup")
     monkeypatch.setattr(passivbot, "load_user_info", forbidden)
-    with pytest.raises(ValueError, match="runtime integration is not available"):
-        passivbot.Passivbot(prepared(source()))
+    cfg = prepared(source())
+    cfg['live']['hsl_engine'] = 'unknown'
+    with pytest.raises(ValueError, match="legacy or revised"):
+        passivbot.Passivbot(cfg)
 
 
 @pytest.mark.parametrize("path", ["bot.long.hsl.red_threshold", "bot.short.hsl.no_restart_drawdown_threshold"])
@@ -253,16 +267,24 @@ def test_engine_cannot_be_changed_by_optimizer_override():
 
 
 @pytest.mark.asyncio
-async def test_real_live_entrypoint_guard_precedes_credentials_and_exchange_setup(monkeypatch):
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+async def test_live_entrypoint_accepts_revised_without_external_setup(monkeypatch, mode):
     import passivbot
-    cfg = source()
+    cfg = source(mode)
     cfg["live"]["user"] = "offline_test"
     monkeypatch.setattr(passivbot.sys, "argv", ["passivbot"])
     monkeypatch.setattr(passivbot, "configure_logging", lambda **kwargs: None)
     monkeypatch.setattr(passivbot, "load_input_config", lambda *args: (cfg, "", deepcopy(cfg)))
+    class OfflineBoundary(Exception):
+        pass
+    def stop_after_config(config, **kwargs):
+        assert config['live']['hsl_engine'] == 'revised'
+        assert config['live']['hsl_signal_mode'] == mode
+        raise OfflineBoundary()
     def forbidden(*args, **kwargs):
-        pytest.fail("live setup ran before the revised-engine guard")
-    for name in ("load_user_info", "load_markets", "setup_bot", "configure_custom_endpoint_loader", "resolve_live_log_file_settings"):
+        pytest.fail("offline configuration test reached external setup")
+    for name in ("load_user_info", "load_markets", "setup_bot", "configure_custom_endpoint_loader"):
         monkeypatch.setattr(passivbot, name, forbidden)
-    with pytest.raises(ValueError, match="runtime integration is not available"):
+    monkeypatch.setattr(passivbot, "resolve_live_log_file_settings", stop_after_config)
+    with pytest.raises(OfflineBoundary):
         await passivbot._run_live({})
