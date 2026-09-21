@@ -473,3 +473,23 @@ def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
     assert json.loads(request.payload)["span"] == 1_000_000.
     assert request.execution_type == ("limit" if mode == "pside" else "market")
     assert evaluate(requests)[0].action == ("normal" if mode == "coin" else "panic")
+
+
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+def test_undated_flat_fill_quality_survives_without_market_requirements(mode):
+    value = bot(mode)
+    value.positions = {}
+    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    value._pnls_manager.get_events = lambda **_: [event(symbol="UNKNOWN_MARKET", timestamp=0)]
+    result, unavailable = run(value, {}, fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
+    assert not unavailable and all(d.action == "normal" for d in result)
+    for decision in result:
+        assert ("unidentified_or_undated_fill" in decision.reasons) == (decision.scope.pside != "short")
+
+
+def test_undated_other_coin_diagnostic_does_not_cross_coin_scope():
+    value = bot()
+    value._pnls_manager.get_events = lambda **_: [event(symbol="OTHER", timestamp=0)]
+    result, unavailable = run(value)
+    assert not unavailable and len(result) == 1
+    assert "unidentified_or_undated_fill" not in result[0].reasons

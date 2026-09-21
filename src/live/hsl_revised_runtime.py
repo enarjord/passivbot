@@ -261,6 +261,13 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
             restart=policy["restart_after_red_policy"],
             intervention=bot.config["live"]["hsl_position_during_cooldown_policy"])
         reasons = set(global_reasons)
+        # An attributed row may have no usable timestamp and therefore cannot
+        # establish a price-bearing contributor. Its quality still belongs to
+        # the known aggregate scope, without inventing market requirements.
+        if scope.mode != "coin":
+            for pair in tape.pairs:
+                if scope.pside is None or pair.pside == scope.pside:
+                    reasons.update(pair.reasons)
         for key in keys:
             reasons.update(pair_reasons.get(key, ()))
         requests.append(Request(scope, json.dumps(payload, allow_nan=False),
