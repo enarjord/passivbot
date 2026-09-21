@@ -2455,7 +2455,7 @@ def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
         counts = data.get("counts", {})
         return ["engine=revised", f"mode={data.get('signal_mode', '-')}",
                 f"observation={data.get('observation_status', '-')}",
-                *(f"{key}={counts.get(key, 0)}" for key in ("green", "red", "unavailable", "estimated"))]
+                *(f"{key}={counts.get(key, 0)}" for key in ("green", "red", "inactive", "unavailable", "estimated"))]
     parts: list[str] = []
     signal_mode = _data_str(data, "signal_mode")
     if signal_mode:

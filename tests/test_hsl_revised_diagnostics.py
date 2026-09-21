@@ -319,3 +319,17 @@ def test_connector_admission_does_not_run_diagnostics_or_sinks(observed, monkeyp
     # Normal observation capture still refreshes diagnostics outside admission.
     owner.capture()
     assert calls == [slow_stage]
+
+
+
+def test_inactive_scope_is_visible_in_console_and_fallback(observed, caplog):
+    import logging
+    from live.event_bus import LiveEvent, EventTypes, format_console_event
+    bot, owner, _, _ = observed()
+    bot.config['bot']['long']['risk']['n_positions'] = 0
+    bot._emit_live_event = None
+    with caplog.at_level(logging.INFO):
+        owner.capture()
+    event = LiveEvent(EventTypes.HSL_STATUS, data=diagnostics.snapshot(bot, now_ms=NOW))
+    assert 'inactive=1' in format_console_event(event)
+    assert any('inactive=1' in record.message for record in caplog.records)
