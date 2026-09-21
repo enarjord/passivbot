@@ -7,7 +7,7 @@ import pytest
 
 from hsl_reference import Fill, Observation, dec, reconstruct
 from hsl_reference_controller import Episode, Point, replay
-from hsl_reference_replay import scope_boundaries, selected_pairs
+from hsl_reference_replay import scope_boundaries, selected_pairs, _steps
 import test_hsl_reference_replay as cases
 from test_hsl_revised_snapshot import payload
 
@@ -48,6 +48,23 @@ def oracle(snapshot, mode, **selectors):
             points = [Point(point.observation, False)]
     if points:
         episodes.append(Episode(tuple(points)))
+    # Derive lifecycle metadata independently from the exact fill-prefix sets
+    # at consecutive supported flats, not from sampled position sizes.
+    flats = [b for b in boundaries.boundaries if b.lifecycle_eligible]
+    for index in range(1, len(episodes)):
+        preceding = dict(flats[index-1].consumed)
+        following = dict(flats[index].consumed) if index < len(flats) else None
+        openings = []
+        for pair in selected:
+            steps, _, _ = _steps(pair, snapshot.start, snapshot.now)
+            for step in steps:
+                if step.fill in preceding[pair.key]:
+                    continue
+                if following is not None and step.fill not in following[pair.key]:
+                    continue
+                if step.clean_tail and step.before == 0 and step.after > 0:
+                    openings.append(step.fill.timestamp)
+        episodes[index] = replace(episodes[index], opened_at=min(openings, default=None))
     return episodes
 
 
@@ -57,6 +74,7 @@ def compare(snapshot, mode="unified", **selectors):
     assert len(actual["episodes"]) == len(expected)
     for a, e in zip(actual["episodes"], expected):
         assert a["entry_reference"] is None
+        assert a["opened_at"] == e.opened_at
         assert len(a["points"]) == len(e.points)
         for point, ref in zip(a["points"], e.points):
             assert point["timestamp"] == ref.observation.timestamp
@@ -235,3 +253,42 @@ def test_historical_damage_stays_numerical_and_repair_rebuilds_trace(damage):
     assert trace["episodes"][-1]["points"][-1]["timestamp"] == 4*M
     # No prior decision argument: delivering the missing facts rebuilds cleanly.
     assert compare(cases.frame(clean))[0] == rust_trace(payload(cases.frame(clean), quantity_step=.1))
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize("intervention", ["normal", "panic"])
+@pytest.mark.parametrize("restart", ["always", "never"])
+@pytest.mark.parametrize("tied", [False, True])
+def test_round_trip_between_candles_retains_exchange_intervention(pside, intervention, restart, tied):
+    base = closed(pside=pside)
+    direction = 1 if pside == "long" else -1
+    price = 80 if direction == 1 else 120
+    opened = 3*M if tied else 3*M+10
+    flattened = 3*M if tied else 3*M+20
+    fills = (*base.fills,
+             Fill("reopen", opened, direction, price, 0, 0, sequence=11),
+             Fill("reflat", flattened, -direction, price, 0, 0, sequence=12))
+    p = replace(base, fills=fills)
+    snapshot = cases.frame(p)
+    actual, expected = compare(snapshot)
+    assert actual["episodes"][1]["opened_at"] == opened
+    assert not any(p["exposed"] for p in actual["episodes"][1]["points"])
+    results = decisions(snapshot, intervention=intervention, restart=restart)
+    assert results[-1]["action"] == ("normal" if intervention == "normal" else "halted")
+    assert results[-1]["red_at"] == (None if intervention == "normal" else opened)
+    assert results[-1]["flat_at"] == (None if intervention == "normal" else flattened)
+
+
+@pytest.mark.parametrize("opening", [3*M+10, 5*M, 5*M+10])
+@pytest.mark.parametrize("intervention", ["normal", "panic"])
+def test_reopen_time_precedes_later_sample_cooldown_expiry(opening, intervention):
+    base = closed()
+    close_at = 5*M+20
+    p = cases.pair(fills=(*base.fills,
+                         Fill("reopen", opening, 1, 80, 0),
+                         Fill("reflat", close_at, -1, 80, 0)),
+                   prices={0:100, M:100, 2*M:80, 3*M:80}, now=6*M)
+    results = decisions(cases.frame(p, now=6*M), intervention=intervention)
+    panicked = intervention == "panic" and opening < 5*M
+    assert results[-1]["action"] == ("halted" if panicked else "normal")
+    assert results[-1]["red_at"] == (opening if panicked else None)

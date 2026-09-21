@@ -211,14 +211,25 @@ not imply a flat scope.
 Supported flatten prefixes appear before same-timestamp reopen/candle observations,
 including multiple independently sequenced flats. The final flat risk observation
 ends the old episode and also seeds the next episode's peak, so reopening fees are
-retained. Uncertain boundaries never reset an episode. Every trace ends with the
+retained. A supported first opening after that flat is carried separately as a
+lifecycle timestamp. This preserves an entire reopen/close between candle samples
+without adding a price or EMA observation. The controller processes it at its
+exchange time before a later observation can expire the old cooldown; the preceding
+flat seed remains ordered before a same-time opening. Uncertain boundaries never
+reset an episode. Every trace ends with the
 current observed positions and mark valuation; historical uncertainty remains in
 diagnostics and does not make a numerical estimate unavailable in this component.
 No local controller state or journal is accepted.
 
 Validation compares composed traces and controller outcomes with independent
 Decimal reconstruction/boundary/controller references, hand-calculated fees,
+reopen/close round trips between candles and across cooldown deadlines,
 coin/side/unified scopes, long/short exposure, both interventions, partial closes,
 same-time transitions, unknown boundaries, cashflow centering and generated tapes.
 Live/backtest/optimizer invocation, the full sparse-history dispatcher, and revised
 end-to-end fake-live coverage remain outstanding.
+
+The numerical kernel retains relative peak-to-current currency differences before
+adding the balance budget. Normal multi-observation histories therefore preserve a
+representable drawdown smaller than an absolute budget ULP, as the candle-free
+estimator already does. Rounded absolute-equity diagnostics do not erase that signal.

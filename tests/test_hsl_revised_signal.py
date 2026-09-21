@@ -116,3 +116,24 @@ def test_cancelling_oversized_deltas_do_not_erase_representable_loss(require_rea
     assert result["numeric_range_approximation"]
     assert result["equity"][0] == pytest.approx(expected)
     assert result["panic"][-1]
+
+
+@pytest.mark.parametrize("budget,loss", [(1e16, 1.), (1e300, 1e280), (1e-200, 1e-220)])
+@pytest.mark.parametrize("span", [1., 2.5, 10000.])
+def test_multi_point_signal_retains_losses_below_budget_precision(budget, loss, span):
+    from decimal import Decimal, localcontext
+    import json
+    import passivbot_rust as pbr
+    rows = [(i*60_000, -i*loss, 0.) for i in range(4)]
+    result = json.loads(pbr.hsl_revised_signal(rows, budget, span, 0.0))
+    with localcontext() as context:
+        context.prec = 100
+        peak = Decimal.from_float(budget) + Decimal.from_float(3*loss)
+        alpha = Decimal(2) / (Decimal.from_float(span)+1)
+        expected_ema = Decimal(0)
+        for i, (raw, ema) in enumerate(zip(result["raw"], result["ema"])):
+            expected_raw = Decimal.from_float(i*loss) / peak
+            expected_ema = alpha*expected_raw+(1-alpha)*expected_ema
+            assert raw == pytest.approx(float(expected_raw), rel=1e-14, abs=0)
+            assert ema == pytest.approx(float(expected_ema), rel=1e-14, abs=0)
+    assert result["panic"] == [False, True, True, True]

@@ -23,14 +23,21 @@ fn consume(
     counts: &mut [usize],
     targets: &[usize],
     cashflows: &mut CurrencySum,
-) {
+) -> Option<i64> {
+    let mut opening = None;
     for (index, target) in targets.iter().copied().enumerate() {
         for event in &prepared.pairs[index].history.events[counts[index]..target] {
             cashflows.add(event.gross_realized);
             cashflows.add(event.fee);
+            if !event.quantity_estimated && event.before == 0.0 && event.after > 0.0 {
+                opening = Some(
+                    opening.map_or(event.fill.timestamp, |t: i64| t.min(event.fill.timestamp)),
+                );
+            }
         }
         counts[index] = target;
     }
+    opening
 }
 
 /// The input price grids must already have identical timestamps for selected
@@ -51,6 +58,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                     flatten: false,
                 }],
                 entry_reference: None,
+                opened_at: None,
             }],
             reasons,
         });
@@ -85,6 +93,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
     let mut counts = vec![0; prepared.pairs.len()];
     let mut episodes = Vec::new();
     let mut points = Vec::new();
+    let mut opened_at = None;
     let mut boundaries = prepared
         .boundaries
         .iter()
@@ -96,7 +105,10 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
         while boundaries.peek().is_some_and(|b| b.timestamp <= timestamp) {
             let boundary = boundaries.next().unwrap();
             let targets: Vec<_> = boundary.consumed.iter().map(|c| c.count).collect();
-            consume(&prepared, &mut counts, &targets, &mut cashflows);
+            let opening = consume(&prepared, &mut counts, &targets, &mut cashflows);
+            if !episodes.is_empty() {
+                opened_at = opened_at.or(opening);
+            }
             points.push(Point {
                 timestamp: boundary.timestamp,
                 pnl: centered(&cashflows, &anchor, &mut reasons),
@@ -107,6 +119,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
             episodes.push(Episode {
                 points: std::mem::take(&mut points),
                 entry_reference: None,
+                opened_at: opened_at.take(),
             });
             // The actual flat prefix also seeds the next interval. Starting only
             // after a reopen would erase its opening fee from the new peak.
@@ -127,7 +140,10 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                     .partition_point(|e| e.fill.timestamp <= timestamp)
             })
             .collect();
-        consume(&prepared, &mut counts, &targets, &mut cashflows);
+        let opening = consume(&prepared, &mut counts, &targets, &mut cashflows);
+        if !episodes.is_empty() {
+            opened_at = opened_at.or(opening);
+        }
         let mut upnl = CurrencySum::new();
         let mut exposed = false;
         for pair in &prepared.pairs {
@@ -147,6 +163,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
         episodes.push(Episode {
             points,
             entry_reference: None,
+            opened_at,
         });
     }
     Ok(Trace { episodes, reasons })
