@@ -2429,7 +2429,7 @@ impl<'a> Backtest<'a> {
                         k, self.balance.usd_total_balance
                     ));
                 }
-                if self.revised_hsl_enabled() { self.record_revised_analysis(k); }
+                if self.revised_hsl_enabled() { self.record_revised_analysis(k, true); }
                 else { self.record_strategy_equity_sample(); }
                 break;
             }
@@ -2448,12 +2448,12 @@ impl<'a> Backtest<'a> {
             if self.equity_tracking_active {
                 self.update_equities(k);
                 if self.check_and_apply_liquidation(k) {
-                    if self.revised_hsl_enabled() { self.record_revised_analysis(k); }
+                    if self.revised_hsl_enabled() { self.record_revised_analysis(k, false); }
                     else { self.record_strategy_equity_sample(); }
                     break;
                 }
                 if self.revised_hsl_enabled() {
-                    self.record_revised_analysis(k);
+                    self.record_revised_analysis(k, false);
                 } else {
                     self.update_hard_stop_state(k)?;
                     self.record_hard_stop_tier_sample();

@@ -2,7 +2,7 @@
 use super::*;
 
 impl Backtest<'_> {
-    pub(super) fn record_revised_analysis(&mut self, k: usize) {
+    pub(super) fn record_revised_analysis(&mut self, k: usize, at_fill_boundary: bool) {
         let Some(&timestamp) = self.equities.timestamps_ms.last() else {
             return;
         };
@@ -33,8 +33,16 @@ impl Backtest<'_> {
                 }
             }
         }
+        // A fill-depleted account stops at the bar's open. There is no later
+        // bar-close evaluation or elapsed minute to include in its report.
+        let observed_at = timestamp
+            + if at_fill_boundary {
+                0
+            } else {
+                self.interval_ms
+            };
         self.revised_hsl_report
-            .record_bar_signals((timestamp + self.interval_ms) as i64, emas);
+            .record_bar_signals(observed_at as i64, emas);
     }
 
     pub(super) fn revised_strategy_metrics(&self) -> StrategyEquityMetricsBundle {

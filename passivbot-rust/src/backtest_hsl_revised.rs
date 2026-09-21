@@ -1257,6 +1257,12 @@ mod tests {
             let metrics = bt.revised_hsl_report.metrics(1000.0, 3.0);
             // RED at bar 2 close and the real flatten at bar 3 open coincide.
             assert_eq!(metrics.flatten_time_minutes_mean, 0.0, "{mode}");
+            assert_eq!(metrics.duration_minutes_mean, 0.0, "{mode}");
+            assert_eq!(metrics.time_in_red_pct, 0.0, "{mode}");
+            assert_eq!(
+                bt.revised_hsl_report.summary.observed_minutes, 0.0,
+                "{mode}"
+            );
             assert_eq!(metrics.restarts, 0);
             let report = bt.revised_hsl_report_value().unwrap().unwrap();
             assert!(report["events"]
