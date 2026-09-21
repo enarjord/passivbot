@@ -183,12 +183,6 @@ def test_live_guard_precedes_credential_lookup(monkeypatch):
         passivbot.Passivbot(prepared(source()))
 
 
-def test_backtest_guard_precedes_payload_construction():
-    from backtest import build_backtest_payload
-    with pytest.raises(ValueError, match="runtime integration is not available"):
-        build_backtest_payload(None, None, prepared(source()), "fake", None)
-
-
 @pytest.mark.parametrize("path", ["bot.long.hsl.red_threshold", "bot.short.hsl.no_restart_drawdown_threshold"])
 def test_cli_cannot_target_inactive_or_removed_hsl_settings(path):
     cfg = prepared(source("unified"))

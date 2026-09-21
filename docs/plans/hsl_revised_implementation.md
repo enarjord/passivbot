@@ -508,3 +508,16 @@ checks freshness again after synchronous reconstruction and defers expired input
 the input contract but is not the final throughput solution. Before activation, optimize the
 submission path without retaining prior trading authority, and test that independent closes make
 bounded progress under the largest supported input window.
+
+
+## Backtest and CPU optimizer public entry points
+
+The shared startup selector now reaches revised coin, pside and unified simulation through public
+backtest and CPU optimizer entry points. Existing configs remain legacy. The GPU backend and
+public live startup still reject revised selection; this slice does not deploy or start a bot.
+
+Offline integration tests use deterministic complete cached candles and exchange-equivalent
+metadata, deny IP networking in the parent and spawned workers, and exercise actual CLI parsing,
+RED/panic/cooldown reports, scope-sensitive fitness, scenario overrides, evaluator serialization,
+and DEAP/pymoo saved-checkpoint resume. Config exports and saved-fitness checks keep engine/policy
+provenance. These tests validate simulation integration, not live exchange behavior.

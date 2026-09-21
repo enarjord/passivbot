@@ -137,12 +137,6 @@ def test_duplicate_bot_hsl_transport_is_rejected():
         run(args)
 
 
-def test_public_activation_stays_gated():
-    cfg, mss, candles = inputs()
-    with pytest.raises(ValueError, match="runtime integration is not available"):
-        build_backtest_payload(candles, mss, cfg, "binance", np.full(len(candles), 50000.))
-
-
 def test_coin_override_controls_actual_execution():
     args = payload()
     args[-1]["equity_hard_stop_loss"]["coins"]["AAA"][0]["enabled"] = False

@@ -155,7 +155,8 @@ HSL settings live under `bot.long.hsl` and `bot.short.hsl`. Use grouped names su
 `orange_tier_mode`, and `panic_close_order_type`; do not prefix these leaves with `hsl_`.
 `live.hsl_engine` defaults to `legacy`. The experimental `revised` selection has
 separate [configuration migration rules](#experimental-revised-hsl-configuration)
-and currently rejects runtime startup until integration is complete.
+and is available for backtests and CPU optimization. Live startup remains guarded
+until the separate execution-readiness gate is complete.
 
 `live.hsl_signal_mode` selects `coin` (default), `pside`, or `unified` signal construction.
 
@@ -748,10 +749,13 @@ ignored by persistence helpers to keep user configs tidy.
 
 The startup-only selector `live.hsl_engine` accepts `legacy` (default) or `revised`.
 It applies to live, backtest and optimization together, and cannot be changed by
-scenario or fixed optimizer overrides. This checkpoint accepts revised configuration
-for offline development; **all revised runtime modes currently fail explicitly at
-startup/payload construction**. No legacy runtime fallback is used. Normal existing
-configs continue using legacy HSL.
+scenario or fixed optimizer overrides. Revised `coin`, `pside` and `unified` modes
+are available in backtests and CPU optimization (`deap` and `pymoo`), including
+scenario evaluation and checkpoint resume. The GPU backend rejects revised HSL.
+**Live revised startup remains explicitly guarded before credential lookup.** There
+is no silent legacy fallback, and existing configs continue using legacy HSL.
+Use `backtest.offline=true` with a complete local market-data cache for offline runs;
+selecting the revised engine alone does not disable public market-data downloads.
 
 For revised `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. Revised `unified`
 requires an explicitly supplied `bot.hsl` block, even when side settings match or HSL

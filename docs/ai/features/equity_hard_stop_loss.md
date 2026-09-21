@@ -3,20 +3,19 @@
 ## Runtime and experimental component scope
 
 The runtime rules below describe legacy HSL, which remains the trading default.
-The isolated `hsl_revised*` Rust comparison components implement the approved
-[best-effort redesign](../../plans/hsl_best_effort_redesign.md). The internal Rust
-simulator now consumes them for execution tests; public live, backtest and optimizer
-activation remains gated. Their historical candle projection deliberately
+The `hsl_revised*` Rust components implement the approved
+[best-effort redesign](../../plans/hsl_best_effort_redesign.md). Backtests and CPU
+optimization can explicitly select this engine; live activation remains guarded. Their historical candle projection deliberately
 uses the finest causal source throughout lookback, including internal/suffix gaps;
 the legacy prefix-only coarse-candle restriction below does not apply to those
 experimental components. This separation does not weaken legacy runtime readiness
 or permit activating the revised path before its integration gates pass.
 
 `live.hsl_engine` is the startup-only shared selector (`legacy` default, `revised`
-opt-in). It cannot be varied by scenario or optimizer override. At this staged
-checkpoint all revised runtime modes explicitly reject startup/payload execution;
-configuration acceptance is not runtime availability. Live rejects before credential
-lookup; backtest/optimizer entry points reject before preparing an experiment.
+opt-in). It cannot be varied by scenario or optimizer override. Backtest payloads and
+CPU optimizer entry points support coin, pside and unified modes; the GPU backend
+rejects revised selection. Live rejects before credential lookup until its separate
+execution-readiness gate is complete.
 Revised configuration requires explicit restart policy when enabled, explicit
 `bot.hsl` for unified mode, and a finite 1–90 day enabled lookback. Removed fields
 and inactive search dimensions follow the [migration rules](../../configuration.md#experimental-revised-hsl-configuration).
@@ -370,7 +369,7 @@ A selected coin with a freshly confirmed flat position and an empty retained fil
 tape may supply explicit coin/side/window-bound flat proof instead of a fabricated
 quote. This produces a neutral current trace. It cannot replace a retained pair,
 ignore fills, excuse stale positions or turn an unobserved coin into a flat one.
-These input contracts do not activate the staged revised runtime.
+These input contracts apply to revised simulation; live activation remains separately guarded.
 
 
 ### Staged revised simulator execution
@@ -391,8 +390,8 @@ ordinary exchange timestamps alone do not. Freshly observed flat pairs with no r
 activity require no future quote. Cooldown and never-restart permissions are reconstructed
 from bounded fills and prices, without copying a previous controller decision.
 
-Public runtime guards still reject revised activation. Python payload dispatch, revised
-reporting, optimizer integration and performance validation remain separate gates.
+Python backtest payloads dispatch explicitly to this revised simulator. Live execution
+readiness and performance validation remain separate gates.
 
 
 ### Revised lifecycle diagnostics and simulator reports
@@ -421,7 +420,7 @@ closes outside an observed HSL stop are excluded. Metrics-only simulation keeps 
 same summary without retaining per-bar artifacts. There are no YELLOW/ORANGE fields
 in this report. Clearing its observer changes diagnostics only, never trading.
 
-This reporting checkpoint does not open runtime guards or migrate optimizer objectives.
+Reporting never changes trading permissions or silently migrates optimizer objectives.
 Revised native analysis derives its supported lifecycle metrics from this observer;
 legacy placeholder counters must not become revised fitness.
 
@@ -436,9 +435,8 @@ Duplicate flattened HSL fields are rejected on this path. Legacy parsing is unch
 The revised diagnostic report is returned in detailed and metrics-only native results. Revised
 HSL analysis reads its observational lifecycle counters, including open halts and partial exits
 at the end of a simulation; removed yellow/orange tier metrics are absent. General strategy-equity
-statistics are observed independently of HSL enablement. Public activation stays gated until
-optimizer and runtime consumer migrations are complete; an absent field must never become neutral
-fitness. See the revised native analysis contract below.
+statistics are observed independently of HSL enablement. Backtest and CPU optimizer consumers
+use these native observations; an absent field must never become neutral fitness. See the revised native analysis contract below.
 
 ### Revised native analysis observations
 
@@ -490,7 +488,7 @@ markers use actual observation times, not reconstructed historical transition ti
 samples never fall back to account-equity reconstruction or legacy tier formulas. A missing native
 decision is serialized as a null action, never GREEN permission; entirely inactive scopes have no
 signal plot, and inactive samples leave gaps in otherwise active traces. These consumers
-are observational and do not open revised public runtime guards.
+are observational and carry no trading authority.
 
 ### Revised configuration export
 
@@ -514,8 +512,9 @@ zero for a missing or inactive signal. The existing saved-fitness contract recor
 engine, fixed policy and source-verified implementation identity.
 
 The GPU backend does not implement revised HSL and rejects that engine before loading GPU runtime
-services. CPU policy candidates already reach the staged native simulator; this does not open the
-public revised backtest/optimizer or live activation guards.
+services. CPU policy candidates reach the same native simulator as public backtests, including
+scenario evaluation, multiprocessing serialization and compatible saved-checkpoint resume.
+This does not open the revised live activation guard.
 
 Side-specific revised HSL optimizer metrics require an enabled policy for that side in the
 selected scenario. Coin mode uses effective policies of actual dataset members, including
@@ -570,5 +569,5 @@ uses the wave's own planning snapshot even when background ordinary preparation 
 an await. History-only flat pairs can use their latest factual fill price when no candle/quote
 survives; that price never substitutes for the current mark of a held position.
 
-Public revised runtime activation remains gated. Offline integration may exercise this path with
+Public revised live activation remains gated. Offline integration may exercise this path with
 an explicit test-local bypass; this does not authorize live deployment or replace legacy HSL.
