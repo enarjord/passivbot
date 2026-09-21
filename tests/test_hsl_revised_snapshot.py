@@ -467,3 +467,27 @@ def test_explicit_flat_coin_proof_is_neutral_but_absence_is_not_flat():
     request["pairs"] = payload(cases.frame(cases.pair()))["pairs"]
     with pytest.raises(ValueError, match="explicit flat"):
         rust(request)
+
+
+@pytest.mark.parametrize("global_sequence,anchor", [(True, True), (False, True), (True, False)])
+def test_exact_simulator_position_anchor_resolves_same_timestamp_fill(global_sequence, anchor):
+    """Only explicit simulator order plus a matching post-fill anchor proves inclusion."""
+    position = dict(size=0.0, basis=0.0, mark=80.0, multiplier=1.0,
+                    quantity_step=0.1, inverse=False, pside="long")
+    value = dict(now=60_000, start=0, balance=980.0, balance_at=60_000,
+                 config_at=60_000, max_current_age_ms=0, mode="coin", pside="long",
+                 symbol="TEST", global_fill_sequence=global_sequence,
+                 fills_before_same_time_price=False, pairs=[dict(
+                     symbol="TEST", position=position, position_at=60_000, mark_at=60_000,
+                     fills_started_at=60_000, fills_at=60_000, prices_at=60_000,
+                     prices={"0": 100.0, "60000": 80.0}, revisions=[1, 1, 1, 1],
+                     fills_position_anchor=(dict(position_at=60_000, size=0.0, basis=0.0,
+                         multiplier=1.0, inverse=False, pside="long", revision=1) if anchor else None),
+                     fills=[dict(identity="open", timestamp=0, delta=1.0, price=100.0,
+                                 realized=0.0, fee=0.0, sequence=0, revision=0),
+                            dict(identity="close", timestamp=60_000, delta=-1.0, price=80.0,
+                                 realized=-20.0, fee=0.0, sequence=1, revision=0)])])
+    result = rust(value)
+    eligible = global_sequence and anchor
+    assert ("position_fill_timestamp_tie" in result["reasons"]) != eligible
+    assert any(b["lifecycle_eligible"] for b in result["boundaries"]) == eligible

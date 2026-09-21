@@ -270,6 +270,7 @@ impl Default for EquityHardStopLossTierRatios {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EquityHardStopLossConfig {
+    pub revised: Option<crate::backtest::revised_runtime::Config>,
     pub enabled: bool,
     pub signal_mode: String,
     pub red_threshold: f64,
@@ -287,6 +288,7 @@ pub struct EquityHardStopLossConfig {
 impl Default for EquityHardStopLossConfig {
     fn default() -> Self {
         Self {
+            revised: None,
             enabled: false,
             signal_mode: "unified".to_string(),
             red_threshold: 0.25,
