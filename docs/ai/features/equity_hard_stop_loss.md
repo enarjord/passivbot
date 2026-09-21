@@ -393,3 +393,34 @@ from bounded fills and prices, without copying a previous controller decision.
 
 Public runtime guards still reject revised activation. Python payload dispatch, revised
 reporting, optimizer integration and performance validation remain separate gates.
+
+
+### Revised lifecycle diagnostics and simulator reports
+
+Revised replay can additionally return its reconstructed in-window RED, flatten and
+restart events. These are diagnostics, not an immutable execution log: different facts
+or a rebased balance can revise historical events. The permission result remains the
+same pure reconstruction. Zero cooldown may produce RED, flatten and restart at one
+timestamp while the final permission is GREEN; all three events remain visible.
+Intervention events use the actual observed opening time and carry no invented risk
+sample at that instant.
+
+The simulator observes this stream separately from trading state. It counts newly
+observed transitions and same-time event occurrences without counting repeated replay
+as another stop. Initial reconstructed RED is counted when first observed, rather than
+counting every hypothetical transition in the historical lookback. Unified is one
+portfolio trigger/restart, with no invented per-side controllers. Reports record both
+observation time and reconstructed event time. Their full-run history may outlive the
+trading lookback and has no authority over future permissions or orders.
+
+The versioned revised report includes samples/reasons, observed lifecycle events and
+summary counts, maximum observed raw/EMA drawdown, account time with any scope RED,
+and the loss from negative net-PnL panic-close fills attributed to an observed HSL stop.
+Positive close fills do not offset this loss-only statistic; independent manual panic
+closes outside an observed HSL stop are excluded. Metrics-only simulation keeps the
+same summary without retaining per-bar artifacts. There are no YELLOW/ORANGE fields
+in this report. Clearing its observer changes diagnostics only, never trading.
+
+This reporting checkpoint does not open runtime guards or migrate optimizer objectives.
+The revised report is separate from legacy analysis metrics until payload/analysis
+migration is complete; legacy placeholder counters must not become revised fitness.

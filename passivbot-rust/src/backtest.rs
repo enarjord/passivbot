@@ -2,6 +2,8 @@
 mod revised_inputs;
 #[path = "backtest_hsl_runtime.rs"]
 pub(crate) mod revised_runtime;
+#[path = "backtest_hsl_report.rs"]
+mod revised_report;
 
 use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
@@ -663,6 +665,7 @@ pub struct Backtest<'a> {
     orch_profile: Option<OrchProfile>,
     max_tradable_coins_seen: EffectiveNPositions,
     revised_hsl_scopes: Vec<revised_runtime::Scope>,
+    revised_hsl_report: revised_report::Report,
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_coin: [Vec<HardStopPsideRuntime>; 2],
     hard_stop_state: Option<ehsl::HardStopState>,
@@ -2258,6 +2261,7 @@ impl<'a> Backtest<'a> {
                 }),
             max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
             revised_hsl_scopes: Vec::new(),
+            revised_hsl_report: revised_report::Report::new(!backtest_params.metrics_only),
             hard_stop_pside: [
                 HardStopPsideRuntime::default(),
                 HardStopPsideRuntime::default(),
@@ -4224,6 +4228,11 @@ impl<'a> Backtest<'a> {
         k: usize,
         net_pnl: f64,
     ) {
+        if self.revised_hsl_enabled() {
+            let key = self.revised_report_key(pside, idx);
+            self.revised_hsl_report.panic_fill(key, net_pnl);
+            return;
+        }
         let panic_loss = (-net_pnl).max(0.0);
         self.hard_stop_panic_close_loss_sum += panic_loss;
         self.hard_stop_panic_close_loss_max = self.hard_stop_panic_close_loss_max.max(panic_loss);
