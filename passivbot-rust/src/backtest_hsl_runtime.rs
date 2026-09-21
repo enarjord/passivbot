@@ -352,6 +352,15 @@ impl Backtest<'_> {
             if exposed {
                 continue;
             }
+            if self.balance.usd_total_balance <= 0.0 {
+                // The fill proves this scope flat even though a depleted account
+                // cannot enter normal risk evaluation. Finalize observation only;
+                // liquidation owns the terminal trading outcome.
+                let now = (self.first_timestamp_ms + k as u64 * self.interval_ms) as i64;
+                self.revised_hsl_report
+                    .observed_flat((scope_side, scope_coin), now);
+                continue;
+            }
             let updated = self.evaluate_revised_scope(k, scope_side, scope_coin, true)?;
             self.revised_hsl_report.observe(
                 (scope_side, scope_coin),

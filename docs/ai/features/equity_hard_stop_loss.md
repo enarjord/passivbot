@@ -451,8 +451,11 @@ only score-bearing observations, excluding unscored historical/intervention evid
 
 Panic loss sums negative net execution PnL without offsetting profitable fills. Per-fill maximum
 and per-exit loss/account-equity ratios retain their existing diagnostic meanings: each exit uses
-account equity observed at its first attributed panic fill, and unfinished partial exits are
-included in final statistics. Ordinary/manual panic fills outside observed HSL RED are excluded.
+account equity observed at its first attributed panic fill using that bar's BTC collateral mark,
+and unfinished partial exits are included in final statistics. A fill-proven flatten completes
+execution latency at the fill timestamp even if it exhausts the balance; this reporting observation
+never supplies a restart permission for the liquidating account. Ordinary/manual panic fills outside
+observed HSL RED are excluded.
 Duration/loss summaries are read without consuming pending episodes, so detailed and compact runs
 agree. Annual rates use the actual sampled backtest duration.
 

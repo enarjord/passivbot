@@ -4236,7 +4236,16 @@ impl<'a> Backtest<'a> {
     ) {
         if self.revised_hsl_enabled() {
             let key = self.revised_report_key(pside, idx);
-            let equity = self.current_usd_equity_at(k);
+            // Fills precede the bar's ordinary balance revaluation. Observe
+            // current collateral here without mutating trading balances.
+            let balance = if self.balance.use_btc_collateral {
+                self.balance.btc_cash_wallet * self.btc_usd_prices[k]
+                    + self.balance.usd_cash_wallet
+            } else {
+                self.balance.usd_total_balance
+            };
+            let equity = balance + self.unrealized_pnl_pside(LONG, k)
+                + self.unrealized_pnl_pside(SHORT, k);
             self.revised_hsl_report.panic_fill(key, net_pnl, equity);
             return;
         }
@@ -4471,11 +4480,11 @@ impl<'a> Backtest<'a> {
         if !self.balance.usd_total_balance.is_finite() {
             return Err(format!("non-finite balance at HSL fill boundary: k {}", k));
         }
-        if self.balance.usd_total_balance <= 0.0 {
-            return Ok(()); // The account liquidation path owns depleted balances.
-        }
         if self.revised_hsl_enabled() {
             return self.finish_revised_hsl_flat(k, idx, filled_pside);
+        }
+        if self.balance.usd_total_balance <= 0.0 {
+            return Ok(()); // The account liquidation path owns depleted balances.
         }
         let coin_mode = self.hard_stop_signal_mode() == "coin";
         let unified = self.hard_stop_signal_mode() == "unified";

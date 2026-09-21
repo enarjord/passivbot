@@ -312,3 +312,13 @@ def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
     assert account_equity == pytest.approx(990.)
     assert strategy_equity == pytest.approx(expected, abs=1e-9)
     assert strategy_equity != pytest.approx(account_equity)
+
+
+def test_disabled_revised_zero_balance_keeps_halt_loss_metric_finite():
+    args = payload()
+    args[-1]["starting_balance"] = 0.0
+    args[-1]["global_warmup_bars"] = len(args[0])
+    for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
+        policy["enabled"] = False
+    result = run(args)
+    assert result[2]["hard_stop_halt_to_restart_equity_loss_pct"] == 0.0

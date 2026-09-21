@@ -317,6 +317,35 @@ impl Report {
         }
     }
 
+    /// A real fill can prove flat even when depleted balance prevents replay.
+    /// This completes diagnostic execution accounting, not trading permission.
+    pub(super) fn observed_flat(&mut self, key: Key, now: i64) {
+        self.advance(now);
+        if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
+            if let Some(start) = scope.exit_started.take() {
+                self.stats
+                    .flatten_minutes
+                    .push((now - start).max(0) as f64 / 60_000.0);
+                Self::finish_loss(&mut self.stats, scope);
+                // A later same-bar fill may restore balance and permit replay.
+                // Do not report this already-observed flatten a second time.
+                scope.consumed.retain(|(t, _), _| *t == now);
+                *scope.consumed.entry((now, "flat")).or_insert(0) += 1;
+                scope.watermark = Some(now);
+                if self.detailed {
+                    self.events.push(Event {
+                        observed_at: now,
+                        side: key.0,
+                        coin: key.1,
+                        kind: "flat",
+                        reconstructed_at: Some(now),
+                        reason: "depleted_balance_flat",
+                    });
+                }
+            }
+        }
+    }
+
     pub(super) fn record_bar_signals(&mut self, now: i64, emas: [f64; 3]) {
         self.advance(now);
         for (samples, value) in self.signal_emas.iter_mut().zip(emas) {
@@ -370,7 +399,8 @@ impl Report {
             panic_close_loss_drawdown_pct_min: stats.panic_loss_ratios.min,
             panic_close_loss_drawdown_pct_mean: stats.panic_loss_ratios.mean(),
             panic_close_loss_drawdown_pct_max: stats.panic_loss_ratios.max,
-            halt_to_restart_equity_loss_pct: s.panic_close_loss / starting_balance,
+            halt_to_restart_equity_loss_pct: s.panic_close_loss
+                / starting_balance.max(f64::EPSILON),
             flatten_time_minutes_mean: stats.flatten_minutes.mean(),
             post_restart_retrigger_pct: if s.restarts > 0 {
                 stats.retriggers as f64 / s.restarts as f64
@@ -711,5 +741,36 @@ mod tests {
         assert_eq!(m.duration_minutes_mean, 3.0);
         assert_eq!(m.flatten_time_minutes_mean, 0.5); // Two exits: zero and one minute.
         assert_eq!(m.triggers_long + m.triggers_short, 0);
+    }
+    #[test]
+    fn fill_proven_flat_is_not_recounted_by_later_replay() {
+        let mut report = Report::new(true);
+        let key = (None, None);
+        let mut events = zero_cooldown_events(60_000);
+        events.truncate(1);
+        report.observe(
+            key,
+            60_000,
+            "bar_close",
+            &output(60_000, Action::Panic, events),
+        );
+        report.panic_fill(key, -20.0, 1000.0);
+        report.observed_flat(key, 120_000);
+        report.observed_flat(key, 120_000);
+        let mut events = zero_cooldown_events(120_000);
+        events.remove(0);
+        for _ in 0..2 {
+            report.observe(
+                key,
+                120_000,
+                "scope_flat",
+                &output(120_000, Action::Normal, events.clone()),
+            );
+        }
+        assert_eq!(report.events.iter().filter(|e| e.kind == "flat").count(), 1);
+        let m = report.metrics(1000.0, 2.0);
+        assert_eq!(m.flatten_time_minutes_mean, 1.0);
+        assert_eq!(m.restarts, 1);
+        assert_eq!(m.panic_close_loss_drawdown_pct_mean, 0.02);
     }
 }
