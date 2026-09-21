@@ -172,7 +172,7 @@ def _policies(bot, pairs):
 
 def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
             max_current_age_ms, fills_started_ms=None, fills_completed_ms=None,
-            position_observation=None, use_observed_fills=False):
+            position_observation=None, use_observed_fills=False, target=None):
     """Copy a current account cohort and canonical history into immutable requests.
 
     ``quotes`` are factual MarketSnapshots (UTC fetch times). Candle open and
@@ -181,6 +181,8 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     Missing interval evidence degrades lifecycle proof, not numeric evaluation.
     ``symbols`` maps each position side to its currently eligible symbols; it
     cannot grant a symbol eligibility on the opposite side.
+    ``target`` optionally selects the one symbol/position side whose order needs
+    permission; an aggregate scope still retains every contributing pair.
     ``positions`` must be the complete successfully committed account snapshot;
     an omitted symbol in that complete response is an observed flat position.
 
@@ -237,7 +239,12 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
         global_reasons.add("future_fill_outside_evaluation")
     if bot.config["live"]["hsl_signal_mode"] == "coin":
         relevant.update((symbol, side) for side, selected in symbols.items() for symbol in selected)
-    policies = tuple(_policies(bot, relevant))
+    if target is not None and (not isinstance(target, tuple) or len(target) != 2
+            or not isinstance(target[0], str) or not target[0] or target[1] not in {"long", "short"}):
+        raise ValueError("invalid revised HSL permission target")
+    policies = tuple((scope, policy, slots) for scope, policy, slots in _policies(bot, relevant)
+        if target is None or ((scope.symbol is None or scope.symbol == target[0])
+                             and (scope.pside is None or scope.pside == target[1])))
 
     def fresh(timestamp):
         return type(timestamp) is int and timestamp > 0 and 0 <= utc_now_ms - timestamp <= max_current_age_ms

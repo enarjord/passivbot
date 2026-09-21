@@ -11,6 +11,10 @@ since the latest release tag; these features may already be available when insta
   fill in that scope as a disclosed cooldown timestamp estimate; repeated reads and restarts
   do not renew it. Delayed history can correct the anchor. Legacy HSL is unchanged.
 
+- Reduce revised HSL write-admission cost by reevaluating the order's authorizing scope: one
+  coin-side, one whole position side or the whole unified portfolio. Complete current-account
+  confirmation and freshness checks remain required.
+
 - Enable the opt-in revised HSL engine for backtests and CPU optimization in coin, pside and
   unified modes, including scenario evaluation and checkpoint resume. Legacy remains the default;
   revised live startup and GPU optimization remain explicitly guarded.

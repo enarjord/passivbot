@@ -591,7 +591,11 @@ relax source freshness or connector admission checks.
 
 Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,
 current account freshness, pending confirmations, generation, balance and positions are checked,
-and Rust recomputes scoped permission from current observations. Changed permission or execution
+and Rust recomputes the order's authorizing scope from current observations. Coin admission
+reconstructs its coin-side; pside admission retains every contributing pair on that side; unified
+admission retains the whole portfolio. Other independent scopes are evaluated during the full
+protection/planning wave. Admission never replaces full-scope diagnostics, and complete account
+confirmation and post-evaluation freshness remain mandatory. Changed permission or execution
 policy or changed open-order facts defers that write. A receipt from a previous owner cannot
 authorize execution. Ordinary preparation checks its complete starting account facts after each
 awaited phase and discards a mixed-cohort result. Enabled ordinary fill consumers also bind the
