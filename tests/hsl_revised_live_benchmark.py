@@ -4,6 +4,8 @@
 
 This synthetic no-fill history is one workload, not the complete readiness gate.
 Compare result digests before interpreting timing changes across implementations.
+Use --admission to measure a complete owner capture and connector admission against
+a continuously advancing clock; this reports current-input expiry without extending TTLs.
 """
 import argparse
 from dataclasses import asdict, replace
@@ -24,6 +26,7 @@ def main():
     parser.add_argument("--mode", choices=("coin", "pside", "unified"), default="coin")
     parser.add_argument("--lookback-days", type=int, default=30)
     parser.add_argument("--coins", type=int, default=10)
+    parser.add_argument("--admission", action="store_true")
     options = parser.parse_args()
     if not 1 <= options.lookback_days <= 90 or options.coins < 1:
         parser.error("lookback must be 1..90 days and coins must be positive")
@@ -33,15 +36,37 @@ def main():
     value.config["bot"]["long"]["risk"]["n_positions"] = options.coins
     positions, marks, sources = {}, {}, {}
     minutes = options.lookback_days * 1440
+    candles = tuple(Candle(NOW-(minutes-j)*60_000, 1, 100., 110., 90., 100., NOW)
+                    for j in range(minutes))
     for i in range(options.coins):
         symbol = f"ASSET{i}/USDT:USDT"
         positions[symbol] = value.positions[SYMBOL]
         marks[symbol] = replace(quotes()[SYMBOL], symbol=symbol)
         value.c_mults[symbol], value.qty_steps[symbol] = 1., .1
-        candles = tuple(Candle(NOW-(minutes-j)*60_000, 1, 100., 110., 90., 100., NOW)
-                        for j in range(minutes))
         sources[symbol] = Sources((CandleTape(candles, ()),), (), 0)
     value.positions = positions
+    if options.admission:
+        import utils
+        from live.hsl_revised_live import Owner
+        value.open_orders = {}
+        value.approved_coins_minus_ignored_coins = {'long': set(), 'short': set()}
+        value._live_market_snapshot_max_age_ms = lambda: 10_000
+        value._ensure_freshness_ledger().stamp('open_orders', now_ms=NOW-200)
+        started = time.perf_counter()
+        value.get_exchange_time = utils.utc_ms = lambda: NOW + int((time.perf_counter()-started)*1000)
+        owner = Owner(value)
+        owner.sources = sources
+        wave = owner.capture(marks)
+        captured = time.perf_counter()
+        order = {'symbol': next(iter(positions)), 'position_side': 'long'}
+        owner.bind(wave, (), (order,))
+        admitted = owner.admit(order)
+        finished = time.perf_counter()
+        print(json.dumps(dict(fixture=vars(options), artifact=artifact,
+            capture_seconds=captured-started, admit_seconds=finished-captured,
+            total_seconds=finished-started, admitted=admitted,
+            max_rss_native_units=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss), sort_keys=True))
+        return
     start = time.perf_counter()
     requests, unavailable = capture(value, marks, sources, symbols={side: list(positions) for side in ("long", "short")},
         now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)

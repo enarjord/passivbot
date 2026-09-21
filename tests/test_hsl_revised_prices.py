@@ -25,6 +25,10 @@ def run(pbr, candles, start, end):
     compact = pbr.hsl_revised_price_grid(start, end, [
         (c["start"], c["minutes"], c["open"], c["high"], c["low"], c["close"], c["available_at"])
         for c in values])
+    native = pbr.hsl_revised_native_price_grid(start, end, [
+        (c["start"], c["minutes"], c["open"], c["high"], c["low"], c["close"], c["available_at"])
+        for c in values])
+    assert (native[0].values(), native[1], native[2]) == compact
     result = json.loads(pbr.hsl_revised_prices(json.dumps(
         {"candles": values, "start": start, "end": end})))
     assert compact[0] == {str(row["timestamp"]): row["close"] for row in result["rows"]}

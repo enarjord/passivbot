@@ -238,10 +238,65 @@ pub fn hsl_revised_evaluate(input_json: &str) -> PyResult<String> {
     serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Compact metadata and immutable native price inputs use the same evaluator as
+/// the JSON/reference boundary. A grid must belong to this exact observation cut;
+/// callers cannot combine it with a second price source or silently drop pairs.
+fn attach_grids(
+    input: &mut Input,
+    grids: &[&crate::hsl_revised_prices::RevisedHslPriceGrid],
+) -> Result<(), String> {
+    if grids.len() != input.snapshot.pairs.len() {
+        return Err("revised HSL price grid count mismatch".into());
+    }
+    for (pair, grid) in input.snapshot.pairs.iter_mut().zip(grids) {
+        if grid.start != input.snapshot.start
+            || grid.end != input.snapshot.now
+            || pair.prices_at != grid.end
+            || !pair.prices.is_empty()
+        {
+            return Err("revised HSL price grid observation mismatch".into());
+        }
+        pair.prices = grid.prices.clone();
+    }
+    Ok(())
+}
+
+#[pyfunction]
+pub fn hsl_revised_evaluate_grids(
+    input_json: &str,
+    grids: Vec<PyRef<'_, crate::hsl_revised_prices::RevisedHslPriceGrid>>,
+) -> PyResult<String> {
+    let mut input: Input =
+        serde_json::from_str(input_json).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let refs: Vec<_> = grids.iter().map(|grid| &**grid).collect();
+    attach_grids(&mut input, &refs).map_err(PyValueError::new_err)?;
+    let output = evaluate(input).map_err(PyValueError::new_err)?;
+    serde_json::to_string(&output).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn native_price_inputs_preserve_values_and_reject_other_observation_cuts() {
+        use crate::hsl_revised_prices::RevisedHslPriceGrid;
+        let mut input = fixture();
+        input.snapshot.pairs[0].prices.clear();
+        let grid = RevisedHslPriceGrid {
+            start: input.snapshot.start,
+            end: input.snapshot.now,
+            prices: BTreeMap::from([(60000, 98.0), (120000, 95.0)]),
+        };
+        assert!(attach_grids(&mut input, &[]).is_err());
+        attach_grids(&mut input, &[&grid]).unwrap();
+        assert_eq!(input.snapshot.pairs[0].prices, grid.prices);
+        assert!(attach_grids(&mut input, &[&grid]).is_err());
+        input.snapshot.pairs[0].prices.clear();
+        input.snapshot.start += 1;
+        assert!(attach_grids(&mut input, &[&grid]).is_err());
+    }
 
     fn fixture() -> Input {
         serde_json::from_value(json!({

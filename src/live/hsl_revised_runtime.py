@@ -98,9 +98,18 @@ class Scope:
 @dataclass(frozen=True)
 class Request:
     scope: Scope
-    payload: str
+    metadata: str
     execution_type: str
     reasons: tuple[str, ...]
+    price_grids: tuple[object, ...]
+
+    @property
+    def payload(self):
+        """Materialize a standalone reference/debug snapshot only on demand."""
+        value = json.loads(self.metadata)
+        for pair, grid in zip(value["snapshot"]["pairs"], self.price_grids, strict=True):
+            pair["prices"] = grid.values()
+        return json.dumps(value, allow_nan=False)
 
 
 @dataclass(frozen=True)
@@ -297,8 +306,8 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 candles = [(c.start, c.minutes, c.open, c.high, c.low, c.close,
                             c.available_at + offset)
                            for tape in source.tapes for c in tape.candles] if source is not None else []
-                projected[symbol] = pbr.hsl_revised_price_grid(start, now_ms, candles)
-            prices, last_price, price_reasons = projected[symbol]
+                projected[symbol] = pbr.hsl_revised_native_price_grid(start, now_ms, candles)
+            _grid, last_price, price_reasons = projected[symbol]
             quote = quotes.get(symbol)
             flat_fill_prices = [(fill.timestamp, fill.price) for fill in history.fills
                                 if start <= fill.timestamp <= now_ms and _finite(fill.price, positive=True)] if history else []
@@ -338,7 +347,7 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 mark_at=mark_at,
                 fills_started_at=None if fills_started_ms is None else fills_started_ms + offset,
                 fills_at=None if fills_completed_ms is None else fills_completed_ms + offset,
-                prices_at=now_ms, prices=prices,
+                prices_at=now_ms, prices={},
                 fills=fills.payload() if fills is not None else [],
                 revisions=[position_state.revision, 0, 0, 0],
                 fills_position_anchor=None)
@@ -371,7 +380,8 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
         for key in keys:
             reasons.update(pair_reasons.get(key, ()))
         requests.append(Request(scope, json.dumps(payload, allow_nan=False),
-                                policy["panic_close_order_type"], tuple(sorted(reasons))))
+                                policy["panic_close_order_type"], tuple(sorted(reasons)),
+                                tuple(projected[key[0]][0] for key in keys if key in pairs)))
     return tuple(requests), tuple(unavailable)
 
 
@@ -386,8 +396,8 @@ def evaluate(requests):
 def _evaluate(requests):
     decisions = []
     for request in requests:
-        submitted = json.loads(request.payload)
-        output = json.loads(pbr.hsl_revised_evaluate(request.payload))
+        submitted = json.loads(request.metadata)
+        output = json.loads(pbr.hsl_revised_evaluate_grids(request.metadata, request.price_grids))
         decision = output["decision"]
         inactive = request.scope.mode == "coin" and submitted["slots"] == 0
         if (decision is None) != inactive:

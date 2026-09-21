@@ -9,6 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Enable the opt-in revised HSL engine for backtests and CPU optimization in coin, pside and
   unified modes, including scenario evaluation and checkpoint resume. Legacy remains the default;
   revised live startup and GPU optimization remain explicitly guarded.
+- Reduce revised HSL live snapshot overhead by retaining immutable projected minute prices in
+  Rust across capture and evaluation, with unchanged reconstruction and freshness requirements.
 
 - Reduce revised-HSL historical price-projection overhead while preserving source selection,
   conflict handling, gap filling and diagnostics. This is a staged performance improvement;
