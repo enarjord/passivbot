@@ -25,6 +25,9 @@ pub struct Input {
 #[derive(Debug, Serialize)]
 pub struct Output {
     pub decision: Option<Decision>,
+    /// Reconstructed in-window lifecycle, for diagnostics only. Repeated evaluation
+    /// may revise these events as facts/budget change; this is not an execution log.
+    pub events: Vec<controller::LifecycleEvent>,
     pub reasons: BTreeSet<String>,
     pub observations: usize,
     pub episodes: usize,
@@ -140,6 +143,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         reasons.insert("inactive_scope".into());
         return Ok(Output {
             decision: None,
+            events: Vec::new(),
             reasons,
             observations: 0,
             episodes: 0,
@@ -154,7 +158,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
     let trace = compose_with_cashflow_peaks(&input.snapshot, candle_free)?;
     reasons.extend(trace.reasons);
     let episodes = trace.episodes.len();
-    let decisions = controller::replay(&controller::Input {
+    let replay = controller::replay_with_events(&controller::Input {
         episodes: trace.episodes,
         now: input.snapshot.now,
         start: input.snapshot.start,
@@ -165,6 +169,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         restart: input.restart,
         intervention: input.intervention,
     })?;
+    let decisions = replay.decisions;
     if decisions.iter().any(|d| d.numeric_range_approximation) {
         reasons.insert("numeric_range_approximation".into());
     }
@@ -175,6 +180,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         .ok_or("empty revised HSL evaluation")?;
     Ok(Output {
         decision: Some(decision),
+        events: replay.events,
         reasons,
         observations,
         episodes,

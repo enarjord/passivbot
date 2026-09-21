@@ -205,3 +205,33 @@ def test_fake_exchange_reconstruction_reaches_shared_evaluator(pside,monkeypatch
 
     monkeypatch.setattr(trace_cases,"decisions",compare)
     trace_cases.test_fake_exchange_missing_opening_with_candles_rebuilds_without_cache(pside)
+
+
+@pytest.mark.parametrize("mode,selectors", [("coin", {"pside": "long", "symbol": "A"}),
+                                            ("pside", {"pside": "long"}), ("unified", {})])
+def test_diagnostic_events_keep_zero_cooldown_flat_stop_and_expire_with_window(mode, selectors):
+    pair = cases.pair(size=0, basis=0, mark=50, fills=[
+        Fill("open", M, 2, 100, 0), Fill("flat", 2*M, -2, 50, -100)])
+    snapshot = cases.frame(pair, balance=1000)
+    result = evaluate(snapshot, mode, cooldown_ms=0, **selectors)
+    assert result["decision"]["action"] == "normal"
+    assert [(e["kind"], e["timestamp"]) for e in result["events"]] == [
+        ("red", 2*M), ("flat", 2*M), ("restart", 2*M)]
+    assert result["events"][0]["raw"] > .05
+    assert result["events"][-1]["raw"] is None
+    # A diagnostic report is reconstructed, never a persisted stop commitment.
+    expired = evaluate(replace(snapshot, start=2*M+1), mode, cooldown_ms=0, **selectors)
+    assert expired["events"] == []
+    assert expired["decision"]["action"] == "normal"
+
+
+@pytest.mark.parametrize("policy,kind,reason", [("normal", "restart", "normal_intervention"),
+                                                ("panic", "red", "panic_intervention")])
+def test_intervention_diagnostic_uses_actual_open_time_without_inventing_a_risk_sample(policy, kind, reason):
+    pair = cases.pair(size=1, basis=100, mark=100, fills=[
+        Fill("open", M, 2, 100, 0), Fill("flat", 2*M, -2, 50, -100),
+        Fill("reopen", 3*M, 1, 100, 0)])
+    result = evaluate(cases.frame(pair, balance=1000), restart="never", intervention=policy)
+    event = result["events"][-1]
+    assert (event["timestamp"], event["kind"], event["reason"]) == (3*M, kind, reason)
+    assert event["raw"] is None and event["ema"] is None

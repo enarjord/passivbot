@@ -1881,6 +1881,7 @@ fn run_backtest_core<'py>(
             ));
         }
         let artifact_conversion_start = profile_start(profile_enabled);
+        let revised_hsl_report = backtest.revised_hsl_report_value().map_err(PyValueError::new_err)?;
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
         let py_events_long = PyList::empty_bound(py);
         for event in hard_stop_plot_data.events_long {
@@ -1905,6 +1906,9 @@ fn run_backtest_core<'py>(
             py_events_short.append(py_event)?;
         }
         let py_hard_stop_plot = PyDict::new_bound(py);
+        if let Some(report) = revised_hsl_report {
+            py_hard_stop_plot.set_item("revised", json_value_to_py(py, &report)?)?;
+        }
         py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
         py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
         py_hard_stop_plot.set_item("timestamps_ms_long", hard_stop_plot_data.timestamps_ms_long)?;

@@ -380,3 +380,29 @@ flat pairs, fresh reconstruction of cooldown and bounded never-policy expiry. Th
 execution integration coverage, not full live fake-harness or revised CLI availability.
 Reporting/metrics, Python payload dispatch, optimizer compatibility, performance and
 full offline live integration must pass before opening public runtime guards.
+
+
+## Revised simulator lifecycle reporting
+
+The pure controller now exposes an optional reconstructed lifecycle event stream while
+preserving the existing decision trace. The evaluator returns these bounded diagnostic
+events with its current permission. This preserves instantaneous zero-cooldown stops
+and exact-time interventions without adding risk samples or a new trading-state input.
+
+The simulator owns a separate observational report with per-scope samples, reasons,
+observed/reconstructed event timestamps and summary statistics. Repeated replay does
+not duplicate events; multiple actual same-time occurrences remain distinguishable.
+Unified is counted once. Metrics-only runs retain summary state, not per-bar details.
+The versioned report is available under the revised section of hard-stop plot data;
+legacy callers retain their output shape. Report loss sums negative net-PnL panic fills
+from an observed HSL stop, not unrelated manual panic fills. It is never replay authority.
+
+Tests cover instantaneous stops, intervention timestamps, lookback expiry, repeated
+and extended same-time cohorts, unified/side attribution, loss-only accounting,
+metrics-only parity, and identical orders/fills after clearing report state. Actual
+simulator runs verify the exported report survives result-array draining. Existing
+independent reference tests still validate unchanged trading decisions.
+
+Public activation remains closed. Engine-aware payloads, migration of legacy analysis
+metrics and optimizer objectives, performance, live capture/execution and full revised
+fake-live remain required before enabling any revised runtime mode.

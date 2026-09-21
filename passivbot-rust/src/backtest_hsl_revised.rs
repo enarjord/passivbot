@@ -873,6 +873,21 @@ mod tests {
             assert_eq!(panics.len(), 1, "{mode}");
             assert_eq!(panics[0].index, 3, "{mode}");
             assert_eq!(panics[0].fill_qty, -10.0);
+            let report = bt.revised_hsl_report_value().unwrap().unwrap();
+            assert_eq!(report["summary"]["triggers"], 1, "{mode}: {report}");
+            assert_eq!(report["summary"]["restarts"], 0);
+            assert_eq!(report["summary"]["panic_close_fills"], 1);
+            assert!(report["summary"]["panic_close_loss"].as_f64().unwrap() > 0.0);
+            assert!(report["samples"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["phase"] == "scope_flat"));
+            if mode == "unified" {
+                assert_eq!(report["summary"]["triggers_long"], 0);
+                assert_eq!(report["summary"]["triggers_short"], 0);
+            }
+
             assert_eq!(bt.positions.long[0].size, 0.0);
             assert_eq!(
                 bt.revised_action(LONG, 0),
@@ -1125,5 +1140,32 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn revised_reporting_reset_cannot_change_panic_execution() {
+        let c = candles(5, 1);
+        let btc = Array1::from_elem(5, 1.0);
+        let mut outcomes = Vec::new();
+        for reset_report in [false, true] {
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, "unified", "market");
+            fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 120.0);
+            bt.update_revised_hsl(1).unwrap();
+            if reset_report {
+                bt.revised_hsl_report = super::super::revised_report::Report::default();
+            }
+            bt.update_open_orders_all(1).unwrap();
+            bt.check_for_fills(2).unwrap();
+            outcomes.push((
+                bt.positions.long[0].size,
+                bt.revised_action(LONG, 0),
+                bt.fills
+                    .iter()
+                    .map(|f| (f.timestamp_ms, f.fill_qty, f.fill_price, f.order_type))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
     }
 }

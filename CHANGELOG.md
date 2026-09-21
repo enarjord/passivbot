@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add revised-HSL lifecycle diagnostics and separate simulator reports, including
+  instantaneous zero-cooldown stops, replay deduplication and one portfolio counter
+  in unified mode. Reports do not supply trading state; revised activation remains gated.
+
 - Connect the internal revised-HSL simulator path to scoped permissions, full-position
   panic orders and fill-time cooldown reconstruction. This remains an offline integration
   checkpoint: public revised runtime activation is still disabled and legacy stays default.

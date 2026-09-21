@@ -30,6 +30,7 @@ pub struct Config {
 
 #[derive(Debug)]
 pub(super) struct Scope {
+    timestamp: i64,
     side: Option<usize>,
     coin: Option<usize>,
     pub result: evaluator::Output,
@@ -129,6 +130,7 @@ impl Backtest<'_> {
         });
         let symbol = coin.map(|c| self.backtest_params.coins[c].as_str());
         let observed = self.revised_hsl_inputs_at(k, mode, side_name, symbol, boundary)?;
+        let timestamp = observed.snapshot.now;
         let slots = side.map_or(1, |s| observed.slots[s]) as u64;
         let mut result = evaluator::evaluate(evaluator::Input {
             snapshot: observed.snapshot,
@@ -140,7 +142,12 @@ impl Backtest<'_> {
             intervention,
         })?;
         result.reasons.extend(observed.reasons);
-        Ok(Scope { side, coin, result })
+        Ok(Scope {
+            timestamp,
+            side,
+            coin,
+            result,
+        })
     }
 
     pub(super) fn update_revised_hsl(&mut self, k: usize) -> Result<(), String> {
@@ -152,6 +159,14 @@ impl Backtest<'_> {
         }
         // Replace atomically only after every selected current evaluation succeeds.
         self.revised_hsl_scopes = results;
+        for scope in &self.revised_hsl_scopes {
+            self.revised_hsl_report.observe(
+                (scope.side, scope.coin),
+                scope.timestamp,
+                "bar_close",
+                &scope.result,
+            );
+        }
         self.clear_revised_entries();
         Ok(())
     }
@@ -272,6 +287,12 @@ impl Backtest<'_> {
                 continue;
             }
             let updated = self.evaluate_revised_scope(k, scope_side, scope_coin, true)?;
+            self.revised_hsl_report.observe(
+                (scope_side, scope_coin),
+                updated.timestamp,
+                "scope_flat",
+                &updated.result,
+            );
             self.revised_hsl_scopes
                 .retain(|s| s.side != scope_side || s.coin != scope_coin);
             self.revised_hsl_scopes.push(updated);

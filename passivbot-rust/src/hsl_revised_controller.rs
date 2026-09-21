@@ -95,6 +95,23 @@ pub struct Decision {
     pub numeric_range_approximation: bool,
 }
 
+/// Reconstructed lifecycle evidence for diagnostics, never prior trading authority.
+#[derive(Clone, Debug, Serialize)]
+pub struct LifecycleEvent {
+    pub timestamp: i64,
+    pub kind: &'static str,
+    pub red_at: i64,
+    pub flat_at: Option<i64>,
+    pub reason: &'static str,
+    pub raw: Option<f64>,
+    pub ema: Option<f64>,
+}
+
+pub struct Replay {
+    pub decisions: Vec<Decision>,
+    pub events: Vec<LifecycleEvent>,
+}
+
 fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
     input.restart == Restart::Always
         && flat
@@ -108,25 +125,58 @@ fn advance_permissions(
     input: &Input,
     red_at: &mut Option<i64>,
     flat_at: &mut Option<i64>,
+    events: &mut Vec<LifecycleEvent>,
 ) -> Option<&'static str> {
     if cooldown_finished(*flat_at, timestamp, input) {
+        events.push(LifecycleEvent {
+            timestamp,
+            kind: "restart",
+            red_at: red_at.expect("flat stop has RED origin"),
+            flat_at: *flat_at,
+            reason: "cooldown_complete",
+            raw: None,
+            ema: None,
+        });
         *red_at = None;
         *flat_at = None;
         return Some("cooldown_complete");
     }
     if flat_at.is_some() && exposed {
+        let previous_flat = *flat_at;
         *flat_at = None;
         if input.intervention == Intervention::Normal {
+            events.push(LifecycleEvent {
+                timestamp,
+                kind: "restart",
+                red_at: red_at.expect("flat stop has RED origin"),
+                flat_at: previous_flat,
+                reason: "normal_intervention",
+                raw: None,
+                ema: None,
+            });
             *red_at = None;
             return Some("normal_intervention");
         }
         *red_at = Some(timestamp);
+        events.push(LifecycleEvent {
+            timestamp,
+            kind: "red",
+            red_at: timestamp,
+            flat_at: None,
+            reason: "panic_intervention",
+            raw: None,
+            ema: None,
+        });
         return Some("panic_intervention");
     }
     None
 }
 
 pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
+    Ok(replay_with_events(input)?.decisions)
+}
+
+pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
     if input.start > input.now
         || input.cooldown_ms < 0
         || !input.budget.is_finite()
@@ -194,6 +244,7 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
         unrealized: current.upnl,
     };
     let mut decisions = Vec::new();
+    let mut events = Vec::new();
     let mut red_at = None;
     let mut flat_at = None;
     for episode in &input.episodes {
@@ -254,25 +305,57 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
             if *original_index > 0 {
                 if let Some(opened) = opening.filter(|opened| *opened <= t) {
                     opening = None;
-                    reason = advance_permissions(opened, true, input, &mut red_at, &mut flat_at)
-                        .unwrap_or(reason);
+                    reason = advance_permissions(
+                        opened,
+                        true,
+                        input,
+                        &mut red_at,
+                        &mut flat_at,
+                        &mut events,
+                    )
+                    .unwrap_or(reason);
                 }
             }
-            reason = advance_permissions(t, point.exposed, input, &mut red_at, &mut flat_at)
-                .unwrap_or(reason);
+            reason = advance_permissions(
+                t,
+                point.exposed,
+                input,
+                &mut red_at,
+                &mut flat_at,
+                &mut events,
+            )
+            .unwrap_or(reason);
             if risk.panic[index] && (point.exposed || point.flatten) && red_at.is_none() {
                 red_at = Some(t);
                 flat_at = None;
                 reason = "drawdown";
+                events.push(LifecycleEvent {
+                    timestamp: t,
+                    kind: "red",
+                    red_at: t,
+                    flat_at: None,
+                    reason,
+                    raw: Some(risk.raw[index]),
+                    ema: Some(risk.ema[index]),
+                });
             }
             if point.flatten && red_at.is_some() {
                 flat_at = Some(t);
                 reason = "stop_flattened";
+                events.push(LifecycleEvent {
+                    timestamp: t,
+                    kind: "flat",
+                    red_at: red_at.unwrap(),
+                    flat_at,
+                    reason,
+                    raw: Some(risk.raw[index]),
+                    ema: Some(risk.ema[index]),
+                });
             }
             if cooldown_finished(flat_at, t, input) {
-                red_at = None;
-                flat_at = None;
-                reason = "cooldown_complete";
+                reason =
+                    advance_permissions(t, false, input, &mut red_at, &mut flat_at, &mut events)
+                        .expect("completed cooldown emits restart");
             }
             let action = if red_at.is_none() {
                 Action::Normal
@@ -299,7 +382,7 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
     if decisions.last().unwrap().timestamp != input.now {
         return Err("HSL trace must end at the current observation".into());
     }
-    Ok(decisions)
+    Ok(Replay { decisions, events })
 }
 
 #[pyfunction]
@@ -313,6 +396,41 @@ pub fn hsl_revised_controller(input_json: &str) -> PyResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reporting_keeps_zero_cooldown_stop_without_changing_permission() {
+        let input: Input = serde_json::from_value(serde_json::json!({
+            "now": 120000, "start": 0, "budget": 1000.0, "span": 1.0,
+            "threshold": 0.05, "cooldown_ms": 0, "restart": "always", "intervention": "panic",
+            "episodes": [
+                {"points": [
+                    {"timestamp": 0, "pnl": 0.0, "upnl": 0.0, "exposed": true, "flatten": false},
+                    {"timestamp": 60000, "pnl": -100.0, "upnl": 0.0, "exposed": false, "flatten": true}
+                ]},
+                {"points": [
+                    {"timestamp": 60000, "pnl": -100.0, "upnl": 0.0, "exposed": false, "flatten": false},
+                    {"timestamp": 120000, "pnl": -100.0, "upnl": 0.0, "exposed": false, "flatten": false}
+                ]}
+            ]
+        })).unwrap();
+        let result = replay_with_events(&input).unwrap();
+        assert_eq!(result.decisions.last().unwrap().action, Action::Normal);
+        assert_eq!(
+            result
+                .events
+                .iter()
+                .map(|e| (e.kind, e.timestamp))
+                .collect::<Vec<_>>(),
+            vec![("red", 60000), ("flat", 60000), ("restart", 60000)]
+        );
+        let plain = replay(&input).unwrap();
+        assert_eq!(
+            serde_json::to_string(&plain).unwrap(),
+            serde_json::to_string(&result.decisions).unwrap()
+        );
+        assert!(result.events[0].raw.unwrap() > 0.05);
+        assert!(result.events[2].raw.is_none());
+    }
 
     #[test]
     fn unavailable_flat_evidence_does_not_invent_cooldown() {
