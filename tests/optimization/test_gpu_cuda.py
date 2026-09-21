@@ -1,5 +1,7 @@
 """CUDA launch contract, independent of the shared strategy regression suite."""
 
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -179,6 +181,54 @@ def test_mps_compilation_does_not_apply_cuda_coin_specialization(monkeypatch):
     assert sources == [source]
 
 
+def test_disabled_hsl_specialization_requires_explicit_shader_guard(monkeypatch):
+    """Only guarded multicoin sources may opt into the compact HSL state."""
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
+    sys.modules.pop("optimization.gpu.mps_kernel", None)
+    from optimization.gpu.mps_kernel import _with_hsl_disabled, _with_hsl_features
+
+    guarded = (
+        "#ifndef PASSIVBOT_HSL_DIAGNOSTICS_ENABLED\n"
+        "#if PASSIVBOT_HSL_DISABLED\nint compact;\n#endif\n"
+    )
+    assert _with_hsl_disabled(guarded, False) == guarded
+    compact = _with_hsl_disabled(guarded, True)
+    assert compact == (
+        "#define PASSIVBOT_HSL_DISABLED 1\n" + guarded
+    )
+    assert "#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 0" not in compact
+    assert _with_hsl_features(
+        compact,
+        ema_tail_enabled=False,
+        raw_drawdown_enabled=False,
+        raw_tail_enabled=False,
+    ) == compact
+    with pytest.raises(RuntimeError, match="disabled-HSL feature guard"):
+        _with_hsl_disabled("kernel void unguarded() {}", True)
+    sys.modules.pop("optimization.gpu.mps_kernel", None)
+
+
+def test_disabled_hsl_specialization_excludes_fused_layout(monkeypatch):
+    """The compact one-side HSL arrays must never back the fused kernel."""
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace())
+    sys.modules.pop("optimization.gpu.mps_kernel", None)
+    from optimization.gpu.mps_kernel import MpsEmaAnchorMulticoinFusedRunner
+
+    assert MpsEmaAnchorMulticoinFusedRunner.hsl_disabled_specialization is False
+    sys.modules.pop("optimization.gpu.mps_kernel", None)
+
+
+def test_disabled_hsl_source_removes_hsl_portfolio_scans():
+    """The ordinary disabled-HSL candle path has no pre-fill or HSL update scan."""
+    source = (
+        Path(__file__).parents[2]
+        / "passivbot-rust/src/gpu/mps_ema_anchor_multicoin_long.metal"
+    ).read_text()
+
+    assert "#if PASSIVBOT_HSL_DISABLED\n        float hsl_equity_before_fills = 0.0f;" in source
+    assert "#if !PASSIVBOT_HSL_DISABLED\n        if (can_generate && alive" in source
+
+
 @pytest.mark.parametrize("case", ["ema-multicoin-overhead", "tm-multicoin-overhead"])
 @pytest.mark.parametrize("coins", [2, 3, 5, 9, 17, 33, 64])
 def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
@@ -210,6 +260,39 @@ def test_cuda_coin_capacity_matches_full_capacity_outputs(cuda, case, coins):
     assert specialized.keys() == baseline.keys()
     for key in baseline:
         np.testing.assert_array_equal(specialized[key], baseline[key], err_msg=key)
+
+
+def test_cuda_disabled_hsl_specialization_matches_full_hsl_state(cuda):
+    """Removing unreachable per-coin HSL state must preserve every GPU output."""
+    torch, _library_cls = cuda
+    from tools.gpu_proxy_benchmark import _build_case
+
+    def evaluate(compact_hsl):
+        proxy, candidates, *_ = _build_case(
+            "ema-multicoin-overhead",
+            candidates=4,
+            dispatch_batch_size=4,
+            single_bars=128,
+            multicoin_bars=128,
+            coins=5,
+            seed=11,
+        )
+        runner = proxy.runners["long"]
+        if not compact_hsl:
+            runner.coin_hsl_may_enable = True
+        output = runner.run(proxy._parameter_matrix(candidates, "long"))
+        assert runner.dispatch_hsl_disabled is compact_hsl
+        return {
+            key: value.cpu().numpy().copy()
+            for key, value in output.items()
+            if isinstance(value, torch.Tensor)
+        }
+
+    compact = evaluate(True)
+    baseline = evaluate(False)
+    assert compact.keys() == baseline.keys()
+    for key in baseline:
+        np.testing.assert_array_equal(compact[key], baseline[key], err_msg=key)
 
 
 @pytest.mark.parametrize("pending_queries", [0, 2])

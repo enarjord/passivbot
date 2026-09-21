@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce private-state pressure for single-side multi-coin EMA Anchor GPU
+  optimization when every candidate and coin override disables legacy HSL. The
+  specialized kernel removes unreachable per-coin controller state and HSL scans
+  while retaining forced-delist diagnostics and the existing output contract.
+
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable
   equity; reporting does not fetch data or affect trading.
