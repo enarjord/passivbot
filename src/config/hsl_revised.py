@@ -232,7 +232,30 @@ def require_runtime_support(config, supported_modes=()):
         raise ValueError(f"revised HSL {_mode(config)} runtime integration is not available in this build; legacy remains the default")
 
 
-def validate_optimizer_metrics(config, metrics):
+def _side_has_enabled_policy(config, side, markets_by_exchange):
+    base_enabled = config["bot"][side]["hsl"]["enabled"]
+    if _mode(config) != "coin":
+        return base_enabled
+    datasets = config.get("backtest", {}).get("coins")
+    if datasets is None:
+        # Config-only callers can check the declared policies before a dataset
+        # exists. Runtime callers below use only their actual dataset members.
+        return base_enabled or any(
+            patch.get("bot", {}).get(side, {}).get("hsl", {}).get("enabled", base_enabled)
+            for patch in config.get("coin_overrides", {}).values()
+        )
+    from backtest import _get_backtest_coin_override
+
+    for exchange, coins in datasets.items():
+        markets = (markets_by_exchange or {}).get(exchange, {})
+        for coin in coins:
+            patch = _get_backtest_coin_override(config, markets, exchange, coin)
+            if patch.get("bot", {}).get(side, {}).get("hsl", {}).get("enabled", base_enabled):
+                return True
+    return False
+
+
+def validate_optimizer_metrics(config, metrics, *, markets_by_exchange=None):
     """Validate only objectives/limits consuming this effective scenario's results."""
     if engine(config) != "revised":
         return
@@ -251,3 +274,5 @@ def validate_optimizer_metrics(config, metrics):
         )
         if _mode(config) == "unified" and side_signal:
             raise ValueError(f"{metric} has no side controller in revised unified HSL; use the portfolio metric")
+        if side_signal and not _side_has_enabled_policy(config, name.rsplit("_", 1)[1], markets_by_exchange):
+            raise ValueError(f"{metric} has no enabled side controller in this revised HSL scenario")

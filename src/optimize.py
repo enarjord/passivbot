@@ -1708,7 +1708,7 @@ class Evaluator:
         validate_optimizer_metrics(config, [
             *(spec.metric for spec in self.scoring_specs),
             *(check["metric"] for check in self.limit_checks),
-        ])
+        ], markets_by_exchange=self.msss)
         individual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             if individual_hash in self.seen_hashes:

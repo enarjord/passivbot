@@ -57,6 +57,8 @@ def test_unified_rejects_inactive_side_signal_objectives(metric):
     cfg, _, _ = inputs("unified")
     with pytest.raises(ValueError, match="no side controller"):
         validate_optimizer_metrics(cfg, [metric])
+    for side in ["long", "short"]:
+        cfg["bot"][side]["hsl"]["enabled"] = True
     for mode in ["coin", "pside"]:
         cfg["live"]["hsl_signal_mode"] = mode
         validate_optimizer_metrics(cfg, [metric])
@@ -103,8 +105,8 @@ def test_suite_metric_validation_uses_only_its_selected_scenarios(section, scena
     fixed_side_bounds(cfg)
     cfg["optimize"]["fixed_runtime_overrides"] = {}
     contexts = [
-        SimpleNamespace(label="side", config=cfg, overrides={}),
-        SimpleNamespace(label="portfolio", config=portfolio, overrides={
+        SimpleNamespace(label="side", config=cfg, overrides={}, msss={}),
+        SimpleNamespace(label="portfolio", config=portfolio, msss={}, overrides={
             "live.hsl_signal_mode": "unified", "bot.hsl": portfolio["bot"]["hsl"]}),
     ]
     evaluator = SuiteEvaluator(Evaluator({}, {}, {}, cfg), contexts, {"default": "mean"})
@@ -139,3 +141,49 @@ def test_gpu_preparation_rejects_revised_before_torch_probe(monkeypatch, through
     preflight = _run_gpu_preparation_preflight if through_cli else validate_gpu_preparation_scope
     with pytest.raises(ValueError, match="GPU optimization does not implement revised HSL"):
         preflight(cfg, {"enabled": False})
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside"])
+@pytest.mark.parametrize("metric", ["hard_stop_triggers_short", "drawdown_worst_ema_hsl_short_max",
+                                    "hard_stop_restarts_short_mean"])
+def test_disabled_side_signal_metrics_are_rejected(mode, metric):
+    cfg, _, _ = inputs(mode)
+    with pytest.raises(ValueError, match="no enabled side controller"):
+        validate_optimizer_metrics(cfg, [metric])
+    validate_optimizer_metrics(cfg, ["drawdown_worst_strategy_eq_short"])
+    cfg["bot"]["short"]["hsl"]["enabled"] = True
+    validate_optimizer_metrics(cfg, [metric])
+
+
+@pytest.mark.parametrize("base,override,accepted", [(False, True, True), (True, False, False),
+                                                   (False, False, False), (True, True, True)])
+def test_coin_metrics_follow_effective_dataset_policy(base, override, accepted):
+    cfg, markets, _ = inputs("coin")
+    cfg["bot"]["short"]["hsl"]["enabled"] = base
+    cfg["coin_overrides"] = {"AAA": {"bot": {"short": {"hsl": {"enabled": override}}}},
+                             "OUTSIDE": {"bot": {"short": {"hsl": {"enabled": True}}}}}
+    if accepted:
+        validate_optimizer_metrics(cfg, ["hard_stop_triggers_short"], markets_by_exchange={"binance": markets})
+    else:
+        with pytest.raises(ValueError, match="no enabled side controller"):
+            validate_optimizer_metrics(cfg, ["hard_stop_triggers_short"], markets_by_exchange={"binance": markets})
+
+
+def test_coin_policy_metric_check_uses_same_alias_resolution_as_payload(monkeypatch):
+    import backtest
+    cfg, markets, _ = inputs("coin")
+    cfg["coin_overrides"] = {"AAA/USDT:USDT": {"bot": {"short": {"hsl": {"enabled": True}}}}}
+    markets["AAA"]["symbol"] = "AAA/USDT:USDT"
+    monkeypatch.setattr(backtest, "coin_to_symbol", lambda value, *a, **k: "AAA/USDT:USDT")
+    validate_optimizer_metrics(cfg, ["hard_stop_triggers_short"], markets_by_exchange={"binance": markets})
+
+
+def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
+    cfg, _, _ = inputs("pside")
+    fixed_side_bounds(cfg)
+    cfg["optimize"]["scoring"] = ["hard_stop_triggers_short"]
+    cfg["optimize"]["limits"] = []
+    evaluator = Evaluator({"binance": None}, {}, {}, cfg)
+    with pytest.raises(ValueError, match="no enabled side controller"):
+        evaluator.evaluate([bound.low for bound in evaluator.bounds], [])
+    assert evaluator.shared_hlcvs_np == {}

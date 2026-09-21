@@ -516,3 +516,8 @@ engine, fixed policy and source-verified implementation identity.
 The GPU backend does not implement revised HSL and rejects that engine before loading GPU runtime
 services. CPU policy candidates already reach the staged native simulator; this does not open the
 public revised backtest/optimizer or live activation guards.
+
+Side-specific revised HSL optimizer metrics require an enabled policy for that side in the
+selected scenario. Coin mode uses effective policies of actual dataset members, including
+resolved overrides; an enabled policy for a coin outside the dataset does not qualify.
+General side equity/performance metrics remain valid when HSL is disabled.
