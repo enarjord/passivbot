@@ -532,16 +532,20 @@ strategy consumers retain their own fill, PnL, candle and EMA requirements.
 
 Protection receives a finite execution wave during startup preparation and each outer-loop pass.
 Ordinary preparation, fill repair and candle acquisition run as owned background tasks; writes are
-serialized. An unfilled limit close or unavailable quote on one coin cannot occupy another coin's
-protection turn. Quotes have a bounded wave time slice and a separate network deadline. Resistant
+serialized across connector batch tasks. Hourly preparation never starts another writer once the
+main owner is running. Each attempted write requires fresh balance, position and open-order
+confirmation before the next admission, including after ambiguous failure. Deferred cancellations
+do not create submission telemetry or cancellation provenance. An unfilled limit close or
+unavailable quote on one coin cannot occupy another coin's protection turn. Quotes have a bounded wave time slice and a separate network deadline. Resistant
 reads retain their bounded slots instead of spawning overlapping retries. Known I/O failures stay
 observable; malformed native output and unexpected programming errors propagate fatally.
 
 A successful remote fill fetch atomically captures its immutable normalized tape, manager identity
 and actual acquisition interval. A later cache read cannot renew that timestamp. Unchanged retained
 facts can reuse the receipt while another request is pending; changed facts or manager replacement
-cannot inherit it. Expired rows are excluded from the comparison. An earlier actual, unchanged and
-still-fresh position observation may precede the fill fetch; account invalidation or changed
+cannot inherit it. Completeness diagnostics, including undated/unattributed rows and quality-only
+corrections, participate in receipt validation. Expired numeric rows are excluded from the
+comparison. An earlier actual, unchanged and still-fresh position observation may precede the fill fetch; account invalidation or changed
 positions discards it. These are observation caches, never persisted lifecycle authority.
 
 Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,

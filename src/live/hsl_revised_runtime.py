@@ -65,12 +65,14 @@ def observed_fill_interval(bot, tape, start, now):
 
     def retained_facts(value):
         # Event order is not execution sequence. Expired facts cannot invalidate
-        # the receipt of retained facts. Quality diagnostics are always taken
-        # from the *current* tape by capture, not certified by this interval.
-        return {(pair.symbol, pair.pside): Counter(
-                    fill for fill in pair.fills if start <= fill.timestamp <= now)
-                for pair in value.pairs
-                if any(start <= fill.timestamp <= now for fill in pair.fills)}
+        # the receipt of retained facts. Completeness diagnostics are facts too:
+        # undated/unattributed rows and quality-only corrections cannot inherit a
+        # successful acquisition interval from a different canonical tape.
+        return (value.reasons, {
+            (pair.symbol, pair.pside): (pair.reasons, Counter(
+                fill for fill in pair.fills if start <= fill.timestamp <= now))
+            for pair in value.pairs
+            if pair.reasons or any(start <= fill.timestamp <= now for fill in pair.fills)})
 
     return observation.interval if retained_facts(tape) == retained_facts(observation.tape) else None
 

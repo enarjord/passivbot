@@ -2,6 +2,7 @@ from exchanges.ccxt_bot import CCXTBot, format_exchange_config_response
 from live.balance_composition import normalize_okx_balance_composition
 from live.diagnostic_safety import bounded_exception_type
 from passivbot import logging
+from live import hsl_revised_live
 import passivbot_rust as pbr
 
 import asyncio
@@ -259,11 +260,9 @@ class OKXBot(CCXTBot):
             fetched[i]["position_side"] = fetched[i]["info"]["posSide"]
         return sorted(fetched, key=lambda x: x["timestamp"])
 
+    @hsl_revised_live.connector_write("cancel")
     async def execute_cancellation(self, order: dict) -> dict:
         """OKX: Cancel order with special handling for 51400 (already cancelled/filled)."""
-        from live import hsl_revised_live, executor
-        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
-            return executor.DeferredOrderCancellation()
         try:
             self._emit_execution_connector_call_started_event(
                 order=order,

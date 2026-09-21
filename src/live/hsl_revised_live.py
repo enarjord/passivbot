@@ -5,6 +5,7 @@ this module persists a permission: a wave carries an immutable observation and
 must be admitted again from current facts immediately before a connector write.
 """
 from dataclasses import dataclass
+from functools import wraps
 import logging
 from uuid import uuid4
 
@@ -34,6 +35,36 @@ def owner(bot):
     return instance
 
 
+def connector_write(action):
+    """Serialize revised admission and writes, including adapter batch overrides.
+
+    A write may change aggregate risk before its REST result is reflected locally.
+    The next write needs a newer complete account read, even after an ambiguous
+    failure. Legacy batching and admission remain unchanged.
+    """
+    def decorate(operation):
+        @wraps(operation)
+        async def submit(bot, order):
+            if not selected(bot):
+                return await operation(bot, order)
+            from live import executor
+            instance = owner(bot)
+            async with instance._write_lock:
+                if not instance.admit(order):
+                    return (executor.DeferredOrderCreation() if action == "create"
+                            else executor.DeferredOrderCancellation())
+                if action == "cancel":
+                    executor.record_cancel_connector_admission(bot, order)
+                try:
+                    return await operation(bot, order)
+                finally:
+                    # Reads completed while the call was pending cannot confirm
+                    # its final outcome. Mark all current account inputs pending.
+                    bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+        return submit
+    return decorate
+
+
 def matches(scope, symbol, side):
     return ((scope.symbol is None or scope.symbol == symbol)
             and (scope.pside is None or scope.pside == side))
@@ -58,6 +89,9 @@ class Wave:
 
 class Owner:
     def __init__(self, bot):
+        import asyncio
+        self._write_lock = asyncio.Lock()
+        self._running = False
         self.bot = bot
         self.sources = {}
         self.quotes = {}
@@ -343,6 +377,10 @@ class Owner:
         import asyncio
         from ccxt.base.errors import NetworkError
         from live.state_refresh import AuthoritativeSurfaceUnavailable
+        # init_markets is reused by hourly maintenance. Once the main owner is
+        # running it alone schedules protection; maintenance must remain a reader.
+        if self._running:
+            return await operation
         task = asyncio.create_task(operation)
         try:
             while not task.done() and not self.bot.stop_signal_received:
@@ -372,6 +410,9 @@ class Owner:
         from live.state_refresh import AuthoritativeSurfaceUnavailable
         from ccxt.base.errors import NetworkError
         bot = self.bot
+        if self._running:
+            raise RuntimeError("revised HSL execution owner is already running")
+        self._running = True
         ordinary = None
         next_history = next_sources = 0.
         try:
@@ -382,6 +423,19 @@ class Owner:
                 bot.state_change_detected_by_symbol = set()
                 try:
                     self.poll_inputs()
+                    plan = None
+                    # Completed producer failures must surface even when the next
+                    # account refresh cannot succeed. Plans still need fresh input
+                    # admission below; a blocked cycle may discard a valid plan.
+                    if ordinary is not None and ordinary.done():
+                        completed, ordinary = ordinary, None
+                        try:
+                            plan = completed.result()
+                        except RuntimeError as exc:
+                            handled, details = bot._handle_staged_execution_precondition_error(exc)
+                            if not handled:
+                                raise
+                            bot._log_staged_execution_defer(details)
                     if not await bot.refresh_protective_authoritative_state(require_balance=True):
                         await bot._sleep_unless_shutdown(.5, stage='revised_current_inputs')
                         continue
@@ -398,21 +452,10 @@ class Owner:
                     await self.protect()
                     if ordinary is None:
                         ordinary = asyncio.create_task(self._ordinary_plan())
-                    if ordinary.done():
-                        completed = ordinary
-                        ordinary = None
-                        try:
-                            plan = completed.result()
-                        except RuntimeError as exc:
-                            handled, details = bot._handle_staged_execution_precondition_error(exc)
-                            if not handled:
-                                raise
-                            bot._log_staged_execution_defer(details)
-                            plan = None
-                        if plan is not None:
-                            cancels, creates, snapshot = plan
-                            bot._current_planning_snapshot = snapshot
-                            await bot.execute_order_plan_to_exchange(cancels, creates)
+                    if plan is not None:
+                        cancels, creates, snapshot = plan
+                        bot._current_planning_snapshot = snapshot
+                        await bot.execute_order_plan_to_exchange(cancels, creates)
                 except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
                     logging.warning('[risk] revised current I/O unavailable | error_type=%s', type(exc).__name__)
                 bot._last_loop_duration_ms = int(utc_ms()) - started
@@ -423,6 +466,7 @@ class Owner:
         finally:
             # Keep every task owned; cancellation-resistant reads are not replaced
             # with overlapping retries. Shutdown never waits indefinitely on them.
+            self._running = False
             self.cancel_inputs()
             if ordinary is not None:
                 ordinary.cancel()

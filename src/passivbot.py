@@ -20283,7 +20283,7 @@ class Passivbot:
             **({"market_snapshots": market_snapshots, "execution_types": execution_types}
                if market_snapshots is not None else {}),
         )
-        protective_snapshot = self._current_planning_snapshot
+        protective_snapshot = getattr(self, "_current_planning_snapshot", None)
         actual_symbols = sorted(
             set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
             | set(ideal_orders)
@@ -22098,6 +22098,7 @@ class Passivbot:
         """
         return {}
 
+    @hsl_revised_live.connector_write("create")
     async def execute_order(self, order: dict) -> dict | executor.DeferredOrderCreation:
         """Place a single order via the exchange client."""
         params = {
@@ -22108,8 +22109,6 @@ class Passivbot:
             "price": order["price"],
             "params": self._build_order_params(order),
         }
-        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
-            return executor.DeferredOrderCreation()
         planned_generation = order.get("_planned_account_invalidation_generation")
         if (
             planned_generation is not None
@@ -22132,10 +22131,9 @@ class Passivbot:
         """Execute a batch of order creations using the helper pipeline."""
         return await self.execute_multiple(orders, "execute_order")
 
+    @hsl_revised_live.connector_write("cancel")
     async def execute_cancellation(self, order: dict) -> dict:
         """Cancel a single order via the exchange client."""
-        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
-            return executor.DeferredOrderCancellation()
         executed = None
         try:
             self._emit_execution_connector_call_started_event(

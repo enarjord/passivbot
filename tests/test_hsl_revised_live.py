@@ -704,3 +704,181 @@ def test_synchronous_reconstruction_must_not_outlive_current_input_freshness(mon
         return result
     monkeypatch.setattr(hsl_revised_runtime, 'evaluate', slow_evaluation)
     assert not instance.admit(order)
+
+
+@pytest.mark.parametrize('change', ['undated', 'unattributed', 'quality_only', 'new_pair_undated'])
+def test_fill_receipt_rejects_completeness_changes(change):
+    from dataclasses import replace
+    from test_hsl_revised_runtime import bot as make_bot, NOW
+    from test_hsl_revised_inputs import event
+    from live.hsl_revised_runtime import observe_fills, observed_fill_interval, capture_fills
+    rows = [event(timestamp=NOW-60_000, c_mult=1.)]
+    bot = make_bot()
+    bot.get_exchange_time = lambda: NOW
+    bot._pnls_manager.get_events = lambda **kwargs: rows
+    bot._hsl_revised_fill_observation = observe_fills(bot, (NOW-150, NOW-50))
+    if change == 'quality_only':
+        rows[0] = replace(rows[0], fee_quality='estimated')
+    elif change == 'unattributed':
+        rows.append(replace(rows[0], symbol=''))
+    else:
+        rows.append(replace(rows[0], timestamp=0,
+                            symbol='OTHER/USDT:USDT' if change == 'new_pair_undated' else rows[0].symbol))
+    assert observed_fill_interval(bot, capture_fills(rows, bot.c_mults), NOW-86_400_000, NOW) is None
+    bot._hsl_revised_fill_observation = observe_fills(bot, (NOW-30, NOW-10))
+    assert observed_fill_interval(bot, capture_fills(rows, bot.c_mults), NOW-86_400_000, NOW) == (NOW-30, NOW-10)
+
+
+@pytest.mark.asyncio
+async def test_hourly_preparation_does_not_start_another_protective_writer():
+    import asyncio
+    from types import SimpleNamespace
+    instance = hsl_revised_live.Owner(SimpleNamespace())
+    instance._running = True
+    entered, release = asyncio.Event(), asyncio.Event()
+    async def metadata():
+        entered.set()
+        await release.wait()
+        return 'updated'
+    task = asyncio.create_task(instance.during_preparation(metadata()))
+    await asyncio.wait_for(entered.wait(), 1.)
+    assert not task.done()
+    release.set()
+    # A second protection loop would access nonexistent account methods above.
+    assert await task == 'updated'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error_type', [ValueError, hsl_revised_live.runtime.InvalidHslOutput])
+async def test_completed_planner_failure_surfaces_while_account_refresh_is_blocked(error_type):
+    import asyncio
+    from types import SimpleNamespace
+    count = 0
+    async def refresh(**kwargs):
+        nonlocal count
+        count += 1
+        assert count < 3, 'fatal planner error was hidden behind unavailable account inputs'
+        return count == 1
+    async def fail():
+        raise error_type('invalid producer')
+    async def noop(*args, **kwargs):
+        await asyncio.sleep(0)
+    bot = SimpleNamespace(stop_signal_received=False,
+        _begin_live_event_cycle=lambda **kwargs: None,
+        refresh_protective_authoritative_state=refresh,
+        _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None,
+        live_value=lambda key: .05)
+    instance = hsl_revised_live.Owner(bot)
+    instance.remember_position = lambda: None
+    instance.schedule_history = instance.schedule_sources = lambda: None
+    instance.protect = noop
+    instance._ordinary_plan = fail
+    with pytest.raises(error_type, match='invalid producer'):
+        await instance.run()
+    assert count == 1
+    assert not instance._running
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('batch', ['base', 'ccxt'])
+@pytest.mark.parametrize('action', ['create', 'cancel'])
+@pytest.mark.parametrize('outcome', ['ok', 'ambiguous'])
+async def test_revised_batch_waits_for_write_then_requires_new_account(monkeypatch, batch, action, outcome):
+    import asyncio
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    from exchanges.ccxt_bot import CCXTBot
+    from live import executor
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    import utils
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot('unified')
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    ledger = bot._ensure_freshness_ledger()
+    ledger.stamp('open_orders', now_ms=NOW-200)
+    bot._request_authoritative_confirmation = Passivbot._request_authoritative_confirmation.__get__(bot)
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes())
+    orders = [dict(id=str(i), symbol=SYMBOL, position_side='long', side='sell', qty=1., price=90., type='market')
+              for i in range(2)]
+    instance.bind(wave, orders if action == 'cancel' else (), orders if action == 'create' else ())
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls, records = [], []
+    async def connector(*args, **kwargs):
+        calls.append(kwargs)
+        entered.set()
+        await release.wait()
+        if outcome == 'ambiguous':
+            raise OSError('offline transport failure')
+        return {'id': 'ack'}
+    bot.cca = SimpleNamespace(create_order=connector, cancel_order=connector)
+    bot._build_order_params = lambda order: {}
+    bot._emit_execution_connector_call_started_event = lambda **kwargs: None
+    monkeypatch.setattr(executor, 'record_create_connector_admission', lambda bot, order: records.append(order['id']))
+    monkeypatch.setattr(executor, 'record_cancel_connector_admission', lambda bot, order: records.append(order['id']))
+    bot.execute_order = Passivbot.execute_order.__get__(bot)
+    bot.execute_cancellation = Passivbot.execute_cancellation.__get__(bot)
+    bot.execute_multiple = Passivbot.execute_multiple.__get__(bot)
+    async def handle(failures):
+        assert len(failures) == int(outcome == 'ambiguous')
+    bot._handle_order_write_failures = handle
+    cls = Passivbot if batch == 'base' else CCXTBot
+    method = cls.execute_orders if action == 'create' else cls.execute_cancellations
+    pending = asyncio.create_task(method(bot, orders))
+    await asyncio.wait_for(entered.wait(), 1.)
+    # Both batch tasks have been scheduled, but only one has entered the connector.
+    await asyncio.sleep(0)
+    assert len(calls) == 1
+    release.set()
+    results = await pending
+    deferred = executor.DeferredOrderCreation if action == 'create' else executor.DeferredOrderCancellation
+    assert isinstance(results[1], deferred)
+    assert records == ['0']
+    assert set(bot._authoritative_pending_confirmations) == {'balance', 'positions', 'open_orders'}
+    # The next confirmed cohort may admit a new plan; no permanent write latch.
+    ledger.begin_epoch(now_ms=NOW)
+    for surface in ('balance', 'positions', 'open_orders'):
+        ledger.stamp(surface, now_ms=NOW)
+    assert instance.admit(orders[1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('adapter', ['base', 'okx', 'hyperliquid'])
+async def test_deferred_cancellation_has_no_submission_provenance(monkeypatch, adapter):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    from exchanges.okx import OKXBot
+    from exchanges.hyperliquid import HyperliquidBot
+    from live import executor
+    from live.event_bus import EventTypes
+    from test_hsl_revised_runtime import bot as make_bot, NOW, SYMBOL
+    events, calls, recorded = [], [], []
+    bot = make_bot()
+    # No receipt: a stale or unplanned cancellation must be deferred, including
+    # when passed through the full parent bookkeeping and adapter override.
+    bot.live_value = lambda key: 10
+    bot.add_to_recent_order_cancellations = lambda order: recorded.append(order)
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args: None
+    bot.state_change_detected_by_symbol = set()
+    bot.get_exchange_time = lambda: NOW
+    async def cancel(*args, **kwargs):
+        calls.append(args)
+        return {'id': 'old'}
+    bot.cca = SimpleNamespace(cancel_order=cancel)
+    cls = {'base': Passivbot, 'okx': OKXBot, 'hyperliquid': HyperliquidBot}[adapter]
+    bot.execute_cancellation = cls.execute_cancellation.__get__(bot)
+    bot.execute_multiple = Passivbot.execute_multiple.__get__(bot)
+    bot.execute_cancellations = Passivbot.execute_cancellations.__get__(bot)
+    async def handle(failures):
+        assert not failures
+    bot._handle_order_write_failures = handle
+    monkeypatch.setattr(Passivbot, '_emit_execution_order_event',
+                        lambda *args, **kwargs: events.append(kwargs['event_type']))
+    order = dict(id='old', symbol=SYMBOL, position_side='long', side='sell', qty=1., price=100.)
+    assert await executor.execute_cancellations_parent(bot, [order]) == []
+    assert not calls and not recorded
+    assert EventTypes.EXECUTION_CANCEL_SENT not in events
+    assert not bot.state_change_detected_by_symbol
