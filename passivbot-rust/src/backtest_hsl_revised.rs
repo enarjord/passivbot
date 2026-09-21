@@ -994,13 +994,10 @@ mod tests {
                 result.reasons.contains("position_fill_timestamp_tie"),
                 !eligible
             );
-            assert!(result
-                .boundaries
-                .last()
-                .is_some_and(|b| b.lifecycle_eligible));
+            assert!(!result.boundaries.is_empty());
             assert_eq!(
                 result.reasons.contains("current_flat_timestamp_estimate"),
-                !eligible
+                false
             );
         }
     }

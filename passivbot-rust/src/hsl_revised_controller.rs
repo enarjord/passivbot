@@ -15,8 +15,8 @@ pub struct Point {
     #[serde(deserialize_with = "crate::hsl_revised_json::number")]
     pub upnl: f64,
     pub exposed: bool,
-    /// A supported scope flatten after this risk observation, never an
-    /// artificial flat from an ambiguous quantity estimate.
+    /// A scope flatten selected by the best-effort reconciler after this risk
+    /// observation. Its disclosed estimates are consumed without a second veto.
     pub flatten: bool,
     /// Candle-free cashflow peak known at this observation, relative to budget.
     /// A reference updates the peak, without inserting a past EMA sample.

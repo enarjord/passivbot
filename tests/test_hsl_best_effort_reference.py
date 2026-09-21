@@ -150,7 +150,10 @@ def test_hand_calculated_fill_history_and_fee_accounting():
 @pytest.mark.parametrize("missing,equity,panic", [
     (0, (1077, 1077, 1056, 1030, 1000), True),
     (1, (1057, 1056, 1016, 1000, 1000), True),
-    (2, (1047, 1046, 1035, 1020, 1000), False),
+    # Preserve both known +1 fills until the final current-size adjustment:
+    # 2 units at basis 90 give UPNL -20/-40 at marks 80/70. Missing
+    # reduction PnL remains unknown; endpoint UPNL is -45 at size 1.5.
+    (2, (1047, 1046, 1025, 1005, 1000), False),
 ])
 def test_missing_open_middle_or_latest_fill_still_evaluates_and_repairs(missing, equity, panic):
     position, fills, prices = clean_tape()

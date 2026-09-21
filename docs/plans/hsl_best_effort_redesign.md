@@ -125,30 +125,38 @@ by pretending every quantity is a linear base-asset amount.
 1. Normalize/deduplicate fills by execution identity and apply corrections. Gross PnL
    and signed fee balance impact retain the existing accounting contract; net realized
    PnL is their sum. Estimates never overwrite the factual exchange ledger.
-2. Anchor current size and average price at their observation time. Walk quantities
-   backward: `q_before = q_after - signed_fill_qty`. For the long case, clamp impossible
-   negative reconstructed quantities to zero, record the discrepancy, and continue.
-3. Walk average entry price forward. For an incomplete initial episode, seed its
-   carried quantity using the earliest usable retained fill price. Adds update weighted
-   average price; reductions preserve it; an estimated flat resets estimated basis.
-   A close's gross PnL may improve a missing basis when it identifies it unambiguously;
-   that inference is optional, never another readiness requirement.
-4. At the current endpoint use the observed size and basis. Report any reconciliation
-   adjustment rather than silently overwriting the endpoint or spreading a correction
-   over every old episode. A missing newest fill does not reveal when the discrepancy
-   arose; backward allocation is an approximation, not proof of historical position.
-5. Retain usable realized PnL and estimate missing components only from available
-   evidence. An unknown realized component remains diagnostically unknown even if the
-   usable series omits it. Do not invent realized profit or count a loss twice.
-6. Rebuild when source observations change. Self-healing means convergence to the
-   complete-data reconstruction when the missing evidence arrives. Clamping alone is
-   not evidence that historical error has become small.
+2. Normalize signed execution quantities to increases/reductions for each position side.
+   Let `S` be cumulative usable quantity deltas, including initial zero. Choose
+   `opening_size = max(0, -min(S), abs(current_size) - S[-1])`, then walk forward.
+   This minimum feasible opening inventory keeps known transitions intact. Unknown
+   quantities contribute no transition, with diagnostics; independent cashflow survives.
+   Decimal lot roundoff is bounded by exchange precision when available and disclosed.
+3. Walk average entry price forward over that same path. For an incomplete initial
+   episode, seed its carried quantity using the earliest usable retained fill price,
+   otherwise current basis/mark. Adds update contract-aware weighted average price;
+   reductions preserve it; an estimated flat resets estimated basis.
+4. Reconcile to the observed current size/basis with a separate estimated adjustment,
+   never a fabricated execution, fee or realized PnL. Unexplained larger current
+   inventory is carried from the opening; do not assume it came from a recent missing
+   add. This can retain an older loss until later evidence supplies a flat. Unexplained
+   reductions apply at the current endpoint. For an exchange-flat pair, apply its final
+   missing reduction at the latest retained fill time as a disclosed estimate, so samples
+   and cooldown share the same flat path. No retained fill means no cooldown anchor.
+5. Retain usable realized PnL and estimate missing components from available basis/price.
+   Unknown fees contribute no estimated cashflow with diagnostics. Do not invent a
+   realized result for an endpoint adjustment or count a known loss twice.
+6. Rebuild from the current facts when observations change. Self-healing means convergence
+   when missing evidence arrives, without a prior decision, local journal or historical
+   position observation as required authority. Estimates can still materially differ from
+   the unavailable true history; expose opening inventory, per-fill estimates and adjustments.
 
 Same-timestamp rows are handled deterministically per symbol/side before scope
 aggregation. Prefer actual sequence information when available. Otherwise use a
 documented tie convention or cohort aggregation and report ambiguity; independent
-symbols must not require a provable global fill order. Artificial or ambiguous flats
-alone must not be presented as proof that a reconstructible in-window stop ended.
+symbols must not require a provable global fill order. The reconciler chooses one
+estimated path; its scope flats drive both drawdown resets and lifecycle. There is no
+second historical-correctness gate which rejects those flats. Unknown cross-pair ordering
+uses a whole-timestamp cohort rather than inventing an internal portfolio flat/reopen.
 Fresh exchange positions establishing that every selected position is flat are a separate
 authority: when the final historical boundary is unavailable, use the latest retained scoped
 fill timestamp as a disclosed estimate for cooldown. Apply this reconstructed lifecycle policy; a prior local flag cannot overrule it.
@@ -630,7 +638,7 @@ Acceptance criteria:
   waves. Optimization must preserve
   the reference calculation and should not introduce another correctness gate.
 
-EMA and quantity clamping do not guarantee small reconstruction errors. The suite
+EMA and minimum-inventory reconstruction do not guarantee small reconstruction errors. The suite
 must expose decision errors rather than declaring every finite result good enough.
 
 ## Migration and PR sequence
