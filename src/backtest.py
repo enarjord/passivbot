@@ -995,9 +995,9 @@ def build_backtest_payload(
     """
 
     from config.hsl_revised import require_runtime_support
-    require_runtime_support(config)
+    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
     if runtime_config is not None:
-        require_runtime_support(runtime_config)
+        require_runtime_support(runtime_config, supported_modes=("coin", "pside", "unified"))
     if runtime_config is None:
         runtime_config = compile_runtime_config(config, runtime="backtest", record_step=False)
     if execution_settings is None:
@@ -3227,7 +3227,7 @@ async def main():
         raw_snapshot=raw_snapshot,
     )
     from config.hsl_revised import require_runtime_support
-    require_runtime_support(config)
+    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(
         cli_log_level, config_logging_value, fallback=1

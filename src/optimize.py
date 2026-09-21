@@ -3505,7 +3505,7 @@ async def main():
         raw_snapshot=raw_snapshot,
     )
     from config.hsl_revised import require_runtime_support
-    require_runtime_support(config)
+    require_runtime_support(config, supported_modes=("coin", "pside", "unified"))
     config = parse_overrides(config, verbose=False)
     validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     if "couple_unstuck_ema_spans" in (
