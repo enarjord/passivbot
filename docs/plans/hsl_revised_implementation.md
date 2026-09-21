@@ -173,6 +173,32 @@ Still required before offline completion:
 No actual live testing or legacy replacement is part of offline completion. Those are
 subsequent stages with separate authorization.
 
+## Live snapshot-to-decision adapter
+
+`live.hsl_revised_runtime` captures immutable serialized requests from a committed complete
+account snapshot, canonical fills, current market snapshots and source-resolution candles.
+It selects per-coin/side or one portfolio policy, values disabled-entry exposure in unified
+mode, passes raw balance and configured coin slots, and delegates price estimation and all
+risk/lifecycle decisions to Rust. Historical damage is diagnostic; essential current-input
+absence is scoped before evaluation. Native results are validated as a complete batch before
+any result is returned. No prior decision, saved EMA, local RED flag or journal is an input.
+
+Account and quote observation times come from the authoritative freshness ledger and market
+snapshot provider. Their UTC times, candle capture times and optional factual fill-fetch
+interval are translated into the evaluation clock without moving exchange event/candle times.
+An unknown fill-fetch interval remains unknown: a cache read does not supply a post-position
+certificate. It cannot prevent a numeric estimate, though lifecycle boundaries may remain
+uncertain. Complete account response absence supplies explicit flat sizes; historical flat
+pairs may retain an older factual market snapshot or a retained source candle close when a
+live quote is unavailable; that historical price never values current exposure. Out-of-window
+flat symbols are excluded.
+
+Capture and evaluation are synchronous, with no intervening await. Callers still need bounded
+asynchronous acquisition, current-state revalidation at execution, scoped diagnostics and
+protective scheduling. This adapter alone does not open the public live guard or constitute
+the full offline fake-live readiness gate. Actual outer-loop integration and its failure,
+restart, execution and latency coverage remain outstanding.
+
 ## Staged configuration boundary
 
 `config.hsl_revised` owns explicit migration and engine-specific hydration.
