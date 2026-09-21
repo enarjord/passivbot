@@ -261,6 +261,9 @@ class OKXBot(CCXTBot):
 
     async def execute_cancellation(self, order: dict) -> dict:
         """OKX: Cancel order with special handling for 51400 (already cancelled/filled)."""
+        from live import hsl_revised_live, executor
+        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
+            return executor.DeferredOrderCancellation()
         try:
             self._emit_execution_connector_call_started_event(
                 order=order,

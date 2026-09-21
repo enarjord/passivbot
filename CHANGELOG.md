@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Connect staged revised-HSL live protection to the actual execution loop and startup preparation.
+  History repair and ordinary planning run in the background while current inputs support scoped
+  panic closes. Recheck each write against current Rust permissions; reconstruct restart and
+  partial-close behavior from exchange observations. Public activation remains gated and legacy
+  HSL stays the default.
+
 - Reduce staged revised-HSL live snapshot cost by transporting candle scalars and the compact
   native price grid directly, preserving projected closes, factual source times, diagnostics and
   complete decisions. Public activation remains gated pending execution-loop validation.

@@ -24,8 +24,17 @@ def staged_planner_required_surfaces(
     bot, *, include_market_snapshot: bool = True
 ) -> frozenset[str]:
     """Return live input surfaces required before staged order planning may proceed."""
-    del bot
     surfaces = set(ACCOUNT_SURFACES)
+    from live import hsl_revised_live
+    if hsl_revised_live.selected(bot):
+        now = int(bot.get_exchange_time())
+        start = max(0, now - round(bot.config['live']['pnls_max_lookback_days'] * 86_400_000))
+        required, _ = bot._required_fill_history_start_ms(now, pnl_start_ms=start)
+        if not required:
+            # Revised HSL can estimate history. Other enabled fill/PnL
+            # consumers retain the canonical strict surface; trailing input
+            # availability is scoped separately by the strategy reader.
+            surfaces.discard('fills')
     if include_market_snapshot:
         surfaces.add("market_snapshot")
     return frozenset(surfaces)
@@ -351,10 +360,11 @@ def build_protective_planning_snapshot(
 
 
 def current_planning_snapshot_invalid_for_creations(
-    bot, symbols: Iterable[str]
+    bot, symbols: Iterable[str], *, snapshot=None,
 ) -> list[dict]:
-    """Return reasons the current staged planning snapshot is unsafe for creations."""
-    snapshot = getattr(bot, "_current_planning_snapshot", None)
+    """Return reasons the supplied/current planning snapshot is unsafe for creations."""
+    if snapshot is None:
+        snapshot = getattr(bot, "_current_planning_snapshot", None)
     ordered_symbols = tuple(
         sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
     )

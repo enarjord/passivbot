@@ -151,7 +151,7 @@ def market_snapshot_ticker_strategy(bot) -> str:
 
 
 async def filter_fresh_market_snapshot_creations(
-    bot, orders: list[dict]
+    bot, orders: list[dict], *, planning_snapshot=None,
 ) -> list[dict]:
     """Block staged order creations unless live market snapshots are still fresh."""
     if not orders:
@@ -159,9 +159,13 @@ async def filter_fresh_market_snapshot_creations(
     symbols = sorted({str(order["symbol"]) for order in orders if order.get("symbol")})
     if not symbols:
         return orders
-    planning_snapshot_invalid = bot._current_planning_snapshot_invalid_for_creations(
-        symbols
-    )
+    if planning_snapshot is None:
+        planning_snapshot_invalid = bot._current_planning_snapshot_invalid_for_creations(symbols)
+    else:
+        from live import planning_gates
+        planning_snapshot_invalid = planning_gates.current_planning_snapshot_invalid_for_creations(
+            bot, symbols, snapshot=planning_snapshot)
+
     if planning_snapshot_invalid:
         refreshable_reasons = {
             ("market_snapshot", "snapshot_too_old"),
@@ -247,6 +251,9 @@ async def filter_fresh_market_snapshot_creations(
             bot, orders, "pre_create_market_snapshot_unavailable"
         )
         return []
+    from live import hsl_revised_live
+    if hsl_revised_live.selected(bot):
+        hsl_revised_live.owner(bot).quotes.update(snapshots)
     orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)
     return orders
 

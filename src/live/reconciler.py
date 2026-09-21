@@ -969,6 +969,14 @@ async def calc_orders_to_cancel_and_create(bot):
         prepare_order_churn_evidence(bot, ideal_orders, generation=generation)
     else:
         state.clear_history()
+    from live import hsl_revised_live
+    if hsl_revised_live.selected(bot):
+        wave = bot._hsl_revised_planning_wave
+        snapshot = bot._current_planning_snapshot
+        cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+        hsl_revised_live.owner(bot).bind(wave, cancels, creates)
+        bot._current_planning_snapshot = snapshot
+        return cancels, creates
     return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
 
 

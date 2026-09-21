@@ -50,6 +50,9 @@ async def refresh_authoritative_state(bot) -> bool:
     """Refresh authoritative account state before planning/execution."""
     if bot.stop_signal_received:
         return False
+    from live import hsl_revised_live
+    if hsl_revised_live.selected(bot):
+        return await refresh_protective_authoritative_state(bot, require_balance=True)
     bot._begin_authoritative_refresh_epoch()
     return await bot._refresh_authoritative_state_staged()
 

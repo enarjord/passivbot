@@ -57,7 +57,7 @@ from fill_events_manager import (
 )
 from live import candle_ws, executor, market_data, planning_gates, reconciler, state_refresh
 from live.diagnostic_safety import bounded_traceback_detail as _bounded_traceback_detail
-from live import risk_input_recovery, hsl_protection
+from live import risk_input_recovery, hsl_protection, hsl_revised_live
 from live.order_churn_gate import (
     ORDER_CHURN_GATE_SUPPORTED_EXCHANGES,
     OrderChurnGateState,
@@ -1199,6 +1199,9 @@ class Passivbot:
         """Log bounded fallbacks and preserve restart-budget handling."""
         if not failures:
             return
+        for _action, _order, error in failures:
+            if isinstance(error, FatalBotException):
+                raise error
         for action, order, error in failures:
             symbol = order.get("symbol") if isinstance(order, dict) else None
             if symbol:
@@ -1730,7 +1733,7 @@ class Passivbot:
         self._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
-        self.hsl = self._parse_hsl_config()
+        self.hsl = {} if hsl_revised_live.selected(self) else self._parse_hsl_config()
         self._runtime_forced_modes = {"long": {}, "short": {}}
         self._equity_hard_stop_supervisor_running = False
         self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
@@ -3456,13 +3459,16 @@ class Passivbot:
                 return
             # Minimal trading-ready warmup first; broad approved-coin catch-up runs in background.
             boot_stage = "warmup_trading_ready_candles"
-            try:
-                await self.warmup_trading_ready_candles()
-            except Exception as e:
-                logging.info(
-                    "[boot] trading-ready candle warmup skipped | error_type=%s",
-                    bounded_exception_type(e),
-                )
+            if hsl_revised_live.selected(self):
+                await hsl_revised_live.owner(self).during_preparation(self.warmup_trading_ready_candles())
+            else:
+                try:
+                    await self.warmup_trading_ready_candles()
+                except Exception as e:
+                    logging.info(
+                        "[boot] trading-ready candle warmup skipped | error_type=%s",
+                        bounded_exception_type(e),
+                    )
             Passivbot._startup_timing_mark(self, "active-candle")
             if self.stop_signal_received:
                 self._monitor_emit_stop(
@@ -3875,7 +3881,8 @@ class Passivbot:
         self.init_markets_last_update_ms = utc_ms()
         # A journal commitment needs no new balance or equity reconstruction.
         # Load only execution metadata before servicing it, even on a cold start.
-        protection_bootstrap = (not getattr(self, "_bot_ready", False)
+        protection_bootstrap = (not hsl_revised_live.selected(self)
+                                and not getattr(self, "_bot_ready", False)
                                 and bool(hsl_protection.manager(self).pending_exits()))
         if protection_bootstrap:
             await self._load_market_metadata(verbose=verbose)
@@ -3956,10 +3963,16 @@ class Passivbot:
             authoritative_ready = await self.refresh_authoritative_state()
         self._assert_supported_live_state()
         self.set_market_specific_settings()
-        await self.update_effective_min_cost()
+        if hsl_revised_live.selected(self):
+            await hsl_revised_live.owner(self).during_preparation(self.update_effective_min_cost())
+        else:
+            await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
-            await self.update_first_timestamps()
+            if hsl_revised_live.selected(self):
+                await hsl_revised_live.owner(self).during_preparation(self.update_first_timestamps())
+            else:
+                await self.update_first_timestamps()
 
     def log_once(self, msg: str):
         if not hasattr(self, "log_once_set"):
@@ -6426,6 +6439,12 @@ class Passivbot:
         self._execution_loop_task = current_task
         self._execution_loop_task_is_inline = True
         self._execution_loop_stopped = execution_loop_stopped
+        if hsl_revised_live.selected(self):
+            try:
+                return await hsl_revised_live.owner(self).run()
+            finally:
+                self._execution_loop_task = None
+                execution_loop_stopped.set()
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         authoritative_fill_retry_count = 0
         authoritative_fill_retry_reason = None
@@ -8094,10 +8113,11 @@ class Passivbot:
         )
 
     async def _filter_fresh_market_snapshot_creations(
-        self, orders: list[dict]
+        self, orders: list[dict], *, planning_snapshot=None,
     ) -> list[dict]:
         """Block staged order creations unless live market snapshots are still fresh."""
-        return await market_data.filter_fresh_market_snapshot_creations(self, orders)
+        return await market_data.filter_fresh_market_snapshot_creations(
+            self, orders, **({"planning_snapshot": planning_snapshot} if planning_snapshot is not None else {}))
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of orders after throttling and bookkeeping."""
@@ -8698,6 +8718,9 @@ class Passivbot:
 
     def stop_data_maintainers(self, verbose=True):
         """Cancel background candle/orderbook tasks and log the outcome."""
+        revised_owner = getattr(self, "_hsl_revised_live", None)
+        if revised_owner is not None:
+            revised_owner.cancel_inputs()
         if not hasattr(self, "maintainers"):
             return
         res = {}
@@ -11095,7 +11118,8 @@ class Passivbot:
 
     def get_forced_PB_mode(self, pside, symbol=None):
         """Return an explicitly forced mode for the side or symbol, if configured."""
-        if symbol is not None and hsl_protection.holds_after_emergency_exit(self, pside, symbol):
+        if (not hsl_revised_live.selected(self) and symbol is not None
+                and hsl_protection.holds_after_emergency_exit(self, pside, symbol)):
             return "panic"
         if self._equity_hard_stop_enabled(pside):
             state = self._hsl_state(pside)
@@ -13016,6 +13040,11 @@ class Passivbot:
         hsl_fill_observation = ((ledger.epoch, position_observation.revision)
                                 if position_observation.epoch == ledger.epoch else None)
         self._hsl_fill_tail_observation = None
+        # Factual acquisition interval for the revised estimator. A local cache
+        # read, skipped fetch or failed attempt cannot renew this observation.
+        # It is not a readiness certificate or a persisted trading decision.
+        self._hsl_revised_fill_capture_interval = None
+        fill_capture_interval = None
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
         before_events_count = 0
@@ -13036,8 +13065,15 @@ class Passivbot:
             return []
 
         async def refresh_evidence(operation, **kwargs):
+            nonlocal fill_capture_interval
+            started_ms = int(utc_ms())
             try:
-                return await operation(**kwargs)
+                result = await operation(**kwargs)
+                fill_capture_interval = (
+                    started_ms if fill_capture_interval is None else fill_capture_interval[0],
+                    int(utc_ms()),
+                )
+                return result
             except ValueError as exc:
                 if source != "hsl_emergency":
                     raise
@@ -13384,6 +13420,14 @@ class Passivbot:
                 fill_fetch_completed = True
             if degraded_repair_attempted:
                 refresh_mode = f"{refresh_mode}_with_degraded_pnl_repair"
+
+            if fill_fetch_completed:
+                self._hsl_revised_fill_capture_interval = fill_capture_interval
+                if hsl_revised_live.selected(self) and fill_capture_interval is not None:
+                    # Capture before yielding again. A later cache mutation or
+                    # replacement cannot inherit this remote observation time.
+                    self._hsl_revised_fill_observation = hsl_revised_live.runtime.observe_fills(
+                        self, fill_capture_interval)
 
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
@@ -16456,7 +16500,9 @@ class Passivbot:
                     targets.setdefault(symbol, set()).add(pside)
         return targets
 
-    async def calc_protective_panic_ideal_orders_orchestrator(self, *, target_psides_by_symbol=None):
+    async def calc_protective_panic_ideal_orders_orchestrator(
+        self, *, target_psides_by_symbol=None, market_snapshots=None, execution_types=None,
+    ):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
         if not hasattr(self, "_hsl_protective_unavailable_symbols"):
@@ -16493,7 +16539,8 @@ class Passivbot:
             return {}
 
         try:
-            market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+            if market_snapshots is None:
+                market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         except MarketSnapshotUnavailable as exc:
             # A quote outage in one scope must not strand independently ready
             # exits. Partition inputs before Rust; never discard part of its output.
@@ -16576,8 +16623,9 @@ class Passivbot:
                     "order_book": {"bid": float(snap.bid), "ask": float(snap.ask)},
                     "price_step": float(self.price_steps[symbol]),
                     "execution_type": (
-                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside, symbol=symbol)
-                        if enabled else "limit"
+                        execution_types[symbol, pside] if execution_types is not None else
+                        (Passivbot._equity_hard_stop_panic_close_order_type(self, pside, symbol=symbol)
+                         if enabled else "limit")
                     ),
                 })
         orders = reconciler.parse_and_validate_protective_closes(
@@ -16781,6 +16829,13 @@ class Passivbot:
                     )
             else:
                 out[out_key] = float(val or 0.0)
+        if hsl_revised_live.selected(self):
+            policy = hsl_revised_live.policy(self, pside, symbol)
+            # The order kernel consumes only execution policy; the shared
+            # revised evaluator owns the signal and controller.
+            out.update(hsl_enabled=policy["enabled"],
+                       hsl_panic_close_order_type=policy["panic_close_order_type"])
+            return out
         hsl_cfg = (
             self._equity_hard_stop_config(pside, symbol)
             if symbol is not None and hasattr(self, "_equity_hard_stop_config")
@@ -17056,7 +17111,8 @@ class Passivbot:
         return set(due)
 
     def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
-        if hsl_protection.holds_after_emergency_exit(self, pside, symbol):
+        if (not hsl_revised_live.selected(self)
+                and hsl_protection.holds_after_emergency_exit(self, pside, symbol)):
             return "panic"
         if self._equity_hard_stop_enabled(pside):
             state = self._hsl_state(pside)
@@ -19600,6 +19656,8 @@ class Passivbot:
             )
         )
         if not symbols:
+            if hsl_revised_live.selected(self):
+                self._hsl_revised_planning_wave = hsl_revised_live.owner(self).capture()
             return {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         exchange_unavailable_symbols = (
@@ -19653,6 +19711,18 @@ class Passivbot:
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        if hsl_revised_live.selected(self):
+            revised = hsl_revised_live.owner(self)
+            wave = revised.capture(market_snapshots)
+            revised.report(wave)
+            self._hsl_revised_planning_wave = wave
+            for side in ("long", "short"):
+                for symbol in symbols:
+                    action, _ = wave.permission(symbol, side)
+                    if action in {"panic", "halted"}:
+                        mode_overrides[side][symbol] = "panic"
+                    elif action == "unavailable":
+                        mode_overrides[side][symbol] = "manual"
         self._assert_staged_planner_preconditions(
             include_market_snapshot=True,
             context="rust order calculation",
@@ -20203,12 +20273,17 @@ class Passivbot:
         """Determine which existing orders to cancel and which new ones to place."""
         return await reconciler.calc_orders_to_cancel_and_create(self)
 
-    async def calc_protective_panic_orders_to_cancel_and_create(self, *, target_psides_by_symbol=None):
+    async def calc_protective_panic_orders_to_cancel_and_create(
+        self, *, target_psides_by_symbol=None, market_snapshots=None, execution_types=None,
+    ):
         """Determine protective cancels/reduce-only creates for RED panic supervision."""
         ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator(
             **({"target_psides_by_symbol": target_psides_by_symbol}
-               if target_psides_by_symbol is not None else {})
+               if target_psides_by_symbol is not None else {}),
+            **({"market_snapshots": market_snapshots, "execution_types": execution_types}
+               if market_snapshots is not None else {}),
         )
+        protective_snapshot = self._current_planning_snapshot
         actual_symbols = sorted(
             set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
             | set(ideal_orders)
@@ -20216,7 +20291,7 @@ class Passivbot:
         actual_psides_by_symbol = getattr(
             self, "_protective_panic_reconcile_psides_by_symbol", None
         )
-        return await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+        plan = await reconciler.calc_orders_to_cancel_and_create_from_ideal(
             self,
             ideal_orders,
             actual_symbols=actual_symbols,
@@ -20224,6 +20299,8 @@ class Passivbot:
             apply_mode_filters=False,
             collect_fresh_entry_eligibility=False,
         )
+        self._current_planning_snapshot = protective_snapshot
+        return plan
 
     def _snapshot_actual_orders(
         self,
@@ -22031,6 +22108,8 @@ class Passivbot:
             "price": order["price"],
             "params": self._build_order_params(order),
         }
+        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
+            return executor.DeferredOrderCreation()
         planned_generation = order.get("_planned_account_invalidation_generation")
         if (
             planned_generation is not None
@@ -22055,6 +22134,8 @@ class Passivbot:
 
     async def execute_cancellation(self, order: dict) -> dict:
         """Cancel a single order via the exchange client."""
+        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
+            return executor.DeferredOrderCancellation()
         executed = None
         try:
             self._emit_execution_connector_call_started_event(

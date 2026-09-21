@@ -7,8 +7,8 @@ import sys
 import time
 from collections import Counter, defaultdict
 
-from passivbot_exceptions import RestartBotException
-from live import hsl_protection
+from passivbot_exceptions import RestartBotException, FatalBotException
+from live import hsl_protection, hsl_revised_live
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
@@ -19,6 +19,10 @@ from utils import utc_ms as _utils_utc_ms
 
 class DeferredOrderCreation:
     """An order deliberately withheld before the exchange connector was called."""
+
+
+class DeferredOrderCancellation:
+    """A cancellation withheld before calling the exchange connector."""
 
 
 def _passivbot_module():
@@ -983,7 +987,8 @@ async def execute_order_plan(
             )
         before_market_filter = len(to_create_mod)
         to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
-            bot, to_create_mod
+            bot, to_create_mod,
+            **({"planning_snapshot": snapshot} if hsl_revised_live.selected(bot) else {}),
         )
         if order_wave is not None:
             order_wave["skipped_create"] += max(
@@ -1059,7 +1064,7 @@ async def execute_order_plan(
                 if order_wave is not None:
                     order_wave["create_ms"] = int(max(0, _utc_ms() - create_started_ms))
                     order_wave["create_posted"] = len(res or [])
-            except RestartBotException:
+            except (RestartBotException, FatalBotException):
                 raise
             except Exception as exc:
                 if not _live_event_console_available(bot, passivbot_cls):
@@ -1148,7 +1153,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     bot._execution_connector_call_context = connector_call_context
     try:
         res = await bot.execute_orders(orders)
-    except RestartBotException:
+    except (RestartBotException, FatalBotException):
         # Batch results were not classified; do not publish a partial cycle trace.
         bot._fresh_entry_eligibility_trace = None
         raise
@@ -1422,7 +1427,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     bot._execution_connector_call_context = connector_call_context
     try:
         res = await bot.execute_cancellations(orders)
-    except RestartBotException:
+    except (RestartBotException, FatalBotException):
         raise
     except Exception as exc:
         for idx, order in enumerate(orders):
@@ -1470,6 +1475,8 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             )
         return []
     for idx, (ex, order) in enumerate(zip(res, orders)):
+        if isinstance(ex, DeferredOrderCancellation):
+            continue
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])
             passivbot_cls._emit_execution_order_event(

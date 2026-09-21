@@ -480,3 +480,23 @@ changing BTC collateral with and without fills, liquidation, and subset policy a
 activation is still gated pending optimizer schema/fitness versioning, plotting/runtime consumer
 integration, performance gates and the remaining offline live implementation. The current native
 analysis is not evidence that those remaining gates have passed.
+
+## Staged live loop and execution integration
+
+The separate revised live owner is now connected to startup preparation, the actual execution loop,
+ordinary Rust planning, protective reconciliation and connector admission. It preserves the legacy
+runtime default and closed revised activation guard. Production policy and observation authority
+are specified in the [feature contract](../ai/features/equity_hard_stop_loss.md#staged-revised-live-execution).
+
+Offline fake-client tests use the real rebuilt extension and actual account, planner and executor
+paths. They cover all three signal scopes and both position sides, history/preparation stalls,
+missing quotes, an unfilled limit close alongside another coin's market exit, and otherwise-valid
+initial entries without HSL history. A fresh bot reconstructs cooldown/never policy and partial
+close continuity from the preceding bot's exchange fills and balance, then releases the halt at
+the specified boundary. Further tests reject stale permissions and malformed native output at the
+write boundary and exercise new RED protection while startup warmup is suspended.
+
+This slice does not open runtime guards. Full ordinary fake-CLI stepping and revised trace output,
+structured monitor integration, broader fault/performance gates, final backtest/optimizer activation
+and the operator live-validation/rollback checklist remain follow-up work. No actual live bot tests
+are included in this offline gate.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from live import hsl_protection
+from config.hsl_revised import engine as hsl_engine
 
 import asyncio
 import json
@@ -698,6 +699,8 @@ def _equity_hard_stop_config(
 def _equity_hard_stop_enabled(
     self, pside: Optional[str] = None, *, symbol: Optional[str] = None
 ) -> bool:
+    if hsl_engine(getattr(self, "config", {})) == "revised":
+        return False
     if not hasattr(self, "hsl") or not isinstance(self.hsl, dict):
         legacy_cfg = getattr(self, "equity_hard_stop_loss", None)
         enabled = bool(isinstance(legacy_cfg, dict) and legacy_cfg.get("enabled", False))

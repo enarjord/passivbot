@@ -1726,6 +1726,9 @@ class HyperliquidBot(CCXTBot):
 
     async def execute_cancellation(self, order: dict) -> dict:
         """Hyperliquid: Cancel order with vault support."""
+        from live import hsl_revised_live, executor
+        if hsl_revised_live.selected(self) and not hsl_revised_live.owner(self).admit(order):
+            return executor.DeferredOrderCancellation()
         params = (
             {"vaultAddress": self.user_info["wallet_address"]} if self.user_info["is_vault"] else {}
         )
