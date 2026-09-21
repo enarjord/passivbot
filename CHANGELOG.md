@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Stage explicit revised-HSL backtest policy transport for coin, side, and portfolio scopes.
+  Native simulations reject invalid policy inputs before running and retain the revised report
+  in compact results. Unsupported legacy HSL analysis fields are omitted for this opt-in native
+  path; public revised backtest/optimizer activation remains gated pending analysis migration.
+
+
 - Add revised-HSL lifecycle diagnostics and separate simulator reports, including
   instantaneous zero-cooldown stops, replay deduplication and one portfolio counter
   in unified mode. Reports do not supply trading state; revised activation remains gated.

@@ -2,7 +2,8 @@
 
 This temporary implementation record follows the
 [reviewed design](hsl_best_effort_redesign.md). Legacy HSL remains the trading default;
-the revised numerical kernel below has no live, backtest or optimizer controller caller.
+the revised evaluator has an internal simulator execution caller; public backtest, optimizer
+and live activation remain gated until their consumer integrations are complete.
 
 ## Shared numerical kernel
 
@@ -406,3 +407,25 @@ independent reference tests still validate unchanged trading decisions.
 Public activation remains closed. Engine-aware payloads, migration of legacy analysis
 metrics and optimizer objectives, performance, live capture/execution and full revised
 fake-live remain required before enabling any revised runtime mode.
+
+## Native backtest configuration transport
+
+The staged native simulator now accepts an explicit `equity_hard_stop_loss.engine=revised`
+policy payload produced from canonical config by `prep_backtest_args`. This is an internal
+transport discriminator derived from `live.hsl_engine`, not another user switch. The payload
+contains mode, intervention, two side policies, an explicit unified portfolio policy when
+selected, and effective dataset coin policies only in coin mode. Fractional EMA spans survive;
+disabled restart choices may remain null. Unified never infers policy from either side.
+
+The native parser validates active policies, dataset coin identities, scope shape, enabled
+lookback and 1m cadence before simulation. It rejects duplicate flattened HSL fields in ordinary
+bot parameters, so there is one revised policy authority. Shared legacy Rust storage remains
+inert, not hydrated back into the revised producer/controller.
+
+Detailed and compact native results expose the same revised summary. Legacy HSL and
+`strategy_eq` metrics depend on legacy observations and are deliberately absent from revised
+native analysis until their separate analysis migration; ordinary equity drawdown remains.
+The public payload builder, CLI and optimizer activation guards remain closed. Native fixture
+runs here establish config-to-simulator integration, not completion of public backtesting or
+optimizer fitness support. The next activation gate must migrate those analysis consumers and
+version revised fitness, preserving independent general strategy-equity statistics.

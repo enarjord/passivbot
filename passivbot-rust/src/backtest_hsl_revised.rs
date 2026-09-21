@@ -746,7 +746,7 @@ mod tests {
             red_threshold: 0.05,
             ema_span_minutes: 1.0,
             cooldown_minutes_after_red: 10.0,
-            restart_after_red_policy: "always".into(),
+            restart_after_red_policy: Some("always".into()),
             panic_close_order_type: order_type.into(),
         };
         bt.backtest_params.equity_hard_stop_loss.signal_mode = mode.into();
@@ -922,9 +922,9 @@ mod tests {
                     .as_mut()
                     .unwrap();
                 for p in &mut cfg.sides {
-                    p.restart_after_red_policy = restart.into();
+                    p.restart_after_red_policy = Some(restart.into());
                 }
-                cfg.portfolio.as_mut().unwrap().restart_after_red_policy = restart.into();
+                cfg.portfolio.as_mut().unwrap().restart_after_red_policy = Some(restart.into());
                 fresh.fills = bt.fills.clone();
                 fresh.balance.usd_total_balance = bt.balance.usd_total_balance;
                 fresh.balance.usd_cash_wallet = bt.balance.usd_cash_wallet;
