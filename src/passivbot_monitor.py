@@ -321,6 +321,14 @@ def _monitor_emit_stop(
     return event
 
 
+def _monitor_hsl_section(self, *, now_ms):
+    from live.hsl_revised_live import selected
+    if selected(self):
+        from live.hsl_revised_diagnostics import snapshot
+        return snapshot(self, now_ms=now_ms)
+    return {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")}
+
+
 def _monitor_hsl_payload(self, pside: str) -> dict:
     enabled = self._equity_hard_stop_enabled(pside)
     state = self._hsl_state(pside)
@@ -1945,7 +1953,7 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
                 "short": dict(self._runtime_forced_modes.get("short", {})),
             },
         },
-        "hsl": {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")},
+        "hsl": _monitor_hsl_section(self, now_ms=now_ms),
         "market": market,
         "trailing": self._build_monitor_trailing_section(
             balance_raw=balance_raw,

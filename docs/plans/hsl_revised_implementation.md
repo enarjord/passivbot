@@ -524,3 +524,15 @@ metadata, deny IP networking in the parent and spawned workers, and exercise act
 RED/panic/cooldown reports, scope-sensitive fitness, scenario overrides, evaluator serialization,
 and DEAP/pymoo saved-checkpoint resume. Config exports and saved-fitness checks keep engine/policy
 provenance. These tests validate simulation integration, not live exchange behavior.
+
+## Staged live observation visibility
+
+The revised owner now publishes passive scoped diagnostics from each completed evaluation. Monitor
+snapshots retain bounded GREEN/RED/inactive/unavailable scope rows, complete counts, approximation
+reasons and raw/EMA/selected drawdown. Unified presentation has one portfolio scope. Input expiry,
+pending account confirmation and generation changes label prior observations as stale; the
+monitor never creates a risk owner or reevaluates a decision. Structured status events summarize
+qualitative changes without repeating unchanged numeric samples on the console.
+
+This completes staged structured-monitor integration. Full fake-CLI stepping, admission-throughput
+validation, remaining activation gates and the live-validation/rollback checklist remain pending.

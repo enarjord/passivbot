@@ -492,6 +492,12 @@
     return "";
   }
 
+  function hslSummary(hsl) {
+    if (hsl.engine !== "revised") return `L ${hsl.long?.tier || "-"} / S ${hsl.short?.tier || "-"}`;
+    const counts = hsl.counts || {};
+    return `revised ${hsl.signal_mode || "-"} · ${hsl.observation_status || "-"} · GREEN ${counts.green || 0} / RED ${counts.red || 0} / unavailable ${counts.unavailable || 0} / estimated ${counts.estimated || 0}`;
+  }
+
   function renderBotOverview(botEntries) {
     els.botOverview.innerHTML = "";
     const activeCount = botEntries.filter(([, entry]) => botRelayStatus(entry) === "active").length;
@@ -538,7 +544,7 @@
           </div>
           <div class="overview-metric">
             <p class="label">HSL</p>
-            <p class="value">${escapeHtml(`L ${hsl.long?.tier || "-"} / S ${hsl.short?.tier || "-"}`)}</p>
+            <p class="value">${escapeHtml(hslSummary(hsl))}</p>
           </div>
         </div>
         <p class="overview-foot">events ${escapeHtml(String(botEntry.recentEvents.length))} · ticks ${escapeHtml(String(botEntry.recentTicks.size))} · uptime ${escapeHtml(fmtUptimeMs(health.uptime_ms))}</p>
@@ -559,8 +565,15 @@
       ["Orders", `${fmtCompact(health.orders_placed, 0)} / ${fmtCompact(health.orders_cancelled, 0)}`],
       ["Fills", fmtCompact(health.fills, 0)],
       ["Uptime", fmtUptimeMs(health.uptime_ms)],
-      ["HSL", `L ${hsl.long?.tier || "-"} / S ${hsl.short?.tier || "-"}`],
+      ["HSL", hslSummary(hsl)],
     ];
+    if (hsl.engine === "revised") {
+      for (const scope of (hsl.scopes || []).slice(0, 3)) {
+        const label = [scope.symbol, scope.pside].filter(Boolean).join(" ") || "portfolio";
+        rows.push([`HSL ${label}`, `${scope.action || scope.availability} · DD ${fmtCompact(scope.score, 4)} / ${fmtCompact(scope.threshold, 4)} · ${scope.estimated ? "estimated" : scope.availability}`]);
+      }
+      if ((hsl.scope_count || 0) > 3) rows.push(["More HSL scopes", String(hsl.scope_count - 3)]);
+    }
     els.summaryCards.innerHTML = "";
     for (const [label, value] of rows) {
       const card = document.createElement("article");

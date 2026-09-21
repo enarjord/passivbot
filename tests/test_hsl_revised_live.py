@@ -91,6 +91,15 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
             assert not any(c['method'] == 'create_order' for c in bot.cca.export_request_log())
         elif path == 'wave':
             assert await instance.protect()
+            from live.hsl_revised_diagnostics import snapshot
+            from utils import utc_ms
+            diagnostics = snapshot(bot, now_ms=int(utc_ms()))
+            assert diagnostics['engine'] == 'revised'
+            assert diagnostics['signal_mode'] == mode
+            assert diagnostics['counts']['red'] >= 1
+            if mode == 'unified':
+                assert diagnostics['scope_count'] == 1
+                assert diagnostics['scopes'][0]['pside'] is None
         elif path == 'cancel_first':
             # Discovering an external order and later confirming its cancellation
             # invalidate account cohorts. Bounded subsequent polls must finish
