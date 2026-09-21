@@ -371,3 +371,25 @@ Cache paths use `to_standard_exchange_name()` rather than raw CCXT identifiers s
 - `src/hlcv_preparation.py`
 - `src/tools/verify_hlcvs_data.py`
 - `exchange_integrations.md`
+
+## Source-resolution reads for revised HSL
+
+`get_candles(standardize=False)` retains normal source acquisition and caching but
+returns sparse source rows without the 1m gap-standardization or outside-range
+price seed. The 1m returned array is detached from the mutable cache. Native coarse
+cache reads remain native even with no exchange object; they must not relabel 1m
+rows as 5m/15m/1h. Existing callers retain standardization by default.
+
+The staged `live.hsl_revised_candles.acquire_sources` reader requests supported
+1m/5m/15m/1h sources over the full estimator window. A real 1m close at the inclusive
+left edge belongs to the window although its source bucket opened one minute earlier.
+Rust rejects earlier closes and coarse buckets straddling the boundary, selects the
+finest available source, and applies estimator-local gap carrying. Manager-persisted
+verified no-trade observations remain usable under the existing cache contract.
+
+Each source read is bounded by the caller's timeout. Expected exchange/transport/read
+failures retain type-only diagnostics and attempt a bounded cache-only read; independent
+resolutions survive. Invalid producer shapes, programming errors and cancellation
+propagate, with all sibling reads cancelled and awaited. No source projection is
+written into factual caches. The caller owns background scheduling and coherent
+current-state capture; this staged reader alone does not activate revised trading.

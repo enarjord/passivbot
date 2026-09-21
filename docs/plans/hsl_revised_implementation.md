@@ -262,3 +262,16 @@ capture time. Rust retains ownership of completeness, causal clipping, conflicts
 resampling and in-window carrying. These are transport helpers; no runtime caller
 is activated yet. Offline tests include the real fill manager over the fake exchange,
 contract quantities, fees, both sides, partial closes and cache-free reconstruction.
+
+## Source-resolution acquisition
+
+The revised candle reader captures immutable source tapes from the real candle
+manager across supported resolutions and the full requested window. It bypasses
+return-time 1m standardization so an internal coarse source can reach the Rust
+finest-source projector. Expected fetch failures perform bounded cache-only reads;
+timeout/cancellation and malformed producer behavior have explicit offline coverage.
+The left-edge 1m source bucket is requested only for its in-window closing observation.
+Native coarse cache reads without an exchange cannot masquerade as minute data.
+
+This is historical-data plumbing. Runtime scheduling, whole-snapshot revalidation,
+the final mixed-history dispatcher and full revised fake-live remain to be connected.

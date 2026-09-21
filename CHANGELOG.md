@@ -6,7 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Add immutable factual fill and candle transport for the experimental revised HSL, preserving native contract quantities, signed fees and historical uncertainty without changing the active trading path.
+- Add immutable factual fill and candle transport for the experimental revised HSL,
+  preserving native contract quantities, signed fees and historical uncertainty.
+  Add bounded source-resolution candle acquisition with cache-only recovery and sparse
+  observations for Rust's whole-window projection, without changing the active trading path.
 
 - Add the startup-only `live.hsl_engine` selector, defaulting to legacy, and explicit
   revised-HSL configuration migration with portfolio optimizer paths. Revised runtime
