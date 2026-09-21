@@ -58,14 +58,10 @@ def record(bot, wave):
         counts = Counter(row['tier'] or 'unavailable' for row in rows)
         counts['estimated'] = sum(row['estimated'] for row in rows)
         counts = {key: counts[key] for key in ('green', 'red', 'inactive', 'unavailable', 'estimated')}
-        instance = getattr(bot, '_hsl_revised_live', None)
-        stamps = [wave.captured_ms, wave.position_observed_ms]
+        stamps = [wave.captured_ms, wave.position_observed_ms, *wave.mark_observed_ms]
         ledger = getattr(bot, 'freshness_ledger', None)
         stamps += [state.updated_ms for name, state in getattr(ledger, 'surfaces', {}).items()
                    if name in ('balance', 'open_orders')]
-        if instance is not None:
-            stamps += [quote.fetched_ms for symbol, quote in instance.quotes.items()
-                       if any(p['size'] != 0 for p in bot.positions.get(symbol, {}).values())]
         observation = dict(engine='revised', schema_version=1,
             signal_mode=bot.config['live']['hsl_signal_mode'], captured_at_ms=wave.captured_ms,
             input_expires_at_ms=min(stamps) + int(bot._live_market_snapshot_max_age_ms()),
@@ -120,6 +116,10 @@ def snapshot(bot, *, now_ms):
         result['age_ms'] = max(0, age)
         result['observation_status'] = ('diagnostic_unavailable' if getattr(bot, '_hsl_revised_diagnostic_failed', False)
                                         else 'stale' if stale else 'current')
+        # Older bounded report/preview consumers retain only the aggregate tier.
+        # Keep last RED attention, but never present stale GREEN as current GREEN.
+        if result['observation_status'] != 'current' and result['tier'] != 'red':
+            result['tier'] = result['observation_status']
         return result
     except Exception as exc:
         logging.debug('[risk] revised HSL diagnostic read failed | error_type=%s', bounded_exception_type(exc))

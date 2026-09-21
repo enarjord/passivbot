@@ -442,6 +442,12 @@ or retained trading permission. Numeric metrics refresh on every completed evalu
 monitor snapshot even when no new status event is emitted. Sink/projection failure cannot inhibit
 risk evaluation or exchange execution.
 
+Diagnostic expiry uses the actual held-position mark timestamps consumed by evaluated scopes;
+quotes cached for disabled scopes cannot expire another scope's display. The bounded legacy
+aggregate preserves last RED attention, while a stale or failed GREEN observation is labelled
+stale or unavailable instead of advertising current GREEN. Per-scope rows retain the last observed
+native decision alongside explicit freshness.
+
 The revised monitor `hsl` section has `schema_version=1`, `signal_mode`, `observation_status`,
 `captured_at_ms`, `age_ms`, current account availability, complete scope counts and up to 128 scoped
 rows. RED scopes come first, then unavailable and estimated scopes. `omitted_scopes` discloses
