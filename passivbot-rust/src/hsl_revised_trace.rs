@@ -85,7 +85,16 @@ pub(crate) fn compose_with_cashflow_peaks(
     input: &Input,
     candle_free: bool,
 ) -> Result<Trace, String> {
-    let prepared = prepare(input)?;
+    compose_prepared(input, prepare(input)?, candle_free)
+}
+
+/// Consume facts already reconstructed from this exact snapshot in this call.
+/// This is evaluation-local reuse, never authority from an earlier evaluation.
+pub(crate) fn compose_prepared(
+    input: &Input,
+    prepared: Prepared,
+    candle_free: bool,
+) -> Result<Trace, String> {
     let mut reasons = prepared.reasons.clone();
     if prepared.pairs.is_empty() {
         return Ok(Trace {
