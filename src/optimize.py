@@ -2136,7 +2136,7 @@ class SuiteEvaluator:
                   if basis.scenario is None or basis.scenario == ctx.label),
                 *(check["metric"] for check in self.base.limit_checks
                   if check.get("scenario") is None or check["scenario"] == ctx.label),
-            ])
+            ], markets_by_exchange=ctx.msss)
         return scenario_config
 
     def _build_scenario_candidate_config(

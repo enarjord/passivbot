@@ -187,3 +187,26 @@ def test_disabled_side_objective_rejected_before_cpu_dataset_attachment():
     with pytest.raises(ValueError, match="no enabled side controller"):
         evaluator.evaluate([bound.low for bound in evaluator.bounds], [])
     assert evaluator.shared_hlcvs_np == {}
+
+
+@pytest.mark.parametrize("base_enabled,override_enabled", [(False, True), (True, False)])
+def test_combined_suite_validates_actual_source_market_policy(base_enabled, override_enabled):
+    cfg, markets, _ = inputs("coin")
+    fixed_side_bounds(cfg)
+    cfg["bot"]["short"]["hsl"].update(enabled=base_enabled, restart_after_red_policy="always")
+    cfg["backtest"]["coins"] = {"combined": ["AAA"]}
+    cfg["coin_overrides"] = {"AAA": {"bot": {"short": {"hsl": {
+        "enabled": override_enabled, "restart_after_red_policy": "always"}}}}}
+    cfg["optimize"]["scoring"] = [{"metric": "hard_stop_triggers_short", "goal": "min"}]
+    cfg["optimize"]["limits"] = []
+    ctx = SimpleNamespace(label="combined", config=cfg, overrides={}, msss={"combined": markets})
+    suite = SuiteEvaluator(Evaluator({}, {}, {}, cfg), [ctx], {"default": "mean"})
+    if override_enabled:
+        candidate = suite.build_scenario_candidate_config(cfg, ctx)
+        # The native transport and the validator must resolve the same policy.
+        from backtest import prep_backtest_args
+        native = prep_backtest_args(candidate, markets, "combined")[-1]["equity_hard_stop_loss"]
+        assert native["coins"]["AAA"][1]["enabled"] is True
+    else:
+        with pytest.raises(ValueError, match="no enabled side controller"):
+            suite.build_scenario_candidate_config(cfg, ctx)
