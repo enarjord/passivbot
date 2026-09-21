@@ -429,3 +429,18 @@ The public payload builder, CLI and optimizer activation guards remain closed. N
 runs here establish config-to-simulator integration, not completion of public backtesting or
 optimizer fitness support. The next activation gate must migrate those analysis consumers and
 version revised fitness, preserving independent general strategy-equity statistics.
+
+## Revised native analysis integration
+
+Revised runs now populate supported HSL metrics from the revised observer, preserving one unified
+controller. Open halts/partial exits, repeated panic during cooldown, per-fill losses and
+scope-local retriggers have explicit observation-based accounting. General full-run strategy-equity
+statistics and artifacts are computed independently of HSL enablement and exclude collateral PnL;
+the prior staged omission of these fields is superseded. Yellow/orange metrics remain absent.
+Compact Python execution retains the revised summary and coin subsets retain only selected policies.
+
+Native and prepared-payload integration tests cover compact/detail parity, active/inactive scopes,
+changing BTC collateral with and without fills, liquidation, and subset policy authority. Public
+activation is still gated pending optimizer schema/fitness versioning, plotting/runtime consumer
+integration, performance gates and the remaining offline live implementation. The current native
+analysis is not evidence that those remaining gates have passed.

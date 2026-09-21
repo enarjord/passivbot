@@ -4,6 +4,8 @@ mod revised_inputs;
 pub(crate) mod revised_runtime;
 #[path = "backtest_hsl_report.rs"]
 mod revised_report;
+#[path = "backtest_revised_analysis.rs"]
+mod revised_analysis;
 
 use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
@@ -2427,7 +2429,8 @@ impl<'a> Backtest<'a> {
                         k, self.balance.usd_total_balance
                     ));
                 }
-                self.record_strategy_equity_sample();
+                if self.revised_hsl_enabled() { self.record_revised_analysis(k); }
+                else { self.record_strategy_equity_sample(); }
                 break;
             }
             let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;
@@ -2445,10 +2448,13 @@ impl<'a> Backtest<'a> {
             if self.equity_tracking_active {
                 self.update_equities(k);
                 if self.check_and_apply_liquidation(k) {
-                    self.record_strategy_equity_sample();
+                    if self.revised_hsl_enabled() { self.record_revised_analysis(k); }
+                    else { self.record_strategy_equity_sample(); }
                     break;
                 }
-                if !self.revised_hsl_enabled() {
+                if self.revised_hsl_enabled() {
+                    self.record_revised_analysis(k);
+                } else {
                     self.update_hard_stop_state(k)?;
                     self.record_hard_stop_tier_sample();
                 }
@@ -4230,7 +4236,8 @@ impl<'a> Backtest<'a> {
     ) {
         if self.revised_hsl_enabled() {
             let key = self.revised_report_key(pside, idx);
-            self.revised_hsl_report.panic_fill(key, net_pnl);
+            let equity = self.current_usd_equity_at(k);
+            self.revised_hsl_report.panic_fill(key, net_pnl, equity);
             return;
         }
         let panic_loss = (-net_pnl).max(0.0);
@@ -6093,6 +6100,9 @@ impl<'a> Backtest<'a> {
                 return metrics;
             }
         }
+        if self.revised_hsl_enabled() {
+            return self.revised_strategy_metrics();
+        }
         let long_enabled = self.hard_stop_reporting_enabled_pside(LONG);
         let short_enabled = self.hard_stop_reporting_enabled_pside(SHORT);
         StrategyEquityMetricsBundle {
@@ -6127,6 +6137,13 @@ impl<'a> Backtest<'a> {
             if let Some(metrics) = self.final_hard_stop_metrics {
                 return metrics;
             }
+        }
+        if self.revised_hsl_enabled() {
+            let minutes = match (self.equities.timestamps_ms.first(), self.equities.timestamps_ms.last()) {
+                (Some(first), Some(last)) => (last.saturating_sub(*first) as f64 / 60_000.0).max(1.0),
+                _ => 0.0,
+            };
+            return self.revised_hsl_report.metrics(self.backtest_params.starting_balance, minutes);
         }
         let starting_balance = self.backtest_params.starting_balance.max(f64::EPSILON);
         let time_in_yellow_pct = if self.hard_stop_tier_samples_total > 0 {

@@ -6,11 +6,15 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
+  halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL
+  enablement and BTC collateral changes, and preserve compact reports and subset policies. Removed
+  yellow/orange metrics stay absent; public revised activation remains gated.
+
 - Stage explicit revised-HSL backtest policy transport for coin, side, and portfolio scopes.
   Native simulations reject invalid policy inputs before running and retain the revised report
-  in compact results. Unsupported legacy HSL analysis fields are omitted for this opt-in native
-  path; public revised backtest/optimizer activation remains gated pending analysis migration.
-
+  in compact results. Public revised backtest/optimizer activation remains gated until the
+  remaining consumer integrations and offline readiness checks are complete.
 
 - Add revised-HSL lifecycle diagnostics and separate simulator reports, including
   instantaneous zero-cooldown stops, replay deduplication and one portfolio counter

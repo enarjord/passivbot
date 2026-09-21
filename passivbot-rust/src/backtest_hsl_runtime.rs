@@ -97,7 +97,7 @@ impl Config {
 #[derive(Debug)]
 pub(super) struct Scope {
     timestamp: i64,
-    side: Option<usize>,
+    pub(super) side: Option<usize>,
     coin: Option<usize>,
     pub result: evaluator::Output,
 }

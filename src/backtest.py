@@ -1273,14 +1273,16 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             rust_profile = dict(profile_value)
     payload.rust_profile = rust_profile
 
+    payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
+    payload.hard_stop_plot_data.pop("_rust_profile", None)
     if payload.backtest_params.get("metrics_only", False):
-        payload.hard_stop_plot_data = {}
+        payload.hard_stop_plot_data = {
+            key: value for key, value in payload.hard_stop_plot_data.items() if key == "revised"
+        }
         analysis = expand_analysis(analysis_usd, analysis_btc, None, equities_array, config)
         return None, None, analysis
 
     equities_array = np.asarray(equities_array)
-    payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
-    payload.hard_stop_plot_data.pop("_rust_profile", None)
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
     if bool(analysis.get("liquidated", False)):
         final_equity_usd = (
@@ -1400,6 +1402,11 @@ def subset_backtest_payload(
         if key in new_backtest_params and isinstance(new_backtest_params[key], list):
             new_backtest_params[key] = _select(new_backtest_params[key])
     new_backtest_params.pop("active_coin_indices", None)
+    hsl = new_backtest_params.get("equity_hard_stop_loss")
+    if hsl is not None and hsl.get("engine") == "revised" and hsl["mode"] == "coin":
+        selected_coins = set(new_backtest_params["coins"])
+        hsl["coins"] = {coin: policy for coin, policy in hsl["coins"].items() if coin in selected_coins}
+
 
     return BacktestPayload(
         bundle=new_bundle,

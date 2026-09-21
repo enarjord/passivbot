@@ -422,8 +422,8 @@ same summary without retaining per-bar artifacts. There are no YELLOW/ORANGE fie
 in this report. Clearing its observer changes diagnostics only, never trading.
 
 This reporting checkpoint does not open runtime guards or migrate optimizer objectives.
-The revised report is separate from legacy analysis metrics until payload/analysis
-migration is complete; legacy placeholder counters must not become revised fitness.
+Revised native analysis derives its supported lifecycle metrics from this observer;
+legacy placeholder counters must not become revised fitness.
 
 ### Staged revised native configuration boundary
 
@@ -433,8 +433,35 @@ block, effective coin overrides, active restart choices, finite enabled lookback
 before simulation. Disabled restart choices remain optional; no legacy policy is inferred.
 Duplicate flattened HSL fields are rejected on this path. Legacy parsing is unchanged.
 
-The revised diagnostic report is returned in detailed and metrics-only native results. Legacy
-HSL/strategy-equity analysis fields are absent on this staged path because their observations
-are not populated by the revised controller. Public activation stays gated until the analysis,
-optimizer and runtime consumer migrations are complete; an absent field must never become
-neutral fitness. Independent ordinary equity metrics remain available.
+The revised diagnostic report is returned in detailed and metrics-only native results. Revised
+HSL analysis reads its observational lifecycle counters, including open halts and partial exits
+at the end of a simulation; removed yellow/orange tier metrics are absent. General strategy-equity
+statistics are observed independently of HSL enablement. Public activation stays gated until
+optimizer and runtime consumer migrations are complete; an absent field must never become neutral
+fitness. See the revised native analysis contract below.
+
+### Revised native analysis observations
+
+Analysis is observational and never supplies controller history or trading permission. RED time
+is the union across scopes. Halt duration runs from first observed RED to observed normal permission,
+including any unfinished halt through the final sample; an additional panic during cooldown keeps
+that continuous halt but starts a new exit-latency measurement. Restart/retrigger counters are
+scope-local; unified increments once and has no side-controller events. Trigger drawdown averages
+only score-bearing observations, excluding unscored historical/intervention evidence.
+
+Panic loss sums negative net execution PnL without offsetting profitable fills. Per-fill maximum
+and per-exit loss/account-equity ratios retain their existing diagnostic meanings: each exit uses
+account equity observed at its first attributed panic fill, and unfinished partial exits are
+included in final statistics. Ordinary/manual panic fills outside observed HSL RED are excluded.
+Duration/loss summaries are read without consuming pending episodes, so detailed and compact runs
+agree. Annual rates use the actual sampled backtest duration.
+
+General strategy equity is starting balance plus cumulative net trading PnL plus current UPNL,
+excluding BTC collateral gains/losses. Side statistics use only that side's net trading PnL/UPNL
+and the same starting-balance reference, regardless of HSL enablement or signal mode. Their raw
+performance/drawdown statistics describe the full observed backtest, not a risk decision replay.
+EMA diagnostic fields summarize the actual enabled revised signals at bar close: maximum across
+coin scopes, per-side for pside, one portfolio value for unified. Side EMA diagnostics are zero
+when no side controller exists; they must not be offered as active side-HSL objectives in unified
+optimization. Strategy-equity artifacts require exact alignment with equity timestamps; there is
+no account-equity substitution on the revised path. The existing legacy analysis path is unchanged.

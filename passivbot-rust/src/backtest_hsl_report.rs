@@ -55,6 +55,48 @@ struct Scope {
     watermark: Option<i64>,
     consumed: BTreeMap<(i64, &'static str), usize>,
     red: bool,
+    halt_started: Option<i64>,
+    exit_started: Option<i64>,
+    restarted_without_retrigger: bool,
+    panic_loss: f64,
+    panic_equity: Option<f64>,
+}
+
+#[derive(Clone, Default)]
+struct Distribution {
+    count: u64,
+    sum: f64,
+    min: f64,
+    max: f64,
+}
+impl Distribution {
+    fn push(&mut self, value: f64) {
+        self.min = if self.count == 0 {
+            value
+        } else {
+            self.min.min(value)
+        };
+        self.max = self.max.max(value);
+        self.sum += value;
+        self.count += 1;
+    }
+    fn mean(&self) -> f64 {
+        if self.count == 0 {
+            0.0
+        } else {
+            self.sum / self.count as f64
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct LifecycleStats {
+    durations: Distribution,
+    flatten_minutes: Distribution,
+    trigger_scores: Distribution,
+    panic_loss_ratios: Distribution,
+    panic_loss_max: f64,
+    retriggers: u32,
 }
 
 #[derive(Default)]
@@ -65,6 +107,9 @@ pub(super) struct Report {
     pub events: Vec<Event>,
     timestamp: Option<i64>,
     detailed: bool,
+    stats: LifecycleStats,
+    // One bar-close maximum per signal category: global, long, short.
+    pub signal_emas: [Vec<f64>; 3],
 }
 
 impl Report {
@@ -118,6 +163,9 @@ impl Report {
                 "reconstructed_red",
                 &mut scope,
             );
+            if let Some(d) = decision {
+                self.stats.trigger_scores.push(d.raw.min(d.ema));
+            }
         } else if action == Action::Normal && scope.red {
             self.restart(key, now, None, "current_permission", &mut scope);
         }
@@ -158,6 +206,12 @@ impl Report {
             Some(SHORT) => self.summary.triggers_short += 1,
             _ => {} // One unified event, without inventing two side controllers.
         }
+        if scope.restarted_without_retrigger {
+            self.stats.retriggers += 1;
+            scope.restarted_without_retrigger = false;
+        }
+        scope.halt_started.get_or_insert(now);
+        scope.exit_started = Some(now);
         scope.red = true;
         self.events.push(Event {
             observed_at: now,
@@ -186,6 +240,14 @@ impl Report {
             Some(SHORT) => self.summary.restarts_short += 1,
             _ => {}
         }
+        if let Some(start) = scope.halt_started.take() {
+            self.stats
+                .durations
+                .push((now - start).max(0) as f64 / 60_000.0);
+        }
+        Self::finish_loss(&mut self.stats, scope);
+        scope.exit_started = None;
+        scope.restarted_without_retrigger = true;
         scope.red = false;
         self.events.push(Event {
             observed_at: now,
@@ -205,11 +267,22 @@ impl Report {
             self.summary.worst_ema = self.summary.worst_ema.max(ema);
         }
         match event.kind {
-            "red" => self.trigger(key, now, Some(event.timestamp), event.reason, scope),
+            "red" => {
+                self.trigger(key, now, Some(event.timestamp), event.reason, scope);
+                if let (Some(raw), Some(ema)) = (event.raw, event.ema) {
+                    self.stats.trigger_scores.push(raw.min(ema));
+                }
+            }
             "flat" => {
                 if !scope.red {
                     self.trigger(key, now, Some(event.red_at), "reconstructed_red", scope);
                 }
+                if let Some(start) = scope.exit_started.take() {
+                    self.stats
+                        .flatten_minutes
+                        .push((now - start).max(0) as f64 / 60_000.0);
+                }
+                Self::finish_loss(&mut self.stats, scope);
                 self.events.push(Event {
                     observed_at: now,
                     side: key.0,
@@ -224,10 +297,82 @@ impl Report {
         }
     }
 
-    pub(super) fn panic_fill(&mut self, key: Key, net_pnl: f64) {
-        if self.scopes.get(&key).is_some_and(|s| s.red) {
+    fn finish_loss(stats: &mut LifecycleStats, scope: &mut Scope) {
+        if let Some(equity) = scope.panic_equity.take() {
+            stats.panic_loss_ratios.push(scope.panic_loss / equity);
+            scope.panic_loss = 0.0;
+        }
+    }
+
+    pub(super) fn panic_fill(&mut self, key: Key, net_pnl: f64, account_equity: f64) {
+        if let Some(scope) = self.scopes.get_mut(&key).filter(|s| s.red) {
+            let loss = (-net_pnl).max(0.0);
             self.summary.panic_close_fills += 1;
-            self.summary.panic_close_loss += (-net_pnl).max(0.0);
+            self.summary.panic_close_loss += loss;
+            self.stats.panic_loss_max = self.stats.panic_loss_max.max(loss);
+            scope.panic_loss += loss;
+            scope
+                .panic_equity
+                .get_or_insert(account_equity.max(f64::EPSILON));
+        }
+    }
+
+    pub(super) fn record_bar_signals(&mut self, now: i64, emas: [f64; 3]) {
+        self.advance(now);
+        for (samples, value) in self.signal_emas.iter_mut().zip(emas) {
+            samples.push(value);
+        }
+    }
+
+    /// Include censored open halts/exits without mutating observation state.
+    pub(super) fn metrics(&self, starting_balance: f64, minutes: f64) -> HardStopMetrics {
+        let mut stats = self.stats.clone();
+        for scope in self.scopes.values() {
+            if let (Some(start), Some(end)) = (scope.halt_started, self.timestamp) {
+                stats.durations.push((end - start).max(0) as f64 / 60_000.0);
+            }
+            if let Some(equity) = scope.panic_equity {
+                stats.panic_loss_ratios.push(scope.panic_loss / equity);
+            }
+        }
+        let annual = if minutes > 0.0 {
+            365.25 * 1440.0 / minutes
+        } else {
+            0.0
+        };
+        let s = &self.summary;
+        HardStopMetrics {
+            triggers: s.triggers,
+            triggers_per_year: s.triggers as f64 * annual,
+            triggers_long: s.triggers_long,
+            triggers_short: s.triggers_short,
+            restarts: s.restarts,
+            restarts_per_year: s.restarts as f64 * annual,
+            restarts_long: s.restarts_long,
+            restarts_short: s.restarts_short,
+            restarts_per_year_long: s.restarts_long as f64 * annual,
+            restarts_per_year_short: s.restarts_short as f64 * annual,
+            time_in_red_pct: if s.observed_minutes > 0.0 {
+                s.red_minutes / s.observed_minutes
+            } else {
+                0.0
+            },
+            duration_minutes_mean: stats.durations.mean(),
+            duration_minutes_max: stats.durations.max,
+            trigger_drawdown_mean: stats.trigger_scores.mean(),
+            panic_close_loss_sum: s.panic_close_loss,
+            panic_close_loss_max: stats.panic_loss_max,
+            panic_close_loss_drawdown_pct_min: stats.panic_loss_ratios.min,
+            panic_close_loss_drawdown_pct_mean: stats.panic_loss_ratios.mean(),
+            panic_close_loss_drawdown_pct_max: stats.panic_loss_ratios.max,
+            halt_to_restart_equity_loss_pct: s.panic_close_loss / starting_balance,
+            flatten_time_minutes_mean: stats.flatten_minutes.mean(),
+            post_restart_retrigger_pct: if s.restarts > 0 {
+                stats.retriggers as f64 / s.restarts as f64
+            } else {
+                0.0
+            },
+            ..HardStopMetrics::default()
         }
     }
 }
@@ -382,8 +527,8 @@ mod tests {
             "bar_close",
             &output(120000, Action::Panic, vec![]),
         );
-        report.panic_fill(key, -25.0);
-        report.panic_fill(key, 10.0);
+        report.panic_fill(key, -25.0, 1000.0);
+        report.panic_fill(key, 10.0, 1000.0);
         report.observe(
             key,
             180000,
@@ -396,7 +541,7 @@ mod tests {
             "bar_close",
             &output(240000, Action::Normal, vec![]),
         );
-        report.panic_fill(key, -500.0); // An unrelated manual panic is not this HSL stop.
+        report.panic_fill(key, -500.0, 1000.0); // An unrelated manual panic is not this HSL stop.
         assert_eq!((report.summary.triggers, report.summary.restarts), (1, 1));
         assert_eq!(
             (report.summary.triggers_long, report.summary.restarts_long),
@@ -430,7 +575,7 @@ mod tests {
                 "bar_close",
                 &output(60000, Action::Panic, vec![]),
             );
-            report.panic_fill((None, None), -12.0);
+            report.panic_fill((None, None), -12.0, 1000.0);
             report.observe(
                 (None, None),
                 120000,
@@ -452,5 +597,110 @@ mod tests {
         assert!(!detailed.events.is_empty());
         assert!(compact.samples.is_empty());
         assert!(compact.events.is_empty());
+    }
+    #[test]
+    fn lifecycle_metrics_include_open_halts_partial_exits_and_retriggers() {
+        let key = (Some(LONG), Some(0));
+        let mut report = Report::new(false);
+        let event = |timestamp, kind, red_at| LifecycleEvent {
+            timestamp,
+            kind,
+            red_at,
+            flat_at: None,
+            reason: "fixture",
+            raw: Some(0.2),
+            ema: Some(0.1),
+        };
+        report.observe(key, 0, "bar_close", &output(0, Action::Normal, vec![]));
+        report.observe(
+            key,
+            60_000,
+            "bar_close",
+            &output(60_000, Action::Panic, vec![event(60_000, "red", 60_000)]),
+        );
+        report.panic_fill(key, -25.0, 1000.0);
+        report.panic_fill(key, 10.0, 900.0);
+        report.observe(
+            key,
+            180_000,
+            "scope_flat",
+            &output(
+                180_000,
+                Action::Halted,
+                vec![event(180_000, "flat", 60_000)],
+            ),
+        );
+        report.observe(
+            key,
+            300_000,
+            "bar_close",
+            &output(
+                300_000,
+                Action::Normal,
+                vec![event(300_000, "restart", 60_000)],
+            ),
+        );
+        report.observe(
+            key,
+            360_000,
+            "bar_close",
+            &output(360_000, Action::Panic, vec![event(360_000, "red", 360_000)]),
+        );
+        report.panic_fill(key, -40.0, 800.0);
+        report.record_bar_signals(420_000, [0.1, 0.1, 0.0]);
+        for _ in 0..2 {
+            // Snapshot metrics must not consume unfinished episodes.
+            let m = report.metrics(1000.0, 7.0);
+            assert_eq!((m.triggers, m.restarts), (2, 1));
+            assert!((m.time_in_red_pct - 5.0 / 7.0).abs() < 1e-12);
+            assert_eq!(m.duration_minutes_mean, 2.5);
+            assert_eq!(m.duration_minutes_max, 4.0);
+            assert_eq!(m.flatten_time_minutes_mean, 2.0);
+            assert_eq!(m.trigger_drawdown_mean, 0.1);
+            assert_eq!(m.panic_close_loss_sum, 65.0);
+            assert_eq!(m.panic_close_loss_max, 40.0);
+            assert_eq!(m.panic_close_loss_drawdown_pct_min, 0.025);
+            assert!((m.panic_close_loss_drawdown_pct_mean - 0.0375).abs() < 1e-12);
+            assert_eq!(m.panic_close_loss_drawdown_pct_max, 0.05);
+            assert_eq!(m.halt_to_restart_equity_loss_pct, 0.065);
+            assert_eq!(m.post_restart_retrigger_pct, 1.0);
+            assert_eq!(m.triggers_per_year, 2.0 * 365.25 * 1440.0 / 7.0);
+        }
+        assert!(report.samples.is_empty() && report.events.is_empty());
+    }
+
+    #[test]
+    fn repanic_flat_latency_uses_new_exit_but_keeps_continuous_halt_duration() {
+        let key = (None, None);
+        let mut report = Report::new(false);
+        let mut events = zero_cooldown_events(60_000);
+        events.pop(); // RED then flat, held in cooldown.
+        report.observe(
+            key,
+            60_000,
+            "scope_flat",
+            &output(60_000, Action::Halted, events),
+        );
+        let mut events = zero_cooldown_events(180_000);
+        events.truncate(1);
+        report.observe(
+            key,
+            180_000,
+            "bar_close",
+            &output(180_000, Action::Panic, events),
+        );
+        let mut events = zero_cooldown_events(240_000);
+        events.remove(0);
+        report.observe(
+            key,
+            240_000,
+            "scope_flat",
+            &output(240_000, Action::Normal, events),
+        );
+        let m = report.metrics(1000.0, 3.0);
+        assert_eq!((m.triggers, m.restarts), (2, 1));
+        assert_eq!(m.duration_minutes_mean, 3.0);
+        assert_eq!(m.flatten_time_minutes_mean, 0.5); // Two exits: zero and one minute.
+        assert_eq!(m.triggers_long + m.triggers_short, 0);
     }
 }
