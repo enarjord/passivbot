@@ -317,7 +317,7 @@ impl Report {
         }
     }
 
-    /// A real fill can prove flat even when depleted balance prevents replay.
+    /// A real fill can prove flat even when account liquidation prevents replay.
     /// This completes diagnostic execution accounting, not trading permission.
     pub(super) fn observed_flat(&mut self, key: Key, now: i64) {
         self.advance(now);
@@ -339,7 +339,7 @@ impl Report {
                         coin: key.1,
                         kind: "flat",
                         reconstructed_at: Some(now),
-                        reason: "depleted_balance_flat",
+                        reason: "liquidating_account_flat",
                     });
                 }
             }

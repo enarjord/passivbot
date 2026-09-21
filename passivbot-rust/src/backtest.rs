@@ -2420,7 +2420,10 @@ impl<'a> Backtest<'a> {
             self.update_trailing_prices(k);
             if self.equity_tracking_active
                 && self.balance.usd_total_balance.is_finite()
-                && self.balance.usd_total_balance <= 0.0
+                && (self.balance.usd_total_balance <= 0.0
+                    || (self.revised_hsl_enabled()
+                        && self.fills.last().is_some_and(|fill| fill.index == k)
+                        && self.revised_fill_is_terminal(k)))
             {
                 self.update_equities(k);
                 if !self.check_and_apply_liquidation(k) {
