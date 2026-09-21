@@ -83,8 +83,11 @@ class FillTape:
 def capture_fills(events: Iterable[FillEvent], multipliers: Mapping[str, float]) -> FillTape:
     """Copy canonical manager fills in native contract quantities.
 
-    ``multipliers`` is current factual market metadata. A missing/changed fill
-    multiplier makes that fill's quantity unknown; independently usable cashflows
+    This consumes the manager's normalized contract, including its supported
+    optional-field defaults (complete supplied PnL and native unit multiplier 1).
+    It does not demand raw-field-presence certificates from normalized objects.
+    ``multipliers`` is current factual market metadata. A missing/changed normalized
+    fill multiplier makes that fill's quantity unknown; independently usable cashflows
     survive. Unknown accounting contracts cannot supply gross/fee amounts. Pending
     PnL is absent, including a producer's placeholder zero. Estimated PnL under the
     current contract remains usable and disclosed. No historical defect blocks

@@ -204,7 +204,12 @@ revision zero within that batch. Execution sequence remains unknown until a
 producer supplies an explicit supported sequence contract.
 
 Native contract quantities remain separate from contract multipliers. Missing or
-mismatched multiplier evidence makes only the historical quantity unavailable.
+mismatched normalized multipliers make only the historical quantity unavailable.
+The adapter consumes the manager's existing canonical contract, including its
+optional defaults for supplied PnL completeness and native contract units. It does
+not reinterpret omitted raw optional metadata as corrupt canonical observations
+or add raw-presence certificates to otherwise usable history. Current market
+multipliers remain independently required and must match the normalized units.
 Pending PnL placeholders stay missing; usable current-contract estimates and signed
 fees survive with diagnostics. Unknown accounting contracts cannot supply gross or
 fee amounts. Unattributed/undated records are disclosed rather than assigned to an

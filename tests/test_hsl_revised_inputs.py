@@ -296,3 +296,28 @@ def test_unknown_cached_pnl_status_survives_manager_but_is_disclosed_at_transpor
     source = FillEvent.from_dict(fields)
     assert source.pnl_status == "unrecognized"
     assert pair([source]).payload()[0]["realized"] is None
+
+
+@pytest.mark.parametrize("status", [None, "", "omitted"])
+def test_canonical_optional_status_default_retains_supplied_realized_pnl(status):
+    fields = event(pnl=-12.).to_dict()
+    if status == "omitted":
+        del fields["pnl_status"]
+    else:
+        fields["pnl_status"] = status
+    source = FillEvent.from_dict(fields)
+    assert source.pnl_status == "complete"
+    captured = pair([source])
+    assert captured.payload()[0]["realized"] == -12.
+    assert "unknown_pnl_completeness" not in captured.reasons
+
+
+def test_canonical_native_unit_default_is_checked_against_current_market_units():
+    fields = event().to_dict()
+    del fields["c_mult"]
+    source = FillEvent.from_dict(fields)
+    assert source.c_mult == 1.
+    assert pair([source], multiplier=1.).payload()[0]["delta"] == 2.
+    mismatched = pair([source], multiplier=10.)
+    assert mismatched.payload()[0]["delta"] is None
+    assert "fill_contract_units_unavailable" in mismatched.reasons
