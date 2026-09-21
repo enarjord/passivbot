@@ -43,10 +43,13 @@ def test_native_scope_values_and_effective_threshold_are_plotted(mode):
         assert lines["RED threshold"].get_ydata() == [scope["policy"]["red_threshold"]] * 2
         assert not any("orange" in key.lower() or "yellow" in key.lower() for key in lines)
         assert [t.get_text() for t in state_ax.get_yticklabels()] == ["GREEN", "RED"]
-        np.testing.assert_equal(state_ax.lines[0].get_ydata(),
-                                [int(r["action"] != "normal") for r in rows])
+        transitions = sorted(
+            [(r["sequence"], r["timestamp"], int(r["action"] != "normal")) for r in rows]
+            + [(e["sequence"], e["observed_at"], int(e["kind"] != "restart"))
+               for e in report["events"]])
+        np.testing.assert_equal(state_ax.lines[0].get_ydata(), [r[2] for r in transitions])
         np.testing.assert_equal(state_ax.lines[0].get_xdata(),
-                                pd.to_datetime([r["timestamp"] for r in rows], unit="ms").to_numpy())
+                                pd.to_datetime([r[1] for r in transitions], unit="ms").to_numpy())
         for line, event in zip(state_ax.lines[1:], report["events"]):
             assert line.get_xdata()[0] == pd.to_datetime(event["observed_at"], unit="ms")
         if mode == "coin":
@@ -148,3 +151,29 @@ def test_artifact_workspace_preserves_native_report_and_legacy_absence(tmp_path)
 def test_unsupported_report_version_is_not_interpreted_as_legacy():
     with pytest.raises(ValueError, match="unsupported revised HSL report schema"):
         revised_report({"revised": {"schema_version": 999, "engine": "revised"}})
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
+    cfg, markets, _ = inputs(mode)
+    policy = cfg["bot"]["hsl"] if mode == "unified" else cfg["bot"]["long"]["hsl"]
+    policy["cooldown_minutes_after_red"] = 0
+    data = run(payload(mode, cfg=cfg, mss=markets))[4]
+    report = data["revised"]
+    sequences = [r["sequence"] for r in report["samples"] + report["events"]]
+    assert len(sequences) == len(set(sequences))
+    red = next(e for e in report["events"] if e["kind"] == "red")
+    restart = next(e for e in report["events"] if e["kind"] == "restart")
+    assert red["observed_at"] == restart["observed_at"]
+    assert red["sequence"] < restart["sequence"]
+    figures = create_forager_hard_stop_drawdown_figure(
+        pd.DataFrame(), cfg, hard_stop_plot_data=data, autoplot=False, return_figures=True)
+    try:
+        fig, = figures.values()
+        line = fig.axes[1].lines[0]
+        at_boundary = line.get_xdata() == pd.to_datetime(red["observed_at"], unit="ms")
+        values = line.get_ydata()[at_boundary].tolist()
+        assert 1 in values and values[-1] == 0
+    finally:
+        for fig in figures.values():
+            plt.close(fig)

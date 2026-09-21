@@ -62,7 +62,15 @@ def create_revised_hsl_figures(report, *, figsize, autoplot, return_figures, dis
         if states.isna().any():
             plt.close(fig)
             raise ValueError("unsupported revised HSL report action")
-        state_ax.step(x, states, where="post", color="firebrick", label="Controller state")
+        transitions = [(row["sequence"], row["timestamp"], state)
+                       for row, state in zip(rows, states)]
+        for event in events.get((side, coin), []):
+            transitions.append((event["sequence"], event["observed_at"],
+                                {"red": 1, "flat": 1, "restart": 0}[event["kind"]]))
+        transitions.sort(key=lambda row: row[0])
+        state_ax.step(pd.to_datetime([row[1] for row in transitions], unit="ms"),
+                      [row[2] for row in transitions], where="post", color="firebrick",
+                      label="Controller state")
         state_ax.set_yticks([0, 1], ["GREEN", "RED"])
         state_ax.set_ylim(-.15, 1.15)
         seen = set()

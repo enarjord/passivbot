@@ -483,7 +483,9 @@ older artifacts have no report. Compact runs keep summaries/policies and explici
 
 Revised plots use native raw drawdown, drawdown EMA and controller actions, with one figure per
 observed coin-side, side, or portfolio scope. Thresholds come from the native effective policy,
-including coin overrides. GREEN/RED state plots preserve same-timestamp observation order; event
+including coin overrides. Native sequence numbers order samples and lifecycle transitions together,
+including instantaneous RED/flat/restart observations at zero cooldown. GREEN/RED plots preserve
+that order; event
 markers use actual observation times, not reconstructed historical transition times. Missing native
 samples never fall back to account-equity reconstruction or legacy tier formulas. These consumers
 are observational and do not open revised public runtime guards.

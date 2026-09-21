@@ -25,6 +25,7 @@ pub struct Summary {
 
 #[derive(Debug, Serialize)]
 pub struct Sample {
+    pub sequence: u64,
     pub timestamp: i64,
     pub side: Option<usize>,
     pub coin: Option<usize>,
@@ -39,6 +40,7 @@ pub struct Sample {
 
 #[derive(Debug, Serialize)]
 pub struct Event {
+    pub sequence: u64,
     pub observed_at: i64,
     pub side: Option<usize>,
     pub coin: Option<usize>,
@@ -107,6 +109,7 @@ pub(super) struct Report {
     pub events: Vec<Event>,
     timestamp: Option<i64>,
     detailed: bool,
+    sequence: u64,
     stats: LifecycleStats,
     // One bar-close maximum per signal category: global, long, short.
     pub signal_emas: [Vec<f64>; 3],
@@ -173,7 +176,9 @@ impl Report {
             self.summary.worst_raw = self.summary.worst_raw.max(d.raw);
             self.summary.worst_ema = self.summary.worst_ema.max(d.ema);
         }
+        self.sequence += 1;
         self.samples.push(Sample {
+            sequence: self.sequence,
             timestamp: now,
             side: key.0,
             coin: key.1,
@@ -213,7 +218,9 @@ impl Report {
         scope.halt_started.get_or_insert(now);
         scope.exit_started = Some(now);
         scope.red = true;
+        self.sequence += 1;
         self.events.push(Event {
+            sequence: self.sequence,
             observed_at: now,
             side: key.0,
             coin: key.1,
@@ -249,7 +256,9 @@ impl Report {
         scope.exit_started = None;
         scope.restarted_without_retrigger = true;
         scope.red = false;
+        self.sequence += 1;
         self.events.push(Event {
+            sequence: self.sequence,
             observed_at: now,
             side: key.0,
             coin: key.1,
@@ -283,7 +292,9 @@ impl Report {
                         .push((now - start).max(0) as f64 / 60_000.0);
                 }
                 Self::finish_loss(&mut self.stats, scope);
+                self.sequence += 1;
                 self.events.push(Event {
+                    sequence: self.sequence,
                     observed_at: now,
                     side: key.0,
                     coin: key.1,
@@ -333,7 +344,9 @@ impl Report {
                 *scope.consumed.entry((now, "flat")).or_insert(0) += 1;
                 scope.watermark = Some(now);
                 if self.detailed {
+                    self.sequence += 1;
                     self.events.push(Event {
+                        sequence: self.sequence,
                         observed_at: now,
                         side: key.0,
                         coin: key.1,
