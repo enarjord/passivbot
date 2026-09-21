@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Seed experimental revised HSL's incomplete initial episode from estimated entry value,
+  including when candles exist, so flat/backfilled history cannot hide an existing loss.
+  The estimate adds no EMA sample and resets at a supported flatten. Legacy behavior and
+  revised-runtime startup guards remain unchanged.
+
 - Add immutable factual fill and candle transport for the experimental revised HSL,
   preserving native contract quantities, signed fees and historical uncertainty.
   Add bounded source-resolution candle acquisition with cache-only recovery and sparse

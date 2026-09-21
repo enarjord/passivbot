@@ -106,6 +106,20 @@ pub fn signal_with_anchor(
     entry_reference: Option<f64>,
     anchor: &Observation,
 ) -> Result<Signal, String> {
+    signal_with_references(rows, budget, span, threshold, entry_reference, None, anchor)
+}
+
+/// A reference relative to current budget preserves small losses which would
+/// disappear if the caller rounded budget + reference before signal evaluation.
+pub(crate) fn signal_with_references(
+    rows: &[Observation],
+    budget: f64,
+    span: f64,
+    threshold: f64,
+    entry_reference: Option<f64>,
+    entry_reference_delta: Option<f64>,
+    anchor: &Observation,
+) -> Result<Signal, String> {
     validate_settings(span, threshold)?;
     if !anchor.realized.is_finite()
         || !anchor.unrealized.is_finite()
@@ -113,6 +127,8 @@ pub fn signal_with_anchor(
         || !budget.is_finite()
         || budget <= 0.0
         || entry_reference.is_some_and(|p| !p.is_finite())
+        || entry_reference_delta.is_some_and(|p| !p.is_finite())
+        || (entry_reference.is_some() && entry_reference_delta.is_some())
         || rows
             .iter()
             .any(|r| !r.realized.is_finite() || !r.unrealized.is_finite())
@@ -165,7 +181,12 @@ pub fn signal_with_anchor(
     // An explicit absolute reference already has the caller's float precision.
     // Otherwise retain the relative currency peak, so adding a large budget
     // cannot erase an independently representable peak-to-current loss.
-    let mut peak_delta = entry_reference.is_none().then_some(deltas[0]);
+    let mut peak_delta = entry_reference
+        .is_none()
+        .then_some(entry_reference_delta.map_or(deltas[0], |reference| reference.max(deltas[0])));
+    if let Some(relative_peak) = peak_delta {
+        peak = bounded(budget + relative_peak, &mut out.numeric_range_approximation);
+    }
     let alpha = 2.0 / (span + 1.0);
     let mut previous_minute = None;
     let mut baseline: Option<f64> = None;
@@ -248,6 +269,20 @@ pub fn signal_py(
 mod tests {
     use super::*;
     use crate::hsl_revised_sum::currency_sum;
+
+    #[test]
+    fn relative_entry_peak_retains_loss_below_budget_ulp() {
+        let row = Observation {
+            timestamp_ms: 0,
+            realized: 0.0,
+            unrealized: -1.0,
+        };
+        let risk =
+            signal_with_references(&[row], 1e16, 10_000.5, 0.0, None, Some(1.0), &row).unwrap();
+        assert_eq!(risk.raw[0], 1e-16);
+        assert_eq!(risk.ema[0], risk.raw[0]);
+        assert!(risk.panic[0]);
+    }
 
     #[test]
     fn currency_sum_retains_residuals_across_extreme_permutations() {

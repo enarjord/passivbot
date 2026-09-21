@@ -319,3 +319,19 @@ Native coarse cache reads without an exchange cannot masquerade as minute data.
 
 This is historical-data plumbing. Runtime scheduling, whole-snapshot revalidation,
 the final mixed-history dispatcher and full revised fake-live remain to be connected.
+
+## Estimated initial-entry peak
+
+The scoped trace now seeds an incomplete initial episode with one entry-value peak
+reference, including when historical candles are available. It rebases the retained
+zero-realized, zero-UPNL entry value against the current scope endpoint, using exact
+currency accumulation across pairs. It emits `estimated_entry_peak` and never adds a
+price or EMA row. A supported flatten consumes the reference; later episodes do not
+inherit it. A changed fill tape rebuilds the reference without previous-decision state.
+
+The controller accepts this reference as a relative currency offset, preserving losses
+smaller than a budget ULP before ratio calculation. The existing explicit absolute
+singleton reference remains supported by the experimental kernel interface. Independent
+Decimal tests cover missing openings with long/short and all scope modes, aggregate
+netting, cashflows, flatten/cooldown, window expiry and replacement by opening evidence.
+Runtime guards are unchanged; mixed-price dispatch and runtime integration remain pending.

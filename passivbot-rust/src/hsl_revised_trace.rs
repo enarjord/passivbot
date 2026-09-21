@@ -1,6 +1,6 @@
 //! Compose prepared, aligned scope observations into the stateless controller trace.
-//! Price normalization and minimal/mixed-history reference policy belong to the
-//! caller; this layer never discards one pair's history to align another pair.
+//! Price normalization belongs to the caller. Missing initial exposure seeds one
+//! scoped entry-value peak, never an invented price or EMA observation.
 use crate::hsl_revised_controller::{Episode, Point};
 use crate::hsl_revised_snapshot::{prepare, Input, Output as Prepared};
 use crate::hsl_revised_sum::CurrencySum;
@@ -58,6 +58,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                     flatten: false,
                 }],
                 entry_reference: None,
+                entry_reference_delta: None,
                 opened_at: None,
             }],
             reasons,
@@ -89,6 +90,25 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
             anchor.add(event.fee);
         }
     }
+    // The reconstructed prefix before retained fills has zero realized cashflow
+    // and zero UPNL at its estimated entry value. Rebase that one scope value
+    // against the same current endpoint as every ordinary observation. Never
+    // add independent per-pair peaks or discard available candle observations.
+    let mut entry_reference_delta = if prepared
+        .pairs
+        .iter()
+        .any(|p| p.history.reasons.contains("estimated_opening_basis"))
+    {
+        let mut reference = CurrencySum::new();
+        reference.subtract(&anchor);
+        for pair in &prepared.pairs {
+            reference.add(-pair.history.samples.last().unwrap().upnl);
+        }
+        reasons.insert("estimated_entry_peak".into());
+        Some(reference.value(&mut reasons))
+    } else {
+        None
+    };
     let mut cashflows = CurrencySum::new();
     let mut counts = vec![0; prepared.pairs.len()];
     let mut episodes = Vec::new();
@@ -127,6 +147,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
             episodes.push(Episode {
                 points: std::mem::take(&mut points),
                 entry_reference: None,
+                entry_reference_delta: entry_reference_delta.take(),
                 opened_at: opened_at.take(),
             });
             // The actual flat prefix also seeds the next interval. Starting only
@@ -176,6 +197,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
         episodes.push(Episode {
             points,
             entry_reference: None,
+            entry_reference_delta,
             opened_at,
         });
     }

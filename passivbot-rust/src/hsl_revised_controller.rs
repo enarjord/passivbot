@@ -1,7 +1,7 @@
 //! Pure replay of revised scoped permission from a reconstructed episode trace.
 //! No persisted or previous controller state is accepted as authority.
 
-use crate::hsl_revised::{signal_with_anchor, Observation};
+use crate::hsl_revised::{signal_with_references, Observation};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,10 @@ pub struct Episode {
     pub opened_at: Option<i64>,
     #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference: Option<f64>,
+    /// Estimated entry value relative to the shared current budget. Only the
+    /// incomplete initial episode may carry this reference; it adds no EMA row.
+    #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
+    pub entry_reference_delta: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -129,6 +133,11 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
     let mut previous_time = None;
     let mut previous_flat = false;
     for episode in &input.episodes {
+        if episode.entry_reference_delta.is_some()
+            && (previous_time.is_some() || episode.entry_reference.is_some())
+        {
+            return Err("entry delta requires only the initial incomplete episode".into());
+        }
         if episode.points.is_empty() {
             return Err("empty HSL episode".into());
         }
@@ -210,12 +219,18 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
                 unrealized: p.upnl,
             })
             .collect();
-        let risk = signal_with_anchor(
+        let relative_reference = if points[0].0 == 0 {
+            episode.entry_reference_delta
+        } else {
+            None
+        };
+        let risk = signal_with_references(
             &rows,
             input.budget,
             input.span,
             input.threshold,
             reference,
+            relative_reference,
             &anchor,
         )?;
         let mut opening = episode.opened_at.filter(|t| *t >= input.start);
@@ -300,6 +315,7 @@ mod tests {
             intervention: Intervention::Normal,
             episodes: vec![Episode {
                 entry_reference: None,
+                entry_reference_delta: None,
                 opened_at: None,
                 points: vec![
                     Point {

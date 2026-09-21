@@ -387,6 +387,24 @@ position gives zero in this minimal case. The reference seeds the peak only; it 
 not an invented earlier zero-drawdown EMA observation or proof of an entry inside the
 lookback. Past unobserved realized losses cannot be recovered this way.
 
+### Missing opening with usable candles
+
+When the reconstructed initial quantity is nonzero before the first retained fill,
+seed that initial episode's peak at its estimated entry value even when candles exist.
+Keep all usable historical observations. The reference contributes no invented EMA
+sample, execution timestamp, opening fill, or lifecycle proof. This deliberate
+approximation can count a loss which began before the lookback; it prevents flat or
+backfilled candles from hiding the current loss solely because the opening is missing.
+Out-of-window fills and cashflows are still excluded.
+
+Use one scope-level currency reference. Before retained fills, realized PnL is zero
+and carried positions have zero UPNL at their estimated entry values. In the common
+current-budget coordinate system, the reference offset is
+`-(retained_net_realized_pnl + current_upnl)`, summed across selected pairs before normalization.
+This nets gains and losses instead of adding per-pair peaks. Known flattening resets
+this initial reference; it must not seed later episodes. Newly available opening
+evidence rebuilds the trace and can remove the estimate without any local RED latch.
+
 This removes the separate timed raw-UPNL emergency evaluator in the eventual migrated
 path. It does **not** preserve smoothing delay when no usable history exists: a
 singleton EMA has no delay, regardless of span. That is an intentional tradeoff,
