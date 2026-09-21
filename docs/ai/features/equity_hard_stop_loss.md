@@ -372,7 +372,8 @@ A selected coin with a freshly confirmed flat position and an empty retained fil
 tape may supply explicit coin/side/window-bound flat proof instead of a fabricated
 quote. This produces a neutral current trace. It cannot replace a retained pair,
 ignore fills, excuse stale positions or turn an unobserved coin into a flat one.
-These input contracts apply to revised simulation; live activation remains separately guarded.
+These factual-input contracts apply to revised simulation; live uses the corresponding current
+exchange observations described below. Both require explicit revised selection.
 
 
 ### Staged revised simulator execution
@@ -517,7 +518,8 @@ engine, fixed policy and source-verified implementation identity.
 The GPU backend does not implement revised HSL and rejects that engine before loading GPU runtime
 services. CPU policy candidates reach the same native simulator as public backtests, including
 scenario evaluation, multiprocessing serialization and compatible saved-checkpoint resume.
-This does not open the revised live activation guard.
+Live selection follows the same startup-only engine policy; offline optimization does not
+verify live exchange execution.
 
 Side-specific revised HSL optimizer metrics require an enabled policy for that side in the
 selected scenario. Coin mode uses effective policies of actual dataset members, including
@@ -619,5 +621,6 @@ exactly once. Fake artifacts expose passive revised scope diagnostics rather tha
 Artifact comparison excludes only diagnostic wall-clock capture/expiry/age fields; native actions,
 exchange-time lifecycle anchors and approximation evidence remain part of determinism checks.
 
-Public revised live activation remains gated. Offline integration may exercise this path with
-an explicit test-local bypass; this does not authorize live deployment or replace legacy HSL.
+Public revised live selection is supported explicitly; the offline fake CLI uses the same
+entry points without a test-local activation bypass. Live deployment requires separate operator
+authorization and validation, and legacy remains the default.

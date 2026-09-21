@@ -1,5 +1,9 @@
 # Equity Hard Stop Loss Cooldown Contracts
 
+This guide describes `live.hsl_engine=legacy`, the default. For the opt-in engine, see
+[Revised Equity Hard Stop Loss](hsl_revised.md), including its different signal,
+portfolio controller, finite-window restart and best-effort history policies.
+
 This file defines the contract for
 `live.hsl_position_during_cooldown_policy`.
 

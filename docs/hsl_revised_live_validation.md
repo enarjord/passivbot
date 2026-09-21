@@ -8,8 +8,8 @@ launch command and intervention scope.
 ## Before the first live run
 
 1. Record the reviewed commit, source-verified Rust extension, selected engine, signal mode and
-   complete effective HSL policy. Preserve the original launch command and a legacy-compatible
-   configuration for rollback. Keep account identifiers, credentials and operational artifacts
+   complete effective HSL policy. Preserve the pre-trial legacy launch command and a
+   legacy-compatible configuration separately from the revised trial command for rollback. Keep account identifiers, credentials and operational artifacts
    outside the public repository.
 2. Validate configuration through the canonical loader. Coin/pside policies belong under
    `bot.long.hsl` and `bot.short.hsl`; unified requires an explicitly supplied `bot.hsl` block.
@@ -67,8 +67,12 @@ order.
 
 Rollback requires restarting with `live.hsl_engine=legacy` and a legacy-compatible configuration.
 Do not silently translate a unified portfolio policy into side policies, or reuse revised optimizer
-fitness as legacy fitness. Retain the exact original launch command unless the operator approves a
-change. Confirm the resulting engine, exposure, orders and HSL readiness after restart.
+fitness as legacy fitness. Select the saved legacy configuration path and remove or replace
+trial CLI overrides, including `--live.hsl_engine revised`, signal mode and HSL policy overrides:
+CLI values override the file and can otherwise select revised again. Preserve unrelated launch
+arguments. Verify the proposed rollback command resolves to `live.hsl_engine=legacy` and the
+intended legacy policy before executing it within the operator-approved scope. Confirm the
+resulting engine, exposure, orders and HSL readiness after restart.
 
 The operator can accept the live trial after the applicable cases show the intended exchange
 behavior, scope scheduling, source freshness, restart reconstruction and diagnostics. A successful

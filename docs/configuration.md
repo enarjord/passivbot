@@ -747,6 +747,8 @@ ignored by persistence helpers to keep user configs tidy.
 
 ## Experimental revised HSL configuration
 
+See [Revised Equity Hard Stop Loss](hsl_revised.md) for signal formulas, estimation and lifecycle behavior.
+
 The startup-only selector `live.hsl_engine` accepts `legacy` (default) or `revised`.
 It applies to live, backtest and optimization together, and cannot be changed by
 scenario or fixed optimizer overrides. Revised `coin`, `pside` and `unified` modes

@@ -249,6 +249,10 @@ Operational notes:
   limited to fills created by the current bot process.
 
 ### D. Equity Hard Stop Loss (`bot.{long,short}.hsl.*`)
+
+This section describes the default legacy engine. The opt-in revised engine has a shared
+equity-peak formula, one unified portfolio controller and different restart semantics; see
+[Revised Equity Hard Stop Loss](hsl_revised.md).
 This is a side-specific circuit breaker based on reconstructed strategy drawdown, not just raw exchange equity.
 
 It exists for cases where:

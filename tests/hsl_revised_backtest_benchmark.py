@@ -4,7 +4,7 @@ Run from the repository root with the current rebuilt extension:
     PYTHONPATH=src python tests/hsl_revised_backtest_benchmark.py
 
 Compare the digest across builds before interpreting elapsed-time differences.
-This exercises the staged native adapter; public revised activation stays gated.
+This exercises the shared native adapter without live exchange access.
 """
 import argparse
 import hashlib

@@ -9,7 +9,13 @@ since the latest release tag; these features may already be available when insta
 - Enable explicit revised HSL live selection with `live.hsl_engine=revised` for coin, pside and
   unified signals alongside the legacy default. The standard offline fake CLI now exercises the
   same path without an activation bypass. Add an operator live-validation and rollback checklist;
-  offline qualification does not establish live exchange readiness.
+  offline qualification does not establish live exchange readiness. Revised coin HSL now uses
+  equity-peak drawdown and current-budget rebasing, aligned with pside and unified signals.
+  The engine uses best-effort history and an entry reference when history is absent, GREEN/RED
+  trading only, explicit portfolio configuration, and finite-window lifecycle reconstruction
+  without the legacy journal. `never` expires with lookback; zero cooldown means no wait.
+  The terminal threshold and legacy intervention/tier optimizer dimensions are removed; policies
+  and fitness require explicit migration. See [the revised guide](docs/hsl_revised.md).
 
 - Let fresh exchange-flat positions complete revised HSL protection when closing fills are
   missing or ambiguous. If the final boundary cannot be reconstructed, use the latest retained
