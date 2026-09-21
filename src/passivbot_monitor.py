@@ -492,6 +492,52 @@ def _monitor_handle_candlestick_persist(
     publisher.record_completed_candles(symbol, timeframe, candles)
 
 
+def _monitor_equity(self, *, balance_raw: float, now_ms: int) -> Optional[float]:
+    """Passive account observation; revised refreshes do not run legacy callbacks.
+
+    Read only already-committed account facts and cached quotes. Missing current
+    inputs mean unknown equity, not zero UPNL or the constructor's placeholder.
+    This helper neither fetches data nor supplies any trading permission.
+    """
+    if getattr(self, "config", {}).get("live", {}).get("hsl_engine") != "revised":
+        return float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw)
+    try:
+        max_age = self._live_market_snapshot_max_age_ms()
+        pending = getattr(self, "_authoritative_pending_confirmations", {})
+        for name in ("balance", "positions"):
+            state = self.freshness_ledger.surfaces[name]
+            if (state.updated_ms <= 0 or not 0 <= now_ms - state.updated_ms <= max_age
+                    or int(pending.get(name, 0)) > state.epoch):
+                return None
+        if not math.isfinite(balance_raw):
+            return None
+        equity = balance_raw
+        cache = getattr(getattr(self, "market_snapshot_provider", None), "_cache", {})
+        for symbol, sides in self.positions.items():
+            for side in ("long", "short"):
+                position = sides.get(side)
+                if position is None:
+                    continue
+                size = float(position["size"])
+                if not math.isfinite(size):
+                    return None
+                if size == 0.0:
+                    continue
+                basis, multiplier = float(position["price"]), float(self.c_mults[symbol])
+                quote = cache.get(symbol)
+                if (not math.isfinite(basis) or basis <= 0.0
+                        or not math.isfinite(multiplier) or multiplier <= 0.0
+                        or quote is None or not quote.is_valid()
+                        or not 0 <= now_ms - quote.fetched_ms <= max_age):
+                    return None
+                equity += _calc_monitor_pnl(side, basis, quote.last, size, multiplier)
+        return float(equity) if math.isfinite(equity) else None
+    except Exception as exc:
+        # Optional telemetry must never inhibit trading or publish partial equity.
+        logging.debug("[monitor] equity observation unavailable | error_type=%s", type(exc).__name__)
+        return None
+
+
 def _build_health_summary_payload(
     self,
     *,
@@ -518,7 +564,7 @@ def _build_health_summary_payload(
         "balance_raw": balance_raw,
         "balance_snapped": balance_snapped,
         "quote": str(getattr(self, "quote", "") or ""),
-        "equity": float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw),
+        "equity": _monitor_equity(self, balance_raw=balance_raw, now_ms=now_ms),
         "orders_placed": int(self._health_orders_placed),
         "orders_cancelled": int(self._health_orders_cancelled),
         "fills": int(self._health_fills),
@@ -1886,8 +1932,9 @@ async def _build_monitor_snapshot(self, *, now_ms: Optional[int] = None) -> dict
     now_ms = utc_ms() if now_ms is None else int(now_ms)
     balance_raw = float(self.get_raw_balance())
     balance_snapped = float(self.get_hysteresis_snapped_balance())
-    equity = float(getattr(self, "_monitor_last_equity", balance_raw) or balance_raw)
-    if abs(equity) < 1e-18 and balance_raw != 0.0:
+    equity = _monitor_equity(self, balance_raw=balance_raw, now_ms=now_ms)
+    if (getattr(self, "config", {}).get("live", {}).get("hsl_engine") != "revised"
+            and abs(equity) < 1e-18 and balance_raw != 0.0):
         equity = balance_raw
     account = {
         "balance_raw": balance_raw,

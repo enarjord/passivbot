@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Report revised-HSL account and health equity from current balances, positions and cached
+  quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable
+  equity; reporting does not fetch data or affect trading.
+
 - Enable explicit revised HSL live selection with `live.hsl_engine=revised` for coin, pside and
   unified signals alongside the legacy default. The standard offline fake CLI now exercises the
   same path without an activation bypass. Add an operator live-validation and rollback checklist;
