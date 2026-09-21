@@ -187,8 +187,16 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     let mut capture_known = true;
     let mut capture_after_position = true;
     for p in &selected {
-        if !fresh(p.position_at) || !fresh(p.mark_at) {
+        if !fresh(p.position_at)
+            || p.mark_at > input.now
+            || (p.position.size != 0.0 && !fresh(p.mark_at))
+        {
             return Err("unusable current position/mark observation".into());
+        }
+        if p.position.size == 0.0 && !fresh(p.mark_at) {
+            // Current UPNL is exactly zero for a confirmed-flat pair. Its last
+            // factual close still values retained history after a delisting.
+            reasons.insert("stale_flat_mark".into());
         }
         if p.prices_at > input.now
             || p.fills_at.is_some_and(|t| t > input.now)

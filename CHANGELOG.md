@@ -22,6 +22,8 @@ since the latest release tag; these features may already be available when insta
   Add scoped trace composition from aligned pair histories, retaining final flatten
   observations, reopening fees and between-candle exposure events for controller replay.
   Preserve small relative drawdowns through normalization by a large balance budget.
+  Add simulator factual-input transport for shared revised reconstruction, retaining
+  flat delisted scopes without requiring an irrelevant fresh mark.
   Revised JSON numeric inputs preserve exact float round-trips, preventing a supplied
   position or cashflow from drifting by an ulp. Legacy HSL and its parsing remain unchanged.
 

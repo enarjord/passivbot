@@ -419,3 +419,26 @@ def test_candle_free_loss_survives_absolute_peak_rounding(budget, loss):
     assert result["signal"]["raw"][0] == pytest.approx(expected, rel=1e-14, abs=0)
     assert result["signal"]["ema"] == result["signal"]["raw"]
     assert result["signal"]["panic"] == [True]
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_confirmed_flat_can_replay_cooldown_with_old_factual_mark(pside):
+    M = cases.M
+    direction = 1 if pside == "long" else -1
+    pair = cases.pair(pside=pside, fills=[Fill("open", M, direction, 100, 0),
+                                        Fill("flat", 2*M, -direction, 80, -20)],
+                      mark_at=M, now=8*M)
+    frame = cases.frame(pair, now=8*M)
+    result = rust(payload(frame, quantity_step=.1))
+    assert "stale_flat_mark" in result["reasons"]
+    assert len(result["boundaries"]) == 1
+    assert result["boundaries"][0]["lifecycle_eligible"]
+    compare(frame, "unified", quantity_step=.1)
+    request = payload(frame)
+    request["pairs"][0]["position"].update(size=direction, basis=100.)
+    with pytest.raises(ValueError, match="position/mark"):
+        rust(request)
+    request = payload(frame)
+    request["pairs"][0]["mark_at"] = 9*M
+    with pytest.raises(ValueError, match="position/mark"):
+        rust(request)

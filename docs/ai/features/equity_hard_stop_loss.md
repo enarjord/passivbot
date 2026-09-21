@@ -28,6 +28,12 @@ HSL drawdown state is scoped by `live.hsl_signal_mode`:
 | `pside` | all positions on one `pside` | every position on that side is fully closed |
 | `unified` | the whole account | every position is fully closed |
 
+For revised snapshot reconstruction, positions and balance must be fresh. A nonzero
+position also requires a fresh mark. A confirmed-flat pair may retain its last factual
+mark to reconstruct in-window history after delisting; this emits `stale_flat_mark`
+when applicable and never substitutes a price for held exposure. Future mark captures
+remain invalid. This exception does not authorize any order or waive execution inputs.
+
 ## Invariants
 
 1. The drawdown tracker resets after every proven episode end. The next episode begins after the

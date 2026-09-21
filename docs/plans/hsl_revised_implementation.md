@@ -262,3 +262,32 @@ capture time. Rust retains ownership of completeness, causal clipping, conflicts
 resampling and in-window carrying. These are transport helpers; no runtime caller
 is activated yet. Offline tests include the real fill manager over the fake exchange,
 contract quantities, fees, both sides, partial closes and cache-free reconstruction.
+
+## Backtest factual input adapter
+
+`backtest_hsl_revised.rs` captures the simulator's actual fills and current positions
+for the shared price, snapshot and trace components. It preserves native contract
+quantities, gross PnL and signed fees, and uses simulator execution sequence rather
+than reconstructed fill after-states. Raw current balance and the existing configured
+versus dynamic-tradability slot counts remain separate scope-budget inputs. Unified
+observations include both sides even when ordinary entries are disabled.
+
+A simulator candle is valued at its end, matching the revised live price projector.
+Fills retain their existing bar-open event timestamp and actual execution sequence;
+the post-bar position therefore follows all that bar's fills without manufacturing
+an ordering certificate from equal timestamps. No future candle is read. This
+adapter accepts 1m simulation data; selecting another interval is an explicit input
+error. The legacy simulator remains unchanged.
+
+Only in-window fills and complete in-window candles are retained. Existing Rust
+projection supplies the approved within-window forward/backfill. Flat pre-listing or
+expired pairs with no retained fills have no scope contribution. Flat delisted pairs
+with retained fills remain reconstructible from their last factual close; a stale
+mark is disclosed but cannot change their zero current UPNL. Held positions still
+require current valid valuation. Positions and balance always require freshness.
+
+Tests drive the real simulator fill handlers into shared reconstruction, including
+shorts, partials, contract units, fees, same-bar flatten/reopen, disabled-side unified
+exposure, raw balance, dynamic slots, delisting, exact lookback edges, source-column
+mapping and exclusion of future prices. Runtime dispatch, final sparse-history policy,
+execution/metrics and full revised fake-live remain subsequent integration work.
