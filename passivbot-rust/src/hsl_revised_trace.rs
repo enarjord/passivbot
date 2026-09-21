@@ -32,7 +32,7 @@ fn consume(
     let mut timeline = Vec::new();
     for (index, target) in targets.iter().copied().enumerate() {
         for event in &prepared.pairs[index].history.events[counts[index]..target] {
-            if !event.quantity_estimated && event.before == 0.0 && event.after > 0.0 {
+            if event.before == 0.0 && event.after > 0.0 {
                 opening = Some(
                     opening.map_or(event.fill.timestamp, |t: i64| t.min(event.fill.timestamp)),
                 );
@@ -169,11 +169,7 @@ pub(crate) fn compose_prepared(
     let mut episodes = Vec::new();
     let mut points = Vec::new();
     let mut opened_at = None;
-    let mut boundaries = prepared
-        .boundaries
-        .iter()
-        .filter(|b| b.lifecycle_eligible)
-        .peekable();
+    let mut boundaries = prepared.boundaries.iter().peekable();
     for (sample_index, &timestamp) in timestamps.iter().enumerate() {
         // A flatten's exact consumed prefix precedes any same-time reopen.
         // A producer's explicit pre-fill candle phase stays before that prefix.

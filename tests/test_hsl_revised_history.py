@@ -83,13 +83,14 @@ def test_invalid_history_preserves_independent_cashflow(require_real_passivbot_r
     assert reason in actual["reasons"]
 
 
-def test_clamp_bad_old_episode_and_later_clean_tape(require_real_passivbot_rust_module):
+def test_missing_old_reduction_is_an_explicit_endpoint_adjustment(require_real_passivbot_rust_module):
     p = Position(1, 90, 80)
     fills = [Fill("old_add", 1, 2, 100, 0), Fill("old_close", 2, -1, 90, -10),
              Fill("current_open", 60_000, 1, 90, 0)]
     result = compare(require_real_passivbot_rust_module, p, fills, {1: 100, 2: 90, 60_000: 90})
-    assert "clamped_quantity" in result["reasons"]
-    assert result["events"][-1]["before"] == 0
+    assert "current_quantity_reconciliation" in result["reasons"]
+    assert result["events"][-1]["before"] == 1
+    assert result["reconciliation"]["delta"] == -1
     assert not result["events"][-1]["quantity_estimated"]
 
 

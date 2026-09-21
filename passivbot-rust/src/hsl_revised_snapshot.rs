@@ -106,7 +106,6 @@ pub struct Boundary {
     pub timestamp: i64,
     pub pnl: f64,
     pub upnl: f64,
-    pub lifecycle_eligible: bool,
     pub consumed: Vec<Consumed>,
 }
 #[derive(Debug, Serialize)]
@@ -214,8 +213,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     let selected = select(input)?;
     let mut reasons = BTreeSet::new();
     let mut pairs = Vec::new();
-    let mut last_uncertain = None;
-    let mut capture_known = true;
     for p in &selected {
         if !fresh(p.position_at)
             || p.mark_at > input.now
@@ -239,7 +236,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
         }
         if p.fills_started_at.is_none() || p.fills_at.is_none() {
             reasons.insert("fill_capture_unknown".into());
-            capture_known = false;
         }
         if p.fills_started_at
             .is_some_and(|t| t < p.position_at || (t == p.position_at && !p.anchored()))
@@ -267,20 +263,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             }
         }
         let causal = causal_fills(p, input.now);
-        let mut conflicts = BTreeMap::<&str, Vec<&Fill>>::new();
-        for f in latest(&causal) {
-            conflicts.entry(&f.identity).or_default().push(f);
-        }
-        for variants in conflicts.values() {
-            if variants.iter().any(|f| *f != variants[0]) {
-                for f in variants {
-                    if input.start <= f.timestamp && f.timestamp <= p.position_at {
-                        last_uncertain =
-                            Some(last_uncertain.map_or(f.timestamp, |t: i64| t.max(f.timestamp)));
-                    }
-                }
-            }
-        }
         let mut fills = history::canonical_fills(
             &causal,
             input.start,
@@ -304,12 +286,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             fills: fills.clone(),
             prices,
         })?;
-        for e in &h.events {
-            if e.quantity_estimated {
-                last_uncertain =
-                    Some(last_uncertain.map_or(e.fill.timestamp, |t: i64| t.max(e.fill.timestamp)));
-            }
-        }
         reasons.extend(h.reasons.iter().cloned());
         pairs.push(PreparedPair {
             symbol: p.symbol.clone(),
@@ -343,7 +319,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     timeline.sort_unstable();
     let mut boundaries = Vec::new();
     let mut cursor = 0;
-    let mut uncertain_episode = false;
     while cursor < timeline.len() {
         let t = timeline[cursor].0;
         let end = cursor + timeline[cursor..].partition_point(|v| v.0 == t);
@@ -371,8 +346,17 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
                 });
             for &(_, pi, fi) in group {
                 let e = &pairs[pi].history.events[fi];
-                uncertain_episode |= e.quantity_estimated;
-                sizes[pi] = e.after;
+                sizes[pi] = if fi + 1 == pairs[pi].history.events.len()
+                    && pairs[pi]
+                        .history
+                        .reconciliation
+                        .as_ref()
+                        .is_some_and(|r| r.after == 0.0)
+                {
+                    0.0
+                } else {
+                    e.after
+                };
                 counts[pi] = fi + 1;
                 cashflows.add(e.gross_realized);
                 cashflows.add(e.fee);
@@ -380,36 +364,14 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             if sizes.iter().any(|q| *q != 0.0) {
                 continue;
             }
-            let uncertain = uncertain_episode;
-            uncertain_episode = false;
             if !had_exposure {
-                continue;
-            }
-            if uncertain {
-                reasons.insert("uncertain_episode_flat".into());
                 continue;
             }
             if selected.iter().any(|p| t > p.position_at) {
                 reasons.insert("boundary_after_position_anchor".into());
-                continue;
             }
-            // A later position refresh cannot erase an older reconstructed
-            // flatten. Only the tail overlapping a pre-position fill fetch still
-            // lacks ordering evidence. Current flat authority is handled below.
-            if !capture_known
-                || selected.iter().any(|p| {
-                    let started = p.fills_started_at.unwrap();
-                    !(t < started
-                        || started > p.position_at
-                        || (started == p.position_at && p.anchored()))
-                })
-            {
-                continue;
-            }
-            if last_uncertain.is_some_and(|u| u >= t) {
-                reasons.insert("uncertain_flat".into());
-                continue;
-            }
+            // This is the reconciler's estimated path. Observation skew and
+            // historical quality remain diagnostics, never a second flat veto.
             let mut mixed = BTreeMap::<usize, BTreeSet<bool>>::new();
             for &(_, pi, fi) in group {
                 mixed.entry(pi).or_default().insert(
@@ -424,19 +386,10 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
                 reasons.insert("estimated_flat".into());
             }
             let pnl = cashflows.value(&mut reasons);
-            let lifecycle_eligible = !ambiguous
-                && ![
-                    "post_position_fill",
-                    "position_fill_timestamp_tie",
-                    "post_capture_fill",
-                ]
-                .iter()
-                .any(|r| reasons.contains(*r));
             boundaries.push(Boundary {
                 timestamp: t,
                 pnl,
                 upnl: 0.0,
-                lifecycle_eligible,
                 consumed: pairs
                     .iter()
                     .zip(&counts)
@@ -449,56 +402,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             });
         }
         cursor = end;
-    }
-    // Current exchange positions establish flatness even when the tape cannot
-    // reconstruct its closing fill. Only the timestamp is approximate. Prefer a
-    // supported final boundary; later position-neutral fees do not move it.
-    if selected.iter().all(|p| p.position.size == 0.0) {
-        let terminal_known = boundaries.iter().any(|b| {
-            b.lifecycle_eligible
-                && pairs.iter().zip(&b.consumed).all(|(p, consumed)| {
-                    p.history.events[consumed.count..]
-                        .iter()
-                        .all(|e| e.fill.delta == Some(0.0))
-                })
-        });
-        if !terminal_known {
-            if let Some(timestamp) = pairs
-                .iter()
-                .flat_map(|p| p.history.events.last().map(|e| e.fill.timestamp))
-                .max()
-            {
-                reasons.insert("current_flat_timestamp_estimate".into());
-                let consumed: Vec<_> = pairs
-                    .iter()
-                    .map(|p| Consumed {
-                        symbol: p.symbol.clone(),
-                        pside: p.pside,
-                        count: p.history.events.len(),
-                    })
-                    .collect();
-                // An unordered final cohort may already have a numeric boundary.
-                // Current flat authority makes that final prefix lifecycle-usable,
-                // without asserting any internal flat/reopen order for the cohort.
-                if let Some(b) = boundaries.last_mut().filter(|b| {
-                    b.timestamp == timestamp
-                        && b.consumed
-                            .iter()
-                            .zip(&consumed)
-                            .all(|(a, z)| a.count == z.count)
-                }) {
-                    b.lifecycle_eligible = true;
-                } else {
-                    boundaries.push(Boundary {
-                        timestamp,
-                        pnl: cashflows.value(&mut reasons),
-                        upnl: 0.0,
-                        lifecycle_eligible: true,
-                        consumed,
-                    });
-                }
-            }
-        }
     }
     Ok(Output {
         pairs,
@@ -537,7 +440,6 @@ mod tests {
         assert_eq!(output.boundaries.len(), 1);
         assert_eq!(output.boundaries[0].timestamp, 2);
         assert_eq!(output.boundaries[0].consumed[0].count, 2);
-        assert!(output.boundaries[0].lifecycle_eligible);
         assert!(output.reasons.contains("current_flat_timestamp_estimate"));
         input.pairs[0].position.size = 2.0;
         input.pairs[0].position.basis = 100.0;
@@ -545,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_flat_survives_later_position_refresh_but_not_overlapping_tail() {
+    fn historical_flat_survives_capture_skew_and_missing_receipts() {
         let value = serde_json::json!({
             "now": 100, "start": 0, "balance": 1000.0, "balance_at": 100,
             "config_at": 100, "max_current_age_ms": 10, "mode": "unified",
@@ -566,13 +468,12 @@ mod tests {
         assert!(output.reasons.contains("fills_before_position"));
         assert_eq!(output.boundaries.len(), 1);
         assert_eq!(output.boundaries[0].timestamp, 20);
-        assert!(output.boundaries[0].lifecycle_eligible);
         for started in [10, 20] {
             input.pairs[0].fills_started_at = Some(started);
-            assert!(prepare(&input).unwrap().boundaries.is_empty());
+            assert_eq!(prepare(&input).unwrap().boundaries.len(), 1);
         }
         input.pairs[0].fills_started_at = None;
-        assert!(prepare(&input).unwrap().boundaries.is_empty());
+        assert_eq!(prepare(&input).unwrap().boundaries.len(), 1);
     }
 
     #[test]

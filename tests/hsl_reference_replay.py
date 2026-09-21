@@ -10,7 +10,7 @@ from itertools import groupby
 
 from hsl_reference import (
     Candle, Fill, MINUTE, Observation, Position, dec, minute_prices, ordered_fills,
-    reconstruct, signal,
+    reconstruct, signal, quantity_path,
 )
 
 
@@ -264,7 +264,6 @@ class Step:
     fill: Fill
     before: Decimal
     after: Decimal
-    clean_tail: bool
 
 
 @dataclass(frozen=True)
@@ -273,7 +272,6 @@ class Boundary:
     # Full canonical prefix distinguishes both tied flats and corrected evidence.
     consumed: tuple
     observation: Observation
-    lifecycle_eligible: bool = True
 
 
 @dataclass(frozen=True)
@@ -290,41 +288,21 @@ def _steps(pair, start, now):
         reasons.add("post_position_fill")
     end = min(pair.position_at, pair.fills_at if pair.fills_at is not None else now)
     ordered = [f for f in ordered if f.timestamp <= end]
-    # Conflicting current revisions have no canonical position transition. Keep
-    # their uncertainty local in time; an older damaged prefix does not taint a
-    # later independently reconstructible episode.
-    versions = {}
-    for f in causal:
-        versions.setdefault(f.identity, []).append(f)
-    conflicts = []
-    for group in versions.values():
-        newest = [f for f in group if f.revision == max(x.revision for x in group)]
-        if any(f != newest[0] for f in newest):
-            if any(pair.position_at < f.timestamp <= now for f in newest):
-                reasons.add("post_position_fill")
-            conflicts.extend(f.timestamp for f in newest if start <= f.timestamp <= pair.position_at)
-    steps = []
-    after = abs(dec(pair.position.size))
-    clean = True
-    for f in reversed(ordered):
-        delta, valid = _quantity(f)
-        before = after - delta * direction
-        if not valid or before < 0 or any(t >= f.timestamp for t in conflicts):
-            clean = False
-        if before < 0:
-            reasons.add("clamped_quantity")
-        before = max(Decimal(0), before)
-        steps.append(Step(pair.key, f, before, after, clean))
-        after = before
-    return list(reversed(steps)), reasons, conflicts
+    steps, opening = quantity_path(ordered, abs(dec(pair.position.size)), direction)
+    if opening:
+        reasons.add("estimated_opening_quantity")
+    if steps and steps[-1][2] != abs(dec(pair.position.size)):
+        reasons.add("current_quantity_reconciliation")
+        if not pair.position.size:
+            reasons.add("current_flat_timestamp_estimate")
+    return [Step(pair.key, f, before, after) for f, before, after, _ in steps], reasons, []
 
 
 def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
     """Supported scope flats from observed positions and in-window fills.
 
-    Historical uncertainty may suppress an internal lifecycle boundary, never
-    current risk evaluation or authoritative current flatness. Absence of a detected gap is not proof
-    that all exchange fills were delivered. Cross-pair simultaneous fills are a
+    The reconciler selects one estimated path, whose flats drive lifecycle too.
+    Diagnostics disclose uncertainty without vetoing its boundaries. Cross-pair simultaneous fills are a
     cohort; per-pair sequence numbers do not prove a global exchange ordering.
     """
     pairs = selected_pairs(snapshot, mode, pside=pside, symbol=symbol)
@@ -338,7 +316,6 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
     consumed = {p.key: [] for p in pairs}
     timeline = sorted((s for steps in paths.values() for s in steps), key=lambda s: s.fill.timestamp)
     boundaries = []
-    uncertain_episode = False
     for timestamp, cohort in groupby(timeline, key=lambda s: s.fill.timestamp):
         cohort = list(cohort)
         one_pair = len({s.pair for s in cohort}) == 1
@@ -350,60 +327,26 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
         for group in groups:
             was_exposed = any(sizes.values())
             for step in group:
-                delta, valid = _quantity(step.fill)
-                direction = 1 if step.pair[1] == "long" else -1
-                if not valid or step.before + direction * delta != step.after:
-                    uncertain_episode = True
-                sizes[step.pair] = step.after
+                sizes[step.pair] = (Decimal(0) if step == paths[step.pair][-1]
+                    and any(p.key == step.pair and p.position.size == 0 for p in pairs)
+                    else step.after)
                 consumed[step.pair].append(step.fill)
             had_exposure = was_exposed or any(s.before > 0 or s.after > 0 for s in group)
             if any(sizes.values()):
                 continue
-            # A contradictory opening followed by a partial reduction must not
-            # turn that reduction into a false flatten. An inferred flat may
-            # separate a later clean episode, but is not exported as a lifecycle
-            # boundary and cannot release an existing halt.
-            uncertain = uncertain_episode
-            uncertain_episode = False
             if not had_exposure:
-                continue
-            if uncertain:
-                reasons.add("uncertain_episode_flat")
                 continue
             if any(timestamp > p.position_at for p in pairs):
                 reasons.add("boundary_after_position_anchor")
-                continue
-            fill_quality = snapshot_quality(snapshot, {p.key for p in pairs}) & {
-                "fills_before_position", "fill_capture_unknown"
-            }
-            reasons.update(fill_quality)
-            # Receipt ordering constrains the overlapping tail, not historical
-            # flat boundaries preceding every selected pair's fill-fetch start.
-            if "fill_capture_unknown" in fill_quality or any(
-                not (timestamp < p.fills_started_at
-                     or p.fills_started_at > p.position_at
-                     or (p.fills_started_at == p.position_at
-                         and p.fills_position_anchor == position_anchor(p)))
-                for p in pairs
-            ):
-                continue
-            if "position_fill_timestamp_tie" in snapshot_quality(snapshot, {p.key for p in pairs}):
-                reasons.add("position_fill_timestamp_tie")
-            if (any(not s.clean_tail for s in group)
-                    or any(t >= timestamp for ts in conflicts.values() for t in ts)
-                    or any(not s.clean_tail for steps in paths.values() for s in steps
-                           if s.fill.timestamp > timestamp)):
-                reasons.add("uncertain_flat")
-                continue
             realized = Decimal(0)
             for pair in pairs:
-                flat = replace(pair.position, size=Decimal(0), basis=Decimal(0))
-                history = reconstruct(flat, consumed[pair.key], {}, snapshot.start, timestamp)
-                realized += history.rows[-1].pnl
+                history = reconstruct(pair.position, [s.fill for s in paths[pair.key]], {},
+                                      snapshot.start, snapshot.now)
+                if consumed[pair.key]:
+                    realized += history.cashflows[len(consumed[pair.key])-1][1]
                 reasons.update(history.reasons)
-            # A mixed unordered cohort supplies an estimated risk row, not proof
-            # of a lifecycle reset. sequence means actual exchange/simulator order,
-            # never an arbitrary ID or Python list index (see capture contract).
+            # Unknown cross-pair order is applied as one cohort; its final flat
+            # is usable without claiming an unobserved internal flat/reopen.
             ambiguous = not exact_order and any(
                 len({(_quantity(s.fill)[0] > 0) for s in group if s.pair == p.key}) > 1
                 for p in pairs
@@ -411,29 +354,7 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             if ambiguous:
                 reasons.add("estimated_flat")
             tape = tuple((p.key, tuple(consumed[p.key])) for p in pairs)
-            boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0)),
-                                       not ambiguous and not reasons.intersection({
-                                           "post_position_fill", "position_fill_timestamp_tie", "post_capture_fill"
-                                       })))
-    # A fresh exchange-flat scope does not need its missing closing fill to
-    # finish protection. Use the last retained fill as a disclosed time estimate;
-    # never manufacture an observation-time anchor or move an already known flat
-    # merely because a later fee-only record exists.
-    if pairs and all(dec(p.position.size) == 0 for p in pairs):
-        terminal_known = any(b.lifecycle_eligible and all(
-            all(_zero_quantity(step.fill)
-                for step in paths[key][len(prefix):])
-            for key, prefix in b.consumed) for b in boundaries)
-        if not terminal_known and timeline:
-            timestamp = max(s.fill.timestamp for s in timeline)
-            tape = tuple((p.key, tuple(s.fill for s in paths[p.key])) for p in pairs)
-            realized = sum((reconstruct(p.position, dict(tape)[p.key], {}, snapshot.start,
-                                        snapshot.now).rows[-1].pnl for p in pairs), Decimal(0))
-            reasons.add("current_flat_timestamp_estimate")
-            if boundaries and boundaries[-1].timestamp == timestamp and boundaries[-1].consumed == tape:
-                boundaries[-1] = replace(boundaries[-1], lifecycle_eligible=True)
-            else:
-                boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0))))
+            boundaries.append(Boundary(timestamp, tape, Observation(timestamp, realized, Decimal(0))))
     return BoundaryTrace(tuple(boundaries), frozenset(reasons))
 
 

@@ -64,13 +64,11 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
     assert float(boundary.observation.pnl) == pytest.approx(client.realized_pnl - client.realized_fees)
     # Current flatness is authoritative even when the simulator clock ties the
     # fill and position observations; timing uncertainty remains diagnostic.
-    assert boundary.lifecycle_eligible
-    assert "current_flat_timestamp_estimate" in trace.reasons
+    assert "current_flat_timestamp_estimate" not in trace.reasons
     assert client.advance_time()
     clean = snapshot()
     trace = scope_boundaries(clean, "unified")
     boundary, = trace.boundaries
-    assert boundary.lifecycle_eligible
     risk = signal([Observation(start, dec(0), dec(0)), boundary.observation],
                   client.balance_total, 1, ".02")
     assert risk.panic[-1]

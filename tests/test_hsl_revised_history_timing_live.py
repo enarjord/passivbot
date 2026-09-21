@@ -18,7 +18,8 @@ import tools.run_fake_live as runner
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 @pytest.mark.parametrize('side', ['long', 'short'])
-async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fills(tmp_path, monkeypatch, mode, side):
+@pytest.mark.parametrize('current_size', [1., 2., .5])
+async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fills(tmp_path, monkeypatch, mode, side, current_size):
     user = f'fake_history_timing_{tmp_path.name}'
     _cleanup_fake_user_state(user)
     legacy = prepare_config(load_config(str(REPO_ROOT/'configs/fake_live_hsl_btc.hjson'), verbose=False),
@@ -43,7 +44,7 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
     for i, candle in enumerate(scenario['replay']['symbols'][symbol]['candles']):
         candle[:] = [stamp(i), 100., 100., 100., 100., 10.]
     scenario['account']['balance'] = 1000.
-    scenario['account']['positions'] = [dict(symbol=symbol, position_side=side, qty=1., price=100.)]
+    scenario['account']['positions'] = [dict(symbol=symbol, position_side=side, qty=current_size, price=100.)]
     entry, close = ('buy','sell') if side == 'long' else ('sell','buy')
     scenario['account']['fills'] = [dict(id=str(i), order=str(i), timestamp=stamp(t), symbol=symbol,
         position_side=side, side=order_side, amount=qty, price=price, pnl=pnl,
@@ -70,10 +71,21 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
             instance = hsl_revised_live.Owner(bot)
             bot._hsl_revised_live = instance
             result = await instance.protect()
+            if current_size == 2.:
+                # The same tape can mean residual old inventory or a missing new
+                # add. The approved minimum-opening rule retains the old loss.
+                # It must evaluate and close the full current size, not go blind.
+                assert result is True
+                await bot.refresh_protective_authoritative_state()
+                assert bot.positions[symbol][side]['size'] == 0.
+                assert any(c['method']=='create_order' for c in bot.cca.export_request_log())
+                completed.append(True)
+                return {'residual_inventory_evaluated': True}
             assert result is False
             assert not any(c['method']=='create_order' for c in bot.cca.export_request_log())
-            assert abs(bot.positions[symbol][side]['size']) == 1.
+            assert abs(bot.positions[symbol][side]['size']) == current_size
         # A genuine new loss still reaches the real reduce-only connector.
+        policy['red_threshold'] = .03
         bot.cca.get_current_step()['prices'][symbol] = 10. if side=='long' else 190.
         bot.market_snapshot_provider._cache.clear()
         await bot.refresh_protective_authoritative_state()

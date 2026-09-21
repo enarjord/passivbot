@@ -540,15 +540,39 @@ renew the anchor to now. No retained fill means no historical cooldown anchor. R
 history may replace the estimate, including reinstating remaining cooldown if the actual close was
 later. `never` retains its in-window stop restriction; lookback expiry still removes historical
 influence. This shared Rust/reference rule applies to live, fake exchange and simulation consumers;
-it does not treat stale or missing current positions as flat or grant lifecycle authority to
-artificial historical zero quantities while exposure remains.
+it does not treat stale or missing current positions as flat.
 
-A reconstructed historical flat boundary strictly before every selected pair's observed fill-fetch
-start remains usable when a newer position read follows that fetch. Read ordering alone must not
-merge completed historical episodes or renew an old stop. The overlapping tail still needs its
-causal ordering evidence, and unknown fetch receipts, contradictory quantities, ambiguous cohorts,
-and post-observation fills retain their existing scoped restrictions. `fills_before_position`
-remains a quality diagnostic even when an older boundary is usable.
+### Revised best-effort fill reconciler
+
+One pure Rust reconciler owns estimated position/basis history, explicit current-position
+adjustments and the path used to derive scope-flat boundaries. For each coin-side, canonicalize
+identities/revisions and causal timestamps, then let `S` be cumulative usable quantity changes in
+increase/reduction units, including zero. The opening inventory is
+`max(0, -min(S), abs(current_size) - S[-1])`. Walk forward without changing known fill quantities.
+The initial basis uses the earliest usable retained fill price, otherwise current basis/mark;
+adds update contract-aware weighted basis, reductions retain it, and flats reset it.
+Unknown quantities omit only their position transition; independently usable PnL/fees remain.
+
+Differences from current exchange size/basis become explicit estimated adjustments with no
+invented execution price, fee or realized PnL. An unexplained larger current size is carried from
+the opening, which may retain old losses until a missing add arrives and restores a historical
+flat. An unexplained reduction applies at the current endpoint; for an exchange-flat pair its
+estimated application time is the latest retained fill timestamp, consistently in samples and
+cooldown. The observed fill itself is unchanged. Empty retained history creates no historical
+cooldown anchor. Quantity rounding never changes the actual current endpoint and is constrained
+by the exchange quantity quantum when supplied.
+
+Aggregate scope boundaries require every estimated member position to be zero. Known global
+execution ordering may expose distinct same-time flats; otherwise a cross-pair timestamp cohort
+is applied as a whole, without inventing its internal order. Observation skew, unknown receipts,
+conflicting or incomplete history remain diagnostics. Consumers use the selected estimated path
+without a second lifecycle-eligibility veto. Current input validation and causal clipping remain
+mandatory; neither future fills nor invalid current positions become trading authority.
+
+Per-fill diagnostic reasons, estimated opening inventory/basis and endpoint adjustments remain
+visible in reconstruction output. Later observations rebuild the estimate without sticky failure
+or decision state. These estimates are local to revised HSL, never repairs to the factual fill
+ledger or certificates for other strategy/accounting consumers. Legacy HSL is unchanged.
 
 ### Staged revised live execution
 

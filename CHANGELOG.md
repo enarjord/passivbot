@@ -6,9 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Preserve revised-HSL historical flat boundaries when a later account refresh follows the
-  fill fetch. Read ordering alone no longer merges a completed old loss into the current
-  position or changes its reconstructed cooldown; uncertain overlapping tails remain scoped.
+- Revised HSL now uses one best-effort fill reconciliation path for drawdown and cooldown.
+  Known fill quantities are preserved with minimum feasible opening inventory and explicit
+  current-position adjustments. Missing or ambiguous history and read ordering produce
+  diagnostics instead of a second veto on estimated flats. Fresh flat positions complete
+  missing closes at an estimated last-fill time; delayed history rebuilds the result. Legacy
+  HSL remains the default and is unchanged.
 
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable

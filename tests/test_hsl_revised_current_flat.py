@@ -185,9 +185,10 @@ def test_live_owner_admits_after_estimated_cooldown_and_rechecks_repaired_histor
     monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
     opening, closing = ('buy','sell') if side == 'long' else ('sell','buy')
     price = 80. if side == 'long' else 120.
-    events = [event(id='open',timestamp=NOW-30*M,side=opening,qty=3.,position_side=side,
+    direction = 1 if side == 'long' else -1
+    events = [event(id='open',timestamp=NOW-30*M,side=opening,qty=direction*3.,position_side=side,
                     c_mult=1.,fee_paid=0.),
-              event(id='partial',timestamp=NOW-10*M,side=closing,qty=1.,price=price,pnl=-20.,
+              event(id='partial',timestamp=NOW-10*M,side=closing,qty=-direction,price=price,pnl=-20.,
                     position_side=side,c_mult=1.,fee_paid=0.)]
     value = bot(mode,side=side,events=events)
     value.positions[SYMBOL][side].update(size=0.,price=0.)
@@ -208,7 +209,7 @@ def test_live_owner_admits_after_estimated_cooldown_and_rechecks_repaired_histor
     assert owner.admit(order)
     # An independently captured owner reaches the same result without old state.
     assert Owner(value).capture(quotes(side)).permission(SYMBOL,side) == wave.permission(SYMBOL,side)
-    events.append(event(id='final',timestamp=NOW-2*M,side=closing,qty=2.,price=price,pnl=-40.,
+    events.append(event(id='final',timestamp=NOW-2*M,side=closing,qty=-direction*2.,price=price,pnl=-40.,
                         position_side=side,c_mult=1.,fee_paid=0.))
     assert owner.capture().permission(SYMBOL,side)[0] == 'halted'
     assert not owner.admit(order)
