@@ -487,5 +487,7 @@ including coin overrides. Native sequence numbers order samples and lifecycle tr
 including instantaneous RED/flat/restart observations at zero cooldown. GREEN/RED plots preserve
 that order; event
 markers use actual observation times, not reconstructed historical transition times. Missing native
-samples never fall back to account-equity reconstruction or legacy tier formulas. These consumers
+samples never fall back to account-equity reconstruction or legacy tier formulas. A missing native
+decision is serialized as a null action, never GREEN permission; entirely inactive scopes have no
+signal plot, and inactive samples leave gaps in otherwise active traces. These consumers
 are observational and do not open revised public runtime guards.

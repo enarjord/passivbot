@@ -36,7 +36,7 @@ def create_revised_hsl_figures(report, *, figsize, autoplot, return_figures, dis
     for scope in report["scopes"]:
         side, coin = scope["side"], scope["coin"]
         rows = samples.get((side, coin), [])
-        if not rows:
+        if not rows or not any(row["action"] is not None for row in rows):
             continue
         side_name = ("long", "short")[side] if side is not None else None
         if report["mode"] == "coin":
@@ -59,7 +59,7 @@ def create_revised_hsl_figures(report, *, figsize, autoplot, return_figures, dis
         signal_ax.set_ylabel("Drawdown")
         # Preserve native same-timestamp observation order, including fill-boundary transitions.
         states = frame["action"].map({"normal": 0, "panic": 1, "halted": 1})
-        if states.isna().any():
+        if (frame["action"].notna() & states.isna()).any():
             plt.close(fig)
             raise ValueError("unsupported revised HSL report action")
         transitions = [(row["sequence"], row["timestamp"], state)

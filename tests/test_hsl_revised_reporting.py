@@ -82,6 +82,9 @@ def test_coin_plots_keep_each_coin_and_side_separate():
     params["coins"] = ["AAA", "BBB"]
     for key in ("first_valid_indices", "last_valid_indices", "warmup_minutes", "trade_start_indices"):
         params[key] *= 2
+    for pair in args[2]:
+        pair["short"]["entry_eligible"] = True
+        pair["short"]["wallet_exposure_limit"] = -1.0
     policies = params["equity_hard_stop_loss"]["coins"]
     policies["BBB"] = deepcopy(policies["AAA"])
     for coin_policies in policies.values():
@@ -177,3 +180,15 @@ def test_zero_cooldown_red_is_visible_between_same_timestamp_transitions(mode):
     finally:
         for fig in figures.values():
             plt.close(fig)
+
+
+def test_inactive_coin_scope_has_no_native_permission_or_green_plot():
+    args = payload()
+    args[2][0]["long"]["n_positions"] = 0
+    data = run(args)[4]
+    rows = data["revised"]["samples"]
+    assert rows
+    assert all(row["action"] is None and row["raw"] is None and row["ema"] is None for row in rows)
+    assert all("inactive_scope" in row["reasons"] for row in rows)
+    assert create_forager_hard_stop_drawdown_figure(
+        pd.DataFrame(), {}, hard_stop_plot_data=data, autoplot=False, return_figures=True) == {}
