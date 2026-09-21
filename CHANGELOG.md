@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce revised-HSL historical price-projection overhead while preserving source selection,
+  conflict handling, gap filling and diagnostics. This is a staged performance improvement;
+  revised runtime activation remains guarded.
+
 - Connect staged revised-HSL live protection to the actual execution loop and startup preparation.
   History repair and ordinary planning run in the background while current inputs support scoped
   panic closes. Recheck each write against current Rust permissions; reconstruct restart and
