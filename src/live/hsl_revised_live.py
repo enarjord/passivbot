@@ -331,10 +331,16 @@ class Owner:
         # read from the tail read. A tied observation stays explicitly uncertain.
         await asyncio.sleep(.001)
         try:
-            return await self.bot.update_pnls(source='hsl_revised', **kwargs)
+            ready = await self.bot.update_pnls(source='hsl_revised', **kwargs)
         except (NetworkError, OSError, AuthoritativeSurfaceUnavailable, FillEventDataError) as exc:
             logging.warning('[risk] revised history repair unavailable | error_type=%s', type(exc).__name__)
-            return False
+            ready = False
+        if not ready:
+            # A failed/incomplete refresh cannot leave an older tape certified
+            # for ordinary fill consumers. The canonical successful refresh owns
+            # renewal; account-only and protective actions do not require fills.
+            self.bot._request_authoritative_confirmation({'fills'})
+        return ready
 
     def schedule_sources(self):
         import asyncio

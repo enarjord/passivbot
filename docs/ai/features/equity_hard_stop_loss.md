@@ -562,7 +562,9 @@ authorize execution. Ordinary preparation checks its complete starting account f
 awaited phase and discards a mixed-cohort result. Enabled ordinary fill consumers also bind the
 canonical fill signature and readiness to their plan and connector receipt, including PnL/fee-only
 enrichment. This does not impose ordinary fill requirements on protective closes or otherwise
-valid plans without those consumers. Unchanged confirming reads do not starve slow
+valid plans without those consumers. A failed or incomplete background fill refresh requires a
+new authoritative fill confirmation before ordinary fill consumers resume; an older successful
+stamp cannot survive that failure. Account-only protection remains independent. Unchanged confirming reads do not starve slow
 preparation. A replacement planner starts only after the preceding plan finishes writing. The executor
 uses the wave's own planning snapshot even when background ordinary preparation completes during
 an await. History-only flat pairs can use their latest factual fill price when no candle/quote

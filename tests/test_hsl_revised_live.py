@@ -1151,3 +1151,61 @@ async def test_failed_account_refresh_releases_revised_transaction(monkeypatch):
         await state_refresh.refresh_protective_authoritative_state(bot)
     assert not hsl_revised_live.owner(bot)._refresh_lock.locked()
     assert await state_refresh.refresh_protective_authoritative_state(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('required', [True, False])
+@pytest.mark.parametrize('failure', ['incomplete', 'network', 'cache', 'fill_data'])
+async def test_failed_fill_refresh_revokes_only_required_consumers_until_repaired(monkeypatch, required, failure):
+    from types import MethodType
+    from ccxt.base.errors import NetworkError
+    from passivbot import Passivbot
+    from passivbot_exceptions import FillEventDataError
+    from live.planning_gates import staged_planner_precondition_state
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    import utils
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot()
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    surfaces = {'balance', 'positions', 'open_orders'} | ({'fills'} if required else set())
+    bot._staged_planner_required_surfaces = lambda **kwargs: surfaces
+    bot._staged_planner_surface_min_epochs = MethodType(Passivbot._staged_planner_surface_min_epochs, bot)
+    bot._request_authoritative_confirmation = MethodType(Passivbot._request_authoritative_confirmation, bot)
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    for surface in ('balance', 'positions', 'open_orders', 'fills'):
+        ledger.stamp(surface, signature=('old tape',) if surface == 'fills' else None, now_ms=NOW-200)
+    calls = []
+    async def refresh(**kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            if failure == 'incomplete':
+                return False
+            raise {'network': NetworkError, 'cache': OSError, 'fill_data': FillEventDataError}[failure]('offline failure')
+        ledger.stamp('fills', signature=('repaired tape',), now_ms=NOW)
+        return True
+    bot.update_pnls = refresh
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes())
+    ordinary = dict(symbol=SYMBOL, position_side='long')
+    protective = dict(ordinary)
+    instance.bind(wave, (), (ordinary,), ordinary=True)
+    instance.bind(wave, (), (protective,))
+    assert staged_planner_precondition_state(bot, include_market_snapshot=False)[0]
+    assert await instance._refresh_history({}) is False
+    ready, details = staged_planner_precondition_state(bot, include_market_snapshot=False)
+    assert ready == (not required)
+    assert details['missing'] == (['fills'] if required else [])
+    assert instance.admit(ordinary) == (not required)
+    assert instance.admit(protective)
+    # The next owner account pass advances the shared epoch; only an actual
+    # successful fill refresh can stamp the required fill confirmation there.
+    ledger.begin_epoch()
+    assert await instance._refresh_history({}) is True
+    assert staged_planner_precondition_state(bot, include_market_snapshot=False)[0]
+    fresh = dict(symbol=SYMBOL, position_side='long')
+    instance.bind(instance.capture(), (), (fresh,), ordinary=True)
+    assert instance.admit(fresh)
+    assert instance.admit(protective)
