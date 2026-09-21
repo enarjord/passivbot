@@ -6,6 +6,104 @@ import pytest
 from market_snapshot import MarketSnapshotProvider
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
+async def test_cancelled_waiter_does_not_cancel_shared_quote_or_other_waiter(strategy):
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+    async def fetch(*args):
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return {'A': {'bid': 99., 'ask': 101., 'last': 100.}}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch,
+        fetch_tickers_for_symbols=fetch, ticker_strategy=strategy)
+    protection = asyncio.create_task(provider.get_snapshots(['A']))
+    ordinary = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    protection.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await protection
+    release.set()
+    assert (await ordinary)['A'].last == 100.
+    assert calls == 1
+    assert provider._fetch_task is None and not provider._symbol_fetch_tasks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
+@pytest.mark.parametrize('outcome', ['success', 'failure', 'shutdown'])
+async def test_abandoned_shared_quote_is_owned_until_completion_or_shutdown(strategy, outcome):
+    started, release = asyncio.Event(), asyncio.Event()
+    async def fetch(*args):
+        started.set()
+        await release.wait()
+        if outcome == 'failure':
+            raise OSError('synthetic offline failure')
+        return {'A': {'bid': 99., 'ask': 101., 'last': 100.}}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch,
+        fetch_tickers_for_symbols=fetch, ticker_strategy=strategy)
+    waiter = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    shared = provider._fetch_task or next(iter(provider._symbol_fetch_tasks.values()))
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert not shared.done()
+    if outcome == 'shutdown':
+        provider.cancel_pending()
+    else:
+        release.set()
+    await asyncio.wait({shared})
+    await asyncio.sleep(0)  # provider completion callback, even without a waiter
+    assert provider._fetch_task is None and not provider._symbol_fetch_tasks
+    assert shared.cancelled() == (outcome == 'shutdown')
+    assert not shared._log_traceback  # an abandoned failure was retrieved
+
+
+@pytest.mark.asyncio
+async def test_revised_quote_deadline_cannot_cancel_ordinary_shared_request():
+    from types import SimpleNamespace
+    from time import monotonic
+    from live.hsl_revised_live import Owner
+    started, release = asyncio.Event(), asyncio.Event()
+    async def fetch():
+        started.set()
+        await release.wait()
+        return {'A': {'bid': 99., 'ask': 101., 'last': 100.}}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    owner = Owner(SimpleNamespace(_get_orchestrator_market_snapshots=provider.get_snapshots))
+    assert await owner.acquire_quotes({'A'}) == {}
+    ordinary = asyncio.create_task(provider.get_snapshots(['A']))
+    await asyncio.sleep(0)
+    owner._quote_started['A'] = monotonic() - 6.
+    assert await owner.acquire_quotes({'A'}) == {}
+    await asyncio.sleep(0)
+    assert not ordinary.done()
+    release.set()
+    assert (await ordinary)['A'].last == 100.
+    assert (await owner.acquire_quotes({'A'}))['A'].last == 100.
+    owner.cancel_inputs()
+
+
+@pytest.mark.asyncio
+async def test_bot_shutdown_cancels_provider_owned_requests():
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+    started = asyncio.Event()
+    async def fetch():
+        started.set()
+        await asyncio.Event().wait()
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    waiter = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    Passivbot.stop_data_maintainers(SimpleNamespace(market_snapshot_provider=provider))
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    assert provider._fetch_task is None
+
+
 def _unsafe_snapshot_exception(secret: str) -> RuntimeError:
     unsafe_type = type("SnapshotCredentialFailure", (RuntimeError,), {})
     return unsafe_type(secret)

@@ -8725,6 +8725,9 @@ class Passivbot:
         revised_owner = getattr(self, "_hsl_revised_live", None)
         if revised_owner is not None:
             revised_owner.cancel_inputs()
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        if snapshots is not None:
+            snapshots.cancel_pending()
         if not hasattr(self, "maintainers"):
             return
         res = {}

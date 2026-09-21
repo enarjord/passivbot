@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Keep shared quote requests alive when one reader times out, so revised HSL quote deadlines
+  cannot cancel ordinary planning and repeatedly restart the bot. Shutdown still cancels shared
+  requests; quote failures and freshness requirements remain unchanged.
+
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable
   equity; reporting does not fetch data or affect trading.

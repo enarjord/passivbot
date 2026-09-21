@@ -265,11 +265,17 @@ class MarketSnapshotProvider:
         if task is None or task.done():
             task = asyncio.create_task(self._fetch_tickers())
             self._fetch_task = task
-        try:
-            return await task
-        finally:
-            if self._fetch_task is task and task.done():
-                self._fetch_task = None
+            def finished(done):
+                if self._fetch_task is done:
+                    self._fetch_task = None
+                if not done.cancelled():
+                    # Retrieve even when every waiter timed out. Awaiting callers
+                    # still receive the original failure through their shield.
+                    done.exception()
+            task.add_done_callback(finished)
+        # A protection reader's deadline belongs to that reader, not to another
+        # planning reader sharing the same underlying exchange request.
+        return await asyncio.shield(task)
 
     async def _fetch_tickers_for_symbols_shared(self, symbols: list[str]) -> dict[str, Any]:
         if self._fetch_tickers_for_symbols is None:
@@ -279,11 +285,19 @@ class MarketSnapshotProvider:
         if task is None or task.done():
             task = asyncio.create_task(self._fetch_tickers_for_symbols(list(key)))
             self._symbol_fetch_tasks[key] = task
-        try:
-            return await task
-        finally:
-            if self._symbol_fetch_tasks.get(key) is task and task.done():
-                self._symbol_fetch_tasks.pop(key, None)
+            def finished(done):
+                if self._symbol_fetch_tasks.get(key) is done:
+                    self._symbol_fetch_tasks.pop(key, None)
+                if not done.cancelled():
+                    done.exception()
+            task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    def cancel_pending(self) -> None:
+        """Owner shutdown, unlike an individual read timeout, cancels shared I/O."""
+        for task in (self._fetch_task, *self._symbol_fetch_tasks.values()):
+            if task is not None and not task.done():
+                task.cancel()
 
     @staticmethod
     def _coerce_positive(value: Any) -> Optional[float]:
