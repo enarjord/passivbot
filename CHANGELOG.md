@@ -9,6 +9,10 @@ since the latest release tag; these features may already be available when insta
 - Avoid duplicate revised-HSL snapshot reconstruction when selected prices already have the
   required minute grid. Each evaluation still rebuilds from current facts; sparse and damaged
   histories keep their existing approximation path. Public revised activation remains gated.
+- Save staged revised-HSL native reports with backtest artifacts, including effective scope
+  policies and explicit compact/detail status. Plot native drawdown, EMA and GREEN/RED state
+  separately per scope, without substituting legacy signals or account-equity reconstruction.
+  Artifact workspaces expose the report; public revised activation remains gated.
 
 - Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
   halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL

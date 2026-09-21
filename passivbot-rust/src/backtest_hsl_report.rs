@@ -437,8 +437,19 @@ impl Backtest<'_> {
             serde_json::to_value(&self.revised_hsl_report.samples).map_err(|e| e.to_string())?;
         let events =
             serde_json::to_value(&self.revised_hsl_report.events).map_err(|e| e.to_string())?;
+        let scopes = self
+            .revised_hsl_report
+            .scopes
+            .keys()
+            .map(|&(side, coin)| {
+                Ok(serde_json::json!({
+                    "side": side, "coin": coin, "policy": self.revised_policy(side, coin)?,
+                }))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         Ok(Some(serde_json::json!({
             "schema_version": 1, "engine": "revised", "mode": config.mode,
+            "detailed": self.revised_hsl_report.detailed, "scopes": scopes,
             "coins": self.backtest_params.coins, "summary": summary,
             "samples": samples, "events": events,
         })))

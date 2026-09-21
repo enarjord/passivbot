@@ -2941,6 +2941,12 @@ def post_process(
     label=None,
     plot_context: BacktestPlotContext | None = None,
 ):
+    from config.hsl_revised import engine
+    from hsl_revised_reporting import revised_report
+
+    hsl_report = revised_report(plot_context.hard_stop_plot_data if plot_context else None)
+    if engine(config) == "revised" and hsl_report is None:
+        raise ValueError("revised backtest results require their native HSL report")
     sts = utc_ms()
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))
     equities_array = np.asarray(equities_array)
@@ -2979,6 +2985,9 @@ def post_process(
     json.dump(
         analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True
     )
+    if hsl_report is not None:
+        with open(f"{results_path}hsl_report.json", "w", encoding="utf-8") as output:
+            json.dump(hsl_report, output, indent=2, sort_keys=True, allow_nan=False)
     original_config = config.get("_original_backtest_config")
     if original_config is not None:
         dump_config(

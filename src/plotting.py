@@ -1034,6 +1034,18 @@ def create_forager_hard_stop_drawdown_figure(
     autoplot: bool | None = None,
     return_figures: bool | None = None,
 ) -> dict:
+    from config.hsl_revised import engine
+    from hsl_revised_reporting import revised_report, create_revised_hsl_figures
+
+    report = revised_report(hard_stop_plot_data)
+    if report is not None or engine(config or {}) == "revised":
+        autoplot = (_ipy_display is not None) if autoplot is None else autoplot
+        return create_revised_hsl_figures(
+            report, figsize=figsize, autoplot=autoplot,
+            return_figures=(not autoplot) if return_figures is None else return_figures,
+            display=_ipy_display,
+        )
+
     figures: dict = {}
 
     def _resolve_pside_cfg(pside: str) -> dict:

@@ -125,7 +125,11 @@ impl Backtest<'_> {
         self.backtest_params.equity_hard_stop_loss.revised.is_some()
     }
 
-    fn revised_policy(&self, side: Option<usize>, coin: Option<usize>) -> Result<Policy, String> {
+    pub(super) fn revised_policy(
+        &self,
+        side: Option<usize>,
+        coin: Option<usize>,
+    ) -> Result<Policy, String> {
         let cfg = self
             .backtest_params
             .equity_hard_stop_loss
