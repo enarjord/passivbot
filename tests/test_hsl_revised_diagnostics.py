@@ -292,3 +292,30 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
     bot.freshness_ledger.stamp('open_orders', now_ms=NOW)
     diagnostics.record(bot, clean)
     assert events[-1][1]['data']['tier'] == 'green'
+
+
+@pytest.mark.parametrize('slow_stage', ['projection', 'sink'])
+def test_connector_admission_does_not_run_diagnostics_or_sinks(observed, monkeypatch, slow_stage):
+    import utils
+    bot, owner, wave, _ = observed()
+    clock = [NOW]
+    monkeypatch.setattr(utils, 'utc_ms', lambda: clock[0])
+    bot.get_exchange_time = lambda: clock[0]
+    calls = []
+    original = diagnostics._row if slow_stage == 'projection' else bot._emit_live_event
+    def slow(*args, **kwargs):
+        calls.append(slow_stage)
+        clock[0] += 20_000
+        return original(*args, **kwargs)
+    if slow_stage == 'projection':
+        monkeypatch.setattr(diagnostics, '_row', slow)
+    else:
+        bot._emit_live_event = slow
+    bot._hsl_revised_diagnostic_event = None
+    order = dict(symbol=SYMBOL, position_side='long')
+    owner.bind(wave, (), (order,))
+    assert owner.admit(order)
+    assert not calls and clock == [NOW]
+    # Normal observation capture still refreshes diagnostics outside admission.
+    owner.capture()
+    assert calls == [slow_stage]

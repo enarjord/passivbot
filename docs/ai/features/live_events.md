@@ -442,6 +442,8 @@ or retained trading permission. Numeric metrics refresh on every completed evalu
 monitor snapshot even when no new status event is emitted. Sink/projection failure cannot inhibit
 risk evaluation or exchange execution.
 
+Connector admission evaluates current risk without diagnostic projection or synchronous event sinks.
+Normal planning/protection captures report observations outside that write-boundary check.
 Diagnostic expiry uses the actual held-position mark timestamps consumed by evaluated scopes;
 quotes cached for disabled scopes cannot expire another scope's display. The bounded legacy
 aggregate preserves last RED attention, while a stale or failed GREEN observation is labelled
