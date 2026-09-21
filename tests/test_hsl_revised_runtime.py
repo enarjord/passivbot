@@ -750,3 +750,29 @@ def test_targeted_permission_keeps_the_complete_relevant_scope(mode, side):
     selected, selected_absent = capture(value, marks, {}, target=(SYMBOL, side), **kwargs)
     assert bool(selected) == (mode == 'coin')
     assert bool(selected_absent) == (mode != 'coin')
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+@pytest.mark.parametrize('side', ['long', 'short'])
+@pytest.mark.parametrize('cooldown', [1., 10.])
+def test_historical_flat_and_cooldown_survive_newer_position_reads(mode, side, cooldown):
+    """Receipt order alone cannot merge an old stopped episode into a new one."""
+    sign = 1 if side == 'long' else -1
+    entry_side, close_side = ('buy', 'sell') if sign > 0 else ('sell', 'buy')
+    events = [event(id='old-open', timestamp=NOW-600_000, qty=sign*10., price=100.,
+                    position_side=side, side=entry_side, c_mult=1., fee_paid=0.),
+              event(id='old-close', timestamp=NOW-480_000, qty=-sign*10., price=100.-sign*20.,
+                    position_side=side, side=close_side, pnl=-200., c_mult=1., fee_paid=0.),
+              event(id='new-open', timestamp=NOW-60_000, qty=sign*1., price=100.,
+                    position_side=side, side=entry_side, c_mult=1., fee_paid=0.)]
+    value = bot(mode, side=side, events=events)
+    value.positions[SYMBOL][side].update(size=sign*1., price=100.)
+    policy = value.config['bot']['hsl'] if mode == 'unified' else value.config['bot'][side]['hsl']
+    policy.update(ema_span_minutes=1., cooldown_minutes_after_red=cooldown, red_threshold=.05)
+    marks = {SYMBOL: MarketSnapshot(SYMBOL, 100., 100., 100., NOW-100, 'fixture')}
+    results = []
+    for started, completed in [(NOW-150, NOW-50), (NOW-500, NOW-300), (NOW-200, NOW-100)]:
+        decision, = run(value, marks, fills_started_ms=started, fills_completed_ms=completed)[0]
+        results.append(json.loads(decision.payload)['decision'])
+    assert results[0]['action'] == ('normal' if cooldown == 1. else 'panic')
+    assert results[1:] == [results[0], results[0]]

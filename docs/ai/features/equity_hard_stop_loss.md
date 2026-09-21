@@ -543,6 +543,13 @@ influence. This shared Rust/reference rule applies to live, fake exchange and si
 it does not treat stale or missing current positions as flat or grant lifecycle authority to
 artificial historical zero quantities while exposure remains.
 
+A reconstructed historical flat boundary strictly before every selected pair's observed fill-fetch
+start remains usable when a newer position read follows that fetch. Read ordering alone must not
+merge completed historical episodes or renew an old stop. The overlapping tail still needs its
+causal ordering evidence, and unknown fetch receipts, contradictory quantities, ambiguous cohorts,
+and post-observation fills retain their existing scoped restrictions. `fills_before_position`
+remains a quality diagnostic even when an older boundary is usable.
+
 ### Staged revised live execution
 
 The revised live owner (`live/hsl_revised_live.py`) uses the shared Rust evaluator and the minimal

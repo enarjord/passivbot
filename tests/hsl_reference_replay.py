@@ -376,8 +376,16 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
             fill_quality = snapshot_quality(snapshot, {p.key for p in pairs}) & {
                 "fills_before_position", "fill_capture_unknown"
             }
-            if fill_quality:
-                reasons.update(fill_quality)
+            reasons.update(fill_quality)
+            # Receipt ordering constrains the overlapping tail, not historical
+            # flat boundaries preceding every selected pair's fill-fetch start.
+            if "fill_capture_unknown" in fill_quality or any(
+                not (timestamp < p.fills_started_at
+                     or p.fills_started_at > p.position_at
+                     or (p.fills_started_at == p.position_at
+                         and p.fills_position_anchor == position_anchor(p)))
+                for p in pairs
+            ):
                 continue
             if "position_fill_timestamp_tie" in snapshot_quality(snapshot, {p.key for p in pairs}):
                 reasons.add("position_fill_timestamp_tie")

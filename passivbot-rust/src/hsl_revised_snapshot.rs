@@ -216,7 +216,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     let mut pairs = Vec::new();
     let mut last_uncertain = None;
     let mut capture_known = true;
-    let mut capture_after_position = true;
     for p in &selected {
         if !fresh(p.position_at)
             || p.mark_at > input.now
@@ -246,7 +245,6 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             .is_some_and(|t| t < p.position_at || (t == p.position_at && !p.anchored()))
         {
             reasons.insert("fills_before_position".into());
-            capture_after_position = false;
         }
         if p.prices_at < p.mark_at {
             reasons.insert("prices_before_mark".into());
@@ -395,7 +393,17 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
                 reasons.insert("boundary_after_position_anchor".into());
                 continue;
             }
-            if !capture_known || !capture_after_position {
+            // A later position refresh cannot erase an older reconstructed
+            // flatten. Only the tail overlapping a pre-position fill fetch still
+            // lacks ordering evidence. Current flat authority is handled below.
+            if !capture_known
+                || selected.iter().any(|p| {
+                    let started = p.fills_started_at.unwrap();
+                    !(t < started
+                        || started > p.position_at
+                        || (started == p.position_at && p.anchored()))
+                })
+            {
                 continue;
             }
             if last_uncertain.is_some_and(|u| u >= t) {
@@ -533,6 +541,37 @@ mod tests {
         assert!(output.reasons.contains("current_flat_timestamp_estimate"));
         input.pairs[0].position.size = 2.0;
         input.pairs[0].position.basis = 100.0;
+        assert!(prepare(&input).unwrap().boundaries.is_empty());
+    }
+
+    #[test]
+    fn historical_flat_survives_later_position_refresh_but_not_overlapping_tail() {
+        let value = serde_json::json!({
+            "now": 100, "start": 0, "balance": 1000.0, "balance_at": 100,
+            "config_at": 100, "max_current_age_ms": 10, "mode": "unified",
+            "pairs": [{"symbol": "A", "position": {"size": 1.0, "basis": 100.0,
+                "mark": 100.0, "multiplier": 1.0, "inverse": false, "pside": "long"},
+                "position_at": 100, "mark_at": 100, "prices_at": 100,
+                "fills_started_at": 95, "fills_at": 99, "prices": {}, "revisions": [0,0,0,0],
+                "fills": [
+                    {"identity": "open", "timestamp": 10, "delta": 10.0, "price": 100.0,
+                     "realized": 0.0, "fee": 0.0, "revision": 0},
+                    {"identity": "close", "timestamp": 20, "delta": -10.0, "price": 80.0,
+                     "realized": -200.0, "fee": 0.0, "revision": 0},
+                    {"identity": "reopen", "timestamp": 90, "delta": 1.0, "price": 100.0,
+                     "realized": 0.0, "fee": 0.0, "revision": 0}]}]
+        });
+        let mut input: Input = serde_json::from_value(value).unwrap();
+        let output = prepare(&input).unwrap();
+        assert!(output.reasons.contains("fills_before_position"));
+        assert_eq!(output.boundaries.len(), 1);
+        assert_eq!(output.boundaries[0].timestamp, 20);
+        assert!(output.boundaries[0].lifecycle_eligible);
+        for started in [10, 20] {
+            input.pairs[0].fills_started_at = Some(started);
+            assert!(prepare(&input).unwrap().boundaries.is_empty());
+        }
+        input.pairs[0].fills_started_at = None;
         assert!(prepare(&input).unwrap().boundaries.is_empty());
     }
 

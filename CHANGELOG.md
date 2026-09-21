@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve revised-HSL historical flat boundaries when a later account refresh follows the
+  fill fetch. Read ordering alone no longer merges a completed old loss into the current
+  position or changes its reconstructed cooldown; uncertain overlapping tails remain scoped.
+
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable
   equity; reporting does not fetch data or affect trading.

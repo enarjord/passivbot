@@ -455,7 +455,11 @@ def test_fill_fetch_timing_changes_quality_not_current_flat_authority(timing, re
     p = capture_pair("A", original.position, 4 * M, 4 * M, original.fills, {}, prices_at=4 * M, **timing)
     trace = scope_boundaries(frame(p), "unified")
     assert [b.timestamp for b in trace.boundaries] == [3 * M]
-    assert {reason, "current_flat_timestamp_estimate"} <= trace.reasons
+    assert reason in trace.reasons
+    # A receipt beginning after the historical close supports that boundary
+    # even when the current position read is newer or shares its clock tick.
+    assert ("current_flat_timestamp_estimate" in trace.reasons) == (
+        timing.get("fills_started_at", 0) <= 3 * M)
     fresh = after_position(replace(p, fills_started_at=4 * M, fills_at=4 * M))
     assert scope_boundaries(frame(fresh), "unified").boundaries[0].lifecycle_eligible
 
