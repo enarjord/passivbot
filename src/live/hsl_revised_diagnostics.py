@@ -7,7 +7,7 @@ import logging
 
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTags, EventTypes
-from live.event_emitters import _safe_emit
+from live.event_emitters import _safe_emit, _console_sink_error_count
 
 SCOPE_LIMIT = 128
 SAMPLE_LIMIT = 3
@@ -48,7 +48,7 @@ def _priority(row):
 
 
 def record(bot, wave):
-    """Refresh numeric diagnostics on every evaluation, emit bounded status changes."""
+    """Report a completed protective wave and emit bounded status changes."""
     try:
         from utils import utc_ms
         now = int(utc_ms())
@@ -84,11 +84,15 @@ def record(bot, wave):
         bot._hsl_revised_diagnostic_event = (signature, now)
         data['scopes'] = data['scopes'][:SAMPLE_LIMIT]
         data['omitted_scopes'] = max(0, len(rows)-SAMPLE_LIMIT)
+        console_errors_before = _console_sink_error_count(bot)
         emitted = _safe_emit(bot, EventTypes.HSL_STATUS, component='risk.hsl', tags=(EventTags.RISK, EventTags.SUMMARY),
             level='warning' if counts['unavailable'] else 'info',
             status='degraded' if counts['unavailable'] or counts['estimated'] else 'ok',
             cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
-        if emitted is None:
+        console_errors_after = _console_sink_error_count(bot)
+        console_failed = (console_errors_before is not None and console_errors_after is not None
+                          and console_errors_after > console_errors_before)
+        if emitted is None or console_failed:
             logging.log(logging.WARNING if counts['unavailable'] else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d',
                          data['signal_mode'], data['observation_status'], counts['green'], counts['red'],
                          counts['inactive'], counts['unavailable'], counts['estimated'])
