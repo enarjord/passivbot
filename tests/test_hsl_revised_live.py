@@ -675,3 +675,32 @@ def test_fresh_owner_cannot_recycle_an_old_orders_permission(monkeypatch):
     fresh_owner.bind(fresh_wave, (), (fresh_order,))
     assert fresh_owner.admit(fresh_order)
     assert not fresh_owner.admit(old_order)
+
+
+@pytest.mark.parametrize('expires', ['account', 'mark'])
+def test_synchronous_reconstruction_must_not_outlive_current_input_freshness(monkeypatch, expires):
+    from dataclasses import replace
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    from live import hsl_revised_runtime
+    import utils
+    clock = [NOW]
+    monkeypatch.setattr(utils, 'utc_ms', lambda: clock[0])
+    bot = make_bot()
+    bot.get_exchange_time = lambda: clock[0]
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._ensure_freshness_ledger().stamp('open_orders', now_ms=NOW-200)
+    instance = hsl_revised_live.owner(bot)
+    marks = quotes()
+    if expires == 'mark':
+        marks = {SYMBOL: replace(marks[SYMBOL], fetched_ms=NOW-9_500)}
+    wave = instance.capture(marks)
+    order = {'symbol': SYMBOL, 'position_side': 'long'}
+    instance.bind(wave, (), (order,))
+    evaluate = hsl_revised_runtime.evaluate
+    def slow_evaluation(requests):
+        result = evaluate(requests)
+        clock[0] += 10_000 if expires == 'account' else 1_000
+        return result
+    monkeypatch.setattr(hsl_revised_runtime, 'evaluate', slow_evaluation)
+    assert not instance.admit(order)

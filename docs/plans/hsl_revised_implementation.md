@@ -500,3 +500,11 @@ This slice does not open runtime guards. Full ordinary fake-CLI stepping and rev
 structured monitor integration, broader fault/performance gates, final backtest/optimizer activation
 and the operator live-validation/rollback checklist remain follow-up work. No actual live bot tests
 are included in this offline gate.
+
+Admission throughput is an explicit activation gate: a synthetic unified scope with ten held
+symbols and ninety days of minute closes showed that recomputing the full signal per connector
+write can consume the current-input freshness budget partway through a batch. The staged guard
+checks freshness again after synchronous reconstruction and defers expired inputs. This preserves
+the input contract but is not the final throughput solution. Before activation, optimize the
+submission path without retaining prior trading authority, and test that independent closes make
+bounded progress under the largest supported input window.

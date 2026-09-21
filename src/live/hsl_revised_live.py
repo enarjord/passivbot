@@ -112,15 +112,10 @@ class Owner:
                                 item.scope, item.reason)
             self._diagnostic = signature
 
-    def admit(self, order):
-        wave = self._waves.get(order.get("_hsl_revised_wave"))
-        if not isinstance(wave, Wave):
-            return False
+    def _account_matches(self, wave, now):
         bot = self.bot
-        from utils import utc_ms
         ledger = bot._ensure_freshness_ledger()
         pending = getattr(bot, '_authoritative_pending_confirmations', {})
-        now = int(utc_ms())
         for surface in ('balance', 'positions', 'open_orders'):
             state = ledger.surfaces[surface]
             if (state.updated_ms <= 0 or not 0 <= now - state.updated_ms <= bot._live_market_snapshot_max_age_ms()
@@ -131,7 +126,29 @@ class Owner:
         if (wave.generation != int(getattr(bot, "_account_invalidation_generation", 0))
                 or wave.positions != runtime.observe_positions(bot).payload or wave.balance != bot.get_raw_balance()):
             return False
+        return True
+
+    def admit(self, order):
+        from utils import utc_ms
+        wave = self._waves.get(order.get("_hsl_revised_wave"))
+        if not isinstance(wave, Wave) or not self._account_matches(wave, int(utc_ms())):
+            return False
         current = self.capture()
+        now = int(utc_ms())
+        # A long synchronous reconstruction can consume the remaining freshness
+        # budget even without an await. Recheck at the actual write boundary.
+        if not self._account_matches(wave, now):
+            return False
+        scopes = [d.scope for d in current.decisions
+                  if matches(d.scope, order['symbol'], order['position_side'])]
+        for symbol, sides in self.bot.positions.items():
+            if any(p['size'] != 0 and any(matches(scope, symbol, side) for scope in scopes)
+                   for side, p in sides.items()):
+                quote = self.quotes.get(symbol)
+                if (quote is None or not quote.is_valid()
+                        or not 0 < quote.fetched_ms <= now
+                        or now - quote.fetched_ms > self.bot._live_market_snapshot_max_age_ms()):
+                    return False
         before = wave.permission(order["symbol"], order["position_side"])
         after = current.permission(order["symbol"], order["position_side"])
         return after[0] != "unavailable" and before == after
