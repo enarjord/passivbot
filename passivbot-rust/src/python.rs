@@ -1845,6 +1845,12 @@ fn run_backtest_core<'py>(
         analysis_btc.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
         analysis_btc.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
 
+        if backtest_params.equity_hard_stop_loss.revised.is_some() {
+            for analysis in [&mut analysis_usd, &mut analysis_btc] {
+                analysis.drawdown_worst_ema_strategy_eq = strategy.overall.drawdown_worst_ema_strategy_eq;
+                analysis.drawdown_worst_mean_1pct_ema_strategy_eq = strategy.overall.drawdown_worst_mean_1pct_ema_strategy_eq;
+            }
+        }
         let analysis_dict_start = profile_start(profile_enabled);
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = if skip_btc_analysis {
@@ -1854,14 +1860,12 @@ fn run_backtest_core<'py>(
         };
         let revised_hsl_report = backtest.revised_hsl_report_value().map_err(PyValueError::new_err)?;
         if revised_hsl_report.is_some() {
-            // These legacy fields depend on legacy controller observations.
-            // Until their independent analysis migration is complete, absence
-            // is explicit: do not publish plausible zero fitness values.
+            // Removed trading tiers are absent, never constant zero objectives.
             for analysis in [&py_analysis_usd, &py_analysis_btc] {
                 let dict = analysis.bind(py);
                 for key in dict.keys().iter() {
                     let name: String = key.extract()?;
-                    if name.starts_with("hard_stop_") || name.contains("strategy_eq") {
+                    if matches!(name.as_str(), "hard_stop_time_in_yellow_pct" | "hard_stop_time_in_orange_pct") {
                         dict.del_item(key)?;
                     }
                 }
@@ -1972,18 +1976,18 @@ fn run_backtest_core<'py>(
         }
 
         let strategy_equity_series = backtest.strategy_equity_series_for_artifacts();
-        // Revised strategy-equity observations are not integrated yet. Do not
-        // label collateral-inclusive account equity as strategy-only performance.
-        let equity_columns = if backtest_params.equity_hard_stop_loss.revised.is_some() { 3 } else { 4 };
+        let revised = backtest_params.equity_hard_stop_loss.revised.is_some();
+        if revised && strategy_equity_series.len() != equities.timestamps_ms.len() {
+            return Err(PyValueError::new_err("revised strategy-equity observations do not match equity timestamps"));
+        }
         let equities_array =
-            Array2::from_shape_fn((equities.timestamps_ms.len(), equity_columns), |(i, j)| match j {
+            Array2::from_shape_fn((equities.timestamps_ms.len(), 4), |(i, j)| match j {
                 0 => equities.timestamps_ms[i] as f64,
                 1 => equities.usd_total_equity[i],
                 2 => equities.btc_total_equity[i],
-                3 => strategy_equity_series
-                    .get(i)
-                    .copied()
-                    .unwrap_or(equities.usd_total_equity[i]),
+                3 => if revised { strategy_equity_series[i] } else {
+                    strategy_equity_series.get(i).copied().unwrap_or(equities.usd_total_equity[i])
+                },
                 _ => 0.0,
             })
             .into_pyarray_bound(py)

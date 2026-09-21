@@ -97,7 +97,7 @@ impl Config {
 #[derive(Debug)]
 pub(super) struct Scope {
     timestamp: i64,
-    side: Option<usize>,
+    pub(super) side: Option<usize>,
     coin: Option<usize>,
     pub result: evaluator::Output,
 }
@@ -109,6 +109,18 @@ impl Scope {
 }
 
 impl Backtest<'_> {
+    /// Current post-fill account value, before ordinary collateral revaluation.
+    pub(super) fn revised_fill_is_terminal(&self, k: usize) -> bool {
+        let balance = if self.balance.use_btc_collateral {
+            self.balance.btc_cash_wallet * self.btc_usd_prices[k] + self.balance.usd_cash_wallet
+        } else {
+            self.balance.usd_total_balance
+        };
+        let equity =
+            balance + self.unrealized_pnl_pside(LONG, k) + self.unrealized_pnl_pside(SHORT, k);
+        balance <= 0.0 || equity <= self.liquidation_equity_floor_usd()
+    }
+
     pub(super) fn revised_hsl_enabled(&self) -> bool {
         self.backtest_params.equity_hard_stop_loss.revised.is_some()
     }
@@ -350,6 +362,15 @@ impl Backtest<'_> {
                 })
             });
             if exposed {
+                continue;
+            }
+            if self.revised_fill_is_terminal(k) {
+                // The fill proves this scope flat even though a liquidating account
+                // cannot enter normal risk evaluation. Finalize observation only;
+                // liquidation owns the terminal trading outcome.
+                let now = (self.first_timestamp_ms + k as u64 * self.interval_ms) as i64;
+                self.revised_hsl_report
+                    .observed_flat((scope_side, scope_coin), now);
                 continue;
             }
             let updated = self.evaluate_revised_scope(k, scope_side, scope_coin, true)?;

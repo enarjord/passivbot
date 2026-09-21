@@ -1168,4 +1168,132 @@ mod tests {
         }
         assert_eq!(outcomes[0], outcomes[1]);
     }
+    #[test]
+    fn revised_panic_loss_ratio_revalues_collateral_before_fill() {
+        for side in [PositionSide::Long, PositionSide::Short] {
+            let long = side == PositionSide::Long;
+            let mark = if long { 80.0 } else { 120.0 };
+            let qty = if long { 10.0 } else { -10.0 };
+            let mut c = candles(5, 1);
+            for k in 1..5 {
+                for f in [HIGH, LOW, CLOSE] {
+                    c[[k, 0, f]] = mark;
+                }
+            }
+            let btc = Array1::from_vec(vec![1.0, 1.0, 1.0, 2.0, 2.0]);
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, "coin", "market");
+            fill(&mut bt, 0, 0, side, qty, 100.0);
+            bt.balance.use_btc_collateral = true;
+            bt.balance.btc_cash_wallet = 500.0;
+            bt.balance.usd_cash_wallet = bt.balance.usd_total_balance - 500.0;
+            bt.update_revised_hsl(2).unwrap();
+            let pside = if long { LONG } else { SHORT };
+            assert_eq!(
+                bt.revised_action(pside, 0),
+                crate::hsl_revised_controller::Action::Panic
+            );
+            let expected_equity = bt.balance.usd_cash_wallet + 500.0 * 2.0 - 400.0;
+            assert!((bt.current_usd_equity_at(3) - expected_equity).abs() > 400.0);
+            let order = Order {
+                qty: -qty,
+                price: mark,
+                order_type: if long {
+                    OrderType::ClosePanicLong
+                } else {
+                    OrderType::ClosePanicShort
+                },
+            };
+            let exec = OrderFillExecution {
+                price: mark,
+                fee_rate: 0.0,
+                liquidity: "taker",
+            };
+            if long {
+                bt.process_close_fill_long(3, 0, &order, exec).unwrap();
+            } else {
+                bt.process_close_fill_short(3, 0, &order, exec).unwrap();
+            }
+            let metrics = bt.revised_hsl_report.metrics(1000.0, 3.0);
+            assert_eq!(metrics.panic_close_loss_sum, 400.0);
+            assert!(
+                (metrics.panic_close_loss_drawdown_pct_mean - 400.0 / expected_equity).abs()
+                    < 1e-12
+            );
+        }
+    }
+
+    #[test]
+    fn revised_terminal_panic_fill_finishes_flat_latency_at_execution() {
+        for terminal_price in [1.0, 52.0] {
+            for mode in ["coin", "pside", "unified"] {
+                let mut c = candles(8, 1);
+                for k in 2..8 {
+                    for f in [HIGH, LOW, CLOSE] {
+                        c[[k, 0, f]] = if k == 2 { 80.0 } else { terminal_price };
+                    }
+                }
+                let btc = Array1::from_elem(8, 1.0);
+                let mut bt = make(&c, &btc);
+                enable_revised(&mut bt, mode, "market");
+                let config = bt
+                    .backtest_params
+                    .equity_hard_stop_loss
+                    .revised
+                    .as_mut()
+                    .unwrap();
+                for policy in config.sides.iter_mut().chain(config.portfolio.iter_mut()) {
+                    policy.cooldown_minutes_after_red = 0.0;
+                }
+                bt.bot_params_master.long.total_wallet_exposure_limit = 4.0;
+                bt.bot_params_original[0].long.wallet_exposure_limit = 4.0;
+                bt.bot_params_original[0].long.total_wallet_exposure_limit = 4.0;
+                fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 100.0);
+                let (fills, equities) = bt.run().unwrap();
+                assert!(
+                    bt.liquidated
+                        && bt.balance.usd_total_balance <= bt.liquidation_equity_floor_usd(),
+                    "{mode}"
+                );
+                assert_eq!(bt.balance.usd_total_balance > 0.0, terminal_price == 52.0);
+                assert_eq!(bt.positions.long[0].size, 0.0);
+                let panic = fills
+                    .iter()
+                    .find(|f| f.order_type == OrderType::ClosePanicLong)
+                    .unwrap();
+                assert_eq!(panic.index, 3);
+                assert_eq!(
+                    equities.timestamps_ms.last().copied(),
+                    Some(panic.timestamp_ms)
+                );
+                assert_eq!(
+                    bt.strategy_equity_series.len(),
+                    equities.timestamps_ms.len()
+                );
+                for emas in &bt.revised_hsl_report.signal_emas {
+                    assert_eq!(
+                        emas.len() + 1,
+                        bt.strategy_equity_series.len(),
+                        "terminal strategy sample must not duplicate a stale EMA"
+                    );
+                }
+                let metrics = bt.revised_hsl_report.metrics(1000.0, 3.0);
+                // RED at bar 2 close and the real flatten at bar 3 open coincide.
+                assert_eq!(metrics.flatten_time_minutes_mean, 0.0, "{mode}");
+                assert_eq!(metrics.duration_minutes_mean, 0.0, "{mode}");
+                assert_eq!(metrics.time_in_red_pct, 0.0, "{mode}");
+                assert_eq!(
+                    bt.revised_hsl_report.summary.observed_minutes, 0.0,
+                    "{mode}"
+                );
+                assert_eq!(metrics.restarts, 0);
+                let report = bt.revised_hsl_report_value().unwrap().unwrap();
+                assert!(report["events"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|e| e["kind"] == "flat" && e["observed_at"] == panic.timestamp_ms));
+            }
+        }
+    }
 }

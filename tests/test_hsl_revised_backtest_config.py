@@ -69,8 +69,12 @@ def test_native_revised_transport_and_report(mode):
     assert report["summary"]["triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
     assert any("panic" in str(fill[13]) for fill in full[0])
-    # Legacy-dependent analysis must not masquerade as valid zero revised fitness.
-    assert not any(k.startswith("hard_stop_") or "strategy_eq" in k for k in full[2])
+    assert "hard_stop_time_in_yellow_pct" not in full[2]
+    assert "hard_stop_time_in_orange_pct" not in full[2]
+    assert full[2]["hard_stop_triggers"] == report["summary"]["triggers"]
+    assert full[2]["hard_stop_panic_close_loss_sum"] == report["summary"]["panic_close_loss"]
+    assert full[2]["drawdown_worst_strategy_eq"] > 0.0
+    assert full[2]["drawdown_worst_ema_strategy_eq"] > 0.0
     assert "drawdown_worst" in full[2]
     compact_args = deepcopy(args)
     compact_args[-1]["metrics_only"] = True
@@ -187,11 +191,134 @@ def test_revised_artifact_never_substitutes_btc_collateral_equity_for_strategy()
     args[-1]["btc_collateral_cap"] = 0.5
     args[1] = np.linspace(50000.0, 90000.0, len(args[0]))
     result = run(args)
-    assert result[1].shape[1] == 3
+    assert result[1].shape[1] == 4
     assert np.ptp(result[1][:, 1]) > 1.0
     _, _, frame = process_forager_fills(
         result[0], args[-1]["coins"], args[0], result[1], balance_sample_divider=1
     )
-    # The historical artifact schema may keep an unavailable column, but it
-    # cannot contain account equity mislabeled as strategy performance.
-    assert frame["strategy_equity"].isna().all()
+    expected = []
+    for timestamp, *_ in result[1]:
+        k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000)
+        fills = [row for row in result[0] if row[1] <= timestamp]
+        realized = sum(float(row[3]) + float(row[4]) for row in fills)
+        size, basis = (float(fills[-1][11]), float(fills[-1][12])) if fills else (0., 0.)
+        expected.append(1000. + realized + size * (args[0][k, 0, 2] - basis))
+    np.testing.assert_allclose(result[1][:, 3], expected, rtol=1e-12, atol=1e-9)
+    assert not np.allclose(result[1][:, 1], result[1][:, 3])
+    assert frame["strategy_equity"].notna().all()
+
+
+def test_strategy_equity_statistics_exclude_btc_collateral_even_without_fills():
+    args = list(payload("unified"))
+    args[-1]["btc_collateral_cap"] = .5
+    args[1] = np.linspace(50000., 90000., len(args[0]))
+    args[0][:] = [100., 100., 100., 1000.]
+    result = run(args)
+    assert len(result[0]) == 0
+    assert result[1][-1, 1] > 1300.
+    np.testing.assert_allclose(result[1][:, 3], 1000.)
+    assert result[2]["gain_strategy_eq"] == 0.
+    assert result[2]["drawdown_worst_strategy_eq"] == 0.
+    assert result[2]["drawdown_worst_strategy_eq_long"] == 0.
+    assert result[2]["drawdown_worst_strategy_eq_short"] == 0.
+
+
+def test_general_strategy_metrics_survive_disabled_hsl():
+    args = payload()
+    for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
+        policy.update(enabled=False, restart_after_red_policy=None)
+    result = run(args)
+    assert result[2]["hard_stop_triggers"] == 0
+    assert result[2]["drawdown_worst_strategy_eq"] > 0
+    assert result[2]["drawdown_worst_strategy_eq_long"] > 0
+    assert result[2]["drawdown_worst_strategy_eq_short"] == 0
+    assert result[1].shape[1] == 4
+
+
+def prepared_payload(args):
+    from backtest import BacktestPayload, _build_hlcvs_bundle
+    params = args[-1]
+    timestamps = params["first_timestamp_ms"] + np.arange(len(args[0]), dtype=np.int64) * 60000
+    mss = {coin: dict(qty_step=.001,price_step=.01,min_qty=.001,min_cost=1.,c_mult=1.)
+           for coin in params["coins"]}
+    bundle = _build_hlcvs_bundle(args[0], args[1], timestamps, "binance", mss,
+        params["coins"], params["first_valid_indices"], params["last_valid_indices"],
+        params["warmup_minutes"], params["trade_start_indices"], {
+            "requested_start_timestamp_ms": params["first_timestamp_ms"],
+            "effective_start_timestamp_ms": params["first_timestamp_ms"],
+            "warmup_minutes_requested": 1, "warmup_minutes_provided": 1})
+    return BacktestPayload(bundle, args[2], args[3], args[4], params)
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_execute_backtest_preserves_revised_report_and_shared_metrics(compact):
+    from backtest import execute_backtest
+    cfg, _, _ = inputs("unified")
+    args = payload("unified")
+    args[-1]["metrics_only"] = compact
+    prepared = prepared_payload(args)
+    _, _, analysis = execute_backtest(prepared, cfg)
+    assert analysis["hard_stop_triggers"] > 0
+    assert "hard_stop_triggers_usd" not in analysis
+    assert not any("time_in_orange" in key or "time_in_yellow" in key for key in analysis)
+    assert prepared.hard_stop_plot_data["revised"]["summary"]["triggers"] == analysis["hard_stop_triggers"]
+
+
+def test_dataset_subset_preserves_only_selected_coin_policies():
+    from backtest import subset_backtest_payload, execute_backtest
+    args = list(payload())
+    args[0] = np.repeat(args[0], 2, axis=1)
+    for index in (2,3,4):
+        args[index] = [deepcopy(args[index][0]), deepcopy(args[index][0])]
+    params = args[-1]
+    params["coins"] = ["AAA", "BBB"]
+    for key in ("first_valid_indices", "last_valid_indices", "warmup_minutes", "trade_start_indices"):
+        params[key] *= 2
+    hsl = params["equity_hard_stop_loss"]
+    hsl["coins"]["BBB"] = deepcopy(hsl["coins"]["AAA"])
+    prepared = prepared_payload(args)
+    subset = subset_backtest_payload(prepared, coin_indices=[1])
+    assert set(subset.backtest_params["equity_hard_stop_loss"]["coins"]) == {"BBB"}
+    assert set(prepared.backtest_params["equity_hard_stop_loss"]["coins"]) == {"AAA", "BBB"}
+    cfg, _, _ = inputs()
+    _, _, analysis = execute_backtest(subset, cfg)
+    assert analysis["hard_stop_triggers"] > 0
+
+
+@pytest.mark.parametrize("btc_cap", [0.0, 0.5])
+def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
+    args = list(payload())
+    args[-1]["btc_collateral_cap"] = btc_cap
+    args[1] = np.full(len(args[0]), 50000.)
+    args[1][70:] = 25000.
+    # Gap through the floor rather than landing exactly on it.
+    args[0][70:] *= np.array([.5, .5, .5, 1.])
+    for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
+        policy["enabled"] = False
+    args[-1]["liquidation_threshold"] = .99
+    result = run(args)
+    assert result[2]["liquidated"]
+    assert 0 < len(result[1]) < len(args[0]) - 3
+    assert result[1].shape[1] == 4
+    assert np.isfinite(result[1][:, 3]).all()
+    assert result[2]["drawdown_worst_strategy_eq"] > 0
+    timestamp, account_equity, _, strategy_equity = result[1][-1]
+    fills = [row for row in result[0] if row[1] <= timestamp]
+    assert fills
+    k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000)
+    realized = sum(float(row[3]) + float(row[4]) for row in fills)
+    size, basis = float(fills[-1][11]), float(fills[-1][12])
+    expected = 1000. + realized + size * (args[0][k, 0, 2] - basis)
+    assert account_equity == pytest.approx(990.)
+    assert strategy_equity == pytest.approx(expected, abs=1e-9)
+    assert strategy_equity != pytest.approx(account_equity)
+
+
+def test_disabled_revised_zero_balance_keeps_halt_loss_metric_finite():
+    args = payload()
+    args[-1]["starting_balance"] = 0.0
+    args[-1]["global_warmup_bars"] = len(args[0])
+    for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
+        policy["enabled"] = False
+    result = run(args)
+    assert result[2]["hard_stop_halt_to_restart_equity_loss_pct"] == 0.0
