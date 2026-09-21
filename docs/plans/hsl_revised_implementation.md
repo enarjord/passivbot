@@ -283,7 +283,9 @@ never imply a portfolio-wide ordering. The post-bar position follows the bar's f
 adapter accepts 1m simulation data; selecting another interval is an explicit input
 error. The legacy simulator remains unchanged.
 
-Only in-window fills and complete in-window candles are retained. Existing Rust
+Only in-window fills and close observations are retained. A real 1m close exactly
+at the inclusive left edge is retained even though its source candle opened one
+minute earlier; no earlier close sample, fill, or coarse interpolation is imported. Existing Rust
 projection supplies the approved within-window forward/backfill. Flat pre-listing or
 expired pairs with no retained fills have no aggregate scope contribution. An
 explicitly selected coin instead carries fresh flat-position and empty in-window tape

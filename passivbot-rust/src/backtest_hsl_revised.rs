@@ -68,8 +68,12 @@ impl Backtest<'_> {
         let fill_end = self
             .fills
             .partition_point(|f| (f.timestamp_ms as i128) <= now as i128);
+        // The source candle names its open, but its 1m close is an
+        // instantaneous observation. Retain a close exactly at the inclusive
+        // left edge without retaining any earlier price sample or fill.
         let first_row =
-            ((start as i128 - self.first_timestamp_ms as i128 + 59_999).max(0) / 60_000) as usize;
+            (((start as i128 - self.first_timestamp_ms as i128 + 59_999).max(0) / 60_000) - 1)
+                .max(0) as usize;
         let mut pairs = Vec::new();
         let mut flat_coin = None;
         let mut reasons = BTreeSet::new();
@@ -153,7 +157,7 @@ impl Backtest<'_> {
                 for j in first_row..=k {
                     let end = close_time(j)?;
                     let candle_start = end - 60_000;
-                    if candle_start < start || !self.coin_is_valid_at(idx, j) {
+                    if end < start || !self.coin_is_valid_at(idx, j) {
                         continue;
                     }
                     candles.push(prices::Candle {
@@ -653,6 +657,40 @@ mod tests {
                 )
                 .and_then(|i| snapshot::prepare(&i.snapshot))
                 .is_err());
+        }
+    }
+    #[test]
+    fn close_at_lookback_edge_uses_the_actual_preceding_close() {
+        for side in [PositionSide::Long, PositionSide::Short] {
+            let mut data = candles(1443, 1);
+            let d = if side == PositionSide::Long {
+                1.0
+            } else {
+                -1.0
+            };
+            for k in 2..1443 {
+                data[[k, 0, CLOSE]] = 100.0 + 20.0 * d;
+            }
+            let btc = Array1::from_elem(1443, 20_000.0);
+            let mut bt = make(&data, &btc);
+            fill(&mut bt, 1, 0, side, d, 100.0);
+            fill(&mut bt, 2, 0, side, -d, 100.0);
+            let input = bt
+                .revised_hsl_inputs(1441, snapshot::Mode::Coin, Some(side), Some("C0"))
+                .unwrap();
+            assert_eq!(input.snapshot.start, (FIRST + 2 * 60_000) as i64);
+            assert_eq!(input.snapshot.pairs[0].fills.len(), 1);
+            assert_eq!(input.snapshot.pairs[0].prices[&input.snapshot.start], 100.0);
+            let trace = crate::hsl_revised_trace::compose(&input.snapshot).unwrap();
+            let first = &trace.episodes[0].points[0];
+            assert_eq!(first.timestamp, input.snapshot.start);
+            assert!(first.exposed);
+            assert!(trace
+                .episodes
+                .iter()
+                .flat_map(|e| &e.points)
+                .all(|p| p.upnl == 0.0));
+            assert!(trace.episodes[0].points.last().unwrap().flatten);
         }
     }
 }
