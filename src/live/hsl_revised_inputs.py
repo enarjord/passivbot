@@ -169,7 +169,11 @@ class CandleTape:
     reasons: tuple[str, ...]
 
     def payload(self):
-        return [asdict(candle) for candle in self.candles]
+        # These frozen records contain only scalar values. Recursive dataclass
+        # deepcopy dominates a multi-week live capture without adding isolation.
+        return [dict(start=c.start, minutes=c.minutes, open=c.open, high=c.high,
+                     low=c.low, close=c.close, available_at=c.available_at)
+                for c in self.candles]
 
 
 def capture_candles(rows, *, minutes: int, observed_at: int) -> CandleTape:

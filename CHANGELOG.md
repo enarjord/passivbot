@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add staged live observation transport for revised HSL: evaluate canonical fills and source
+  candles with fresh account observations through the shared Rust evaluator, isolating unavailable
+  current inputs by scope and preserving historical approximation diagnostics. Revised live
+  activation remains gated while execution-loop integration is completed.
+
 - Preserve explicit revised-HSL portfolio policies and optimizer bounds when cleaning or exporting
   configs and recording fitness contracts. Do not restore removed legacy tier fields or invent
   missing unified/restart choices. Preserve prepared coin membership in single-run CPU optimizer
