@@ -15,6 +15,7 @@ class Point:
     observation: object
     exposed: bool
     flatten: bool = False  # supported scope flatten after the risk sample
+    cashflow_reference_delta: object = None
 
 
 @dataclass(frozen=True)
@@ -89,7 +90,8 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
         if episode.entry_reference_delta is not None and points[0] == episode.points[0]:
             reference = dec(budget) + dec(episode.entry_reference_delta)
         risk = signal([p.observation for p in points], budget, span, threshold,
-                      entry_reference=reference, anchor=episodes[-1].points[-1].observation)
+                      entry_reference=reference, point_references=[p.cashflow_reference_delta for p in points],
+                      anchor=episodes[-1].points[-1].observation)
         opening = episode.opened_at if episode.opened_at is not None and episode.opened_at >= start else None
         for point, raw, ema, red_now in zip(points, risk.raw, risk.ema, risk.panic):
             t = point.observation.timestamp

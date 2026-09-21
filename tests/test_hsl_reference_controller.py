@@ -30,7 +30,8 @@ def controller_backend(request, monkeypatch):
                                 "entry_reference_delta": None if e.entry_reference_delta is None else float(e.entry_reference_delta),
                                 "points": [{"timestamp": p.observation.timestamp,
                                             "pnl": float(p.observation.pnl), "upnl": float(p.observation.upnl),
-                                            "exposed": p.exposed, "flatten": p.flatten} for p in e.points]}
+                                            "exposed": p.exposed, "flatten": p.flatten,
+                                            "cashflow_reference_delta": None if p.cashflow_reference_delta is None else float(p.cashflow_reference_delta)} for p in e.points]}
                                for e in episodes]
         try:
             expected = REFERENCE_REPLAY(episodes, **kwargs)
@@ -345,3 +346,12 @@ def test_relative_entry_seed_is_not_allowed_after_supported_flat():
         run(stopped(), Episode((point(300),), entry_reference_delta=100))
     with pytest.raises(ValueError, match="initial incomplete"):
         run(Episode((point(300),), entry_reference=1100, entry_reference_delta=100))
+
+
+def test_cashflow_reference_is_applied_only_at_its_observation():
+    first=point(0,upnl=0)
+    later=replace(point(60_000,upnl=0),cashflow_reference_delta=100)
+    result=run(Episode((first,later)),span=3)
+    assert result[0].raw == 0 and result[0].ema == 0
+    assert float(result[1].raw) == pytest.approx(100/1100)
+    assert float(result[1].ema) == pytest.approx(50/1100)

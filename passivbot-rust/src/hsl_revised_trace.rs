@@ -23,19 +23,52 @@ fn consume(
     counts: &mut [usize],
     targets: &[usize],
     cashflows: &mut CurrencySum,
+    peak: &mut CurrencySum,
+    track_peak: bool,
+    global_sequence: bool,
+    reasons: &mut BTreeSet<String>,
 ) -> Option<i64> {
     let mut opening = None;
+    let mut timeline = Vec::new();
     for (index, target) in targets.iter().copied().enumerate() {
         for event in &prepared.pairs[index].history.events[counts[index]..target] {
-            cashflows.add(event.gross_realized);
-            cashflows.add(event.fee);
             if !event.quantity_estimated && event.before == 0.0 && event.after > 0.0 {
                 opening = Some(
                     opening.map_or(event.fill.timestamp, |t: i64| t.min(event.fill.timestamp)),
                 );
             }
+            if track_peak {
+                timeline.push((index, event));
+            } else {
+                cashflows.add(event.gross_realized);
+                cashflows.add(event.fee);
+            }
         }
         counts[index] = target;
+    }
+    timeline.sort_by_key(|(_, e)| e.fill.timestamp);
+    let mut cursor = 0;
+    while cursor < timeline.len() {
+        let end = cursor
+            + timeline[cursor..]
+                .partition_point(|(_, e)| e.fill.timestamp == timeline[cursor].1.fill.timestamp);
+        let cohort = &mut timeline[cursor..end];
+        let one_pair = cohort.iter().all(|(i, _)| *i == cohort[0].0);
+        let sequences: BTreeSet<_> = cohort.iter().filter_map(|(_, e)| e.fill.sequence).collect();
+        let exact = (one_pair || global_sequence) && sequences.len() == cohort.len();
+        if exact {
+            cohort.sort_by_key(|(_, e)| e.fill.sequence);
+        } else if cohort.len() > 1 {
+            reasons.insert("cohort_cashflow_peak".into());
+        }
+        for (index, (_, event)) in cohort.iter().enumerate() {
+            cashflows.add(event.gross_realized);
+            cashflows.add(event.fee);
+            if (exact || index + 1 == cohort.len()) && cashflows.difference(peak, reasons) > 0.0 {
+                *peak = cashflows.clone();
+            }
+        }
+        cursor = end;
     }
     opening
 }
@@ -45,6 +78,13 @@ fn consume(
 /// not a decision that a historical outage should block protection. The later
 /// snapshot dispatcher must normalize prices and choose the approved estimator.
 pub fn compose(input: &Input) -> Result<Trace, String> {
+    compose_with_cashflow_peaks(input, false)
+}
+
+pub(crate) fn compose_with_cashflow_peaks(
+    input: &Input,
+    candle_free: bool,
+) -> Result<Trace, String> {
     let prepared = prepare(input)?;
     let mut reasons = prepared.reasons.clone();
     if prepared.pairs.is_empty() {
@@ -56,6 +96,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                     upnl: 0.0,
                     exposed: false,
                     flatten: false,
+                    cashflow_reference_delta: None,
                 }],
                 entry_reference: None,
                 entry_reference_delta: None,
@@ -110,6 +151,11 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
         None
     };
     let mut cashflows = CurrencySum::new();
+    let mut peak = CurrencySum::new();
+    let mut endpoint = anchor.clone();
+    for pair in &prepared.pairs {
+        endpoint.add(pair.history.samples.last().unwrap().upnl);
+    }
     let mut counts = vec![0; prepared.pairs.len()];
     let mut episodes = Vec::new();
     let mut points = Vec::new();
@@ -133,7 +179,16 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
         }) {
             let boundary = boundaries.next().unwrap();
             let targets: Vec<_> = boundary.consumed.iter().map(|c| c.count).collect();
-            let opening = consume(&prepared, &mut counts, &targets, &mut cashflows);
+            let opening = consume(
+                &prepared,
+                &mut counts,
+                &targets,
+                &mut cashflows,
+                &mut peak,
+                candle_free,
+                input.global_fill_sequence,
+                &mut reasons,
+            );
             if !episodes.is_empty() {
                 opened_at = opened_at.or(opening);
             }
@@ -143,6 +198,8 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                 upnl: 0.0,
                 exposed: false,
                 flatten: true,
+                cashflow_reference_delta: candle_free
+                    .then(|| peak.difference(&endpoint, &mut reasons)),
             });
             episodes.push(Episode {
                 points: std::mem::take(&mut points),
@@ -158,7 +215,9 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                 upnl: 0.0,
                 exposed: false,
                 flatten: false,
+                cashflow_reference_delta: None,
             });
+            peak = cashflows.clone();
         }
         let targets: Vec<_> = prepared
             .pairs
@@ -174,7 +233,16 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
                 })
             })
             .collect();
-        let opening = consume(&prepared, &mut counts, &targets, &mut cashflows);
+        let opening = consume(
+            &prepared,
+            &mut counts,
+            &targets,
+            &mut cashflows,
+            &mut peak,
+            candle_free,
+            input.global_fill_sequence,
+            &mut reasons,
+        );
         if !episodes.is_empty() {
             opened_at = opened_at.or(opening);
         }
@@ -191,6 +259,7 @@ pub fn compose(input: &Input) -> Result<Trace, String> {
             upnl: upnl.value(&mut reasons),
             exposed,
             flatten: false,
+            cashflow_reference_delta: candle_free.then(|| peak.difference(&endpoint, &mut reasons)),
         });
     }
     if !points.is_empty() {

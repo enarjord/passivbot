@@ -18,6 +18,14 @@ pub struct Point {
     /// A supported scope flatten after this risk observation, never an
     /// artificial flat from an ambiguous quantity estimate.
     pub flatten: bool,
+    /// Candle-free cashflow peak known at this observation, relative to budget.
+    /// A reference updates the peak, without inserting a past EMA sample.
+    #[serde(
+        default,
+        deserialize_with = "crate::hsl_revised_json::optional",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cashflow_reference_delta: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -231,6 +239,10 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
             input.threshold,
             reference,
             relative_reference,
+            &points
+                .iter()
+                .map(|(_, p)| p.cashflow_reference_delta)
+                .collect::<Vec<_>>(),
             &anchor,
         )?;
         let mut opening = episode.opened_at.filter(|t| *t >= input.start);
@@ -324,6 +336,7 @@ mod tests {
                         upnl: 0.0,
                         exposed: true,
                         flatten: false,
+                        cashflow_reference_delta: None,
                     },
                     Point {
                         timestamp: 60_000,
@@ -331,6 +344,7 @@ mod tests {
                         upnl: -100.0,
                         exposed: true,
                         flatten: false,
+                        cashflow_reference_delta: None,
                     },
                     Point {
                         timestamp: 120_000,
@@ -338,6 +352,7 @@ mod tests {
                         upnl: 0.0,
                         exposed: false,
                         flatten: false,
+                        cashflow_reference_delta: None,
                     },
                 ],
             }],

@@ -335,3 +335,25 @@ singleton reference remains supported by the experimental kernel interface. Inde
 Decimal tests cover missing openings with long/short and all scope modes, aggregate
 netting, cashflows, flatten/cooldown, window expiry and replacement by opening evidence.
 Runtime guards are unchanged; mixed-price dispatch and runtime integration remain pending.
+
+## Shared snapshot evaluator
+
+`hsl_revised_evaluator.rs` joins normalized source prices, current-anchored reconstruction,
+scoped trace composition and controller replay. It returns only the current decision,
+quality reasons and observation/episode counts; live adapters need not serialize the
+full trace back from Rust. Coin uses raw balance divided by its configured slots;
+side/unified use raw balance. Zero-slot coin inactivity still validates current inputs.
+
+Sparse selected prices are ffilled/bfilled on the common in-window minute grid. A pair
+without any eligible price uses its observed mark as a disclosed historical estimate
+when other pairs supply candles. If every selected pair lacks prices, no minute grid
+is created. Known cashflow peaks are attached to current/flatten observations, preserving
+one current EMA sample in the minimal case and scope lifecycle boundaries when known.
+Cashflow prefixes are netted by timestamp cohort unless sequence authority is explicit;
+per-pair sequence numbers do not manufacture portfolio ordering. A supported scope flat
+resets its cashflow peak before the next episode. A reference cannot leak into earlier
+observations; normal same-minute EMA replacement still applies.
+
+This completes snapshot-to-decision composition, not runtime activation. Coherent live
+snapshot capture/revalidation, execution routing, actual simulator/optimizer consumers,
+full revised fake-live scenarios, runtime performance and final rollout docs remain.

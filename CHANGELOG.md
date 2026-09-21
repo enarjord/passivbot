@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add a shared experimental revised-HSL snapshot evaluator for complete, sparse and
+  candle-free histories, including scoped cashflow peaks and restart permissions.
+  The legacy default and revised runtime startup guards remain unchanged.
+
 - Seed experimental revised HSL's incomplete initial episode from estimated entry value,
   including when candles exist, so flat/backfilled history cannot hide an existing loss.
   The estimate adds no EMA sample and resets at a supported flatten. Legacy behavior and

@@ -42,6 +42,16 @@ flatten resets it, and a fresh reconstruction replaces it when opening evidence 
 This explicitly accepted approximation may include loss originating before lookback;
 actual out-of-window fills/cashflows remain excluded. See the [reference policy](../../plans/hsl_best_effort_redesign.md#missing-opening-with-usable-candles).
 
+The shared experimental `hsl_revised_evaluate` boundary composes normalized factual
+snapshots into current permissions. It validates selected current inputs before
+zero-slot inactivity, aligns selected historical closes over the bounded minute grid,
+and replays the existing scope controller. Partial price absence uses an explicitly
+diagnosed `current_mark_history_estimate` for the absent pair while preserving other
+pairs' candles. Full candle absence keeps only current and supported-flat observations;
+retained realized cashflow peaks update references at those observations, without
+inventing minute samples. References reset at supported flats, and each observation
+uses only its consumed cashflow prefix. None of these components activates trading yet.
+
 ## Invariants
 
 1. The drawdown tracker resets after every proven episode end. The next episode begins after the
