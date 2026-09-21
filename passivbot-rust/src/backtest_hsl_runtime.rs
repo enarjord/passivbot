@@ -14,7 +14,7 @@ pub struct Policy {
     pub red_threshold: f64,
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
-    pub restart_after_red_policy: String,
+    pub restart_after_red_policy: Option<String>,
     pub panic_close_order_type: String,
 }
 
@@ -26,6 +26,72 @@ pub struct Config {
     pub sides: [Policy; 2],
     pub portfolio: Option<Policy>,
     pub coins: BTreeMap<String, [Policy; 2]>,
+}
+
+impl Config {
+    /// Validate before simulation, even when no candle ever causes an evaluation.
+    pub fn validate(&self, coins: &[String], lookback: f64, interval: u64) -> Result<(), String> {
+        if !["coin", "pside", "unified"].contains(&self.mode.as_str()) {
+            return Err("invalid revised HSL signal mode".into());
+        }
+        if !["panic", "normal"].contains(&self.intervention.as_str()) {
+            return Err("invalid revised HSL intervention policy".into());
+        }
+        if self.mode != "coin" && !self.coins.is_empty() {
+            return Err("revised HSL coin policies require coin mode".into());
+        }
+        if self.coins.keys().any(|coin| !coins.contains(coin)) {
+            return Err("revised HSL policy names a coin outside the dataset".into());
+        }
+        let policies: Vec<&Policy> = if self.mode == "unified" {
+            vec![self
+                .portfolio
+                .as_ref()
+                .ok_or("missing explicit revised portfolio policy")?]
+        } else {
+            if self.portfolio.is_some() {
+                return Err("revised portfolio policy requires unified mode".into());
+            }
+            self.sides
+                .iter()
+                .chain(self.coins.values().flatten())
+                .collect()
+        };
+        for policy in &policies {
+            if !policy.red_threshold.is_finite()
+                || !(0.0 < policy.red_threshold && policy.red_threshold <= 1.0)
+                || !policy.ema_span_minutes.is_finite()
+                || policy.ema_span_minutes < 1.0
+                || !policy.cooldown_minutes_after_red.is_finite()
+                || policy.cooldown_minutes_after_red < 0.0
+                || policy.cooldown_minutes_after_red * 60_000.0 >= i64::MAX as f64
+            {
+                return Err("invalid revised HSL numeric policy".into());
+            }
+            if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
+                return Err("invalid revised HSL panic close order type".into());
+            }
+            if policy.enabled
+                && !matches!(
+                    policy.restart_after_red_policy.as_deref(),
+                    Some("always" | "never")
+                )
+            {
+                return Err(
+                    "enabled revised HSL requires explicit always or never restart policy".into(),
+                );
+            }
+        }
+        if policies.iter().any(|p| p.enabled) {
+            if !lookback.is_finite() || !(1.0..=90.0).contains(&lookback) {
+                return Err("enabled revised HSL requires finite lookback in [1,90] days".into());
+            }
+            if interval != 1 {
+                return Err("enabled revised HSL backtest requires 1m candles".into());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -97,9 +163,9 @@ impl Backtest<'_> {
             .as_ref()
             .ok_or("missing revised HSL config")?;
         let policy = self.revised_policy(side, coin)?;
-        let restart = match policy.restart_after_red_policy.as_str() {
-            "always" => Restart::Always,
-            "never" => Restart::Never,
+        let restart = match policy.restart_after_red_policy.as_deref() {
+            Some("always") => Restart::Always,
+            Some("never") => Restart::Never,
             _ => return Err("invalid revised HSL restart policy".into()),
         };
         let intervention = match cfg.intervention.as_str() {

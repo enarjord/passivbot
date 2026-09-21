@@ -424,3 +424,17 @@ in this report. Clearing its observer changes diagnostics only, never trading.
 This reporting checkpoint does not open runtime guards or migrate optimizer objectives.
 The revised report is separate from legacy analysis metrics until payload/analysis
 migration is complete; legacy placeholder counters must not become revised fitness.
+
+### Staged revised native configuration boundary
+
+For the opt-in revised native backtest, Python transports canonical scope policies separately
+from ordinary bot parameters. Rust validates the selected mode, explicit unified portfolio
+block, effective coin overrides, active restart choices, finite enabled lookback and 1m cadence
+before simulation. Disabled restart choices remain optional; no legacy policy is inferred.
+Duplicate flattened HSL fields are rejected on this path. Legacy parsing is unchanged.
+
+The revised diagnostic report is returned in detailed and metrics-only native results. Legacy
+HSL/strategy-equity analysis fields are absent on this staged path because their observations
+are not populated by the revised controller. Public activation stays gated until the analysis,
+optimizer and runtime consumer migrations are complete; an absent field must never become
+neutral fitness. Independent ordinary equity metrics remain available.
