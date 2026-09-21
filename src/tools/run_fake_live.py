@@ -214,6 +214,10 @@ def _serialize_live_event_capture(
 
 
 def _extract_hsl_trace(bot) -> Dict[str, dict]:
+    from live import hsl_revised_live, hsl_revised_diagnostics
+    if hsl_revised_live.selected(bot):
+        from utils import utc_ms
+        return {'revised': hsl_revised_diagnostics.snapshot(bot, now_ms=int(utc_ms()))}
     trace: Dict[str, dict] = {}
     for pside in ("long", "short"):
         if not hasattr(bot, "_hsl_state"):
@@ -468,6 +472,11 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
+        from live import hsl_revised_live
+        if hsl_revised_live.selected(bot):
+            # Retry cadence follows scenario time, while acquisition timestamps,
+            # TTLs and bounded I/O waits remain on the actual observation clock.
+            hsl_revised_live.owner(bot)._schedule_clock = lambda: fake_client.now_ms / 1000.
         bot.get_exchange_time = lambda: int(fake_client.now_ms)
         update_pnls = getattr(bot, "update_pnls", None)
         if isinstance(update_pnls, MethodType):
@@ -711,7 +720,22 @@ async def _run_fake_cycle(bot):
 
 
 async def _run_fake_cycle_ready(bot):
-    from live import risk_input_recovery
+    from live import risk_input_recovery, hsl_revised_live
+    if hsl_revised_live.selected(bot):
+        instance = hsl_revised_live.owner(bot)
+        # Settle fast fake reads/planning at one scenario timestamp. An outage
+        # remains pending after a bounded number of production passes; never
+        # await arbitrary ordinary work to completion before protection.
+        for attempt in range(8):
+            result = await instance.cycle()
+            if not result['updated'] or result['ordinary_executed']:
+                return dict(result, engine='revised', passes=attempt+1)
+            pending = [task for task in (instance._ordinary,
+                getattr(instance, '_fill_task', None), getattr(instance, '_source_task', None))
+                if task is not None and not task.done()]
+            if pending:
+                await asyncio.wait(pending, timeout=.25)
+        return dict(result, engine='revised', passes=8, preparation_pending=True)
     if getattr(bot, "_risk_input_recovery", None) is not None:
         if await risk_input_recovery.protect_before_history_refresh(bot):
             return {"updated": False, "hsl_protection": True}
