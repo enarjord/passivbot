@@ -442,6 +442,56 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
         }
         cursor = end;
     }
+    // Current exchange positions establish flatness even when the tape cannot
+    // reconstruct its closing fill. Only the timestamp is approximate. Prefer a
+    // supported final boundary; later position-neutral fees do not move it.
+    if selected.iter().all(|p| p.position.size == 0.0) {
+        let terminal_known = boundaries.iter().any(|b| {
+            b.lifecycle_eligible
+                && pairs.iter().zip(&b.consumed).all(|(p, consumed)| {
+                    p.history.events[consumed.count..]
+                        .iter()
+                        .all(|e| e.fill.delta == Some(0.0))
+                })
+        });
+        if !terminal_known {
+            if let Some(timestamp) = pairs
+                .iter()
+                .flat_map(|p| p.history.events.last().map(|e| e.fill.timestamp))
+                .max()
+            {
+                reasons.insert("current_flat_timestamp_estimate".into());
+                let consumed: Vec<_> = pairs
+                    .iter()
+                    .map(|p| Consumed {
+                        symbol: p.symbol.clone(),
+                        pside: p.pside,
+                        count: p.history.events.len(),
+                    })
+                    .collect();
+                // An unordered final cohort may already have a numeric boundary.
+                // Current flat authority makes that final prefix lifecycle-usable,
+                // without asserting any internal flat/reopen order for the cohort.
+                if let Some(b) = boundaries.last_mut().filter(|b| {
+                    b.timestamp == timestamp
+                        && b.consumed
+                            .iter()
+                            .zip(&consumed)
+                            .all(|(a, z)| a.count == z.count)
+                }) {
+                    b.lifecycle_eligible = true;
+                } else {
+                    boundaries.push(Boundary {
+                        timestamp,
+                        pnl: cashflows.value(&mut reasons),
+                        upnl: 0.0,
+                        lifecycle_eligible: true,
+                        consumed,
+                    });
+                }
+            }
+        }
+    }
     Ok(Output {
         pairs,
         boundaries,
@@ -459,6 +509,33 @@ pub fn hsl_revised_snapshot(input_json: &str) -> PyResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn current_flat_uses_last_retained_fill_but_residual_exposure_does_not() {
+        let value = serde_json::json!({
+            "now": 100, "start": 0, "balance": 100.0, "balance_at": 100,
+            "config_at": 100, "max_current_age_ms": 10, "mode": "unified",
+            "pairs": [{"symbol": "A", "position": {"size": 0.0, "basis": 0.0,
+                "mark": 80.0, "multiplier": 1.0, "inverse": false, "pside": "long"},
+                "position_at": 100, "mark_at": 100, "prices_at": 100,
+                "fills_started_at": 100, "fills_at": 100, "prices": {}, "revisions": [0,0,0,0],
+                "fills": [
+                    {"identity": "open", "timestamp": 1, "delta": 3.0, "price": 100.0,
+                     "realized": 0.0, "fee": 0.0, "revision": 0},
+                    {"identity": "partial", "timestamp": 2, "delta": -1.0, "price": 80.0,
+                     "realized": -20.0, "fee": 0.0, "revision": 0}]}]
+        });
+        let mut input: Input = serde_json::from_value(value).unwrap();
+        let output = prepare(&input).unwrap();
+        assert_eq!(output.boundaries.len(), 1);
+        assert_eq!(output.boundaries[0].timestamp, 2);
+        assert_eq!(output.boundaries[0].consumed[0].count, 2);
+        assert!(output.boundaries[0].lifecycle_eligible);
+        assert!(output.reasons.contains("current_flat_timestamp_estimate"));
+        input.pairs[0].position.size = 2.0;
+        input.pairs[0].position.basis = 100.0;
+        assert!(prepare(&input).unwrap().boundaries.is_empty());
+    }
+
     #[test]
     fn future_variant_quarantines_whole_revision_without_erasing_older_evidence() {
         let original = Fill {

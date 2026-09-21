@@ -102,8 +102,10 @@ rejected rather than clipped. A numerical RED that remains reconstructible in th
 corrected or expired evidence can remove it on the next independent replay.
 
 A supported flatten ends an episode only after its final risk observation. Cooldown starts
-at that actual flatten, not at a partial fill or retry. An estimated flat cannot be marked
-as a supported boundary. A surviving generic flat does not prove an expired numerical
+at that actual flatten when reconstructed. Fresh current positions can independently establish
+that the whole scope is flat; a missing closing boundary then uses the latest retained scoped fill
+as an estimated timestamp, never the retry/observation time. An artificial historical zero alone
+cannot establish flatness. A surviving generic flat does not prove an expired numerical
 crossing was an HSL stop; unreconstructible decisions remain void. The input builder must
 still establish exchange-derived boundaries and any explicit stop provenance. The binding
 is a pure trace component, not proof that the supplied trace was acquired correctly.
@@ -125,7 +127,8 @@ cashflows and current-anchored numerical history independently of lifecycle elig
 Supported flatten rows retain their canonical consumed-prefix lengths, including sequenced
 same-time flat/reopen events. Cross-pair timestamp cohorts have no invented global ordering.
 Unknown quantities, contradictory transitions and unsupported capture order can withhold a
-lifecycle boundary without withholding the numeric estimate. An old damaged prefix does
+internal lifecycle boundary without withholding the numeric estimate. Fresh current scope-flat
+positions still finish the episode using a disclosed last-fill timestamp estimate when needed. An old damaged prefix does
 not permanently taint a later clean suffix. Scope quality uses only selected pair inputs.
 Compensated quantity summation avoids drift across repeated partial fills. Cancellation
 residuals within eight scaled floating-point epsilons are disclosed as

@@ -524,6 +524,23 @@ selected scenario. Coin mode uses effective policies of actual dataset members, 
 resolved overrides; an enabled policy for a coin outside the dataset does not qualify.
 General side equity/performance metrics remain valid when HSL is disabled.
 
+### Revised current-flat authority and estimated cooldown
+
+Fresh exchange positions establish whether a revised HSL scope is flat independently of whether
+its closing fill is present. Every selected position must be zero; opposing exposure is not netted.
+Prefer a reconstructed final closing boundary. When historical damage prevents that boundary, use
+the latest causal fill retained inside the configured lookback for the selected scope as the
+cooldown timestamp, with `current_flat_timestamp_estimate` diagnostics. The fill may be a partial
+close or an entry; it estimates time, while current positions establish flatness.
+
+Remaining cooldown is `max(0, anchor + cooldown - now)`. Repeated reads and process restarts never
+renew the anchor to now. No retained fill means no historical cooldown anchor. Repaired exchange
+history may replace the estimate, including reinstating remaining cooldown if the actual close was
+later. `never` retains its in-window stop restriction; lookback expiry still removes historical
+influence. This shared Rust/reference rule applies to live, fake exchange and simulation consumers;
+it does not treat stale or missing current positions as flat or grant lifecycle authority to
+artificial historical zero quantities while exposure remains.
+
 ### Staged revised live execution
 
 The revised live owner (`live/hsl_revised_live.py`) uses the shared Rust evaluator and the minimal

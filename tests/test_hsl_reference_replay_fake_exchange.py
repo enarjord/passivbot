@@ -54,15 +54,18 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
     assert not scope_boundaries(snapshot(), "unified").boundaries
     assert client.advance_time()  # actual flat
     events = client.get_fill_events(start, client.now_ms)
-    assert not scope_boundaries(snapshot(events[:-1]), "unified").boundaries
+    estimated = scope_boundaries(snapshot(events[:-1]), "unified")
+    assert [b.timestamp for b in estimated.boundaries] == [events[-2]["timestamp"]]
+    assert "current_flat_timestamp_estimate" in estimated.reasons
     clean = snapshot()
     trace = scope_boundaries(clean, "unified")
     boundary, = trace.boundaries
     assert boundary.timestamp == client.now_ms
     assert float(boundary.observation.pnl) == pytest.approx(client.realized_pnl - client.realized_fees)
-    # The coarse simulator clock ties the fill and observation timestamps. Keep
-    # risk available, but obtain a later position observation for lifecycle use.
-    assert not boundary.lifecycle_eligible
+    # Current flatness is authoritative even when the simulator clock ties the
+    # fill and position observations; timing uncertainty remains diagnostic.
+    assert boundary.lifecycle_eligible
+    assert "current_flat_timestamp_estimate" in trace.reasons
     assert client.advance_time()
     clean = snapshot()
     trace = scope_boundaries(clean, "unified")

@@ -105,15 +105,15 @@ SIMPLE_CASES = [
     "unsequenced_cohort_cannot_prove_an_internal_flat_then_reopen",
     "old_missing_opening_does_not_poison_later_flat",
     "clamp_cannot_create_boundary_but_does_not_poison_clean_suffix",
-    "unknown_quantity_after_candidate_does_not_certify_flat",
+    "unknown_quantity_retains_current_flat_with_estimated_timestamp",
     "conflicting_prefix_is_local_and_repair_rebuilds_boundaries",
-    "missing_flat_fill_does_not_invent_timestamp_from_current_flat",
-    "missing_final_reduction_cannot_promote_an_earlier_partial_close_to_flat",
+    "missing_flat_fill_uses_latest_fill_timestamp_not_observation_time",
+    "missing_final_reduction_uses_partial_timestamp_for_current_flat",
     "exact_window_edge_and_empty_restart_reproduce_same_boundary",
-    "cross_pair_boundary_cannot_postdate_an_older_position_anchor",
+    "current_flat_boundary_can_use_skewed_fresh_observations",
     "close_after_position_anchor_is_disclosed_until_positions_catch_up",
-    "older_fill_capture_cannot_certify_flat_against_newer_position",
-    "conflicting_post_position_variants_cannot_certify_an_older_flat",
+    "older_fill_capture_estimates_current_flat_timestamp",
+    "conflicting_post_position_variants_do_not_override_current_flat",
     "same_timestamp_tail_execution_is_uncertain_until_later_position_observation",
     "boundary_selector_requires_explicit_current_coin_observation",
     "equal_clock_causal_fill_proof_is_bound_to_the_observed_position",
@@ -142,7 +142,7 @@ def test_cross_pair_cohorts_and_scope_isolation(other_side, monkeypatch):
 @pytest.mark.parametrize("mixed", [False, True])
 def test_future_revision_cannot_erase_causal_evidence(mixed, monkeypatch):
     monkeypatch.setattr(cases, "scope_boundaries", compare)
-    cases.test_impossible_correction_preserves_earlier_causal_financial_and_boundary_evidence(mixed)
+    cases.test_impossible_correction_preserves_causal_finances_and_current_flat(mixed)
 
 
 @pytest.mark.parametrize("field,value", [("price", 101), ("fee", -1), ("revision", 1)])
@@ -221,7 +221,8 @@ def test_quantity_tolerance_does_not_hide_a_material_missing_close():
              Fill("last_known", 3*cases.M, "-.7", 80, -2)]
     p = cases.pair(fills=fills)
     result = rust(payload(cases.frame(p)))
-    assert not result["boundaries"]
+    assert [b["timestamp"] for b in result["boundaries"]] == [3 * cases.M]
+    assert "current_flat_timestamp_estimate" in result["reasons"]
     assert "clamped_quantity" in result["reasons"]
     assert "uncertain_episode_flat" in result["reasons"]
     # Actual residual current exposure cannot be snapped away by historical rounding.
@@ -490,4 +491,5 @@ def test_exact_simulator_position_anchor_resolves_same_timestamp_fill(global_seq
     result = rust(value)
     eligible = global_sequence and anchor
     assert ("position_fill_timestamp_tie" in result["reasons"]) != eligible
-    assert any(b["lifecycle_eligible"] for b in result["boundaries"]) == eligible
+    assert any(b["lifecycle_eligible"] for b in result["boundaries"])
+    assert ("current_flat_timestamp_estimate" in result["reasons"]) != eligible
