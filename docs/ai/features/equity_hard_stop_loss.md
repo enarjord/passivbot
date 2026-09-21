@@ -553,6 +553,13 @@ corrections, participate in receipt validation. Expired numeric rows are exclude
 comparison. An earlier actual, unchanged and still-fresh position observation may precede the fill fetch; account invalidation or changed
 positions discards it. These are observation caches, never persisted lifecycle authority.
 
+Projected minute prices may cross the live adapter boundary as immutable Rust-owned factual
+grids with the exact lookback/evaluation cut. Compact metadata supplies the ordered pair mapping;
+the evaluator rejects mismatched counts, cuts or a second embedded price source. Both native-grid
+and standalone JSON inputs call the same reconstruction and controller. Exporting a grid yields
+a detached copy. These handles carry no prior permission, EMA or lifecycle authority and do not
+relax source freshness or connector admission checks.
+
 Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,
 current account freshness, pending confirmations, generation, balance and positions are checked,
 and Rust recomputes scoped permission from current observations. Changed permission or execution

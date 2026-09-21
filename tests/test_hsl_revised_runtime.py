@@ -254,15 +254,15 @@ def test_malformed_later_native_scope_does_not_publish_an_earlier_usable_subset(
     import live.hsl_revised_runtime as runtime
     value = bot()
     value.config["bot"]["short"]["hsl"]["enabled"] = True
-    native = runtime.pbr.hsl_revised_evaluate
+    native = runtime.pbr.hsl_revised_evaluate_grids
     calls = []
-    def malformed(request):
+    def malformed(request, grids):
         calls.append(request)
-        output = json.loads(native(request))
+        output = json.loads(native(request, grids))
         if len(calls) == 2:
             output["decision"] = None
         return json.dumps(output)
-    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate", malformed)
+    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate_grids", malformed)
     with pytest.raises(InvalidHslOutput):
         run(value)
     assert len(calls) == 2
@@ -311,12 +311,12 @@ def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
                                         ("timestamp", NOW-1), ("action", [])])
 def test_malformed_native_decision_is_fatal(field, value, monkeypatch):
     import live.hsl_revised_runtime as runtime
-    native = runtime.pbr.hsl_revised_evaluate
-    def malformed(request):
-        result = json.loads(native(request))
+    native = runtime.pbr.hsl_revised_evaluate_grids
+    def malformed(request, grids):
+        result = json.loads(native(request, grids))
         result["decision"][field] = value
         return json.dumps(result)
-    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate", malformed)
+    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate_grids", malformed)
     with pytest.raises(InvalidHslOutput):
         run(bot())
 
@@ -324,9 +324,9 @@ def test_malformed_native_decision_is_fatal(field, value, monkeypatch):
 def test_native_errors_use_the_bot_fatal_contract(monkeypatch):
     import live.hsl_revised_runtime as runtime
     from passivbot_exceptions import FatalBotException
-    def invalid(_request):
+    def invalid(_request, _grids):
         raise ValueError("unexpected native schema error")
-    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate", invalid)
+    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate_grids", invalid)
     with pytest.raises(FatalBotException):
         run(bot())
 
@@ -418,12 +418,12 @@ def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
 ])
 def test_lifecycle_incoherent_native_response_is_fatal(changes, monkeypatch):
     import live.hsl_revised_runtime as runtime
-    native = runtime.pbr.hsl_revised_evaluate
-    def malformed(request):
-        result = json.loads(native(request))
+    native = runtime.pbr.hsl_revised_evaluate_grids
+    def malformed(request, grids):
+        result = json.loads(native(request, grids))
         result["decision"].update(changes)
         return json.dumps(result)
-    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate", malformed)
+    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate_grids", malformed)
     with pytest.raises(InvalidHslOutput):
         run(bot())
 
@@ -602,3 +602,91 @@ def test_recent_but_invalidated_account_observation_is_not_current(surface):
     value._ensure_freshness_ledger().stamp(surface, now_ms=NOW-10, epoch=1)
     decisions, unavailable = run(value)
     assert not unavailable and decisions[0].action == 'panic'
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("history", ["empty", "partial", "coarse", "complete"])
+def test_native_grid_transport_matches_complete_json_and_is_immutable(mode, side, history):
+    import passivbot_rust as pbr
+    import numpy as np
+    value = bot(mode, side=side, events=[event(timestamp=NOW-120_000, qty=None,
+        position_side=side, pnl=-12., fee_paid=-.3, c_mult=1.)])
+    sources = {}
+    if history != "empty":
+        minutes = 15 if history == "coarse" else 1
+        count = 1440 if history == "complete" else 3
+        rows = np.array([(NOW-(count-i)*minutes*60_000, 100., 105., 85., 90.)
+            for i in range(count)], dtype=[(k, 'int64' if k == 'ts' else 'float64')
+                                          for k in ('ts', 'o', 'h', 'l', 'c')])
+        sources[SYMBOL] = Sources((capture_candles(rows, minutes=minutes, observed_at=NOW),), (), 0)
+    requests, unavailable = capture(value, quotes(side), sources,
+        symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
+        utc_now_ms=NOW, max_current_age_ms=10_000)
+    assert not unavailable
+    for request, decision in zip(requests, evaluate(requests), strict=True):
+        expected = json.loads(pbr.hsl_revised_evaluate(request.payload))
+        assert json.loads(decision.payload) == expected
+        assert all(not pair['prices'] for pair in json.loads(request.metadata)['snapshot']['pairs'])
+        for grid in request.price_grids:
+            original = grid.values()
+            detached = grid.values()
+            detached.clear()
+            assert grid.values() == original
+            with pytest.raises(AttributeError):
+                grid.prices = {}
+        # Repeated evaluation must not consume or mutate its immutable input.
+        assert json.loads(evaluate((request,))[0].payload) == expected
+    with pytest.raises(TypeError):
+        pbr.RevisedHslPriceGrid()
+
+
+@pytest.mark.parametrize("defect", ["missing", "extra", "start", "end", "prices_at", "override", "wrong_type"])
+def test_native_grid_transport_rejects_mismatched_observation(defect):
+    import passivbot_rust as pbr
+    requests, unavailable = capture(bot(), quotes(), {}, symbols={"long": [SYMBOL], "short": []},
+        now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)
+    assert not unavailable
+    request, = requests
+    value = json.loads(request.metadata)
+    grids = list(request.price_grids)
+    if defect == "missing":
+        grids.clear()
+    elif defect == "extra":
+        grids += grids
+    elif defect in {"start", "end"}:
+        grids[0] = pbr.hsl_revised_native_price_grid(value['snapshot']['start']-(defect == 'start'),
+                                                   NOW+(defect == 'end'), [])[0]
+    elif defect == "prices_at":
+        value['snapshot']['pairs'][0]['prices_at'] -= 1
+    elif defect == "override":
+        value['snapshot']['pairs'][0]['prices'] = {str(NOW): 12.}
+    else:
+        grids[0] = {}
+    with pytest.raises((ValueError, TypeError)):
+        pbr.hsl_revised_evaluate_grids(json.dumps(value), grids)
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+def test_native_grids_stay_with_their_symbol_across_scope_ordering(mode):
+    import passivbot_rust as pbr
+    from live.hsl_revised_inputs import Candle, CandleTape
+    value = bot(mode)
+    other = 'AAA/USDT:USDT'
+    value.positions[other] = {'long': {'size': 2., 'price': 130.},
+                              'short': {'size': -1., 'price': 80.}}
+    value.c_mults[other], value.qty_steps[other] = 1., .1
+    if mode != 'unified':
+        value.config['bot']['short']['hsl']['enabled'] = True
+    marks = {**quotes(), other: replace(quotes()[SYMBOL], symbol=other, last=110., bid=110., ask=110.)}
+    sources = {symbol: Sources((CandleTape(tuple(
+        Candle(NOW-(3-i)*60_000, 1, price, price, price, price, NOW)
+        for i in range(3)), ()),), (), 0) for symbol, price in [(SYMBOL, 140.), (other, 75.)]}
+    requests, unavailable = capture(value, marks, sources,
+        symbols={'long': [SYMBOL, other], 'short': [other, SYMBOL]},
+        now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)
+    assert not unavailable
+    for request, actual in zip(requests, evaluate(requests), strict=True):
+        assert json.loads(actual.payload) == json.loads(pbr.hsl_revised_evaluate(request.payload))
+        for pair in json.loads(request.payload)['snapshot']['pairs']:
+            assert set(pair['prices'].values()) == ({75.} if pair['symbol'] == other else {140.})

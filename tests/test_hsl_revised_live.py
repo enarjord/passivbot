@@ -66,7 +66,7 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
             from live import market_data
             from live.hsl_revised_runtime import InvalidHslOutput
             original_filter = market_data.filter_fresh_market_snapshot_creations
-            native = pbr.hsl_revised_evaluate
+            native = pbr.hsl_revised_evaluate_grids
             boundary_reached = []
             async def change_at_boundary(current_bot, orders, **kwargs):
                 boundary_reached.append(True)
@@ -75,7 +75,7 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                     bot.market_snapshot_provider._cache.clear()
                 result = await original_filter(current_bot, orders, **kwargs)
                 if path == 'malformed_before_write':
-                    monkeypatch.setattr(pbr, 'hsl_revised_evaluate', lambda value: '{"decision": null}')
+                    monkeypatch.setattr(pbr, 'hsl_revised_evaluate_grids', lambda value, grids: '{"decision": null}')
                 return result
             monkeypatch.setattr(market_data, 'filter_fresh_market_snapshot_creations', change_at_boundary)
             try:
@@ -85,7 +85,7 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                 else:
                     await instance.protect()
             finally:
-                monkeypatch.setattr(pbr, 'hsl_revised_evaluate', native)
+                monkeypatch.setattr(pbr, 'hsl_revised_evaluate_grids', native)
                 monkeypatch.setattr(market_data, 'filter_fresh_market_snapshot_creations', original_filter)
             assert boundary_reached
             assert not any(c['method'] == 'create_order' for c in bot.cca.export_request_log())
