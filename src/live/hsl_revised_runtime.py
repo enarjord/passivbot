@@ -202,28 +202,27 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 continue
             if symbol not in projected:
                 source = candle_sources.get(symbol)
-                candles = [{**row, "available_at": row["available_at"] + offset}
-                           for row in source.payload()] if source is not None else []
-                projected[symbol] = json.loads(pbr.hsl_revised_prices(json.dumps(
-                    dict(candles=candles, start=start, end=now_ms), allow_nan=False)))
-            prices = projected[symbol]
+                candles = [(c.start, c.minutes, c.open, c.high, c.low, c.close,
+                            c.available_at + offset)
+                           for tape in source.tapes for c in tape.candles] if source is not None else []
+                projected[symbol] = pbr.hsl_revised_price_grid(start, now_ms, candles)
+            prices, last_price, price_reasons = projected[symbol]
             quote = quotes.get(symbol)
             quote_valid = (quote is not None and quote.is_valid()
                            and 0 < quote.fetched_ms <= utc_now_ms)
             if quote_valid and (size == 0 or fresh(quote.fetched_ms)):
                 mark, mark_at = quote.last, quote.fetched_ms + offset
                 flat_price_reason = None
-            elif size == 0 and prices["rows"]:
+            elif size == 0 and last_price is not None:
                 # Flat UPNL is zero. A retained source close can value this
                 # history without requiring a live quote from a delisted market.
-                last = prices["rows"][-1]
-                mark, mark_at = last["close"], last["source_end"]
+                mark, mark_at = last_price
                 flat_price_reason = "flat_historical_close"
             else:
                 pair_problems[key] = "current_mark_unavailable"
                 continue
             fills = by_pair.get(key)
-            reasons = global_reasons | set(prices["reasons"])
+            reasons = global_reasons | set(price_reasons)
             if flat_price_reason:
                 reasons.add(flat_price_reason)
             if fills is not None:
@@ -238,7 +237,7 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 mark_at=mark_at,
                 fills_started_at=None if fills_started_ms is None else fills_started_ms + offset,
                 fills_at=None if fills_completed_ms is None else fills_completed_ms + offset,
-                prices_at=now_ms, prices={str(row["timestamp"]): row["close"] for row in prices["rows"]},
+                prices_at=now_ms, prices=prices,
                 fills=fills.payload() if fills is not None else [],
                 revisions=[position_state.revision, 0, 0, 0],
                 fills_position_anchor=None)

@@ -190,6 +190,57 @@ pub fn hsl_revised_prices(input_json: &str) -> PyResult<String> {
     serde_json::to_string(&result).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+// The live adapter already owns validated, immutable scalar observations. Avoid
+// encoding those as JSON and returning per-minute provenance which that consumer
+// immediately discards. Both bindings use exactly the same projection above.
+type CandleRow = (
+    i64,
+    i64,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<i64>,
+);
+type PriceGrid = (BTreeMap<String, f64>, Option<(f64, i64)>, Vec<String>);
+
+#[pyfunction]
+pub fn hsl_revised_price_grid(
+    start: i64,
+    end: i64,
+    candles: Vec<CandleRow>,
+) -> PyResult<PriceGrid> {
+    let input = Input {
+        start,
+        end,
+        candles: candles
+            .into_iter()
+            .map(
+                |(start, minutes, open, high, low, close, available_at)| Candle {
+                    start,
+                    minutes,
+                    open,
+                    high,
+                    low,
+                    close,
+                    available_at,
+                },
+            )
+            .collect(),
+    };
+    let result = minute_prices(&input).map_err(PyValueError::new_err)?;
+    let last = result.rows.last().map(|row| (row.close, row.source_end));
+    Ok((
+        result
+            .rows
+            .into_iter()
+            .map(|row| (row.timestamp.to_string(), row.close))
+            .collect(),
+        last,
+        result.reasons.into_iter().collect(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

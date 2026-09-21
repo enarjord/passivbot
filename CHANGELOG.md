@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce staged revised-HSL live snapshot cost by transporting candle scalars and the compact
+  native price grid directly, preserving projected closes, factual source times, diagnostics and
+  complete decisions. Public activation remains gated pending execution-loop validation.
+
 - Add staged live observation transport for revised HSL: evaluate canonical fills and source
   candles with fresh account observations through the shared Rust evaluator, isolating unavailable
   current inputs by scope and preserving historical approximation diagnostics. Revised live
