@@ -126,7 +126,8 @@ async def test_fake_cycle_returns_bounded_pending_while_protection_keeps_running
     instance.schedule_history = instance.schedule_sources = lambda: None
     instance._ordinary_plan = release.wait
     waves = []
-    async def protect():
+    async def protect(*, deferred_reports):
+        assert deferred_reports == []
         waves.append(True)
         return True
     instance.protect = protect
