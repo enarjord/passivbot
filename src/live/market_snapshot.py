@@ -125,17 +125,6 @@ class MarketSnapshotProvider:
             ) from exc
 
         fetched_ms = utc_ms()
-        if not isinstance(fetched, dict):
-            self._log.warning(
-                "[market] ticker snapshot fetch returned non-dict | exchange=%s type=%s",
-                self.exchange_name,
-                type(fetched).__name__,
-            )
-            raise RuntimeError(
-                f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
-                f"{type(fetched).__name__}"
-            )
-
         cached = 0
         for raw_symbol, ticker in fetched.items():
             symbol = str(raw_symbol)
@@ -189,16 +178,6 @@ class MarketSnapshotProvider:
                 ) from exc
             retry_ms = utc_ms()
             retry_cached = 0
-            if not isinstance(symbol_fetched, dict):
-                self._log.warning(
-                    "[market] ticker missing-symbol retry returned non-dict | exchange=%s type=%s",
-                    self.exchange_name,
-                    type(symbol_fetched).__name__,
-                )
-                raise RuntimeError(
-                    f"[market] ticker missing-symbol retry returned non-dict for {self.exchange_name}: "
-                    f"{type(symbol_fetched).__name__}"
-                )
             for raw_symbol, ticker in symbol_fetched.items():
                 symbol = str(raw_symbol)
                 if symbol not in missing_after:
@@ -265,12 +244,23 @@ class MarketSnapshotProvider:
         fetched = await self._fetch_tickers_for_symbols_shared(missing)
         return fetched, "fetch_tickers_symbols"
 
+    async def _fetch_validated(self, fetcher, *args) -> dict[str, Any]:
+        # Result-shape validation belongs to the shared owner too: readers may
+        # all time out before a connector returns a malformed result.
+        fetched = await fetcher(*args)
+        if not isinstance(fetched, dict):
+            raise RuntimeError(
+                f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
+                f"{type(fetched).__name__}"
+            )
+        return fetched
+
     async def _fetch_tickers_shared(self) -> dict[str, Any]:
         if self._fetch_tickers is None:
             return {}
         task = self._fetch_task
         if task is None or task.done():
-            task = asyncio.create_task(self._fetch_tickers())
+            task = asyncio.create_task(self._fetch_validated(self._fetch_tickers))
             self._fetch_task = task
             def finished(done):
                 if self._fetch_task is done:
@@ -287,7 +277,7 @@ class MarketSnapshotProvider:
         key = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
         task = self._symbol_fetch_tasks.get(key)
         if task is None or task.done():
-            task = asyncio.create_task(self._fetch_tickers_for_symbols(list(key)))
+            task = asyncio.create_task(self._fetch_validated(self._fetch_tickers_for_symbols, list(key)))
             self._symbol_fetch_tasks[key] = task
             def finished(done):
                 if self._symbol_fetch_tasks.get(key) is done:
@@ -323,7 +313,24 @@ class MarketSnapshotProvider:
     def cancel_pending(self) -> None:
         """Owner shutdown, unlike an individual read timeout, cancels shared I/O."""
         for task in self.pending_tasks():
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
+
+    async def wait_pending(self, *, timeout_seconds: float = 10.0) -> None:
+        """Bounded cleanup for direct client-close paths after cancellation."""
+        tasks = self.pending_tasks()
+        if not tasks:
+            return
+        _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout_seconds))
+        if pending:
+            self._log.warning("[market] shared quote cleanup timed out | task_count=%d action=cancel_remaining", len(pending))
+            for task in pending:
+                task.cancel()
+            _, pending = await asyncio.wait(pending, timeout=1.0)
+            if pending:
+                self._log.warning("[market] shared quote cancellation grace expired | task_count=%d action=abandon_pending", len(pending))
+        # Completion callbacks retrieve every result/failure, including tasks
+        # that finish after the bounded cancellation grace.
 
     @staticmethod
     def _coerce_positive(value: Any) -> Optional[float]:

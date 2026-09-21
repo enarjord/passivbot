@@ -21807,6 +21807,9 @@ class Passivbot:
     async def close(self):
         """Stop background tasks and close exchange clients."""
         self.stop_data_maintainers()
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        if snapshots is not None:
+            await snapshots.wait_pending()
         await self.cca.close()
         if self.ccp is not None:
             await self.ccp.close()
@@ -22250,7 +22253,6 @@ def setup_bot(config):
 async def shutdown_bot(bot):
     """Stop background tasks and close the exchange clients gracefully."""
     print("Shutting down bot...")
-    bot.stop_data_maintainers()
     try:
         await asyncio.wait_for(bot.close(), timeout=3.0)
     except asyncio.TimeoutError:

@@ -2419,10 +2419,3 @@ class BitunixBot(CCXTBot):
         if position_side not in {"long", "short"}:
             raise ValueError("Bitunix fill missing explicit LONG/SHORT positionSide")
         return position_side
-
-    async def close(self) -> None:
-        self.stop_data_maintainers()
-        if self.ccp is not None:
-            await self.ccp.close()
-        await self.cca.close()
-        self._close_live_event_pipeline(timeout=2.0)

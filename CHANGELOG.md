@@ -8,7 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Keep shared quote requests alive when one reader times out, so revised HSL quote deadlines
   cannot cancel ordinary planning and repeatedly restart the bot. Shutdown still cancels shared
-  requests and awaits their cleanup before closing clients. Late non-transient failures reach
+  requests and awaits their cleanup before closing clients through every close path. Late non-transient
+  failures, including malformed result shapes, reach
   the next reader even after all original readers time out; freshness requirements remain unchanged.
 
 - Report revised-HSL account and health equity from current balances, positions and cached

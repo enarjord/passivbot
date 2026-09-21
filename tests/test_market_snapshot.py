@@ -511,7 +511,7 @@ async def test_failure_delivered_to_active_reader_is_not_replayed(strategy):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
-@pytest.mark.parametrize('cleanup', ['restart', 'shutdown'])
+@pytest.mark.parametrize('cleanup', ['restart', 'shutdown', 'close', 'bitunix_close', 'shutdown_bot', 'bitunix_shutdown_bot'])
 async def test_bot_cleanup_awaits_shared_quote_cleanup_before_client_close(strategy, cleanup):
     from passivbot import Passivbot
     from unittest.mock import AsyncMock
@@ -537,18 +537,28 @@ async def test_bot_cleanup_awaits_shared_quote_cleanup_before_client_close(strat
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
-    bot = Passivbot.__new__(Passivbot)
+    from exchanges.bitunix import BitunixBot
+    cls = BitunixBot if cleanup.startswith('bitunix') else Passivbot
+    bot = cls.__new__(cls)
     bot.market_snapshot_provider = provider
     bot.maintainers = {}
     bot.WS_ohlcvs_1m_tasks = {}
-    bot.ccp, bot.cca = Client(), None
+    bot.ccp, bot.cca = None, Client()
     bot.monitor_publisher = None
     bot._close_live_event_pipeline = lambda **kwargs: True
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
     bot._monitor_emit_stop = lambda *args, **kwargs: None
     bot._monitor_flush_snapshot = AsyncMock()
-    operation = bot.cleanup_for_restart() if cleanup == 'restart' else bot.shutdown_gracefully()
+    from passivbot import shutdown_bot
+    if cleanup == 'restart':
+        operation = bot.cleanup_for_restart()
+    elif cleanup == 'shutdown':
+        operation = bot.shutdown_gracefully()
+    elif cleanup.endswith('shutdown_bot'):
+        operation = shutdown_bot(bot)
+    else:
+        operation = bot.close()
     task = asyncio.create_task(operation)
     await cancelled.wait()
     assert not task.done() and calls == []
@@ -556,3 +566,59 @@ async def test_bot_cleanup_awaits_shared_quote_cleanup_before_client_close(strat
     await task
     assert calls == ['quote_stopped', 'client_closed']
     assert provider.pending_tasks() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
+@pytest.mark.parametrize('malformed', [None, [], 42, 'invalid'])
+async def test_abandoned_malformed_result_is_validated_by_shared_owner(strategy, malformed):
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+    async def fetch(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            return malformed
+        return {'A': {'bid': 99., 'ask': 101., 'last': 100.}}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch,
+        fetch_tickers_for_symbols=fetch, ticker_strategy=strategy)
+    waiter = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    shared = provider.pending_tasks()[0]
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    await asyncio.wait({shared})
+    await asyncio.sleep(0)
+    with pytest.raises(RuntimeError, match='returned non-dict'):
+        await provider.get_snapshots(['A'])
+    assert calls == 1
+    assert (await provider.get_snapshots(['A']))['A'].last == 100.
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_shared_quote_cleanup_repeated_cancellation_waits_then_is_bounded():
+    started, cancelled = asyncio.Event(), asyncio.Event()
+    async def fetch():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await asyncio.Event().wait()
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    reader = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    shared = provider.pending_tasks()[0]
+    provider.cancel_pending()
+    await cancelled.wait()
+    provider.cancel_pending()
+    assert shared.cancelling() == 1  # don't interrupt asynchronous cleanup twice
+    await asyncio.wait_for(provider.wait_pending(timeout_seconds=0), timeout=1.5)
+    with pytest.raises(asyncio.CancelledError):
+        await reader
+    assert shared.done() and provider.pending_tasks() == ()
