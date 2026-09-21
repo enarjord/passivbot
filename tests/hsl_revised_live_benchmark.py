@@ -43,7 +43,7 @@ def main():
         sources[symbol] = Sources((CandleTape(candles, ()),), (), 0)
     value.positions = positions
     start = time.perf_counter()
-    requests, unavailable = capture(value, marks, sources, symbols=list(positions),
+    requests, unavailable = capture(value, marks, sources, symbols={side: list(positions) for side in ("long", "short")},
         now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)
     captured = time.perf_counter()
     decisions = evaluate(requests)

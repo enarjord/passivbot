@@ -41,7 +41,7 @@ def bot(mode="coin", *, side="long", events=()):
     positions = {SYMBOL: {pside: dict(size=(10. if side == "long" else -10.) if side == pside else 0.,
                                      price=100. if side == pside else 0.)
                          for pside in ("long", "short")}}
-    value = SimpleNamespace(config=config, positions=positions, inverse=False,
+    value = SimpleNamespace(config=config, positions=positions, inverse=False, coin_overrides={},
         c_mults={SYMBOL: 1.}, qty_steps={SYMBOL: .1},
         _ensure_freshness_ledger=lambda: ledger, get_raw_balance=lambda: 1000.,
         _pnls_manager=SimpleNamespace(get_events=lambda *, start_ms: [e for e in events if e.timestamp >= start_ms]))
@@ -56,8 +56,10 @@ def quotes(side="long"):
 
 
 def run(value, marks=None, sources=None, **changes):
-    kwargs = dict(symbols=[SYMBOL], now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)
+    kwargs = dict(symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000)
     kwargs.update(changes)
+    if isinstance(kwargs["symbols"], list):
+        kwargs["symbols"] = {side: kwargs["symbols"] for side in ("long", "short")}
     requests, unavailable = capture(value, quotes() if marks is None else marks, sources or {}, **kwargs)
     return evaluate(requests), unavailable
 
@@ -119,7 +121,7 @@ def test_stale_essentials_do_not_become_healthy_or_saved_decisions(surface):
 
 def test_clock_offset_preserves_age_without_changing_exchange_event_times():
     value = bot(events=[event(timestamp=NOW-60_000, c_mult=1.)])
-    requests, unavailable = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW+5000,
+    requests, unavailable = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW+5000,
         utc_now_ms=NOW, max_current_age_ms=10_000,
         fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
     assert not unavailable
@@ -141,7 +143,7 @@ def test_candle_capture_clock_conversion_does_not_move_candle_open(offset):
     for surface in ("balance", "positions"):
         value._ensure_freshness_ledger().stamp(surface, now_ms=NOW-offset-200)
     marks = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=NOW-offset-100)}
-    requests, unavailable = capture(value, marks, sources, symbols=[SYMBOL], now_ms=NOW,
+    requests, unavailable = capture(value, marks, sources, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW-offset, max_current_age_ms=10_000)
     assert not unavailable
     prices = json.loads(requests[0].payload)["snapshot"]["pairs"][0]["prices"]
@@ -151,7 +153,7 @@ def test_candle_capture_clock_conversion_does_not_move_candle_open(offset):
 
 def test_capture_is_immutable_and_does_not_inherit_prior_state():
     value = bot()
-    requests, unavailable = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW,
+    requests, unavailable = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW, max_current_age_ms=10_000)
     assert not unavailable
     before = evaluate(requests)
@@ -173,7 +175,7 @@ def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
     value = bot()
     value.config["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = 1.5/60_000
     value.config["live"]["pnls_max_lookback_days"] = (86_400_000 + 1.5)/86_400_000
-    requests, _ = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW,
+    requests, _ = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW, max_current_age_ms=10_000)
     assert json.loads(requests[0].payload)["cooldown_ms"] == 2
     assert json.loads(requests[0].payload)["snapshot"]["start"] == NOW-86_400_002
@@ -243,8 +245,7 @@ def test_observed_fill_interval_reconstructs_flat_halt_and_window_expiry(mode):
 def test_missing_quote_does_not_contaminate_disabled_side_or_other_coin_policy():
     value = bot()
     other = "OTHER/USDT:USDT"
-    base = value.bp
-    value.bp = lambda side, key, symbol: False if symbol == other and key == "hsl_enabled" else base(side, key, symbol)
+    value.coin_overrides[other] = {"bot": {"long": {"hsl": {"enabled": False}}}}
     result, unavailable = run(value, symbols=[SYMBOL, other])
     assert not unavailable and len(result) == 1
 
@@ -277,7 +278,7 @@ def test_out_of_window_fill_does_not_introduce_old_flat_symbols_or_quality():
 def test_empty_aggregate_side_does_not_duplicate_price_history():
     import passivbot_rust as pbr
     value = bot("unified")
-    requests, unavailable = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW,
+    requests, unavailable = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW, max_current_age_ms=10_000)
     assert not unavailable
     request, = requests
@@ -293,7 +294,7 @@ def test_empty_aggregate_side_does_not_duplicate_price_history():
 def test_empty_aggregate_side_retains_cashflows_even_without_exposure():
     value = bot("unified", events=[event(timestamp=NOW-60_000, position_side="short",
         qty=0., price=100., pnl=-200., fee_paid=0., c_mult=1.)])
-    requests, unavailable = capture(value, quotes(), {}, symbols=[SYMBOL], now_ms=NOW,
+    requests, unavailable = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW, max_current_age_ms=10_000)
     assert not unavailable and len(json.loads(requests[0].payload)["snapshot"]["pairs"]) == 2
     assert json.loads(evaluate(requests)[0].payload)["decision"]["raw"] == pytest.approx(300/1300)
@@ -328,3 +329,147 @@ def test_native_errors_use_the_bot_fatal_contract(monkeypatch):
     monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate", invalid)
     with pytest.raises(FatalBotException):
         run(bot())
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_future_only_symbol_does_not_demand_a_current_quote_or_metadata(mode):
+    value = bot(mode, events=[event(symbol="FUTURE", timestamp=NOW+60_000, c_mult=1.)])
+    result, unavailable = run(value)
+    assert not unavailable and result[0].action == "panic"
+    assert "future_fill_outside_evaluation" in result[0].reasons
+
+
+def test_coin_membership_keeps_eligible_and_historical_sides_separate():
+    value = bot(events=[event(symbol="OLD_SHORT", position_side="short", side="sell",
+                            qty=-1., timestamp=NOW-60_000, c_mult=1.)])
+    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    result, unavailable = run(value, symbols={"long": [SYMBOL], "short": ["SHORT_ONLY"]})
+    assert [(d.scope.symbol, d.scope.pside) for d in result] == [(SYMBOL, "long")]
+    assert {(u.scope.symbol, u.scope.pside) for u in unavailable} == {
+        ("OLD_SHORT", "short"), ("SHORT_ONLY", "short")}
+
+
+def test_long_only_history_never_requires_metadata_for_the_empty_short_scope():
+    value = bot("pside", events=[event(symbol="LONG_ONLY", timestamp=NOW-60_000)])
+    value.config["bot"]["short"]["hsl"]["enabled"] = True
+    result, unavailable = run(value)
+    assert [(d.scope.pside, d.action) for d in result] == [("short", "normal")]
+    assert len(unavailable) == 1 and unavailable[0].scope.pside == "long"
+
+
+def test_simultaneous_flat_empty_observation_needs_no_invented_mark_or_metadata():
+    value = bot()
+    value.positions = {}
+    value.c_mults = {}
+    result, unavailable = run(value, {}, fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
+    assert not unavailable and result[0].action == "normal"
+    assert json.loads(result[0].payload)["observations"] == 1
+    requests, _ = capture(value, {}, {}, symbols={"long": [SYMBOL], "short": []},
+        now_ms=NOW, utc_now_ms=NOW, max_current_age_ms=10_000,
+        fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
+    snapshot = json.loads(requests[0].payload)["snapshot"]
+    assert snapshot["pairs"] == []
+    assert snapshot["flat_coin"] == dict(symbol=SYMBOL, pside="long",
+        position_at=NOW-200, fills_at=NOW-200, history_start=NOW-86_400_000)
+    # A local cache read or different remote observation is not that proof.
+    for kwargs in ({}, dict(fills_started_ms=NOW-300, fills_completed_ms=NOW-100)):
+        result, unavailable = run(value, {}, **kwargs)
+        assert not result and unavailable
+
+
+@pytest.mark.parametrize("changes", [dict(qty=None), dict(timestamp=0)])
+def test_damaged_retained_fill_cannot_supply_empty_flat_proof(changes):
+    value = bot(events=[event(timestamp=NOW-60_000, c_mult=1., **changes)]
+                if "timestamp" not in changes else [event(c_mult=1., **changes)])
+    value.positions = {}
+    result, unavailable = run(value, {}, fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
+    # The undated row is filtered by this fixture's canonical window query, so
+    # use an explicit manager response for that corrupted observation.
+    if "timestamp" in changes:
+        value._pnls_manager.get_events = lambda **_: [event(c_mult=1., **changes)]
+        result, unavailable = run(value, {}, fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
+    assert not result and unavailable
+
+
+def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
+    value = bot()
+    value.positions[SYMBOL]["long"]["size"] = 100.
+    value.config["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.5
+    rows = [dict(ts=NOW-(6-i)*60_000, o=p, h=p, l=p, c=p)
+            for i, p in enumerate([1000., .001, .001, .001, .001, .001])]
+    sources = {SYMBOL: Sources((capture_candles(rows, minutes=1, observed_at=NOW),), (), 0)}
+    result, unavailable = run(value, sources=sources)
+    assert not unavailable and result[0].action == "panic"
+    assert json.loads(result[0].payload)["decision"]["ema"] > 1.
+
+
+@pytest.mark.parametrize("changes", [
+    dict(action="halted"), dict(action="normal"), dict(red_at=None),
+    dict(red_at=True), dict(flat_at=NOW), dict(red_at=NOW+1),
+    dict(red_at=NOW-86_400_001), dict(numeric_range_approximation=1),
+    dict(reason=None), dict(ema=-.01), dict(raw=True), dict(timestamp=float(NOW)),
+])
+def test_lifecycle_incoherent_native_response_is_fatal(changes, monkeypatch):
+    import live.hsl_revised_runtime as runtime
+    native = runtime.pbr.hsl_revised_evaluate
+    def malformed(request):
+        result = json.loads(native(request))
+        result["decision"].update(changes)
+        return json.dumps(result)
+    monkeypatch.setattr(runtime.pbr, "hsl_revised_evaluate", malformed)
+    with pytest.raises(InvalidHslOutput):
+        run(bot())
+
+
+def test_empty_failed_candle_acquisition_keeps_flat_proof_and_diagnostics():
+    value = bot()
+    value.positions = {}
+    sources = {SYMBOL: Sources((), (Failure("1m", "fetch", "TimeoutError"),), 0)}
+    result, unavailable = run(value, {}, sources,
+        fills_started_ms=NOW-300, fills_completed_ms=NOW-200)
+    assert not unavailable and result[0].action == "normal"
+    assert "candle_fetch_unavailable:1m" in result[0].reasons
+
+
+@pytest.mark.parametrize("symbols", [[SYMBOL], {"long": [SYMBOL]},
+                                      {"long": SYMBOL, "short": []}])
+def test_scope_selection_requires_explicit_valid_side_membership(symbols):
+    with pytest.raises(ValueError, match="membership"):
+        capture(bot(), quotes(), {}, symbols=symbols, now_ms=NOW,
+                utc_now_ms=NOW, max_current_age_ms=10_000)
+
+
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+def test_empty_aggregate_retains_unknown_fill_capture_diagnostic(mode):
+    value = bot(mode)
+    value.positions = {}
+    result, unavailable = run(value, {})
+    assert not unavailable and result[0].action == "normal"
+    assert "fill_capture_unknown" in result[0].reasons
+    result, unavailable = run(value, {}, fills_started_ms=NOW-150, fills_completed_ms=NOW-50)
+    assert not unavailable and "fill_capture_unknown" not in result[0].reasons
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_actual_passivbot_grouped_policy_and_resolved_partial_override(mode):
+    from passivbot import Passivbot
+    fixture = bot(mode)
+    # Do not start a bot or exchange client: exercise the real runtime accessors
+    # and symbol override resolver against canonical prepared configuration.
+    value = Passivbot.__new__(Passivbot)
+    value.__dict__.update(fixture.__dict__)
+    del value.__dict__["bp"], value.__dict__["bot_value"]
+    value.config["coin_overrides"] = {"TEST": {"bot": {"long": {"hsl": {
+        "red_threshold": .99, "panic_close_order_type": "market"}}}}}
+    value.coin_to_symbol = lambda coin, verbose=False: SYMBOL
+    value.markets_dict = {SYMBOL: {}}
+    value.init_coin_overrides()
+    requests, unavailable = capture(value, quotes(), {},
+        symbols={"long": [SYMBOL], "short": []}, now_ms=NOW, utc_now_ms=NOW,
+        max_current_age_ms=10_000)
+    assert not unavailable
+    request, = requests
+    assert json.loads(request.payload)["threshold"] == (.99 if mode == "coin" else .05)
+    assert json.loads(request.payload)["span"] == 1_000_000.
+    assert request.execution_type == ("limit" if mode == "pside" else "market")
+    assert evaluate(requests)[0].action == ("normal" if mode == "coin" else "panic")

@@ -54,7 +54,15 @@ def _finite(value, *, positive=False):
             and math.isfinite(value) and (not positive or value > 0))
 
 
-def _policies(bot, symbols):
+def _source_reasons(source):
+    if source is None:
+        return set()
+    return ({reason for tape in source.tapes for reason in tape.reasons}
+            | {"candle_" + failure.stage + "_unavailable:" + failure.timeframe
+               for failure in source.failures})
+
+
+def _policies(bot, pairs):
     mode = bot.config["live"]["hsl_signal_mode"]
     if mode == "unified":
         policy = dict(bot.config["bot"]["hsl"])
@@ -62,8 +70,13 @@ def _policies(bot, symbols):
             yield Scope(mode), policy, 1
     elif mode in {"coin", "pside"}:
         for side in ("long", "short"):
-            for symbol in sorted(symbols) if mode == "coin" else (None,):
-                policy = {key: bot.bp(side, "hsl_" + key, symbol) for key in FIELDS}
+            for symbol in sorted(s for s, pside in pairs if pside == side) if mode == "coin" else (None,):
+                policy = {key: bot.config["bot"][side]["hsl"][key] for key in FIELDS}
+                if symbol is not None:
+                    # init_coin_overrides resolves authored identifiers to
+                    # exchange symbols. Merge its canonical partial HSL block;
+                    # bp's legacy global fallback expects removed flat keys.
+                    policy.update(bot.coin_overrides.get(symbol, {}).get("bot", {}).get(side, {}).get("hsl", {}))
                 if policy["enabled"]:
                     # Coin budgets use configured slots, not current open bags or
                     # the number of symbols whose history happened to arrive.
@@ -81,6 +94,8 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     fill event times use the exchange clock; candle capture times use UTC. The optional fill interval is an
     observed remote fetch interval in UTC, never synthesized from a cache read.
     Missing interval evidence degrades lifecycle proof, not numeric evaluation.
+    ``symbols`` maps each position side to its currently eligible symbols; it
+    cannot grant a symbol eligibility on the opposite side.
     ``positions`` must be the complete successfully committed account snapshot;
     an omitted symbol in that complete response is an observed flat position.
 
@@ -90,6 +105,11 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     """
     if engine(bot.config) != "revised":
         raise ValueError("revised HSL adapter requires revised engine")
+    if (not isinstance(symbols, dict) or set(symbols) != {"long", "short"}
+            or any(not isinstance(selected, (list, tuple, set, frozenset))
+                   or any(not isinstance(symbol, str) or not symbol for symbol in selected)
+                   for selected in symbols.values())):
+        raise ValueError("revised HSL symbols require explicit long/short membership")
     if (any(type(x) is not int for x in (now_ms, utc_now_ms, max_current_age_ms))
             or max_current_age_ms < 0):
         raise ValueError("invalid revised HSL capture clock")
@@ -106,11 +126,17 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     tape = capture_fills(events, bot.c_mults)
     by_pair = {(p.symbol, p.pside): p for p in tape.pairs}
     # Old flat history is intentionally outside the configured authority window.
-    relevant = {p.symbol for p in tape.pairs if any(f.timestamp >= start for f in p.fills)}
-    relevant.update(symbol for symbol, sides in bot.positions.items()
-                    if any(side["size"] != 0 for side in sides.values()))
+    relevant = {(p.symbol, p.pside) for p in tape.pairs
+                if any(start <= f.timestamp <= now_ms for f in p.fills)}
+    relevant.update((symbol, side) for symbol, sides in bot.positions.items()
+                    for side, position in sides.items() if position["size"] != 0)
+    global_reasons = set(tape.reasons)
+    if fills_started_ms is None or fills_completed_ms is None:
+        global_reasons.add("fill_capture_unknown")
+    if any(f.timestamp > now_ms for p in tape.pairs for f in p.fills):
+        global_reasons.add("future_fill_outside_evaluation")
     if bot.config["live"]["hsl_signal_mode"] == "coin":
-        relevant.update(symbols)
+        relevant.update((symbol, side) for side, selected in symbols.items() for symbol in selected)
     policies = tuple(_policies(bot, relevant))
 
     def fresh(timestamp):
@@ -133,20 +159,13 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
     scoped_keys = {}
     for scope, _, _ in policies:
         keys = []
-        for symbol in ((scope.symbol,) if scope.symbol else sorted(relevant)):
-            for side in ((scope.pside,) if scope.pside else ("long", "short")):
-                size = bot.positions.get(symbol, {}).get(side, {"size": 0.0})["size"]
-                history = by_pair.get((symbol, side))
-                # A complete observed account plus empty retained tape makes
-                # this aggregate contributor zero. Do not duplicate a minute
-                # grid/quote requirement for an empty opposite side.
-                if (scope.mode != "coin" and _finite(size) and size == 0
-                        and (history is None or not history.fills)):
-                    continue
+        for symbol, side in sorted(relevant):
+            if ((scope.symbol is None or scope.symbol == symbol)
+                    and (scope.pside is None or scope.pside == side)):
                 keys.append((symbol, side))
         scoped_keys[scope] = keys
 
-    pairs, pair_problems, pair_reasons = {}, {}, {}
+    pairs, pair_problems, pair_reasons, flat_coins = {}, {}, {}, {}
     projected = {}
     for scope, _, _ in policies:
         for symbol, side in scoped_keys[scope]:
@@ -160,6 +179,22 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
             if (not _finite(size) or (size != 0 and not _finite(basis, positive=True))
                     or (side == "long" and size < 0) or (side == "short" and size > 0)):
                 pair_problems[key] = "current_position_unavailable"
+                continue
+            history = by_pair.get(key)
+            quote = quotes.get(symbol)
+            source = candle_sources.get(symbol)
+            if (scope.mode == "coin" and size == 0 and quote is None
+                    and (source is None or not any(t.candles for t in source.tapes))
+                    and bot._pnls_manager is not None
+                    and (history is None or (not history.fills and not history.reasons))
+                    and not tape.reasons and fills_started_ms is not None
+                    and fills_completed_ms == position_state.updated_ms):
+                # This is the native contract's simultaneous factual flat/empty
+                # cohort, not a cache read relabelled as a fill observation.
+                flat_coins[scope] = dict(symbol=symbol, pside=side,
+                    position_at=position_state.updated_ms + offset,
+                    fills_at=fills_completed_ms + offset, history_start=start)
+                pair_reasons[key] = global_reasons | _source_reasons(source)
                 continue
             multiplier = bot.c_mults.get(symbol)
             if not _finite(multiplier, positive=True):
@@ -188,17 +223,12 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 pair_problems[key] = "current_mark_unavailable"
                 continue
             fills = by_pair.get(key)
-            reasons = set(tape.reasons) | set(prices["reasons"])
+            reasons = global_reasons | set(prices["reasons"])
             if flat_price_reason:
                 reasons.add(flat_price_reason)
             if fills is not None:
                 reasons.update(fills.reasons)
-            source = candle_sources.get(symbol)
-            if source is not None:
-                for source_tape in source.tapes:
-                    reasons.update(source_tape.reasons)
-                for failure in source.failures:
-                    reasons.add("candle_" + failure.stage + "_unavailable:" + failure.timeframe)
+            reasons.update(_source_reasons(source))
             pair_reasons[key] = reasons
             pairs[key] = dict(
                 symbol=symbol, position=dict(size=size, basis=basis if size != 0 else 0.0,
@@ -222,15 +252,17 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
         snapshot = dict(now=now_ms, start=start, balance=balance,
             balance_at=balance_state.updated_ms + offset, config_at=now_ms,
             max_current_age_ms=max_current_age_ms, mode=scope.mode, pside=scope.pside,
-            symbol=scope.symbol, pairs=[pairs[key] for key in keys])
+            symbol=scope.symbol, pairs=[pairs[key] for key in keys if key in pairs])
+        if scope in flat_coins:
+            snapshot["flat_coin"] = flat_coins[scope]
         payload = dict(snapshot=snapshot, slots=slots, span=policy["ema_span_minutes"],
             threshold=policy["red_threshold"],
             cooldown_ms=math.floor(policy["cooldown_minutes_after_red"] * 60_000 + .5),
             restart=policy["restart_after_red_policy"],
             intervention=bot.config["live"]["hsl_position_during_cooldown_policy"])
-        reasons = set(tape.reasons)
+        reasons = set(global_reasons)
         for key in keys:
-            reasons.update(pair_reasons[key])
+            reasons.update(pair_reasons.get(key, ()))
         requests.append(Request(scope, json.dumps(payload, allow_nan=False),
                                 policy["panic_close_order_type"], tuple(sorted(reasons))))
     return tuple(requests), tuple(unavailable)
@@ -254,9 +286,21 @@ def _evaluate(requests):
         if (decision is None) != inactive:
             raise InvalidHslOutput("unexpected revised HSL scope activity")
         if decision is not None:
-            if (decision["timestamp"] != submitted["snapshot"]["now"]
+            snapshot = submitted["snapshot"]
+            exposed = any(pair["position"]["size"] != 0 for pair in snapshot["pairs"])
+            red, flat = decision["red_at"], decision["flat_at"]
+            if (type(decision["timestamp"]) is not int or decision["timestamp"] != snapshot["now"]
                     or decision["action"] not in {"normal", "panic", "halted"}
-                    or any(not _finite(decision[key]) or not 0 <= decision[key] <= 1 for key in ("raw", "ema"))):
+                    or any(not _finite(decision[key]) or decision[key] < 0 for key in ("raw", "ema"))
+                    or any(t is not None and (type(t) is not int or not snapshot["start"] <= t <= snapshot["now"])
+                           for t in (red, flat))
+                    or not isinstance(decision["reason"], str) or not decision["reason"]
+                    or type(decision["numeric_range_approximation"]) is not bool
+                    or (decision["action"] == "normal" and (red is not None or flat is not None))
+                    or (decision["action"] != "normal" and red is None)
+                    or (decision["action"] == "panic" and (not exposed or flat is not None))
+                    or (decision["action"] == "halted" and exposed)
+                    or (flat is not None and (red is None or flat < red))):
                 raise InvalidHslOutput("invalid revised HSL decision envelope")
         reasons = tuple(sorted(set(request.reasons) | set(output["reasons"])))
         decisions.append(Decision(request.scope, None if decision is None else decision["action"],
