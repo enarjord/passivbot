@@ -102,6 +102,7 @@ class Request:
     execution_type: str
     reasons: tuple[str, ...]
     price_grids: tuple[object, ...]
+    mark_observed_ms: tuple[int, ...]
 
     @property
     def payload(self):
@@ -382,7 +383,9 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
             reasons.update(pair_reasons.get(key, ()))
         requests.append(Request(scope, json.dumps(payload, allow_nan=False),
                                 policy["panic_close_order_type"], tuple(sorted(reasons)),
-                                tuple(projected[key[0]][0] for key in keys if key in pairs)))
+                                tuple(projected[key[0]][0] for key in keys if key in pairs),
+                                tuple(pair["mark_at"] - offset for pair in snapshot["pairs"]
+                                      if pair["position"]["size"] != 0)))
     return tuple(requests), tuple(unavailable)
 
 

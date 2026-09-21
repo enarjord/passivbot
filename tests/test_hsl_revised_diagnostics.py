@@ -254,3 +254,41 @@ def test_account_freshness_recovery_emits_once_without_numeric_churn(observed):
     assert len(events) == 3
     owner.capture()
     assert len(events) == 3
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside'])
+def test_unused_disabled_position_quote_does_not_expire_evaluated_scopes(observed, mode):
+    bot, owner, _, _ = observed(mode)
+    other = 'DISABLED/USDT:USDT'
+    bot.positions[other] = {'short': {'size': -1., 'price': 100.}}
+    owner.quotes[other] = replace(quotes()[SYMBOL], symbol=other, fetched_ms=NOW-100_000)
+    bot.c_mults[other] = 1.
+    wave = owner.capture()
+    assert len(wave.decisions) == 1 and not wave.unavailable
+    assert wave.mark_observed_ms == (NOW-100,)
+    payload = diagnostics.snapshot(bot, now_ms=NOW)
+    assert payload['observation_status'] == 'current'
+    assert payload['input_expires_at_ms'] == NOW+9800
+
+
+def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observed):
+    from live.smoke_report import _risk_event_group, _summarize_hsl_status
+    from tools.hsl_startup_preview import _bounded_hsl_data, _status_from_event
+    bot, owner, _, events = observed('unified')
+    wave = owner.capture({SYMBOL: replace(quotes()[SYMBOL], bid=100., ask=100., last=100.)})
+    clean = replace(wave, decisions=tuple(replace(d, reasons=()) for d in wave.decisions))
+    assert clean.decisions[0].action == 'normal'
+    bot._authoritative_pending_confirmations = {'open_orders': 1}
+    diagnostics.record(bot, clean)
+    event = dict(event_type='hsl.status', **{key: events[-1][1][key]
+        for key in ('level', 'status', 'data')})
+    assert event['data']['tier'] == 'stale'
+    assert event['data']['scopes'][0]['tier'] == 'green'
+    group = _risk_event_group(bot_key='fake/example', row={'ts': NOW, 'seq': 1},
+                             live_event=event, path=Path('events.ndjson'), line_no=1)
+    assert _summarize_hsl_status({'one': group})['tier_counts'] == {'stale': 1}
+    assert _status_from_event({'latest_data': _bounded_hsl_data(event)}) == 'stale'
+    bot.freshness_ledger.begin_epoch()
+    bot.freshness_ledger.stamp('open_orders', now_ms=NOW)
+    diagnostics.record(bot, clean)
+    assert events[-1][1]['data']['tier'] == 'green'
