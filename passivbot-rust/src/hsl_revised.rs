@@ -131,6 +131,7 @@ pub fn signal_with_anchor(
         numeric_range_approximation: false,
     };
     let last = anchor;
+    let mut deltas = Vec::with_capacity(rows.len());
     // Subtract the common currency offset first: a large realized baseline must
     // not erase an otherwise representable unrealized change or the budget.
     for row in rows {
@@ -147,6 +148,7 @@ pub fn signal_with_anchor(
                 + (row.unrealized * 0.25 - last.unrealized * 0.25);
             bounded(scaled * 4.0, &mut out.numeric_range_approximation)
         };
+        deltas.push(delta);
         out.equity.push(bounded(
             budget + delta,
             &mut out.numeric_range_approximation,
@@ -160,12 +162,34 @@ pub fn signal_with_anchor(
         *out.equity.last_mut().unwrap() = budget;
     }
     let mut peak = entry_reference.unwrap_or(out.equity[0]);
+    // An explicit absolute reference already has the caller's float precision.
+    // Otherwise retain the relative currency peak, so adding a large budget
+    // cannot erase an independently representable peak-to-current loss.
+    let mut peak_delta = entry_reference.is_none().then_some(deltas[0]);
     let alpha = 2.0 / (span + 1.0);
     let mut previous_minute = None;
     let mut baseline: Option<f64> = None;
-    for (row, equity) in rows.iter().zip(out.equity.iter().copied()) {
+    for (index, (row, equity)) in rows.iter().zip(out.equity.iter().copied()).enumerate() {
         peak = peak.max(equity);
-        let drawdown = if peak > 0.0 {
+        if let Some(relative_peak) = &mut peak_delta {
+            *relative_peak = relative_peak.max(deltas[index]);
+        }
+        let drawdown = if peak > 0.0 && peak_delta.is_some() {
+            let relative_peak = peak_delta.unwrap();
+            let loss = relative_peak - deltas[index];
+            let denominator = budget + relative_peak;
+            bounded(
+                if loss.is_finite() && denominator.is_finite() {
+                    loss / denominator
+                } else {
+                    // Power-of-two scaling avoids overflow in either positive
+                    // denominator or opposite-sign loss subtraction.
+                    (relative_peak * 0.25 - deltas[index] * 0.25)
+                        / (budget * 0.25 + relative_peak * 0.25)
+                },
+                &mut out.numeric_range_approximation,
+            )
+        } else if peak > 0.0 {
             // Division first avoids overflow when peak and negative equity have
             // opposite extreme magnitudes. Clamp only an unrepresentable ratio.
             bounded(

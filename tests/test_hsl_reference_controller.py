@@ -26,6 +26,7 @@ def controller_backend(request, monkeypatch):
             (kwargs["budget"], kwargs["span"], kwargs["threshold"]))
         payload["cooldown_ms"] = payload.pop("cooldown")
         payload["episodes"] = [{"entry_reference": None if e.entry_reference is None else float(e.entry_reference),
+                                "opened_at": e.opened_at,
                                 "points": [{"timestamp": p.observation.timestamp,
                                             "pnl": float(p.observation.pnl), "upnl": float(p.observation.upnl),
                                             "exposed": p.exposed, "flatten": p.flatten} for p in e.points]}
@@ -285,3 +286,42 @@ def test_minimal_reference_cannot_fabricate_a_stop_on_a_flat_scope(completed):
 def test_expired_reference_does_not_affect_current_history():
     episode = Episode((point(0), point(100)), entry_reference=2000)
     assert run(episode, start=1)[-1].action == "normal"
+
+
+@pytest.mark.parametrize("opening", [200, 250, 400, 450])
+@pytest.mark.parametrize("intervention", ["normal", "panic"])
+@pytest.mark.parametrize("restart", ["always", "never"])
+def test_exchange_reopen_and_flat_between_prices(opening, intervention, restart):
+    second = Episode((point(200, -100, exposed=False),
+                      point(500, -100, exposed=False, flatten=True)), opened_at=opening)
+    third = Episode((point(500, -100, exposed=False), point(600, -100, exposed=False)))
+    result = run(stopped(), second, third, intervention=intervention, restart=restart)
+    during_cooldown = restart == "never" or opening < 400
+    panicked = intervention == "panic" and during_cooldown
+    assert result[-1].action == ("halted" if panicked else "normal")
+    assert result[-1].red_at == (opening if panicked else None)
+    assert result[-1].flat_at == (500 if panicked else None)
+    assert len(result) == 8  # lifecycle evidence adds no EMA observations
+    # At the seed, the previous stop has not yet been cleared or re-panicked.
+    assert result[4].action == "halted" and result[4].red_at == 100
+
+
+@pytest.mark.parametrize("opening", [199, 501])
+def test_opening_event_must_belong_to_its_seeded_episode(opening):
+    second = Episode((point(200, -100, exposed=False),
+                      point(500, -100, exposed=False)), opened_at=opening)
+    with pytest.raises(ValueError, match="opening event"):
+        run(stopped(), second)
+
+
+def test_first_episode_cannot_claim_prior_flat_opening_metadata():
+    first = Episode((point(0, exposed=False), point(100)), opened_at=50)
+    with pytest.raises(ValueError, match="opening event"):
+        run(first)
+
+
+def test_opening_before_window_cannot_retain_expired_stop():
+    second = Episode((point(200, -100, exposed=False),
+                      point(500, -100, exposed=False, flatten=True)), opened_at=250)
+    third = Episode((point(600, -100, exposed=False),))
+    assert run(stopped(), second, third, start=251, restart="never")[-1].action == "normal"

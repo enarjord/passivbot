@@ -21,6 +21,7 @@ class Point:
 class Episode:
     points: tuple
     entry_reference: object = None
+    opened_at: int | None = None
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,13 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
             raise ValueError("empty episode")
         if previous_time is not None and not previous_flat:
             raise ValueError("episode reset without supported flatten")
+        if episode.opened_at is not None:
+            seed = episode.points[0]
+            if (not previous_flat or previous_time != seed.observation.timestamp
+                    or len(episode.points) < 2 or seed.exposed or seed.flatten
+                    or not seed.observation.timestamp <= episode.opened_at <= episode.points[-1].observation.timestamp
+                    or any(p.exposed and p.observation.timestamp < episode.opened_at for p in episode.points)):
+                raise ValueError("invalid opening event")
         for i, point in enumerate(episode.points):
             t = point.observation.timestamp
             if t > now:
@@ -77,9 +85,21 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
             raise ValueError("entry reference requires the current exposed singleton")
         risk = signal([p.observation for p in points], budget, span, threshold,
                       entry_reference=reference, anchor=episodes[-1].points[-1].observation)
+        opening = episode.opened_at if episode.opened_at is not None and episode.opened_at >= start else None
         for point, raw, ema, red_now in zip(points, risk.raw, risk.ema, risk.panic):
             t = point.observation.timestamp
             reason = "green"
+            # Independently replay the exchange exposure event before the next
+            # price observation. The preceding flat seed is not that event.
+            if opening is not None and point is not episode.points[0] and opening <= t:
+                if flat_at is not None and restart == "always" and opening >= flat_at + cooldown:
+                    red_at = flat_at = None
+                    reason = "cooldown_complete"
+                elif flat_at is not None:
+                    red_at = None if intervention == "normal" else opening
+                    flat_at = None
+                    reason = f"{intervention}_intervention"
+                opening = None
             if flat_at is not None and restart == "always" and t >= flat_at + cooldown:
                 red_at = flat_at = None
                 reason = "cooldown_complete"

@@ -6,7 +6,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Point {
     pub timestamp: i64,
@@ -20,10 +20,14 @@ pub struct Point {
     pub flatten: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Episode {
     pub points: Vec<Point>,
+    /// First supported increase after this episode's initial scope-flat seed.
+    /// A lifecycle event only: it does not add a price or EMA observation.
+    #[serde(default)]
+    pub opened_at: Option<i64>,
     #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference: Option<f64>,
 }
@@ -86,6 +90,30 @@ fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
             .is_some_and(|deadline| timestamp >= deadline)
 }
 
+fn advance_permissions(
+    timestamp: i64,
+    exposed: bool,
+    input: &Input,
+    red_at: &mut Option<i64>,
+    flat_at: &mut Option<i64>,
+) -> Option<&'static str> {
+    if cooldown_finished(*flat_at, timestamp, input) {
+        *red_at = None;
+        *flat_at = None;
+        return Some("cooldown_complete");
+    }
+    if flat_at.is_some() && exposed {
+        *flat_at = None;
+        if input.intervention == Intervention::Normal {
+            *red_at = None;
+            return Some("normal_intervention");
+        }
+        *red_at = Some(timestamp);
+        return Some("panic_intervention");
+    }
+    None
+}
+
 pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
     if input.start > input.now
         || input.cooldown_ms < 0
@@ -106,6 +134,23 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
         }
         if previous_time.is_some() && !previous_flat {
             return Err("episode reset without supported flatten".into());
+        }
+        if let Some(opened) = episode.opened_at {
+            let seed = &episode.points[0];
+            if !previous_flat
+                || previous_time != Some(seed.timestamp)
+                || episode.points.len() < 2
+                || seed.exposed
+                || seed.flatten
+                || opened < seed.timestamp
+                || opened > episode.points.last().unwrap().timestamp
+                || episode
+                    .points
+                    .iter()
+                    .any(|p| p.exposed && p.timestamp < opened)
+            {
+                return Err("invalid HSL opening event".into());
+            }
         }
         for (index, point) in episode.points.iter().enumerate() {
             if point.timestamp > input.now {
@@ -173,25 +218,21 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
             reference,
             &anchor,
         )?;
-        for (index, (_, point)) in points.iter().enumerate() {
+        let mut opening = episode.opened_at.filter(|t| *t >= input.start);
+        for (index, (original_index, point)) in points.iter().enumerate() {
             let t = point.timestamp;
             let mut reason = "green";
-            if cooldown_finished(flat_at, t, input) {
-                red_at = None;
-                flat_at = None;
-                reason = "cooldown_complete";
-            }
-            if flat_at.is_some() && point.exposed {
-                if input.intervention == Intervention::Normal {
-                    red_at = None;
-                    flat_at = None;
-                    reason = "normal_intervention";
-                } else {
-                    red_at = Some(t);
-                    flat_at = None;
-                    reason = "panic_intervention";
+            // The seed precedes the opening even when timestamps tie. Process
+            // the event at its real time, before cooldown expiry at a later bar.
+            if *original_index > 0 {
+                if let Some(opened) = opening.filter(|opened| *opened <= t) {
+                    opening = None;
+                    reason = advance_permissions(opened, true, input, &mut red_at, &mut flat_at)
+                        .unwrap_or(reason);
                 }
             }
+            reason = advance_permissions(t, point.exposed, input, &mut red_at, &mut flat_at)
+                .unwrap_or(reason);
             if risk.panic[index] && (point.exposed || point.flatten) && red_at.is_none() {
                 red_at = Some(t);
                 flat_at = None;
@@ -259,6 +300,7 @@ mod tests {
             intervention: Intervention::Normal,
             episodes: vec![Episode {
                 entry_reference: None,
+                opened_at: None,
                 points: vec![
                     Point {
                         timestamp: 0,

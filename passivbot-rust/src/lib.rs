@@ -9,6 +9,7 @@ mod equity_hard_stop_loss;
 mod gpu;
 mod hsl_revised;
 mod hsl_revised_controller;
+mod hsl_revised_trace;
 mod hsl_revised_candle_free;
 mod hsl_revised_history;
 mod hsl_revised_prices;
@@ -110,6 +111,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised::signal_py, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_controller::hsl_revised_controller, m)?)?;
+    m.add_function(wrap_pyfunction!(hsl_revised_trace::hsl_revised_trace, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_history::hsl_revised_history, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_prices::hsl_revised_prices, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_snapshot::hsl_revised_snapshot, m)?)?;
