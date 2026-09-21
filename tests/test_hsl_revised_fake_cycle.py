@@ -97,6 +97,15 @@ async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkey
         assert len(summaries) == 4
         assert all("'engine': 'revised'" in step['result'] for step in summaries)
         assert all('passes' in step['result'] for step in summaries)
+        if entrypoint == 'in_process' and side == 'long':
+            first = runner._load_run_artifacts(artifacts)
+            _cleanup_fake_user_state(user)
+            args.output_dir = str(tmp_path / 'repeat')
+            assert await runner._async_main(args) == 0
+            repeated_trace, = (tmp_path / 'repeat').rglob('hsl_trace.json')
+            second = runner._load_run_artifacts(repeated_trace.parent)
+            comparison = runner._compare_run_artifacts(first, second)
+            assert comparison['match'], comparison['diffs']
     finally:
         _cleanup_fake_user_state(user)
 
@@ -110,7 +119,8 @@ async def test_fake_cycle_returns_bounded_pending_while_protection_keeps_running
     async def refresh(**kwargs):
         return True
     bot = SimpleNamespace(config={'live': {'hsl_engine': 'revised'}},
-        refresh_protective_authoritative_state=refresh)
+        refresh_protective_authoritative_state=refresh,
+        _begin_live_event_cycle=lambda **kwargs: None)
     instance = owner(bot)
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
@@ -142,7 +152,8 @@ async def test_production_cycle_rejects_overlapping_owner_calls_and_releases_aft
         entered.set()
         await release.wait()
         raise ValueError('malformed account producer')
-    instance = Owner(SimpleNamespace(refresh_protective_authoritative_state=refresh))
+    instance = Owner(SimpleNamespace(refresh_protective_authoritative_state=refresh,
+        _begin_live_event_cycle=lambda **kwargs: None))
     task = asyncio.create_task(instance.cycle())
     await entered.wait()
     with pytest.raises(RuntimeError, match='cycle is already running'):
@@ -151,3 +162,47 @@ async def test_production_cycle_rejects_overlapping_owner_calls_and_releases_aft
     with pytest.raises(ValueError, match='malformed account producer'):
         await task
     assert not instance._running and not instance._cycle_running
+
+
+@pytest.mark.asyncio
+async def test_each_owner_pass_recovers_prior_cycle_state_before_account_refresh():
+    from types import SimpleNamespace
+    from live.hsl_revised_live import Owner
+    cycles, refreshed = [], []
+    bot = SimpleNamespace(execution_scheduled=True,
+        state_change_detected_by_symbol={'TEST/USDT:USDT'},
+        _live_event_current_cycle_id='previous')
+    def begin(**kwargs):
+        assert kwargs['loop_start_ms'] > 0
+        cycles.append(len(cycles)+1)
+        bot._live_event_current_cycle_id = cycles[-1]
+    async def refresh(**kwargs):
+        assert bot.state_change_detected_by_symbol == set()
+        assert bot.execution_scheduled is False
+        assert bot._live_event_current_cycle_id == len(cycles)
+        refreshed.append(True)
+        # Simulate the preceding pass's failed/ambiguous cancellation and
+        # scheduled work. The next pass must not inherit its execution embargo.
+        bot.state_change_detected_by_symbol.add('TEST/USDT:USDT')
+        bot.execution_scheduled = True
+        return False
+    bot._begin_live_event_cycle = begin
+    bot.refresh_protective_authoritative_state = refresh
+    owner = Owner(bot)
+    for _ in range(2):
+        assert (await owner.cycle())['updated'] is False
+    assert len(cycles) == len(refreshed) == 2
+
+
+def test_revised_trace_comparison_preserves_trading_evidence():
+    first = dict(revised=dict(engine='revised', captured_at_ms=100, input_expires_at_ms=110,
+        age_ms=1, observation_status='current', scopes=[dict(action='panic', red_at=500, flat_at=None)],
+        counts={'red': 1}))
+    second = deepcopy(first)
+    second['revised'].update(captured_at_ms=200, input_expires_at_ms=210, age_ms=2)
+    assert runner._canonical_hsl_trace(first) == runner._canonical_hsl_trace(second)
+    assert 'captured_at_ms' in first['revised']  # Comparison does not rewrite artifacts.
+    for key, changed in [('action', 'normal'), ('red_at', 600)]:
+        altered = deepcopy(second)
+        altered['revised']['scopes'][0][key] = changed
+        assert runner._canonical_hsl_trace(first) != runner._canonical_hsl_trace(altered)

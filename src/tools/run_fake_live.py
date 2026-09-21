@@ -832,6 +832,12 @@ def _canonical_fill(fill: dict[str, Any]) -> dict[str, Any]:
 
 def _canonical_hsl_trace(trace: dict[str, Any]) -> dict[str, Any]:
     normalized = json.loads(json.dumps(trace))
+    revised = normalized.get("revised")
+    if isinstance(revised, dict):
+        # Preserve native actions, exchange-time lifecycle and quality evidence;
+        # only observation wall-clock bookkeeping varies between identical runs.
+        for key in ("captured_at_ms", "input_expires_at_ms", "age_ms"):
+            revised.pop(key, None)
     for pside_state in normalized.values():
         if not isinstance(pside_state, dict):
             continue
