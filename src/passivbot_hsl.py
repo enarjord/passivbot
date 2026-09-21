@@ -4540,9 +4540,9 @@ async def _equity_hard_stop_initialize_coin_from_history(
         # Capture the authoritative observation before price-history I/O. The
         # retained replay tape cannot prove its own discarded opening fills.
         observation = _equity_hard_stop_coin_input_observation(self, configured_start_ms)
-        history_required, replay_start_ms = (
-            self._equity_hard_stop_required_fill_history_start_ms(
-                now_ms, pnl_start_ms=configured_start_ms,
+        history_required, replay_start_ms, required_pair_starts = (
+            _equity_hard_stop_required_fill_history_scope(
+                self, now_ms, pnl_start_ms=configured_start_ms,
             )
         )
         if not history_required:
@@ -5034,7 +5034,13 @@ async def _equity_hard_stop_initialize_coin_from_history(
                     # whose cooldown can still matter. Later arrivals/corrections
                     # must compare against these values, not a fresh cache read.
                     self._hsl_coin_state(pside, symbol)["episode_evidence"] = (
-                        evidence.window(replay_start_ms, now_ms)
+                        evidence.window(
+                            self._hsl_coin_state(pside, symbol)["pnl_reset_timestamp_ms"]
+                            if required_pair_starts is not None
+                            and (pside, symbol) not in required_pair_starts
+                            else replay_start_ms,
+                            now_ms,
+                        )
                     )
             pair = (pside, symbol)
             self._equity_hard_stop_coin_replay_pending_pairs.discard(pair)
@@ -5117,6 +5123,19 @@ async def _equity_hard_stop_initialize_coin_from_history(
                 replay_start_boundary_ts = bounded_pair_replay_starts.get(
                     (pside, symbol)
                 )
+                if (
+                    required_pair_starts is not None
+                    and (pside, symbol) not in required_pair_starts
+                    and (replay_boundary is None or replay_boundary[:2] != (pside, symbol))
+                ):
+                    # The canonical scope has no retained episode for this flat
+                    # pair and its cooldown horizon has expired. Another pair's
+                    # longer coverage window must not replay this closed loss.
+                    # Freeze the boundary until the next canonical reconstruction,
+                    # so a later fill remains visible to live evidence checks.
+                    replay_start_boundary_ts = max(
+                        replay_start_ms or 0, now_ms - cooldown_ms
+                    )
                 if (
                     replay_boundary is not None
                     and replay_boundary[:2] == (pside, symbol)

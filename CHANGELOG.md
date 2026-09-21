@@ -12,6 +12,10 @@ since the latest release tag; these features may already be available when insta
 - Reduce revised HSL live snapshot overhead by retaining immutable projected minute prices in
   Rust across capture and evaluation, with unchanged reconstruction and freshness requirements.
 
+- Keep legacy coin-HSL replay scoped to each pair's required episode. A longer history window
+  for another side or coin no longer replays an expired flat episode's loss and retriggers RED
+  while waiting for a closing fill that already occurred.
+
 - Reduce revised-HSL historical price-projection overhead while preserving source selection,
   conflict handling, gap filling and diagnostics. This is a staged performance improvement;
   revised runtime activation remains guarded.

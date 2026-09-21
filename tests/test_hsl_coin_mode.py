@@ -1308,11 +1308,12 @@ def test_passivbot_binds_coin_hsl_replay_support_helper():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_initializer_uses_canonical_required_history_start():
+async def test_coin_hsl_initializer_uses_canonical_required_history_start(monkeypatch):
     bot = make_coin_bot()
     captured = {}
-    bot._equity_hard_stop_required_fill_history_start_ms = (
-        lambda now_ms, pnl_start_ms=None: (True, 120_000)
+    monkeypatch.setattr(
+        hsl, "_equity_hard_stop_required_fill_history_scope",
+        lambda self, now_ms, pnl_start_ms=None: (True, 120_000, None),
     )
 
     async def fake_history(**kwargs):
