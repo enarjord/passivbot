@@ -51,7 +51,6 @@ def record(bot, wave):
     """Report a completed protective wave and emit bounded status changes."""
     try:
         from utils import utc_ms
-        now = int(utc_ms())
         rows = [_row(d.scope, action=d.action, decision=d) for d in wave.decisions]
         rows += [_row(item.scope, reason=item.reason) for item in wave.unavailable]
         rows.sort(key=_priority)
@@ -71,35 +70,50 @@ def record(bot, wave):
             tier=('red' if counts['red'] else 'unavailable' if counts['unavailable']
                   else 'green' if counts['green'] else 'inactive'),
             scopes=rows[:SCOPE_LIMIT], omitted_scopes=max(0, len(rows)-SCOPE_LIMIT))
-        # No runtime or executor consumer reads this attribute.
+        scope_signature = hashlib.sha256(json.dumps([
+            (r['signal_mode'], r['symbol'], r['pside'], r['action'], r['availability'],
+             r['unavailable_reason'], r['estimates']) for r in rows], sort_keys=True).encode()).hexdigest()
+        # A skipped account-refresh wave may let the previous observation expire.
+        # Publish that transition before replacing it, retaining only its compact
+        # all-scope signature; this diagnostic state is never execution authority.
+        previous = getattr(bot, '_hsl_revised_diagnostic_event', None)
+        if previous is not None:
+            prior = snapshot(bot, now_ms=int(utc_ms()))
+            if 'captured_at_ms' in prior:
+                _emit_status(bot, prior, previous[0][0])
         bot._hsl_revised_diagnostic_observation = observation
         bot._hsl_revised_diagnostic_failed = False
-        data = snapshot(bot, now_ms=now)
-        signature = hashlib.sha256(json.dumps([data['observation_status'], data['account_unavailable'], [
-            (r['signal_mode'], r['symbol'], r['pside'], r['action'], r['availability'],
-             r['unavailable_reason'], r['estimates']) for r in rows]], sort_keys=True).encode()).hexdigest()
-        previous = getattr(bot, '_hsl_revised_diagnostic_event', None)
-        if previous is not None and previous[0] == signature:
-            return
-        bot._hsl_revised_diagnostic_event = (signature, now)
-        data['scopes'] = data['scopes'][:SAMPLE_LIMIT]
-        data['omitted_scopes'] = max(0, len(rows)-SAMPLE_LIMIT)
-        console_errors_before = _console_sink_error_count(bot)
-        emitted = _safe_emit(bot, EventTypes.HSL_STATUS, component='risk.hsl', tags=(EventTags.RISK, EventTags.SUMMARY),
-            level='warning' if counts['unavailable'] else 'info',
-            status='degraded' if counts['unavailable'] or counts['estimated'] else 'ok',
-            cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
-        console_errors_after = _console_sink_error_count(bot)
-        console_failed = (console_errors_before is not None and console_errors_after is not None
-                          and console_errors_after > console_errors_before)
-        if emitted is None or console_failed:
-            logging.log(logging.WARNING if counts['unavailable'] else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d',
-                         data['signal_mode'], data['observation_status'], counts['green'], counts['red'],
-                         counts['inactive'], counts['unavailable'], counts['estimated'])
+        # Projection and the previous event sink may take time. Evaluate freshness
+        # only after those operations, immediately before creating the event.
+        _emit_status(bot, snapshot(bot, now_ms=int(utc_ms())), scope_signature)
     except Exception as exc:
         # Optional diagnostics must never inhibit or fabricate a trading decision.
         bot._hsl_revised_diagnostic_failed = True
         logging.debug('[risk] revised HSL diagnostic projection failed | error_type=%s', bounded_exception_type(exc))
+
+
+def _emit_status(bot, data, scope_signature):
+    signature = (scope_signature, data['observation_status'], tuple(data['account_unavailable']))
+    previous = getattr(bot, '_hsl_revised_diagnostic_event', None)
+    if previous is not None and previous[0] == signature:
+        return
+    bot._hsl_revised_diagnostic_event = (signature, data['captured_at_ms'] + data['age_ms'])
+    counts = data['counts']
+    unavailable = bool(counts['unavailable'] or data['observation_status'] != 'current')
+    data['scopes'] = data['scopes'][:SAMPLE_LIMIT]
+    data['omitted_scopes'] = max(0, data['scope_count']-SAMPLE_LIMIT)
+    console_errors_before = _console_sink_error_count(bot)
+    emitted = _safe_emit(bot, EventTypes.HSL_STATUS, component='risk.hsl', tags=(EventTags.RISK, EventTags.SUMMARY),
+        level='warning' if unavailable else 'info',
+        status='degraded' if unavailable or counts['estimated'] else 'ok',
+        cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
+    console_errors_after = _console_sink_error_count(bot)
+    console_failed = (console_errors_before is not None and console_errors_after is not None
+                      and console_errors_after > console_errors_before)
+    if emitted is None or console_failed:
+        logging.log(logging.WARNING if unavailable else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d',
+                     data['signal_mode'], data['observation_status'], counts['green'], counts['red'],
+                     counts['inactive'], counts['unavailable'], counts['estimated'])
 
 
 def snapshot(bot, *, now_ms):
