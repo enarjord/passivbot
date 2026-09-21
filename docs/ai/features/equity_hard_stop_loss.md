@@ -379,7 +379,10 @@ The internal revised simulator path evaluates scoped permissions before construc
 orders from each completed bar. Non-GREEN scopes discard ordinary orders; PANIC scopes
 use the minimal Rust full-position protective-close API with their explicit execution
 policy. Unified mode has one portfolio policy/controller, including entry-disabled
-side exposure. Partial closes retain only the actual remaining size as a close target.
+side exposure. Fill simulation consumes the revised order's explicit market/limit type;
+legacy side policy cannot reinterpret it. A protective fill requires a current valuation
+candle, while ordinary entry warmup does not block it. Partial closes retain only the
+actual remaining size as a close target.
 
 A scope-flat execution is evaluated before another queued fill can reopen it, using
 only preceding completed candles and the just-observed execution. The simulator's

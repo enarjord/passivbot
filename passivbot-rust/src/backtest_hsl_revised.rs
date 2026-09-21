@@ -822,7 +822,8 @@ mod tests {
 
     #[test]
     fn revised_unified_uses_one_controller_and_explicit_portfolio_execution_policy() {
-        let c = candles(4, 1);
+        let mut c = candles(4, 1);
+        c[[2, 0, LOW]] = 99.0;
         let btc = Array1::from_elem(4, 1.0);
         let mut bt = make(&c, &btc);
         enable_revised(&mut bt, "unified", "limit");
@@ -1039,6 +1040,90 @@ mod tests {
             });
             bt.check_for_fills(1).unwrap();
             assert_eq!(bt.fills.len(), 1);
+        }
+    }
+    #[test]
+    fn revised_panic_fill_uses_explicit_type_fees_slippage_and_close_eligibility() {
+        for mode in ["coin", "pside", "unified"] {
+            for side in [LONG, SHORT] {
+                for execution in ["market", "limit"] {
+                    for before_entry_start in [false, true] {
+                        let mut c = candles(5, 1);
+                        // Panic limits sit one tick through the previous touch.
+                        // Move the next whole candle away so only market execution fills.
+                        for f in [HIGH, LOW, CLOSE] {
+                            c[[2, 0, f]] = if side == LONG { 99.0 } else { 101.0 };
+                        }
+                        c[[3, 0, LOW]] = 99.0;
+                        c[[3, 0, HIGH]] = 101.0;
+                        let btc = Array1::from_elem(5, 1.0);
+                        let mut bt = make(&c, &btc);
+                        enable_revised(&mut bt, mode, execution);
+                        let opposite = if execution == "market" {
+                            "limit"
+                        } else {
+                            "market"
+                        };
+                        bt.bot_params[0].long.hsl_panic_close_order_type = opposite.into();
+                        bt.bot_params[0].short.hsl_panic_close_order_type = opposite.into();
+                        bt.bot_params_master.long.hsl_panic_close_order_type = opposite.into();
+                        bt.bot_params_master.short.hsl_panic_close_order_type = opposite.into();
+                        bt.exchange_params_list[0].maker_fee = 0.001;
+                        bt.exchange_params_list[0].taker_fee = 0.003;
+                        bt.backtest_params.market_order_slippage_pct = 0.01;
+                        let (pside, qty, basis) = if side == LONG {
+                            (PositionSide::Long, 10.0, 120.0)
+                        } else {
+                            (PositionSide::Short, -10.0, 80.0)
+                        };
+                        fill(&mut bt, 0, 0, pside, qty, basis);
+                        if before_entry_start {
+                            bt.coin_trade_start_idx[0] = 4;
+                        }
+                        bt.trading_enabled.long = false;
+                        bt.trading_enabled.short = false;
+                        bt.update_revised_hsl(1).unwrap();
+                        bt.update_open_orders_all(1).unwrap();
+                        // No limit-price crossing; explicit market policy still fills.
+                        bt.check_for_fills(2).unwrap();
+                        if execution == "limit" {
+                            assert_eq!(bt.fills.len(), 1, "{mode} {side} {execution}");
+                            bt.check_for_fills(3).unwrap();
+                        }
+                        assert_eq!(
+                            bt.fills.len(),
+                            2,
+                            "{mode} {side} {execution} warmup={before_entry_start}"
+                        );
+                        let close = bt.fills.last().unwrap();
+                        let expected_price = if execution == "limit" {
+                            if side == LONG {
+                                99.99
+                            } else {
+                                100.01
+                            }
+                        } else if side == LONG {
+                            98.01
+                        } else {
+                            102.01
+                        };
+                        let fee = if execution == "limit" { 0.001 } else { 0.003 };
+                        assert_eq!(close.fill_qty, -qty);
+                        assert_eq!(close.fill_price, expected_price);
+                        assert!(
+                            (close.fee_paid + qty.abs() * expected_price * 2.0 * fee).abs() < 1e-10
+                        );
+                        assert_eq!(
+                            close.liquidity,
+                            if execution == "limit" {
+                                "maker"
+                            } else {
+                                "taker"
+                            }
+                        );
+                    }
+                }
+            }
         }
     }
 }

@@ -4936,8 +4936,19 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    fn order_can_fill(&self, k: usize, idx: usize, order: &Order) -> bool {
+        if self.revised_hsl_enabled()
+            && matches!(order.order_type, OrderType::ClosePanicLong | OrderType::ClosePanicShort)
+        {
+            // Protective closes require a real current candle, not entry warmup.
+            self.coin_is_valid_at(idx, k)
+        } else {
+            self.coin_is_tradeable_at(idx, k)
+        }
+    }
+
     fn order_filled(&self, k: usize, idx: usize, order: &Order) -> bool {
-        if !self.coin_is_tradeable_at(idx, k) {
+        if !self.order_can_fill(k, idx, order) {
             return false;
         }
         // check if filled in current candle (pass k+1 to check if will fill in next candle)
@@ -5285,13 +5296,16 @@ impl<'a> Backtest<'a> {
     }
 
     fn market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
-        if !self.coin_is_tradeable_at(idx, k) {
+        if !self.order_can_fill(k, idx, order) {
             return None;
         }
         self.market_fill_price_for_qty(k, idx, order.qty)
     }
 
     fn order_uses_market_execution(&self, idx: usize, order: &BacktestOrder) -> bool {
+        if self.revised_hsl_enabled() {
+            return order.execution_type == orchestrator::ExecutionType::Market;
+        }
         match order.order.order_type {
             OrderType::ClosePanicLong => {
                 let cfg = if self.hard_stop_signal_mode() == "coin" {
