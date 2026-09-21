@@ -27,6 +27,7 @@ def controller_backend(request, monkeypatch):
         payload["cooldown_ms"] = payload.pop("cooldown")
         payload["episodes"] = [{"entry_reference": None if e.entry_reference is None else float(e.entry_reference),
                                 "opened_at": e.opened_at,
+                                "entry_reference_delta": None if e.entry_reference_delta is None else float(e.entry_reference_delta),
                                 "points": [{"timestamp": p.observation.timestamp,
                                             "pnl": float(p.observation.pnl), "upnl": float(p.observation.upnl),
                                             "exposed": p.exposed, "flatten": p.flatten} for p in e.points]}
@@ -325,3 +326,22 @@ def test_opening_before_window_cannot_retain_expired_stop():
                       point(500, -100, exposed=False, flatten=True)), opened_at=250)
     third = Episode((point(600, -100, exposed=False),))
     assert run(stopped(), second, third, start=251, restart="never")[-1].action == "normal"
+
+
+def test_relative_entry_seed_applies_before_flat_and_expires_with_initial_sample():
+    first = Episode((point(0, upnl=-100), point(60_000, -100, exposed=False, flatten=True)),
+                    entry_reference_delta=100)
+    rest = Episode((point(60_000, -100, exposed=False), point(120_000, -100, exposed=False)))
+    result = run(first, rest, now=120_000, restart="never", span=10000)
+    assert result[0].action == "panic"
+    assert result[-1].action == "halted"
+    assert result[-1].flat_at == 60_000
+    # A clipped trace must not import its expired entry reference.
+    assert run(first, rest, now=120_000, start=60_001, restart="never")[-1].action == "normal"
+
+
+def test_relative_entry_seed_is_not_allowed_after_supported_flat():
+    with pytest.raises(ValueError, match="initial incomplete"):
+        run(stopped(), Episode((point(300),), entry_reference_delta=100))
+    with pytest.raises(ValueError, match="initial incomplete"):
+        run(Episode((point(300),), entry_reference=1100, entry_reference_delta=100))

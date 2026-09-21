@@ -42,7 +42,7 @@ def signal(rows, budget, span, threshold, *, entry_reference=None, anchor=None):
 
     Rows may include known flatten boundaries as well as minute closes. Consumers
     must inspect boundary decisions before resetting the episode. Nothing is latched
-    in this function. entry_reference is only for the explicit minimal-history case.
+    in this function. entry_reference seeds an estimated entry peak without adding a row.
     """
     budget, span, threshold = map(dec, (budget, span, threshold))
     if budget <= 0 or span < 1 or not 0 <= threshold <= 1 or not rows:

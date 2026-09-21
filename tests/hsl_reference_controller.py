@@ -7,7 +7,7 @@ The production scope builder must independently establish this trace from snapsh
 
 from dataclasses import dataclass
 
-from hsl_reference import signal
+from hsl_reference import dec, signal
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class Episode:
     points: tuple
     entry_reference: object = None
     opened_at: int | None = None
+    entry_reference_delta: object = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,8 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
     previous_time = None
     previous_flat = False
     for episode in episodes:
+        if episode.entry_reference_delta is not None and (previous_time is not None or episode.entry_reference is not None):
+            raise ValueError("entry delta requires only the initial incomplete episode")
         if not episode.points:
             raise ValueError("empty episode")
         if previous_time is not None and not previous_flat:
@@ -83,6 +86,8 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
         if reference is not None and (len(points) != 1 or not points[0].exposed
                                       or points[0].flatten or points[0].observation.timestamp != now):
             raise ValueError("entry reference requires the current exposed singleton")
+        if episode.entry_reference_delta is not None and points[0] == episode.points[0]:
+            reference = dec(budget) + dec(episode.entry_reference_delta)
         risk = signal([p.observation for p in points], budget, span, threshold,
                       entry_reference=reference, anchor=episodes[-1].points[-1].observation)
         opening = episode.opened_at if episode.opened_at is not None and episode.opened_at >= start else None

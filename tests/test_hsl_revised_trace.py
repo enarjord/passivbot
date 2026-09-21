@@ -65,6 +65,9 @@ def oracle(snapshot, mode, **selectors):
                 if step.clean_tail and step.before == 0 and step.after > 0:
                     openings.append(step.fill.timestamp)
         episodes[index] = replace(episodes[index], opened_at=min(openings, default=None))
+    if any("estimated_opening_basis" in h.reasons for h in histories):
+        reference_delta = -sum((h.rows[-1].pnl + h.rows[-1].upnl for h in histories), dec(0))
+        episodes[0] = replace(episodes[0], entry_reference_delta=reference_delta)
     return episodes
 
 
@@ -74,6 +77,10 @@ def compare(snapshot, mode="unified", **selectors):
     assert len(actual["episodes"]) == len(expected)
     for a, e in zip(actual["episodes"], expected):
         assert a["entry_reference"] is None
+        if e.entry_reference_delta is None:
+            assert a["entry_reference_delta"] is None
+        else:
+            assert a["entry_reference_delta"] == pytest.approx(float(e.entry_reference_delta))
         assert a["opened_at"] == e.opened_at
         assert len(a["points"]) == len(e.points)
         for point, ref in zip(a["points"], e.points):
@@ -85,10 +92,10 @@ def compare(snapshot, mode="unified", **selectors):
     return actual, expected
 
 
-def decisions(snapshot, mode="unified", *, intervention="panic", restart="always", **selectors):
+def decisions(snapshot, mode="unified", *, intervention="panic", restart="always", threshold=.1, **selectors):
     actual, expected = compare(snapshot, mode, **selectors)
     settings = dict(now=snapshot.now, start=snapshot.start, budget=float(snapshot.balance),
-                    span=1.0, threshold=.1, cooldown=2*M, restart=restart, intervention=intervention)
+                    span=1.0, threshold=threshold, cooldown=2*M, restart=restart, intervention=intervention)
     reference = replay(expected, **settings)
     settings["cooldown_ms"] = settings.pop("cooldown")
     import passivbot_rust as pbr
@@ -335,3 +342,117 @@ def test_global_order_is_explicit_and_preserves_aggregate_flat_prefix():
     # Duplicate cross-pair sequence values cannot establish total order.
     request["pairs"][1]["fills"][1]["sequence"] = 2
     assert len(rust_trace(request)["episodes"]) == 1
+
+
+@pytest.mark.parametrize("pside", ["long", "short"])
+@pytest.mark.parametrize("mode,selectors", [("coin", {"symbol": "A"}), ("pside", {}), ("unified", {})])
+def test_missing_opening_with_flat_candles_seeds_entry_peak(pside, mode, selectors):
+    direction = 1 if pside == "long" else -1
+    price = 90 if direction == 1 else 110
+    p = cases.pair(size=direction*10, basis=100, mark=price, pside=pside,
+                   prices={t: price for t in range(0, 5*M, M)})
+    selectors = dict(selectors, **({"pside": pside} if mode != "unified" else {}))
+    snapshot = cases.frame(p, balance=1000)
+    actual, expected = compare(snapshot, mode, **selectors)
+    assert actual["episodes"][0]["entry_reference_delta"] == 100
+    assert "estimated_entry_peak" in actual["reasons"]
+    assert len(actual["episodes"][0]["points"]) == 5  # no synthetic EMA row
+    settings = dict(now=snapshot.now, start=0, budget=1000, span=10_000.5,
+                    threshold=.08, cooldown=0, restart="always", intervention="panic")
+    reference = replay(expected, **settings)
+    settings["cooldown_ms"] = settings.pop("cooldown")
+    import passivbot_rust as pbr
+    result = json.loads(pbr.hsl_revised_controller(json.dumps(dict(episodes=actual["episodes"], **settings))))
+    assert len(result) == len(reference)
+    for a, e in zip(result, reference):
+        assert a["raw"] == pytest.approx(100/1100)
+        assert a["ema"] == pytest.approx(float(e.ema))
+        assert a["action"] == e.action == "panic"
+
+
+def test_opening_evidence_replaces_estimate_instead_of_latching_red():
+    price = 90
+    p = cases.pair(size=10, basis=100, mark=price, prices={t: price for t in range(0, 5*M, M)})
+    missing = rust_trace(payload(cases.frame(p, balance=1000), "unified"))
+    assert missing["episodes"][0]["entry_reference_delta"] == 100
+    # A late opening establishes an initially flat scope; ordinary candles/fees
+    # now define the peak. The old approximation has no persistent authority.
+    complete = cases.after_position(replace(p, fills=(Fill("open", M, 10, 100, 0, 0),)))
+    observed, _ = compare(cases.frame(complete, balance=1000))
+    assert observed["episodes"][0]["entry_reference_delta"] is None
+    assert "estimated_entry_peak" not in observed["reasons"]
+
+
+def test_aggregate_entry_reference_nets_positions_before_peak():
+    losing = cases.pair("A", 10, 100, 90, prices={0:90, M:90, 2*M:90, 3*M:90})
+    winning = cases.pair("B", 10, 100, 110, prices={0:110, M:110, 2*M:110, 3*M:110})
+    snapshot = cases.frame(losing, winning, balance=1000)
+    trace, _ = compare(snapshot)
+    assert trace["episodes"][0]["entry_reference_delta"] == 0
+    assert all(d["raw"] == 0 and d["action"] == "normal" for d in decisions(snapshot))
+
+
+def test_partial_close_cashflow_is_counted_once_and_reference_resets_at_flat():
+    p = cases.pair(size=0, basis=0, mark=90,
+                   fills=[Fill("partial", M, -5, 90, -50, -1),
+                          Fill("flat", 2*M, -5, 90, -50, -1)],
+                   prices={0:90, M:90, 2*M:90, 3*M:90})
+    snapshot = cases.frame(p, balance=1000)
+    trace, _ = compare(snapshot)
+    assert trace["episodes"][0]["entry_reference_delta"] == 102
+    assert all(e["entry_reference_delta"] is None for e in trace["episodes"][1:])
+    # Drawdown includes realized losses plus fees; their earlier basis estimate
+    # is uncertain but neither cashflow is dropped or counted a second time.
+    results = decisions(snapshot, restart="never", threshold=.08)
+    at_flat = next(r for r in results if r["reason"] == "stop_flattened")
+    assert at_flat["flat_at"] == 2*M
+    assert results[-1]["action"] == "halted"
+    assert max(r["raw"] for r in results) == pytest.approx(102/1102)
+    assert results[-1]["raw"] == 0
+
+
+def test_window_clipping_drops_old_cashflows_before_new_entry_reference():
+    p = cases.pair(size=10, basis=100, mark=90,
+                   fills=[Fill("expired-close", -M, -5, 80, -500, -2)],
+                   prices={0:90, M:90, 2*M:90, 3*M:90})
+    trace, _ = compare(cases.frame(p, balance=1000))
+    assert trace["episodes"][0]["entry_reference_delta"] == 100
+
+
+@pytest.mark.fake_live
+@pytest.mark.parametrize("pside", ["long", "short"])
+def test_fake_exchange_missing_opening_with_candles_rebuilds_without_cache(pside):
+    from exchanges.fake import FakeCCXTClient
+    symbol = "TEST/USDT:USDT"
+    direction = 1 if pside == "long" else -1
+    price = 90 if direction == 1 else 110
+    client = FakeCCXTClient({
+        "name": "hsl_entry_reference", "start_time": "2026-01-01T00:00:00Z",
+        "tick_interval_seconds": 60, "account": {"balance": 1000},
+        "symbols": {symbol: {"qty_step": .1, "price_step": .1, "min_qty": .1,
+                             "min_cost": 1, "taker": .001}},
+        "timeline": [
+            {"t": 0, "prices": {symbol: 100}},
+            {"t": 1, "prices": {symbol: 100}, "actions": [{"type": "manual_fill",
+             "symbol": symbol, "position_side": pside, "side": "buy" if direction == 1 else "sell",
+             "qty": 10, "reduce_only": False}]},
+            {"t": 2, "prices": {symbol: price}},
+            {"t": 3, "prices": {symbol: price}},
+        ],
+    })
+    start = client.now_ms
+    assert client.advance_time()
+    assert client.advance_time()
+    assert client.advance_time()
+    state = client.positions[(symbol, pside)]
+    # Simulate a lost/missing opening fill and a retained late candle backfilled
+    # across the window. Neither fault alters current exchange position truth.
+    p = cases.pair(symbol, direction*state["size"], state["entry_price"], price,
+                   pside=pside, now=client.now_ms,
+                   prices={t:price for t in range(start, client.now_ms+1, M)})
+    frame = cases.frame(p, start=start, now=client.now_ms, balance=client.balance_total)
+    result = decisions(frame, "coin", pside=pside, symbol=symbol, threshold=.08)
+    assert result[-1]["action"] == "panic"
+    assert result[-1]["raw"] == pytest.approx(100/(client.balance_total+100))
+    copied = replace(frame, pairs=tuple(replace(pair) for pair in frame.pairs))
+    assert decisions(copied, "coin", pside=pside, symbol=symbol, threshold=.08) == result

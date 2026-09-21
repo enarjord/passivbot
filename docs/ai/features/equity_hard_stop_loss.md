@@ -34,6 +34,14 @@ mark to reconstruct in-window history after delisting; this emits `stale_flat_ma
 when applicable and never substitutes a price for held exposure. Future mark captures
 remain invalid. This exception does not authorize any order or waive execution inputs.
 
+For the revised estimator, incomplete initial exposure seeds one scope-level entry-value
+peak, even with usable candles. The relative reference is
+`-(retained_net_realized_pnl + current_upnl)`; sum selected currency components before
+normalization. It adds no price/EMA sample or claimed opening timestamp. A supported
+flatten resets it, and a fresh reconstruction replaces it when opening evidence changes.
+This explicitly accepted approximation may include loss originating before lookback;
+actual out-of-window fills/cashflows remain excluded. See the [reference policy](../../plans/hsl_best_effort_redesign.md#missing-opening-with-usable-candles).
+
 ## Invariants
 
 1. The drawdown tracker resets after every proven episode end. The next episode begins after the
