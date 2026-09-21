@@ -16,6 +16,11 @@ since the latest release tag; these features may already be available when insta
   conflict handling, gap filling and diagnostics. This is a staged performance improvement;
   revised runtime activation remains guarded.
 
+- Exercise staged revised HSL through the standard offline fake runner and command-line parser,
+  using the production execution pass for both ordinary orders and protective closes. Emit scoped
+  revised traces and preserve candle acquisition time separately from simulated exchange time.
+  Public revised activation remains gated; legacy remains the default.
+
 - Show staged revised-HSL scope decisions, drawdown, approximation quality and input freshness in
   structured status events and monitor snapshots, dashboard and TUI. Unified mode displays one
   portfolio scope; unavailable or stale observations cannot appear as current GREEN protection.
