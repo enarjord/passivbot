@@ -4,8 +4,9 @@
 
 The runtime rules below describe legacy HSL, which remains the trading default.
 The isolated `hsl_revised*` Rust comparison components implement the approved
-[best-effort redesign](../../plans/hsl_best_effort_redesign.md), without live, backtest
-or optimizer trading callers yet. Their historical candle projection deliberately
+[best-effort redesign](../../plans/hsl_best_effort_redesign.md). The internal Rust
+simulator now consumes them for execution tests; public live, backtest and optimizer
+activation remains gated. Their historical candle projection deliberately
 uses the finest causal source throughout lookback, including internal/suffix gaps;
 the legacy prefix-only coarse-candle restriction below does not apply to those
 experimental components. This separation does not weaken legacy runtime readiness
@@ -370,3 +371,22 @@ tape may supply explicit coin/side/window-bound flat proof instead of a fabricat
 quote. This produces a neutral current trace. It cannot replace a retained pair,
 ignore fills, excuse stale positions or turn an unobserved coin into a flat one.
 These input contracts do not activate the staged revised runtime.
+
+
+### Staged revised simulator execution
+
+The internal revised simulator path evaluates scoped permissions before constructing
+orders from each completed bar. Non-GREEN scopes discard ordinary orders; PANIC scopes
+use the minimal Rust full-position protective-close API with their explicit execution
+policy. Unified mode has one portfolio policy/controller, including entry-disabled
+side exposure. Partial closes retain only the actual remaining size as a close target.
+
+A scope-flat execution is evaluated before another queued fill can reopen it, using
+only preceding completed candles and the just-observed execution. The simulator's
+global sequence plus an exact post-fill position anchor resolves a timestamp tie;
+ordinary exchange timestamps alone do not. Freshly observed flat pairs with no retained
+activity require no future quote. Cooldown and never-restart permissions are reconstructed
+from bounded fills and prices, without copying a previous controller decision.
+
+Public runtime guards still reject revised activation. Python payload dispatch, revised
+reporting, optimizer integration and performance validation remain separate gates.

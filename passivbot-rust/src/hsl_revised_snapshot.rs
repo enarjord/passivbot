@@ -261,7 +261,7 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
             if p.position_at < f.timestamp && f.timestamp <= input.now {
                 reasons.insert("post_position_fill".into());
             }
-            if f.timestamp == p.position_at {
+            if f.timestamp == p.position_at && !(input.global_fill_sequence && p.anchored()) {
                 reasons.insert("position_fill_timestamp_tie".into());
             }
             if f.timestamp > input.now.min(p.fills_at.unwrap_or(input.now)) {

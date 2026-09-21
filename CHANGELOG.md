@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Connect the internal revised-HSL simulator path to scoped permissions, full-position
+  panic orders and fill-time cooldown reconstruction. This remains an offline integration
+  checkpoint: public revised runtime activation is still disabled and legacy stays default.
+
 - Add a shared experimental revised-HSL snapshot evaluator for complete, sparse and
   candle-free histories, including scoped cashflow peaks and restart permissions.
   The legacy default and revised runtime startup guards remain unchanged.

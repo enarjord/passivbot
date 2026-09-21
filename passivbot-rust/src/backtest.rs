@@ -1,5 +1,7 @@
 #[path = "backtest_hsl_revised.rs"]
 mod revised_inputs;
+#[path = "backtest_hsl_runtime.rs"]
+pub(crate) mod revised_runtime;
 
 use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
@@ -660,6 +662,7 @@ pub struct Backtest<'a> {
     orchestrator_workspace: orchestrator::OrchestratorWorkspace,
     orch_profile: Option<OrchProfile>,
     max_tradable_coins_seen: EffectiveNPositions,
+    revised_hsl_scopes: Vec<revised_runtime::Scope>,
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_coin: [Vec<HardStopPsideRuntime>; 2],
     hard_stop_state: Option<ehsl::HardStopState>,
@@ -1555,7 +1558,7 @@ impl<'a> Backtest<'a> {
                         trailing_available: true,
                         last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_long
                             [idx],
-                        bot_params: self.bot_params[idx].long.clone(),
+                        bot_params: self.revised_order_params(LONG, idx),
                         strategy_params: None,
                         parsed_strategy_params: Some(self.strategy_params[idx].long),
                         runtime_budget: Some(self.runtime_budget[idx].long.clone()),
@@ -1567,7 +1570,7 @@ impl<'a> Backtest<'a> {
                         trailing_available: true,
                         last_increase_fill_timestamp_ms: self.last_increase_fill_timestamp_short
                             [idx],
-                        bot_params: self.bot_params[idx].short.clone(),
+                        bot_params: self.revised_order_params(SHORT, idx),
                         strategy_params: None,
                         parsed_strategy_params: Some(self.strategy_params[idx].short),
                         runtime_budget: Some(self.runtime_budget[idx].short.clone()),
@@ -1741,6 +1744,14 @@ impl<'a> Backtest<'a> {
 
             sym.long.mode = mode_long;
             sym.short.mode = mode_short;
+            if self.revised_hsl_enabled() {
+                let long = self.revised_order_params(LONG, idx);
+                let short = self.revised_order_params(SHORT, idx);
+                sym.long.bot_params.hsl_enabled = long.hsl_enabled;
+                sym.long.bot_params.hsl_panic_close_order_type = long.hsl_panic_close_order_type;
+                sym.short.bot_params.hsl_enabled = short.hsl_enabled;
+                sym.short.bot_params.hsl_panic_close_order_type = short.hsl_panic_close_order_type;
+            }
 
             // Update EMA values (spans are stable; we overwrite only values).
             // m1.close: 3 long then 3 short.
@@ -2045,7 +2056,9 @@ impl<'a> Backtest<'a> {
                 bp.short.wallet_exposure_limit =
                     bp.short.total_wallet_exposure_limit / bp.short.n_positions as f64;
             }
-            if backtest_params.equity_hard_stop_loss.signal_mode != "coin" {
+            if backtest_params.equity_hard_stop_loss.revised.is_none()
+                && backtest_params.equity_hard_stop_loss.signal_mode != "coin"
+            {
                 Self::apply_common_hsl_config_to_bot_params_pair(
                     bp,
                     &backtest_params.equity_hard_stop_loss,
@@ -2244,6 +2257,7 @@ impl<'a> Backtest<'a> {
                     ..OrchProfile::default()
                 }),
             max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
+            revised_hsl_scopes: Vec::new(),
             hard_stop_pside: [
                 HardStopPsideRuntime::default(),
                 HardStopPsideRuntime::default(),
@@ -2418,6 +2432,9 @@ impl<'a> Backtest<'a> {
                     self.equity_tracking_active = true;
                 }
                 self.initialize_btc_collateral_if_needed(k);
+                if self.revised_hsl_enabled() {
+                    self.update_revised_hsl(k)?;
+                }
                 self.update_open_orders_all(k)?;
             }
             self.force_close_delisted_positions(k)?;
@@ -2427,8 +2444,10 @@ impl<'a> Backtest<'a> {
                     self.record_strategy_equity_sample();
                     break;
                 }
-                self.update_hard_stop_state(k)?;
-                self.record_hard_stop_tier_sample();
+                if !self.revised_hsl_enabled() {
+                    self.update_hard_stop_state(k)?;
+                    self.record_hard_stop_tier_sample();
+                }
                 self.record_total_wallet_exposure();
             }
             self.try_restart_after_hard_stop(current_ts);
@@ -2823,6 +2842,9 @@ impl<'a> Backtest<'a> {
 
     #[inline(always)]
     fn try_restart_after_hard_stop(&mut self, current_ts_ms: u64) -> bool {
+        if self.revised_hsl_enabled() {
+            return false;
+        }
         self.hydrate_hard_stop_pside_from_legacy_aliases_if_needed();
         if self.hard_stop_signal_mode() == "coin" {
             let mut restarted = false;
@@ -3357,6 +3379,10 @@ impl<'a> Backtest<'a> {
         pos_long: Position,
         pos_short: Position,
     ) {
+        if self.revised_hsl_enabled() {
+            self.apply_revised_modes(idx, mode_long, mode_short);
+            return;
+        }
         self.hydrate_hard_stop_pside_from_legacy_aliases_if_needed();
         if self.hard_stop_signal_mode() == "coin" {
             self.apply_hard_stop_mode_override_coin(mode_long, pos_long, idx, LONG);
@@ -3471,6 +3497,9 @@ impl<'a> Backtest<'a> {
     }
 
     fn update_hard_stop_state(&mut self, k: usize) -> Result<(), String> {
+        if self.revised_hsl_enabled() {
+            return self.update_revised_hsl(k);
+        }
         self.hydrate_hard_stop_pside_from_legacy_aliases_if_needed();
         self.record_strategy_equity_sample();
         if self.hard_stop_signal_mode() == "coin" {
@@ -4317,7 +4346,10 @@ impl<'a> Backtest<'a> {
     fn check_for_fills(&mut self, k: usize) -> Result<(), String> {
         self.did_fill_long.fill(false);
         self.did_fill_short.fill(false);
-        if self.trading_enabled.long {
+        if self.trading_enabled.long
+            || (self.revised_hsl_enabled()
+                && self.positions.long.iter().any(|p| p.size != 0.0))
+        {
             for idx in 0..self.n_coins {
                 // Process close fills long
                 if !self.open_orders.long[idx].closes.is_empty() {
@@ -4337,7 +4369,7 @@ impl<'a> Backtest<'a> {
                     }
                 }
                 // Process entry fills long
-                if !self.open_orders.long[idx].entries.is_empty() {
+                if self.trading_enabled.long && !self.open_orders.long[idx].entries.is_empty() {
                     let mut entries_to_process = Vec::new();
                     {
                         for entry_order in &self.open_orders.long[idx].entries {
@@ -4347,6 +4379,12 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for (order, exec) in entries_to_process {
+                        if self.revised_hsl_enabled()
+                            && self.revised_action(LONG, idx)
+                                != crate::hsl_revised_controller::Action::Normal
+                        {
+                            continue;
+                        }
                         self.did_fill_long[idx] = true;
                         self.last_increase_fill_timestamp_long[idx] =
                             Some(self.first_timestamp_ms + (k as u64) * self.interval_ms);
@@ -4355,7 +4393,10 @@ impl<'a> Backtest<'a> {
                 }
             }
         }
-        if self.trading_enabled.short {
+        if self.trading_enabled.short
+            || (self.revised_hsl_enabled()
+                && self.positions.short.iter().any(|p| p.size != 0.0))
+        {
             for idx in 0..self.n_coins {
                 // Process close fills short
                 if !self.open_orders.short[idx].closes.is_empty() {
@@ -4375,7 +4416,7 @@ impl<'a> Backtest<'a> {
                     }
                 }
                 // Process entry fills short
-                if !self.open_orders.short[idx].entries.is_empty() {
+                if self.trading_enabled.short && !self.open_orders.short[idx].entries.is_empty() {
                     let mut entries_to_process = Vec::new();
                     {
                         for entry_order in &self.open_orders.short[idx].entries {
@@ -4385,6 +4426,12 @@ impl<'a> Backtest<'a> {
                         }
                     }
                     for (order, exec) in entries_to_process {
+                        if self.revised_hsl_enabled()
+                            && self.revised_action(SHORT, idx)
+                                != crate::hsl_revised_controller::Action::Normal
+                        {
+                            continue;
+                        }
                         self.did_fill_short[idx] = true;
                         self.last_increase_fill_timestamp_short[idx] =
                             Some(self.first_timestamp_ms + (k as u64) * self.interval_ms);
@@ -4410,6 +4457,9 @@ impl<'a> Backtest<'a> {
         }
         if self.balance.usd_total_balance <= 0.0 {
             return Ok(()); // The account liquidation path owns depleted balances.
+        }
+        if self.revised_hsl_enabled() {
+            return self.finish_revised_hsl_flat(k, idx, filled_pside);
         }
         let coin_mode = self.hard_stop_signal_mode() == "coin";
         let unified = self.hard_stop_signal_mode() == "unified";
@@ -5374,11 +5424,23 @@ impl<'a> Backtest<'a> {
             let input_update_elapsed = t0.elapsed();
 
             let t1 = Instant::now();
-            let res = orchestrator::compute_ideal_orders_with_workspace(
+            let mut res = orchestrator::compute_ideal_orders_with_workspace(
                 &input,
                 &mut self.orchestrator_workspace,
             )
             .map_err(|e| format!("orchestrator error at k {}: {:?}", k, e))?;
+            if self.revised_hsl_enabled() {
+                res.orders.retain(|order| {
+                    let side = if order.pside == orchestrator::PositionSide::Long {
+                        LONG
+                    } else {
+                        SHORT
+                    };
+                    self.revised_action(side, order.symbol_idx)
+                        == crate::hsl_revised_controller::Action::Normal
+                });
+                res.orders.extend(self.revised_protective_orders(k)?);
+            }
             let compute_elapsed = t1.elapsed();
             self.orchestrator_input_cache = Some(input);
             (res, input_update_elapsed, compute_elapsed)

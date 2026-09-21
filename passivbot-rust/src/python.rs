@@ -2073,6 +2073,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             }
         }
         Ok(EquityHardStopLossConfig {
+            revised: None,
             enabled: extract_value(cfg, "enabled")?,
             signal_mode,
             red_threshold: extract_value(cfg, "red_threshold")?,

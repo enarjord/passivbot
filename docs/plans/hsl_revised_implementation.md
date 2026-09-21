@@ -357,3 +357,26 @@ observations; normal same-minute EMA replacement still applies.
 This completes snapshot-to-decision composition, not runtime activation. Coherent live
 snapshot capture/revalidation, execution routing, actual simulator/optimizer consumers,
 full revised fake-live scenarios, runtime performance and final rollout docs remain.
+
+
+## Internal simulator execution integration
+
+The Rust simulator now invokes the shared revised evaluator before order construction,
+with separate coin/side or one unified controller. Revised policy is an explicit optional
+internal backtest configuration; the Python parser still constructs legacy configuration
+and every public revised runtime guard remains closed. No user-facing engine is enabled
+by this checkpoint.
+
+Revised non-GREEN scopes discard ordinary orders, and PANIC targets use the minimal
+full-position close API independently of ordinary symbol selection. Scope execution
+policy also governs residual exposure on an entry-disabled side. Flat-fill hooks rebuild
+permission at the execution timestamp before same-bar reentry, with preceding closes
+only. A simulator-global sequence and exact post-fill position anchor prove inclusion
+of same-timestamp fills; the exchange-side uncertainty rule is preserved.
+
+Tests exercise actual simulator run/order/fill methods, all signal scopes, market/limit
+panic policy, partial fills, disabled-side residuals, future-candle isolation, first-bar
+flat pairs, fresh reconstruction of cooldown and bounded never-policy expiry. This is
+execution integration coverage, not full live fake-harness or revised CLI availability.
+Reporting/metrics, Python payload dispatch, optimizer compatibility, performance and
+full offline live integration must pass before opening public runtime guards.

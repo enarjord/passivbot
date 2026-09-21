@@ -1,12 +1,11 @@
 //! Factual simulator observations for the shared revised HSL reconstruction.
-//! No revised trading path is activated by this adapter.
+//! Shared by the staged Rust simulator execution path; public runtime gates stay closed.
 use super::*;
 use crate::hsl_revised_history::{self as history, PositionSide};
 use crate::hsl_revised_prices as prices;
 use crate::hsl_revised_snapshot as snapshot;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[allow(dead_code)] // Runtime consumers land in the next integration step.
 pub(super) struct Inputs {
     pub snapshot: snapshot::Input,
     pub slots: [usize; 2],
@@ -17,13 +16,26 @@ impl Backtest<'_> {
     /// Observe the simulator after all fills in bar `k`. Candle timestamps name
     /// bar opens; valuation is available at the bar end, just as in the live
     /// candle projector. Fill timestamps and simulator execution order are kept.
-    #[allow(dead_code)] // Connected by the subsequent revised runtime dispatch.
+    #[cfg(test)]
     pub(super) fn revised_hsl_inputs(
         &self,
         k: usize,
         mode: snapshot::Mode,
         pside: Option<PositionSide>,
         symbol: Option<&str>,
+    ) -> Result<Inputs, String> {
+        self.revised_hsl_inputs_at(k, mode, pside, symbol, false)
+    }
+
+    /// A scope-flat observation uses only preceding completed candles and the
+    /// just-observed execution. No current bar close is available at its open.
+    pub(super) fn revised_hsl_inputs_at(
+        &self,
+        k: usize,
+        mode: snapshot::Mode,
+        pside: Option<PositionSide>,
+        symbol: Option<&str>,
+        at_flat_boundary: bool,
     ) -> Result<Inputs, String> {
         if self.interval_ms != 60_000 || k >= self.hlcvs.shape()[0] {
             return Err("revised HSL backtest inputs require a valid 1m bar".into());
@@ -56,7 +68,7 @@ impl Backtest<'_> {
                 .and_then(|t| i64::try_from(t).ok())
                 .ok_or_else(|| "backtest HSL timestamp overflow".into())
         };
-        let now = close_time(k)?;
+        let now = close_time(k)? - if at_flat_boundary { 60_000 } else { 0 };
         let start = now
             .checked_sub((days * 86_400_000.0).round() as i64)
             .ok_or("backtest HSL lookback overflow")?;
@@ -89,6 +101,11 @@ impl Backtest<'_> {
             ] {
                 if pside.is_some_and(|s| s != side) {
                     continue;
+                }
+                if at_flat_boundary && position.size != 0.0 {
+                    return Err(
+                        "revised HSL boundary observation requires a flat selected scope".into(),
+                    );
                 }
                 let mut fills = Vec::new();
                 for (offset, fill) in self.fills[fill_start..fill_end].iter().enumerate() {
@@ -140,16 +157,45 @@ impl Backtest<'_> {
                 if position.size != 0.0 && !current_valid {
                     return Err("missing held-position backtest HSL valuation".into());
                 }
-                let latest = self
-                    .coin_valid_range(idx)
-                    .and_then(|(first, last)| {
-                        let last = last.min(k);
-                        (first.max(first_row)..=last)
-                            .rev()
-                            .find(|&j| self.coin_is_valid_at(idx, j))
-                    })
-                    .ok_or("missing backtest HSL valuation history")?;
-                let mark = self.hlcvs_value(latest, idx, CLOSE);
+                let latest = self.coin_valid_range(idx).and_then(|(first, last)| {
+                    let last = if at_flat_boundary {
+                        k.checked_sub(1)?
+                    } else {
+                        k
+                    }
+                    .min(last);
+                    (first.max(first_row)..=last)
+                        .rev()
+                        .find(|&j| self.coin_is_valid_at(idx, j))
+                });
+                if at_flat_boundary && fills.is_empty() && latest.is_none() {
+                    // A freshly observed flat pair without any retained activity
+                    // contributes no risk. Its first candle has not closed yet;
+                    // do not borrow that future quote for another pair's boundary.
+                    if matches!(mode, snapshot::Mode::Coin) {
+                        flat_coin = Some(snapshot::FlatCoin {
+                            symbol: coin.clone(),
+                            pside: side,
+                            position_at: now,
+                            fills_at: now,
+                            history_start: start,
+                        });
+                    }
+                    continue;
+                }
+                let (mark, mark_at) = if let Some(latest) = latest {
+                    (self.hlcvs_value(latest, idx, CLOSE), close_time(latest)?)
+                } else if at_flat_boundary {
+                    let fill = fills
+                        .last()
+                        .ok_or("missing flat-boundary valuation evidence")?;
+                    (
+                        fill.price.ok_or("missing flat-boundary fill price")?,
+                        fill.timestamp,
+                    )
+                } else {
+                    return Err("missing backtest HSL valuation history".into());
+                };
                 if !mark.is_finite() || mark <= 0.0 {
                     return Err("invalid current backtest HSL valuation".into());
                 }
@@ -157,7 +203,7 @@ impl Backtest<'_> {
                 for j in first_row..=k {
                     let end = close_time(j)?;
                     let candle_start = end - 60_000;
-                    if end < start || !self.coin_is_valid_at(idx, j) {
+                    if end < start || end > now || !self.coin_is_valid_at(idx, j) {
                         continue;
                     }
                     candles.push(prices::Candle {
@@ -195,7 +241,7 @@ impl Backtest<'_> {
                         pside: side,
                     },
                     position_at: now,
-                    mark_at: close_time(latest)?,
+                    mark_at,
                     fills_started_at: Some(now),
                     fills_at: Some(now),
                     prices_at: now,
@@ -691,6 +737,308 @@ mod tests {
                 .flat_map(|e| &e.points)
                 .all(|p| p.upnl == 0.0));
             assert!(trace.episodes[0].points.last().unwrap().flatten);
+        }
+    }
+    fn enable_revised(bt: &mut Backtest<'_>, mode: &str, order_type: &str) {
+        use super::super::revised_runtime::{Config, Policy};
+        let policy = Policy {
+            enabled: true,
+            red_threshold: 0.05,
+            ema_span_minutes: 1.0,
+            cooldown_minutes_after_red: 10.0,
+            restart_after_red_policy: "always".into(),
+            panic_close_order_type: order_type.into(),
+        };
+        bt.backtest_params.equity_hard_stop_loss.signal_mode = mode.into();
+        bt.backtest_params.equity_hard_stop_loss.revised = Some(Config {
+            mode: mode.into(),
+            intervention: "panic".into(),
+            sides: [policy.clone(), policy.clone()],
+            portfolio: Some(policy),
+            coins: BTreeMap::new(),
+        });
+    }
+
+    #[test]
+    fn revised_runtime_drives_real_panic_orders_for_all_scopes() {
+        for mode in ["coin", "pside", "unified"] {
+            for order_type in ["market", "limit"] {
+                let mut c = candles(5, 1);
+                for k in 1..5 {
+                    for f in [HIGH, LOW, CLOSE] {
+                        c[[k, 0, f]] = 80.0;
+                    }
+                }
+                let btc = Array1::from_elem(5, 1.0);
+                let mut bt = make(&c, &btc);
+                enable_revised(&mut bt, mode, order_type);
+                fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 100.0);
+                bt.update_hard_stop_state(1).unwrap();
+                assert_eq!(
+                    bt.revised_action(LONG, 0),
+                    crate::hsl_revised_controller::Action::Panic
+                );
+                bt.update_open_orders_all(1).unwrap();
+                assert!(bt.open_orders.long[0].entries.is_empty());
+                let close = &bt.open_orders.long[0].closes[0];
+                assert_eq!(close.order.order_type, OrderType::ClosePanicLong);
+                assert_eq!(close.order.qty, -10.0);
+                assert_eq!(
+                    close.execution_type,
+                    if order_type == "market" {
+                        orchestrator::ExecutionType::Market
+                    } else {
+                        orchestrator::ExecutionType::Limit
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn revised_flat_boundary_cancels_reentry_without_future_candle_close() {
+        for future_close in [10.0, 200.0] {
+            let mut c = candles(4, 1);
+            c[[1, 0, CLOSE]] = future_close;
+            let btc = Array1::from_elem(4, 1.0);
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, "coin", "market");
+            fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 100.0);
+            fill(&mut bt, 1, 0, PositionSide::Long, -10.0, 80.0);
+            assert_eq!(
+                bt.revised_action(LONG, 0),
+                crate::hsl_revised_controller::Action::Halted
+            );
+            let decision = bt
+                .revised_hsl_scopes
+                .iter()
+                .find_map(|s| s.result.decision.as_ref())
+                .unwrap();
+            assert_eq!(decision.flat_at, Some((FIRST + 60_000) as i64));
+            assert_eq!(decision.timestamp, (FIRST + 60_000) as i64);
+            assert!(bt.open_orders.long[0].entries.is_empty());
+        }
+    }
+
+    #[test]
+    fn revised_unified_uses_one_controller_and_explicit_portfolio_execution_policy() {
+        let c = candles(4, 1);
+        let btc = Array1::from_elem(4, 1.0);
+        let mut bt = make(&c, &btc);
+        enable_revised(&mut bt, "unified", "limit");
+        let cfg = bt
+            .backtest_params
+            .equity_hard_stop_loss
+            .revised
+            .as_mut()
+            .unwrap();
+        cfg.sides[LONG].panic_close_order_type = "market".into();
+        cfg.sides[SHORT].panic_close_order_type = "market".into();
+        fill(&mut bt, 0, 0, PositionSide::Short, -10.0, 80.0);
+        bt.trading_enabled.short = false;
+        bt.update_revised_hsl(1).unwrap();
+        assert_eq!(bt.revised_hsl_scopes.len(), 1);
+        assert_eq!(
+            bt.revised_action(SHORT, 0),
+            crate::hsl_revised_controller::Action::Panic
+        );
+        bt.update_open_orders_all(1).unwrap();
+        let close = &bt.open_orders.short[0].closes[0];
+        assert_eq!(close.execution_type, orchestrator::ExecutionType::Limit);
+        bt.check_for_fills(2).unwrap();
+        assert_eq!(bt.positions.short[0].size, 0.0);
+    }
+    #[test]
+    fn revised_full_run_executes_red_before_next_bar_and_keeps_cooldown() {
+        for mode in ["coin", "pside", "unified"] {
+            let mut c = candles(8, 1);
+            for k in 2..8 {
+                for f in [HIGH, LOW, CLOSE] {
+                    c[[k, 0, f]] = 80.0;
+                }
+            }
+            let btc = Array1::from_elem(8, 1.0);
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, mode, "market");
+            bt.bot_params_master.long.total_wallet_exposure_limit = 4.0;
+            bt.bot_params_original[0].long.wallet_exposure_limit = 4.0;
+            bt.bot_params_original[0].long.total_wallet_exposure_limit = 4.0;
+            fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 100.0);
+            let (fills, _) = bt.run().unwrap();
+            let panics: Vec<_> = fills
+                .iter()
+                .filter(|f| f.order_type == OrderType::ClosePanicLong)
+                .collect();
+            assert_eq!(panics.len(), 1, "{mode}");
+            assert_eq!(panics[0].index, 3, "{mode}");
+            assert_eq!(panics[0].fill_qty, -10.0);
+            assert_eq!(bt.positions.long[0].size, 0.0);
+            assert_eq!(
+                bt.revised_action(LONG, 0),
+                crate::hsl_revised_controller::Action::Halted
+            );
+            assert!(bt.open_orders.long[0].entries.is_empty());
+        }
+    }
+
+    #[test]
+    fn revised_cooldown_rebuilds_from_fills_and_expires_without_prior_runtime() {
+        use crate::hsl_revised_controller::Action;
+        let c = candles(1445, 1);
+        let btc = Array1::from_elem(1445, 1.0);
+        for mode in ["coin", "pside", "unified"] {
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, mode, "market");
+            fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 100.0);
+            fill(&mut bt, 1, 0, PositionSide::Long, -10.0, 80.0);
+            for (restart, k, expected) in [
+                ("always", 9, Action::Halted),
+                ("always", 10, Action::Normal),
+                ("never", 10, Action::Halted),
+                ("never", 1442, Action::Normal),
+            ] {
+                let mut fresh = make(&c, &btc);
+                enable_revised(&mut fresh, mode, "market");
+                let cfg = fresh
+                    .backtest_params
+                    .equity_hard_stop_loss
+                    .revised
+                    .as_mut()
+                    .unwrap();
+                for p in &mut cfg.sides {
+                    p.restart_after_red_policy = restart.into();
+                }
+                cfg.portfolio.as_mut().unwrap().restart_after_red_policy = restart.into();
+                fresh.fills = bt.fills.clone();
+                fresh.balance.usd_total_balance = bt.balance.usd_total_balance;
+                fresh.balance.usd_cash_wallet = bt.balance.usd_cash_wallet;
+                assert!(fresh.revised_hsl_scopes.is_empty());
+                fresh.update_revised_hsl(k).unwrap();
+                assert_eq!(
+                    fresh.revised_action(LONG, 0),
+                    expected,
+                    "{mode} {restart} {k}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn revised_partial_close_retains_protection_until_scope_flat() {
+        use crate::hsl_revised_controller::Action;
+        let c = candles(5, 2);
+        let btc = Array1::from_elem(5, 1.0);
+        for mode in ["pside", "unified"] {
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, mode, "market");
+            fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 120.0);
+            fill(&mut bt, 0, 1, PositionSide::Long, 1.0, 200.0);
+            bt.update_revised_hsl(1).unwrap();
+            assert_eq!(bt.revised_action(LONG, 0), Action::Panic);
+            fill(&mut bt, 2, 0, PositionSide::Long, -4.0, 100.0);
+            bt.update_revised_hsl(2).unwrap();
+            let orders = bt.revised_protective_orders(2).unwrap();
+            assert_eq!(orders.len(), 2);
+            assert_eq!(orders.iter().find(|o| o.symbol_idx == 0).unwrap().qty, -6.0);
+            fill(&mut bt, 3, 0, PositionSide::Long, -6.0, 100.0);
+            assert_eq!(bt.revised_action(LONG, 1), Action::Panic);
+            fill(&mut bt, 3, 1, PositionSide::Long, -1.0, 200.0);
+            assert_eq!(bt.revised_action(LONG, 0), Action::Halted);
+            assert_eq!(bt.revised_action(LONG, 1), Action::Halted);
+        }
+    }
+
+    #[test]
+    fn revised_simulator_fill_tie_requires_sequence_and_matching_anchor() {
+        let c = candles(3, 1);
+        let btc = Array1::from_elem(3, 1.0);
+        let mut bt = make(&c, &btc);
+        fill(&mut bt, 0, 0, PositionSide::Long, 1.0, 100.0);
+        fill(&mut bt, 1, 0, PositionSide::Long, -1.0, 80.0);
+        for (global, anchored, eligible) in [
+            (true, true, true),
+            (false, true, false),
+            (true, false, false),
+        ] {
+            let mut inputs = bt
+                .revised_hsl_inputs_at(
+                    1,
+                    snapshot::Mode::Coin,
+                    Some(PositionSide::Long),
+                    Some("C0"),
+                    true,
+                )
+                .unwrap();
+            inputs.snapshot.global_fill_sequence = global;
+            if !anchored {
+                inputs.snapshot.pairs[0].fills_position_anchor = None;
+            }
+            let result = snapshot::prepare(&inputs.snapshot).unwrap();
+            assert_eq!(
+                result.reasons.contains("position_fill_timestamp_tie"),
+                !eligible
+            );
+            assert_eq!(
+                result
+                    .boundaries
+                    .last()
+                    .is_some_and(|b| b.lifecycle_eligible),
+                eligible
+            );
+        }
+    }
+
+    #[test]
+    fn revised_first_bar_flat_uses_execution_without_unrelated_future_quotes() {
+        let c = candles(3, 2);
+        let btc = Array1::from_elem(3, 1.0);
+        let mut bt = make(&c, &btc);
+        enable_revised(&mut bt, "unified", "market");
+        fill(&mut bt, 0, 0, PositionSide::Long, 10.0, 100.0);
+        fill(&mut bt, 0, 0, PositionSide::Long, -10.0, 80.0);
+        assert_eq!(
+            bt.revised_action(LONG, 0),
+            crate::hsl_revised_controller::Action::Halted
+        );
+    }
+    #[test]
+    fn revised_residual_close_gate_does_not_reenable_disabled_side_entries() {
+        let c = candles(3, 1);
+        let btc = Array1::from_elem(3, 1.0);
+        for (side, direction) in [(LONG, 1.0), (SHORT, -1.0)] {
+            let mut bt = make(&c, &btc);
+            enable_revised(&mut bt, "unified", "market");
+            let pside = if side == LONG {
+                PositionSide::Long
+            } else {
+                PositionSide::Short
+            };
+            fill(&mut bt, 0, 0, pside, direction, 100.0);
+            bt.update_revised_hsl(0).unwrap();
+            assert_eq!(
+                bt.revised_action(side, 0),
+                crate::hsl_revised_controller::Action::Normal
+            );
+            let (enabled, orders) = if side == LONG {
+                (&mut bt.trading_enabled.long, &mut bt.open_orders.long[0])
+            } else {
+                (&mut bt.trading_enabled.short, &mut bt.open_orders.short[0])
+            };
+            *enabled = false;
+            orders.entries.push(BacktestOrder {
+                order: Order {
+                    qty: direction,
+                    price: 100.0,
+                    order_type: if side == LONG {
+                        OrderType::EntryInitialNormalLong
+                    } else {
+                        OrderType::EntryInitialNormalShort
+                    },
+                },
+                execution_type: orchestrator::ExecutionType::Market,
+            });
+            bt.check_for_fills(1).unwrap();
+            assert_eq!(bt.fills.len(), 1);
         }
     }
 }
