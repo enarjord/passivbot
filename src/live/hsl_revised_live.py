@@ -72,6 +72,9 @@ def matches(scope, symbol, side):
 
 @dataclass(frozen=True)
 class Wave:
+    captured_ms: int
+    position_observed_ms: int
+    mark_observed_ms: tuple[int, ...]
     decisions: tuple
     unavailable: tuple
     positions: str
@@ -99,7 +102,6 @@ class Owner:
         self.bot = bot
         self.sources = {}
         self.quotes = {}
-        self._diagnostic = None
         self._waves = {}
         self._quote_tasks = {}
         self._quote_started = {}
@@ -122,8 +124,12 @@ class Owner:
             max_current_age_ms=max_age, position_observation=self._position_observation,
             use_observed_fills=True)
         decisions = runtime.evaluate(requests)
-        return Wave(decisions, unavailable, runtime.observe_positions(bot).payload, runtime.observe_open_orders(bot), bot.get_raw_balance(),
+        wave = Wave(now_utc, self._position_observation.observed_ms,
+                    tuple(stamp for request in requests for stamp in request.mark_observed_ms),
+                    decisions, unavailable, runtime.observe_positions(bot).payload,
+                    runtime.observe_open_orders(bot), bot.get_raw_balance(),
                     int(getattr(bot, "_account_invalidation_generation", 0)))
+        return wave
 
     def remember_position(self):
         from utils import utc_ms
@@ -139,16 +145,8 @@ class Owner:
         return now_utc, max_age
 
     def report(self, wave):
-        signature = (tuple((d.scope, d.action, d.reasons) for d in wave.decisions), wave.unavailable)
-        if signature != self._diagnostic:
-            for d in wave.decisions:
-                logging.info("[risk] revised HSL | mode=%s side=%s symbol=%s action=%s estimates=%s",
-                             d.scope.mode, d.scope.pside, d.scope.symbol, d.action,
-                             ",".join(d.reasons) or "none")
-            for item in wave.unavailable:
-                logging.warning("[risk] revised HSL cannot evaluate current inputs | scope=%s reason=%s",
-                                item.scope, item.reason)
-            self._diagnostic = signature
+        from live.hsl_revised_diagnostics import record
+        record(self.bot, wave)
 
     def _account_matches(self, wave, now):
         bot = self.bot
@@ -176,6 +174,8 @@ class Owner:
         wave = self._waves.get(order.get("_hsl_revised_wave"))
         if not isinstance(wave, Wave) or not self._account_matches(wave, int(utc_ms())):
             return False
+        # Capture is side-effect free with respect to diagnostic sinks. Reporting
+        # happens after the protective wave, outside the write freshness budget.
         current = self.capture()
         now = int(utc_ms())
         # A long synchronous reconstruction can consume the remaining freshness
@@ -207,11 +207,12 @@ class Owner:
         for order in (*cancels, *creates):
             order["_hsl_revised_wave"] = token
 
-    async def protect(self):
+    async def protect(self, *, deferred_reports=None):
         """One finite wave over all currently evaluable RED scopes.
 
         Account refresh belongs to the caller. This does not wait for flattening,
         history repair, cooldown, or another scope's close to fill.
+        An outer execution pass may collect reports until its ordinary writes finish.
         """
         bot = self.bot
         symbols = {symbol for symbol, sides in bot.positions.items()
@@ -219,23 +220,30 @@ class Owner:
         symbols.update(symbol for symbol, orders in bot.open_orders.items() if orders)
         quotes = await self.acquire_quotes(symbols)
         wave = self.capture(quotes)
-        self.report(wave)
-        targets, execution_types = {}, {}
-        for symbol in sorted(symbols):
-            for side in ("long", "short"):
-                action, execution_type = wave.permission(symbol, side)
-                if action in {"panic", "halted"}:
-                    targets.setdefault(symbol, set()).add(side)
-                    execution_types[symbol, side] = execution_type
-        if not targets:
-            return False
-        bot._record_market_snapshot_surface(sorted(quotes), quotes)
-        cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
-            target_psides_by_symbol=targets, market_snapshots=quotes,
-            execution_types=execution_types)
-        self.bind(wave, cancels, creates)
-        await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
-        return bool(cancels or creates)
+        try:
+            targets, execution_types = {}, {}
+            for symbol in sorted(symbols):
+                for side in ("long", "short"):
+                    action, execution_type = wave.permission(symbol, side)
+                    if action in {"panic", "halted"}:
+                        targets.setdefault(symbol, set()).add(side)
+                        execution_types[symbol, side] = execution_type
+            if not targets:
+                return False
+            bot._record_market_snapshot_surface(sorted(quotes), quotes)
+            cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
+                target_psides_by_symbol=targets, market_snapshots=quotes,
+                execution_types=execution_types)
+            self.bind(wave, cancels, creates)
+            await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
+            return bool(cancels or creates)
+        finally:
+            # Synchronous projection/logging must not age a wave before its
+            # protective writes. Report even when no targets or orders remain.
+            if deferred_reports is None:
+                self.report(wave)
+            else:
+                deferred_reports.append(wave)
 
     def history_symbols(self):
         bot = self.bot
@@ -477,6 +485,7 @@ class Owner:
                 bot._begin_live_event_cycle(loop_start_ms=started)
                 bot.execution_scheduled = False
                 bot.state_change_detected_by_symbol = set()
+                reports = []
                 try:
                     self.poll_inputs()
                     plan = None
@@ -503,7 +512,7 @@ class Owner:
                     self.schedule_sources()
                     # A pending limit panic never monopolizes the owner. Other
                     # RED scopes and ordinary ready scopes get a pass each wave.
-                    await self.protect()
+                    await self.protect(deferred_reports=reports)
                     if plan is not None:
                         cancels, creates, snapshot = plan
                         bot._current_planning_snapshot = snapshot
@@ -512,6 +521,10 @@ class Owner:
                         ordinary = asyncio.create_task(self._ordinary_plan())
                 except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
                     logging.warning('[risk] revised current I/O unavailable | error_type=%s', type(exc).__name__)
+                finally:
+                    # Neither protective nor ready ordinary writes wait for passive reporting.
+                    for wave in reports:
+                        self.report(wave)
                 bot._last_loop_duration_ms = int(utc_ms()) - started
                 bot._maybe_log_health_summary()
                 await bot._sleep_unless_shutdown(

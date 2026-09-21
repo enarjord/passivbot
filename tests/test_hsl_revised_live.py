@@ -15,7 +15,7 @@ import tools.run_fake_live as runner
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('side', ['long', 'short'])
-@pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write'])
+@pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write', 'slow_projection', 'slow_sink'])
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_path, monkeypatch, mode, path, side):
     import config.hsl_revised as config_hsl
@@ -89,8 +89,40 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                 monkeypatch.setattr(market_data, 'filter_fresh_market_snapshot_creations', original_filter)
             assert boundary_reached
             assert not any(c['method'] == 'create_order' for c in bot.cca.export_request_log())
-        elif path == 'wave':
+        elif path in {'wave', 'slow_projection', 'slow_sink'}:
+            report_calls = []
+            clock_offset = [0]
+            if path.startswith('slow_'):
+                import utils
+                from live import hsl_revised_diagnostics as reporting
+                original_clock = utils.utc_ms
+                monkeypatch.setattr(utils, 'utc_ms', lambda: original_clock() + clock_offset[0])
+                original_report = reporting._row if path == 'slow_projection' else bot._emit_live_event
+                def slow_report(*args, **kwargs):
+                    from live.event_bus import EventTypes
+                    if path == 'slow_sink' and args[0] != EventTypes.HSL_STATUS:
+                        return original_report(*args, **kwargs)
+                    report_calls.append(any(c['method'] == 'create_order' for c in bot.cca.export_request_log()))
+                    clock_offset[0] += 20_000
+                    return original_report(*args, **kwargs)
+                if path == 'slow_projection':
+                    monkeypatch.setattr(reporting, '_row', slow_report)
+                else:
+                    bot._emit_live_event = slow_report
+                bot._hsl_revised_diagnostic_event = None
             assert await instance.protect()
+            if path.startswith('slow_'):
+                assert report_calls and all(report_calls)
+                clock_offset[0] = 0
+            from live.hsl_revised_diagnostics import snapshot
+            from utils import utc_ms
+            diagnostics = snapshot(bot, now_ms=int(utc_ms()))
+            assert diagnostics['engine'] == 'revised'
+            assert diagnostics['signal_mode'] == mode
+            assert diagnostics['counts']['red'] >= 1
+            if mode == 'unified':
+                assert diagnostics['scope_count'] == 1
+                assert diagnostics['scopes'][0]['pside'] is None
         elif path == 'cancel_first':
             # Discovering an external order and later confirming its cancellation
             # invalidate account cohorts. Bounded subsequent polls must finish

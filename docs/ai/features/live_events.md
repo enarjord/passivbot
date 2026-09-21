@@ -434,6 +434,43 @@ published only after identity, size, refresh-generation, and price predicates cl
 The existing warning remains the console/text projection, so the structured event itself
 does not produce a second console line.
 
+## Revised HSL Observations
+
+Staged revised HSL emits `hsl.status` with `engine=revised` and one bounded aggregate per
+qualitative scope/action/availability/estimate change, including stale/current observation recovery. This is passive observation, never a gate
+or retained trading permission. Numeric metrics refresh after each protective execution wave in the
+monitor snapshot even when no new status event is emitted. Sink/projection failure cannot inhibit
+risk evaluation or exchange execution.
+
+Connector admission evaluates current risk without diagnostic projection or synchronous event sinks.
+Decision captures are separate from reporting. A protective wave reports after its order work,
+including when no exit work remains, so synchronous HSL sinks cannot age its inputs before a write.
+Diagnostic expiry uses the actual held-position mark timestamps consumed by evaluated scopes;
+quotes cached for disabled scopes cannot expire another scope's display. The bounded legacy
+aggregate preserves last RED attention, while a stale or failed GREEN observation is labelled
+stale or unavailable instead of advertising current GREEN. Per-scope rows retain the last observed
+native decision alongside explicit freshness.
+
+The revised monitor `hsl` section has `schema_version=1`, `signal_mode`, `observation_status`,
+`captured_at_ms`, `age_ms`, current account availability, complete scope counts and up to 128 scoped
+rows. RED scopes come first, then unavailable and estimated scopes. `omitted_scopes` discloses
+truncation. Status events carry at most three rows; console summaries carry counts. A top-level aggregate tier
+keeps RED visible to existing risk reports and startup previews without inventing an aggregate
+drawdown score for independent scopes. Rows identify
+symbol/position side where applicable, native action, GREEN/RED or diagnostic inactive status,
+raw/EMA/selected drawdown, configured threshold, RED/flat evidence times and approximation reasons.
+There is one portfolio scope in unified mode; side and coin modes retain their native topology.
+Unavailable input is never displayed as GREEN. Removed legacy tiers do not reappear in revised
+payloads; legacy monitor payloads keep their existing shape.
+
+An observation becomes visibly stale when its captured input TTL expires (including the exact
+retained position timestamp used by evaluation), account confirmation is
+pending, or its account generation changes. The last decision remains labeled as an observation;
+monitor reads do not initialize an HSL owner, perform I/O, or reevaluate risk. Diagnostic state is
+replaced after each protective wave and is not persisted as restart authority. A first projection
+failure is explicitly diagnostic-unavailable, and unavailable-scope fallback logs retain warning
+severity when event emission fails or the configured console sink reports a write failure.
+
 ## HSL Replay Timing
 
 For coin-mode `hsl.replay.completed`, `full_elapsed_s` is total replay time;

@@ -19718,7 +19718,6 @@ class Passivbot:
         if hsl_revised_live.selected(self):
             revised = hsl_revised_live.owner(self)
             wave = revised.capture(market_snapshots)
-            revised.report(wave)
             self._hsl_revised_planning_wave = wave
             for side in ("long", "short"):
                 for symbol in symbols:
