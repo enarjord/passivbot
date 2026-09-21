@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Preserve explicit revised-HSL portfolio policies and optimizer bounds when cleaning or exporting
+  configs and recording fitness contracts. Do not restore removed legacy tier fields or invent
+  missing unified/restart choices. Preserve prepared coin membership in single-run CPU optimizer
+  results so unchanged runs can resume. Revised runtime activation remains gated.
+
 - Avoid duplicate revised-HSL snapshot reconstruction when selected prices already have the
   required minute grid. Each evaluation still rebuilds from current facts; sparse and damaged
   histories keep their existing approximation path. Public revised activation remains gated.

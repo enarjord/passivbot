@@ -738,6 +738,10 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
     anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
+    # Prepared dataset membership is result provenance, not user configuration.
+    # Cleaning strips it, but single-run resume compares the exact membership.
+    if "coins" in config.get("backtest", {}):
+        entry["backtest"]["coins"] = deepcopy(config["backtest"]["coins"])
     entry[CONTRACT_KEY] = recorded_evaluation_contract(evaluator_config)
     if anchor_meta is not None:
         entry["optimizer_anchor"] = anchor_meta
