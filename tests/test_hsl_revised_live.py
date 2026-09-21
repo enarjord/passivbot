@@ -1241,3 +1241,40 @@ async def test_failed_fill_refresh_revokes_only_required_consumers_until_repaire
     instance.bind(instance.capture(), (), (fresh,), ordinary=True)
     assert instance.admit(fresh)
     assert instance.admit(protective)
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode):
+    import utils
+    import passivbot_rust as pbr
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    from dataclasses import replace
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot(mode)
+    other = 'PEER/USDT:USDT'
+    bot.positions[other] = {'long': dict(size=2., price=100.)}
+    bot.c_mults[other], bot.qty_steps[other] = 1., .1
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL, other}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._ensure_freshness_ledger().stamp('open_orders', now_ms=NOW-200)
+    owner = hsl_revised_live.owner(bot)
+    wave = owner.capture({**quotes(), other: replace(quotes()[SYMBOL], symbol=other)})
+    order = {'symbol': SYMBOL, 'position_side': 'long'}
+    owner.bind(wave, (), (order,))
+    diagnostic_before = object()
+    bot._hsl_revised_diagnostic_observation = diagnostic_before
+    native = pbr.hsl_revised_evaluate_grids
+    calls = []
+    def evaluate(metadata, grids):
+        calls.append(json.loads(metadata)['snapshot'])
+        return native(metadata, grids)
+    monkeypatch.setattr(pbr, 'hsl_revised_evaluate_grids', evaluate)
+    assert owner.admit(order)
+    assert len(calls) == 1
+    assert bot._hsl_revised_diagnostic_observation is diagnostic_before
+    assert {pair['symbol'] for pair in calls[0]['pairs']} == ({SYMBOL} if mode == 'coin' else {SYMBOL, other})
+    # Scoping risk does not waive complete account-cohort confirmation.
+    bot.positions[other]['long']['size'] += 1
+    assert not owner.admit(order)
+    assert len(calls) == 1

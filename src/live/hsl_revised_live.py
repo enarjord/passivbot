@@ -113,7 +113,7 @@ class Owner:
         self._quote_cursor = 0
         self._position_observation = None
 
-    def capture(self, quotes=None):
+    def capture(self, quotes=None, *, target=None):
         # Factual caches only. The adapter clips every observation again to the
         # current window; neither prior GREEN nor prior RED is an input.
         bot = self.bot
@@ -126,7 +126,7 @@ class Owner:
                      for side in ("long", "short")},
             now_ms=int(bot.get_exchange_time()), utc_now_ms=now_utc,
             max_current_age_ms=max_age, position_observation=self._position_observation,
-            use_observed_fills=True)
+            use_observed_fills=True, target=target)
         decisions = runtime.evaluate(requests)
         wave = Wave(now_utc, self._position_observation.observed_ms,
                     tuple(stamp for request in requests for stamp in request.mark_observed_ms),
@@ -180,7 +180,7 @@ class Owner:
             return False
         # Capture is side-effect free with respect to diagnostic sinks. Reporting
         # happens after the protective wave, outside the write freshness budget.
-        current = self.capture()
+        current = self.capture(target=(order["symbol"], order["position_side"]))
         now = int(utc_ms())
         # A long synchronous reconstruction can consume the remaining freshness
         # budget even without an await. Recheck at the actual write boundary.
