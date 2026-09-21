@@ -3460,7 +3460,7 @@ class Passivbot:
             # Minimal trading-ready warmup first; broad approved-coin catch-up runs in background.
             boot_stage = "warmup_trading_ready_candles"
             if hsl_revised_live.selected(self):
-                await hsl_revised_live.owner(self).during_preparation(self.warmup_trading_ready_candles())
+                await hsl_revised_live.owner(self).during_preparation(hsl_revised_live.owner(self).warmup())
             else:
                 try:
                     await self.warmup_trading_ready_candles()

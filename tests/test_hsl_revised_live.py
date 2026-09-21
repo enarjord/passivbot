@@ -593,7 +593,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
-@pytest.mark.parametrize('stage', ['warmup_trading_ready_candles', '_exchange_config_write_ready', 'update_exchange_config'])
+@pytest.mark.parametrize('stage', ['warmup_trading_ready_candles', '_exchange_config_write_ready', 'update_exchange_config', 'warmup_transient_failure'])
 async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, monkeypatch, mode, stage):
     import asyncio
     import config.hsl_revised as config_hsl
@@ -638,6 +638,10 @@ async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, 
             # Retain the harness's start_bot return boundary; otherwise normal
             # startup would enter the perpetual production execution loop.
             bot.debug_mode = True
+        # A transient failure after protection must still let startup continue.
+        if stage == 'warmup_transient_failure':
+            from ccxt.base.errors import NetworkError
+            raise NetworkError('offline simulated candle outage')
         # The dependency is now released; ordinary warmup/configuration behavior
         # has separate coverage. This dependency only controls completion time.
         return True
@@ -649,7 +653,8 @@ async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, 
         return {'protected_during_startup': True}
 
     from exchanges.fake import FakeBot
-    monkeypatch.setattr(FakeBot, stage, stalled_warmup)
+    monkeypatch.setattr(FakeBot, 'warmup_trading_ready_candles' if stage == 'warmup_transient_failure' else stage,
+                        stalled_warmup)
     monkeypatch.setattr(runner, '_run_fake_cycle', verify)
     try:
         args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
@@ -891,11 +896,12 @@ async def test_deferred_cancellation_has_no_submission_provenance(monkeypatch, a
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stage', ['universe', 'market', 'reconcile'])
-@pytest.mark.parametrize('change', ['position', 'balance', 'order', 'unchanged_confirmation'])
+@pytest.mark.parametrize('change', ['position', 'balance', 'order', 'fill_pnl', 'fill_fee', 'unchanged_confirmation'])
 async def test_pending_planner_requires_unchanged_account_facts(stage, change):
     import asyncio
     from test_hsl_revised_runtime import bot as make_bot, NOW, SYMBOL
     bot = make_bot()
+    bot._staged_planner_required_surfaces = lambda **kwargs: {'fills'}
     instance = hsl_revised_live.owner(bot)
     entered, release = asyncio.Event(), asyncio.Event()
     reached = []
@@ -924,6 +930,8 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
         bot.get_raw_balance = lambda: 900.
     elif change == 'order':
         bot.open_orders[SYMBOL] = [dict(id='expected-own-order', qty=1., price=100.)]
+    elif change.startswith('fill_'):
+        ledger.stamp('fills', signature=((change, -10.),), now_ms=NOW+1)
     else:
         # Harmless confirming reads and planner flat padding must not starve a
         # slow, otherwise coherent plan; only changed account facts invalidate it.
@@ -965,3 +973,181 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
     instance._ordinary_plan = plan
     bot.execute_order_plan_to_exchange = write
     await asyncio.wait_for(instance.run(), 1.)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('blocked_stage', ['fetch', 'commit'])
+async def test_revised_account_refresh_serializes_startup_and_protection(blocked_stage):
+    import asyncio
+    from types import SimpleNamespace
+    from live import state_refresh
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls, commits = [], []
+    async def fetch(plan):
+        calls.append(len(calls) + 1)
+        number = calls[-1]
+        if number == 1 and blocked_stage == 'fetch':
+            entered.set()
+            await release.wait()
+        return dict(balance=1000., positions=[number], open_orders=[number])
+    async def apply_orders(rows, **kwargs):
+        if rows == [1] and blocked_stage == 'commit':
+            entered.set()
+            await release.wait()
+        return True
+    bot = SimpleNamespace(config={'live': {'hsl_engine': 'revised'}}, stop_signal_received=False,
+        positions={}, _begin_authoritative_refresh_epoch=lambda: None,
+        _fetch_authoritative_state_staged_snapshot=fetch,
+        _prepare_balance_snapshot=lambda balance: {'balance': balance},
+        _apply_open_orders_snapshot=apply_orders,
+        _apply_positions_snapshot=lambda rows: (commits.append(rows[0]), rows),
+        _commit_balance_snapshot=lambda snapshot: None,
+        _record_authoritative_surface=lambda *args: None,
+        get_hysteresis_snapped_balance=lambda: 1000., _positions_signature=tuple,
+        _update_entry_cooldown_position_delta_guard=lambda *args, **kwargs: None,
+        get_exchange_time=lambda: 1000, _finalize_authoritative_refresh_consistency=lambda plan: None)
+    first = asyncio.create_task(state_refresh.refresh_authoritative_state(bot))
+    await asyncio.wait_for(entered.wait(), 1.)
+    second = asyncio.create_task(state_refresh.refresh_protective_authoritative_state(bot))
+    await asyncio.sleep(0)
+    assert calls == [1]
+    # A writer must not admit against a partly committed or still-pending cohort.
+    assert not hsl_revised_live.owner(bot)._account_matches(None, 1000)
+    release.set()
+    assert await first and await second
+    assert calls == commits == [1, 2]
+    assert not hsl_revised_live.owner(bot)._refresh_lock.locked()
+
+
+@pytest.mark.parametrize('ordinary,required', [(True, True), (True, False), (False, True)])
+@pytest.mark.parametrize('change', ['pnl', 'fee', 'confirmation', 'pending'])
+def test_fill_enrichment_rechecks_only_required_ordinary_receipts(monkeypatch, ordinary, required, change):
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    import utils
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot()
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._staged_planner_required_surfaces = lambda **kwargs: {'fills'} if required else set()
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    ledger.stamp('open_orders', now_ms=NOW-200)
+    original = (('execution', -1., -.1),)
+    ledger.stamp('fills', signature=original, now_ms=NOW-200)
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes())
+    order = dict(symbol=SYMBOL, position_side='long')
+    instance.bind(wave, (), (order,), ordinary=ordinary)
+    assert instance.admit(order)
+    if change == 'pending':
+        bot._authoritative_pending_confirmations = {'fills': ledger.epoch+1}
+    else:
+        signature = original if change == 'confirmation' else (('execution', -2. if change == 'pnl' else -1., -.2),)
+        ledger.begin_epoch()
+        ledger.stamp('fills', signature=signature, now_ms=NOW)
+    assert instance.admit(order) == (change == 'confirmation' or not (ordinary and required))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['network', 'cache', 'candle', 'programmer'])
+async def test_revised_startup_warmup_failure_policy(failure, caplog):
+    from types import SimpleNamespace
+    from ccxt.base.errors import NetworkError
+    from candlestick_manager import OhlcvFetchError
+    errors = dict(network=NetworkError, cache=OSError, candle=OhlcvFetchError, programmer=ValueError)
+    async def warmup():
+        raise errors[failure]('test failure')
+    instance = hsl_revised_live.Owner(SimpleNamespace(warmup_trading_ready_candles=warmup))
+    if failure == 'programmer':
+        with pytest.raises(ValueError):
+            await instance.warmup()
+    else:
+        import logging
+        with caplog.at_level(logging.INFO):
+            await instance.warmup()
+        assert 'trading-ready candle warmup skipped' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stalled_startup_retries_completed_sources_with_bounded_cadence():
+    import asyncio
+    from types import SimpleNamespace
+    release = asyncio.Event()
+    async def refresh(**kwargs):
+        return True
+    bot = SimpleNamespace(stop_signal_received=False, refresh_protective_authoritative_state=refresh, cm=object())
+    instance = hsl_revised_live.Owner(bot)
+    instance.remember_position = lambda: None
+    instance.schedule_history = lambda: None
+    reads = []
+    async def read_sources():
+        reads.append(True)
+        # A transient source failure is a completed factual result, not an
+        # exception: the real reader records it and the next acquisition repairs.
+        instance.sources = {'test': 'unavailable' if len(reads) == 1 else 'recovered'}
+    instance._read_sources = read_sources
+    waves = []
+    async def protect():
+        waves.append(True)
+        if len(waves) == 2:
+            assert reads == [True]
+            assert instance.sources == {'test': 'unavailable'}
+            # The second startup pass respected the retry deadline. Advance only
+            # that deadline, preserving the real event loop clock and task ownership.
+            instance._next_sources = 0.
+        elif len(waves) == 4:
+            assert len(reads) == 2
+            assert instance.sources == {'test': 'recovered'}
+            release.set()
+    instance.protect = protect
+    await asyncio.wait_for(instance.during_preparation(release.wait()), 6.)
+    instance.cancel_inputs()
+
+
+@pytest.mark.asyncio
+async def test_source_retry_does_not_replace_resistant_task_or_hide_late_failure():
+    import asyncio
+    from types import SimpleNamespace
+    instance = hsl_revised_live.Owner(SimpleNamespace(cm=object()))
+    entered, release = asyncio.Event(), asyncio.Event()
+    reads = []
+    async def read_sources():
+        reads.append(True)
+        entered.set()
+        await release.wait()
+        raise ValueError('malformed producer')
+    instance._read_sources = read_sources
+    instance.schedule_sources()
+    original = instance._source_task
+    await entered.wait()
+    instance._next_sources = 0.
+    instance.schedule_sources()
+    assert instance._source_task is original and reads == [True]
+    release.set()
+    await asyncio.wait((original,))
+    # Even before the next retry deadline, a completed programming failure must
+    # be retrieved and propagated; neither retry nor the clock may hide it.
+    instance._next_sources = float('inf')
+    with pytest.raises(ValueError, match='malformed producer'):
+        instance.schedule_sources()
+    assert instance._source_task is original
+
+
+@pytest.mark.asyncio
+async def test_failed_account_refresh_releases_revised_transaction(monkeypatch):
+    from types import SimpleNamespace
+    from live import state_refresh
+    from ccxt.base.errors import NetworkError
+    bot = SimpleNamespace(config={'live': {'hsl_engine': 'revised'}})
+    calls = []
+    async def refresh(bot, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise NetworkError('offline simulated account outage')
+        return True
+    monkeypatch.setattr(state_refresh, '_refresh_protective_authoritative_state', refresh)
+    with pytest.raises(NetworkError):
+        await state_refresh.refresh_protective_authoritative_state(bot)
+    assert not hsl_revised_live.owner(bot)._refresh_lock.locked()
+    assert await state_refresh.refresh_protective_authoritative_state(bot)

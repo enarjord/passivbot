@@ -59,6 +59,16 @@ async def refresh_authoritative_state(bot) -> bool:
 
 async def refresh_protective_authoritative_state(bot, *, require_balance: bool = True) -> bool:
     """Refresh only account state required for protective cancels/reduce-only closes."""
+    from live import hsl_revised_live
+    if hsl_revised_live.selected(bot):
+        # Startup, maintenance and the execution owner share the entire read /
+        # commit transaction. No older response may overwrite a newer cohort.
+        async with hsl_revised_live.owner(bot)._refresh_lock:
+            return await _refresh_protective_authoritative_state(bot, require_balance=require_balance)
+    return await _refresh_protective_authoritative_state(bot, require_balance=require_balance)
+
+
+async def _refresh_protective_authoritative_state(bot, *, require_balance: bool) -> bool:
     if bot.stop_signal_received:
         return False
     bot._begin_authoritative_refresh_epoch()

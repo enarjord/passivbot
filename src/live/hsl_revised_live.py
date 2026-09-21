@@ -4,7 +4,7 @@ The public runtime guard stays closed while this owner is integrated. Nothing in
 this module persists a permission: a wave carries an immutable observation and
 must be admitted again from current facts immediately before a connector write.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import wraps
 import logging
 from uuid import uuid4
@@ -78,6 +78,7 @@ class Wave:
     open_orders: tuple
     balance: float
     generation: int
+    required_fills: tuple | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -92,6 +93,8 @@ class Owner:
     def __init__(self, bot):
         import asyncio
         self._write_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
+        self._next_sources = 0.
         self._running = False
         self.bot = bot
         self.sources = {}
@@ -149,6 +152,10 @@ class Owner:
 
     def _account_matches(self, wave, now):
         bot = self.bot
+        if self._refresh_lock.locked():
+            return False
+        if wave.required_fills is not None and wave.required_fills != self.required_fill_facts():
+            return False
         ledger = bot._ensure_freshness_ledger()
         pending = getattr(bot, '_authoritative_pending_confirmations', {})
         for surface in ('balance', 'positions', 'open_orders'):
@@ -189,7 +196,9 @@ class Owner:
         after = current.permission(order["symbol"], order["position_side"])
         return after[0] != "unavailable" and before == after
 
-    def bind(self, wave, cancels, creates):
+    def bind(self, wave, cancels, creates, *, ordinary=False):
+        if ordinary:
+            wave = replace(wave, required_fills=self.required_fill_facts())
         # A fresh owner must not recycle an old order's receipt identifier.
         token = uuid4().hex
         self._waves[token] = wave
@@ -330,11 +339,16 @@ class Owner:
     def schedule_sources(self):
         import asyncio
         from live.hsl_revised_candles import CandleSourceReader
+        from time import monotonic
         task = getattr(self, '_source_task', None)
         if task is not None:
             if not task.done():
                 return
             task.result()
+        now = monotonic()
+        if now < self._next_sources:
+            return
+        self._next_sources = now + 60.
         if not hasattr(self, '_reader'):
             self._reader = CandleSourceReader(self.bot.cm)
         self._source_task = asyncio.create_task(self._read_sources())
@@ -352,9 +366,18 @@ class Owner:
             self.sources[symbol] = await self._reader.acquire(
                 symbol, start=start, end=now, timeout_seconds=15., allow_remote_fetch=True)
 
+    def required_fill_facts(self):
+        bot = self.bot
+        if 'fills' not in bot._staged_planner_required_surfaces(include_market_snapshot=False):
+            return None
+        state = bot._ensure_freshness_ledger().surfaces['fills']
+        minimum = max(1, int(getattr(bot, '_authoritative_pending_confirmations', {}).get('fills', 0)))
+        return (state.signature, state.epoch >= minimum)
+
     def account_facts(self):
         bot = self.bot
-        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_raw_balance())
+        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_raw_balance(),
+                self.required_fill_facts())
 
     @staticmethod
     def same_account_facts(before, after):
@@ -392,6 +415,14 @@ class Owner:
         if reader is not None:
             reader.cancel_pending()
 
+    async def warmup(self):
+        from ccxt.base.errors import NetworkError
+        from candlestick_manager import OhlcvFetchError
+        try:
+            await self.bot.warmup_trading_ready_candles()
+        except (NetworkError, OSError, OhlcvFetchError) as exc:
+            logging.info('[boot] trading-ready candle warmup skipped | error_type=%s', type(exc).__name__)
+
     async def during_preparation(self, operation):
         """Keep protection scheduled during slow startup preparation."""
         import asyncio
@@ -409,8 +440,7 @@ class Owner:
                     if await self.bot.refresh_protective_authoritative_state(require_balance=True):
                         self.remember_position()
                         self.schedule_history()
-                        if getattr(self, '_source_task', None) is None:
-                            self.schedule_sources()
+                        self.schedule_sources()
                         await self.protect()
                 except (NetworkError, AuthoritativeSurfaceUnavailable, MarketSnapshotUnavailable) as exc:
                     logging.warning('[risk] revised startup current I/O unavailable | error_type=%s', type(exc).__name__)
@@ -434,7 +464,7 @@ class Owner:
             raise RuntimeError("revised HSL execution owner is already running")
         self._running = True
         ordinary = None
-        next_history = next_sources = 0.
+        next_history = 0.
         try:
             while not bot.stop_signal_received:
                 started = int(utc_ms())
@@ -464,9 +494,7 @@ class Owner:
                     if now >= next_history:
                         self.schedule_history()
                         next_history = now + 5.
-                    if now >= next_sources:
-                        self.schedule_sources()
-                        next_sources = now + 60.
+                    self.schedule_sources()
                     # A pending limit panic never monopolizes the owner. Other
                     # RED scopes and ordinary ready scopes get a pass each wave.
                     await self.protect()

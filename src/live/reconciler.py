@@ -974,7 +974,7 @@ async def calc_orders_to_cancel_and_create(bot):
         wave = bot._hsl_revised_planning_wave
         snapshot = bot._current_planning_snapshot
         cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
-        hsl_revised_live.owner(bot).bind(wave, cancels, creates)
+        hsl_revised_live.owner(bot).bind(wave, cancels, creates, ordinary=True)
         bot._current_planning_snapshot = snapshot
         return cancels, creates
     return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
