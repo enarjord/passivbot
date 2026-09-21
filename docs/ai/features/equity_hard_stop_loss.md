@@ -491,3 +491,13 @@ samples never fall back to account-equity reconstruction or legacy tier formulas
 decision is serialized as a null action, never GREEN permission; entirely inactive scopes have no
 signal plot, and inactive samples leave gaps in otherwise active traces. These consumers
 are observational and do not open revised public runtime guards.
+
+### Revised configuration export
+
+Config cleaning and artifact export use the selected engine's schema. Revised side policies
+exclude removed legacy fields; an explicitly supplied `bot.hsl` portfolio block and
+`optimize.bounds.hsl` survive export. Export must not create an absent portfolio block or an
+explicit restart choice. Saved optimizer contracts retain fixed HSL policy and exclude numeric
+values owned by the candidate vector, including portfolio bounds. Runtime activation gates are
+independent of this serialization contract. CPU result writers separately preserve prepared coin
+membership as resume provenance for single runs; suite results retain scenario ownership instead.

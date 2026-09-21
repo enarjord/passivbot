@@ -138,21 +138,28 @@ def test_changed_contract_blocks_checkpoint_fitness_reuse(tmp_path):
 
 
 @pytest.mark.parametrize("backend", ["deap", "pymoo"])
+@pytest.mark.parametrize("mode", ["legacy", "coin", "pside", "unified"])
+@pytest.mark.parametrize("suite", [False, True])
 def test_result_writers_persist_contract_before_candidate_projection(
-    backend, monkeypatch
+    backend, mode, suite, monkeypatch
 ):
     from types import SimpleNamespace
     import optimize
     from optimization.callback import build_pymoo_record_entry
 
     config = _config()
+    if mode != "legacy":
+        from config.hsl_revised import generated_template
+        config = generated_template(config, mode)
+    config["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
+    metrics = {"suite_metrics": {"scenario": {}}} if suite else {}
     candidate = deepcopy(config)
     candidate["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 37.0
     build = lambda *args, **kwargs: deepcopy(candidate)
     if backend == "pymoo":
         entry = build_pymoo_record_entry(
             vector=[37.0],
-            metrics={},
+            metrics=metrics,
             template=config,
             build_config_fn=build,
             overrides_fn=None,
@@ -161,7 +168,7 @@ def test_result_writers_persist_contract_before_candidate_projection(
         monkeypatch.setattr(optimize, "individual_to_config", build)
         entries = []
         optimize._record_individual_result(
-            SimpleNamespace(evaluation_metrics={}),
+            SimpleNamespace(evaluation_metrics=metrics),
             config,
             [],
             SimpleNamespace(record=entries.append),
@@ -169,6 +176,12 @@ def test_result_writers_persist_contract_before_candidate_projection(
         entry = entries[0]
     assert entry[CONTRACT_KEY] == build_evaluation_contract(config)
     assert optimize._resume_config_mismatches(entry, config) == []
+    if suite:
+        assert "coins" not in entry["backtest"]
+    else:
+        assert entry["backtest"]["coins"] == config["backtest"]["coins"]
+        config["backtest"]["coins"]["binance"].remove("ETH")
+        assert any("backtest.coins" in diff for diff in optimize._resume_config_mismatches(entry, config))
 
 
 def test_added_fixed_backtest_settings_do_not_evade_legacy_comparison():

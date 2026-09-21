@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Sequence
 
 import numpy as np
@@ -29,6 +30,10 @@ def build_pymoo_record_entry(
     )
     anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
+    # Prepared dataset membership is result provenance, not user configuration.
+    # Cleaning strips it, but single-run resume compares the exact membership.
+    if "coins" in config.get("backtest", {}):
+        entry["backtest"]["coins"] = deepcopy(config["backtest"]["coins"])
     entry[CONTRACT_KEY] = recorded_evaluation_contract(template)
     if anchor_meta is not None:
         entry["optimizer_anchor"] = anchor_meta

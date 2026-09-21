@@ -821,8 +821,27 @@ def clean_config(config: dict) -> dict:
     Return a sanitized config aligned with the template structure, stripped of helper keys,
     with dictionaries sorted recursively.
     """
-    template = get_template_config()
-    cleaned = _clean_with_template(template, config or {})
+    from config.hsl_revised import FIELDS, engine, normalization_template
+
+    source = config or {}
+    template = normalization_template(get_template_config(), source)
+    if engine(source) == "revised" and "hsl" in source.get("bot", {}):
+        portfolio = source["bot"]["hsl"]
+        if not isinstance(portfolio, dict):
+            raise TypeError("bot.hsl must be a mapping")
+        # Preserve only explicitly supplied portfolio fields. Cleaning/export is
+        # not authorization to hydrate a missing unified policy or restart choice.
+        template["bot"]["hsl"] = {key: None for key in FIELDS if key in portfolio}
+    if engine(source) == "revised" and "hsl" in source.get("optimize", {}).get("bounds", {}):
+        from config.optimize_bounds import SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY
+
+        bounds = source["optimize"]["bounds"]["hsl"]
+        if not isinstance(bounds, dict):
+            raise TypeError("optimize.bounds.hsl must be a mapping")
+        template["optimize"]["bounds"]["hsl"] = {
+            key: None for key in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"] if key in bounds
+        }
+    cleaned = _clean_with_template(template, source)
     prune_inactive_strategy_subtrees(cleaned)
     prune_inactive_optimize_strategy_bounds(cleaned)
     return sort_dict_keys(cleaned)
