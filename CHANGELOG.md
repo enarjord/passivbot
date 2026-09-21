@@ -9,6 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Enable the opt-in revised HSL engine for backtests and CPU optimization in coin, pside and
   unified modes, including scenario evaluation and checkpoint resume. Legacy remains the default;
   revised live startup and GPU optimization remain explicitly guarded.
+- Reduce revised HSL live snapshot overhead by retaining immutable projected minute prices in
+  Rust across capture and evaluation, with unchanged reconstruction and freshness requirements.
 
 - Keep legacy coin-HSL replay scoped to each pair's required episode. A longer history window
   for another side or coin no longer replays an expired flat episode's loss and retriggers RED

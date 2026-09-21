@@ -213,6 +213,26 @@ type CandleRow = (
     Option<i64>,
 );
 type PriceGrid = (BTreeMap<String, f64>, Option<(f64, i64)>, Vec<String>);
+type NativeProjection = (RevisedHslPriceGrid, Option<(f64, i64)>, Vec<String>);
+
+/// Immutable factual input, never a retained trading permission. Only the shared
+/// source projection can construct it; Python exports are detached copies.
+#[pyclass(module = "passivbot_rust", frozen)]
+pub struct RevisedHslPriceGrid {
+    pub(crate) start: i64,
+    pub(crate) end: i64,
+    pub(crate) prices: BTreeMap<i64, f64>,
+}
+
+#[pymethods]
+impl RevisedHslPriceGrid {
+    pub fn values(&self) -> BTreeMap<String, f64> {
+        self.prices
+            .iter()
+            .map(|(t, p)| (t.to_string(), *p))
+            .collect()
+    }
+}
 
 #[pyfunction]
 pub fn hsl_revised_price_grid(
@@ -220,6 +240,16 @@ pub fn hsl_revised_price_grid(
     end: i64,
     candles: Vec<CandleRow>,
 ) -> PyResult<PriceGrid> {
+    let (grid, last, reasons) = hsl_revised_native_price_grid(start, end, candles)?;
+    Ok((grid.values(), last, reasons))
+}
+
+#[pyfunction]
+pub fn hsl_revised_native_price_grid(
+    start: i64,
+    end: i64,
+    candles: Vec<CandleRow>,
+) -> PyResult<NativeProjection> {
     let input = Input {
         start,
         end,
@@ -241,11 +271,15 @@ pub fn hsl_revised_price_grid(
     let result = minute_prices(&input).map_err(PyValueError::new_err)?;
     let last = result.rows.last().map(|row| (row.close, row.source_end));
     Ok((
-        result
-            .rows
-            .into_iter()
-            .map(|row| (row.timestamp.to_string(), row.close))
-            .collect(),
+        RevisedHslPriceGrid {
+            start,
+            end,
+            prices: result
+                .rows
+                .into_iter()
+                .map(|row| (row.timestamp, row.close))
+                .collect(),
+        },
         last,
         result.reasons.into_iter().collect(),
     ))
