@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add immutable factual fill and candle transport for the experimental revised HSL, preserving native contract quantities, signed fees and historical uncertainty without changing the active trading path.
+
 - Add the startup-only `live.hsl_engine` selector, defaulting to legacy, and explicit
   revised-HSL configuration migration with portfolio optimizer paths. Revised runtime
   modes remain unavailable and reject startup until their integration is complete.

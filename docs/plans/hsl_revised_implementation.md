@@ -192,3 +192,32 @@ by budget plus loss. It does not round the loss away by subtracting two absolute
 equities. The one actual observation seeds raw drawdown and EMA equally, including
 when the loss is smaller than a budget ULP. Signal settings are validated even for
 an inactive zero-slot coin scope; inactivity only removes the budget division.
+
+## Factual history transport
+
+`live.hsl_revised_inputs` copies a manager's current canonical fill batch and raw
+candle-resolution arrays into immutable Rust input records. It does not consume
+manager-derived position size/basis, infer ordering from IDs, merge successive
+snapshots, synthesize a fill, clip history, resample prices or decide risk.
+The manager's canonical batch is replaced on each capture; its resolved rows use
+revision zero within that batch. Execution sequence remains unknown until a
+producer supplies an explicit supported sequence contract.
+
+Native contract quantities remain separate from contract multipliers. Missing or
+mismatched normalized multipliers make only the historical quantity unavailable.
+The adapter consumes the manager's existing canonical contract, including its
+optional defaults for supplied PnL completeness and native contract units. It does
+not reinterpret omitted raw optional metadata as corrupt canonical observations
+or add raw-presence certificates to otherwise usable history. Current market
+multipliers remain independently required and must match the normalized units.
+Pending PnL placeholders stay missing; usable current-contract estimates and signed
+fees survive with diagnostics. Unknown accounting contracts cannot supply gross or
+fee amounts. Unattributed/undated records are disclosed rather than assigned to an
+invented pair or time. Output contains only needed scalar observations, not raw
+exchange payloads, runtime provenance or mutable manager references.
+
+Candle inputs use the manager's `ts/o/h/l/c` fields and their actual resolution and
+capture time. Rust retains ownership of completeness, causal clipping, conflicts,
+resampling and in-window carrying. These are transport helpers; no runtime caller
+is activated yet. Offline tests include the real fill manager over the fake exchange,
+contract quantities, fees, both sides, partial closes and cache-free reconstruction.
