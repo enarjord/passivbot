@@ -331,6 +331,11 @@ impl Report {
             if let (Some(start), Some(end)) = (scope.halt_started, self.timestamp) {
                 stats.durations.push((end - start).max(0) as f64 / 60_000.0);
             }
+            if let (Some(start), Some(end)) = (scope.exit_started, self.timestamp) {
+                stats
+                    .flatten_minutes
+                    .push((end - start).max(0) as f64 / 60_000.0);
+            }
             if let Some(equity) = scope.panic_equity {
                 stats.panic_loss_ratios.push(scope.panic_loss / equity);
             }
@@ -620,6 +625,10 @@ mod tests {
         );
         report.panic_fill(key, -25.0, 1000.0);
         report.panic_fill(key, 10.0, 900.0);
+        report.record_bar_signals(120_000, [0.1, 0.1, 0.0]);
+        for _ in 0..2 {
+            assert_eq!(report.metrics(1000.0, 2.0).flatten_time_minutes_mean, 1.0);
+        }
         report.observe(
             key,
             180_000,
@@ -655,7 +664,7 @@ mod tests {
             assert!((m.time_in_red_pct - 5.0 / 7.0).abs() < 1e-12);
             assert_eq!(m.duration_minutes_mean, 2.5);
             assert_eq!(m.duration_minutes_max, 4.0);
-            assert_eq!(m.flatten_time_minutes_mean, 2.0);
+            assert_eq!(m.flatten_time_minutes_mean, 1.5); // Completed two minutes + open one minute.
             assert_eq!(m.trigger_drawdown_mean, 0.1);
             assert_eq!(m.panic_close_loss_sum, 65.0);
             assert_eq!(m.panic_close_loss_max, 40.0);

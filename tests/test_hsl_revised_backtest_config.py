@@ -285,8 +285,14 @@ def test_dataset_subset_preserves_only_selected_coin_policies():
     assert analysis["hard_stop_triggers"] > 0
 
 
-def test_liquidation_keeps_strategy_observations_aligned_with_equities():
-    args = payload()
+@pytest.mark.parametrize("btc_cap", [0.0, 0.5])
+def test_liquidation_keeps_strategy_observations_aligned_with_equities(btc_cap):
+    args = list(payload())
+    args[-1]["btc_collateral_cap"] = btc_cap
+    args[1] = np.full(len(args[0]), 50000.)
+    args[1][70:] = 25000.
+    # Gap through the floor rather than landing exactly on it.
+    args[0][70:] *= np.array([.5, .5, .5, 1.])
     for policy in args[-1]["equity_hard_stop_loss"]["coins"]["AAA"]:
         policy["enabled"] = False
     args[-1]["liquidation_threshold"] = .99
@@ -296,3 +302,13 @@ def test_liquidation_keeps_strategy_observations_aligned_with_equities():
     assert result[1].shape[1] == 4
     assert np.isfinite(result[1][:, 3]).all()
     assert result[2]["drawdown_worst_strategy_eq"] > 0
+    timestamp, account_equity, _, strategy_equity = result[1][-1]
+    fills = [row for row in result[0] if row[1] <= timestamp]
+    assert fills
+    k = int((timestamp - args[-1]["first_timestamp_ms"]) / 60000)
+    realized = sum(float(row[3]) + float(row[4]) for row in fills)
+    size, basis = float(fills[-1][11]), float(fills[-1][12])
+    expected = 1000. + realized + size * (args[0][k, 0, 2] - basis)
+    assert account_equity == pytest.approx(990.)
+    assert strategy_equity == pytest.approx(expected, abs=1e-9)
+    assert strategy_equity != pytest.approx(account_equity)

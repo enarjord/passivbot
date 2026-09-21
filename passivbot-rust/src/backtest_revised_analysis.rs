@@ -3,19 +3,22 @@ use super::*;
 
 impl Backtest<'_> {
     pub(super) fn record_revised_analysis(&mut self, k: usize) {
-        let Some(&equity) = self.equities.usd_total_equity.last() else {
-            return;
-        };
         let Some(&timestamp) = self.equities.timestamps_ms.last() else {
             return;
         };
-        let upnl = equity - self.balance.usd_total_balance;
+        // Account equity may have been clamped to the liquidation floor.
+        // Strategy performance retains the actual marked exposure and net fills.
+        let side_upnl = [
+            self.unrealized_pnl_pside(LONG, k),
+            self.unrealized_pnl_pside(SHORT, k),
+        ];
+        let upnl = side_upnl[LONG] + side_upnl[SHORT];
         self.strategy_equity_series
             .push(self.backtest_params.starting_balance + self.pnl_cumsum_running_net + upnl);
         for side in [LONG, SHORT] {
             let value = self.backtest_params.starting_balance
                 + self.pnl_cumsum_running_net_pside[side]
-                + self.unrealized_pnl_pside(side, k);
+                + side_upnl[side];
             self.strategy_equity_series_pside[side].push(value);
             self.strategy_equity_timestamps_ms_pside[side].push(timestamp);
         }
