@@ -109,7 +109,7 @@ class Owner:
         self._quote_cursor = 0
         self._position_observation = None
 
-    def capture(self, quotes=None):
+    def capture(self, quotes=None, *, report=True):
         # Factual caches only. The adapter clips every observation again to the
         # current window; neither prior GREEN nor prior RED is an input.
         bot = self.bot
@@ -129,7 +129,8 @@ class Owner:
                     decisions, unavailable, runtime.observe_positions(bot).payload,
                     runtime.observe_open_orders(bot), bot.get_raw_balance(),
                     int(getattr(bot, "_account_invalidation_generation", 0)))
-        self.report(wave)
+        if report:
+            self.report(wave)
         return wave
 
     def remember_position(self):
@@ -175,7 +176,9 @@ class Owner:
         wave = self._waves.get(order.get("_hsl_revised_wave"))
         if not isinstance(wave, Wave) or not self._account_matches(wave, int(utc_ms())):
             return False
-        current = self.capture()
+        # Diagnostics and synchronous event sinks cannot spend the write-boundary
+        # freshness budget. Regular planning/protection captures report separately.
+        current = self.capture(report=False)
         now = int(utc_ms())
         # A long synchronous reconstruction can consume the remaining freshness
         # budget even without an await. Recheck at the actual write boundary.
