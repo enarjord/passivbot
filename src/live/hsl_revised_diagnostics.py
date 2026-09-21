@@ -59,10 +59,10 @@ def record(bot, wave):
         counts['estimated'] = sum(row['estimated'] for row in rows)
         counts = {key: counts[key] for key in ('green', 'red', 'inactive', 'unavailable', 'estimated')}
         instance = getattr(bot, '_hsl_revised_live', None)
-        stamps = [wave.captured_ms]
+        stamps = [wave.captured_ms, wave.position_observed_ms]
         ledger = getattr(bot, 'freshness_ledger', None)
         stamps += [state.updated_ms for name, state in getattr(ledger, 'surfaces', {}).items()
-                   if name in ('balance', 'positions', 'open_orders')]
+                   if name in ('balance', 'open_orders')]
         if instance is not None:
             stamps += [quote.fetched_ms for symbol, quote in instance.quotes.items()
                        if any(p['size'] != 0 for p in bot.positions.get(symbol, {}).values())]
@@ -70,18 +70,22 @@ def record(bot, wave):
             signal_mode=bot.config['live']['hsl_signal_mode'], captured_at_ms=wave.captured_ms,
             input_expires_at_ms=min(stamps) + int(bot._live_market_snapshot_max_age_ms()),
             account_generation=wave.generation, counts=counts, scope_count=len(rows),
+            # Existing risk reports consume one aggregate tier. Keep RED visible
+            # without fabricating a portfolio score from distinct coin signals.
+            tier=('red' if counts['red'] else 'unavailable' if counts['unavailable']
+                  else 'green' if counts['green'] else 'inactive'),
             scopes=rows[:SCOPE_LIMIT], omitted_scopes=max(0, len(rows)-SCOPE_LIMIT))
         # No runtime or executor consumer reads this attribute.
         bot._hsl_revised_diagnostic_observation = observation
         bot._hsl_revised_diagnostic_failed = False
-        signature = hashlib.sha256(json.dumps([
+        data = snapshot(bot, now_ms=now)
+        signature = hashlib.sha256(json.dumps([data['observation_status'], data['account_unavailable'], [
             (r['signal_mode'], r['symbol'], r['pside'], r['action'], r['availability'],
-             r['unavailable_reason'], r['estimates']) for r in rows], sort_keys=True).encode()).hexdigest()
+             r['unavailable_reason'], r['estimates']) for r in rows]], sort_keys=True).encode()).hexdigest()
         previous = getattr(bot, '_hsl_revised_diagnostic_event', None)
         if previous is not None and previous[0] == signature:
             return
         bot._hsl_revised_diagnostic_event = (signature, now)
-        data = snapshot(bot, now_ms=now)
         data['scopes'] = data['scopes'][:SAMPLE_LIMIT]
         data['omitted_scopes'] = max(0, len(rows)-SAMPLE_LIMIT)
         emitted = _safe_emit(bot, EventTypes.HSL_STATUS, component='risk.hsl', tags=(EventTags.RISK, EventTags.SUMMARY),
@@ -89,7 +93,7 @@ def record(bot, wave):
             status='degraded' if counts['unavailable'] or counts['estimated'] else 'ok',
             cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
         if emitted is None:
-            logging.info('[risk] revised HSL | mode=%s observation=%s green=%d red=%d unavailable=%d estimated=%d',
+            logging.log(logging.WARNING if counts['unavailable'] else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d unavailable=%d estimated=%d',
                          data['signal_mode'], data['observation_status'], counts['green'], counts['red'],
                          counts['unavailable'], counts['estimated'])
     except Exception as exc:
@@ -105,7 +109,8 @@ def snapshot(bot, *, now_ms):
         if observed is None:
             return dict(engine='revised', schema_version=1,
                         signal_mode=bot.config['live']['hsl_signal_mode'],
-                        observation_status='not_evaluated', scopes=[], counts={}, scope_count=0, omitted_scopes=0)
+                        observation_status=('diagnostic_unavailable' if getattr(bot, '_hsl_revised_diagnostic_failed', False)
+                                            else 'not_evaluated'), scopes=[], counts={}, scope_count=0, omitted_scopes=0)
         result = deepcopy(observed)
         missing = _account_unavailable(bot, now_ms)
         result['account_unavailable'] = missing

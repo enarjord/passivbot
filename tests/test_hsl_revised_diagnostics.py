@@ -148,6 +148,9 @@ assert.equal(hslSummary({long: {tier: 'green'}, short: {tier: 'red'}}), 'L green
 const revised = hslSummary({engine: 'revised', signal_mode: 'unified', observation_status: 'stale', counts: {red: 1, estimated: 1}});
 assert.match(revised, /revised unified.*stale.*RED 1.*estimated 1/);
 assert.ok(!revised.includes('L '));
+assert.match(hslSummary({engine: 'revised', counts: {inactive: 2}}), /inactive 2/);
+assert.equal(hslScopeStatus({action: null, tier: 'inactive', availability: 'available'}), 'inactive');
+assert.equal(hslScopeStatus({action: null, tier: null, availability: 'unavailable'}), 'unavailable');
 '''
     subprocess.run([node, '-e', script], check=True, capture_output=True, text=True)
 
@@ -161,3 +164,93 @@ def test_structured_console_shows_revised_counts_without_legacy_tiers(observed):
     assert 'engine=revised mode=unified observation=current' in text
     assert 'red=1' in text and 'estimated=1' in text
     assert 'tier=disabled' not in text
+
+
+def test_clean_red_aggregate_survives_smoke_and_startup_preview_consumers(observed):
+    from live.smoke_report import _risk_event_group, _risk_attention_rank, _summarize_hsl_status
+    from tools.hsl_startup_preview import _bounded_hsl_data, _status_from_event
+    bot, _, wave, events = observed('unified')
+    # No approximation/degradation flag should be needed to get RED attention.
+    clean = replace(wave, decisions=tuple(replace(d, reasons=()) for d in wave.decisions))
+    diagnostics.record(bot, clean)
+    event = dict(event_type='hsl.status', **{key: events[-1][1][key]
+        for key in ('level', 'status', 'data')})
+    assert event['status'] == 'ok' and event['data']['tier'] == 'red'
+    group = _risk_event_group(bot_key='fake/example', row={'ts': NOW, 'seq': 1},
+                             live_event=event, path=Path('events.ndjson'), line_no=1)
+    assert _risk_attention_rank(group) == 35
+    assert _summarize_hsl_status({'one': group})['tier_counts'] == {'red': 1}
+    assert _status_from_event({'latest_data': _bounded_hsl_data(event)}) == 'red'
+
+
+def test_inactive_scopes_are_visible_in_tui_and_overview(observed):
+    from monitor_tui import MonitorTuiState, render_screen
+    bot, owner, _, _ = observed()
+    bot.config['bot']['long']['risk']['n_positions'] = 0
+    owner.capture()
+    payload = diagnostics.snapshot(bot, now_ms=NOW)
+    assert payload['tier'] == 'inactive'
+    state = MonitorTuiState(relay_url='http://127.0.0.1:8765', exchange='fake', user='example')
+    state.apply_message(dict(type='snapshot', exchange='fake', user='example', seq=1, ts=NOW,
+                            payload={'hsl': payload}))
+    screen = render_screen(state, width=200)
+    assert 'inactive=1' in screen and f'{SYMBOL} long: inactive' in screen
+    assert f'{SYMBOL} long: available' not in screen
+
+
+def test_expiry_uses_retained_position_observation_not_newer_ledger_stamp(observed, monkeypatch):
+    import utils
+    bot, owner, original, _ = observed()
+    later = NOW+4000
+    monkeypatch.setattr(utils, 'utc_ms', lambda: later)
+    bot.get_exchange_time = lambda: later
+    for name in ('balance', 'positions', 'open_orders'):
+        bot.freshness_ledger.stamp(name, now_ms=later)
+    wave = owner.capture({SYMBOL: replace(quotes()[SYMBOL], fetched_ms=later)})
+    assert wave.position_observed_ms == original.position_observed_ms == NOW-200
+    data = diagnostics.snapshot(bot, now_ms=NOW+10_000)
+    assert data['account_unavailable'] == []
+    assert data['input_expires_at_ms'] == NOW+9800
+    assert data['observation_status'] == 'stale'
+
+
+def test_unavailable_scope_fallback_remains_warning_without_event_sink(observed, caplog):
+    import logging
+    bot, owner, _, _ = observed()
+    bot._emit_live_event = None
+    bot.positions[SYMBOL]['long']['price'] = float('nan')
+    with caplog.at_level(logging.WARNING):
+        owner.capture()
+    assert any(row.levelno == logging.WARNING and 'revised HSL' in row.message
+               and 'unavailable=1' in row.message for row in caplog.records)
+
+
+def test_initial_projection_failure_is_distinct_from_not_evaluated(observed, monkeypatch):
+    bot, owner, _, _ = observed()
+    del bot._hsl_revised_diagnostic_observation
+    original = diagnostics._row
+    def fail(*args, **kwargs):
+        raise ValueError('broken diagnostics')
+    monkeypatch.setattr(diagnostics, '_row', fail)
+    wave = owner.capture()
+    assert wave.permission(SYMBOL, 'long')[0] == 'panic'
+    assert diagnostics.snapshot(bot, now_ms=NOW)['observation_status'] == 'diagnostic_unavailable'
+    monkeypatch.setattr(diagnostics, '_row', original)
+    owner.capture()
+    assert diagnostics.snapshot(bot, now_ms=NOW)['observation_status'] == 'current'
+
+
+def test_account_freshness_recovery_emits_once_without_numeric_churn(observed):
+    bot, owner, _, events = observed()
+    bot._authoritative_pending_confirmations = {'open_orders': 1}
+    owner.capture()
+    assert events[-1][1]['data']['observation_status'] == 'stale'
+    assert events[-1][1]['data']['account_unavailable'] == ['open_orders']
+    bot.freshness_ledger.begin_epoch()
+    bot.freshness_ledger.stamp('open_orders', now_ms=NOW)
+    owner.capture()
+    assert events[-1][1]['data']['observation_status'] == 'current'
+    assert events[-1][1]['data']['account_unavailable'] == []
+    assert len(events) == 3
+    owner.capture()
+    assert len(events) == 3

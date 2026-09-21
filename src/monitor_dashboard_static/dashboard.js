@@ -495,7 +495,11 @@
   function hslSummary(hsl) {
     if (hsl.engine !== "revised") return `L ${hsl.long?.tier || "-"} / S ${hsl.short?.tier || "-"}`;
     const counts = hsl.counts || {};
-    return `revised ${hsl.signal_mode || "-"} · ${hsl.observation_status || "-"} · GREEN ${counts.green || 0} / RED ${counts.red || 0} / unavailable ${counts.unavailable || 0} / estimated ${counts.estimated || 0}`;
+    return `revised ${hsl.signal_mode || "-"} · ${hsl.observation_status || "-"} · GREEN ${counts.green || 0} / RED ${counts.red || 0} / inactive ${counts.inactive || 0} / unavailable ${counts.unavailable || 0} / estimated ${counts.estimated || 0}`;
+  }
+
+  function hslScopeStatus(scope) {
+    return scope.action || scope.tier || scope.availability;
   }
 
   function renderBotOverview(botEntries) {
@@ -570,7 +574,7 @@
     if (hsl.engine === "revised") {
       for (const scope of (hsl.scopes || []).slice(0, 3)) {
         const label = [scope.symbol, scope.pside].filter(Boolean).join(" ") || "portfolio";
-        rows.push([`HSL ${label}`, `${scope.action || scope.availability} · DD ${fmtCompact(scope.score, 4)} / ${fmtCompact(scope.threshold, 4)} · ${scope.estimated ? "estimated" : scope.availability}`]);
+        rows.push([`HSL ${label}`, `${hslScopeStatus(scope)} · DD ${fmtCompact(scope.score, 4)} / ${fmtCompact(scope.threshold, 4)} · ${scope.estimated ? "estimated" : scope.availability}`]);
       }
       if ((hsl.scope_count || 0) > 3) rows.push(["More HSL scopes", String(hsl.scope_count - 3)]);
     }
