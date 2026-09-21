@@ -554,7 +554,10 @@ Passive HSL diagnostic projection and synchronous event sinks run after that wav
 execution, including empty waves. Capturing a decision or checking write admission does not emit
 diagnostics; a slow sink cannot consume a captured protective order's freshness budget.
 A failed configured console sink retains the bounded status fallback, including warning severity
-for unavailable scopes.
+for unavailable scopes. Freshness is sampled after diagnostic projection; stale observations
+emit degraded status even when their last decision was GREEN. Recovery from skipped refresh
+waves reports the expired prior observation before the new current observation, without
+repeating unchanged numeric updates.
 Startup loads execution metadata and read-only connector preflight before supervising ordinary
 configuration-readiness, configuration writes, account preparation and candle warmup.
 Ordinary preparation, fill repair and candle acquisition run as owned background tasks; writes are

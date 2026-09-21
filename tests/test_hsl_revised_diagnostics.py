@@ -278,7 +278,7 @@ def test_unused_disabled_position_quote_does_not_expire_evaluated_scopes(observe
 
 
 def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observed):
-    from live.smoke_report import _risk_event_group, _summarize_hsl_status
+    from live.smoke_report import _risk_event_group, _risk_attention_rank, _summarize_hsl_status
     from tools.hsl_startup_preview import _bounded_hsl_data, _status_from_event
     bot, owner, _, events = observed('unified')
     wave = capture_report(owner, {SYMBOL: replace(quotes()[SYMBOL], bid=100., ask=100., last=100.)})
@@ -288,10 +288,12 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
     diagnostics.record(bot, clean)
     event = dict(event_type='hsl.status', **{key: events[-1][1][key]
         for key in ('level', 'status', 'data')})
+    assert event['status'] == 'degraded'
     assert event['data']['tier'] == 'stale'
     assert event['data']['scopes'][0]['tier'] == 'green'
     group = _risk_event_group(bot_key='fake/example', row={'ts': NOW, 'seq': 1},
                              live_event=event, path=Path('events.ndjson'), line_no=1)
+    assert _risk_attention_rank(group) == 20
     assert _summarize_hsl_status({'one': group})['tier_counts'] == {'stale': 1}
     assert _status_from_event({'latest_data': _bounded_hsl_data(event)}) == 'stale'
     bot.freshness_ledger.begin_epoch()
@@ -303,7 +305,7 @@ def test_stale_green_cannot_survive_as_current_green_in_bounded_consumers(observ
 @pytest.mark.parametrize('slow_stage', ['projection', 'sink'])
 def test_connector_admission_does_not_run_diagnostics_or_sinks(observed, monkeypatch, slow_stage):
     import utils
-    bot, owner, wave, _ = observed()
+    bot, owner, wave, events = observed()
     clock = [NOW]
     monkeypatch.setattr(utils, 'utc_ms', lambda: clock[0])
     bot.get_exchange_time = lambda: clock[0]
@@ -327,6 +329,9 @@ def test_connector_admission_does_not_run_diagnostics_or_sinks(observed, monkeyp
     assert not calls and clock == [NOW]
     owner.report(fresh)
     assert calls == [slow_stage]
+    if slow_stage == 'projection':
+        assert events[-1][1]['data']['observation_status'] == 'stale'
+        assert events[-1][1]['status'] == 'degraded'
 
 
 
@@ -377,3 +382,55 @@ async def test_protective_wave_reports_even_when_scope_has_no_exit_work(observed
     result = diagnostics.snapshot(bot, now_ms=NOW)
     assert result['counts']['green'] == 1
     assert events[-1][1]['data']['counts']['green'] == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_refresh_then_recovery_reports_expired_prior_wave(observed, monkeypatch):
+    import asyncio
+    import utils
+    bot, owner, _, events = observed()
+    clock = [NOW]
+    monkeypatch.setattr(utils, 'utc_ms', lambda: clock[0])
+    bot.get_exchange_time = lambda: clock[0]
+    bot.positions[SYMBOL]['long'].update(size=0., price=0.)
+    events.clear()
+    capture_report(owner)
+    assert len(events) == 1
+    calls = []
+
+    async def refresh(**kwargs):
+        calls.append(clock[0])
+        if len(calls) == 1:
+            clock[0] += 20_000
+            return False
+        for surface in ('balance', 'positions', 'open_orders'):
+            bot.freshness_ledger.stamp(surface, now_ms=clock[0])
+        owner.quotes = {SYMBOL: replace(quotes()[SYMBOL], fetched_ms=clock[0])}
+        return True
+
+    async def sleep(delay, *, stage):
+        if stage == 'revised_current_inputs':
+            # Exercise the real skipped-wave branch, without manually reporting it.
+            assert len(events) == 1
+        else:
+            bot.stop_signal_received = True
+        await asyncio.sleep(0)
+
+    async def ordinary():
+        await asyncio.Event().wait()
+
+    bot.stop_signal_received = False
+    bot._begin_live_event_cycle = lambda **kwargs: None
+    bot.refresh_protective_authoritative_state = refresh
+    bot._sleep_unless_shutdown = sleep
+    bot._maybe_log_health_summary = lambda: None
+    bot.live_value = lambda key: .05
+    owner.schedule_history = owner.schedule_sources = lambda: None
+    owner._ordinary_plan = ordinary
+    await owner.run()
+    assert len(calls) == 2
+    assert [e[1]['data']['observation_status'] for e in events] == ['current', 'stale', 'current']
+    assert events[1][1]['status'] == 'degraded'
+    assert all(e[1]['data']['counts']['green'] == 1 for e in events)
+    capture_report(owner)
+    assert len(events) == 3
