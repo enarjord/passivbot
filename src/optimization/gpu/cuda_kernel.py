@@ -64,22 +64,9 @@ __device__ inline PBFloat3 fma(PBFloat3 a, PBFloat3 b, PBFloat3 c) {
 def cuda_source(source: str, *, coin_capacity: int | None = None) -> str:
     """Lower only the explicitly supported scalar shader dialect."""
     if coin_capacity is not None:
-        declarations = list(re.finditer(
-            r"\bconstant\s+int\s+MAX_COINS\s*=\s*(\d+)\s*;", source
-        ))
-        if len(declarations) != 1:
-            raise ValueError("CUDA coin specialization requires one MAX_COINS declaration")
-        declaration = declarations[0]
-        if (
-            type(coin_capacity) is not int
-            or not 1 <= coin_capacity <= int(declaration[1])
-        ):
-            raise ValueError("CUDA coin capacity must fit the shader's MAX_COINS limit")
-        source = (
-            source[:declaration.start(1)]
-            + str(coin_capacity)
-            + source[declaration.end(1):]
-        )
+        from optimization.gpu.runtime import specialize_coin_capacity
+
+        source = specialize_coin_capacity(source, coin_capacity)
     for signature in re.findall(r"kernel\s+void\s+\w+\((.*?)\)\s*\{", source, re.S):
         for position, argument in enumerate(signature.split(",")):
             slot = re.search(r"\[\[buffer\((\d+)\)\]\]", argument)

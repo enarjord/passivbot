@@ -972,6 +972,7 @@ def _ema_anchor_multicoin_shader_library(
     cuda_coin_capacity: int | None = None,
     revised_capacity: int = 0,
     revised_lookback: int = 0,
+    mps_coin_capacity: int | None = None,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -991,6 +992,9 @@ def _ema_anchor_multicoin_shader_library(
     if revised_capacity:
         source = (f"#define PASSIVBOT_HSL_REVISED_LOOKBACK {revised_lookback}\n"
                   + _with_revised_hsl(source, revised_capacity))
+    if mps_coin_capacity is not None:
+        return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity,
+                              mps_coin_capacity=mps_coin_capacity)
     return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
@@ -1008,6 +1012,7 @@ def _trailing_martingale_multicoin_shader_library(
     cuda_coin_capacity: int | None = None,
     revised_capacity: int = 0,
     revised_lookback: int = 0,
+    mps_coin_capacity: int | None = None,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1032,6 +1037,9 @@ def _trailing_martingale_multicoin_shader_library(
     if revised_capacity:
         source = (f"#define PASSIVBOT_HSL_REVISED_LOOKBACK {revised_lookback}\n"
                   + _with_revised_hsl(source, revised_capacity))
+    if mps_coin_capacity is not None:
+        return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity,
+                              mps_coin_capacity=mps_coin_capacity)
     return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
@@ -2093,6 +2101,12 @@ class MpsEmaAnchorMulticoinRunner:
         )
         self.bars = data["bars"]
         self.cuda_coin_capacity = None
+        self.mps_coin_capacity = None
+        if (self.revised_capacity and self.bars.device.type == "mps"
+                and self.coin_override_label == "Trailing Martingale"):
+            if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
+                raise ValueError("Metal coin count exceeds the multicoin shader limit")
+            self.mps_coin_capacity = 1 << (self.n_coins - 1).bit_length()
         if self.bars.device.type == "cuda":
             if not 1 <= self.n_coins <= MPS_MULTICOIN_MAX_COINS:
                 raise ValueError("CUDA coin count exceeds the multicoin shader limit")
@@ -2328,7 +2342,8 @@ class MpsEmaAnchorMulticoinRunner:
             self.equity_balance_diff_enabled,
         )
         if self.revised_capacity:
-            args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars)
+            args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars,
+                     self.mps_coin_capacity)
         elif self.cuda_coin_capacity is not None:
             args += (self.cuda_coin_capacity,)
         return _ema_anchor_multicoin_shader_library, args
@@ -2892,7 +2907,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.max_dispatch_candidate_bars is not None,
         )
         if self.revised_capacity:
-            args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars)
+            args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars,
+                     self.mps_coin_capacity)
         elif self.cuda_coin_capacity is not None:
             args += (self.cuda_coin_capacity,)
         return _trailing_martingale_multicoin_shader_library, args
