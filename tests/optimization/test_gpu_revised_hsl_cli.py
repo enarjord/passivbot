@@ -16,13 +16,16 @@ pytestmark=pytest.mark.skipif(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode',['coin','pside','unified'])
-async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
+@pytest.mark.parametrize('coin_count',[1,2])
+async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode,coin_count):
     from optimize import main
     from optimization.shape import build_optimization_shape
     from config.optimize_bounds import set_flat_optimize_bound
     import msgpack
 
     cfg=offline_cli_config(tmp_path,monkeypatch,mode)
+    if coin_count==2:
+        add_offline_coin(tmp_path,cfg)
     cfg['live']['strategy_kind']='trailing_martingale'
     cfg['optimize'].update(backend='gpu',iters=32,n_cpus=1,population_size=4,
         scoring=[{'metric':'adg_usd','goal':'max'}],limits=[],seed=42,
@@ -75,3 +78,33 @@ async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
     resumed = pickle.loads(checkpoint.read_bytes())
     assert resumed['exact_done'] > state['exact_done']
     assert resumed['optimizer_evaluation_contract'] == state['optimizer_evaluation_contract']
+
+
+def add_offline_coin(root,cfg):
+    """Duplicate the synthetic fixture under a second public symbol, offline."""
+    from copy import deepcopy
+    import numpy as np
+    from ohlcv_catalog import OhlcvCatalog
+    from ohlcv_store import OhlcvStore
+    from test_simulation_offline import START
+    from test_hsl_revised_offline_runtime import runtime_inputs
+    cache=root/'caches'
+    for path in cache.rglob('*.json'):
+        values=json.loads(path.read_text())
+        if path.name=='markets.json':
+            market=deepcopy(values['BTC/USDT:USDT'])
+            market.update(id='ETHUSDT',symbol='ETH/USDT:USDT',base='ETH')
+            values['ETH/USDT:USDT']=market
+        elif 'BTC' in values:
+            values['ETH']=deepcopy(values['BTC'])
+            if path.name.endswith('_symbols.json'):
+                values['ETH']={'binanceusdm':'ETH/USDT:USDT'}
+        path.write_text(json.dumps(values))
+    cfg['live']['approved_coins']['long']=['BTC','ETH']
+    _,_,candles,_=runtime_inputs(cfg['live']['hsl_signal_mode'])
+    stamps=START+np.arange(-1,1441,dtype=np.int64)*60000
+    rows=np.concatenate([candles[:1,0],candles[:,0],
+                         np.repeat(candles[-1:,0],1441-len(candles),axis=0)])
+    rows[:,:3]*=1.1
+    store=OhlcvStore(cache/'ohlcvs',OhlcvCatalog(cache/'ohlcvs/catalog.sqlite'))
+    store.write_rows('binance','1m','ETH/USDT:USDT',stamps,rows.astype(np.float32))

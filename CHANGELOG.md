@@ -9,6 +9,9 @@ since the latest release tag; these features may already be available when insta
 - Reduce revised-HSL CPU allocations by streaming the shared numerical signal into
   its controller and reusing validated simulator buffers and policy references.
   Diagnostic output, current decisions, and reconstruction fallbacks are preserved.
+- Support revised HSL in multi-coin Metal/CUDA optimization for both strategy families,
+  all signal modes and one or both position sides, with bounded independent history,
+  static coin-policy overrides, exact Rust validation and checkpoint resume.
 
 - Reduce revised-HSL GPU history memory by storing compact minute samples and
   summaries of completed blocks, preserving same-minute peak/EMA updates and
@@ -16,7 +19,7 @@ since the latest release tag; these features may already be available when insta
 
 - Support revised-HSL single-coin GPU optimization on Metal and CUDA in coin, pside
   and unified modes, including canonical policy bounds, exact Rust validation and resume.
-  Multi-coin revised scenarios remain explicitly unsupported. GPU history scratch is bounded
+  GPU history scratch is bounded
   and current-equity signal arithmetic has parity coverage.
 
 

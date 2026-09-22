@@ -5,7 +5,7 @@ Legacy-only ABI fields below are inert when the revised shader is selected.
 """
 
 
-def project_bot(payload, coin_index, side, config):
+def project_bot(payload, coin_index, side, config, *, base=False):
     bot = payload.bot_params_list[coin_index][side]
     from config.hsl_revised import engine
 
@@ -20,7 +20,7 @@ def project_bot(payload, coin_index, side, config):
         policy = hsl['portfolio']
     elif mode == 'coin':
         coin = payload.backtest_params['coins'][coin_index]
-        policy = hsl['coins'][coin][index]
+        policy = config['bot'][side]['hsl'] if base else hsl['coins'][coin][index]
     else:
         policy = hsl['sides'][index]
     result = dict(bot)

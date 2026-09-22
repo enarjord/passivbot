@@ -2,7 +2,7 @@
 
 Select `live.hsl_engine=revised` at startup to use this engine. `legacy` remains the
 implicit default. The selector applies to live execution, the offline fake runner,
-backtests, CPU optimization and single-coin GPU optimization.
+backtests, CPU optimization and GPU optimization.
 Changing engines requires a restart and an engine-compatible configuration.
 
 ## Signals and scopes
@@ -136,7 +136,7 @@ These disposable caches do not authorize trading independently and are not persi
 
 ## Offline GPU optimization
 
-Single-coin GPU optimization supports revised HSL for both supported strategy families
+Single- and multi-coin GPU optimization support revised HSL for both supported strategy families
 and all three signal modes. Unified mode uses the explicit `bot.hsl` policy and portfolio
 HSL bounds; coin and pside modes use their directional policies. They use bounded per-candidate history, recompute drawdown when its equity anchor
 changes, and derive current panic and terminal cooldown without latching past decisions.
@@ -145,9 +145,9 @@ to keep history scratch below 512 MiB; temporal replay rebinds that scratch expl
 History stores two floats per minute plus summaries of completed 64-minute blocks;
 partial boundary blocks are evaluated directly, including same-minute replacement peaks.
 
-Select `live.hsl_engine=revised` and `optimize.backend=gpu` with 1m candles. Revised
-GPU scenarios currently require exactly one prepared coin; multi-coin scenarios are
-rejected explicitly. Existing GPU metric and execution restrictions still apply. Saved
+Select `live.hsl_engine=revised` and `optimize.backend=gpu` with 1m candles. Multi-coin scenarios support one or both position sides, effective coin overrides,
+and one shared portfolio controller in unified mode. Existing GPU metric and execution
+restrictions still apply. Saved
 checkpoints include the selected engine and effective policies; incompatible resume is
 rejected. GPU float32 results are screening estimates; exact Rust backtests remain
 authoritative for retained candidates. This offline path does not execute live orders.

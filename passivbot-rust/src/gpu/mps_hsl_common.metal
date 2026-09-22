@@ -532,6 +532,34 @@ inline void bind_revised_hsl(
     }
 }
 
+#ifdef PASSIVBOT_HSL_REVISED_LOOKBACK
+inline void bind_revised_multicoin_hsl(
+    thread HslState& aggregate, thread HslState* coins,
+    device RevisedHslNode* trees, device int* rows, int scope_base, int coin_count,
+    bool initialize, bool owner
+) {
+    bind_revised_hsl(aggregate, trees, rows, scope_base,
+        PASSIVBOT_HSL_REVISED_CAPACITY, PASSIVBOT_HSL_REVISED_TREE_SIZE,
+        PASSIVBOT_HSL_REVISED_LOOKBACK, initialize, owner);
+    for (int c = 0; c < coin_count; ++c) {
+        bind_revised_hsl(coins[c], trees, rows, scope_base + 1 + c,
+            PASSIVBOT_HSL_REVISED_CAPACITY, PASSIVBOT_HSL_REVISED_TREE_SIZE,
+            PASSIVBOT_HSL_REVISED_LOOKBACK, initialize, true);
+    }
+}
+
+inline bool valid_revised_multicoin_hsl(
+    thread HslState& aggregate, thread HslState* coins, int coin_count
+) {
+    if (aggregate.signal_mode != HSL_SIGNAL_COIN)
+        return !aggregate.enabled || aggregate.revised_valid;
+    for (int c = 0; c < coin_count; ++c)
+        if (coins[c].enabled && !coins[c].revised_valid) return false;
+    return true;
+}
+
+#endif
+
 inline void mirror_revised_hsl(thread HslState& owner, thread HslState& view) {
     view.revised = owner.revised;
     view.revised_valid = owner.revised_valid;

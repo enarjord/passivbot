@@ -540,10 +540,10 @@ objectives/limits must be meaningful for every contributing scenario. This check
 zero for a missing or inactive signal. The existing saved-fitness contract records the selected
 engine, fixed policy and source-verified implementation identity.
 
-The GPU backend supports revised HSL for single-coin 1m scenarios in both strategy families
+The GPU backend supports revised HSL for single- and multi-coin 1m scenarios in both strategy families
 and all three signal modes. Canonical effective policies feed the revised shader explicitly;
-unified portfolio genes are transported to the single shared controller. Multi-coin revised
-scenarios remain rejected. GPU screening retains exact Rust validation and checkpoint engine/policy
+unified portfolio genes are transported to the single shared controller. Multi-coin coin controllers resolve effective overrides and current slot counts; temporal
+replay and candidate partitioning retain isolated history for every scope. GPU screening retains exact Rust validation and checkpoint engine/policy
 identity. CPU policy candidates reach the same native simulator as public backtests, including
 scenario evaluation, multiprocessing serialization and compatible saved-checkpoint resume.
 Live selection follows the same startup-only engine policy; offline optimization does not

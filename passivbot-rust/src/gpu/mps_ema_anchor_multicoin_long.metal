@@ -2923,6 +2923,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
     uint b,
     bool short_side
 ) {
@@ -3051,6 +3055,10 @@ inline void passivbot_ema_anchor_multicoin_impl(
     float day_start_balance = balance;
     thread float& day_fill_count = fills.day_fill_count;
 
+#if PASSIVBOT_HSL_REVISED
+    bind_revised_multicoin_hsl(side.hsl, side.coin_hsl,
+        revised_trees, revised_rows, int(b) * (C + 1), C, true, true);
+#endif
     for (int k = 1; k < stop_k; ++k) {
         if (alive && (held_positions_have_missing_prices(side.psize, bars, coin_settings, k, C))) {
             // The decoder rejects -2 as unavailable held-position valuation.
@@ -3425,7 +3433,13 @@ inline void passivbot_ema_anchor_multicoin_impl(
                 liquidation_day = day_index;
             }
         }
-    }
+    #if PASSIVBOT_HSL_REVISED
+        if (!(valid_revised_multicoin_hsl(side.hsl, side.coin_hsl, C))) {
+            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+#endif
+}
 
     if (day_touched && current_day >= 0 && current_day < D) {
         int output = (int(b) * D + current_day) * DAILY_COLS;
@@ -3780,6 +3794,10 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
     uint b
 ) {
     const int B = sizes[0];
@@ -3916,6 +3934,16 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
     float day_min_balance = INFINITY;
     float day_start_balance = account.balance;
 
+#if PASSIVBOT_HSL_REVISED
+    const bool revised_long_owner = long_config.twel > 0.0f && long_config.n_positions > 0;
+    const bool revised_unified = long_side.hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    bind_revised_multicoin_hsl(long_side.hsl, long_side.coin_hsl,
+        revised_trees, revised_rows, int(b) * 2 * (C + 1), C, true,
+        !revised_unified || revised_long_owner);
+    bind_revised_multicoin_hsl(short_side.hsl, short_side.coin_hsl,
+        revised_trees, revised_rows, int(b) * 2 * (C + 1) + C + 1, C, true,
+        !revised_unified || !revised_long_owner);
+#endif
     for (int k = 1; k < stop_k; ++k) {
         if (alive && (held_positions_have_missing_prices(long_side.psize, bars, coin_settings, k, C)
             || held_positions_have_missing_prices(short_side.psize, bars, coin_settings, k, C))) {
@@ -4398,7 +4426,13 @@ inline void passivbot_ema_anchor_multicoin_fused_impl(
                 liquidation_day = day_index;
             }
         }
-    }
+    #if PASSIVBOT_HSL_REVISED
+        if (!(valid_revised_multicoin_hsl(long_side.hsl, long_side.coin_hsl, C) && valid_revised_multicoin_hsl(short_side.hsl, short_side.coin_hsl, C))) {
+            scalars[int(b) * FUSED_SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+#endif
+}
 
     if (day_touched && current_day >= 0 && current_day < D) {
         int output = (int(b) * D + current_day) * DAILY_COLS;
@@ -4625,6 +4659,10 @@ kernel void passivbot_ema_anchor_multicoin_fused(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_fused_impl(
@@ -4640,6 +4678,9 @@ kernel void passivbot_ema_anchor_multicoin_fused(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#if PASSIVBOT_HSL_REVISED
+        revised_trees, revised_rows,
 #endif
         b
     );
@@ -4669,6 +4710,10 @@ kernel void passivbot_ema_anchor_multicoin(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     const bool short_side = run_settings[3] > 0.5f;
@@ -4685,6 +4730,9 @@ kernel void passivbot_ema_anchor_multicoin(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#if PASSIVBOT_HSL_REVISED
+        revised_trees, revised_rows,
 #endif
         b, short_side
     );
@@ -4714,6 +4762,10 @@ kernel void passivbot_ema_anchor_multicoin_long(
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
     uint b [[thread_position_in_grid]]
 ) {
     passivbot_ema_anchor_multicoin_impl(
@@ -4729,6 +4781,9 @@ kernel void passivbot_ema_anchor_multicoin_long(
         daily, scalars, gap_hist, coin_fill_counts,
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
+#endif
+#if PASSIVBOT_HSL_REVISED
+        revised_trees, revised_rows,
 #endif
         b, false
     );
