@@ -55,11 +55,11 @@ def point(t, pnl=0, upnl=0, *, exposed=True, flatten=False):
     return Point(Observation(t, dec(pnl), dec(upnl)), exposed, flatten)
 
 
-def run(*episodes, now=None, start=0, cooldown=200, restart="always", intervention="panic", span=1):
+def run(*episodes, now=None, start=0, cooldown=200, restart="always", span=1):
     if now is None:
         now = max((p.observation.timestamp for e in episodes for p in e.points), default=1000)
     return replay(episodes, now=now, start=start, budget=1000, span=span,
-                  threshold=".05", cooldown=cooldown, restart=restart, intervention=intervention)
+                  threshold=".05", cooldown=cooldown, restart=restart)
 
 
 def stopped():
@@ -77,28 +77,25 @@ def test_actual_flat_anchors_cooldown_partial_does_not():
 @pytest.mark.parametrize("restart", ["always", "never"])
 def test_normal_intervention_clears_halt_but_fresh_loss_still_panics(restart):
     second = Episode((point(220, -100, exposed=False), point(230, -101), point(240, -101, -100)))
-    trace = run(stopped(), second, restart=restart, intervention="normal")
-    assert trace[-2].action == "normal" and trace[-2].reason == "normal_intervention"
+    trace = run(stopped(), second, restart=restart)
+    assert trace[-2].action == "normal" and trace[-2].reason == "green"
     assert trace[-1].action == "panic" and trace[-1].red_at == 240
 
 
 @pytest.mark.parametrize("restart", ["always", "never"])
-def test_repanic_during_cooldown_anchors_new_flat(restart):
+def test_reopening_clears_cooldown_even_if_it_flattens_between_samples(restart):
     second = Episode((point(230, -101), point(240, -101, exposed=False, flatten=True)))
     third = Episode((point(300, -101, exposed=False), point(439, -101, exposed=False), point(440, -101, exposed=False)))
     trace = run(stopped(), second, third, restart=restart)
-    assert trace[4].reason == "panic_intervention" and trace[4].red_at == 230
-    assert trace[5].flat_at == 240
-    assert trace[-2].action == "halted"
-    assert trace[-1].action == ("normal" if restart == "always" else "halted")
+    assert all(d.action == "normal" and d.red_at is None and d.flat_at is None for d in trace[4:])
 
 
-def test_residual_exposure_is_not_a_normal_intervention():
+def test_partial_panic_recovery_revokes_panic_without_ending_episode():
     unfinished = Episode((point(0, exposed=False), point(100, upnl=-100), point(150, -50, -50),
                           point(200, -50, 0)))
-    trace = run(unfinished, intervention="normal")
-    assert trace[-1].action == "panic"
-    assert trace[-1].red_at == 100 and trace[-1].flat_at is None
+    trace = run(unfinished)
+    assert trace[-1].action == "normal"
+    assert trace[-1].red_at is None and trace[-1].flat_at is None
 
 
 @pytest.mark.parametrize("restart", ["always", "never"])
@@ -125,7 +122,7 @@ def test_flatten_risk_before_same_timestamp_reopen():
     second = Episode((point(100, -101), point(150, -101, 200)))
     result = run(first, second)
     assert result[1].action == "halted"
-    assert result[2].action == "panic" and result[2].reason == "panic_intervention"
+    assert result[2].action == "normal" and result[2].red_at is None
 
 
 def test_poll_and_cache_free_copy_have_identical_output():
@@ -144,7 +141,7 @@ def test_no_history_singleton_uses_reference_and_flat_scope_is_normal():
 def test_flat_observation_without_completion_evidence_cannot_start_cooldown():
     episode = Episode((point(0), point(100, upnl=-100), point(200, -100, exposed=False)))
     last = run(episode)[-1]
-    assert last.action == "halted" and last.flat_at is None
+    assert last.action == "normal" and last.flat_at is None and last.red_at is None
 
 
 def test_reset_requires_actual_boundary_and_ordered_trace():
@@ -157,8 +154,8 @@ def test_reset_requires_actual_boundary_and_ordered_trace():
 def test_long_ema_prevents_a_brief_excursion_and_final_recovery():
     episode = Episode((point(0), point(60_000, upnl=-100), point(120_000, upnl=0)))
     assert all(d.action == "normal" for d in run(episode, now=120_000, span=1_000_000))
-    assert run(episode, now=120_000, span=1)[-1].action == "panic"
-    # The latter historical crossing remains reconstructible from the trace.
+    assert run(episode, now=120_000, span=1)[-1].action == "normal"
+    # The historical crossing is diagnostic only; current recovery revokes panic.
     # If that point was an unrecorded transient mark, a fresh trace lacks it.
     without_transient = replace(episode, points=(episode.points[0], episode.points[-1]))
     assert run(without_transient, now=120_000, span=1)[-1].action == "normal"
@@ -190,8 +187,8 @@ def test_same_minute_partial_samples_do_not_advance_ema_clock():
     episode = Episode((point(0), point(60_000, upnl=-100),
                        point(60_001, -50, -150), point(120_000, -50, 50)))
     trace = run(episode, now=120_000, span=3)
-    assert float(trace[1].ema) == pytest.approx(.05)
-    assert float(trace[2].ema) == pytest.approx(.1)
+    assert float(trace[1].ema) == pytest.approx(50/1050)
+    assert float(trace[2].ema) == pytest.approx(100/1050)
 
 
 def test_partial_exit_does_not_extend_original_red_time():
@@ -216,13 +213,13 @@ def test_expired_unreconstructible_crossing_does_not_turn_an_ordinary_flat_into_
     assert trace[-1].action == "normal"
 
 
-def test_red_recovered_before_flat_is_still_a_reconstructible_stop():
+def test_red_recovered_before_flat_does_not_start_cooldown():
     episode = Episode((point(0), point(60_000, upnl=-100), point(120_000, upnl=0),
                        point(180_000, exposed=False, flatten=True)))
     trace = run(episode, cooldown=0, restart="never")
-    assert trace[-1].action == "halted"
-    assert trace[-1].red_at == 60_000
-    assert trace[-1].flat_at == 180_000
+    assert trace[-1].action == "normal"
+    assert trace[-1].red_at is None
+    assert trace[-1].flat_at is None
 
 
 @pytest.mark.parametrize("seed", range(12))
@@ -245,14 +242,14 @@ def test_generated_multi_episode_replay_matches_reference(seed):
     episodes.append(Episode((point(clock, exposed=False),)))
     run(*episodes, start=seed * 60_000, cooldown=180_000,
         span=rng.choice([1, 2.5, 30.5]),
-        restart=rng.choice(["always", "never"]), intervention=rng.choice(["panic", "normal"]))
+        restart=rng.choice(["always", "never"]))
 
 
 def test_completed_episode_rebases_to_common_current_endpoint():
     loss = Episode((point(0), point(60_000, -100, exposed=False, flatten=True)))
     recovered = Episode((point(120_000, -100, exposed=False), point(180_000, 0, exposed=False)))
     trace = replay((loss, recovered), now=180_000, start=0, budget=1000, span=1,
-                   threshold=".095", cooldown=0, restart="never", intervention="panic")
+                   threshold=".095", cooldown=0, restart="never")
     assert float(trace[1].raw) == pytest.approx(.1)
     assert trace[-1].action == "halted"
 
@@ -291,18 +288,14 @@ def test_expired_reference_does_not_affect_current_history():
 
 
 @pytest.mark.parametrize("opening", [200, 250, 400, 450])
-@pytest.mark.parametrize("intervention", ["normal", "panic"])
 @pytest.mark.parametrize("restart", ["always", "never"])
-def test_exchange_reopen_and_flat_between_prices(opening, intervention, restart):
+def test_exchange_reopen_and_flat_between_prices(opening, restart):
     second = Episode((point(200, -100, exposed=False),
                       point(500, -100, exposed=False, flatten=True)), opened_at=opening)
     third = Episode((point(500, -100, exposed=False), point(600, -100, exposed=False)))
-    result = run(stopped(), second, third, intervention=intervention, restart=restart)
-    during_cooldown = restart == "never" or opening < 400
-    panicked = intervention == "panic" and during_cooldown
-    assert result[-1].action == ("halted" if panicked else "normal")
-    assert result[-1].red_at == (opening if panicked else None)
-    assert result[-1].flat_at == (500 if panicked else None)
+    result = run(stopped(), second, third, restart=restart)
+    assert result[-1].action == "normal"
+    assert result[-1].red_at is None and result[-1].flat_at is None
     assert len(result) == 8  # lifecycle evidence adds no EMA observations
     # At the seed, the previous stop has not yet been cleared or re-panicked.
     assert result[4].action == "halted" and result[4].red_at == 100
@@ -355,3 +348,46 @@ def test_cashflow_reference_is_applied_only_at_its_observation():
     assert result[0].raw == 0 and result[0].ema == 0
     assert float(result[1].raw) == pytest.approx(100/1100)
     assert float(result[1].ema) == pytest.approx(50/1100)
+
+
+@pytest.mark.parametrize("restart", ["always", "never"])
+def test_latest_green_episode_supersedes_older_red_stop(restart):
+    first = stopped()
+    second = Episode((point(200, -100, exposed=False), point(250, -100),
+                      point(300, -99, exposed=False, flatten=True)), opened_at=250)
+    last = Episode((point(300, -99, exposed=False), point(350, -99, exposed=False)))
+    result = run(first, second, last, restart=restart)
+    assert result[-1].action == "normal"
+    assert result[-1].red_at is None and result[-1].flat_at is None
+
+
+@pytest.mark.parametrize("restart", ["always", "never"])
+def test_current_balance_reclassifies_terminal_cooldown_without_renewing_anchor(restart):
+    episodes = (stopped(), Episode((point(250, -100, exposed=False),)))
+    def calculate(budget):
+        return replay(episodes, now=250, start=0, budget=budget, span=1,
+                      threshold=".05", cooldown=200, restart=restart)[-1]
+    assert calculate(1000).action == "halted"
+    assert calculate(10000).action == "normal"
+    restored = calculate(1000)
+    assert restored.action == "halted" and restored.flat_at == 200
+
+
+def test_partial_close_preserves_loss_but_price_recovery_revokes_panic():
+    # Balance after realizing half the loss is 90. Equity stays 80 at the close.
+    points = (point(0), point(60000, upnl=-20), point(60001, -10, -10),
+              point(120000, -10, 10))
+    result = replay((Episode(points),), now=120000, start=0, budget=90,
+                    span=1, threshold=".1", cooldown=200, restart="always")
+    assert [d.action for d in result] == ["normal", "panic", "panic", "normal"]
+    assert float(result[1].raw) == pytest.approx(.2)
+    assert float(result[2].raw) == pytest.approx(.2)
+    assert result[-1].red_at is None and result[-1].flat_at is None
+
+
+def test_historical_red_cannot_panic_after_current_recovery():
+    for upnls in ([0, -10], [0, -10, 10]):
+        episode = Episode(tuple(point(i*60000, upnl=u) for i,u in enumerate(upnls)))
+        result = replay((episode,), now=(len(upnls)-1)*60000, start=0,
+                        budget=100, span=1, threshold=".095", cooldown=0, restart="always")
+        assert result[-1].action == ("panic" if upnls[-1] < 0 else "normal")

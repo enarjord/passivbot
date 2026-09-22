@@ -120,8 +120,8 @@ pub fn estimate(input: &Input) -> Result<Output, String> {
     for value in upnl_terms {
         peak.add(-value);
     }
-    let reference_delta = peak.value(&mut reasons);
-    let mut result = singleton_from_loss(budget, reference_delta, input.span, input.threshold)?;
+    let loss = peak.value(&mut reasons);
+    let mut result = singleton_from_loss(budget, upnl, loss, input.span, input.threshold)?;
     result.numeric_range_approximation |= reasons.contains("numeric_range_approximation");
     if result.numeric_range_approximation {
         reasons.insert("numeric_range_approximation".into());

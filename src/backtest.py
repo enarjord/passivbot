@@ -295,7 +295,6 @@ def _resolve_backtest_revised_hsl(config, coin_policies):
     return {
         "engine": "revised",
         "mode": mode,
-        "intervention": require_config_value(config, "live.hsl_position_during_cooldown_policy"),
         "sides": [deepcopy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
         "portfolio": deepcopy(config["bot"]["hsl"]) if mode == "unified" else None,
         "coins": coin_policies if mode == "coin" else {},

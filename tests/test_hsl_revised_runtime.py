@@ -75,7 +75,7 @@ def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     assert decision.action == "panic"
     raw = json.loads(decision.payload)
     assert raw["observations"] == 1
-    assert raw["decision"]["raw"] == pytest.approx(100/1100)
+    assert raw["decision"]["raw"] == pytest.approx(100/1000)
     assert raw["decision"]["ema"] == raw["decision"]["raw"]
     assert "fill_capture_unknown" in decision.reasons
     assert decision.execution_type == ("market" if mode == "unified" else "limit")
@@ -88,7 +88,7 @@ def test_canonical_cashflows_survive_pending_quantity_and_missing_candles(mode):
     decision, = run(value)[0]
     assert decision.action == "panic"
     assert "invalid_fill_quantity" in decision.reasons
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(301/1301)
+    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(301/1201)
 
 
 def test_current_quote_failure_is_scoped_before_native_evaluation():
@@ -298,7 +298,7 @@ def test_empty_aggregate_side_retains_cashflows_even_without_exposure():
     requests, unavailable = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW, max_current_age_ms=10_000)
     assert not unavailable and len(json.loads(requests[0].payload)["snapshot"]["pairs"]) == 2
-    assert json.loads(evaluate(requests)[0].payload)["decision"]["raw"] == pytest.approx(300/1300)
+    assert json.loads(evaluate(requests)[0].payload)["decision"]["raw"] == pytest.approx(300/1200)
 
 
 def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
@@ -775,5 +775,5 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(mode, side, c
     for started, completed in [(NOW-150, NOW-50), (NOW-500, NOW-300), (NOW-200, NOW-100)]:
         decision, = run(value, marks, fills_started_ms=started, fills_completed_ms=completed)[0]
         results.append(json.loads(decision.payload)['decision'])
-    assert results[0]['action'] == ('normal' if cooldown == 1. else 'panic')
+    assert results[0]['action'] == 'normal'
     assert results[1:] == [results[0], results[0]]

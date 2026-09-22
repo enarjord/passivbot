@@ -151,9 +151,6 @@ pub(crate) fn compose_prepared(
     {
         let mut reference = CurrencySum::new();
         reference.subtract(&anchor);
-        for pair in &prepared.pairs {
-            reference.add(-pair.history.samples.last().unwrap().upnl);
-        }
         reasons.insert("estimated_entry_peak".into());
         Some(reference.value(&mut reasons))
     } else {
@@ -161,10 +158,7 @@ pub(crate) fn compose_prepared(
     };
     let mut cashflows = CurrencySum::new();
     let mut peak = CurrencySum::new();
-    let mut endpoint = anchor.clone();
-    for pair in &prepared.pairs {
-        endpoint.add(pair.history.samples.last().unwrap().upnl);
-    }
+    let endpoint = anchor.clone();
     let mut counts = vec![0; prepared.pairs.len()];
     let mut realized = 0.0;
     let mut realized_valid = false;

@@ -82,8 +82,8 @@ def estimate_candle_free(snapshot, mode, *, pside=None, symbol=None):
             peak = max(peak, realized)
     # Preserve known cashflow peaks and current losses, but do not invent past
     # UPNL observations. Gains offset losses in currency before any division.
-    endpoint = realized + upnl
-    reference = max(budget, budget + peak - endpoint)
+    endpoint = realized
+    reference = budget + peak - endpoint
     result = signal([Observation(snapshot.now, realized, upnl)], budget,
                     snapshot.settings.ema_span, snapshot.settings.threshold,
                     entry_reference=reference)

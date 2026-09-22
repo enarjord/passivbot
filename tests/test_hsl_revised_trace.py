@@ -66,7 +66,7 @@ def oracle(snapshot, mode, **selectors):
                     openings.append(step.fill.timestamp)
         episodes[index] = replace(episodes[index], opened_at=min(openings, default=None))
     if any("estimated_opening_basis" in h.reasons for h in histories):
-        reference_delta = -sum((h.rows[-1].pnl + h.rows[-1].upnl for h in histories), dec(0))
+        reference_delta = -sum((h.rows[-1].pnl for h in histories), dec(0))
         episodes[0] = replace(episodes[0], entry_reference_delta=reference_delta)
     return episodes
 
@@ -92,10 +92,10 @@ def compare(snapshot, mode="unified", **selectors):
     return actual, expected
 
 
-def decisions(snapshot, mode="unified", *, intervention="panic", restart="always", threshold=.1, **selectors):
+def decisions(snapshot, mode="unified", *, restart="always", threshold=.1, **selectors):
     actual, expected = compare(snapshot, mode, **selectors)
     settings = dict(now=snapshot.now, start=snapshot.start, budget=float(snapshot.balance),
-                    span=1.0, threshold=threshold, cooldown=2*M, restart=restart, intervention=intervention)
+                    span=1.0, threshold=threshold, cooldown=2*M, restart=restart)
     reference = replay(expected, **settings)
     settings["cooldown_ms"] = settings.pop("cooldown")
     import passivbot_rust as pbr
@@ -131,15 +131,14 @@ def test_scope_flatten_is_final_risk_sample_then_cooldown(mode, selectors):
 
 
 @pytest.mark.parametrize("pside", ["long", "short"])
-@pytest.mark.parametrize("intervention", ["panic", "normal"])
 @pytest.mark.parametrize("restart", ["always", "never"])
-def test_same_timestamp_reopen_is_after_supported_flat(pside, intervention, restart):
+def test_same_timestamp_reopen_is_after_supported_flat(pside, restart):
     snapshot = cases.frame(closed(pside=pside, reopened=True))
-    results = decisions(snapshot, intervention=intervention, restart=restart)
-    assert results[-1]["action"] == ("panic" if intervention == "panic" else "normal")
+    results = decisions(snapshot, restart=restart)
+    assert results[-1]["action"] == "normal"
     at_flat = [r for r in results if r["timestamp"] == 3*M]
     assert at_flat[0]["reason"] == "stop_flattened"
-    assert any(r["reason"] == f"{intervention}_intervention" for r in at_flat[1:])
+    assert any(r["reason"] == "green" for r in at_flat[1:])
 
 
 def test_multi_flat_same_timestamp_preserves_cashflow_prefixes():
@@ -218,7 +217,7 @@ def test_currency_centering_retains_small_fee_after_large_common_realized_prefix
 def test_normal_intervention_still_panics_on_large_reopening_fee():
     p = closed(reopened=True)
     p = replace(p, fills=(*p.fills[:-1], replace(p.fills[-1], fee=dec(-25))))
-    results = decisions(cases.frame(p), intervention="normal")
+    results = decisions(cases.frame(p))
     assert results[-1]["action"] == "panic"
     assert results[-1]["red_at"] == 3*M
     assert results[-1]["raw"] == pytest.approx(.2)
@@ -239,8 +238,7 @@ def test_generated_clean_partial_close_and_reopen_traces(seed):
     fills.append(Fill("reopen", 9*M, d, prices[9*M], 0, dec("-.1")))
     p = cases.pair(size=d, basis=prices[9*M], mark=prices[11*M], pside=side,
                    fills=fills, prices=prices, now=now)
-    for intervention in ("panic", "normal"):
-        decisions(cases.frame(p, now=now), intervention=intervention)
+    decisions(cases.frame(p, now=now))
 
 
 @pytest.mark.parametrize("damage", ["missing_open", "missing_partial", "unknown_quantity", "missing_cashflow"])
@@ -264,10 +262,9 @@ def test_historical_damage_stays_numerical_and_repair_rebuilds_trace(damage):
 
 
 @pytest.mark.parametrize("pside", ["long", "short"])
-@pytest.mark.parametrize("intervention", ["normal", "panic"])
 @pytest.mark.parametrize("restart", ["always", "never"])
 @pytest.mark.parametrize("tied", [False, True])
-def test_round_trip_between_candles_retains_exchange_intervention(pside, intervention, restart, tied):
+def test_round_trip_between_candles_retains_exchange_intervention(pside, restart, tied):
     base = closed(pside=pside)
     direction = 1 if pside == "long" else -1
     price = 80 if direction == 1 else 120
@@ -281,25 +278,23 @@ def test_round_trip_between_candles_retains_exchange_intervention(pside, interve
     actual, expected = compare(snapshot)
     assert actual["episodes"][1]["opened_at"] == opened
     assert not any(p["exposed"] for p in actual["episodes"][1]["points"])
-    results = decisions(snapshot, intervention=intervention, restart=restart)
-    assert results[-1]["action"] == ("normal" if intervention == "normal" else "halted")
-    assert results[-1]["red_at"] == (None if intervention == "normal" else opened)
-    assert results[-1]["flat_at"] == (None if intervention == "normal" else flattened)
+    results = decisions(snapshot, restart=restart)
+    assert results[-1]["action"] == "normal"
+    assert results[-1]["red_at"] is None
+    assert results[-1]["flat_at"] is None
 
 
 @pytest.mark.parametrize("opening", [3*M+10, 5*M, 5*M+10])
-@pytest.mark.parametrize("intervention", ["normal", "panic"])
-def test_reopen_time_precedes_later_sample_cooldown_expiry(opening, intervention):
+def test_reopen_time_precedes_later_sample_cooldown_expiry(opening):
     base = closed()
     close_at = 5*M+20
     p = cases.pair(fills=(*base.fills,
                          Fill("reopen", opening, 1, 80, 0),
                          Fill("reflat", close_at, -1, 80, 0)),
                    prices={0:100, M:100, 2*M:80, 3*M:80}, now=6*M)
-    results = decisions(cases.frame(p, now=6*M), intervention=intervention)
-    panicked = intervention == "panic" and opening < 5*M
-    assert results[-1]["action"] == ("halted" if panicked else "normal")
-    assert results[-1]["red_at"] == (opening if panicked else None)
+    results = decisions(cases.frame(p, now=6*M))
+    assert results[-1]["action"] == "normal"
+    assert results[-1]["red_at"] is None
 
 
 @pytest.mark.parametrize("side,quantity,entry", [("long", 1, 80), ("short", -1, 120)])
@@ -319,8 +314,7 @@ def test_explicit_simulator_phase_prevents_pre_entry_profit(side, quantity, entr
     import passivbot_rust as pbr
     result = json.loads(pbr.hsl_revised_controller(json.dumps(dict(
         now=4*M, start=0, budget=100, span=1, threshold=.01,
-        cooldown_ms=M, restart="always", intervention="panic",
-        episodes=actual["episodes"]))))
+        cooldown_ms=M, restart="always",         episodes=actual["episodes"]))))
     assert all(r["action"] == "normal" and r["raw"] == 0 for r in result)
 
 
@@ -355,18 +349,18 @@ def test_missing_opening_with_flat_candles_seeds_entry_peak(pside, mode, selecto
     selectors = dict(selectors, **({"pside": pside} if mode != "unified" else {}))
     snapshot = cases.frame(p, balance=1000)
     actual, expected = compare(snapshot, mode, **selectors)
-    assert actual["episodes"][0]["entry_reference_delta"] == 100
+    assert actual["episodes"][0]["entry_reference_delta"] == 0
     assert "estimated_entry_peak" in actual["reasons"]
     assert len(actual["episodes"][0]["points"]) == 5  # no synthetic EMA row
     settings = dict(now=snapshot.now, start=0, budget=1000, span=10_000.5,
-                    threshold=.08, cooldown=0, restart="always", intervention="panic")
+                    threshold=.08, cooldown=0, restart="always")
     reference = replay(expected, **settings)
     settings["cooldown_ms"] = settings.pop("cooldown")
     import passivbot_rust as pbr
     result = json.loads(pbr.hsl_revised_controller(json.dumps(dict(episodes=actual["episodes"], **settings))))
     assert len(result) == len(reference)
     for a, e in zip(result, reference):
-        assert a["raw"] == pytest.approx(100/1100)
+        assert a["raw"] == pytest.approx(100/1000)
         assert a["ema"] == pytest.approx(float(e.ema))
         assert a["action"] == e.action == "panic"
 
@@ -375,7 +369,7 @@ def test_opening_evidence_replaces_estimate_instead_of_latching_red():
     price = 90
     p = cases.pair(size=10, basis=100, mark=price, prices={t: price for t in range(0, 5*M, M)})
     missing = rust_trace(payload(cases.frame(p, balance=1000), "unified"))
-    assert missing["episodes"][0]["entry_reference_delta"] == 100
+    assert missing["episodes"][0]["entry_reference_delta"] == 0
     # A late opening establishes an initially flat scope; ordinary candles/fees
     # now define the peak. The old approximation has no persistent authority.
     complete = cases.after_position(replace(p, fills=(Fill("open", M, 10, 100, 0, 0),)))
@@ -417,7 +411,7 @@ def test_window_clipping_drops_old_cashflows_before_new_entry_reference():
                    fills=[Fill("expired-close", -M, -5, 80, -500, -2)],
                    prices={0:90, M:90, 2*M:90, 3*M:90})
     trace, _ = compare(cases.frame(p, balance=1000))
-    assert trace["episodes"][0]["entry_reference_delta"] == 100
+    assert trace["episodes"][0]["entry_reference_delta"] == 0
 
 
 @pytest.mark.fake_live
@@ -454,6 +448,6 @@ def test_fake_exchange_missing_opening_with_candles_rebuilds_without_cache(pside
     frame = cases.frame(p, start=start, now=client.now_ms, balance=client.balance_total)
     result = decisions(frame, "coin", pside=pside, symbol=symbol, threshold=.08)
     assert result[-1]["action"] == "panic"
-    assert result[-1]["raw"] == pytest.approx(100/(client.balance_total+100))
+    assert result[-1]["raw"] == pytest.approx(100/client.balance_total)
     copied = replace(frame, pairs=tuple(replace(pair) for pair in frame.pairs))
     assert decisions(copied, "coin", pside=pside, symbol=symbol, threshold=.08) == result

@@ -1,6 +1,6 @@
 //! Revised backtest execution integration. Permission is rebuilt from simulator facts.
 use super::*;
-use crate::hsl_revised_controller::{Action, Intervention, Restart};
+use crate::hsl_revised_controller::{Action, Restart};
 use crate::hsl_revised_evaluator as evaluator;
 use crate::hsl_revised_history::PositionSide;
 use crate::hsl_revised_snapshot::Mode;
@@ -22,7 +22,6 @@ pub struct Policy {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub mode: String,
-    pub intervention: String,
     pub sides: [Policy; 2],
     pub portfolio: Option<Policy>,
     pub coins: BTreeMap<String, [Policy; 2]>,
@@ -33,9 +32,6 @@ impl Config {
     pub fn validate(&self, coins: &[String], lookback: f64, interval: u64) -> Result<(), String> {
         if !["coin", "pside", "unified"].contains(&self.mode.as_str()) {
             return Err("invalid revised HSL signal mode".into());
-        }
-        if !["panic", "normal"].contains(&self.intervention.as_str()) {
-            return Err("invalid revised HSL intervention policy".into());
         }
         if self.mode != "coin" && !self.coins.is_empty() {
             return Err("revised HSL coin policies require coin mode".into());
@@ -172,22 +168,11 @@ impl Backtest<'_> {
         coin: Option<usize>,
         boundary: bool,
     ) -> Result<Scope, String> {
-        let cfg = self
-            .backtest_params
-            .equity_hard_stop_loss
-            .revised
-            .as_ref()
-            .ok_or("missing revised HSL config")?;
         let policy = self.revised_policy(side, coin)?;
         let restart = match policy.restart_after_red_policy.as_deref() {
             Some("always") => Restart::Always,
             Some("never") => Restart::Never,
             _ => return Err("invalid revised HSL restart policy".into()),
-        };
-        let intervention = match cfg.intervention.as_str() {
-            "panic" => Intervention::Panic,
-            "normal" => Intervention::Normal,
-            _ => return Err("invalid revised HSL intervention policy".into()),
         };
         if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
             return Err("invalid revised HSL panic close order type".into());
@@ -221,7 +206,6 @@ impl Backtest<'_> {
             threshold: policy.red_threshold,
             cooldown_ms: cooldown.round() as i64,
             restart,
-            intervention,
         })?;
         result.reasons.extend(observed.reasons);
         Ok(Scope {

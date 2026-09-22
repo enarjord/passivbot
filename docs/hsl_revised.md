@@ -27,13 +27,17 @@ drawdown. Within the configured lookback and current reset episode:
 
 ```text
 X[t] = cumulative net realized PnL[t] + unrealized PnL[t]
-equity[t] = budget + X[t] - X[last]
+current_equity = budget + unrealized PnL[last]
+equity[t] = current_equity + X[t] - X[last]
 peak[t] = cumulative_max(equity)[t]
 raw_drawdown[t] = (peak[t] - equity[t]) / peak[t]
 smoothed[t] = EMA(raw_drawdown, span=ema_span_minutes, adjust=False)[t]
 score = min(raw_drawdown[last], smoothed[last])
 RED = score > red_threshold
 ```
+
+Only the current score authorizes panic. Historical threshold crossings do not latch RED.
+Recovery to GREEN retires unfilled panic orders, including after a partial panic close.
 
 The first raw drawdown seeds the EMA. Fractional spans are preserved. Repeated updates
 within a minute replace that minute's sample rather than repeatedly advancing the EMA.
@@ -56,9 +60,10 @@ prefix inside the lookback. Live valuation ends at a fresh current mark. A histo
 wick that recovers before the close is not an additional HSL sample.
 
 With no usable history, current size, basis and mark still define current UPNL. The
-estimator uses an entry-equity reference `budget - UPNL` and one drawdown sample; it does
+estimator uses an entry-equity reference `budget` and one drawdown sample; it does
 not invent an earlier zero sample to dilute the EMA. For loss `L`, the minimal signal is
-`L / (budget + L)`: a 100 loss against a 1,000 budget gives approximately 9.09%. This is
+`L / budget`: a 100 loss against a 1,000 budget gives 10%.
+Current equity may be zero or negative; this is a loss signal, not missing input. This is
 part of the same evaluator, not a separately timed fallback. Available history is not
 arbitrarily discarded to use this shorter path.
 
@@ -71,7 +76,10 @@ Other strategy consumers retain their own input requirements.
 ## Stops, cooldown and restart
 
 Trading has GREEN and RED behavior; there are no YELLOW/ORANGE trading tiers or separate
-terminal drawdown threshold. After a reconstructed stop flattens its scope:
+terminal drawdown threshold. Only the latest episode matters. Evaluate its terminal accounting sample, including the
+final realized PnL and fees, before resetting the peak and EMA. If that terminal score
+exceeds RED, the flat scope is eligible for cooldown regardless of the closing order type.
+An earlier RED followed by terminal GREEN does not start cooldown. For an eligible scope:
 
 - `restart_after_red_policy=always` permits restart after cooldown. Zero cooldown means
   no wait, subject to current HSL and ordinary strategy requirements.
@@ -84,12 +92,17 @@ fill in that scope. Repeated observations do not renew it. A delayed final fill 
 the anchor and restore remaining cooldown. No retained fills means no historical cooldown.
 Aggregate flatness requires every selected position to be zero, not zero net exposure.
 
-For new exposure appearing during a halt, `live.hsl_position_during_cooldown_policy=panic`
-closes it; `normal` clears the applicable halt and resumes normal operation with HSL still
-enabled. Residual exposure from an unfinished panic is not a new intervention.
+Any renewed exposure clears the preceding cooldown and begins normal evaluation of the
+new episode. There is no revised `hsl_position_during_cooldown_policy` or forced re-panic.
+Fresh losses in that new episode can independently produce current RED.
+
+Cooldown is reconstructed each evaluation. A balance/budget change or corrected history
+can remove or restore terminal RED; any remaining duration is measured from the original
+estimated flatten timestamp, never from the time of reclassification. This also applies
+to the lookback-bounded `never` restriction.
 
 All history and lifecycle anchors outside the lookback are forgotten, including `never`
-halts and unfinished panic states. Equal exchange evidence and configuration reconstruct
+halts. Equal exchange evidence and configuration reconstruct
 equal decisions after restart. A previous RED decision that produced no recoverable
 exchange evidence has no separate local authority. There is no revised emergency journal.
 Repeated stops under `always` have no second, terminal accumulated-loss threshold.

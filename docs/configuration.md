@@ -777,15 +777,17 @@ Revised HSL removes `tier_ratios`, `orange_tier_mode`, and
 `no_restart_drawdown_threshold`. Ordinary supplied fields are removed with migration
 warnings; optimizer bounds, explicit patches, and fixed overrides targeting them are
 rejected. Removed yellow/orange time metrics are rejected as objectives or limits.
-The surviving intervention choices are `panic` and `normal`; migrate any previous
-`manual`, `tp_only` or `graceful_stop` choice explicitly. Enabled HSL requires
+`live.hsl_position_during_cooldown_policy` is also removed from revised configurations
+with a warning; any renewed exposure clears cooldown. Legacy retains its existing policy.
+Explicit revised optimizer/scenario overrides targeting the removed parameter are rejected.
+Enabled HSL requires
 `live.pnls_max_lookback_days` in **[1, 90]**, including fractional days; invalid values
 fail rather than being clamped. EMA spans remain fractional and at least one minute.
 
 Unified optimizer bounds use `optimize.bounds.hsl` and resolve to `bot.hsl` fields;
 fixed overrides use explicit paths such as `bot.hsl.restart_after_red_policy`.
 Side HSL bounds/overrides and per-coin HSL patches are rejected in unified mode.
-Per-coin HSL patches are supported only in coin mode. Engine and intervention choices
+Per-coin HSL patches are supported only in coin mode. Engine selection and effective HSL parameters
 participate in the saved-fitness contract; legacy scores cannot be treated as revised
 results. To return to legacy, use a legacy-compatible config as well as selecting
 `legacy`; revised portfolio config is not silently converted to legacy side settings.
