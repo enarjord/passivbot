@@ -1,4 +1,4 @@
-//! Revised HSL numerical kernel. Not yet connected to any trading controller.
+//! Revised HSL numerical kernel shared by diagnostic and trading-controller consumers.
 //!
 //! Inputs are already scoped currency observations, not individual drawdown ratios.
 //! Reconstruction, lifecycle and execution adapters must not use this kernel alone
@@ -142,6 +142,55 @@ pub(crate) fn signal_with_references(
     point_references: &[Option<f64>],
     anchor: &Observation,
 ) -> Result<Signal, String> {
+    let mut out = Signal {
+        equity: Vec::with_capacity(rows.len()),
+        peaks: Vec::with_capacity(rows.len()),
+        raw: Vec::with_capacity(rows.len()),
+        ema: Vec::with_capacity(rows.len()),
+        panic: Vec::with_capacity(rows.len()),
+        numeric_range_approximation: false,
+        last_peak_delta: None,
+    };
+    let summary = visit_signal(
+        rows,
+        budget,
+        span,
+        threshold,
+        entry_reference,
+        entry_reference_delta,
+        point_references,
+        anchor,
+        |_, equity, peak, raw, ema, panic| {
+            out.equity.push(equity);
+            out.peaks.push(peak);
+            out.raw.push(raw);
+            out.ema.push(ema);
+            out.panic.push(panic);
+        },
+    )?;
+    out.numeric_range_approximation = summary.numeric_range_approximation;
+    out.last_peak_delta = summary.last_peak_delta;
+    Ok(out)
+}
+
+pub(crate) struct SignalSummary {
+    pub numeric_range_approximation: bool,
+    pub last_peak_delta: Option<f64>,
+}
+
+/// The same arithmetic can stream to its controller without allocating the five
+/// diagnostic output arrays. The public numerical API collects this stream.
+pub(crate) fn visit_signal(
+    rows: &[Observation],
+    budget: f64,
+    span: f64,
+    threshold: f64,
+    entry_reference: Option<f64>,
+    entry_reference_delta: Option<f64>,
+    point_references: &[Option<f64>],
+    anchor: &Observation,
+    mut visit: impl FnMut(usize, f64, f64, f64, f64, bool),
+) -> Result<SignalSummary, String> {
     validate_settings(span, threshold)?;
     if !anchor.realized.is_finite()
         || !anchor.unrealized.is_finite()
@@ -184,76 +233,51 @@ pub(crate) fn signal_with_references(
     let budget = budget * scale;
     let entry_reference = entry_reference.map(|r| r * scale);
     let entry_reference_delta = entry_reference_delta.map(|r| r * scale);
-    let mut out = Signal {
-        equity: Vec::with_capacity(rows.len()),
-        peaks: Vec::with_capacity(rows.len()),
-        raw: Vec::with_capacity(rows.len()),
-        ema: Vec::with_capacity(rows.len()),
-        panic: Vec::with_capacity(rows.len()),
-        numeric_range_approximation: scale != 1.0,
-        last_peak_delta: None,
-    };
-    let last = anchor;
-    let mut deltas = Vec::with_capacity(rows.len());
-    // Subtract the common currency offset first: a large realized baseline must
-    // not erase an otherwise representable unrealized change or the budget.
-    for row in rows {
-        let realized_delta = row.realized * scale - last.realized * scale;
-        let unrealized_delta = row.unrealized * scale;
-        let direct = realized_delta + unrealized_delta;
-        let delta = if direct.is_finite() {
+    let mut approximate = scale != 1.0;
+    // Keep the same currency subtraction order as the collected reference.
+    let delta = |row: &Observation, approximate: &mut bool| {
+        let direct = (row.realized * scale - anchor.realized * scale) + row.unrealized * scale;
+        if direct.is_finite() {
             direct
         } else {
-            // Opposite oversized deltas may cancel to a representable result.
-            // Do not saturate each independently and erase that residual risk.
-            out.numeric_range_approximation = true;
-            let scaled = (row.realized * 0.25 - last.realized * 0.25) + row.unrealized * 0.25;
-            bounded(scaled * 4.0, &mut out.numeric_range_approximation)
-        };
-        deltas.push(delta);
-        out.equity.push(bounded(
-            budget + delta,
-            &mut out.numeric_range_approximation,
-        ));
-    }
-    // Exact endpoint identity, including after range-limited history estimation.
-    if rows
-        .last()
-        .is_some_and(|r| r.realized == anchor.realized && r.unrealized == anchor.unrealized)
-    {
-        *out.equity.last_mut().unwrap() = bounded(
-            budget + anchor.unrealized * scale,
-            &mut out.numeric_range_approximation,
-        );
-    }
-    let mut peak = entry_reference.unwrap_or(out.equity[0]);
-    // An explicit absolute reference already has the caller's float precision.
-    // Otherwise retain the relative currency peak, so adding a large budget
-    // cannot erase an independently representable peak-to-current loss.
-    let mut peak_delta = entry_reference
-        .is_none()
-        .then_some(entry_reference_delta.map_or(deltas[0], |reference| reference.max(deltas[0])));
+            *approximate = true;
+            let scaled = (row.realized * 0.25 - anchor.realized * 0.25) + row.unrealized * 0.25;
+            bounded(scaled * 4.0, approximate)
+        }
+    };
+    let first_delta = delta(&rows[0], &mut approximate);
+    let mut peak = entry_reference.unwrap_or(bounded(budget + first_delta, &mut approximate));
+    let mut peak_delta = entry_reference.is_none().then_some(
+        entry_reference_delta.map_or(first_delta, |reference| reference.max(first_delta)),
+    );
     if let Some(relative_peak) = peak_delta {
-        peak = bounded(budget + relative_peak, &mut out.numeric_range_approximation);
+        peak = bounded(budget + relative_peak, &mut approximate);
     }
     let alpha = 2.0 / (span + 1.0);
     let mut previous_minute = None;
     let mut baseline: Option<f64> = None;
-    for (index, (row, equity)) in rows.iter().zip(out.equity.iter().copied()).enumerate() {
+    let mut previous_ema = None;
+    for (index, row) in rows.iter().enumerate() {
+        let current_delta = delta(row, &mut approximate);
+        let equity = if index + 1 == rows.len()
+            && row.realized == anchor.realized
+            && row.unrealized == anchor.unrealized
+        {
+            bounded(budget + anchor.unrealized * scale, &mut approximate)
+        } else {
+            bounded(budget + current_delta, &mut approximate)
+        };
         peak = peak.max(equity);
         if let Some(relative_peak) = &mut peak_delta {
-            *relative_peak = relative_peak.max(deltas[index]);
+            *relative_peak = relative_peak.max(current_delta);
             if let Some(reference) = point_references.get(index).copied().flatten() {
                 *relative_peak = relative_peak.max(reference * scale);
-                peak = bounded(
-                    budget + *relative_peak,
-                    &mut out.numeric_range_approximation,
-                );
+                peak = bounded(budget + *relative_peak, &mut approximate);
             }
         }
         let drawdown = if peak > 0.0 && peak_delta.is_some() {
             let relative_peak = peak_delta.unwrap();
-            let loss = relative_peak - deltas[index];
+            let loss = relative_peak - current_delta;
             let denominator = budget + relative_peak;
             bounded(
                 if loss.is_finite() && denominator.is_finite() {
@@ -261,10 +285,10 @@ pub(crate) fn signal_with_references(
                 } else {
                     // Power-of-two scaling avoids overflow in either positive
                     // denominator or opposite-sign loss subtraction.
-                    (relative_peak * 0.25 - deltas[index] * 0.25)
+                    (relative_peak * 0.25 - current_delta * 0.25)
                         / (budget * 0.25 + relative_peak * 0.25)
                 },
-                &mut out.numeric_range_approximation,
+                &mut approximate,
             )
         } else if peak > 0.0 {
             // Division first avoids overflow when peak and negative equity have
@@ -275,7 +299,7 @@ pub(crate) fn signal_with_references(
                 } else {
                     1.0 - equity / peak
                 },
-                &mut out.numeric_range_approximation,
+                &mut approximate,
             )
         } else {
             // Explicit reference rule for a nonpositive historical peak.
@@ -283,29 +307,40 @@ pub(crate) fn signal_with_references(
         };
         let minute = row.timestamp_ms.div_euclid(60_000);
         if previous_minute != Some(minute) {
-            baseline = out.ema.last().copied();
+            baseline = previous_ema;
         }
         let ema = baseline.map_or(drawdown, |prior| {
-            bounded(
-                alpha * drawdown + (1.0 - alpha) * prior,
-                &mut out.numeric_range_approximation,
-            )
+            bounded(alpha * drawdown + (1.0 - alpha) * prior, &mut approximate)
         });
-        out.peaks.push(peak);
-        out.raw.push(drawdown);
-        out.ema.push(ema);
-        out.panic.push(drawdown.min(ema) > threshold);
+        previous_ema = Some(ema);
+        let displayed_equity = if scale == 1.0 {
+            equity
+        } else {
+            bounded(equity / scale, &mut approximate)
+        };
+        let displayed_peak = if scale == 1.0 {
+            peak
+        } else {
+            bounded(peak / scale, &mut approximate)
+        };
+        visit(
+            index,
+            displayed_equity,
+            displayed_peak,
+            drawdown,
+            ema,
+            drawdown.min(ema) > threshold,
+        );
         previous_minute = Some(minute);
     }
-    if scale == 1.0 && !out.numeric_range_approximation {
-        out.last_peak_delta = peak_delta;
-    }
-    if scale != 1.0 {
-        for value in out.equity.iter_mut().chain(out.peaks.iter_mut()) {
-            *value = bounded(*value / scale, &mut out.numeric_range_approximation);
-        }
-    }
-    Ok(out)
+    Ok(SignalSummary {
+        numeric_range_approximation: approximate,
+        last_peak_delta: if scale == 1.0 && !approximate {
+            peak_delta
+        } else {
+            None
+        },
+    })
 }
 
 #[pyfunction(name = "hsl_revised_signal", signature = (rows, budget, span, threshold, entry_reference=None))]

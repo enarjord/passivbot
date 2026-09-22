@@ -1,7 +1,7 @@
 //! Pure replay of revised scoped permission from a reconstructed episode trace.
 //! No persisted or previous controller state is accepted as authority.
 
-use crate::hsl_revised::{signal_with_references, Observation};
+use crate::hsl_revised::{visit_signal, Observation};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -254,7 +254,9 @@ fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
         } else {
             None
         };
-        let risk = signal_with_references(
+        let decision_start = decisions.len();
+        let mut opening = episode.opened_at.filter(|t| *t >= input.start);
+        let risk = visit_signal(
             &rows,
             input.budget,
             input.span,
@@ -266,116 +268,120 @@ fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
                 .map(|(_, p)| p.cashflow_reference_delta)
                 .collect::<Vec<_>>(),
             &anchor,
-        )?;
-        cursor_peak = risk.last_peak_delta;
-        let mut opening = episode.opened_at.filter(|t| *t >= input.start);
-        for (index, (original_index, point)) in points.iter().enumerate() {
-            let score = risk.raw[index].min(risk.ema[index]);
-            threshold_sensitive |=
-                (score - input.threshold).abs() <= 1e-12 * score.abs().max(1.0);
-            let t = point.timestamp;
-            let mut reason = "green";
-            // Exposure, including a round trip between price observations, ends
-            // the previous cooldown. Historical RED is never a trading latch.
-            let reopened = *original_index > 0 && opening.is_some_and(|opened| opened <= t);
-            if reopened || point.exposed {
-                if flat_at.is_some() {
+            |index, _equity, _peak, raw, ema, panic| {
+                let (original_index, point) = points[index];
+                let score = raw.min(ema);
+                threshold_sensitive |=
+                    (score - input.threshold).abs() <= 1e-12 * score.abs().max(1.0);
+                let t = point.timestamp;
+                let mut reason = "green";
+                // Exposure, including a round trip between price observations, ends
+                // the previous cooldown. Historical RED is never a trading latch.
+                let reopened = original_index > 0 && opening.is_some_and(|opened| opened <= t);
+                if reopened || point.exposed {
+                    if flat_at.is_some() {
+                        events.push(LifecycleEvent {
+                            timestamp: opening.unwrap_or(t),
+                            kind: "restart",
+                            red_at: red_at.unwrap(),
+                            flat_at,
+                            reason: "exposure_resumed",
+                            raw: None,
+                            ema: None,
+                        });
+                        reason = "exposure_resumed";
+                    }
+                    if flat_at.is_some() {
+                        red_at = None;
+                    }
+                    flat_at = None;
+                    if reopened {
+                        red_at = None;
+                        opening = None;
+                    }
+                }
+                if point.exposed || point.flatten {
+                    // Evaluate the terminal accounting sample BEFORE resetting the
+                    // episode. The closing order's type is deliberately irrelevant.
+                    if panic {
+                        if red_at.is_none() {
+                            red_at = Some(t);
+                            events.push(LifecycleEvent {
+                                timestamp: t,
+                                kind: "red",
+                                red_at: t,
+                                flat_at: None,
+                                reason: "drawdown",
+                                raw: Some(raw),
+                                ema: Some(ema),
+                            });
+                        }
+                        reason = "drawdown";
+                    } else {
+                        red_at = None;
+                        reason = "green";
+                    }
+                    if point.flatten {
+                        flat_at = red_at.map(|_| t);
+                        if let Some(red) = red_at {
+                            reason = "stop_flattened";
+                            events.push(LifecycleEvent {
+                                timestamp: t,
+                                kind: "flat",
+                                red_at: red,
+                                flat_at,
+                                reason,
+                                raw: Some(raw),
+                                ema: Some(ema),
+                            });
+                        }
+                    }
+                }
+                if cooldown_finished(flat_at, t, input) {
                     events.push(LifecycleEvent {
-                        timestamp: opening.unwrap_or(t),
+                        timestamp: t,
                         kind: "restart",
                         red_at: red_at.unwrap(),
                         flat_at,
-                        reason: "exposure_resumed",
+                        reason: "cooldown_complete",
                         raw: None,
                         ema: None,
                     });
-                    reason = "exposure_resumed";
+                    red_at = None;
+                    flat_at = None;
+                    reason = "cooldown_complete";
                 }
-                if flat_at.is_some() {
+                if !point.exposed && flat_at.is_none() {
                     red_at = None;
                 }
-                flat_at = None;
-                if reopened {
-                    red_at = None;
-                    opening = None;
-                }
-            }
-            if point.exposed || point.flatten {
-                // Evaluate the terminal accounting sample BEFORE resetting the
-                // episode. The closing order's type is deliberately irrelevant.
-                if risk.panic[index] {
-                    if red_at.is_none() {
-                        red_at = Some(t);
-                        events.push(LifecycleEvent {
-                            timestamp: t,
-                            kind: "red",
-                            red_at: t,
-                            flat_at: None,
-                            reason: "drawdown",
-                            raw: Some(risk.raw[index]),
-                            ema: Some(risk.ema[index]),
-                        });
-                    }
-                    reason = "drawdown";
+                let action = if point.exposed && panic {
+                    Action::Panic
+                } else if !point.exposed && flat_at.is_some() {
+                    Action::Halted
                 } else {
-                    red_at = None;
-                    reason = "green";
+                    Action::Normal
+                };
+                observations += 1;
+                if !KEEP_HISTORY {
+                    decisions.clear();
                 }
-                if point.flatten {
-                    flat_at = red_at.map(|_| t);
-                    if let Some(red) = red_at {
-                        reason = "stop_flattened";
-                        events.push(LifecycleEvent {
-                            timestamp: t,
-                            kind: "flat",
-                            red_at: red,
-                            flat_at,
-                            reason,
-                            raw: Some(risk.raw[index]),
-                            ema: Some(risk.ema[index]),
-                        });
-                    }
-                }
-            }
-            if cooldown_finished(flat_at, t, input) {
-                events.push(LifecycleEvent {
+                decisions.push(Decision {
                     timestamp: t,
-                    kind: "restart",
-                    red_at: red_at.unwrap(),
+                    action,
+                    red_at,
                     flat_at,
-                    reason: "cooldown_complete",
-                    raw: None,
-                    ema: None,
+                    reason,
+                    raw: raw,
+                    ema: ema,
+                    numeric_range_approximation: false,
                 });
-                red_at = None;
-                flat_at = None;
-                reason = "cooldown_complete";
-            }
-            if !point.exposed && flat_at.is_none() {
-                red_at = None;
-            }
-            let action = if point.exposed && risk.panic[index] {
-                Action::Panic
-            } else if !point.exposed && flat_at.is_some() {
-                Action::Halted
-            } else {
-                Action::Normal
-            };
-            observations += 1;
-            numeric_range_approximation |= risk.numeric_range_approximation;
-            if !KEEP_HISTORY {
-                decisions.clear();
-            }
-            decisions.push(Decision {
-                timestamp: t,
-                action,
-                red_at,
-                flat_at,
-                reason,
-                raw: risk.raw[index],
-                ema: risk.ema[index],
-                numeric_range_approximation: risk.numeric_range_approximation,
-            });
+            },
+        )?;
+        cursor_peak = risk.last_peak_delta;
+        numeric_range_approximation |= risk.numeric_range_approximation;
+        let first = if KEEP_HISTORY { decision_start } else { 0 };
+        for decision in &mut decisions[first..] {
+            decision.numeric_range_approximation = risk.numeric_range_approximation;
         }
     }
     if decisions.is_empty() {

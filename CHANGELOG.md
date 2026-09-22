@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce revised-HSL CPU allocations by streaming the shared numerical signal into
+  its controller and reusing validated simulator buffers and policy references.
+  Diagnostic output, current decisions, and reconstruction fallbacks are preserved.
+
 - Reduce revised-HSL GPU history memory by storing compact minute samples and
   summaries of completed blocks, preserving same-minute peak/EMA updates and
   bounded-lookback behavior while allowing larger candidate batches.

@@ -90,6 +90,15 @@ impl Config {
     }
 }
 
+/// Borrow-free numeric view of the already validated immutable policy.
+#[derive(Clone, Copy)]
+pub(super) struct SignalSettings {
+    pub span: f64,
+    pub threshold: f64,
+    pub cooldown_ms: i64,
+    pub restart: Restart,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Scope {
     pub(super) timestamp: i64,
@@ -128,7 +137,7 @@ impl Backtest<'_> {
         &self,
         side: Option<usize>,
         coin: Option<usize>,
-    ) -> Result<Policy, String> {
+    ) -> Result<&Policy, String> {
         let cfg = self
             .backtest_params
             .equity_hard_stop_loss
@@ -138,11 +147,11 @@ impl Backtest<'_> {
         match side {
             None => cfg
                 .portfolio
-                .clone()
+                .as_ref()
                 .ok_or("missing revised portfolio HSL policy".into()),
             Some(side) => Ok(coin
                 .and_then(|c| cfg.coins.get(&self.backtest_params.coins[c]))
-                .map_or_else(|| cfg.sides[side].clone(), |p| p[side].clone())),
+                .map_or(&cfg.sides[side], |p| &p[side])),
         }
     }
 
@@ -180,17 +189,23 @@ impl Backtest<'_> {
         if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
             return Err("invalid revised HSL panic close order type".into());
         }
-        if !boundary {
-            if let Some(scope) = self.advance_revised_scope(k, side, coin, &policy) {
-                return Ok(scope);
-            }
-            if let Some(scope) = self.replay_revised_trace(k, side, coin, &policy) {
-                return Ok(scope);
-            }
-        }
         let cooldown = policy.cooldown_minutes_after_red * 60_000.0;
         if !cooldown.is_finite() || cooldown < 0.0 || cooldown >= i64::MAX as f64 {
             return Err("invalid revised HSL cooldown".into());
+        }
+        let settings = SignalSettings {
+            span: policy.ema_span_minutes,
+            threshold: policy.red_threshold,
+            cooldown_ms: cooldown.round() as i64,
+            restart,
+        };
+        if !boundary {
+            if let Some(scope) = self.advance_revised_scope(k, side, coin, settings) {
+                return Ok(scope);
+            }
+            if let Some(scope) = self.replay_revised_trace(k, side, coin, settings) {
+                return Ok(scope);
+            }
         }
         let mode = if coin.is_some() {
             Mode::Coin
@@ -220,10 +235,10 @@ impl Backtest<'_> {
         let mut result = evaluator::evaluate_for_simulator(evaluator::Input {
             snapshot: observed.snapshot,
             slots,
-            span: policy.ema_span_minutes,
-            threshold: policy.red_threshold,
-            cooldown_ms: cooldown.round() as i64,
-            restart,
+            span: settings.span,
+            threshold: settings.threshold,
+            cooldown_ms: settings.cooldown_ms,
+            restart: settings.restart,
         })?;
         result.reasons.extend(observed.reasons);
         self.seed_revised_trace((side, coin), &mut result);
@@ -276,7 +291,7 @@ impl Backtest<'_> {
                 .revised_policy(scope.0, scope.1)
                 .expect("validated revised HSL execution policy");
             params.hsl_enabled = policy.enabled;
-            params.hsl_panic_close_order_type = policy.panic_close_order_type;
+            params.hsl_panic_close_order_type = policy.panic_close_order_type.clone();
         }
         params
     }
