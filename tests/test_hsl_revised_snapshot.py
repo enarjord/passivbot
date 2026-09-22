@@ -82,7 +82,7 @@ def compare(snapshot, mode, *, quantity_step=None, **kwargs):
                 assert got[field] == pytest.approx(float(value))
     for a, e in zip(actual["boundaries"], expected.boundaries):
         assert a["timestamp"] == e.timestamp
-        assert a["lifecycle_eligible"] == e.lifecycle_eligible
+        assert "lifecycle_eligible" not in a
         assert a["pnl"] == pytest.approx(float(e.observation.pnl))
         assert a["upnl"] == 0
         for consumed, (key, fills) in zip(a["consumed"], e.consumed):
@@ -104,7 +104,7 @@ SIMPLE_CASES = [
     "roundtrip_wholly_within_unsequenced_cohort_has_final_flat_only",
     "unsequenced_cohort_cannot_prove_an_internal_flat_then_reopen",
     "old_missing_opening_does_not_poison_later_flat",
-    "clamp_cannot_create_boundary_but_does_not_poison_clean_suffix",
+    "missing_reduction_preserves_quantities_and_reconciles_current_flat",
     "unknown_quantity_retains_current_flat_with_estimated_timestamp",
     "conflicting_prefix_is_local_and_repair_rebuilds_boundaries",
     "missing_flat_fill_uses_latest_fill_timestamp_not_observation_time",
@@ -210,7 +210,7 @@ def test_quantity_roundoff_cannot_hide_a_real_flat(side, opening, first, last):
     p = cases.pair(pside=side, fills=fills)
     result = rust(payload(cases.frame(p), quantity_step=.1))
     assert len(result["boundaries"]) == 1
-    assert result["boundaries"][0]["lifecycle_eligible"]
+    assert "lifecycle_eligible" not in result["boundaries"][0]
     assert "uncertain_episode_flat" not in result["reasons"]
     compare(cases.frame(p), "unified", quantity_step=.1)
 
@@ -223,8 +223,8 @@ def test_quantity_tolerance_does_not_hide_a_material_missing_close():
     result = rust(payload(cases.frame(p)))
     assert [b["timestamp"] for b in result["boundaries"]] == [3 * cases.M]
     assert "current_flat_timestamp_estimate" in result["reasons"]
-    assert "clamped_quantity" in result["reasons"]
-    assert "uncertain_episode_flat" in result["reasons"]
+    assert "current_quantity_reconciliation" in result["reasons"]
+    assert "uncertain_episode_flat" not in result["reasons"]
     # Actual residual current exposure cannot be snapped away by historical rounding.
     p = cases.pair(size=1e-8, basis=100, fills=[])
     result = rust(payload(cases.frame(p)))
@@ -236,7 +236,7 @@ def test_many_decimal_partial_fills_do_not_accumulate_false_missing_quantity():
     fills += [Fill(f"close-{i}", i+2, "-.1", 90, -1) for i in range(2000)]
     result = rust(payload(cases.frame(cases.pair(fills=fills)), quantity_step=.1))
     assert len(result["boundaries"]) == 1
-    assert result["boundaries"][0]["lifecycle_eligible"]
+    assert "lifecycle_eligible" not in result["boundaries"][0]
     assert result["boundaries"][0]["pnl"] == -2000
 
 
@@ -248,7 +248,7 @@ def test_larger_later_position_does_not_hide_earlier_small_flat(side):
     p = cases.pair(pside=side, size=4.9*d, basis=100, fills=fills)
     result = rust(payload(cases.frame(p), quantity_step=.1))
     assert [b["timestamp"] for b in result["boundaries"]] == [2]
-    assert result["boundaries"][0]["lifecycle_eligible"]
+    assert "lifecycle_eligible" not in result["boundaries"][0]
     compare(cases.frame(p), "unified", quantity_step=.1)
 
 
@@ -307,7 +307,7 @@ def test_quantity_roundoff_scale_resets_after_later_episode_opening():
     p = cases.pair(size=1e12, basis=100, fills=fills)
     result = rust(payload(cases.frame(p)))
     assert not result["boundaries"]
-    assert "clamped_quantity" in result["reasons"]
+    assert result["pairs"][0]["history"]["events"][1]["after"] > 0
 
 
 @pytest.mark.parametrize("step", [None, .0001220703125])
@@ -320,7 +320,7 @@ def test_scale_only_rounding_does_not_certify_a_real_residual_flat(step, side):
     p = cases.pair(size=(1e12+residual)*d, basis=100, pside=side, fills=fills)
     result = rust(payload(cases.frame(p), quantity_step=step))
     assert not result["boundaries"]
-    assert "quantity_precision_unavailable" in result["reasons"]
+    assert result["pairs"][0]["history"]["opening_size"] != 0
     assert result["pairs"][0]["history"]["samples"][-1]["size"] == float(p.position.size)
 
 
@@ -433,7 +433,7 @@ def test_confirmed_flat_can_replay_cooldown_with_old_factual_mark(pside):
     result = rust(payload(frame, quantity_step=.1))
     assert "stale_flat_mark" in result["reasons"]
     assert len(result["boundaries"]) == 1
-    assert result["boundaries"][0]["lifecycle_eligible"]
+    assert "lifecycle_eligible" not in result["boundaries"][0]
     compare(frame, "unified", quantity_step=.1)
     request = payload(frame)
     request["pairs"][0]["position"].update(size=direction, basis=100.)
@@ -491,5 +491,5 @@ def test_exact_simulator_position_anchor_resolves_same_timestamp_fill(global_seq
     result = rust(value)
     eligible = global_sequence and anchor
     assert ("position_fill_timestamp_tie" in result["reasons"]) != eligible
-    assert any(b["lifecycle_eligible"] for b in result["boundaries"])
-    assert ("current_flat_timestamp_estimate" in result["reasons"]) != eligible
+    assert result["boundaries"]
+    assert "current_flat_timestamp_estimate" not in result["reasons"]

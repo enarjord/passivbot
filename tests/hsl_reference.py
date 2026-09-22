@@ -206,34 +206,35 @@ def ordered_fills(fills, start, end, direction):
     return ordered, reasons
 
 
+def quantity_path(ordered, current, direction):
+    """Minimum opening inventory; known deltas are never clamped or rewritten."""
+    prefix = [Decimal(0)]
+    for fill in ordered:
+        prefix.append(prefix[-1] + _estimated_delta(fill) * direction)
+    opening = max(Decimal(0), -min(prefix), current - prefix[-1])
+    return [(fill, opening + prefix[i], opening + prefix[i+1],
+             _estimated_delta(fill) * direction) for i, fill in enumerate(ordered)], opening
+
+
 def reconstruct(position, fills, prices, start, end):
     """One pair, coherent current snapshot; prices are minute-end estimates.
 
     No I/O/retry policy is modeled. Malformed historical price/fee/PnL fields
     degrade individual estimates; invalid current inputs are errors. This layer
-    deliberately does not decide whether an inferred flat is lifecycle evidence.
+    supplies the same estimated position path used by lifecycle reconstruction.
     """
     size, current_basis, mark, _ = position.validate()
     if start > end or any(not start <= t <= end or dec(p) <= 0 for t, p in prices.items()):
         raise ValueError("invalid price grid")
     direction = Decimal(1) if position.pside == "long" else Decimal(-1)
     ordered, reasons = ordered_fills(fills, start, end, direction)
-    after = abs(size)
-    steps = []
-    for f in reversed(ordered):
-        delta = _estimated_delta(f) * direction
-        before = after - delta
-        if before < 0:
-            reasons.add("clamped_quantity")
-            before = Decimal(0)
-        steps.append((f, before, after, delta))
-        after = before
-    steps.reverse()
+    steps, quantity = quantity_path(ordered, abs(size), direction)
+    if quantity:
+        reasons.add("estimated_opening_quantity")
     basis = next((dec(f.price) for f in ordered if _positive(f.price)),
                  current_basis if current_basis > 0 else mark)
-    if after:
+    if quantity:
         reasons.add("estimated_opening_basis")
-    quantity = after
     if not quantity:
         basis = Decimal(0)
     states = [(start - 1, quantity, basis, Decimal(0))]
@@ -263,12 +264,17 @@ def reconstruct(position, fills, prices, start, end):
         states.append((f.timestamp, after, basis, cumulative))
     if size and basis != current_basis:
         reasons.add("current_basis_reconciliation")
+    tail = steps[-1][2] if steps else quantity
+    if tail != abs(size):
+        reasons.add("current_quantity_reconciliation")
+        if not size and ordered:
+            reasons.add("current_flat_timestamp_estimate")
     rows, sizes, bases = [], [], []
     grid = dict(prices)
     grid[end] = mark
     for t, price in sorted(grid.items()):
         _, q, b, realized = next(s for s in reversed(states) if s[0] <= t)
-        if t == end:
+        if t == end or (not size and tail != 0 and ordered and t >= ordered[-1].timestamp):
             q, b = abs(size), current_basis
         rows.append(Observation(t, realized, pnl(position, direction * q, b, price)))
         sizes.append(direction * q)

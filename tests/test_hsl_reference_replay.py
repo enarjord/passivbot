@@ -106,8 +106,7 @@ def test_roundtrip_wholly_within_unsequenced_cohort_has_final_flat_only():
         assert [b.observation.pnl for b in trace.boundaries] == [-20]
         assert "estimated_fill_order" in trace.reasons
         assert "estimated_flat" in trace.reasons
-        assert trace.boundaries[0].lifecycle_eligible
-        assert "current_flat_timestamp_estimate" in trace.reasons
+        assert "current_flat_timestamp_estimate" not in trace.reasons
 
 
 def test_unsequenced_cohort_cannot_prove_an_internal_flat_then_reopen():
@@ -130,23 +129,23 @@ def test_old_missing_opening_does_not_poison_later_flat():
     assert "estimated_opening_basis" in trace.reasons
 
 
-def test_clamp_cannot_create_boundary_but_does_not_poison_clean_suffix():
-    # The old add cannot coexist with the following opening from zero; backward
-    # reconstruction clamps it. The newer complete episode remains independent.
+def test_missing_reduction_preserves_quantities_and_reconciles_current_flat():
+    # Preserve both adds. Current flatness supplies a separate estimated final
+    # reduction; the observed small close does not silently consume the old add.
     tape = [Fill("bad-add", M, 9, 100, 0), Fill("new-open", 2 * M, 1, 100, 0),
             Fill("new-close", 3 * M, -1, 70, -30)]
     trace = scope_boundaries(frame(pair(fills=tape)), "unified")
     assert [b.timestamp for b in trace.boundaries] == [3 * M]
-    assert "clamped_quantity" in trace.reasons
+    assert "current_quantity_reconciliation" in trace.reasons
 
 
 def test_unknown_quantity_retains_current_flat_with_estimated_timestamp():
     tape = [Fill("open", M, 1, 100, 0), Fill("close", 2 * M, -1, 80, -20),
             Fill("unknown", 3 * M, "NaN", 70, -5)]
     trace = scope_boundaries(frame(pair(fills=tape)), "unified")
-    assert [b.timestamp for b in trace.boundaries] == [3 * M]
-    assert "current_flat_timestamp_estimate" in trace.reasons
-    assert "uncertain_flat" in trace.reasons
+    assert [b.timestamp for b in trace.boundaries] == [2 * M]
+    assert "current_flat_timestamp_estimate" not in trace.reasons
+    assert "invalid_quantity" in trace.reasons
     p = pair(size=1, basis=100, mark=50, fills=tape, prices={0: 100, M: 100, 2 * M: 80})
     assert estimate_pair(frame(p), p.key).signal.panic[-1]
 
@@ -168,7 +167,7 @@ def test_missing_flat_fill_uses_latest_fill_timestamp_not_observation_time():
     trace = scope_boundaries(frame(p), "unified")
     assert [b.timestamp for b in trace.boundaries] == [M]
     assert "current_flat_timestamp_estimate" in trace.reasons
-    assert "clamped_quantity" in trace.reasons
+    assert "current_quantity_reconciliation" in trace.reasons
     delivered = replace(p, fills=(*p.fills, Fill("close", 2 * M, -1, 80, -20)))
     assert [b.timestamp for b in scope_boundaries(frame(delivered), "unified").boundaries] == [2 * M]
 
@@ -178,7 +177,7 @@ def test_missing_final_reduction_uses_partial_timestamp_for_current_flat():
     trace = scope_boundaries(frame(p), "unified")
     assert [b.timestamp for b in trace.boundaries] == [2 * M]
     assert "current_flat_timestamp_estimate" in trace.reasons
-    assert "uncertain_episode_flat" in trace.reasons
+    assert "current_quantity_reconciliation" in trace.reasons
     delivered = replace(p, fills=(*p.fills, Fill("final", 3 * M, -1, 80, -20)))
     assert [b.timestamp for b in scope_boundaries(frame(delivered), "unified").boundaries] == [3 * M]
 
@@ -204,7 +203,7 @@ def test_current_flat_boundary_can_use_skewed_fresh_observations():
     b = closed_tape("B")
     trace = scope_boundaries(frame(a, b), "unified")
     assert [b.timestamp for b in trace.boundaries] == [3 * M]
-    assert "current_flat_timestamp_estimate" in trace.reasons
+    assert "current_flat_timestamp_estimate" not in trace.reasons
     assert "boundary_after_position_anchor" in trace.reasons
     fresh = after_position(replace(a, position_at=4 * M, fills_at=4 * M))
     assert len(scope_boundaries(frame(fresh, b), "unified").boundaries) == 1
@@ -455,9 +454,11 @@ def test_fill_fetch_timing_changes_quality_not_current_flat_authority(timing, re
     p = capture_pair("A", original.position, 4 * M, 4 * M, original.fills, {}, prices_at=4 * M, **timing)
     trace = scope_boundaries(frame(p), "unified")
     assert [b.timestamp for b in trace.boundaries] == [3 * M]
-    assert {reason, "current_flat_timestamp_estimate"} <= trace.reasons
+    assert reason in trace.reasons
+    # A receipt beginning after the historical close supports that boundary
+    # even when the current position read is newer or shares its clock tick.
+    assert "current_flat_timestamp_estimate" not in trace.reasons
     fresh = after_position(replace(p, fills_started_at=4 * M, fills_at=4 * M))
-    assert scope_boundaries(frame(fresh), "unified").boundaries[0].lifecycle_eligible
 
 
 @pytest.mark.parametrize("other_side", ["long", "short"])
@@ -487,13 +488,13 @@ def test_conflicting_post_position_variants_do_not_override_current_flat():
     p = pair(fills=(*tape, late, replace(late, delta=2)), position_at=2 * M)
     trace = scope_boundaries(frame(p), "unified")
     assert "post_position_fill" in trace.reasons
-    assert [b.timestamp for b in trace.boundaries if b.lifecycle_eligible] == [2 * M]
-    assert "current_flat_timestamp_estimate" in trace.reasons
+    assert [b.timestamp for b in trace.boundaries] == [2 * M]
+    assert "current_flat_timestamp_estimate" not in trace.reasons
     corrected = replace(p, position_at=4 * M, position=Position(1, 90, 80),
                         fills=(*p.fills, replace(late, revision=2)))
     corrected = after_position(corrected)
     recovered = scope_boundaries(frame(corrected), "unified")
-    assert [b.timestamp for b in recovered.boundaries if b.lifecycle_eligible] == [2 * M]
+    assert [b.timestamp for b in recovered.boundaries] == [2 * M]
 
 
 def test_unrelated_pair_churn_cannot_invalidate_stable_coin_projection():
@@ -569,7 +570,6 @@ def test_same_timestamp_tail_execution_is_uncertain_until_later_position_observa
     fresh = replace(fresh, pairs=(after_position(fresh.pairs[0]),))
     observe, _ = observe_sequence(fresh, fresh)
     assert evaluate_bounded(observe, compute, scope_keys={p.key}).revalidated
-    assert scope_boundaries(fresh, "unified").boundaries[0].lifecycle_eligible
 
 
 def test_missing_requested_pair_is_not_a_silent_flat_scope_member():
@@ -684,8 +684,8 @@ def test_future_fill_is_excluded_from_current_flat_timestamp(after):
                                                    Fill("future", 5 * M, 1, 80, 0)))
     trace = scope_boundaries(frame(boundary_pair), "unified")
     assert "post_capture_fill" in trace.reasons
-    assert [b.timestamp for b in trace.boundaries if b.lifecycle_eligible] == [3 * M]
-    assert "current_flat_timestamp_estimate" in trace.reasons
+    assert [b.timestamp for b in trace.boundaries] == [3 * M]
+    assert "current_flat_timestamp_estimate" not in trace.reasons
 
 
 @pytest.mark.parametrize("corrected_timestamp,valid", [(-M, True), (5 * M, False)])
@@ -736,8 +736,7 @@ def test_impossible_correction_preserves_causal_finances_and_current_flat(mixed)
     before = scope_boundaries(original, "unified").boundaries[0]
     after = scope_boundaries(changed, "unified").boundaries[0]
     assert after.observation == before.observation and after.consumed == before.consumed
-    assert after.lifecycle_eligible
-    assert "current_flat_timestamp_estimate" in scope_boundaries(changed, "unified").reasons
+    assert "current_flat_timestamp_estimate" not in scope_boundaries(changed, "unified").reasons
 
 
 @pytest.mark.parametrize("damage", ["revision", "capture", "missing"])

@@ -6,6 +6,13 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Revised HSL now uses one best-effort fill reconciliation path for drawdown and cooldown.
+  Known fill quantities are preserved with minimum feasible opening inventory and explicit
+  current-position adjustments. Missing or ambiguous history and read ordering produce
+  diagnostics instead of a second veto on estimated flats. Fresh flat positions complete
+  missing closes at an estimated last-fill time; delayed history rebuilds the result. Legacy
+  HSL remains the default and is unchanged.
+
 - Keep shared quote requests alive when one reader times out, so revised HSL quote deadlines
   cannot cancel ordinary planning and repeatedly restart the bot. Shutdown still cancels shared
   requests and awaits their cleanup before closing clients through every close path. Late non-transient

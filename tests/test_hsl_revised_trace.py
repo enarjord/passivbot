@@ -28,7 +28,7 @@ def oracle(snapshot, mode, **selectors):
     current_pnl = sum((h.rows[-1].pnl for h in histories), dec(0))
     boundaries = scope_boundaries(snapshot, mode, **selectors)
     flat_rows = [Point(Observation(b.timestamp, b.observation.pnl-current_pnl, dec(0)), False, True)
-                 for b in boundaries.boundaries if b.lifecycle_eligible]
+                 for b in boundaries.boundaries]
     sample_rows = []
     for index in range(len(histories[0].rows)):
         rows = [h.rows[index] for h in histories]
@@ -50,7 +50,7 @@ def oracle(snapshot, mode, **selectors):
         episodes.append(Episode(tuple(points)))
     # Derive lifecycle metadata independently from the exact fill-prefix sets
     # at consecutive supported flats, not from sampled position sizes.
-    flats = [b for b in boundaries.boundaries if b.lifecycle_eligible]
+    flats = [b for b in boundaries.boundaries]
     for index in range(1, len(episodes)):
         preceding = dict(flats[index-1].consumed)
         following = dict(flats[index].consumed) if index < len(flats) else None
@@ -62,7 +62,7 @@ def oracle(snapshot, mode, **selectors):
                     continue
                 if following is not None and step.fill not in following[pair.key]:
                     continue
-                if step.clean_tail and step.before == 0 and step.after > 0:
+                if step.before == 0 and step.after > 0:
                     openings.append(step.fill.timestamp)
         episodes[index] = replace(episodes[index], opened_at=min(openings, default=None))
     if any("estimated_opening_basis" in h.reasons for h in histories):
