@@ -381,6 +381,16 @@ FIELD_RUNTIME_RULES = {
             "live": "Behavior",
         },
     },
+    "live.hsl_engine": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
     "live.hsl_signal_mode": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -1275,6 +1285,20 @@ RESERVED_CLI_ARGS = {
             "evidence (panic/cooldown/no-restart may be wrong). Per-invocation only; "
             "values persisted in config files are ignored."
         ),
+    },
+    "live.hsl_engine": {
+        "visible": ["--hsl-engine"],
+        "hidden": ["--live.hsl_engine", "--live_hsl_engine"],
+        "type": str,
+        "metavar": "ENGINE",
+        "choices": ("legacy", "revised"),
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "HSL implementation: legacy or revised. Defaults to the config value (legacy when omitted).",
     },
     "live.hsl_signal_mode": {
         "visible": ["--hsl-signal-mode"],

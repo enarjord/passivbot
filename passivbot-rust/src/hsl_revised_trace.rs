@@ -166,6 +166,8 @@ pub(crate) fn compose_prepared(
         endpoint.add(pair.history.samples.last().unwrap().upnl);
     }
     let mut counts = vec![0; prepared.pairs.len()];
+    let mut realized = 0.0;
+    let mut realized_valid = false;
     let mut episodes = Vec::new();
     let mut points = Vec::new();
     let mut opened_at = None;
@@ -184,6 +186,7 @@ pub(crate) fn compose_prepared(
         }) {
             let boundary = boundaries.next().unwrap();
             let targets: Vec<_> = boundary.consumed.iter().map(|c| c.count).collect();
+            let cashflows_changed = counts != targets;
             let opening = consume(
                 &prepared,
                 &mut counts,
@@ -194,12 +197,16 @@ pub(crate) fn compose_prepared(
                 input.global_fill_sequence,
                 &mut reasons,
             );
+            if cashflows_changed || !realized_valid {
+                realized = centered(&cashflows, &anchor, &mut reasons);
+                realized_valid = true;
+            }
             if !episodes.is_empty() {
                 opened_at = opened_at.or(opening);
             }
             points.push(Point {
                 timestamp: boundary.timestamp,
-                pnl: centered(&cashflows, &anchor, &mut reasons),
+                pnl: realized,
                 upnl: 0.0,
                 exposed: false,
                 flatten: true,
@@ -216,7 +223,7 @@ pub(crate) fn compose_prepared(
             // after a reopen would erase its opening fee from the new peak.
             points.push(Point {
                 timestamp: boundary.timestamp,
-                pnl: centered(&cashflows, &anchor, &mut reasons),
+                pnl: realized,
                 upnl: 0.0,
                 exposed: false,
                 flatten: false,
@@ -238,6 +245,7 @@ pub(crate) fn compose_prepared(
                 })
             })
             .collect();
+        let cashflows_changed = counts != targets;
         let opening = consume(
             &prepared,
             &mut counts,
@@ -248,20 +256,35 @@ pub(crate) fn compose_prepared(
             input.global_fill_sequence,
             &mut reasons,
         );
+        if cashflows_changed || !realized_valid {
+            realized = centered(&cashflows, &anchor, &mut reasons);
+            realized_valid = true;
+        }
         if !episodes.is_empty() {
             opened_at = opened_at.or(opening);
         }
-        let mut upnl = CurrencySum::new();
-        let mut exposed = false;
-        for pair in &prepared.pairs {
-            let sample = &pair.history.samples[sample_index];
-            upnl.add(sample.upnl);
-            exposed |= sample.size != 0.0;
-        }
+        let (upnl, exposed) = if prepared.pairs.len() == 1 {
+            let sample = &prepared.pairs[0].history.samples[sample_index];
+            // The exact sum of one finite scalar is that scalar. Normalize zero
+            // just as CurrencySum does, without a wide accumulator per minute.
+            (
+                if sample.upnl == 0.0 { 0.0 } else { sample.upnl },
+                sample.size != 0.0,
+            )
+        } else {
+            let mut upnl = CurrencySum::new();
+            let mut exposed = false;
+            for pair in &prepared.pairs {
+                let sample = &pair.history.samples[sample_index];
+                upnl.add(sample.upnl);
+                exposed |= sample.size != 0.0;
+            }
+            (upnl.value(&mut reasons), exposed)
+        };
         points.push(Point {
             timestamp,
-            pnl: centered(&cashflows, &anchor, &mut reasons),
-            upnl: upnl.value(&mut reasons),
+            pnl: realized,
+            upnl,
             exposed,
             flatten: false,
             cashflow_reference_delta: candle_free.then(|| peak.difference(&endpoint, &mut reasons)),
