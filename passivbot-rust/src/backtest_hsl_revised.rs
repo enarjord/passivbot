@@ -37,6 +37,18 @@ impl Backtest<'_> {
         symbol: Option<&str>,
         at_flat_boundary: bool,
     ) -> Result<Inputs, String> {
+        self.revised_hsl_inputs_at_clipped(k, mode, pside, symbol, at_flat_boundary, None)
+    }
+
+    pub(super) fn revised_hsl_inputs_at_clipped(
+        &self,
+        k: usize,
+        mode: snapshot::Mode,
+        pside: Option<PositionSide>,
+        symbol: Option<&str>,
+        at_flat_boundary: bool,
+        cutoff: Option<(i64, usize)>,
+    ) -> Result<Inputs, String> {
         if self.interval_ms != 60_000 || k >= self.hlcvs.shape()[0] {
             return Err("revised HSL backtest inputs require a valid 1m bar".into());
         }
@@ -72,11 +84,16 @@ impl Backtest<'_> {
         let start = now
             .checked_sub((days * 86_400_000.0).round() as i64)
             .ok_or("backtest HSL lookback overflow")?;
+        // Earlier completed episodes cannot change current permission or the
+        // latest completed episode's cooldown. This is a suffix of the configured
+        // lookback, never an extension beyond it.
+        let start = cutoff.map_or(start, |(timestamp, _)| start.max(timestamp));
         // Simulator fills are appended in event-time order. Binary clipping and
         // row bounds keep each capture limited to the configured lookback.
         let fill_start = self
             .fills
-            .partition_point(|f| (f.timestamp_ms as i128) < start as i128);
+            .partition_point(|f| (f.timestamp_ms as i128) < start as i128)
+            .max(cutoff.map_or(0, |(_, consumed)| consumed));
         let fill_end = self
             .fills
             .partition_point(|f| (f.timestamp_ms as i128) <= now as i128);
@@ -1291,6 +1308,253 @@ mod tests {
                     .iter()
                     .any(|e| e["kind"] == "flat" && e["observed_at"] == panic.timestamp_ms));
             }
+        }
+    }
+
+    #[test]
+    fn latest_episode_suffix_preserves_current_decision() {
+        use crate::hsl_revised_controller::Restart;
+        use crate::hsl_revised_evaluator::{evaluate, Input};
+        let data = candles(50, 2);
+        let btc = Array1::from_elem(50, 50000.);
+        for (_mode, side, coin) in [
+            (snapshot::Mode::Coin, Some(LONG), Some(0)),
+            (snapshot::Mode::Pside, Some(LONG), None),
+            (snapshot::Mode::Unified, None, None),
+        ] {
+            let mode = || match (side, coin) {
+                (_, Some(_)) => snapshot::Mode::Coin,
+                (Some(_), _) => snapshot::Mode::Pside,
+                _ => snapshot::Mode::Unified,
+            };
+            let mut bt = make(&data, &btc);
+            for (k, qty) in [(3, 1.), (8, -1.), (9, 1.), (15, -1.), (18, 1.)] {
+                fill(
+                    &mut bt,
+                    k,
+                    0,
+                    PositionSide::Long,
+                    qty,
+                    if qty > 0. { 100. } else { 70. },
+                );
+                let cutoff = bt.revised_history_cutoff(side, coin);
+                let side_name = side.map(|_| PositionSide::Long);
+                let symbol = coin.map(|c| bt.backtest_params.coins[c].as_str());
+                let full = bt
+                    .revised_hsl_inputs_at(k, mode(), side_name, symbol, false)
+                    .unwrap();
+                let trimmed = bt
+                    .revised_hsl_inputs_at_clipped(k, mode(), side_name, symbol, false, cutoff)
+                    .unwrap();
+                assert!(trimmed.snapshot.start >= full.snapshot.start);
+                let config = |snapshot| Input {
+                    snapshot,
+                    slots: 1,
+                    span: 3.5,
+                    threshold: 0.06,
+                    cooldown_ms: 600_000,
+                    restart: Restart::Always,
+                };
+                let expected = evaluate(config(full.snapshot)).unwrap().decision.unwrap();
+                let actual = evaluate(config(trimmed.snapshot))
+                    .unwrap()
+                    .decision
+                    .unwrap();
+                assert_eq!(actual.action, expected.action);
+                assert_eq!(actual.flat_at, expected.flat_at);
+                assert!((actual.raw - expected.raw).abs() < 1e-12);
+                assert!((actual.ema - expected.ema).abs() < 1e-12);
+                // Discarding this optimization cannot change the selected prefix.
+                bt.revised_hsl_cutoffs.clear();
+                assert_eq!(bt.revised_history_cutoff(side, coin), cutoff);
+            }
+        }
+    }
+    #[test]
+    fn incremental_marks_match_fresh_replay_through_fills_recovery_and_budget_changes() {
+        use crate::backtest::revised_runtime::{Config, Policy};
+        use crate::hsl_revised_controller::Restart;
+        use crate::hsl_revised_evaluator::{evaluate, Input};
+        let mut data = candles(75, 2);
+        for k in 0..75 {
+            let price = match k {
+                0..=5 => 100.,
+                6..=16 => 70.,
+                17..=27 => 120.,
+                28..=43 => 80.,
+                _ => 110.,
+            };
+            for c in 0..2 {
+                for f in [HIGH, LOW, CLOSE] {
+                    data[[k, c, f]] = price + c as f64;
+                }
+            }
+        }
+        let btc = Array1::from_elem(75, 50000.);
+        for name in ["coin", "pside", "unified"] {
+            for restart in ["always", "never"] {
+                let mode = || match name {
+                    "coin" => snapshot::Mode::Coin,
+                    "pside" => snapshot::Mode::Pside,
+                    _ => snapshot::Mode::Unified,
+                };
+                let side = (name != "unified").then_some(PositionSide::Long);
+                let symbol = (name == "coin").then_some("C0");
+                let mut bt = make(&data, &btc);
+                let policy = Policy {
+                    enabled: true,
+                    red_threshold: 0.06,
+                    ema_span_minutes: 3.5,
+                    cooldown_minutes_after_red: 5.,
+                    restart_after_red_policy: Some(restart.into()),
+                    panic_close_order_type: "limit".into(),
+                };
+                bt.backtest_params.equity_hard_stop_loss.revised = Some(Config {
+                    mode: name.into(),
+                    sides: [policy.clone(), policy.clone()],
+                    portfolio: (name == "unified").then_some(policy.clone()),
+                    coins: Default::default(),
+                });
+                for k in 2..70 {
+                    bt.current_step = k;
+                    for (when, coin, side, qty) in [
+                        (3, 0, PositionSide::Long, 2.),
+                        (5, 1, PositionSide::Short, -1.),
+                        (7, 0, PositionSide::Long, 1.),
+                        (12, 0, PositionSide::Long, -1.),
+                        (15, 0, PositionSide::Long, -2.),
+                        (15, 0, PositionSide::Long, 1.),
+                        (20, 0, PositionSide::Long, -1.),
+                        (30, 1, PositionSide::Short, 1.),
+                        (32, 0, PositionSide::Long, 1.),
+                        (34, 0, PositionSide::Long, -0.5),
+                        (40, 0, PositionSide::Long, -0.5),
+                        (60, 0, PositionSide::Long, 1.),
+                    ] {
+                        if k == when {
+                            fill(&mut bt, k, coin, side, qty, data[[k, coin, CLOSE]]);
+                        }
+                    }
+                    if k == 25 || k == 45 {
+                        let delta = if k == 25 { 500. } else { -400. };
+                        bt.balance.usd_total_balance += delta;
+                        bt.balance.usd_cash_wallet += delta;
+                    }
+                    if k == 47 {
+                        bt.effective_n_positions.long = 1;
+                    }
+                    if k % 11 == 0 {
+                        bt.revised_hsl_cutoffs.clear();
+                        bt.revised_hsl_scopes.clear();
+                    }
+                    bt.update_revised_hsl(k).unwrap();
+                    let actual = bt.revised_hsl_scopes[0].result.decision.as_ref().unwrap();
+                    let full = bt
+                        .revised_hsl_inputs_at(k, mode(), side, symbol, false)
+                        .unwrap();
+                    let expected = evaluate(Input {
+                        snapshot: full.snapshot,
+                        slots: if name == "coin" {
+                            full.slots[LONG] as u64
+                        } else {
+                            1
+                        },
+                        span: policy.ema_span_minutes,
+                        threshold: policy.red_threshold,
+                        cooldown_ms: 300_000,
+                        restart: if restart == "always" {
+                            Restart::Always
+                        } else {
+                            Restart::Never
+                        },
+                    })
+                    .unwrap()
+                    .decision
+                    .unwrap();
+                    assert_eq!(
+                        actual.action, expected.action,
+                        "mode={name} restart={restart} k={k}"
+                    );
+                    assert_eq!(
+                        actual.flat_at, expected.flat_at,
+                        "mode={name} restart={restart} k={k}"
+                    );
+                    assert_eq!(
+                        actual.red_at, expected.red_at,
+                        "mode={name} restart={restart} k={k}"
+                    );
+                    assert!(
+                        (actual.raw - expected.raw).abs() < 1e-12,
+                        "mode={name} k={k}"
+                    );
+                    assert!(
+                        (actual.ema - expected.ema).abs() < 1e-12,
+                        "mode={name} k={k} actual={} expected={}",
+                        actual.ema,
+                        expected.ema
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn lookback_crossing_rebuilds_incomplete_current_episode() {
+        use crate::backtest::revised_runtime::{Config, Policy};
+        use crate::hsl_revised_controller::Restart;
+        use crate::hsl_revised_evaluator::{evaluate, Input};
+        let mut data = candles(1450, 1);
+        for k in 0..1450 {
+            for field in [HIGH, LOW, CLOSE] {
+                data[[k, 0, field]] = if k < 800 { 110. } else { 80. };
+            }
+        }
+        let btc = Array1::from_elem(1450, 50000.);
+        let mut bt = make(&data, &btc);
+        let policy = Policy {
+            enabled: true,
+            red_threshold: 0.06,
+            ema_span_minutes: 308.5,
+            cooldown_minutes_after_red: 5.,
+            restart_after_red_policy: Some("always".into()),
+            panic_close_order_type: "limit".into(),
+        };
+        bt.backtest_params.equity_hard_stop_loss.revised = Some(Config {
+            mode: "coin".into(),
+            sides: [policy.clone(), policy.clone()],
+            portfolio: None,
+            coins: Default::default(),
+        });
+        for k in [2, 3, 4, 1441, 1442, 1443, 1444, 1445] {
+            bt.current_step = k;
+            if k == 3 {
+                fill(&mut bt, k, 0, PositionSide::Long, 1., 100.);
+            }
+            bt.update_revised_hsl(k).unwrap();
+            let actual = bt.revised_hsl_scopes[0].result.decision.as_ref().unwrap();
+            let full = bt
+                .revised_hsl_inputs_at(
+                    k,
+                    snapshot::Mode::Coin,
+                    Some(PositionSide::Long),
+                    Some("C0"),
+                    false,
+                )
+                .unwrap();
+            let expected = evaluate(Input {
+                snapshot: full.snapshot,
+                slots: full.slots[LONG] as u64,
+                span: policy.ema_span_minutes,
+                threshold: policy.red_threshold,
+                cooldown_ms: 300_000,
+                restart: Restart::Always,
+            })
+            .unwrap()
+            .decision
+            .unwrap();
+            assert_eq!(actual.action, expected.action, "k={k}");
+            assert_eq!(actual.red_at, expected.red_at, "k={k}");
+            assert!((actual.raw - expected.raw).abs() < 1e-12, "k={k}");
+            assert!((actual.ema - expected.ema).abs() < 1e-12, "k={k}");
         }
     }
 }

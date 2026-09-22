@@ -75,7 +75,7 @@ pub enum Action {
     Halted,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Decision {
     pub timestamp: i64,
     pub action: Action,
@@ -104,6 +104,14 @@ pub struct Replay {
     pub events: Vec<LifecycleEvent>,
     pub observations: usize,
     pub numeric_range_approximation: bool,
+    pub(crate) cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Cursor {
+    pub peak_delta: f64,
+    pub first_required: i64,
+    pub exposed: bool,
 }
 
 fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
@@ -200,6 +208,7 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
     let mut events = Vec::new();
     let mut red_at = None;
     let mut flat_at = None;
+    let mut cursor_peak = None;
     for episode in &input.episodes {
         let points: Vec<_> = episode
             .points
@@ -249,6 +258,7 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
                 .collect::<Vec<_>>(),
             &anchor,
         )?;
+        cursor_peak = risk.last_peak_delta;
         let mut opening = episode.opened_at.filter(|t| *t >= input.start);
         for (index, (original_index, point)) in points.iter().enumerate() {
             let t = point.timestamp;
@@ -362,11 +372,40 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
     if decisions.last().unwrap().timestamp != input.now {
         return Err("HSL trace must end at the current observation".into());
     }
+    let relevant = if current.exposed {
+        input.episodes.last().unwrap()
+    } else {
+        input
+            .episodes
+            .iter()
+            .rev()
+            .find(|e| e.points.last().unwrap().flatten)
+            .unwrap_or(input.episodes.last().unwrap())
+    };
+    let first_required = if !current.exposed
+        && !relevant
+            .points
+            .iter()
+            .any(|p| p.exposed || p.flatten || p.pnl != current.pnl || p.upnl != 0.0)
+    {
+        i64::MAX
+    } else {
+        relevant
+            .points
+            .iter()
+            .find(|p| p.timestamp >= input.start)
+            .map_or(input.now, |p| p.timestamp)
+    };
     Ok(Replay {
         decisions,
         events,
         observations,
         numeric_range_approximation,
+        cursor: cursor_peak.map(|peak_delta| Cursor {
+            peak_delta,
+            first_required,
+            exposed: current.exposed,
+        }),
     })
 }
 

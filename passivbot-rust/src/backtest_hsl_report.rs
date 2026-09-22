@@ -507,6 +507,7 @@ mod tests {
             reasons: Default::default(),
             observations: 1,
             episodes: 1,
+            cursor: None,
         }
     }
 

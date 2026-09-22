@@ -21,7 +21,7 @@ pub struct Input {
     pub restart: Restart,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Output {
     pub decision: Option<Decision>,
     /// Reconstructed in-window lifecycle, for diagnostics only. Repeated evaluation
@@ -30,6 +30,8 @@ pub struct Output {
     pub reasons: BTreeSet<String>,
     pub observations: usize,
     pub episodes: usize,
+    #[serde(skip)]
+    pub(crate) cursor: Option<controller::Cursor>,
 }
 
 /// Normalize only selected pairs to one bounded minute grid. Source-resolution
@@ -184,6 +186,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
             reasons,
             observations: 0,
             episodes: 0,
+            cursor: None,
         });
     }
     let budget = if matches!(input.snapshot.mode, Mode::Coin) {
@@ -225,6 +228,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         reasons,
         observations,
         episodes,
+        cursor: replay.cursor,
     })
 }
 

@@ -117,3 +117,15 @@ and cached fitness must not silently become different policies.
 Offline reference, unit, native parity and fake-exchange tests do not establish actual
 exchange execution correctness. Use the [live validation and rollback checklist](hsl_revised_live_validation.md)
 for an operator-approved trial. Existing live bots and the legacy default are unchanged.
+
+
+## Simulator replay performance
+
+The simulator can discard completed episodes that no longer affect current panic or the
+latest cooldown. Before its first entry, a single preceding flat sample preserves the zero
+EMA seed. These are suffixes of the configured lookback; no older evidence is imported.
+
+With unchanged fills, balance budget and slot count, consecutive minute observations can
+advance the same numerical signal without rebuilding fills and candles. A changed input,
+lookback boundary crossing or sensitive threshold comparison returns to full reconstruction.
+These disposable caches do not authorize trading independently and are not persisted.

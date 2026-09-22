@@ -90,11 +90,14 @@ impl Config {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Scope {
-    timestamp: i64,
+    pub(super) timestamp: i64,
+    pub(super) fill_count: usize,
+    pub(super) budget: f64,
+    pub(super) slots: u64,
     pub(super) side: Option<usize>,
-    coin: Option<usize>,
+    pub(super) coin: Option<usize>,
     pub result: evaluator::Output,
 }
 
@@ -162,7 +165,7 @@ impl Backtest<'_> {
     }
 
     fn evaluate_revised_scope(
-        &self,
+        &mut self,
         k: usize,
         side: Option<usize>,
         coin: Option<usize>,
@@ -176,6 +179,11 @@ impl Backtest<'_> {
         };
         if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
             return Err("invalid revised HSL panic close order type".into());
+        }
+        if !boundary {
+            if let Some(scope) = self.advance_revised_scope(k, side, coin, &policy) {
+                return Ok(scope);
+            }
         }
         let cooldown = policy.cooldown_minutes_after_red * 60_000.0;
         if !cooldown.is_finite() || cooldown < 0.0 || cooldown >= i64::MAX as f64 {
@@ -195,10 +203,17 @@ impl Backtest<'_> {
                 PositionSide::Short
             }
         });
+        let cutoff = self.revised_history_cutoff(side, coin);
         let symbol = coin.map(|c| self.backtest_params.coins[c].as_str());
-        let observed = self.revised_hsl_inputs_at(k, mode, side_name, symbol, boundary)?;
+        let observed =
+            self.revised_hsl_inputs_at_clipped(k, mode, side_name, symbol, boundary, cutoff)?;
         let timestamp = observed.snapshot.now;
         let slots = side.map_or(1, |s| observed.slots[s]) as u64;
+        let budget = if coin.is_some() {
+            observed.snapshot.balance / slots.max(1) as f64
+        } else {
+            observed.snapshot.balance
+        };
         let mut result = evaluator::evaluate(evaluator::Input {
             snapshot: observed.snapshot,
             slots,
@@ -210,6 +225,9 @@ impl Backtest<'_> {
         result.reasons.extend(observed.reasons);
         Ok(Scope {
             timestamp,
+            fill_count: self.fills.len(),
+            budget,
+            slots,
             side,
             coin,
             result,
