@@ -228,6 +228,8 @@ def run_backend(
                 poll_interval_seconds=0.05,
                 on_result=_on_result,
                 on_interrupt=_on_interrupt,
+                progress_label="Optimizer starting configs",
+                progress_total=total,
             )
             return completed["count"]
 

@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Report bounded optimizer population and starting-config progress every five minutes while CPU
+  evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
+
 - Reduce revised HSL replay allocations and repeated exact-cashflow summation without
   changing reconstructed signals, lifecycle decisions, or diagnostics.
 
