@@ -187,6 +187,15 @@ inline HslRollingPnlSignal effective_hsl_rolling_pnl(
 }
 
 struct HslState {
+#if PASSIVBOT_HSL_REVISED
+    RevisedHslController revised;
+    device RevisedHslNode* revised_tree;
+    device int* revised_times;
+    device float* revised_realized;
+    int revised_lookback;
+    bool revised_owner;
+    bool revised_valid;
+#endif
     bool enabled;
     float red_threshold;
     float alpha;
@@ -506,6 +515,81 @@ inline float hsl_drawdown_ema_mean_worst_1pct(
 #endif
 }
 
+#if PASSIVBOT_HSL_REVISED
+inline void bind_revised_hsl(
+    thread HslState& h, device RevisedHslNode* trees, device int* rows,
+    int scope, int capacity, int tree_size, int lookback, bool initialize, bool owner
+) {
+    h.revised_tree = trees + scope * tree_size * 2;
+    h.revised_times = rows + scope * capacity * 2;
+    h.revised_realized = reinterpret_cast<device float*>(h.revised_times + capacity);
+    h.revised_lookback = lookback;
+    h.revised_owner = owner;
+    if (initialize) {
+        h.revised = revised_hsl_controller_init(
+            h.revised_tree, capacity, tree_size, 2.0f / h.alpha - 1.0f);
+        h.revised_valid = true;
+    }
+}
+
+inline void mirror_revised_hsl(thread HslState& owner, thread HslState& view) {
+    view.revised = owner.revised;
+    view.revised_valid = owner.revised_valid;
+    view.halted = owner.halted;
+    view.red_active_now = owner.red_active_now;
+    view.tier = owner.tier;
+    view.drawdown_ema = owner.drawdown_ema;
+    view.sampled_drawdown_raw = owner.sampled_drawdown_raw;
+}
+
+inline void observe_revised_hsl(
+    thread HslState& h, float balance, float realized, float upnl,
+    bool exposed, int minute, bool terminal
+) {
+    if (!h.enabled || !h.revised_valid) return;
+    int prior = h.revised.action;
+    h.revised_valid = revised_hsl_observe(h.revised, h.revised_tree,
+        h.revised_times, h.revised_realized, minute, h.revised_lookback,
+        balance / (h.signal_mode == HSL_SIGNAL_COIN ? h.slot_count : 1.0f),
+        realized, upnl, exposed, terminal, h.red_threshold,
+        h.cooldown_minutes, h.restart_policy == 2);
+    if (!h.revised_valid) return;
+    h.sampled_drawdown_raw = h.revised.raw;
+    h.drawdown_ema = h.revised.ema;
+    h.red_active_now = h.revised.action == 3;
+    h.tier = h.red_active_now ? 3 : 0;
+    h.halted = h.revised.action == 1;
+    if (h.red_active_now && prior != 3) h.current_red_start_k = float(minute);
+    if (terminal && fmin(h.revised.raw, h.revised.ema) > h.red_threshold) {
+        h.triggers += 1.0f;
+        if (h.halted) h.current_halt_start_k = float(minute);
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        h.trigger_drawdown_sum += fmin(h.revised.raw, h.revised.ema);
+        h.trigger_drawdown_count += 1.0f;
+        if (h.current_red_start_k >= 0.0f) {
+            h.flatten_time_sum_steps += fmax(float(minute) - h.current_red_start_k, 0.0f);
+            h.flatten_time_count += 1.0f;
+        }
+#endif
+    }
+    if (prior == 1 && !h.halted) {
+        h.restarts += 1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+        float duration = fmax(float(minute) - h.current_halt_start_k, 0.0f);
+        h.halt_duration_sum_steps += duration;
+        h.halt_duration_max_steps = fmax(h.halt_duration_max_steps, duration);
+        h.halt_duration_count += 1.0f;
+        h.last_restart_k = float(minute);
+#endif
+        h.current_halt_start_k = -1.0f;
+    }
+    if (!h.red_active_now) h.current_red_start_k = -1.0f;
+#if PASSIVBOT_HSL_DIAGNOSTICS_ENABLED
+    h.drawdown_ema_max = fmax(h.drawdown_ema_max, h.drawdown_ema);
+#endif
+}
+#endif
+
 inline HslState load_hsl(
     constant float* params,
     int po,
@@ -613,6 +697,9 @@ inline void apply_coin_hsl_overrides(
 
 inline int hsl_mode(thread HslState& h, bool has_position) {
     if (!h.enabled) return 0;
+#if PASSIVBOT_HSL_REVISED
+    return h.revised.action;
+#endif
     if (h.halted) return has_position ? 3 : 1;
     if (h.tier == 3) return h.red_active_now ? 3 : 2;
     if (h.tier == 2) return h.orange_graceful_stop ? 1 : 2;
@@ -859,6 +946,11 @@ inline void update_hsl(
     float kf,
     float interval_ms
 ) {
+#if PASSIVBOT_HSL_REVISED
+    observe_revised_hsl(h, balance, realized_pnl, unrealized_pnl,
+        has_position, int(kf) + 1, false);
+    return;
+#endif
     HslSignal signal;
     if (!derive_hsl_signal(
         h, balance, starting_balance, realized_pnl, unrealized_pnl, signal
@@ -878,6 +970,10 @@ inline bool finish_hsl_episode_at_flat(
     float kf,
     float interval_ms
 ) {
+#if PASSIVBOT_HSL_REVISED
+    observe_revised_hsl(h, balance, realized_pnl, 0.0f, false, int(kf), true);
+    return true;
+#endif
     if (!h.enabled || h.halted || h.no_restart_latched) return false;
     HslSignal signal;
     if (!derive_hsl_signal(h, balance, starting_balance, realized_pnl, 0.0f, signal)) {
@@ -926,6 +1022,15 @@ inline bool finish_hsl_scoped_episode_at_flat(
 ) {
     const bool unified = h.signal_mode == HSL_SIGNAL_UNIFIED;
     if (scope_has_position || (unified && opposite_has_position)) return false;
+#if PASSIVBOT_HSL_REVISED
+    if (unified && opposite_hsl != nullptr) {
+        thread HslState& owner = h.revised_owner ? h : *opposite_hsl;
+        thread HslState& view = h.revised_owner ? *opposite_hsl : h;
+        finish_hsl_episode_at_flat(owner, balance, starting_balance, realized_total, kf, interval_ms);
+        mirror_revised_hsl(owner, view);
+        return true;
+    }
+#endif
     bool reset = finish_hsl_episode_at_flat(
         h, balance, starting_balance, unified ? realized_total : realized_scope, kf, interval_ms
     );
@@ -978,6 +1083,17 @@ inline bool update_dual_side_hsl(
     const bool shared_has_position = has_position_long || has_position_short;
     const bool shared_has_blocking_orders = has_blocking_orders_long
         || has_blocking_orders_short;
+#if PASSIVBOT_HSL_REVISED
+    if (unified) {
+        thread HslState& owner = long_hsl.revised_owner ? long_hsl : short_hsl;
+        thread HslState& view = long_hsl.revised_owner ? short_hsl : long_hsl;
+        update_hsl(owner, balance, starting_balance, realized_pnl_total,
+            unrealized_pnl_long + unrealized_pnl_short, shared_has_position,
+            shared_has_blocking_orders, kf, interval_ms);
+        mirror_revised_hsl(owner, view);
+        return owner.revised_valid;
+    }
+#endif
     update_hsl(
         long_hsl, balance, starting_balance,
         unified ? realized_pnl_total : realized_pnl_long,
@@ -996,10 +1112,17 @@ inline bool update_dual_side_hsl(
         unified ? shared_has_blocking_orders : has_blocking_orders_short,
         kf, interval_ms
     );
+#if PASSIVBOT_HSL_REVISED
+    return long_hsl.revised_valid && short_hsl.revised_valid;
+#else
     return true;
+#endif
 }
 
 inline void try_restart_hsl(thread HslState& h, float kf, float current_equity) {
+#if PASSIVBOT_HSL_REVISED
+    return; // Current evidence alone determines remaining cooldown.
+#endif
     if (!h.enabled || !h.halted || h.no_restart_latched
         || h.cooldown_until_k < 0.0f || kf < h.cooldown_until_k) return;
     if (h.current_halt_start_k >= 0.0f) {

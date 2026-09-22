@@ -610,6 +610,8 @@ def test_trailing_martingale_no_hsl_specialization_keeps_base_scalar_abi(
     )
 
     def fake_base_init(self, *args, **kwargs):
+        self.hsl_engine = "legacy"
+        self.revised_capacity = 0
         self.long_enabled = True
         self.short_enabled = False
         self.hsl_ema_tail_enabled = bool(kwargs["hsl_ema_tail_enabled"])
@@ -649,6 +651,8 @@ def test_trailing_martingale_hsl_specialization_keeps_requested_features(
     )
 
     def fake_base_init(self, *args, **kwargs):
+        self.hsl_engine = "legacy"
+        self.revised_capacity = 0
         self.long_enabled = False
         self.short_enabled = True
         self.hsl_ema_tail_enabled = bool(kwargs["hsl_ema_tail_enabled"])
@@ -688,6 +692,8 @@ def test_trailing_martingale_hsl_specialization_disables_unrequested_diagnostics
     )
 
     def fake_base_init(self, *args, **kwargs):
+        self.hsl_engine = "legacy"
+        self.revised_capacity = 0
         self.long_enabled = True
         self.short_enabled = False
         self.hsl_ema_tail_enabled = False
@@ -1022,6 +1028,8 @@ def test_trailing_martingale_runner_accepts_ordinary_market_execution(monkeypatc
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 
     def fake_base_init(self, *args, **kwargs):
+        self.hsl_engine = "legacy"
+        self.revised_capacity = 0
         self.long_enabled = True
         self.short_enabled = False
         self.hsl_ema_tail_enabled = False
