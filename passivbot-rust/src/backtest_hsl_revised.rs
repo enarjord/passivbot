@@ -1398,8 +1398,6 @@ mod tests {
                     "pside" => snapshot::Mode::Pside,
                     _ => snapshot::Mode::Unified,
                 };
-                let side = (name != "unified").then_some(PositionSide::Long);
-                let symbol = (name == "coin").then_some("C0");
                 let mut bt = make(&data, &btc);
                 let policy = Policy {
                     enabled: true,
@@ -1421,6 +1419,8 @@ mod tests {
                         (3, 0, PositionSide::Long, 2.),
                         (5, 1, PositionSide::Short, -1.),
                         (7, 0, PositionSide::Long, 1.),
+                        (10, 0, PositionSide::Long, 0.5),
+                        (10, 0, PositionSide::Long, -0.5),
                         (12, 0, PositionSide::Long, -1.),
                         (15, 0, PositionSide::Long, -2.),
                         (15, 0, PositionSide::Long, 1.),
@@ -1443,56 +1443,69 @@ mod tests {
                     if k == 47 {
                         bt.effective_n_positions.long = 1;
                     }
+                    if k % 13 == 0 {
+                        bt.revised_hsl_traces.clear();
+                    }
                     if k % 11 == 0 {
                         bt.revised_hsl_cutoffs.clear();
                         bt.revised_hsl_scopes.clear();
                     }
                     bt.update_revised_hsl(k).unwrap();
-                    let actual = bt.revised_hsl_scopes[0].result.decision.as_ref().unwrap();
-                    let full = bt
-                        .revised_hsl_inputs_at(k, mode(), side, symbol, false)
+                    for scope in &bt.revised_hsl_scopes {
+                        let actual = scope.result.decision.as_ref().unwrap();
+                        let side = scope.side.map(|s| {
+                            if s == LONG {
+                                PositionSide::Long
+                            } else {
+                                PositionSide::Short
+                            }
+                        });
+                        let symbol = scope.coin.map(|c| bt.backtest_params.coins[c].as_str());
+                        let full = bt
+                            .revised_hsl_inputs_at(k, mode(), side, symbol, false)
+                            .unwrap();
+                        let expected = evaluate(Input {
+                            snapshot: full.snapshot,
+                            slots: if name == "coin" {
+                                full.slots[scope.side.unwrap()] as u64
+                            } else {
+                                1
+                            },
+                            span: policy.ema_span_minutes,
+                            threshold: policy.red_threshold,
+                            cooldown_ms: 300_000,
+                            restart: if restart == "always" {
+                                Restart::Always
+                            } else {
+                                Restart::Never
+                            },
+                        })
+                        .unwrap()
+                        .decision
                         .unwrap();
-                    let expected = evaluate(Input {
-                        snapshot: full.snapshot,
-                        slots: if name == "coin" {
-                            full.slots[LONG] as u64
-                        } else {
-                            1
-                        },
-                        span: policy.ema_span_minutes,
-                        threshold: policy.red_threshold,
-                        cooldown_ms: 300_000,
-                        restart: if restart == "always" {
-                            Restart::Always
-                        } else {
-                            Restart::Never
-                        },
-                    })
-                    .unwrap()
-                    .decision
-                    .unwrap();
-                    assert_eq!(
-                        actual.action, expected.action,
-                        "mode={name} restart={restart} k={k}"
-                    );
-                    assert_eq!(
-                        actual.flat_at, expected.flat_at,
-                        "mode={name} restart={restart} k={k}"
-                    );
-                    assert_eq!(
-                        actual.red_at, expected.red_at,
-                        "mode={name} restart={restart} k={k}"
-                    );
-                    assert!(
-                        (actual.raw - expected.raw).abs() < 1e-12,
-                        "mode={name} k={k}"
-                    );
-                    assert!(
-                        (actual.ema - expected.ema).abs() < 1e-12,
-                        "mode={name} k={k} actual={} expected={}",
-                        actual.ema,
-                        expected.ema
-                    );
+                        assert_eq!(
+                            actual.action, expected.action,
+                            "mode={name} restart={restart} k={k}"
+                        );
+                        assert_eq!(
+                            actual.flat_at, expected.flat_at,
+                            "mode={name} restart={restart} k={k}"
+                        );
+                        assert_eq!(
+                            actual.red_at, expected.red_at,
+                            "mode={name} restart={restart} k={k}"
+                        );
+                        assert!(
+                            (actual.raw - expected.raw).abs() < 1e-12,
+                            "mode={name} k={k}"
+                        );
+                        assert!(
+                            (actual.ema - expected.ema).abs() < 1e-12,
+                            "mode={name} k={k} actual={} expected={}",
+                            actual.ema,
+                            expected.ema
+                        );
+                    }
                 }
             }
         }

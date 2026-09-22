@@ -126,6 +126,9 @@ latest cooldown. Before its first entry, a single preceding flat sample preserve
 EMA seed. These are suffixes of the configured lookback; no older evidence is imported.
 
 With unchanged fills, balance budget and slot count, consecutive minute observations can
-advance the same numerical signal without rebuilding fills and candles. A changed input,
-lookback boundary crossing or sensitive threshold comparison returns to full reconstruction.
+advance the same numerical signal without rebuilding fills and candles. On ordinary fills or
+budget changes within a proven episode, the simulator can extend its factual PNL/UPNL trace
+and replay the shared controller with the new inputs. Episode changes, lookback boundary
+crossings, estimated opening changes and sensitive numeric comparisons rebuild the full
+shared reconstruction. Rebuilding or discarding either cache preserves trading decisions.
 These disposable caches do not authorize trading independently and are not persisted.

@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Further accelerate revised-HSL backtests and CPU optimization by retaining factual
+  PNL/UPNL traces between ordinary fills and balance changes, while reevaluating the shared
+  controller against the current inputs. Episode/window changes still rebuild history.
+
 - Accelerate revised-HSL backtests and CPU optimization by replaying only the latest
   relevant episode and incrementally evaluating unchanged observations. Fills, budget/slot
   changes, lookback clipping and sensitive numeric comparisons rebuild the shared reference.

@@ -8,6 +8,31 @@ use crate::hsl_revised_controller::Action;
 pub(super) type Cutoffs =
     std::collections::BTreeMap<(Option<usize>, Option<usize>), (usize, Option<(i64, usize)>)>;
 
+pub(super) type Traces = std::collections::BTreeMap<(Option<usize>, Option<usize>), Trace>;
+pub(super) struct Trace {
+    episodes: Vec<crate::hsl_revised_controller::Episode>,
+    realized: crate::hsl_revised_sum::CurrencySum,
+    cashflow: f64,
+    fill_count: usize,
+    reference: Option<f64>,
+}
+impl Trace {
+    fn append(&mut self, now: i64, upnl: f64, exposed: bool) {
+        let episode = self.episodes.last_mut().unwrap();
+        if !exposed {
+            episode.points.truncate(1);
+        }
+        episode.points.push(crate::hsl_revised_controller::Point {
+            timestamp: now,
+            pnl: self.cashflow,
+            upnl,
+            exposed,
+            flatten: false,
+            cashflow_reference_delta: None,
+        });
+    }
+}
+
 impl Backtest<'_> {
     /// Find the flat prefix immediately before the only episode that can
     /// authorize current panic/cooldown. Simulator executions are globally ordered
@@ -111,10 +136,10 @@ impl Backtest<'_> {
     }
 
     /// Append a factual mark to an unchanged reconstructed episode. Any fill,
-    /// budget/slot change, window clipping or numeric concern rebuilds the same
-    /// full reference. Cached results never survive changed trading inputs.
+    /// budget/slot change, window clipping or numeric concern leaves this scalar
+    /// shortcut. Changed inputs always receive a fresh controller evaluation.
     pub(super) fn advance_revised_scope(
-        &self,
+        &mut self,
         k: usize,
         side: Option<usize>,
         coin: Option<usize>,
@@ -123,7 +148,8 @@ impl Backtest<'_> {
         let previous = self
             .revised_hsl_scopes
             .iter()
-            .find(|s| s.side == side && s.coin == coin)?;
+            .find(|s| s.side == side && s.coin == coin)?
+            .clone();
         let cursor = previous.result.cursor.as_ref()?;
         let now = (self.first_timestamp_ms + (k as u64 + 1) * self.interval_ms) as i64;
         let start =
@@ -148,68 +174,10 @@ impl Backtest<'_> {
         {
             return None;
         }
-        let mut total = crate::hsl_revised_sum::CurrencySum::new();
-        let mut values = Vec::new();
-        for c in 0..self.n_coins {
-            if coin.is_some_and(|v| v != c) {
-                continue;
-            }
-            for s in [LONG, SHORT] {
-                if side.is_some_and(|v| v != s) {
-                    continue;
-                }
-                let position = if s == LONG {
-                    self.positions.long[c]
-                } else {
-                    self.positions.short[c]
-                };
-                if position.size == 0.0 {
-                    continue;
-                }
-                if !self.coin_is_valid_at(c, k) {
-                    return None;
-                }
-                let mark = self.hlcvs_value(k, c, CLOSE);
-                if !mark.is_finite() || mark <= 0.0 {
-                    return None;
-                }
-                let value = if s == LONG {
-                    calc_pnl_long(
-                        position.price,
-                        mark,
-                        position.size,
-                        self.exchange_params_list[c].c_mult,
-                    )
-                } else {
-                    calc_pnl_short(
-                        position.price,
-                        mark,
-                        position.size,
-                        self.exchange_params_list[c].c_mult,
-                    )
-                };
-                if !value.is_finite() || value.abs() > 1e100 {
-                    return None;
-                }
-                values.push(value);
-            }
-        }
-        if cursor.exposed != !values.is_empty() {
+        let (upnl, exposed) = self.revised_scope_upnl(k, side, coin)?;
+        if exposed != cursor.exposed {
             return None;
         }
-        let upnl = if values.len() == 1 {
-            values[0]
-        } else {
-            for value in values {
-                total.add(value);
-            }
-            let mut reasons = std::collections::BTreeSet::new();
-            let value = total.value(&mut reasons);
-            if !reasons.is_empty() {
-                return None;
-            }
-            value
-        };
         let mut next = previous.clone();
         next.timestamp = now;
         next.result.events.clear();
@@ -285,6 +253,218 @@ impl Backtest<'_> {
             }
         }
         next.result.observations += 1;
+        self.revised_hsl_traces
+            .get_mut(&(side, coin))?
+            .append(now, upnl, exposed);
         Some(next)
+    }
+    fn revised_scope_upnl(
+        &self,
+        k: usize,
+        side: Option<usize>,
+        coin: Option<usize>,
+    ) -> Option<(f64, bool)> {
+        let mut total = crate::hsl_revised_sum::CurrencySum::new();
+        let mut values = Vec::new();
+        for c in 0..self.n_coins {
+            if coin.is_some_and(|v| v != c) {
+                continue;
+            }
+            for s in [LONG, SHORT] {
+                if side.is_some_and(|v| v != s) {
+                    continue;
+                }
+                let position = if s == LONG {
+                    self.positions.long[c]
+                } else {
+                    self.positions.short[c]
+                };
+                if position.size == 0.0 {
+                    continue;
+                }
+                if !self.coin_is_valid_at(c, k) {
+                    return None;
+                }
+                let mark = self.hlcvs_value(k, c, CLOSE);
+                if !mark.is_finite() || mark <= 0.0 {
+                    return None;
+                }
+                let value = if s == LONG {
+                    calc_pnl_long(
+                        position.price,
+                        mark,
+                        position.size,
+                        self.exchange_params_list[c].c_mult,
+                    )
+                } else {
+                    calc_pnl_short(
+                        position.price,
+                        mark,
+                        position.size,
+                        self.exchange_params_list[c].c_mult,
+                    )
+                };
+                if !value.is_finite() || value.abs() > 1e100 {
+                    return None;
+                }
+                values.push(value);
+            }
+        }
+        let exposed = !values.is_empty();
+        let upnl = if values.is_empty() {
+            0.0 // The simulator has just proved this scope flat.
+        } else if values.len() == 1 {
+            values[0]
+        } else {
+            for value in values {
+                total.add(value);
+            }
+            let mut reasons = std::collections::BTreeSet::new();
+            let value = total.value(&mut reasons);
+            if !reasons.is_empty() {
+                return None;
+            }
+            value
+        };
+        Some((upnl, exposed))
+    }
+
+    pub(super) fn seed_revised_trace(
+        &mut self,
+        key: (Option<usize>, Option<usize>),
+        output: &mut crate::hsl_revised_evaluator::Output,
+    ) {
+        self.revised_hsl_traces.remove(&key);
+        if let Some(episodes) = output.cursor.as_mut().and_then(|c| c.seed.take()) {
+            if episodes.iter().any(|e| {
+                e.entry_reference.is_some()
+                    || e.points
+                        .iter()
+                        .any(|p| p.cashflow_reference_delta.is_some())
+            }) {
+                return;
+            }
+            let reference = episodes[0].entry_reference_delta;
+            self.revised_hsl_traces.insert(
+                key,
+                Trace {
+                    episodes,
+                    reference,
+                    realized: crate::hsl_revised_sum::CurrencySum::new(),
+                    cashflow: 0.0,
+                    fill_count: self.fills.len(),
+                },
+            );
+        }
+    }
+
+    /// Reuse reconstructed facts after cashflow/budget changes, evaluating the
+    /// unchanged shared controller again rather than translating its permission.
+    pub(super) fn replay_revised_trace(
+        &mut self,
+        k: usize,
+        side: Option<usize>,
+        coin: Option<usize>,
+        policy: &Policy,
+    ) -> Option<Scope> {
+        use crate::hsl_revised_controller::{self as controller, Restart};
+        let previous = self
+            .revised_hsl_scopes
+            .iter()
+            .find(|s| s.side == side && s.coin == coin)?
+            .clone();
+        let cursor = previous.result.cursor.as_ref()?;
+        let now = (self.first_timestamp_ms + (k as u64 + 1) * self.interval_ms) as i64;
+        let start =
+            now - (self.backtest_params.pnls_max_lookback_days * 86_400_000.0).round() as i64;
+        let slots = side.map_or(1, |s| self.hard_stop_coin_slot_n_positions(s)) as u64;
+        if coin.is_some() && slots == 0 {
+            return None;
+        }
+        let budget =
+            self.balance.usd_total_balance / if coin.is_some() { slots as f64 } else { 1.0 };
+        let (upnl, exposed) = self.revised_scope_upnl(k, side, coin)?;
+        if !budget.is_finite()
+            || budget <= 0.0
+            || budget > 1e100
+            || now != previous.timestamp + 60_000
+            || start > cursor.first_required
+            || cursor.exposed != exposed
+            || previous
+                .result
+                .decision
+                .as_ref()?
+                .numeric_range_approximation
+        {
+            return None;
+        }
+        let trace = self.revised_hsl_traces.get_mut(&(side, coin))?;
+        // Estimated missing-opening tapes can change when new fills arrive.
+        // Reconstruct those instead of extending an estimate with new evidence.
+        if trace.reference.is_some() && trace.fill_count != self.fills.len() {
+            return None;
+        }
+        for fill in &self.fills[trace.fill_count..] {
+            let s = if fill.order_type.is_long() {
+                LONG
+            } else {
+                SHORT
+            };
+            if side.is_some_and(|v| v != s)
+                || coin.is_some_and(|c| self.backtest_params.coins[c] != fill.coin)
+            {
+                continue;
+            }
+            trace.realized.add(fill.pnl);
+            trace.realized.add(fill.fee_paid);
+        }
+        let mut reasons = std::collections::BTreeSet::new();
+        trace.cashflow = trace.realized.value(&mut reasons);
+        if !reasons.is_empty() || trace.cashflow.abs() > budget * 100.0 {
+            return None;
+        }
+        trace.fill_count = self.fills.len();
+        trace.append(now, upnl, exposed);
+        let mut episodes = trace.episodes.clone();
+        if let Some(reference) = trace.reference {
+            episodes[0].entry_reference_delta = Some(reference - trace.cashflow);
+        }
+        let replay = controller::replay_latest_with_events(&controller::Input {
+            episodes,
+            now,
+            start,
+            budget,
+            span: policy.ema_span_minutes,
+            threshold: policy.red_threshold,
+            cooldown_ms: (policy.cooldown_minutes_after_red * 60_000.0).round() as i64,
+            restart: if policy.restart_after_red_policy.as_deref() == Some("always") {
+                Restart::Always
+            } else {
+                Restart::Never
+            },
+        })
+        .ok()?;
+        // Numerical reuse must not decide a threshold comparison at rounding
+        // distance, including the terminal sample of a now-flat episode.
+        if replay.numeric_range_approximation
+            || replay.cursor.as_ref()?.threshold_sensitive
+        {
+            return None;
+        }
+        let decision = replay.decisions.into_iter().last()?;
+        let mut result = previous.result.clone();
+        result.decision = Some(decision);
+        result.events = replay.events;
+        result.observations = replay.observations;
+        result.cursor = replay.cursor;
+        Some(Scope {
+            timestamp: now,
+            fill_count: self.fills.len(),
+            budget,
+            slots,
+            side,
+            coin,
+            result,
+        })
     }
 }

@@ -112,6 +112,8 @@ pub(crate) struct Cursor {
     pub peak_delta: f64,
     pub first_required: i64,
     pub exposed: bool,
+    pub seed: Option<Vec<Episode>>,
+    pub threshold_sensitive: bool,
 }
 
 fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
@@ -126,16 +128,22 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
 }
 
 pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
-    replay_collected::<true>(input)
+    replay_collected::<true, false>(input)
 }
 
 /// Evaluate every historical transition, but retain only the current permission.
 /// Runtime callers need the count and diagnostics, not a full decision allocation.
 pub(crate) fn replay_latest_with_events(input: &Input) -> Result<Replay, String> {
-    replay_collected::<false>(input)
+    replay_collected::<false, false>(input)
 }
 
-fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, String> {
+pub(crate) fn replay_latest_with_seed(input: &Input) -> Result<Replay, String> {
+    replay_collected::<false, true>(input)
+}
+
+fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
+    input: &Input,
+) -> Result<Replay, String> {
     if input.start > input.now
         || input.cooldown_ms < 0
         || !input.budget.is_finite()
@@ -209,6 +217,7 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
     let mut red_at = None;
     let mut flat_at = None;
     let mut cursor_peak = None;
+    let mut threshold_sensitive = false;
     for episode in &input.episodes {
         let points: Vec<_> = episode
             .points
@@ -261,6 +270,9 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
         cursor_peak = risk.last_peak_delta;
         let mut opening = episode.opened_at.filter(|t| *t >= input.start);
         for (index, (original_index, point)) in points.iter().enumerate() {
+            let score = risk.raw[index].min(risk.ema[index]);
+            threshold_sensitive |=
+                (score - input.threshold).abs() <= 1e-12 * score.abs().max(1.0);
             let t = point.timestamp;
             let mut reason = "green";
             // Exposure, including a round trip between price observations, ends
@@ -405,6 +417,35 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
             peak_delta,
             first_required,
             exposed: current.exposed,
+            threshold_sensitive,
+            seed: if SEED {
+                let mut first = relevant.clone();
+                // The omitted preceding episode cannot authorize cooldown for
+                // current exposure; this event no longer has a predecessor here.
+                first.opened_at = None;
+                if first
+                    .points
+                    .iter()
+                    .all(|p| !p.exposed && !p.flatten && p.pnl == current.pnl && p.upnl == 0.0)
+                {
+                    first.points = vec![current.clone()];
+                }
+                let mut seed = vec![first];
+                if !current.exposed && relevant.points.last().unwrap().flatten {
+                    let terminal = relevant.points.last().unwrap();
+                    let mut flat = terminal.clone();
+                    flat.flatten = false;
+                    seed.push(Episode {
+                        points: vec![flat, current.clone()],
+                        opened_at: None,
+                        entry_reference: None,
+                        entry_reference_delta: None,
+                    });
+                }
+                Some(seed)
+            } else {
+                None
+            },
         }),
     })
 }
