@@ -7541,7 +7541,7 @@ class Passivbot:
         snapshots = getattr(self, "market_snapshot_provider", None)
         maintainer_tasks = list(snapshots.pending_tasks()) if snapshots is not None else []
         if snapshots is not None:
-            snapshots.cancel_pending()
+            snapshots.begin_shutdown()
         try:
             self.stop_data_maintainers(verbose=False)
             for task_map_name in ("maintainers", "WS_ohlcvs_1m_tasks"):
@@ -8776,7 +8776,7 @@ class Passivbot:
         snapshots = getattr(self, "market_snapshot_provider", None)
         tasks: list[asyncio.Task] = list(snapshots.pending_tasks()) if snapshots is not None else []
         if snapshots is not None:
-            snapshots.cancel_pending()
+            snapshots.begin_shutdown()
         self.stop_data_maintainers(verbose=False)
         seen: set[int] = {id(task) for task in tasks}
         for task_map in task_maps:
@@ -21826,7 +21826,7 @@ class Passivbot:
         snapshots = getattr(self, "market_snapshot_provider", None)
         if snapshots is not None:
             try:
-                snapshots.cancel_pending()
+                snapshots.begin_shutdown()
                 # One bounded owner keeps its original deadline through repeated caller cancellation.
                 quote_cleanup = asyncio.create_task(snapshots.wait_pending())
                 while not quote_cleanup.done():

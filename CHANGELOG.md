@@ -21,7 +21,8 @@ since the latest release tag; these features may already be available when insta
   Outer shutdown deadlines include quote cleanup time before the client-close allowance.
   Replacing maintainers leaves shared quote requests alive; client and event cleanup is still
   attempted when an earlier client close fails. Cleanup preserves the first failure and completes
-  its bounded quote wait even when the close caller is cancelled.
+  its bounded quote wait even when the close caller is cancelled. Teardown prevents new quote
+  requests, and connector failures during cleanup remain visible and propagate from direct close.
 
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable

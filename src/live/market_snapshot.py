@@ -75,6 +75,8 @@ class MarketSnapshotProvider:
         self._fetch_task: Optional[asyncio.Task] = None
         self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
         self._pending_failure: Optional[Exception] = None
+        self._closing = False
+        self._shutdown_tasks: tuple[asyncio.Task, ...] = ()
 
     def get_cached(self, symbol: str, *, now_ms: int, max_age_ms: int) -> Optional[MarketSnapshot]:
         snap = self._cache.get(symbol)
@@ -87,6 +89,7 @@ class MarketSnapshotProvider:
     async def get_snapshots(
         self, symbols: Iterable[str], *, max_age_ms: int = 10_000
     ) -> dict[str, MarketSnapshot]:
+        self._ensure_open()
         ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
         if not ordered_symbols:
             return {}
@@ -268,6 +271,7 @@ class MarketSnapshotProvider:
         return fetched
 
     async def _fetch_tickers_shared(self) -> dict[str, Any]:
+        self._ensure_open()
         if self._fetch_tickers is None:
             return {}
         task = self._fetch_task
@@ -284,6 +288,7 @@ class MarketSnapshotProvider:
         return await self._await_shared(task)
 
     async def _fetch_tickers_for_symbols_shared(self, symbols: list[str]) -> dict[str, Any]:
+        self._ensure_open()
         if self._fetch_tickers_for_symbols is None:
             return {}
         key = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
@@ -302,20 +307,40 @@ class MarketSnapshotProvider:
         if task.cancelled():
             return
         failure = task.exception()
-        if (failure is not None
-                and not isinstance(failure, (NetworkError, OSError, MarketSnapshotUnavailable))
-                and self._pending_failure is None):
-            # Bounded, provider-owned delivery: an abandoned fatal fetch must
-            # reach caller policy on the next read, even for another symbol.
-            self._pending_failure = failure
+        if failure is not None and not isinstance(
+            failure, (NetworkError, OSError, MarketSnapshotUnavailable)
+        ):
+            if self._closing:
+                # Also visible if bounded teardown has already abandoned this task.
+                self._log.error(
+                    "[market] quote request failed during shutdown | error_type=%s action=report_cleanup_failure",
+                    bounded_exception_type(failure),
+                )
+            if self._pending_failure is None:
+                self._pending_failure = failure
 
     async def _await_shared(self, task: asyncio.Task) -> dict[str, Any]:
         try:
             return await asyncio.shield(task)
         except Exception as exc:
-            if self._pending_failure is exc:
+            if not self._closing and self._pending_failure is exc:
                 self._pending_failure = None  # delivered to this active reader
             raise
+
+    def _ensure_open(self) -> None:
+        if self._closing:
+            raise MarketSnapshotUnavailable("[market] quote provider is shutting down")
+
+    def begin_shutdown(self) -> None:
+        """Atomically reject new requests before cancelling the existing owned I/O."""
+        if not self._closing:
+            # Retain even already-done tasks whose completion callbacks have not run yet.
+            self._shutdown_tasks = tuple(
+                task for task in (self._fetch_task, *self._symbol_fetch_tasks.values())
+                if task is not None
+            )
+            self._closing = True
+        self.cancel_pending()
 
     def pending_tasks(self) -> tuple[asyncio.Task, ...]:
         """Expose owned I/O so lifecycle cleanup can wait before closing clients."""
@@ -330,19 +355,31 @@ class MarketSnapshotProvider:
 
     async def wait_pending(self, *, timeout_seconds: float = SHARED_QUOTE_CLEANUP_SECONDS) -> None:
         """Bounded cleanup for direct client-close paths after cancellation."""
-        tasks = self.pending_tasks()
-        if not tasks:
-            return
-        _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout_seconds))
-        if pending:
-            self._log.warning("[market] shared quote cleanup timed out | task_count=%d action=cancel_remaining", len(pending))
-            for task in pending:
-                task.cancel()
-            _, pending = await asyncio.wait(pending, timeout=SHARED_QUOTE_CANCEL_GRACE_SECONDS)
+        tasks = self._shutdown_tasks if self._closing else self.pending_tasks()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout_seconds))
             if pending:
-                self._log.warning("[market] shared quote cancellation grace expired | task_count=%d action=abandon_pending", len(pending))
-        # Completion callbacks retrieve every result/failure, including tasks
-        # that finish after the bounded cancellation grace.
+                self._log.warning("[market] shared quote cleanup timed out | task_count=%d action=cancel_remaining", len(pending))
+                for task in pending:
+                    task.cancel()
+                _, pending = await asyncio.wait(pending, timeout=SHARED_QUOTE_CANCEL_GRACE_SECONDS)
+                if pending:
+                    self._log.warning("[market] shared quote cancellation grace expired | task_count=%d action=abandon_pending", len(pending))
+        # Inspect retained outcomes too: callbacks may remove the active-task references
+        # before cleanup starts. Preserve the first callback-observed fatal error.
+        failure = self._pending_failure
+        for task in tasks:
+            if task.done() and not task.cancelled():
+                exc = task.exception()
+                if (failure is None and exc is not None
+                        and not isinstance(exc, (NetworkError, OSError, MarketSnapshotUnavailable))):
+                    failure = exc
+        self._pending_failure = None
+        if self._closing:
+            self._shutdown_tasks = tuple(task for task in tasks if not task.done())
+        if failure is not None:
+            raise failure
+        # Callbacks report any fatal outcome arriving after bounded abandonment.
 
     @staticmethod
     def _coerce_positive(value: Any) -> Optional[float]:
