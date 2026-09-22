@@ -21809,23 +21809,47 @@ class Passivbot:
     # Legacy file lock helpers removed
 
     async def close(self):
-        """Stop background tasks and close exchange clients."""
+        """Finish bounded quote cleanup and attempt all clients, preserving the first failure."""
         self.stop_data_maintainers()
+        first_error = None
+
+        def record_failure(exc):
+            nonlocal first_error
+            if first_error is None:
+                first_error = exc
+            elif exc is not first_error:
+                logging.warning(
+                    "[shutdown] additional close failure | error_type=%s action=preserve_first_failure",
+                    bounded_exception_type(exc),
+                )
+
         snapshots = getattr(self, "market_snapshot_provider", None)
-        try:
-            if snapshots is not None:
-                snapshots.cancel_pending()
-                await snapshots.wait_pending()
-        finally:
-            # Each resource still needs cleanup if an earlier close fails or is cancelled.
+        if snapshots is not None:
             try:
-                await self.cca.close()
-            finally:
+                snapshots.cancel_pending()
+                # One bounded owner keeps its original deadline through repeated caller cancellation.
+                quote_cleanup = asyncio.create_task(snapshots.wait_pending())
+                while not quote_cleanup.done():
+                    try:
+                        await asyncio.shield(quote_cleanup)
+                    except (Exception, asyncio.CancelledError) as exc:
+                        record_failure(exc)
+                # Also retrieve an outcome completed concurrently with caller cancellation.
+                quote_cleanup.result()
+            except (Exception, asyncio.CancelledError) as exc:
+                record_failure(exc)
+        for client in (self.cca, self.ccp):
+            if client is not None:
                 try:
-                    if self.ccp is not None:
-                        await self.ccp.close()
-                finally:
-                    self._close_live_event_pipeline(timeout=2.0)
+                    await client.close()
+                except (Exception, asyncio.CancelledError) as exc:
+                    record_failure(exc)
+        try:
+            self._close_live_event_pipeline(timeout=2.0)
+        except (Exception, asyncio.CancelledError) as exc:
+            record_failure(exc)
+        if first_error is not None:
+            raise first_error
 
     def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""
