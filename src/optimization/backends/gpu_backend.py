@@ -479,7 +479,7 @@ def _validate_gpu_data_independent_scope(
             field_name="live.pnls_max_lookback_days",
         )
         for side in hsl_enabled_sides:
-            hsl = config["bot"][side].get("hsl", {})
+            hsl = _gpu_hsl_policy(config, side)
             panic_order_type = str(
                 hsl.get("panic_close_order_type", "limit")
             ).strip().lower()
@@ -517,8 +517,11 @@ def _validate_gpu_suite_override_paths(
             and resolved[0] == "bot"
             and resolved[1] in {"long", "short"}
         )
+        from config.hsl_revised import engine
+        portfolio_override = (engine(proxy_config) == "revised"
+                              and resolved[:2] == ("bot", "hsl"))
         if (
-            not bot_side_override
+            not bot_side_override and not portfolio_override
             and resolved not in GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS
         ):
             raise ValueError(
@@ -530,10 +533,29 @@ def _validate_gpu_suite_override_paths(
             )
 
 
-def _reject_revised_hsl(config: dict) -> None:
+def _validate_revised_gpu_inputs(config: dict) -> None:
     from config.hsl_revised import engine
     if engine(config) == "revised":
-        raise ValueError("GPU optimization does not implement revised HSL; use a CPU backend")
+        interval = float(config.get("backtest", {}).get("candle_interval_minutes", 1))
+        if interval != 1:
+            raise ValueError("Revised GPU HSL requires 1m candles")
+
+
+def _gpu_hsl_policy(config: dict, side: str) -> dict:
+    from config.hsl_revised import engine
+    if engine(config) == "revised" and config["live"]["hsl_signal_mode"] == "unified":
+        return config["bot"]["hsl"]
+    return config.get("bot", {}).get(side, {}).get("hsl", {})
+
+
+def _gpu_hsl_bound_map(config: dict, bound_map: dict) -> dict:
+    from config.hsl_revised import engine
+    result = dict(bound_map)
+    if engine(config) == "revised" and config["live"]["hsl_signal_mode"] == "unified":
+        result = {k: v for k, v in result.items() if not any(
+            k.startswith(f"{side}_hsl_") for side in ("long", "short"))}
+        result.update({key: key for key in _SINGLE_COIN_HSL_BOUND_SUFFIXES})
+    return result
 
 
 def validate_gpu_preparation_scope(
@@ -544,7 +566,7 @@ def validate_gpu_preparation_scope(
 ) -> None:
     """Fail before historical-data preparation when immutable MPS scope is invalid."""
 
-    _reject_revised_hsl(config)
+    _validate_revised_gpu_inputs(config)
     reject_configured_exact_only_gpu_metrics(config)
     suite_cfg = suite_cfg or {}
     suite_enabled = bool(suite_cfg.get("enabled"))
@@ -1684,6 +1706,9 @@ def _validate_scope_config(
                 _validate_tm_multicoin_market_runtime_scope(
                     config, enabled_sides
                 )
+    from config.hsl_revised import engine
+    if engine(config) == "revised" and coin_count > 1:
+        raise ValueError("Revised GPU HSL currently requires exactly one prepared coin")
     if coin_count > 1:
         if coin_count > MPS_MULTICOIN_MAX_COINS:
             raise ValueError(
@@ -1983,11 +2008,13 @@ def _validate_gpu_coin_overrides(
                 hsl_patch = side_patch.get("hsl", {}) or {}
                 if not isinstance(hsl_patch, dict):
                     continue
-                validate_hsl_override_patch(
-                    config.get("bot", {}).get(side, {}).get("hsl", {}) or {},
-                    hsl_patch,
-                    field_name=f"coin_overrides.{coin}.bot.{side}.hsl",
-                )
+                from config.hsl_revised import engine
+                if engine(config) == "legacy":
+                    validate_hsl_override_patch(
+                        config.get("bot", {}).get(side, {}).get("hsl", {}) or {},
+                        hsl_patch,
+                        field_name=f"coin_overrides.{coin}.bot.{side}.hsl",
+                    )
     if unsupported:
         supported_risk = (
             "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
@@ -3463,7 +3490,8 @@ def _gpu_unstuck_checkpoint_contract(config: dict) -> dict:
 
 
 def _gpu_hsl_checkpoint_contract(config: dict) -> dict:
-    return {
+    from config.hsl_revised import engine
+    result = {
         "signal_mode": str(
             config.get("live", {}).get("hsl_signal_mode", "unified")
         )
@@ -3488,25 +3516,27 @@ def _gpu_hsl_checkpoint_contract(config: dict) -> dict:
         },
     }
 
+    if engine(config) == "revised":
+        result.update(engine="revised", portfolio=deepcopy(config.get("bot", {}).get("hsl")))
+    return result
+
 
 def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
     return {
         key: float(bound.low)
         for key, bound in sorted(bound_by_key.items())
-        if "_hsl_" in key
+        if ("_hsl_" in key or key.startswith("hsl_"))
         and math.isclose(
             float(bound.low), float(bound.high), rel_tol=0.0, abs_tol=1.0e-12
         )
     }
 
 
-def _gpu_hsl_side_enabled(config: dict, side: str) -> bool:
-    globally_enabled = bool(
-        config.get("bot", {})
-        .get(side, {})
-        .get("hsl", {})
-        .get("enabled", False)
-    )
+def _gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
+    from config.hsl_revised import engine, _side_has_enabled_policy
+    if engine(config) == "revised" and config["live"]["hsl_signal_mode"] == "coin":
+        return _side_has_enabled_policy(config, side, markets_by_exchange)
+    globally_enabled = bool(_gpu_hsl_policy(config, side).get("enabled", False))
     if globally_enabled:
         return True
     for patch in (config.get("coin_overrides") or {}).values():
@@ -3524,15 +3554,14 @@ def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
     float32_below_one = float(
         np.nextafter(np.float32(1.0), np.float32(0.0))
     )
-    for side in ("long", "short"):
-        globally_enabled = bool(
-            config.get("bot", {})
-            .get(side, {})
-            .get("hsl", {})
-            .get("enabled", False)
-        )
-        enabled = _gpu_hsl_side_enabled(config, side)
-        enabled_bound = bound_by_key.get(f"{side}_hsl_enabled")
+    from config.hsl_revised import engine
+    revised = engine(config) == "revised"
+    unified = revised and config["live"]["hsl_signal_mode"] == "unified"
+    for side in (("portfolio",) if unified else ("long", "short")):
+        prefix = "" if unified else f"{side}_"
+        globally_enabled = bool(_gpu_hsl_policy(config, side).get("enabled", False))
+        enabled = globally_enabled if unified else _gpu_hsl_side_enabled(config, side)
+        enabled_bound = bound_by_key.get(f"{prefix}hsl_enabled")
         if enabled_bound is not None:
             expected = float(globally_enabled)
             endpoints = (float(enabled_bound.low), float(enabled_bound.high))
@@ -3548,27 +3577,30 @@ def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
                 )
         if not enabled:
             continue
-        red_bound = bound_by_key.get(f"{side}_hsl_red_threshold")
+        red_bound = bound_by_key.get(f"{prefix}hsl_red_threshold")
         if red_bound is not None and float(red_bound.low) <= 0.0:
             raise ValueError(
                 f"GPU HSL {side}_hsl_red_threshold bounds must remain greater "
                 f"than zero, got {(float(red_bound.low), float(red_bound.high))}"
             )
         cooldown_bound = bound_by_key.get(
-            f"{side}_hsl_cooldown_minutes_after_red"
+            f"{prefix}hsl_cooldown_minutes_after_red"
         )
         if cooldown_bound is not None and float(cooldown_bound.low) < 0.0:
             raise ValueError(
                 "GPU HSL "
-                f"{side}_hsl_cooldown_minutes_after_red bounds must remain "
+                f"{prefix}hsl_cooldown_minutes_after_red bounds must remain "
                 "non-negative, got "
                 f"{(float(cooldown_bound.low), float(cooldown_bound.high))}"
             )
-        for suffix in (
-            "hsl_red_threshold",
-            "hsl_no_restart_drawdown_threshold",
-        ):
-            bound = bound_by_key.get(f"{side}_{suffix}")
+        if revised:
+            span = bound_by_key.get(f"{prefix}hsl_ema_span_minutes")
+            if span is not None and float(span.low) < 1:
+                raise ValueError("Revised GPU HSL EMA span bounds must remain >= 1")
+        for suffix in (("hsl_red_threshold",) if revised else (
+            "hsl_red_threshold", "hsl_no_restart_drawdown_threshold",
+        )):
+            bound = bound_by_key.get(f"{prefix}{suffix}")
             if bound is None:
                 continue
             low, high = float(bound.low), float(bound.high)
@@ -3581,28 +3613,38 @@ def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
 
 
 def _gpu_hsl_search_sides(
-    proxy_config: dict, suite_inputs, overrides: set[str] | None = None
+    proxy_config: dict, suite_inputs, overrides: set[str] | None = None,
+    *, markets_by_exchange=None,
 ) -> set[str]:
-    configs = (
-        [item["config"] for item in suite_inputs]
-        if suite_inputs
-        else [proxy_config]
-    )
+    from config.hsl_revised import engine
+
+    contexts = []
+    for item in suite_inputs or []:
+        config = item["config"]
+        markets = markets_by_exchange
+        if "coins" in item and "exchange" in item:
+            config = deepcopy(config)
+            config.setdefault("backtest", {})["coins"] = {item["exchange"]: item["coins"]}
+            markets = {item["exchange"]: item["mss"]}
+        contexts.append((config, markets))
+    if not contexts:
+        contexts = [(proxy_config, markets_by_exchange)]
+    portfolio = any(engine(c) == "revised" and c["live"]["hsl_signal_mode"] == "unified"
+                    and bool(c["bot"]["hsl"]["enabled"]) for c, _ in contexts)
     target_sides = {
-        side
-        for side in ("long", "short")
-        if any(
-            gpu_side_enabled(item, side)
-            and _gpu_hsl_side_enabled(item, side)
-            for item in configs
-        )
+        side for side in ("long", "short")
+        if any(gpu_side_enabled(c, side) and _gpu_hsl_side_enabled(c, side, markets)
+               and not (engine(c) == "revised" and c["live"]["hsl_signal_mode"] == "unified")
+               for c, markets in contexts)
     }
-    return _gpu_candidate_source_sides(target_sides, overrides or set())
+    return _gpu_candidate_source_sides(target_sides, overrides or set()) | ({"portfolio"} if portfolio else set())
 
 
 def _gpu_hsl_parameter_active(
     parameter: str, hsl_search_sides: set[str]
 ) -> bool:
+    if parameter.startswith("hsl_"):
+        return "portfolio" in hsl_search_sides
     for side in ("long", "short"):
         if parameter.startswith(f"{side}_hsl_"):
             return side in hsl_search_sides
@@ -4419,7 +4461,7 @@ def run_backend(
     resume: bool = False,
     interrupt_check: InterruptCheck | None = None,
 ) -> dict[str, Any]:
-    _reject_revised_hsl(config)
+    _validate_revised_gpu_inputs(config)
 
     del duplicate_counter
     del constraint_fitness_cls
@@ -4559,6 +4601,8 @@ def run_backend(
     else:
         bound_map = GPU_STRATEGY_BOUND_MAPS[strategy_kind]
 
+    bound_map = _gpu_hsl_bound_map(proxy_config, bound_map)
+
     if "couple_unstuck_ema_spans" in gpu_optimizer_overrides:
         from optimizer_overrides import COUPLED_UNSTUCK_EMA_BOUND_KEYS
 
@@ -4671,12 +4715,13 @@ def run_backend(
         proxy_config, suite_inputs, gpu_optimizer_overrides
     )
     hsl_search_sides = _gpu_hsl_search_sides(
-        proxy_config, suite_inputs, gpu_optimizer_overrides
+        proxy_config, suite_inputs, gpu_optimizer_overrides,
+        markets_by_exchange=getattr(evaluator, "msss", None),
     )
     mapped = {
         name: value
         for name, value in mapped_all.items()
-        if name.split("_", 1)[0] in candidate_source_sides
+        if name.split("_", 1)[0] in candidate_source_sides or name.startswith("hsl_")
     }
     active = [
         (name, index, bound)
