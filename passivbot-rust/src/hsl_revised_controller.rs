@@ -110,6 +110,8 @@ pub struct LifecycleEvent {
 pub struct Replay {
     pub decisions: Vec<Decision>,
     pub events: Vec<LifecycleEvent>,
+    pub observations: usize,
+    pub numeric_range_approximation: bool,
 }
 
 fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
@@ -177,6 +179,16 @@ pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
 }
 
 pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
+    replay_collected::<true>(input)
+}
+
+/// Evaluate every historical transition, but retain only the current permission.
+/// Runtime callers need the count and diagnostics, not a full decision allocation.
+pub(crate) fn replay_latest_with_events(input: &Input) -> Result<Replay, String> {
+    replay_collected::<false>(input)
+}
+
+fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, String> {
     if input.start > input.now
         || input.cooldown_ms < 0
         || !input.budget.is_finite()
@@ -244,6 +256,8 @@ pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
         unrealized: current.upnl,
     };
     let mut decisions = Vec::new();
+    let mut observations = 0;
+    let mut numeric_range_approximation = false;
     let mut events = Vec::new();
     let mut red_at = None;
     let mut flat_at = None;
@@ -364,6 +378,11 @@ pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
             } else {
                 Action::Halted
             };
+            observations += 1;
+            numeric_range_approximation |= risk.numeric_range_approximation;
+            if !KEEP_HISTORY {
+                decisions.clear();
+            }
             decisions.push(Decision {
                 timestamp: t,
                 action,
@@ -382,7 +401,12 @@ pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
     if decisions.last().unwrap().timestamp != input.now {
         return Err("HSL trace must end at the current observation".into());
     }
-    Ok(Replay { decisions, events })
+    Ok(Replay {
+        decisions,
+        events,
+        observations,
+        numeric_range_approximation,
+    })
 }
 
 #[pyfunction]
@@ -396,6 +420,58 @@ pub fn hsl_revised_controller(input_json: &str) -> PyResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latest_replay_preserves_events_counts_and_earlier_numeric_diagnostics() {
+        for budget in [1.0, 1000.0, f64::MAX] {
+            for span in [1.0, 2.5, 10000.0] {
+                let mut points: Vec<_> = (0..100)
+                    .map(|i| Point {
+                        timestamp: i * 60_000,
+                        pnl: if i == 0 { f64::MAX } else { 0.0 },
+                        upnl: ((i * 79) % 401 - 200) as f64,
+                        exposed: true,
+                        flatten: false,
+                        cashflow_reference_delta: None,
+                    })
+                    .collect();
+                points.last_mut().unwrap().exposed = false;
+                points.last_mut().unwrap().flatten = true;
+                let input = Input {
+                    episodes: vec![Episode {
+                        points,
+                        opened_at: None,
+                        entry_reference: None,
+                        entry_reference_delta: None,
+                    }],
+                    now: 99 * 60_000,
+                    start: 0,
+                    budget,
+                    span,
+                    threshold: 0.1,
+                    cooldown_ms: 0,
+                    restart: Restart::Always,
+                    intervention: Intervention::Panic,
+                };
+                let full = replay_with_events(&input).unwrap();
+                let latest = replay_latest_with_events(&input).unwrap();
+                assert_eq!(latest.decisions.len(), 1);
+                assert_eq!(latest.observations, full.decisions.len());
+                assert_eq!(
+                    latest.numeric_range_approximation,
+                    full.decisions.iter().any(|d| d.numeric_range_approximation)
+                );
+                assert_eq!(
+                    serde_json::to_value(latest.decisions.last()).unwrap(),
+                    serde_json::to_value(full.decisions.last()).unwrap()
+                );
+                assert_eq!(
+                    serde_json::to_value(&latest.events).unwrap(),
+                    serde_json::to_value(&full.events).unwrap()
+                );
+            }
+        }
+    }
 
     #[test]
     fn reporting_keeps_zero_cooldown_stop_without_changing_permission() {

@@ -6,8 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce revised HSL replay allocations and repeated exact-cashflow summation without
+  changing reconstructed signals, lifecycle decisions, or diagnostics.
+
 - Expose `--hsl-engine legacy|revised` (also `--live.hsl_engine`) in backtest and optimizer startup CLI
   overrides, matching the existing JSON selector. Legacy remains the default.
+
 
 - Revised HSL services completed ordinary plans before the next account refresh can invalidate
   them. Slow preparation tolerates raw-balance drift while preserving its strategy inputs;

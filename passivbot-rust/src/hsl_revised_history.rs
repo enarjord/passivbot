@@ -453,18 +453,24 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     } else {
         None
     };
-    let mut prices = BTreeMap::new();
+    // Input keys are already ordered and unique. Preserve that order without
+    // allocating a second search tree for a sequential reconstruction pass.
+    let mut prices = Vec::with_capacity(input.prices.len() + 1);
     for (&t, &price) in &input.prices {
         if t < input.start || t > input.end {
             continue;
         }
         if price.is_finite() && price > 0.0 {
-            prices.insert(t, price);
+            prices.push((t, price));
         } else {
             reasons.insert("invalid_historical_price".into());
         }
     }
-    prices.insert(input.end, p.mark);
+    if prices.last().is_some_and(|(t, _)| *t == input.end) {
+        prices.last_mut().unwrap().1 = p.mark;
+    } else {
+        prices.push((input.end, p.mark));
+    }
     let mut samples = Vec::with_capacity(prices.len());
     let mut consumed = 0;
     for (timestamp, price) in prices {
