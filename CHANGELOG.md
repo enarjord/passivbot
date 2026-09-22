@@ -10,9 +10,11 @@ since the latest release tag; these features may already be available when insta
   summaries of completed blocks, preserving same-minute peak/EMA updates and
   bounded-lookback behavior while allowing larger candidate batches.
 
-- Add offline revised-HSL single-coin GPU qualification on Metal and CUDA, with
-  bounded history scratch and current-equity signal parity tests. Public GPU optimization
-  remains gated while the remaining integration is completed.
+- Support revised-HSL single-coin GPU optimization on Metal and CUDA in coin, pside
+  and unified modes, including canonical policy bounds, exact Rust validation and resume.
+  Multi-coin revised scenarios remain explicitly unsupported. GPU history scratch is bounded
+  and current-equity signal arithmetic has parity coverage.
+
 
 - Further accelerate revised-HSL backtests and CPU optimization by retaining factual
   PNL/UPNL traces between ordinary fills and balance changes, while reevaluating the shared
@@ -146,8 +148,8 @@ since the latest release tag; these features may already be available when insta
   controllers or disabled policies, including portfolio metrics when every controller is disabled.
   Coin mode resolves overrides for actual dataset
   members, including combined-dataset market identities; scenario selection remains respected.
-  General side-performance metrics remain available. GPU optimization rejects revised HSL rather
-  than using legacy proxy behavior.
+  General side-performance metrics remain available. GPU screening selects the revised shader
+  explicitly rather than using legacy proxy behavior.
 
 - Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
   halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL

@@ -2,7 +2,7 @@
 
 Select `live.hsl_engine=revised` at startup to use this engine. `legacy` remains the
 implicit default. The selector applies to live execution, the offline fake runner,
-backtests and CPU optimization; GPU optimization does not support revised HSL.
+backtests, CPU optimization and single-coin GPU optimization.
 Changing engines requires a restart and an engine-compatible configuration.
 
 ## Signals and scopes
@@ -134,20 +134,23 @@ shared reconstruction. Rebuilding or discarding either cache preserves trading d
 These disposable caches do not authorize trading independently and are not persisted.
 
 
-## Offline GPU qualification
+## Offline GPU optimization
 
-Internal single-coin GPU runners implement revised arithmetic for both supported strategy
-families. They use bounded per-candidate history, recompute drawdown when its equity anchor
+Single-coin GPU optimization supports revised HSL for both supported strategy families
+and all three signal modes. Unified mode uses the explicit `bot.hsl` policy and portfolio
+HSL bounds; coin and pside modes use their directional policies. They use bounded per-candidate history, recompute drawdown when its equity anchor
 changes, and derive current panic and terminal cooldown without latching past decisions.
 The same Rust-owned shader source runs on Metal and CUDA. Candidate batches are partitioned
 to keep history scratch below 512 MiB; temporal replay rebinds that scratch explicitly.
 History stores two floats per minute plus summaries of completed 64-minute blocks;
 partial boundary blocks are evaluated directly, including same-minute replacement peaks.
 
-The public GPU optimizer selector remains unavailable for revised HSL until configuration,
-multicoin integration and exact-validation coverage are complete. These internal runners
-are for offline qualification, not an alternative live implementation. GPU float32 results
-are screening estimates; exact Rust backtests remain authoritative for retained candidates.
+Select `live.hsl_engine=revised` and `optimize.backend=gpu` with 1m candles. Revised
+GPU scenarios currently require exactly one prepared coin; multi-coin scenarios are
+rejected explicitly. Existing GPU metric and execution restrictions still apply. Saved
+checkpoints include the selected engine and effective policies; incompatible resume is
+rejected. GPU float32 results are screening estimates; exact Rust backtests remain
+authoritative for retained candidates. This offline path does not execute live orders.
 Run the reproducible single-coin timing fixture with:
 
 ```sh
