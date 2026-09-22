@@ -914,7 +914,7 @@ async def test_close_reports_abandoned_quote_cleanup_failure(strategy, completed
     assert raised.value is primary
     assert calls == ['client_closed', 'pipeline']
     assert provider.pending_tasks() == ()
-    assert provider._pending_failure is None
+    assert not provider._pending_failures
     assert 'report_cleanup_failure' in caplog.text and 'connector-secret' not in caplog.text
     await provider.wait_pending()  # delivered cleanup errors are not replayed
 
@@ -983,14 +983,14 @@ async def test_completed_fatal_precedes_callback_cache_and_replacement(strategy,
     # The failing fetch runs first; the new reader then runs before its callbacks.
     release.set()
     async def read_before_callback():
-        assert owned.done() and provider._pending_failure is None
+        assert owned.done() and not provider._pending_failures
         return await provider.get_snapshots(['A'])
     reader = asyncio.create_task(read_before_callback())
     with pytest.raises(ValueError) as raised:
         await reader
     assert raised.value is primary and calls == 1
     await asyncio.sleep(0)
-    assert provider._pending_failure is None  # callback cannot replay delivered failure
+    assert not provider._pending_failures  # callback cannot replay delivered failure
     assert (await provider.get_snapshots(['A']))['A'].last == 100.
     assert calls == (1 if cached else 2)
 
@@ -1017,7 +1017,7 @@ async def test_lifecycle_reports_failure_retained_before_shutdown(lifecycle, str
     owned = provider.pending_tasks()
     release.set()
     await asyncio.wait(owned)
-    assert provider._pending_failure is primary and provider.pending_tasks() == ()
+    assert list(provider._pending_failures.values()) == [primary] and provider.pending_tasks() == ()
     calls = []
     class Client:
         async def close(self):
@@ -1034,7 +1034,7 @@ async def test_lifecycle_reports_failure_retained_before_shutdown(lifecycle, str
     bot._close_live_event_pipeline = lambda **kwargs: True
     bot._emit_shutdown_stage = lambda *args, **kwargs: None
     await getattr(bot, lifecycle)()
-    assert calls == ['client'] and provider._pending_failure is None
+    assert calls == ['client'] and not provider._pending_failures
     assert 'quote cleanup failed' in caplog.text and 'ValueError' in caplog.text
     assert 'private-failure-text' not in caplog.text
     await provider.wait_pending()
@@ -1129,3 +1129,115 @@ async def test_graceful_shutdown_bounds_quote_that_ignores_repeated_cancellation
         await closer
     assert 'private-late-quote' not in caplog.text
     assert 'report_cleanup_failure' in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('destination', ['reader', 'cached_reader', 'direct_close', 'restart', 'graceful'])
+@pytest.mark.parametrize('callbacks_completed', [False, True])
+async def test_all_abandoned_symbol_failures_reach_next_boundary(destination, callbacks_completed, caplog):
+    from passivbot import Passivbot
+    from unittest.mock import AsyncMock
+    release = asyncio.Event()
+    started = {s: asyncio.Event() for s in ('A', 'B')}
+    failures = {'A': ValueError('private-A'), 'B': RuntimeError('private-B')}
+    calls = []
+    async def fetch(symbols):
+        symbol = symbols[0]
+        calls.append(symbol)
+        started[symbol].set()
+        await release.wait()
+        raise failures[symbol]
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=None,
+        fetch_tickers_for_symbols=fetch, ticker_strategy='symbols')
+    readers = [asyncio.create_task(provider.get_snapshots([s])) for s in ('A', 'B')]
+    await asyncio.gather(*(e.wait() for e in started.values()))
+    for reader in readers:
+        reader.cancel()
+    await asyncio.gather(*readers, return_exceptions=True)
+    owned = provider.pending_tasks()
+    if destination == 'cached_reader':
+        provider._cache['A'] = provider._snapshot_from_ticker('A',
+            {'bid': 99., 'ask': 101., 'last': 100.}, fetched_ms=10**15)
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    bot.maintainers, bot.WS_ohlcvs_1m_tasks = {}, {}
+    bot.cca = bot.ccp = bot.monitor_publisher = None
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._close_live_event_pipeline = lambda **kwargs: True
+    bot._emit_shutdown_stage = lambda *args, **kwargs: None
+    groups = []
+    original_raise = provider.raise_pending_failure
+    def observe_boundary():
+        try:
+            original_raise()
+        except ExceptionGroup as exc:
+            groups.append(exc)
+            raise
+    provider.raise_pending_failure = observe_boundary
+    release.set()
+    if callbacks_completed:
+        await asyncio.wait(owned)
+        await asyncio.sleep(0)
+        assert len(provider._pending_failures) == 2
+    async def consume():
+        assert all(task.done() for task in owned)
+        if not callbacks_completed:
+            assert not provider._pending_failures  # deterministic callback race
+        if destination in ('reader', 'cached_reader'):
+            await provider.get_snapshots(['A'])
+        elif destination == 'direct_close':
+            await bot.close()
+        elif destination == 'restart':
+            await bot.cleanup_for_restart()
+        else:
+            await bot.shutdown_gracefully()
+    task = asyncio.create_task(consume())
+    if destination in ('restart', 'graceful'):
+        await task  # lifecycle reports errors and continues cleanup
+    else:
+        with pytest.raises(ExceptionGroup) as raised:
+            await task
+        assert raised.value is groups[0]
+    assert len(groups) == 1 and groups[0].exceptions == tuple(failures.values())
+    assert calls == ['A', 'B']  # no replacement I/O before fatal delivery
+    assert not provider._pending_failures
+    await asyncio.sleep(0)
+    provider.raise_pending_failure()  # no callback replay
+    assert 'failure_count=2' in caplog.text
+    assert 'RuntimeError' in caplog.text and 'ValueError' in caplog.text
+    assert 'private-A' not in caplog.text and 'private-B' not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('same_exception', [False, True])
+async def test_active_reader_does_not_consume_other_abandoned_failure(same_exception):
+    release = asyncio.Event()
+    started = {s: asyncio.Event() for s in ('A', 'B')}
+    first = ValueError('first')
+    failures = {'A': first, 'B': first if same_exception else ValueError('second')}
+    async def fetch(symbols):
+        symbol = symbols[0]
+        started[symbol].set()
+        await release.wait()
+        raise failures[symbol]
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=None,
+        fetch_tickers_for_symbols=fetch, ticker_strategy='symbols')
+    active = asyncio.create_task(provider.get_snapshots(['A']))
+    abandoned = asyncio.create_task(provider.get_snapshots(['B']))
+    await asyncio.gather(*(e.wait() for e in started.values()))
+    abandoned.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await abandoned
+    release.set()
+    with pytest.raises(ValueError) as raised:
+        await active
+    assert raised.value is failures['A']
+    assert list(provider._pending_failures.values()) == [failures['B']]
+    with pytest.raises(ValueError) as raised:
+        await provider.get_snapshots(['A'])
+    assert raised.value is failures['B']
+    assert not provider._pending_failures
+    provider.raise_pending_failure()

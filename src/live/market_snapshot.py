@@ -75,7 +75,7 @@ class MarketSnapshotProvider:
         self._cache: dict[str, MarketSnapshot] = {}
         self._fetch_task: Optional[asyncio.Task] = None
         self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
-        self._pending_failure: Optional[Exception] = None
+        self._pending_failures: dict[asyncio.Task, Exception] = {}
         self._observed_tasks = weakref.WeakSet()
         self._closing = False
         self._shutdown_tasks: tuple[asyncio.Task, ...] = ()
@@ -321,8 +321,7 @@ class MarketSnapshotProvider:
                     "[market] quote request failed during shutdown | error_type=%s action=report_cleanup_failure",
                     bounded_exception_type(failure),
                 )
-            if self._pending_failure is None:
-                self._pending_failure = failure
+            self._pending_failures[task] = failure
 
     async def _await_shared(self, task: asyncio.Task) -> dict[str, Any]:
         try:
@@ -332,8 +331,8 @@ class MarketSnapshotProvider:
             self._record_completed_failure(task)
             return task.result()
         except Exception as exc:
-            if not self._closing and self._pending_failure is exc:
-                self._pending_failure = None  # delivered to this active reader
+            if not self._closing:
+                self._pending_failures.pop(task, None)  # delivered to this active reader
             raise
 
     def raise_pending_failure(self) -> None:
@@ -341,9 +340,19 @@ class MarketSnapshotProvider:
         for task in (self._fetch_task, *self._symbol_fetch_tasks.values(), *self._shutdown_tasks):
             if task is not None:
                 self._record_completed_failure(task)
-        if self._pending_failure is not None:
-            failure, self._pending_failure = self._pending_failure, None
-            raise failure
+        if self._pending_failures:
+            failures = list(self._pending_failures.values())
+            self._pending_failures.clear()
+            if len(failures) == 1:
+                raise failures[0]
+            # A reader or lifecycle boundary receives every concurrent outcome.
+            # Keep diagnostics bounded and free of connector exception text.
+            error_types = sorted({bounded_exception_type(exc) for exc in failures})
+            self._log.error(
+                "[market] concurrent quote requests failed | failure_count=%d error_types=%s action=propagate",
+                len(failures), ",".join(error_types[:12]),
+            )
+            raise ExceptionGroup("concurrent quote request failures", failures)
 
     def _ensure_open(self) -> None:
         if self._closing:
