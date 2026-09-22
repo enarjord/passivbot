@@ -7610,7 +7610,12 @@ class Passivbot:
                     if task is not None and not task.done():
                         task.cancel()
                 try:
-                    await asyncio.wait_for(maintainer_gather, timeout=1.0)
+                    # wait_for() waits for cancellation acknowledgement and can
+                    # overrun forever when connector cleanup suppresses cancellation.
+                    done, _ = await asyncio.wait({maintainer_gather}, timeout=1.0)
+                    if not done:
+                        raise asyncio.TimeoutError()
+                    maintainer_gather.result()
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     self._emit_shutdown_stage(
                         "maintainers_cancel_timeout",

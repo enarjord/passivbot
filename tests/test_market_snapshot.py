@@ -1079,3 +1079,53 @@ async def test_close_bounds_all_clients_even_if_they_suppress_cancellation(exter
         await asyncio.gather(*owned, return_exceptions=True)
         await asyncio.sleep(0)
     assert 'late-private-text' not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_graceful_shutdown_bounds_quote_that_ignores_repeated_cancellation(caplog):
+    from passivbot import Passivbot
+    from unittest.mock import AsyncMock
+    started, release = asyncio.Event(), asyncio.Event()
+    async def fetch():
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+        raise ValueError('private-late-quote')
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    reader = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    reader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await reader
+    owned = provider.pending_tasks()
+    calls = []
+    class Client:
+        async def close(self):
+            calls.append('client')
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    bot.maintainers, bot.WS_ohlcvs_1m_tasks = {}, {}
+    bot.cca, bot.ccp = Client(), None
+    bot.monitor_publisher = None
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._shutdown_maintainer_grace_seconds = .01
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._close_live_event_pipeline = lambda **kwargs: True
+    bot._emit_shutdown_stage = lambda *args, **kwargs: None
+    closer = asyncio.create_task(bot.shutdown_gracefully())
+    try:
+        _, pending = await asyncio.wait({closer}, timeout=1.5)
+        assert not pending, 'graceful shutdown exceeded its cancellation grace'
+        closer.result()
+        assert calls == ['client']
+    finally:
+        release.set()
+        await asyncio.gather(*owned, return_exceptions=True)
+        await closer
+    assert 'private-late-quote' not in caplog.text
+    assert 'report_cleanup_failure' in caplog.text
