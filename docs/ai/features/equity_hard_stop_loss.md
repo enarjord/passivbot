@@ -640,6 +640,10 @@ A completed ordinary plan gets a protective pass and its guarded execution befor
 account refresh, avoiding deterministic invalidation by that confirming read; the subsequent
 refresh still receives its own protective pass. If account facts or pending confirmations already
 invalidate that completed plan, discard it for replanning instead of reporting an execution turn.
+The immutable plan-level receipt is retained and checked even when reconciliation emits no orders.
+Shutdown is checked before protection and after its awaited work, before ordinary service, and
+again at revised connector admission, including work queued on the write lock. An exchange call
+already in flight is not recalled; shutdown prevents subsequent submissions.
 Stale or changed receipts remain inadmissible. Enabled ordinary fill consumers also bind the
 canonical fill signature and readiness to their plan and connector receipt, including PnL/fee-only
 enrichment. This does not impose ordinary fill requirements on protective closes or otherwise

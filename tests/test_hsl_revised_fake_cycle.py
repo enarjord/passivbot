@@ -216,7 +216,7 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
         return True
     bot.refresh_protective_authoritative_state = refresh
     instance = Owner(bot)
-    instance._plan_account_matches = lambda *args: True
+    instance._account_matches = lambda *args: True
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
     async def protect(**kwargs):
@@ -224,7 +224,7 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
         return False
     instance.protect = protect
     async def prepared():
-        return [], [dict(raw_at_rust=bot.raw)], object()
+        return [], [dict(raw_at_rust=bot.raw)], object(), object()
     async def execute(cancels, creates):
         events.append('write')
         assert creates[0]['raw_at_rust'] == bot.raw

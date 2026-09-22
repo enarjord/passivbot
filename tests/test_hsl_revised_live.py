@@ -284,7 +284,7 @@ async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monk
         plan = await instance._ordinary_plan()
         assert plan is not None
         assert bot.active_symbols, (bot.approved_coins, bot.approved_coins_minus_ignored_coins, bot.config['live']['approved_coins'])
-        cancels, creates, snapshot = plan
+        cancels, creates, snapshot, wave = plan
         assert any(not order['reduce_only'] for order in creates)
         if raw_balance_drift:
             raw, strategy = bot.get_raw_balance(), bot.get_hysteresis_snapped_balance()
@@ -971,7 +971,7 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
     async def reconcile():
         await step('reconcile')
         from types import SimpleNamespace
-        bot._hsl_revised_planning_wave = SimpleNamespace(balance=bot.get_raw_balance())
+        bot._hsl_revised_planning_wave = hsl_revised_live.Wave(NOW, NOW, (), (), (), "", (), bot.get_raw_balance(), 0)
         await step('after_rust')
         return [], []
     bot.calc_orders_to_cancel_and_create = reconcile
@@ -1017,13 +1017,13 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
         _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None,
         live_value=lambda key: .05)
     instance = hsl_revised_live.Owner(bot)
-    instance._plan_account_matches = lambda *args: True
+    instance._account_matches = lambda *args: True
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
     instance.protect = noop
     async def plan():
         plans.append(True)
-        return [], [dict(symbol='TEST/USDT:USDT')], object()
+        return [], [dict(symbol='TEST/USDT:USDT')], object(), object()
     async def write(*args):
         assert len(plans) == 1
         await asyncio.sleep(0)
@@ -1347,7 +1347,10 @@ def test_ordinary_admission_rejects_changed_risk_inputs(monkeypatch, mode, side,
 
 
 @pytest.mark.asyncio
-async def test_completed_plan_invalidated_by_fill_confirmation_is_replanned(monkeypatch):
+@pytest.mark.parametrize('empty', [False, True])
+@pytest.mark.parametrize('change', ['account_confirmation', 'required_fills'])
+@pytest.mark.parametrize('entrypoint', ['cycle', 'fake_runner'])
+async def test_completed_plan_invalidated_by_fill_confirmation_is_replanned(monkeypatch, empty, change, entrypoint):
     import asyncio
     import utils
     from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
@@ -1364,26 +1367,158 @@ async def test_completed_plan_invalidated_by_fill_confirmation_is_replanned(monk
     instance = hsl_revised_live.owner(bot)
     wave = instance.capture(quotes())
     order = dict(symbol=SYMBOL, position_side='long', reduce_only=True)
+    from dataclasses import replace
+    bot._staged_planner_required_surfaces = lambda **kwargs: {'fills'}
+    wave = replace(wave, required_fills=instance.required_fill_facts())
     instance.bind(wave, (), (order,), ordinary=True)
-    assert instance._plan_account_matches([], [order], NOW)
+    assert instance._account_matches(wave, NOW)
     async def prepared():
-        return [], [order], object()
+        return [], [] if empty else [order], object(), replace(wave, required_fills=instance.required_fill_facts())
     instance._ordinary = asyncio.create_task(prepared())
     await instance._ordinary
     calls = []
+    invalidated = False
     async def protect(**kwargs):
+        nonlocal invalidated
+        if invalidated:
+            return False
+        invalidated = True
         # A delayed fill observation requires another account confirmation.
-        bot._authoritative_pending_confirmations = {'balance': ledger.epoch+1}
+        if change == 'account_confirmation':
+            bot._authoritative_pending_confirmations = {'balance': ledger.epoch+1}
+        else:
+            ledger.stamp('fills', signature=('changed-required-fills',), now_ms=NOW)
         return False
     async def refresh(**kwargs):
         calls.append('refresh')
-        return False
+        if entrypoint == 'cycle':
+            return False
+        ledger.begin_epoch(now_ms=NOW)
+        for surface in ('balance', 'positions', 'open_orders'):
+            ledger.stamp(surface, now_ms=NOW)
+        return True
     async def execute(*args):
         calls.append('write')
     instance.protect = protect
+    instance._ordinary_plan = prepared
+    instance.schedule_history = instance.schedule_sources = lambda: None
     bot.refresh_protective_authoritative_state = refresh
     bot.execute_order_plan_to_exchange = execute
+    try:
+        if entrypoint == 'cycle':
+            result = await instance.cycle()
+            assert result['ordinary_completed'] and not result['ordinary_executed']
+            assert instance._ordinary is None
+            assert calls == ['refresh']
+        else:
+            result = await runner._run_fake_cycle_ready(bot)
+            assert result['passes'] == 2 and result['ordinary_executed']
+            assert calls == ['refresh', 'write', 'refresh']
+    finally:
+        instance.cancel_inputs()
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['before', 'quotes', 'reconcile'])
+@pytest.mark.parametrize('flag', ['stop_signal_received', '_shutdown_in_progress'])
+async def test_shutdown_during_ready_protection_prevents_further_service(monkeypatch, stage, flag):
+    import asyncio
+    import utils
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot()
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._begin_live_event_cycle = lambda **kwargs: None
+    bot._record_market_snapshot_surface = lambda *args: None
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes())
+    assert wave.permission(SYMBOL, 'long')[0] == 'panic'
+    calls = []
+    async def acquire(symbols):
+        calls.append('quotes')
+        await asyncio.sleep(0)
+        if stage == 'quotes': setattr(bot, flag, True)
+        return quotes()
+    async def reconcile(**kwargs):
+        calls.append('reconcile')
+        await asyncio.sleep(0)
+        if stage == 'reconcile': setattr(bot, flag, True)
+        return [], [dict(symbol=SYMBOL, position_side='long')]
+    async def execute(*args, **kwargs):
+        calls.append('write')
+    async def refresh(**kwargs):
+        calls.append('refresh')
+        return True
+    async def prepared():
+        return [], [], object(), wave
+    instance.acquire_quotes = acquire
+    bot.calc_protective_panic_orders_to_cancel_and_create = reconcile
+    bot.execute_order_plan_to_exchange = execute
+    bot.refresh_protective_authoritative_state = refresh
+    instance.report = lambda wave: None
+    instance._ordinary = asyncio.create_task(prepared())
+    await instance._ordinary
+    if stage == 'before': setattr(bot, flag, True)
     result = await instance.cycle()
-    assert result['ordinary_completed'] and not result['ordinary_executed']
+    assert not result['ordinary_executed'] and not result['updated']
+    assert 'write' not in calls and 'refresh' not in calls
+    assert calls == {'before': [], 'quotes': ['quotes'], 'reconcile': ['quotes', 'reconcile']}[stage]
     assert instance._ordinary is None
-    assert calls == ['refresh']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('action', ['create', 'cancel'])
+@pytest.mark.parametrize('flag', ['stop_signal_received', '_shutdown_in_progress'])
+async def test_shutdown_rejects_connector_work_queued_on_write_lock(monkeypatch, action, flag):
+    import asyncio
+    import utils
+    from live import executor
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot()
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._ensure_freshness_ledger().stamp('open_orders', now_ms=NOW)
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes())
+    order = dict(symbol=SYMBOL, position_side='long')
+    instance.bind(wave, (), (order,))
+    assert instance.admit(order)
+    calls = []
+    @hsl_revised_live.connector_write(action)
+    async def connector(bot, order):
+        calls.append(order)
+    await instance._write_lock.acquire()
+    task = asyncio.create_task(connector(bot, order))
+    await asyncio.sleep(0)
+    assert not task.done()
+    setattr(bot, flag, True)
+    instance._write_lock.release()
+    result = await task
+    expected = executor.DeferredOrderCreation if action == 'create' else executor.DeferredOrderCancellation
+    assert isinstance(result, expected) and not calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('flag', ['stop_signal_received', '_shutdown_in_progress'])
+async def test_revised_run_exits_on_each_canonical_shutdown_flag(flag):
+    from types import SimpleNamespace
+    bot = SimpleNamespace(stop_signal_received=False)
+    instance = hsl_revised_live.Owner(bot)
+    calls = []
+    async def cycle():
+        calls.append('cycle')
+        setattr(bot, flag, True)
+        return {'updated': True}
+    async def sleep(*args, **kwargs):
+        assert calls == ['cycle']
+    instance.cycle = cycle
+    bot._maybe_log_health_summary = lambda: None
+    bot._sleep_unless_shutdown = sleep
+    bot.live_value = lambda key: .05
+    await instance.run()
+    assert calls == ['cycle'] and not instance._running
