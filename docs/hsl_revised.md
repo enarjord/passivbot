@@ -151,10 +151,11 @@ restrictions still apply. Saved
 checkpoints include the selected engine and effective policies; incompatible resume is
 rejected. GPU float32 results are screening estimates; exact Rust backtests remain
 authoritative for retained candidates. This offline path does not execute live orders.
-Run the reproducible single-coin timing fixture with:
+Run the reproducible timing fixtures with:
 
 ```sh
 PYTHONPATH=src python tests/hsl_revised_gpu_benchmark.py --minutes 4000 --candidates 16
+PYTHONPATH=src python tests/hsl_revised_gpu_benchmark.py --coins 2 --mode unified --minutes 4000 --candidates 16
 ```
 
 Hardware parity tests cover changing budgets, sliding windows, fractional EMA spans,
