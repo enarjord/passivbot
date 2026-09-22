@@ -624,7 +624,11 @@ relax source freshness or connector admission checks.
 
 Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,
 current account freshness, pending confirmations, generation, balance and positions are checked,
-and Rust recomputes the order's authorizing scope from current observations. Coin admission
+and Rust recomputes the order's authorizing scope from current observations. Ordinary receipts
+bind the hysteresis-smoothed balance consumed by Rust sizing. A confirming read may change raw
+balance without voiding that receipt when the sizing balance is unchanged and current Rust HSL
+permission is unchanged; HSL always uses fresh raw balance for this re-evaluation. Dedicated
+protective receipts still require their captured raw balance. Coin admission
 reconstructs its coin-side; pside admission retains every contributing pair on that side; unified
 admission retains the whole portfolio. Other independent scopes are evaluated during the full
 protection/planning wave. Admission never replaces full-scope diagnostics, and complete account

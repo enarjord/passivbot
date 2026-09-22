@@ -243,7 +243,8 @@ def test_revised_wave_is_not_execution_authority_after_inputs_change(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
-async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize('raw_balance_drift', [False, True])
+async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monkeypatch, mode, raw_balance_drift):
     import asyncio
     user = f'fake_revised_green_{tmp_path.name}'
     _cleanup_fake_user_state(user)
@@ -284,6 +285,12 @@ async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monk
         assert bot.active_symbols, (bot.approved_coins, bot.approved_coins_minus_ignored_coins, bot.config['live']['approved_coins'])
         cancels, creates, snapshot = plan
         assert any(not order['reduce_only'] for order in creates)
+        if raw_balance_drift:
+            raw, strategy = bot.get_raw_balance(), bot.get_hysteresis_snapped_balance()
+            bot.cca.balance_total += .001
+            assert await bot.refresh_protective_authoritative_state(require_balance=True)
+            assert bot.get_raw_balance() != raw
+            assert bot.get_hysteresis_snapped_balance() == strategy
         bot._current_planning_snapshot = snapshot
         await bot.execute_order_plan_to_exchange(cancels, creates)
         assert any(call['method'] == 'create_order' for call in bot.cca.export_request_log())
@@ -1276,3 +1283,41 @@ def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode)
     bot.positions[other]['long']['size'] += 1
     assert not owner.admit(order)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+@pytest.mark.parametrize('side', ['long', 'short'])
+@pytest.mark.parametrize('change', ['raw_only', 'strategy', 'risk_action', 'stale_balance', 'pending_balance'])
+def test_ordinary_admission_rechecks_risk_without_rejecting_raw_balance_drift(monkeypatch, mode, side, change):
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    import utils
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot(mode, side=side)
+    block = bot.config['bot']['hsl'] if mode == 'unified' else bot.config['bot'][side]['hsl']
+    block['red_threshold'] = .2
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {s: {SYMBOL} if s == side else set() for s in ('long', 'short')}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._staged_planner_required_surfaces = lambda **kwargs: set()
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    ledger.stamp('open_orders', now_ms=NOW-200)
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes(side))
+    assert wave.permission(SYMBOL, side)[0] == 'normal'
+    order = dict(symbol=SYMBOL, position_side=side, reduce_only=True)
+    instance.bind(wave, (), (order,), ordinary=True)
+    assert instance.admit(order)
+    bot.get_raw_balance = lambda: 999.
+    if change == 'strategy':
+        bot.get_hysteresis_snapped_balance = lambda: 990.
+    elif change == 'risk_action':
+        # Even with unchanged strategy sizing, fresh raw balance changes the
+        # Rust HSL action. An old ordinary close must not replace panic intent.
+        bot.get_raw_balance = lambda: 100.
+        assert instance.capture().permission(SYMBOL, side)[0] == 'panic'
+    elif change == 'stale_balance':
+        ledger.surfaces['balance'].updated_ms = NOW-10_001
+    elif change == 'pending_balance':
+        bot._authoritative_pending_confirmations = {'balance': ledger.epoch+1}
+    assert instance.admit(order) == (change == 'raw_only')

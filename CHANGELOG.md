@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Revised HSL ordinary orders no longer repeatedly defer when raw balance changes between
+  planning and submission but the strategy sizing balance is unchanged. Submission still
+  re-evaluates HSL with fresh raw balance and rejects changed risk permission or account facts.
+
 - Revised HSL now uses one best-effort fill reconciliation path for drawdown and cooldown.
   Known fill quantities are preserved with minimum feasible opening inventory and explicit
   current-position adjustments. Missing or ambiguous history and read ordering produce

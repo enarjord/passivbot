@@ -82,6 +82,7 @@ class Wave:
     balance: float
     generation: int
     required_fills: tuple | None = None
+    strategy_balance: float | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -169,7 +170,14 @@ class Owner:
         # account-generation bypass. Changed size/basis also requires replanning.
         if (wave.generation != int(getattr(bot, "_account_invalidation_generation", 0))
                 or wave.positions != runtime.observe_positions(bot).payload
-                or wave.open_orders != runtime.observe_open_orders(bot) or wave.balance != bot.get_raw_balance()):
+                or wave.open_orders != runtime.observe_open_orders(bot)):
+            return False
+        # Ordinary Rust sizing consumes the hysteresis balance. Raw balance may
+        # move on a confirming read without changing that input; admit() still
+        # recomputes HSL with fresh raw balance and requires the same action.
+        if (wave.strategy_balance is None and wave.balance != bot.get_raw_balance()
+                or wave.strategy_balance is not None
+                and wave.strategy_balance != bot.get_hysteresis_snapped_balance()):
             return False
         return True
 
@@ -202,7 +210,8 @@ class Owner:
 
     def bind(self, wave, cancels, creates, *, ordinary=False):
         if ordinary:
-            wave = replace(wave, required_fills=self.required_fill_facts())
+            wave = replace(wave, required_fills=self.required_fill_facts(),
+                           strategy_balance=self.bot.get_hysteresis_snapped_balance())
         # A fresh owner must not recycle an old order's receipt identifier.
         token = uuid4().hex
         self._waves[token] = wave
