@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import weakref
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Iterable, Optional
 
@@ -10,6 +11,14 @@ from ccxt.base.errors import NetworkError
 
 from live.diagnostic_safety import bounded_exception_type
 from utils import utc_ms
+
+
+SHARED_QUOTE_CLEANUP_SECONDS = 10.0
+SHARED_QUOTE_CANCEL_GRACE_SECONDS = 1.0
+
+
+class MarketSnapshotPayloadError(RuntimeError):
+    """Provider-generated structural error with a safe actionable diagnostic."""
 
 
 class MarketSnapshotUnavailable(RuntimeError):
@@ -66,6 +75,11 @@ class MarketSnapshotProvider:
         self._cache: dict[str, MarketSnapshot] = {}
         self._fetch_task: Optional[asyncio.Task] = None
         self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
+        self._pending_failures: dict[asyncio.Task, Exception] = {}
+        self._observed_tasks = weakref.WeakSet()
+        self._active_readers: dict[asyncio.Task, int] = {}
+        self._closing = False
+        self._shutdown_tasks: tuple[asyncio.Task, ...] = ()
 
     def get_cached(self, symbol: str, *, now_ms: int, max_age_ms: int) -> Optional[MarketSnapshot]:
         snap = self._cache.get(symbol)
@@ -78,9 +92,14 @@ class MarketSnapshotProvider:
     async def get_snapshots(
         self, symbols: Iterable[str], *, max_age_ms: int = 10_000
     ) -> dict[str, MarketSnapshot]:
+        self._ensure_open()
         ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
         if not ordered_symbols:
             return {}
+
+        # A previous reader timeout must not erase a connector/programming error,
+        # including when this read could otherwise use the cache.
+        self.raise_pending_failure()
 
         now = utc_ms()
         out: dict[str, MarketSnapshot] = {}
@@ -108,6 +127,8 @@ class MarketSnapshotProvider:
                 len(missing),
                 bounded_exception_type(exc),
             )
+            if isinstance(exc, MarketSnapshotPayloadError):
+                raise
             if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                 raise
             error_type = (MarketSnapshotUnavailable if isinstance(exc, (MarketSnapshotUnavailable, NetworkError, OSError))
@@ -118,17 +139,6 @@ class MarketSnapshotProvider:
             ) from exc
 
         fetched_ms = utc_ms()
-        if not isinstance(fetched, dict):
-            self._log.warning(
-                "[market] ticker snapshot fetch returned non-dict | exchange=%s type=%s",
-                self.exchange_name,
-                type(fetched).__name__,
-            )
-            raise RuntimeError(
-                f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
-                f"{type(fetched).__name__}"
-            )
-
         cached = 0
         for raw_symbol, ticker in fetched.items():
             symbol = str(raw_symbol)
@@ -172,6 +182,8 @@ class MarketSnapshotProvider:
                     len(missing_after),
                     bounded_exception_type(exc),
                 )
+                if isinstance(exc, MarketSnapshotPayloadError):
+                    raise
                 if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                     raise
                 error_type = (MarketSnapshotUnavailable if isinstance(exc, (MarketSnapshotUnavailable, NetworkError, OSError))
@@ -182,16 +194,6 @@ class MarketSnapshotProvider:
                 ) from exc
             retry_ms = utc_ms()
             retry_cached = 0
-            if not isinstance(symbol_fetched, dict):
-                self._log.warning(
-                    "[market] ticker missing-symbol retry returned non-dict | exchange=%s type=%s",
-                    self.exchange_name,
-                    type(symbol_fetched).__name__,
-                )
-                raise RuntimeError(
-                    f"[market] ticker missing-symbol retry returned non-dict for {self.exchange_name}: "
-                    f"{type(symbol_fetched).__name__}"
-                )
             for raw_symbol, ticker in symbol_fetched.items():
                 symbol = str(raw_symbol)
                 if symbol not in missing_after:
@@ -258,32 +260,155 @@ class MarketSnapshotProvider:
         fetched = await self._fetch_tickers_for_symbols_shared(missing)
         return fetched, "fetch_tickers_symbols"
 
+    async def _fetch_validated(self, fetcher, *args) -> dict[str, Any]:
+        # Result-shape validation belongs to the shared owner too: readers may
+        # all time out before a connector returns a malformed result.
+        fetched = await fetcher(*args)
+        if not isinstance(fetched, dict):
+            raise MarketSnapshotPayloadError(
+                f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
+                f"{type(fetched).__name__}"
+            )
+        return fetched
+
     async def _fetch_tickers_shared(self) -> dict[str, Any]:
+        self._ensure_open()
+        self.raise_pending_failure()
         if self._fetch_tickers is None:
             return {}
         task = self._fetch_task
         if task is None or task.done():
-            task = asyncio.create_task(self._fetch_tickers())
+            task = asyncio.create_task(self._fetch_validated(self._fetch_tickers))
             self._fetch_task = task
-        try:
-            return await task
-        finally:
-            if self._fetch_task is task and task.done():
-                self._fetch_task = None
+            def finished(done):
+                if self._fetch_task is done:
+                    self._fetch_task = None
+                self._record_completed_failure(done)
+            task.add_done_callback(finished)
+        # A protection reader's deadline belongs to that reader, not to another
+        # planning reader sharing the same underlying exchange request.
+        return await self._await_shared(task)
 
     async def _fetch_tickers_for_symbols_shared(self, symbols: list[str]) -> dict[str, Any]:
+        self._ensure_open()
+        self.raise_pending_failure()
         if self._fetch_tickers_for_symbols is None:
             return {}
         key = tuple(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
         task = self._symbol_fetch_tasks.get(key)
         if task is None or task.done():
-            task = asyncio.create_task(self._fetch_tickers_for_symbols(list(key)))
+            task = asyncio.create_task(self._fetch_validated(self._fetch_tickers_for_symbols, list(key)))
             self._symbol_fetch_tasks[key] = task
+            def finished(done):
+                if self._symbol_fetch_tasks.get(key) is done:
+                    self._symbol_fetch_tasks.pop(key, None)
+                self._record_completed_failure(done)
+            task.add_done_callback(finished)
+        return await self._await_shared(task)
+
+    def _record_completed_failure(self, task: asyncio.Task) -> None:
+        if task in self._observed_tasks or not task.done():
+            return
+        self._observed_tasks.add(task)
+        if task.cancelled():
+            return
+        failure = task.exception()
+        if failure is not None and not isinstance(
+            failure, (NetworkError, OSError, MarketSnapshotUnavailable)
+        ):
+            if self._closing:
+                # Also visible if bounded teardown has already abandoned this task.
+                self._log.error(
+                    "[market] quote request failed during shutdown | error_type=%s action=report_cleanup_failure",
+                    bounded_exception_type(failure),
+                )
+            self._pending_failures[task] = failure
+
+    async def _await_shared(self, task: asyncio.Task) -> dict[str, Any]:
+        self._active_readers[task] = self._active_readers.get(task, 0) + 1
         try:
-            return await task
+            # wait() isolates reader cancellation without shield() logging an
+            # abandoned connector exception (including its private text) on Python 3.14.
+            await asyncio.wait({task})
+            self._record_completed_failure(task)
+            return task.result()
+        except Exception as exc:
+            if not self._closing:
+                self._pending_failures.pop(task, None)  # delivered to this active reader
+            raise
         finally:
-            if self._symbol_fetch_tasks.get(key) is task and task.done():
-                self._symbol_fetch_tasks.pop(key, None)
+            remaining = self._active_readers[task] - 1
+            if remaining:
+                self._active_readers[task] = remaining
+            else:
+                self._active_readers.pop(task)
+
+    def raise_pending_failure(self) -> None:
+        """Observe completed outcomes before callbacks, then deliver each failure once."""
+        for task in (self._fetch_task, *self._symbol_fetch_tasks.values(), *self._shutdown_tasks):
+            if task is not None:
+                self._record_completed_failure(task)
+        # Active waiters own their request's result. Only abandoned outcomes
+        # belong to unrelated reads; teardown must report all retained failures.
+        eligible = [task for task in self._pending_failures
+                    if self._closing or not self._active_readers.get(task)]
+        if eligible:
+            failures = [self._pending_failures.pop(task) for task in eligible]
+            if len(failures) == 1:
+                raise failures[0]
+            # A reader or lifecycle boundary receives every concurrent outcome.
+            # Keep diagnostics bounded and free of connector exception text.
+            error_types = sorted({bounded_exception_type(exc) for exc in failures})
+            self._log.error(
+                "[market] concurrent quote requests failed | failure_count=%d error_types=%s action=propagate",
+                len(failures), ",".join(error_types[:12]),
+            )
+            raise ExceptionGroup("concurrent quote request failures", failures)
+
+    def _ensure_open(self) -> None:
+        if self._closing:
+            raise MarketSnapshotUnavailable("[market] quote provider is shutting down")
+
+    def begin_shutdown(self) -> None:
+        """Atomically reject new requests before cancelling the existing owned I/O."""
+        if not self._closing:
+            # Retain even already-done tasks whose completion callbacks have not run yet.
+            self._shutdown_tasks = tuple(
+                task for task in (self._fetch_task, *self._symbol_fetch_tasks.values())
+                if task is not None
+            )
+            self._closing = True
+        self.cancel_pending()
+
+    def pending_tasks(self) -> tuple[asyncio.Task, ...]:
+        """Expose owned I/O so lifecycle cleanup can wait before closing clients."""
+        return tuple(task for task in (self._fetch_task, *self._symbol_fetch_tasks.values())
+                     if task is not None and not task.done())
+
+    def cancel_pending(self) -> None:
+        """Owner shutdown, unlike an individual read timeout, cancels shared I/O."""
+        for task in self.pending_tasks():
+            if not task.cancelling():
+                task.cancel()
+
+    async def wait_pending(self, *, timeout_seconds: float = SHARED_QUOTE_CLEANUP_SECONDS) -> None:
+        """Bounded cleanup for direct client-close paths after cancellation."""
+        tasks = self._shutdown_tasks if self._closing else self.pending_tasks()
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=max(0.0, timeout_seconds))
+            if pending:
+                self._log.warning("[market] shared quote cleanup timed out | task_count=%d action=cancel_remaining", len(pending))
+                for task in pending:
+                    task.cancel()
+                _, pending = await asyncio.wait(pending, timeout=SHARED_QUOTE_CANCEL_GRACE_SECONDS)
+                if pending:
+                    self._log.warning("[market] shared quote cancellation grace expired | task_count=%d action=abandon_pending", len(pending))
+        try:
+            self.raise_pending_failure()
+        finally:
+            if self._closing:
+                self._shutdown_tasks = tuple(task for task in tasks if not task.done())
+        # Callbacks report any fatal outcome arriving after bounded abandonment.
 
     @staticmethod
     def _coerce_positive(value: Any) -> Optional[float]:

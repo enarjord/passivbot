@@ -11,6 +11,46 @@ since the latest release tag; these features may already be available when insta
   specialized kernel removes unreachable per-coin controller state and HSL scans
   while retaining forced-delist diagnostics and the existing output contract.
 
+- Report bounded optimizer population and starting-config progress every five minutes while CPU
+  evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
+
+- Reduce revised HSL replay allocations and repeated exact-cashflow summation without
+  changing reconstructed signals, lifecycle decisions, or diagnostics.
+
+- Expose `--hsl-engine legacy|revised` (also `--live.hsl_engine`) in backtest and optimizer startup CLI
+  overrides, matching the existing JSON selector. Legacy remains the default.
+
+
+- Revised HSL services completed ordinary plans before the next account refresh can invalidate
+  them. Slow preparation tolerates raw-balance drift while preserving its strategy inputs;
+  final Rust calculation and connector admission still require the same raw balance, so
+  realized-loss, exposure and HSL risk checks remain authoritative. Empty plans retain their
+  account/fill receipt, and shutdown prevents further revised protective or ordinary submissions.
+
+- Revised HSL now uses one best-effort fill reconciliation path for drawdown and cooldown.
+  Known fill quantities are preserved with minimum feasible opening inventory and explicit
+  current-position adjustments. Missing or ambiguous history and read ordering produce
+  diagnostics instead of a second veto on estimated flats. Fresh flat positions complete
+  missing closes at an estimated last-fill time; delayed history rebuilds the result. Legacy
+  HSL remains the default and is unchanged.
+
+- Keep shared quote requests alive when one reader times out, so revised HSL quote deadlines
+  cannot cancel ordinary planning and repeatedly restart the bot. Shutdown still cancels shared
+  requests and awaits their cleanup before closing clients through every close path. Late non-transient
+  failures, including malformed result shapes, reach
+  the next reader even after all original readers time out; freshness requirements remain unchanged.
+  Outer shutdown deadlines include quote cleanup time before the client-close allowance.
+  Replacing maintainers leaves shared quote requests alive; client and event cleanup is still
+  attempted when an earlier client close fails. Cleanup preserves the first failure and completes
+  its bounded quote wait even when the close caller is cancelled. Teardown prevents new quote
+  requests, and connector failures during cleanup remain visible and propagate from direct close.
+  Completed failures are delivered before cache reads or replacement requests even if their callback
+  has not run. Concurrent abandoned failures are retained separately and delivered together, so
+  one failed request cannot hide another. Active waiters retain ownership of their own errors;
+  unrelated reads receive only abandoned outcomes. Restart and graceful shutdown also report retained failures; independent client
+  cleanup stays bounded when a client suppresses cancellation. Abandoned readers do not leak
+  connector exception text through Python 3.14 shield diagnostics.
+
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable
   equity; reporting does not fetch data or affect trading.

@@ -7,6 +7,45 @@ import time
 from typing import Any, Callable
 
 
+OPTIMIZER_PROGRESS_INTERVAL_SECONDS = 300.0
+
+
+class _ProgressHeartbeat:
+    """Emit bounded optimizer progress while asynchronous work is still pending."""
+
+    def __init__(self, label: str | None, total: int | None, interval_seconds: float):
+        self.label = label
+        self.total = total
+        self.interval_seconds = max(0.0, float(interval_seconds))
+        self.started_at = time.monotonic()
+        self.last_log_at = self.started_at
+
+    def maybe_log(self, *, completed: int, pending: int, submitted: int) -> None:
+        if not self.label:
+            return
+        now = time.monotonic()
+        if now - self.last_log_at < self.interval_seconds:
+            return
+        elapsed = max(0.0, now - self.started_at)
+        rate = completed / elapsed if completed > 0 and elapsed > 0.0 else 0.0
+        remaining = max(0, self.total - completed) if self.total is not None else None
+        eta = remaining / rate if remaining is not None and rate > 0.0 else None
+        total_text = str(self.total) if self.total is not None else "?"
+        eta_text = f"{eta:.1f}s" if eta is not None else "unknown"
+        logging.info(
+            "%s progress | completed=%d/%s pending=%d submitted=%d elapsed=%.1fs rate=%.3f/s eta=%s",
+            self.label,
+            completed,
+            total_text,
+            pending,
+            submitted,
+            elapsed,
+            rate,
+            eta_text,
+        )
+        self.last_log_at = now
+
+
 def seed_memory_debug_enabled() -> bool:
     return os.environ.get("PASSIVBOT_OPTIMIZE_SEED_DEBUG", "").strip().lower() in (
         "1",
@@ -148,12 +187,17 @@ def drain_async_results(
     on_result: Callable[[Any, Any], None],
     on_interrupt: Callable[[dict], None] | None = None,
     pending_health_check: Callable[[], None] | None = None,
+    progress_label: str | None = None,
+    progress_interval_seconds: float = OPTIMIZER_PROGRESS_INTERVAL_SECONDS,
 ) -> int:
     completed = 0
+    total = len(pending)
+    heartbeat = _ProgressHeartbeat(progress_label, total, progress_interval_seconds)
     try:
         while pending:
             if pending_health_check is not None:
                 pending_health_check()
+            heartbeat.maybe_log(completed=completed, pending=len(pending), submitted=total)
             ready = [res for res in pending if res.ready()]
             if not ready:
                 time.sleep(max(0.0, float(poll_interval_seconds)))
@@ -179,12 +223,17 @@ def stream_async_results(
     poll_interval_seconds: float = 0.05,
     on_interrupt: Callable[[dict], None] | None = None,
     pending_health_check: Callable[[], None] | None = None,
+    progress_label: str | None = None,
+    progress_total: int | None = None,
+    progress_interval_seconds: float = OPTIMIZER_PROGRESS_INTERVAL_SECONDS,
 ) -> int:
     max_pending = None if max_pending is None else max(1, int(max_pending))
     iterator = iter(items)
     pending: dict[Any, Any] = {}
     completed = 0
+    submitted = 0
     exhausted = False
+    heartbeat = _ProgressHeartbeat(progress_label, progress_total, progress_interval_seconds)
     try:
         while pending or not exhausted:
             while not exhausted and (max_pending is None or len(pending) < max_pending):
@@ -195,12 +244,18 @@ def stream_async_results(
                     break
                 res, context = submit(item)
                 pending[res] = context
+                submitted += 1
 
             if not pending:
                 continue
 
             if pending_health_check is not None:
                 pending_health_check()
+            heartbeat.maybe_log(
+                completed=completed,
+                pending=len(pending),
+                submitted=submitted,
+            )
             ready = [res for res in pending if res.ready()]
             if not ready:
                 time.sleep(max(0.0, float(poll_interval_seconds)))

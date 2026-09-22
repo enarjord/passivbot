@@ -1196,6 +1196,8 @@ def ea_mu_plus_lambda_stream(
             on_result=_on_result,
             on_interrupt=_on_interrupt,
             max_pending=max_pending_evals,
+            progress_label="Optimizer population",
+            progress_total=len(individuals),
         )
 
         total_evals += completed["count"]

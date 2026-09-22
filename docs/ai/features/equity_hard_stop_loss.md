@@ -540,8 +540,39 @@ renew the anchor to now. No retained fill means no historical cooldown anchor. R
 history may replace the estimate, including reinstating remaining cooldown if the actual close was
 later. `never` retains its in-window stop restriction; lookback expiry still removes historical
 influence. This shared Rust/reference rule applies to live, fake exchange and simulation consumers;
-it does not treat stale or missing current positions as flat or grant lifecycle authority to
-artificial historical zero quantities while exposure remains.
+it does not treat stale or missing current positions as flat.
+
+### Revised best-effort fill reconciler
+
+One pure Rust reconciler owns estimated position/basis history, explicit current-position
+adjustments and the path used to derive scope-flat boundaries. For each coin-side, canonicalize
+identities/revisions and causal timestamps, then let `S` be cumulative usable quantity changes in
+increase/reduction units, including zero. The opening inventory is
+`max(0, -min(S), abs(current_size) - S[-1])`. Walk forward without changing known fill quantities.
+The initial basis uses the earliest usable retained fill price, otherwise current basis/mark;
+adds update contract-aware weighted basis, reductions retain it, and flats reset it.
+Unknown quantities omit only their position transition; independently usable PnL/fees remain.
+
+Differences from current exchange size/basis become explicit estimated adjustments with no
+invented execution price, fee or realized PnL. An unexplained larger current size is carried from
+the opening, which may retain old losses until a missing add arrives and restores a historical
+flat. An unexplained reduction applies at the current endpoint; for an exchange-flat pair its
+estimated application time is the latest retained fill timestamp, consistently in samples and
+cooldown. The observed fill itself is unchanged. Empty retained history creates no historical
+cooldown anchor. Quantity rounding never changes the actual current endpoint and is constrained
+by the exchange quantity quantum when supplied.
+
+Aggregate scope boundaries require every estimated member position to be zero. Known global
+execution ordering may expose distinct same-time flats; otherwise a cross-pair timestamp cohort
+is applied as a whole, without inventing its internal order. Observation skew, unknown receipts,
+conflicting or incomplete history remain diagnostics. Consumers use the selected estimated path
+without a second lifecycle-eligibility veto. Current input validation and causal clipping remain
+mandatory; neither future fills nor invalid current positions become trading authority.
+
+Per-fill diagnostic reasons, estimated opening inventory/basis and endpoint adjustments remain
+visible in reconstruction output. Later observations rebuild the estimate without sticky failure
+or decision state. These estimates are local to revised HSL, never repairs to the factual fill
+ledger or certificates for other strategy/accounting consumers. Legacy HSL is unchanged.
 
 ### Staged revised live execution
 
@@ -593,14 +624,27 @@ relax source freshness or connector admission checks.
 
 Each planned order carries a bounded wave receipt. Immediately before connector create/cancel,
 current account freshness, pending confirmations, generation, balance and positions are checked,
-and Rust recomputes the order's authorizing scope from current observations. Coin admission
+and Rust recomputes the order's authorizing scope from current observations. Raw balance remains
+an exact receipt input for both ordinary and protective writes: ordinary Rust also consumes it
+for realized-loss and exposure risk. Coin admission
 reconstructs its coin-side; pside admission retains every contributing pair on that side; unified
 admission retains the whole portfolio. Other independent scopes are evaluated during the full
 protection/planning wave. Admission never replaces full-scope diagnostics, and complete account
 confirmation and post-evaluation freshness remain mandatory. Changed permission or execution
 policy or changed open-order facts defers that write. A receipt from a previous owner cannot
-authorize execution. Ordinary preparation checks its complete starting account facts after each
-awaited phase and discards a mixed-cohort result. Enabled ordinary fill consumers also bind the
+authorize execution. Ordinary preparation checks positions, open orders, generation, required fills and the
+hysteresis-smoothed sizing balance after each awaited phase. Confirming raw-only balance changes
+need not discard expensive preparation: Rust consumes the latest raw balance in its final
+calculation. That captured raw balance must remain unchanged through reconciliation and admission.
+A completed ordinary plan gets a protective pass and its guarded execution before the next
+account refresh, avoiding deterministic invalidation by that confirming read; the subsequent
+refresh still receives its own protective pass. If account facts or pending confirmations already
+invalidate that completed plan, discard it for replanning instead of reporting an execution turn.
+The immutable plan-level receipt is retained and checked even when reconciliation emits no orders.
+Shutdown is checked before protection and after its awaited work, before ordinary service, and
+again at revised connector admission, including work queued on the write lock. An exchange call
+already in flight is not recalled; shutdown prevents subsequent submissions.
+Stale or changed receipts remain inadmissible. Enabled ordinary fill consumers also bind the
 canonical fill signature and readiness to their plan and connector receipt, including PnL/fee-only
 enrichment. This does not impose ordinary fill requirements on protective closes or otherwise
 valid plans without those consumers. A failed or incomplete background fill refresh requires a

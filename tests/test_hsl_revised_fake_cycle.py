@@ -201,3 +201,41 @@ def test_revised_trace_comparison_preserves_trading_evidence():
         altered = deepcopy(second)
         altered['revised']['scopes'][0][key] = changed
         assert runner._canonical_hsl_trace(first) != runner._canonical_hsl_trace(altered)
+
+
+@pytest.mark.asyncio
+async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_protection_first():
+    import asyncio
+    from types import SimpleNamespace
+    from live.hsl_revised_live import Owner
+    events = []
+    bot = SimpleNamespace(_begin_live_event_cycle=lambda **kwargs: None, raw=1000.)
+    async def refresh(**kwargs):
+        events.append('refresh')
+        bot.raw += .01
+        return True
+    bot.refresh_protective_authoritative_state = refresh
+    instance = Owner(bot)
+    instance._account_matches = lambda *args: True
+    instance.remember_position = lambda: None
+    instance.schedule_history = instance.schedule_sources = lambda: None
+    async def protect(**kwargs):
+        events.append('protect')
+        return False
+    instance.protect = protect
+    async def prepared():
+        return [], [dict(raw_at_rust=bot.raw)], object(), object()
+    async def execute(cancels, creates):
+        events.append('write')
+        assert creates[0]['raw_at_rust'] == bot.raw
+    bot.execute_order_plan_to_exchange = execute
+    instance._ordinary_plan = prepared
+    instance._ordinary = asyncio.create_task(prepared())
+    await instance._ordinary
+    try:
+        result = await instance.cycle()
+        assert result['ordinary_executed']
+        assert events == ['protect', 'write', 'refresh', 'protect']
+    finally:
+        instance.cancel_inputs()
+        await asyncio.sleep(0)
