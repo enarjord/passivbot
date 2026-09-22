@@ -11,6 +11,7 @@ const MPS_UNSTUCK_EMA_COMMON_SOURCE: &str = include_str!("gpu/mps_unstuck_ema_co
 
 const MPS_HSL_MARKER: &str = "// PASSIVBOT_HSL_COMMON";
 const MPS_HSL_COMMON_SOURCE: &str = include_str!("gpu/mps_hsl_common.metal");
+const MPS_HSL_REVISED_SOURCE: &str = include_str!("gpu/mps_hsl_revised.metal");
 const MPS_BTC_RISK_MARKER: &str = "// PASSIVBOT_BTC_RISK_COMMON";
 const MPS_BTC_RISK_COMMON_SOURCE: &str = include_str!("gpu/mps_btc_risk_common.metal");
 const MPS_EQUITY_BALANCE_DIFF_MARKER: &str = "// PASSIVBOT_EQUITY_BALANCE_DIFF_COMMON";
@@ -62,7 +63,14 @@ fn compose_hsl_source(body: &str) -> String {
         "MPS source must contain exactly one shared entry-interval marker"
     );
     body.replacen(MPS_UNSTUCK_EMA_MARKER, MPS_UNSTUCK_EMA_COMMON_SOURCE, 1)
-        .replacen(MPS_HSL_MARKER, MPS_HSL_COMMON_SOURCE, 1)
+        .replacen(
+            MPS_HSL_MARKER,
+            &format!(
+                "#if PASSIVBOT_HSL_REVISED\n{}\n#endif\n{}",
+                MPS_HSL_REVISED_SOURCE, MPS_HSL_COMMON_SOURCE
+            ),
+            1,
+        )
         .replacen(MPS_BTC_RISK_MARKER, MPS_BTC_RISK_COMMON_SOURCE, 1)
         .replacen(
             MPS_EQUITY_BALANCE_DIFF_MARKER,

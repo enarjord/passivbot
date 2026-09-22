@@ -100,6 +100,17 @@ _TM_VOLATILITY_DISABLED_DEFINE = (
 )
 
 
+def _with_revised_hsl(source: str, capacity: int) -> str:
+    if not capacity:
+        return source
+    if not 1 <= capacity <= 90 * 1440 + 2:
+        raise ValueError("Invalid revised GPU HSL window capacity")
+    tree_size = 1 << (capacity - 1).bit_length()
+    return (f"#define PASSIVBOT_HSL_REVISED 1\n"
+            f"#define PASSIVBOT_HSL_REVISED_CAPACITY {capacity}\n"
+            f"#define PASSIVBOT_HSL_REVISED_TREE_SIZE {tree_size}\n" + source)
+
+
 def _with_hsl_ema_tail(source: str, enabled: bool) -> str:
     if not enabled:
         return source
@@ -676,6 +687,7 @@ def _shader_library(
     recovery_distribution_enabled: bool = False,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    revised_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -689,7 +701,7 @@ def _shader_library(
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
-    return compile_shader(source)
+    return compile_shader(_with_revised_hsl(source, revised_capacity))
 
 
 @lru_cache(maxsize=4)
@@ -746,6 +758,7 @@ def _trailing_martingale_shader_library(
     entry_interval_enabled: bool = False,
     hsl_diagnostics_enabled: bool = True,
     temporal_chunking: bool = False,
+    revised_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -773,7 +786,7 @@ def _trailing_martingale_shader_library(
     source = _with_entry_interval(source, entry_interval_enabled)
     if temporal_chunking:
         source = "#define PASSIVBOT_TM_SINGLE_COIN_TEMPORAL_REPLAY 1\n" + source
-    return compile_shader(source)
+    return compile_shader(_with_revised_hsl(source, revised_capacity))
 
 
 @lru_cache(maxsize=16)
@@ -1343,6 +1356,8 @@ def _decode_directional_outputs(daily, scalars, gaps) -> dict:
 
 
 class MpsEmaAnchorRunner:
+    revised_scratch_budget_bytes = 512 * 1024 * 1024
+
     """Persistent single-coin Metal runner with invariant data resident on MPS."""
 
     def __init__(
@@ -1363,6 +1378,7 @@ class MpsEmaAnchorRunner:
         hsl_panic_market_long: bool = False,
         hsl_panic_market_short: bool = False,
         hsl_enabled: bool = True,
+        hsl_engine: str = "legacy",
         pnl_lookback_bars: int = 0,
         hsl_ema_tail_enabled: bool = False,
         hsl_raw_drawdown_enabled: bool = False,
@@ -1373,6 +1389,11 @@ class MpsEmaAnchorRunner:
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
     ):
+        if hsl_engine not in {"legacy", "revised"}:
+            raise ValueError("Invalid GPU HSL engine")
+        self.hsl_engine = hsl_engine
+        self.revised_capacity = 0
+        self._revised_buffers = {}
         self.market = market
         if entry_interval_enabled:
             raise ValueError(
@@ -1448,6 +1469,12 @@ class MpsEmaAnchorRunner:
             else 1
         )
         self.n = int(data["n"])
+        if hsl_engine == "revised":
+            if self.interval_minutes != 1 or not 1440 <= pnl_lookback_bars <= 90 * 1440:
+                raise ValueError("Revised GPU HSL requires 1m candles and 1..90d lookback")
+            self.revised_capacity = min(self.n + 2, pnl_lookback_bars + 2)
+            self.rolling_capacity = 1
+            self.shader_topology = "generic"
         self.n_days = int(data["n_days"])
         self.btc_prices = _btc_risk_price_tensor(
             btc_prices, expected_count=self.n
@@ -1568,6 +1595,7 @@ class MpsEmaAnchorRunner:
             self.recovery_distribution_enabled,
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
+            self.revised_capacity,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -1586,7 +1614,9 @@ class MpsEmaAnchorRunner:
             sides=2,
             interval_minutes=self.interval_minutes,
         )
-        return np.ascontiguousarray(scaled, dtype=np.float32)
+        packed = np.ascontiguousarray(scaled, dtype=np.float32)
+        self._validate_revised_hsl_params(packed, EMA_ANCHOR_SINGLE_COIN_PARAM_KEYS)
+        return packed
 
     def _output_buffers(self, batch_size: int):
         if batch_size not in self._buffers:
@@ -1630,6 +1660,105 @@ class MpsEmaAnchorRunner:
         # this sentinel whenever it flushes an active day.
         self._buffers[batch_size][0][:, :, 1].fill_(float("inf"))
         return self._buffers[batch_size]
+
+    def _validate_revised_hsl_params(self, params, keys):
+        if self.hsl_engine != "revised":
+            return
+        width = len(keys)
+        for side, active in enumerate((self.long_enabled, self.short_enabled)):
+            if not active:
+                continue
+            cols = {key: params[:, side * width + keys.index(key)] for key in (
+                "hsl_enabled", "hsl_red_threshold", "hsl_ema_span_minutes",
+                "hsl_cooldown_minutes_after_red", "hsl_restart_policy",
+                "hsl_signal_mode", "hsl_slot_count",
+            )}
+            enabled = cols["hsl_enabled"] > 0.5
+            if not np.isfinite(cols["hsl_enabled"]).all():
+                raise ValueError("Revised GPU HSL enablement must be finite")
+            if not np.any(enabled):
+                continue
+            if any(not np.isfinite(v[enabled]).all() for v in cols.values()):
+                raise ValueError("Revised GPU HSL parameters must be finite")
+            def selected(key):
+                return cols[key][enabled]
+            if (np.any(selected("hsl_red_threshold") <= 0)
+                or np.any(selected("hsl_red_threshold") > 1)
+                or np.any(selected("hsl_ema_span_minutes") < 1)
+                or np.any(selected("hsl_cooldown_minutes_after_red") < 0)
+                or not np.isin(selected("hsl_restart_policy"), [0, 2]).all()
+                or not np.isin(selected("hsl_signal_mode"), [0, 1, 2]).all()
+                or np.any(selected("hsl_slot_count") < 1)):
+                raise ValueError("Invalid revised GPU HSL policy")
+        # Both directional views must identify the same topology. Unified has
+        # one explicitly packed policy; never choose between conflicting views.
+        mode = keys.index("hsl_signal_mode")
+        if np.any(params[:, mode] != params[:, width + mode]):
+            raise ValueError("Revised GPU HSL views disagree on signal mode")
+        unified = params[:, mode] == 0
+        for key in ("hsl_enabled", "hsl_red_threshold", "hsl_ema_span_minutes",
+                    "hsl_cooldown_minutes_after_red", "hsl_restart_policy"):
+            i = keys.index(key)
+            if np.any(params[unified, i] != params[unified, width + i]):
+                raise ValueError("Revised unified GPU HSL requires one shared policy")
+
+    def _revised_bytes_per_candidate(self):
+        tree_size = 1 << (self.revised_capacity - 1).bit_length()
+        return 2 * (2 * tree_size * 32 + self.revised_capacity * 8)
+
+    def _run_revised_batches(self, params, **kwargs):
+        """Partition independent candidates before allocating bounded history scratch."""
+        if not self.revised_capacity or params.ndim != 2:
+            return None
+        limit = self.revised_scratch_budget_bytes // self._revised_bytes_per_candidate()
+        if limit < 1:
+            raise ValueError("Revised HSL history exceeds the GPU scratch budget")
+        if len(params) <= limit:
+            return None
+        outputs, profiles = [], []
+        for start in range(0, len(params), limit):
+            result = self.run(params[start:start + limit], **kwargs)
+            # Each dispatch reuses its output tensors. Retain only decoded
+            # results, never all history scratch allocations.
+            outputs.append({k: v.clone() if isinstance(v, torch.Tensor) else v
+                            for k, v in result.items()})
+            profiles.append(dict(self.last_profile))
+        combined = {}
+        for key, value in outputs[0].items():
+            if isinstance(value, torch.Tensor):
+                combined[key] = torch.cat([o[key] for o in outputs], dim=0)
+            else:
+                if any(o[key] != value for o in outputs):
+                    raise ValueError(f"GPU sub-batches disagree on {key}")
+                combined[key] = value
+        self.last_profile = {}
+        if kwargs.get("profile"):
+            self.last_profile = {
+                key: sum(p.get(key, 0) for p in profiles)
+                for key in profiles[0] if key.endswith("_seconds")
+            }
+            self.last_profile.update(
+                batch_size=len(params),
+                candidate_batch_count=len(outputs),
+                dispatch_count=sum(p.get("dispatch_count", 1) for p in profiles),
+                cold=any(p.get("cold", False) for p in profiles),
+                effective_candle_count=profiles[0]["effective_candle_count"],
+            )
+        return combined
+
+    def _revised_hsl_buffers(self, batch_size):
+        if not self.revised_capacity:
+            return ()
+        tree_size = 1 << (self.revised_capacity - 1).bit_length()
+        nbytes = batch_size * self._revised_bytes_per_candidate()
+        if nbytes > self.revised_scratch_budget_bytes:
+            raise ValueError("Revised HSL GPU batch exceeds its 512 MiB scratch budget")
+        if batch_size not in self._revised_buffers:
+            self._revised_buffers = {batch_size: (
+                torch.empty((batch_size, 2, 2 * tree_size, 32), dtype=torch.uint8, device=gpu_device()),
+                torch.empty((batch_size, 2, 2 * self.revised_capacity), dtype=torch.int32, device=gpu_device()),
+            )}
+        return self._revised_buffers[batch_size]
 
     def _hsl_rolling_buffers(self, batch_size: int):
         if batch_size not in self._rolling_buffers:
@@ -1707,6 +1836,9 @@ class MpsEmaAnchorRunner:
         profile: bool = False,
         end_step: int | None = None,
     ) -> dict:
+        batched = self._run_revised_batches(params, profile=profile, end_step=end_step)
+        if batched is not None:
+            return batched
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         packed = time.perf_counter() if profile else 0.0
@@ -1763,6 +1895,7 @@ class MpsEmaAnchorRunner:
                 rolling_pnl_values,
                 rolling_pnl_indices,
             )
+            kernel_args += self._revised_hsl_buffers(batch_size)
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
             library.passivbot_ema_anchor(
@@ -2993,6 +3126,8 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             hsl_enabled=bool(hsl_enabled),
             hsl_one_side_enabled=True,
         )
+        if self.hsl_engine == "revised":
+            self.shader_topology = "generic"
         # The specialized no-HSL kernels retain the original 66-column ABI.
         # Every EMA-tail metric is identically zero when HSL is disabled, so
         # keep that faster topology and let the decoder synthesize zeroes.
@@ -3109,6 +3244,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             self.hsl_diagnostics_enabled,
             (self.max_dispatch_candidate_bars is not None)
             if temporal_chunking is None else temporal_chunking,
+            self.revised_capacity,
         )
 
     def _entry_interval_buffers(self, batch_size: int):
@@ -3155,9 +3291,11 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
             sides=2,
             interval_minutes=self.interval_minutes,
         )
-        return _pack_tm_parameter_matrix(
+        packed = _pack_tm_parameter_matrix(
             scaled, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS, sides=2
         )
+        self._validate_revised_hsl_params(packed, TRAILING_MARTINGALE_SINGLE_COIN_PARAM_KEYS)
+        return packed
 
     def _trailing_single_coin_size_values(
         self,
@@ -3260,6 +3398,12 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         history_start_step: int | None = None,
         trade_start_step: int | None = None,
     ) -> dict:
+        batched = self._run_revised_batches(
+            params, profile=profile, end_step=end_step,
+            history_start_step=history_start_step, trade_start_step=trade_start_step,
+        )
+        if batched is not None:
+            return batched
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         dispatch_features = _tm_dispatch_specialization(
@@ -3367,6 +3511,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
                 rolling_pnl_values,
                 rolling_pnl_indices,
             )
+            kernel_args += self._revised_hsl_buffers(batch_size)
             if self.recovery_distribution_enabled:
                 kernel_args += (recovery_samples,)
             if not temporal_chunking:

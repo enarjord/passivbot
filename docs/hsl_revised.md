@@ -132,3 +132,26 @@ and replay the shared controller with the new inputs. Episode changes, lookback 
 crossings, estimated opening changes and sensitive numeric comparisons rebuild the full
 shared reconstruction. Rebuilding or discarding either cache preserves trading decisions.
 These disposable caches do not authorize trading independently and are not persisted.
+
+
+## Offline GPU qualification
+
+Internal single-coin GPU runners implement revised arithmetic for both supported strategy
+families. They use bounded per-candidate history, recompute drawdown when its equity anchor
+changes, and derive current panic and terminal cooldown without latching past decisions.
+The same Rust-owned shader source runs on Metal and CUDA. Candidate batches are partitioned
+to keep history scratch below 512 MiB; temporal replay rebinds that scratch explicitly.
+
+The public GPU optimizer selector remains unavailable for revised HSL until configuration,
+multicoin integration and exact-validation coverage are complete. These internal runners
+are for offline qualification, not an alternative live implementation. GPU float32 results
+are screening estimates; exact Rust backtests remain authoritative for retained candidates.
+Run the reproducible single-coin timing fixture with:
+
+```sh
+PYTHONPATH=src python tests/hsl_revised_gpu_benchmark.py --minutes 4000 --candidates 16
+```
+
+Hardware parity tests cover changing budgets, sliding windows, fractional EMA spans,
+current RED recovery, terminal accounting, cooldown reclassification, candidate batching,
+and full versus chunked replay. A successful GPU fixture is not live-exchange evidence.

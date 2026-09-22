@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add offline revised-HSL single-coin GPU qualification on Metal and CUDA, with
+  bounded history scratch and current-equity signal parity tests. Public GPU optimization
+  remains gated while the remaining integration is completed.
+
 - Further accelerate revised-HSL backtests and CPU optimization by retaining factual
   PNL/UPNL traces between ordinary fills and balance changes, while reevaluating the shared
   controller against the current inputs. Episode/window changes still rebuild history.
