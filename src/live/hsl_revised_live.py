@@ -154,7 +154,7 @@ class Owner:
 
     def _account_matches(self, wave, now):
         bot = self.bot
-        if self._refresh_lock.locked():
+        if self._shutdown_requested() or self._refresh_lock.locked():
             return False
         if wave.required_fills is not None and wave.required_fills != self.required_fill_facts():
             return False
@@ -169,7 +169,9 @@ class Owner:
         # account-generation bypass. Changed size/basis also requires replanning.
         if (wave.generation != int(getattr(bot, "_account_invalidation_generation", 0))
                 or wave.positions != runtime.observe_positions(bot).payload
-                or wave.open_orders != runtime.observe_open_orders(bot) or wave.balance != bot.get_raw_balance()):
+                or wave.open_orders != runtime.observe_open_orders(bot)):
+            return False
+        if wave.balance != bot.get_raw_balance():
             return False
         return True
 
@@ -200,6 +202,10 @@ class Owner:
         after = current.permission(order["symbol"], order["position_side"])
         return after[0] != "unavailable" and before == after
 
+    def _shutdown_requested(self):
+        from passivbot import Passivbot
+        return Passivbot._shutdown_requested(self.bot)
+
     def bind(self, wave, cancels, creates, *, ordinary=False):
         if ordinary:
             wave = replace(wave, required_fills=self.required_fill_facts())
@@ -219,10 +225,14 @@ class Owner:
         An outer execution pass may collect reports until its ordinary writes finish.
         """
         bot = self.bot
+        if self._shutdown_requested():
+            return False
         symbols = {symbol for symbol, sides in bot.positions.items()
                    if any(position["size"] != 0 for position in sides.values())}
         symbols.update(symbol for symbol, orders in bot.open_orders.items() if orders)
         quotes = await self.acquire_quotes(symbols)
+        if self._shutdown_requested():
+            return False
         wave = self.capture(quotes)
         try:
             targets, execution_types = {}, {}
@@ -238,6 +248,8 @@ class Owner:
             cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
                 target_psides_by_symbol=targets, market_snapshots=quotes,
                 execution_types=execution_types)
+            if self._shutdown_requested():
+                return False
             self.bind(wave, cancels, creates)
             await bot.execute_order_plan_to_exchange(cancels, creates, configure_creations=False)
             return bool(cancels or creates)
@@ -393,7 +405,7 @@ class Owner:
 
     def account_facts(self):
         bot = self.bot
-        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_raw_balance(),
+        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_hysteresis_snapped_balance(),
                 self.required_fill_facts())
 
     @staticmethod
@@ -420,7 +432,15 @@ class Owner:
         cancels, creates = await bot.calc_orders_to_cancel_and_create()
         if not self.same_account_facts(account, self.account_facts()):
             return None
-        return cancels, creates, bot._current_planning_snapshot
+        # Preparation may span confirming raw-balance changes. Ordinary Rust
+        # risk consumes the latest raw balance at its actual calculation, so
+        # reconciliation and submission must retain that exact observation.
+        if bot._hsl_revised_planning_wave.balance != bot.get_raw_balance():
+            return None
+        # Empty plans need the same immutable receipt as nonempty plans. An
+        # order dictionary is not the authority for the completed calculation.
+        wave = replace(bot._hsl_revised_planning_wave, required_fills=self.required_fill_facts())
+        return cancels, creates, bot._current_planning_snapshot, wave
 
     def cancel_inputs(self):
         for task in (self._ordinary, getattr(self, '_fill_task', None), getattr(self, '_source_task', None),
@@ -451,7 +471,7 @@ class Owner:
             return await operation
         task = asyncio.create_task(operation)
         try:
-            while not task.done() and not self.bot.stop_signal_received:
+            while not task.done() and not self._shutdown_requested():
                 self.poll_inputs()
                 try:
                     if await self.bot.refresh_protective_authoritative_state(require_balance=True):
@@ -502,20 +522,35 @@ class Owner:
                     if not handled:
                         raise
                     bot._log_staged_execution_defer(details)
-            if not await bot.refresh_protective_authoritative_state(require_balance=True):
-                return dict(updated=False, ordinary_completed=completed_plan)
+            protective_work = False
+            if self._shutdown_requested():
+                return dict(updated=False, ordinary_completed=completed_plan, ordinary_executed=False)
+            if plan is not None:
+                # Service ready work before a new confirming account read can
+                # invalidate it. Protection still gets first turn; every write
+                # retains its current-input and exact raw-balance admission.
+                protective_work = await self.protect(deferred_reports=reports)
+                if self._shutdown_requested():
+                    return dict(updated=False, ordinary_completed=completed_plan,
+                                ordinary_executed=False, protective_work=protective_work)
+                cancels, creates, snapshot, wave = plan
+                if self._account_matches(wave, int(utc_ms())):
+                    bot._current_planning_snapshot = snapshot
+                    await bot.execute_order_plan_to_exchange(cancels, creates)
+                else:
+                    plan = None
+            if (not await bot.refresh_protective_authoritative_state(require_balance=True)
+                    or self._shutdown_requested()):
+                return dict(updated=False, ordinary_completed=completed_plan,
+                            ordinary_executed=plan is not None, protective_work=protective_work)
             self.remember_position()
             now = self._schedule_clock()
             if now >= self._next_history:
                 self.schedule_history()
                 self._next_history = now + 5.
             self.schedule_sources()
-            protective_work = await self.protect(deferred_reports=reports)
-            if plan is not None:
-                cancels, creates, snapshot = plan
-                bot._current_planning_snapshot = snapshot
-                await bot.execute_order_plan_to_exchange(cancels, creates)
-            if self._ordinary is None:
+            protective_work = await self.protect(deferred_reports=reports) or protective_work
+            if self._ordinary is None and not self._shutdown_requested():
                 self._ordinary = asyncio.create_task(self._ordinary_plan())
             return dict(updated=True, ordinary_completed=completed_plan,
                         ordinary_executed=plan is not None, protective_work=protective_work)
@@ -536,7 +571,7 @@ class Owner:
             raise RuntimeError("revised HSL execution owner is already running")
         self._running = True
         try:
-            while not bot.stop_signal_received:
+            while not self._shutdown_requested():
                 started = int(utc_ms())
                 result = await self.cycle()
                 if not result['updated'] and not result.get('current_io_unavailable'):

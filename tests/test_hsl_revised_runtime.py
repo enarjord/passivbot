@@ -44,6 +44,7 @@ def bot(mode="coin", *, side="long", events=()):
     value = SimpleNamespace(config=config, positions=positions, open_orders={}, inverse=False, coin_overrides={},
         c_mults={SYMBOL: 1.}, qty_steps={SYMBOL: .1},
         _ensure_freshness_ledger=lambda: ledger, get_raw_balance=lambda: 1000.,
+        get_hysteresis_snapped_balance=lambda: 1000.,
         _pnls_manager=SimpleNamespace(get_events=lambda *, start_ms: [e for e in events if e.timestamp >= start_ms]))
     value.bot_value = lambda side, key: config["bot"][side]["risk"][key]
     value.bp = lambda side, key, symbol: config["bot"][side]["hsl"][key.removeprefix("hsl_")]

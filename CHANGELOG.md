@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Revised HSL services completed ordinary plans before the next account refresh can invalidate
+  them. Slow preparation tolerates raw-balance drift while preserving its strategy inputs;
+  final Rust calculation and connector admission still require the same raw balance, so
+  realized-loss, exposure and HSL risk checks remain authoritative. Empty plans retain their
+  account/fill receipt, and shutdown prevents further revised protective or ordinary submissions.
+
 - Revised HSL now uses one best-effort fill reconciliation path for drawdown and cooldown.
   Known fill quantities are preserved with minimum feasible opening inventory and explicit
   current-position adjustments. Missing or ambiguous history and read ordering produce

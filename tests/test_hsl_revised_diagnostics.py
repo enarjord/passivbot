@@ -460,7 +460,7 @@ async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(observed, m
         order = dict(symbol=SYMBOL, position_side='long')
         owner.bind(wave, (), (order,))
         planned.append(True)
-        return (), (order,), None
+        return (), (order,), None, wave
 
     async def execute(cancels, creates):
         admitted.append(owner.admit(creates[0]))
