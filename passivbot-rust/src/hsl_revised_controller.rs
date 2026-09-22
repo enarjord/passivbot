@@ -51,13 +51,6 @@ pub enum Restart {
     Never,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Intervention {
-    Panic,
-    Normal,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Input {
@@ -72,7 +65,6 @@ pub struct Input {
     pub threshold: f64,
     pub cooldown_ms: i64,
     pub restart: Restart,
-    pub intervention: Intervention,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
@@ -119,59 +111,6 @@ fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
         && flat
             .and_then(|f| f.checked_add(input.cooldown_ms))
             .is_some_and(|deadline| timestamp >= deadline)
-}
-
-fn advance_permissions(
-    timestamp: i64,
-    exposed: bool,
-    input: &Input,
-    red_at: &mut Option<i64>,
-    flat_at: &mut Option<i64>,
-    events: &mut Vec<LifecycleEvent>,
-) -> Option<&'static str> {
-    if cooldown_finished(*flat_at, timestamp, input) {
-        events.push(LifecycleEvent {
-            timestamp,
-            kind: "restart",
-            red_at: red_at.expect("flat stop has RED origin"),
-            flat_at: *flat_at,
-            reason: "cooldown_complete",
-            raw: None,
-            ema: None,
-        });
-        *red_at = None;
-        *flat_at = None;
-        return Some("cooldown_complete");
-    }
-    if flat_at.is_some() && exposed {
-        let previous_flat = *flat_at;
-        *flat_at = None;
-        if input.intervention == Intervention::Normal {
-            events.push(LifecycleEvent {
-                timestamp,
-                kind: "restart",
-                red_at: red_at.expect("flat stop has RED origin"),
-                flat_at: previous_flat,
-                reason: "normal_intervention",
-                raw: None,
-                ema: None,
-            });
-            *red_at = None;
-            return Some("normal_intervention");
-        }
-        *red_at = Some(timestamp);
-        events.push(LifecycleEvent {
-            timestamp,
-            kind: "red",
-            red_at: timestamp,
-            flat_at: None,
-            reason: "panic_intervention",
-            raw: None,
-            ema: None,
-        });
-        return Some("panic_intervention");
-    }
-    None
 }
 
 pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
@@ -314,69 +253,91 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
         for (index, (original_index, point)) in points.iter().enumerate() {
             let t = point.timestamp;
             let mut reason = "green";
-            // The seed precedes the opening even when timestamps tie. Process
-            // the event at its real time, before cooldown expiry at a later bar.
-            if *original_index > 0 {
-                if let Some(opened) = opening.filter(|opened| *opened <= t) {
+            // Exposure, including a round trip between price observations, ends
+            // the previous cooldown. Historical RED is never a trading latch.
+            let reopened = *original_index > 0 && opening.is_some_and(|opened| opened <= t);
+            if reopened || point.exposed {
+                if flat_at.is_some() {
+                    events.push(LifecycleEvent {
+                        timestamp: opening.unwrap_or(t),
+                        kind: "restart",
+                        red_at: red_at.unwrap(),
+                        flat_at,
+                        reason: "exposure_resumed",
+                        raw: None,
+                        ema: None,
+                    });
+                    reason = "exposure_resumed";
+                }
+                if flat_at.is_some() {
+                    red_at = None;
+                }
+                flat_at = None;
+                if reopened {
+                    red_at = None;
                     opening = None;
-                    reason = advance_permissions(
-                        opened,
-                        true,
-                        input,
-                        &mut red_at,
-                        &mut flat_at,
-                        &mut events,
-                    )
-                    .unwrap_or(reason);
                 }
             }
-            reason = advance_permissions(
-                t,
-                point.exposed,
-                input,
-                &mut red_at,
-                &mut flat_at,
-                &mut events,
-            )
-            .unwrap_or(reason);
-            if risk.panic[index] && (point.exposed || point.flatten) && red_at.is_none() {
-                red_at = Some(t);
-                flat_at = None;
-                reason = "drawdown";
-                events.push(LifecycleEvent {
-                    timestamp: t,
-                    kind: "red",
-                    red_at: t,
-                    flat_at: None,
-                    reason,
-                    raw: Some(risk.raw[index]),
-                    ema: Some(risk.ema[index]),
-                });
-            }
-            if point.flatten && red_at.is_some() {
-                flat_at = Some(t);
-                reason = "stop_flattened";
-                events.push(LifecycleEvent {
-                    timestamp: t,
-                    kind: "flat",
-                    red_at: red_at.unwrap(),
-                    flat_at,
-                    reason,
-                    raw: Some(risk.raw[index]),
-                    ema: Some(risk.ema[index]),
-                });
+            if point.exposed || point.flatten {
+                // Evaluate the terminal accounting sample BEFORE resetting the
+                // episode. The closing order's type is deliberately irrelevant.
+                if risk.panic[index] {
+                    if red_at.is_none() {
+                        red_at = Some(t);
+                        events.push(LifecycleEvent {
+                            timestamp: t,
+                            kind: "red",
+                            red_at: t,
+                            flat_at: None,
+                            reason: "drawdown",
+                            raw: Some(risk.raw[index]),
+                            ema: Some(risk.ema[index]),
+                        });
+                    }
+                    reason = "drawdown";
+                } else {
+                    red_at = None;
+                    reason = "green";
+                }
+                if point.flatten {
+                    flat_at = red_at.map(|_| t);
+                    if let Some(red) = red_at {
+                        reason = "stop_flattened";
+                        events.push(LifecycleEvent {
+                            timestamp: t,
+                            kind: "flat",
+                            red_at: red,
+                            flat_at,
+                            reason,
+                            raw: Some(risk.raw[index]),
+                            ema: Some(risk.ema[index]),
+                        });
+                    }
+                }
             }
             if cooldown_finished(flat_at, t, input) {
-                reason =
-                    advance_permissions(t, false, input, &mut red_at, &mut flat_at, &mut events)
-                        .expect("completed cooldown emits restart");
+                events.push(LifecycleEvent {
+                    timestamp: t,
+                    kind: "restart",
+                    red_at: red_at.unwrap(),
+                    flat_at,
+                    reason: "cooldown_complete",
+                    raw: None,
+                    ema: None,
+                });
+                red_at = None;
+                flat_at = None;
+                reason = "cooldown_complete";
             }
-            let action = if red_at.is_none() {
-                Action::Normal
-            } else if point.exposed {
+            if !point.exposed && flat_at.is_none() {
+                red_at = None;
+            }
+            let action = if point.exposed && risk.panic[index] {
                 Action::Panic
-            } else {
+            } else if !point.exposed && flat_at.is_some() {
                 Action::Halted
+            } else {
+                Action::Normal
             };
             observations += 1;
             numeric_range_approximation |= risk.numeric_range_approximation;
@@ -451,7 +412,6 @@ mod tests {
                     threshold: 0.1,
                     cooldown_ms: 0,
                     restart: Restart::Always,
-                    intervention: Intervention::Panic,
                 };
                 let full = replay_with_events(&input).unwrap();
                 let latest = replay_latest_with_events(&input).unwrap();
@@ -477,7 +437,7 @@ mod tests {
     fn reporting_keeps_zero_cooldown_stop_without_changing_permission() {
         let input: Input = serde_json::from_value(serde_json::json!({
             "now": 120000, "start": 0, "budget": 1000.0, "span": 1.0,
-            "threshold": 0.05, "cooldown_ms": 0, "restart": "always", "intervention": "panic",
+            "threshold": 0.05, "cooldown_ms": 0, "restart": "always",
             "episodes": [
                 {"points": [
                     {"timestamp": 0, "pnl": 0.0, "upnl": 0.0, "exposed": true, "flatten": false},
@@ -518,7 +478,6 @@ mod tests {
             threshold: 0.05,
             cooldown_ms: 60_000,
             restart: Restart::Always,
-            intervention: Intervention::Normal,
             episodes: vec![Episode {
                 entry_reference: None,
                 entry_reference_delta: None,
@@ -552,8 +511,8 @@ mod tests {
             }],
         };
         let result = replay(&input).unwrap();
-        assert_eq!(result.last().unwrap().action, Action::Halted);
+        assert_eq!(result.last().unwrap().action, Action::Normal);
         assert_eq!(result.last().unwrap().flat_at, None);
-        assert_eq!(result.last().unwrap().red_at, Some(60_000));
+        assert_eq!(result.last().unwrap().red_at, None);
     }
 }

@@ -182,6 +182,9 @@ class Owner:
             return False
         # Capture is side-effect free with respect to diagnostic sinks. Reporting
         # happens after the protective wave, outside the write freshness budget.
+        if (order.get("_hsl_revised_retired_panic")
+                and self.bot.get_forced_PB_mode(order["position_side"], order["symbol"]) in {"panic", "manual"}):
+            return False
         current = self.capture(target=(order["symbol"], order["position_side"]))
         now = int(utc_ms())
         # A long synchronous reconstruction can consume the remaining freshness
@@ -242,12 +245,25 @@ class Owner:
                     if action in {"panic", "halted"}:
                         targets.setdefault(symbol, set()).add(side)
                         execution_types[symbol, side] = execution_type
-            if not targets:
+            from live import reconciler
+            green_symbols = [symbol for symbol, orders in bot.open_orders.items()
+                             if orders and any(wave.permission(symbol, side)[0] == "normal"
+                                               for side in ("long", "short"))]
+            actual = reconciler.snapshot_actual_orders(bot, green_symbols) if green_symbols else {}
+            retired = [dict(order, _hsl_revised_retired_panic=True) for symbol, orders in actual.items()
+                       for order in orders
+                       if wave.permission(symbol, order["position_side"])[0] == "normal"
+                       and order["pb_order_type"].rsplit("_", 1)[0] == "close_panic"
+                       and bot.get_forced_PB_mode(order["position_side"], symbol) not in {"panic", "manual"}]
+            if not targets and not retired:
                 return False
             bot._record_market_snapshot_surface(sorted(quotes), quotes)
-            cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
-                target_psides_by_symbol=targets, market_snapshots=quotes,
-                execution_types=execution_types)
+            cancels, creates = [], []
+            if targets:
+                cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
+                    target_psides_by_symbol=targets, market_snapshots=quotes,
+                    execution_types=execution_types)
+            cancels.extend(retired)
             if self._shutdown_requested():
                 return False
             self.bind(wave, cancels, creates)

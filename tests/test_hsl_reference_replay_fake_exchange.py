@@ -72,8 +72,8 @@ def test_fake_exchange_partial_final_delayed_fill_and_cache_free_replay(pside):
     risk = signal([Observation(start, dec(0), dec(0)), boundary.observation],
                   client.balance_total, 1, ".02")
     assert risk.panic[-1]
-    evidence = LifecycleEvidence(boundary.timestamp, boundary.timestamp)
-    assert permission(client.now_ms, 86_400_000, 120_000, "always", "panic", evidence,
+    evidence = LifecycleEvidence(risk.panic[-1], boundary.timestamp)
+    assert permission(client.now_ms, 86_400_000, 120_000, "always", evidence,
                       exposed=False, red_now=False) == "halted"
     # Repeated observation does not refresh cooldown.
     repeated = scope_boundaries(snapshot(), "unified")

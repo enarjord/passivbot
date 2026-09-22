@@ -36,6 +36,7 @@ def normalization_template(template, config):
         return template
     result = deepcopy(template)
     result["live"]["hsl_engine"] = "revised"
+    result["live"].pop("hsl_position_during_cooldown_policy", None)
     for side in ("long", "short"):
         block = result["bot"][side]["hsl"]
         for key in REMOVED_FIELDS:
@@ -128,6 +129,8 @@ def _is_hsl_path(path):
 
 
 def validate_parameter_path(path, mode):
+    if "hsl_position_during_cooldown_policy" in path:
+        raise ValueError(f"{path} is removed in revised HSL; exposure clears cooldown")
     if not _is_hsl_path(path):
         return
     if any(key in path for key in REMOVED_FIELDS):
@@ -218,10 +221,10 @@ def normalize_revised(config, template, *, verbose=True):
                 effective = {**bot[side]["hsl"], **values["hsl"]}
                 normalize_block(effective, {}, f"coin_overrides.{coin}.bot.{side}.hsl", verbose=verbose)
                 enabled |= effective["enabled"]
-    intervention = config["live"].get("hsl_position_during_cooldown_policy", "panic")
-    if not isinstance(intervention, str) or intervention.strip().lower() not in {"panic", "normal"}:
-        raise ValueError("revised live.hsl_position_during_cooldown_policy requires panic or normal; manual/tp_only/graceful_stop are removed")
-    config["live"]["hsl_position_during_cooldown_policy"] = intervention.strip().lower()
+    if "hsl_position_during_cooldown_policy" in config["live"]:
+        if verbose:
+            logging.warning("live.hsl_position_during_cooldown_policy is removed in revised HSL; exposure clears cooldown")
+        del config["live"]["hsl_position_during_cooldown_policy"]
     if enabled:
         value = config["live"].get("pnls_max_lookback_days", template["live"]["pnls_max_lookback_days"])
         config["live"]["pnls_max_lookback_days"] = _number(value, "enabled revised HSL lookback days [1,90]", minimum=1, maximum=90)

@@ -752,7 +752,6 @@ mod tests {
         bt.backtest_params.equity_hard_stop_loss.signal_mode = mode.into();
         bt.backtest_params.equity_hard_stop_loss.revised = Some(Config {
             mode: mode.into(),
-            intervention: "panic".into(),
             sides: [policy.clone(), policy.clone()],
             portfolio: Some(policy),
             coins: BTreeMap::new(),

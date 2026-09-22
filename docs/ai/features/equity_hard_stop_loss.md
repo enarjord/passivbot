@@ -359,6 +359,31 @@ flatten boundaries already represented in that tape must not trigger another rep
 Corrections or late fills in the consumed window still invalidate the tape and
 request canonical reconstruction before ordinary planning.
 
+### Revised current-signal and cooldown contract
+
+The revised engine anchors scoped history to current equity: balance budget plus current
+scoped UPNL. Equivalently, historical equity is budget plus historical net realized PnL
+minus current net realized PnL plus historical UPNL. A finite nonpositive current equity
+is usable risk evidence. It is not an invalid balance or missing input.
+
+Panic permission is exactly the current raw/EMA minimum exceeding the configured RED
+threshold. No historical crossing or earlier panic decision authorizes later closes.
+A fresh GREEN result retires outstanding panic orders even after partial execution and
+without waiting for ordinary strategy readiness. Invalid/unavailable current input is
+not GREEN; normal observation freshness and connector admission still apply.
+
+Only the latest episode determines cooldown. At scope flattening, evaluate the terminal
+net-PnL sample before resetting peak/EMA. Terminal RED starts cooldown regardless of fill
+order type; terminal GREEN does not. Any subsequent exposure clears the previous restriction,
+including `never`, and is independently evaluated as a new episode. There is no revised
+intervention policy. All selected positions must be zero for aggregate flatness.
+
+Reconstruction may reclassify terminal RED after deposits, withdrawals, budget changes or
+history corrections. Use the original reconstructed flatten timestamp for remaining duration;
+never renew it to observation time. `always` expires at flatten plus configured cooldown;
+`never` lasts only within lookback. Expired evidence and older superseded episodes have no
+authority. Historical lifecycle diagnostics are not trading state. Legacy is unchanged.
+
 ### Experimental revised simulator observation ordering
 
 Revised simulator input labels retain bar-open fill timestamps and bar-end candle

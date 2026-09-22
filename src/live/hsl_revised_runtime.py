@@ -376,8 +376,7 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
         payload = dict(snapshot=snapshot, slots=slots, span=policy["ema_span_minutes"],
             threshold=policy["red_threshold"],
             cooldown_ms=math.floor(policy["cooldown_minutes_after_red"] * 60_000 + .5),
-            restart=policy["restart_after_red_policy"],
-            intervention=bot.config["live"]["hsl_position_during_cooldown_policy"])
+            restart=policy["restart_after_red_policy"])
         reasons = set(global_reasons)
         # An attributed row may have no usable timestamp and therefore cannot
         # establish a price-bearing contributor. Its quality still belongs to

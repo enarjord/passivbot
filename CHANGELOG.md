@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Anchor revised HSL to scoped current equity and revoke panic as soon as the current
+  raw/EMA signal recovers. Only terminal RED in the latest episode starts cooldown;
+  renewed exposure clears it. Remove the revised cooldown-intervention option and retire
+  recovered panic orders without waiting for ordinary strategy inputs. Legacy is unchanged.
+
 - Report bounded optimizer population and starting-config progress every five minutes while CPU
   evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
 

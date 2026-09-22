@@ -1,7 +1,7 @@
 //! Snapshot-to-permission composition shared by revised runtime adapters.
 //! No prior decision, saved EMA, journal or cached permission is an input.
 use crate::hsl_revised::validate_settings;
-use crate::hsl_revised_controller::{self as controller, Decision, Intervention, Restart};
+use crate::hsl_revised_controller::{self as controller, Decision, Restart};
 use crate::hsl_revised_snapshot::{self as snapshot, Input as Snapshot, Mode};
 use crate::hsl_revised_trace::{compose_prepared, compose_with_cashflow_peaks};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -19,7 +19,6 @@ pub struct Input {
     pub threshold: f64,
     pub cooldown_ms: i64,
     pub restart: Restart,
-    pub intervention: Intervention,
 }
 
 #[derive(Debug, Serialize)]
@@ -210,7 +209,6 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         threshold: input.threshold,
         cooldown_ms: input.cooldown_ms,
         restart: input.restart,
-        intervention: input.intervention,
     })?;
     let decisions = replay.decisions;
     if replay.numeric_range_approximation {
@@ -313,7 +311,7 @@ mod tests {
                 }]
             },
             "slots": 1, "span": 1, "threshold": 0.05, "cooldown_ms": 0,
-            "restart": "always", "intervention": "panic"
+            "restart": "always"
         }))
         .unwrap()
     }

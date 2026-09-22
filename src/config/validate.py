@@ -152,9 +152,10 @@ def validate_config(
                         ),
                     )
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
-    normalize_hsl_cooldown_position_policy(
-        config["live"]["hsl_position_during_cooldown_policy"]
-    )
+    if config["live"].get("hsl_engine", "legacy") != "revised":
+        normalize_hsl_cooldown_position_policy(
+            config["live"]["hsl_position_during_cooldown_policy"]
+        )
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")

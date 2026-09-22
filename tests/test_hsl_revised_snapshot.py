@@ -296,7 +296,7 @@ def test_small_scope_loss_still_panics_after_large_finite_cancellation(values, c
     request = dict(snapshot=snapshot, slots=1, span=10000, threshold=.0005)
     result = json.loads(pbr.hsl_revised_candle_free(json.dumps(request)))
     assert result[component] == -1
-    assert result["signal"]["raw"] == pytest.approx([1 / 1001])
+    assert result["signal"]["raw"] == pytest.approx([1 / (1000 if component == "upnl" else 1001)])
     assert result["signal"]["panic"] == [True]
 
 
@@ -391,8 +391,10 @@ def test_small_loss_survives_large_realized_peak_or_offsetting_current_upnl(offs
                              Fill("fee", 3, -1, 100, 0, -1)])
     request = payload(cases.frame(p, balance=1000))
     result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.0005))))
-    assert result["signal"]["raw"] == pytest.approx([1/1001])
-    assert result["signal"]["panic"] == [True]
+    # With positive current UPNL, current equity (and the peak) includes it.
+    expected = 1 / (1e16 + 1001) if offset_upnl else 1 / 1001
+    assert result["signal"]["raw"] == pytest.approx([expected], rel=1e-14, abs=0)
+    assert result["signal"]["panic"] == [not offset_upnl]
 
 
 @pytest.mark.parametrize("field,value", [("span", 0), ("span", .5), ("threshold", -1),

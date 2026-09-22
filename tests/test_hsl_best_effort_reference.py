@@ -18,18 +18,18 @@ def rows(values):
 
 
 def test_hand_calculated_equity_peak_and_fractional_ema():
-    result = signal(rows([(0, 0), (0, -100), (0, -200)]), 800, 3, ".12")
+    result = signal(rows([(0, 0), (0, -100), (0, -200)]), 1000, 3, ".12")
     assert result.equity == (1000, 900, 800)
     assert result.peaks == (1000, 1000, 1000)
     assert result.raw == tuple(map(dec, [0, ".1", ".2"]))
     assert result.ema == tuple(map(dec, [0, ".05", ".125"]))
     assert result.panic == (False, False, True)
-    fractional = signal(rows([(0, 0), (0, -100)]), 900, "2.5", ".05")
+    fractional = signal(rows([(0, 0), (0, -100)]), 1000, "2.5", ".05")
     assert float(fractional.ema[-1]) == pytest.approx(2 / 3.5 * .1)
 
 
 def test_recovery_uses_min_of_raw_and_ema_not_ema_alone():
-    result = signal(rows([(0, 0), (0, -100), (0, -200), (0, -50)]), 950, 3, ".06")
+    result = signal(rows([(0, 0), (0, -100), (0, -200), (0, -50)]), 1000, 3, ".06")
     assert result.raw[-1] == dec(".05")
     assert result.ema[-1] == dec(".0875")
     assert not result.panic[-1]
@@ -37,14 +37,14 @@ def test_recovery_uses_min_of_raw_and_ema_not_ema_alone():
 
 def test_past_unrealized_peak_counts_without_any_realized_pnl():
     result = signal(rows([(0, 0), (0, 200), (0, -100)]), 1000, 1, ".2")
-    assert result.equity == (1100, 1300, 1000)
-    assert float(result.raw[-1]) == pytest.approx(300 / 1300)
+    assert result.equity == (1000, 1200, 900)
+    assert float(result.raw[-1]) == pytest.approx(300 / 1200)
     assert result.panic[-1]
 
 
 @pytest.mark.parametrize("threshold,expected", [(".124999", True), (".125", False), (".125001", False)])
 def test_strict_threshold_boundary(threshold, expected):
-    result = signal(rows([(0, 0), (0, -100), (0, -200)]), 800, 3, threshold)
+    result = signal(rows([(0, 0), (0, -100), (0, -200)]), 1000, 3, threshold)
     assert result.panic[-1] is expected
 
 
@@ -64,8 +64,8 @@ def test_minimal_history_has_one_actual_ema_sample(span, upnl, expected):
     result = minimal_signal(upnl, 1000, span, ".09")
     assert result.ema == result.raw
     assert result.panic[-1] is expected
-    assert result.equity == (1000,)
-    assert float(result.raw[-1]) == pytest.approx(100 / 1100 if upnl < 0 else 0)
+    assert result.equity == (1000 + upnl,)
+    assert float(result.raw[-1]) == pytest.approx(100 / 1000 if upnl < 0 else 0)
 
 
 def test_no_implicit_zero_ema_seed_and_transition_to_real_history():
@@ -112,7 +112,7 @@ def test_nonpositive_old_peak_has_explicit_impairment_sample():
 
 def test_extreme_finite_amounts_do_not_create_nan_or_hide_current_budget():
     result = signal(rows([(0, "1e600"), (0, "-1e600")]), "1e-300", 1, ".9")
-    assert result.equity[-1] == dec("1e-300")
+    assert result.equity[-1] == dec("-1e600")
     assert all(v.is_finite() for v in (*result.raw, *result.ema))
     assert result.panic[-1]
 
@@ -143,17 +143,17 @@ def test_hand_calculated_fill_history_and_fee_accounting():
     assert [r.upnl for r in history.rows] == [0, 0, -20, -30, -45]
     assert not history.reasons
     result = signal(history.rows, 1000, 1, ".05")
-    assert result.equity == (1058, 1057, 1036, 1015, 1000)
+    assert result.equity == (1013, 1012, 991, 970, 955)
     assert result.panic[-1]
 
 
 @pytest.mark.parametrize("missing,equity,panic", [
-    (0, (1077, 1077, 1056, 1030, 1000), True),
-    (1, (1057, 1056, 1016, 1000, 1000), True),
+    (0, (1032, 1032, 1011, 985, 955), True),
+    (1, (1012, 1011, 971, 955, 955), True),
     # Preserve both known +1 fills until the final current-size adjustment:
     # 2 units at basis 90 give UPNL -20/-40 at marks 80/70. Missing
     # reduction PnL remains unknown; endpoint UPNL is -45 at size 1.5.
-    (2, (1047, 1046, 1025, 1005, 1000), False),
+    (2, (1002, 1001, 980, 960, 955), False),
 ])
 def test_missing_open_middle_or_latest_fill_still_evaluates_and_repairs(missing, equity, panic):
     position, fills, prices = clean_tape()
@@ -345,11 +345,10 @@ def test_real_minute_valid_close_survives_unusable_wick_fields(field, value):
     assert history.rows[-2].upnl == -20
 
 
-@pytest.mark.parametrize("intervention,expected", [("panic", "panic"), ("normal", "normal")])
 @pytest.mark.parametrize("restart", ["always", "never"])
-def test_proven_flat_and_current_exposure_needs_no_reopening_fill(intervention, expected, restart):
-    assert permit(30, LifecycleEvidence(10, 20), intervention=intervention,
-                  restart=restart, exposed=True) == expected
+def test_proven_flat_and_current_exposure_needs_no_reopening_fill(restart):
+    assert permit(30, LifecycleEvidence(True, 20),
+                  restart=restart, exposed=True) == "normal"
 
 
 @pytest.mark.parametrize("minutes", [5, 15, 60])
@@ -404,9 +403,9 @@ def test_live_endpoint_replaces_candle_close_with_current_mark():
     assert history.rows[-1].upnl == -20
 
 
-def permit(now, evidence=LifecycleEvidence(10, 20), *, window=100, cooldown=30,
-           restart="always", intervention="panic", exposed=False, red=False):
-    return permission(now, window, cooldown, restart, intervention, evidence,
+def permit(now, evidence=LifecycleEvidence(True, 20), *, window=100, cooldown=30,
+           restart="always", exposed=False, red=False):
+    return permission(now, window, cooldown, restart, evidence,
                       exposed=exposed, red_now=red)
 
 
@@ -414,7 +413,8 @@ def test_cooldown_deadline_and_inclusive_window_expiry():
     assert permit(49) == "halted"
     assert permit(50) == "normal"
     assert permit(110, restart="never") == "halted"
-    assert permit(111, restart="never") == "normal"
+    assert permit(111, restart="never") == "halted"
+    assert permit(121, restart="never") == "normal"
     assert permit(111, cooldown=1000) == "halted"  # flatten anchor remains in scope
     assert permit(120, cooldown=1000) == "halted"
     assert permit(121, cooldown=1000) == "normal"
@@ -426,18 +426,18 @@ def test_zero_cooldown_only_controls_waiting(restart, expected):
 
 
 @pytest.mark.parametrize("restart", ["always", "never"])
-def test_two_intervention_choices_override_scope_halt_but_not_fresh_red(restart):
-    evidence = LifecycleEvidence(10, 20)
-    assert permit(30, evidence, restart=restart, exposed=True) == "panic"
-    assert permit(30, evidence, restart=restart, intervention="normal", exposed=True) == "normal"
-    assert permit(30, evidence, restart=restart, intervention="normal", exposed=True, red=True) == "panic"
-    assert permit(30, evidence, restart=restart, intervention="normal", exposed=False) == "halted"
+def test_exposure_clears_scope_halt_but_not_fresh_red(restart):
+    evidence = LifecycleEvidence(True, 20)
+    assert permit(30, evidence, restart=restart, exposed=True) == "normal"
+    assert permit(30, evidence, restart=restart, exposed=True) == "normal"
+    assert permit(30, evidence, restart=restart, exposed=True, red=True) == "panic"
+    assert permit(30, evidence, restart=restart, exposed=False) == "halted"
 
 
 def test_partial_close_is_not_intervention_or_new_cooldown_anchor():
-    evidence = LifecycleEvidence(10, None)
+    evidence = LifecycleEvidence(True, None)
     for now in (15, 30, 100):
-        assert permit(now, evidence, intervention="normal", exposed=True) == "panic"
+        assert permit(now, evidence, exposed=True) == "normal"
     assert permit(111, evidence, exposed=True) == "normal"
     assert permit(111, evidence, exposed=True, red=True) == "panic"
 
@@ -451,7 +451,7 @@ def test_unobservable_red_is_void_after_recovery_even_without_restart():
 
 
 def test_repanic_timer_starts_at_new_actual_flat_not_poll_time():
-    new_flat = LifecycleEvidence(25, 35)
+    new_flat = LifecycleEvidence(True, 35)
     assert permit(64, new_flat) == "halted"
     assert permit(65, new_flat) == "normal"
     assert permit(65, new_flat) == "normal"
@@ -460,5 +460,4 @@ def test_repanic_timer_starts_at_new_actual_flat_not_poll_time():
 @pytest.mark.parametrize("removed", ["threshold", "manual", "tp_only", "graceful_stop"])
 def test_removed_policies_are_not_silently_translated(removed):
     with pytest.raises(ValueError):
-        permit(30, restart=removed if removed == "threshold" else "always",
-               intervention="panic" if removed == "threshold" else removed)
+        permit(30, restart=removed)

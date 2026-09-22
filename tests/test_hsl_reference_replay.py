@@ -59,12 +59,12 @@ def test_flatten_signal_drives_real_cooldown_anchor_before_reopening():
     risk_rows = (Observation(0, dec(0), dec(0)), boundary.observation)
     risk = signal(risk_rows, 100, 1, ".2")
     assert risk.panic[-1]
-    evidence = LifecycleEvidence(risk_rows[-1].timestamp, boundary.timestamp)
-    assert permission(4 * M, 10 * M, 2 * M, "always", "panic", evidence,
-                      exposed=True, red_now=False) == "panic"
-    assert permission(4 * M, 10 * M, 2 * M, "always", "normal", evidence,
+    evidence = LifecycleEvidence(risk.panic[-1], boundary.timestamp)
+    assert permission(4 * M, 10 * M, 2 * M, "always", evidence,
+                      exposed=False, red_now=False) == "halted"
+    assert permission(4 * M, 10 * M, 2 * M, "always", evidence,
                       exposed=True, red_now=False) == "normal"
-    assert permission(5 * M, 10 * M, 2 * M, "always", "panic", evidence,
+    assert permission(5 * M, 10 * M, 2 * M, "always", evidence,
                       exposed=False, red_now=False) == "normal"
 
 

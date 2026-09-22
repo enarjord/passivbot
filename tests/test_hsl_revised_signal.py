@@ -39,7 +39,7 @@ def test_clean_recovery_boundaries_and_fractional_ema(require_real_passivbot_rus
 @pytest.mark.parametrize("threshold,expected", [(.124999, True), (.125, False), (.125001, False)])
 def test_strict_threshold_boundary(require_real_passivbot_rust_module, threshold, expected):
     actual = compare(require_real_passivbot_rust_module,
-                     [(0, 0, 0), (60_000, 0, -100), (120_000, 0, -200)], 800, 3, threshold)
+                     [(0, 0, 0), (60_000, 0, -100), (120_000, 0, -200)], 1000, 3, threshold)
     assert actual["panic"][-1] is expected
 
 
@@ -48,7 +48,7 @@ def test_strict_threshold_boundary(require_real_passivbot_rust_module, threshold
 def test_singleton_entry_reference(require_real_passivbot_rust_module, upnl, span):
     expected = minimal_signal(upnl, 1000, span, .09)
     actual = compare(require_real_passivbot_rust_module, [(0, 0, upnl)],
-                     1000, span, .09, max(1000, 1000 - upnl))
+                     1000, span, .09, 1000)
     assert actual["raw"] == actual["ema"]
     assert actual["panic"] == list(expected.panic)
 
@@ -109,7 +109,7 @@ def test_batch_poll_repeat_and_window_reset_have_no_hidden_state(require_real_pa
 @pytest.mark.parametrize("variant", ["both_deltas_overflow", "one_delta_overflows"])
 def test_cancelling_oversized_deltas_do_not_erase_representable_loss(require_real_passivbot_rust_module, variant):
     big = float.fromhex("0x1.fffffffffffffp+1023")
-    rows, expected = ([(0, big, -big / 2), (60_000, -big, big)], big / 2) if variant == "both_deltas_overflow" else (
+    rows, expected = ([(0, big, -big / 2), (60_000, -big, big)], big) if variant == "both_deltas_overflow" else (
         [(0, big, -big), (60_000, -big, 0)], big)
     result = json.loads(require_real_passivbot_rust_module.hsl_revised_signal(
         rows, 1, 1, .1))

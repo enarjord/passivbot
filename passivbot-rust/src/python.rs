@@ -2095,7 +2095,7 @@ fn revised_hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::revised_run
         }
         Ok([policy(items[0])?, policy(items[1])?])
     }
-    keys(dict, &["engine", "mode", "intervention", "sides", "portfolio", "coins"])?;
+    keys(dict, &["engine", "mode", "sides", "portfolio", "coins"])?;
     let portfolio: Option<&PyDict> = extract_value(dict, "portfolio")?;
     let coins: &PyDict = extract_value(dict, "coins")?;
     let mut coin_policies = std::collections::BTreeMap::new();
@@ -2104,7 +2104,6 @@ fn revised_hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::revised_run
     }
     Ok(Config {
         mode: extract_value(dict, "mode")?,
-        intervention: extract_value(dict, "intervention")?,
         sides: pair(extract_value::<&PyAny>(dict, "sides")?)?,
         portfolio: portfolio.map(policy).transpose()?,
         coins: coin_policies,

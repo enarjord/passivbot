@@ -52,10 +52,10 @@ def signal(rows, budget, span, threshold, *, entry_reference=None, point_referen
     with localcontext() as ctx:
         ctx.prec = 80
         values = [dec(r.pnl) + dec(r.upnl) for r in rows]
-        endpoint = values[-1] if anchor is None else dec(anchor.pnl) + dec(anchor.upnl)
+        endpoint = dec(rows[-1].pnl) if anchor is None else dec(anchor.pnl)
         equity = [budget + (x - endpoint) for x in values]
         if anchor is None:
-            equity[-1] = budget
+            equity[-1] = budget + dec(rows[-1].upnl)
         peak = dec(entry_reference) if entry_reference is not None else equity[0]
         alpha = Decimal(2) / (span + 1)
         raw, smooth, peaks = [], [], []
@@ -88,7 +88,7 @@ def minimal_signal(upnl, budget, span, threshold, timestamp=0):
     """A synthetic entry reference is not an earlier zero-drawdown EMA sample."""
     budget, upnl = dec(budget), dec(upnl)
     return signal([Observation(timestamp, Decimal(0), upnl)], budget, span, threshold,
-                  entry_reference=max(budget, budget - upnl))
+                  entry_reference=budget)
 
 
 def aggregate(series):
@@ -362,39 +362,20 @@ def minute_prices(candles, start, end):
 
 @dataclass(frozen=True)
 class LifecycleEvidence:
-    """Exchange-reconstructible times, not persisted decisions.
-
-    Tests construct these from explicit synthetic fill-boundary traces. None
-    means that the available tape does not establish the event. Historical
-    classification from ambiguous fills remains a later integration obligation.
-    """
-    red_at: int | None = None
+    """Latest episode's reconstructed terminal signal and flatten time."""
+    terminal_red: bool = False
     flat_at: int | None = None
 
 
-def permission(now, lookback, cooldown, restart, intervention, evidence, *, exposed, red_now):
-    """Lifecycle algebra, recomputed each call with no saved-state argument."""
-    if restart not in ("always", "never") or intervention not in ("panic", "normal"):
+def permission(now, lookback, cooldown, restart, evidence, *, exposed, red_now):
+    """Latest-episode lifecycle algebra with no saved decision argument."""
+    if restart not in ("always", "never"):
         raise ValueError("removed policy")
     if lookback <= 0 or cooldown < 0:
         raise ValueError("invalid duration")
-    start = now - lookback
-    red_at, flat_at = evidence.red_at, evidence.flat_at
-    red_at = red_at if red_at is not None and start <= red_at <= now else None
-    flat_at = flat_at if flat_at is not None and start <= flat_at <= now else None
-    if red_now and exposed:
-        return "panic"
-    if red_at is None and flat_at is None:
-        return "normal"
-    if flat_at is None or (red_at is not None and flat_at < red_at):
-        return "panic" if exposed else "halted"
-    # Cooldown is anchored at the stop's actual flatten, while `never` is
-    # anchored at its imposing RED event. These may expire at different times.
-    halted = red_at is not None if restart == "never" else now < flat_at + cooldown
-    if not halted:
-        return "normal"
-    # A proven flat followed by fresh current exposure establishes reappearance
-    # without needing its opening fill. An unfinished panic never reaches here.
     if exposed:
-        return "panic" if intervention == "panic" else "normal"
-    return "halted"
+        return "panic" if red_now else "normal"
+    flat = evidence.flat_at
+    if not evidence.terminal_red or flat is None or not now-lookback <= flat <= now:
+        return "normal"
+    return "halted" if restart == "never" or now < flat + cooldown else "normal"

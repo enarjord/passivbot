@@ -83,7 +83,7 @@ def test_known_loss_and_fee_survive_with_no_candles(mode):
         args["symbol"] = "TEST"
     result = estimate_candle_free(snapshot, mode, **args)
     assert (result.realized, result.realized_peak, result.upnl) == (-22, 0, -20)
-    assert float(result.signal.raw[-1]) == pytest.approx(42 / 1042)
+    assert float(result.signal.raw[-1]) == pytest.approx(42 / 1022)
     assert result.signal.ema == result.signal.raw  # no fictional zero seed
 
 
@@ -93,7 +93,7 @@ def test_realized_profit_peak_is_not_discarded_or_added_twice():
              Fill("loss", 180_000, -1, 20, -80)]
     result = coin(snap(pair(fills=fills)))
     assert (result.realized, result.realized_peak, result.upnl) == (20, 100, -20)
-    assert float(result.signal.raw[-1]) == pytest.approx(100 / 1100)
+    assert float(result.signal.raw[-1]) == pytest.approx(100 / 1080)
     assert result.signal.panic[-1]
 
 
@@ -118,7 +118,7 @@ def test_historical_damage_still_evaluates(delta, price, realized, fee, reason):
     assert reason in result.reasons
     expected_realized = (-20 if realized is None else realized) + (fee if isinstance(fee, int) else 0)
     assert result.realized == expected_realized
-    assert float(result.signal.raw[-1]) == pytest.approx((20 - expected_realized) / (1020 - expected_realized))
+    assert float(result.signal.raw[-1]) == pytest.approx((20 - expected_realized) / (1000 - expected_realized))
 
 
 def test_same_symbol_hedged_upnl_and_cross_pair_cashflow_cancel_before_peak():
@@ -190,7 +190,7 @@ def test_current_contract_units(side, size, basis, mark, multiplier, inverse, up
     p = pair(side=side, size=size, basis=basis, mark=mark, multiplier=multiplier, inverse=inverse)
     result = estimate_candle_free(snap(p), "coin", pside=side, symbol="TEST")
     assert result.upnl == upnl
-    assert float(result.signal.raw[-1]) == pytest.approx(-upnl / (1000 - upnl))
+    assert float(result.signal.raw[-1]) == pytest.approx(-upnl / 1000)
 
 
 def test_available_history_cannot_be_discarded_for_singleton():
@@ -263,5 +263,5 @@ def test_fake_exchange_cashflows_without_candles(pside):
     net = client.realized_pnl - client.realized_fees
     assert float(result.realized) == pytest.approx(net)
     assert result.upnl == -20
-    assert float(result.signal.raw[-1]) == pytest.approx((20 - net) / (client.balance_total + 20 - net))
+    assert float(result.signal.raw[-1]) == pytest.approx((20 - net) / (client.balance_total - net))
     assert estimate_candle_free(replace(snapshot, pairs=(replace(p),)), "unified") == result
