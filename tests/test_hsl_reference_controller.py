@@ -391,3 +391,18 @@ def test_historical_red_cannot_panic_after_current_recovery():
         result = replay((episode,), now=(len(upnls)-1)*60000, start=0,
                         budget=100, span=1, threshold=".095", cooldown=0, restart="always")
         assert result[-1].action == ("panic" if upnls[-1] < 0 else "normal")
+
+
+@pytest.mark.parametrize("start", [0, 1, 60_000, 60_001, 120_000])
+@pytest.mark.parametrize("span", [1, 2.5, 1000000])
+def test_bounded_suffix_preserves_duplicate_minute_terminal_decision(start, span):
+    episode = Episode((point(0), point(60_000, upnl=100),
+                       point(60_000, upnl=-100),
+                       point(120_000, pnl=-100, exposed=False, flatten=True)),
+                      entry_reference_delta=dec(50))
+    # The autouse backend checks every Rust decision against the independent
+    # decimal reference, including clipping the initial relative peak reference.
+    decisions = run(episode, start=start, span=span)
+    assert [d.timestamp for d in decisions] == [
+        p.observation.timestamp for p in episode.points if p.observation.timestamp >= start]
+    assert decisions[-1].flat_at in (None, 120_000)

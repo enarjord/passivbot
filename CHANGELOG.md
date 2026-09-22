@@ -6,12 +6,19 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Make offline revised-HSL replay comparisons insensitive to async scheduler pass counts,
+  while retaining raw diagnostics and strict trading/readiness comparisons. Settle pending
+  history reads within the existing bounded fake-cycle loop before advancing scenario time.
+
 - Reduce revised-HSL CPU allocations by streaming the shared numerical signal into
   its controller and reusing validated simulator buffers and policy references.
   Diagnostic output, current decisions, and reconstruction fallbacks are preserved.
 - Support revised HSL in multi-coin Metal/CUDA optimization for both strategy families,
   all signal modes and one or both position sides, with bounded independent history,
   static coin-policy overrides, exact Rust validation and checkpoint resume.
+
+- Further reduce revised-HSL replay allocations by reading bounded episode samples
+  directly, preserving duplicate-minute observations and the numerical reference.
 
 - Reduce revised-HSL GPU history memory by storing compact minute samples and
   summaries of completed blocks, preserving same-minute peak/EMA updates and

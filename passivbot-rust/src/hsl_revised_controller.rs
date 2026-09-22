@@ -219,37 +219,29 @@ fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
     let mut cursor_peak = None;
     let mut threshold_sensitive = false;
     for episode in &input.episodes {
-        let points: Vec<_> = episode
+        // Ordering and the upper bound were validated above. Borrow the
+        // in-window suffix rather than allocating references on every replay.
+        let first = episode
             .points
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| input.start <= p.timestamp && p.timestamp <= input.now)
-            .collect();
+            .partition_point(|p| p.timestamp < input.start);
+        let points = &episode.points[first..];
         if points.is_empty() {
             continue;
         }
-        let reference = if points[0].0 == 0 {
+        let reference = if first == 0 {
             episode.entry_reference
         } else {
             None
         };
         if reference.is_some()
             && (points.len() != 1
-                || !points[0].1.exposed
-                || points[0].1.flatten
-                || points[0].1.timestamp != input.now)
+                || !points[0].exposed
+                || points[0].flatten
+                || points[0].timestamp != input.now)
         {
             return Err("entry reference requires the current exposed singleton".into());
         }
-        let rows: Vec<_> = points
-            .iter()
-            .map(|(_, p)| Observation {
-                timestamp_ms: p.timestamp,
-                realized: p.pnl,
-                unrealized: p.upnl,
-            })
-            .collect();
-        let relative_reference = if points[0].0 == 0 {
+        let relative_reference = if first == 0 {
             episode.entry_reference_delta
         } else {
             None
@@ -257,19 +249,22 @@ fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
         let decision_start = decisions.len();
         let mut opening = episode.opened_at.filter(|t| *t >= input.start);
         let risk = visit_signal(
-            &rows,
+            points.len(),
+            |i| Observation {
+                timestamp_ms: points[i].timestamp,
+                realized: points[i].pnl,
+                unrealized: points[i].upnl,
+            },
+            |i| points[i].cashflow_reference_delta,
             input.budget,
             input.span,
             input.threshold,
             reference,
             relative_reference,
-            &points
-                .iter()
-                .map(|(_, p)| p.cashflow_reference_delta)
-                .collect::<Vec<_>>(),
             &anchor,
             |index, _equity, _peak, raw, ema, panic| {
-                let (original_index, point) = points[index];
+                let original_index = first + index;
+                let point = &points[index];
                 let score = raw.min(ema);
                 threshold_sensitive |=
                     (score - input.threshold).abs() <= 1e-12 * score.abs().max(1.0);

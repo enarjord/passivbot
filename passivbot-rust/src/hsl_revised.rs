@@ -151,14 +151,18 @@ pub(crate) fn signal_with_references(
         numeric_range_approximation: false,
         last_peak_delta: None,
     };
+    if !point_references.is_empty() && point_references.len() != rows.len() {
+        return Err("invalid revised HSL signal inputs".into());
+    }
     let summary = visit_signal(
-        rows,
+        rows.len(),
+        |i| rows[i],
+        |i| point_references.get(i).copied().flatten(),
         budget,
         span,
         threshold,
         entry_reference,
         entry_reference_delta,
-        point_references,
         anchor,
         |_, equity, peak, raw, ema, panic| {
             out.equity.push(equity);
@@ -181,34 +185,32 @@ pub(crate) struct SignalSummary {
 /// The same arithmetic can stream to its controller without allocating the five
 /// diagnostic output arrays. The public numerical API collects this stream.
 pub(crate) fn visit_signal(
-    rows: &[Observation],
+    count: usize,
+    row_at: impl Fn(usize) -> Observation,
+    reference_at: impl Fn(usize) -> Option<f64>,
     budget: f64,
     span: f64,
     threshold: f64,
     entry_reference: Option<f64>,
     entry_reference_delta: Option<f64>,
-    point_references: &[Option<f64>],
     anchor: &Observation,
     mut visit: impl FnMut(usize, f64, f64, f64, f64, bool),
 ) -> Result<SignalSummary, String> {
     validate_settings(span, threshold)?;
     if !anchor.realized.is_finite()
         || !anchor.unrealized.is_finite()
-        || rows.is_empty()
+        || count == 0
         || !budget.is_finite()
         || budget <= 0.0
         || entry_reference.is_some_and(|p| !p.is_finite())
         || entry_reference_delta.is_some_and(|p| !p.is_finite())
         || (entry_reference.is_some() && entry_reference_delta.is_some())
-        || (!point_references.is_empty() && point_references.len() != rows.len())
-        || point_references.iter().flatten().any(|r| !r.is_finite())
-        || (entry_reference.is_some() && point_references.iter().any(Option::is_some))
-        || rows
-            .iter()
+        || (0..count).filter_map(&reference_at).any(|r| !r.is_finite())
+        || (entry_reference.is_some() && (0..count).any(|i| reference_at(i).is_some()))
+        || (0..count)
+            .map(&row_at)
             .any(|r| !r.realized.is_finite() || !r.unrealized.is_finite())
-        || rows
-            .windows(2)
-            .any(|w| w[0].timestamp_ms > w[1].timestamp_ms)
+        || (1..count).any(|i| row_at(i - 1).timestamp_ms > row_at(i).timestamp_ms)
     {
         return Err("invalid revised HSL signal inputs".into());
     }
@@ -216,14 +218,13 @@ pub(crate) fn visit_signal(
     // Saturating an oversized peak before division can erase a real drawdown.
     let scale = if budget.abs() > f64::MAX / 8.0
         || anchor.realized.abs() > f64::MAX / 8.0
-        || rows
-            .iter()
+        || (0..count)
+            .map(&row_at)
             .any(|r| r.realized.abs().max(r.unrealized.abs()) > f64::MAX / 8.0)
         || entry_reference.is_some_and(|r| r.abs() > f64::MAX / 8.0)
         || entry_reference_delta.is_some_and(|r| r.abs() > f64::MAX / 8.0)
-        || point_references
-            .iter()
-            .flatten()
+        || (0..count)
+            .filter_map(&reference_at)
             .any(|r| r.abs() > f64::MAX / 8.0)
     {
         0.125
@@ -245,7 +246,7 @@ pub(crate) fn visit_signal(
             bounded(scaled * 4.0, approximate)
         }
     };
-    let first_delta = delta(&rows[0], &mut approximate);
+    let first_delta = delta(&row_at(0), &mut approximate);
     let mut peak = entry_reference.unwrap_or(bounded(budget + first_delta, &mut approximate));
     let mut peak_delta = entry_reference.is_none().then_some(
         entry_reference_delta.map_or(first_delta, |reference| reference.max(first_delta)),
@@ -257,9 +258,10 @@ pub(crate) fn visit_signal(
     let mut previous_minute = None;
     let mut baseline: Option<f64> = None;
     let mut previous_ema = None;
-    for (index, row) in rows.iter().enumerate() {
-        let current_delta = delta(row, &mut approximate);
-        let equity = if index + 1 == rows.len()
+    for index in 0..count {
+        let row = row_at(index);
+        let current_delta = delta(&row, &mut approximate);
+        let equity = if index + 1 == count
             && row.realized == anchor.realized
             && row.unrealized == anchor.unrealized
         {
@@ -270,7 +272,7 @@ pub(crate) fn visit_signal(
         peak = peak.max(equity);
         if let Some(relative_peak) = &mut peak_delta {
             *relative_peak = relative_peak.max(current_delta);
-            if let Some(reference) = point_references.get(index).copied().flatten() {
+            if let Some(reference) = reference_at(index) {
                 *relative_peak = relative_peak.max(reference * scale);
                 peak = bounded(budget + *relative_peak, &mut approximate);
             }
