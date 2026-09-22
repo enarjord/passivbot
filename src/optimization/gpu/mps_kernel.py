@@ -1477,7 +1477,7 @@ class MpsEmaAnchorRunner:
         )
         self.n = int(data["n"])
         if hsl_engine == "revised":
-            if self.interval_minutes != 1 or not 1440 <= pnl_lookback_bars <= 90 * 1440:
+            if self.interval_minutes != 1 or (bool(hsl_enabled) and not 1440 <= pnl_lookback_bars <= 90 * 1440):
                 raise ValueError("Revised GPU HSL requires 1m candles and 1..90d lookback")
             self.revised_capacity = min(self.n + 2, pnl_lookback_bars + 2)
             self.rolling_capacity = 1
@@ -1685,6 +1685,8 @@ class MpsEmaAnchorRunner:
                 raise ValueError("Revised GPU HSL enablement must be finite")
             if not np.any(enabled):
                 continue
+            if not 1440 <= self.pnl_lookback_bars <= 90 * 1440:
+                raise ValueError("Enabled revised GPU HSL requires 1..90d lookback")
             if any(not np.isfinite(v[enabled]).all() for v in cols.values()):
                 raise ValueError("Revised GPU HSL parameters must be finite")
             def selected(key):
@@ -3106,7 +3108,7 @@ class MpsTrailingMartingaleRunner(MpsEmaAnchorRunner):
         interrupt_check=None,
         **kwargs,
     ):
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, hsl_enabled=hsl_enabled, **kwargs)
         if max_dispatch_candidate_bars is not None:
             if max_dispatch_candidate_bars <= 0:
                 raise ValueError("max_dispatch_candidate_bars must be positive")

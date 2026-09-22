@@ -970,6 +970,19 @@ def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
     )
 
 
+def _revised_hsl_lookback_bars(backtest_params, *, hsl_enabled):
+    if not hsl_enabled:
+        # Inactive revised policies consume no history. Keep 0/all inert.
+        return 0
+    days = float(backtest_params["pnls_max_lookback_days"])
+    if not np.isfinite(days) or not 1 <= days <= 90:
+        raise ValueError("Enabled revised GPU HSL requires 1..90d lookback")
+    # Revised Rust clips at now - round(days * 86_400_000), unlike the
+    # legacy rolling-PNL bar count. Observations are aligned to whole minutes.
+    milliseconds = int(np.floor(days * 86_400_000.0 + 0.5))
+    return milliseconds // 60_000
+
+
 def _directional_coin_hsl_lookback_bars(
     backtest_params: dict,
     *,
@@ -2120,7 +2133,8 @@ class MpsSingleCoinProxy:
         if self.hsl_engine == "revised":
             if candle_interval_minutes != 1:
                 raise ValueError("Revised GPU HSL requires 1m candles")
-            pnl_lookback_bars = int(float(backtest_params["pnls_max_lookback_days"]) * 1440)
+            pnl_lookback_bars = _revised_hsl_lookback_bars(
+                backtest_params, hsl_enabled=bool(hsl_enabled_sides))
 
         self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
             strategy_kind=self.strategy_kind,

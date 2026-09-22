@@ -77,3 +77,35 @@ def test_multicoin_revised_scope_is_rejected_explicitly():
         MpsMulticoinProxy(config=c, hlcvs=None, mss=None, btc=None,
                          timestamps=None, exchange='binance', batch_size=1,
                          needed_metrics={'adg_usd'})
+
+
+@pytest.mark.parametrize('base_enabled,override_enabled', [(True,False),(False,True)])
+def test_coin_activity_uses_only_prepared_effective_policy(base_enabled,override_enabled):
+    c=config('coin')
+    c['backtest']['coins']={'binance':['AAA']}
+    c['bot']['long']['hsl']['enabled']=base_enabled
+    c['bot']['short']['hsl']['enabled']=False
+    c['coin_overrides']={
+        'AAA':{'bot':{'long':{'hsl':{'enabled':override_enabled}}}},
+        'OUTSIDE':{'bot':{'short':{'hsl':{'enabled':True}}}},
+    }
+    assert _gpu_hsl_search_sides(c,None)==({'long'} if override_enabled else set())
+    # A suite's prepared membership wins over its broader source config.
+    c['backtest']['coins']={'binance':['AAA','OUTSIDE']}
+    scenario={'config':c,'exchange':'binance','coins':['AAA'],'mss':{'AAA':{}}}
+    assert _gpu_hsl_search_sides(c,[scenario])==({'long'} if override_enabled else set())
+
+
+@pytest.mark.parametrize('minutes,expected',[(1440.25,1440),(1440.999,1440),
+                                           (1441.-.0004/60000,1441)])
+def test_revised_lookback_matches_native_millisecond_boundary(minutes,expected):
+    from optimization.gpu.service import _revised_hsl_lookback_bars
+    assert _revised_hsl_lookback_bars({'pnls_max_lookback_days':minutes/1440},
+                                    hsl_enabled=True)==expected
+
+
+@pytest.mark.parametrize('lookback',[0,-1])
+def test_disabled_revised_lookback_does_not_require_history(lookback):
+    from optimization.gpu.service import _revised_hsl_lookback_bars
+    assert _revised_hsl_lookback_bars({'pnls_max_lookback_days':lookback},
+                                    hsl_enabled=False)==0

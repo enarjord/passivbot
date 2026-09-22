@@ -16,22 +16,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def make_proxy(mode, strategy='trailing_martingale', override=None):
+def make_proxy(mode, strategy='trailing_martingale', override=None, lookback=1, enabled=True):
     config = generated_template(get_template_config(), mode)
     config['live'].update(strategy_kind=strategy,
         approved_coins={'long':['AAA'], 'short':['AAA']},
-        ignored_coins={'long':[], 'short':[]}, pnls_max_lookback_days=1,
+        ignored_coins={'long':[], 'short':[]}, pnls_max_lookback_days=lookback,
         max_warmup_minutes=60)
     config['backtest'].update(coins={'binance':['AAA']}, starting_balance=1000.,
                              btc_collateral_cap=0.)
     for side in ('long','short'):
         config['bot'][side]['risk'].update(n_positions=1, total_wallet_exposure_limit=2,
                                           position_exposure_enforcer_enabled=False)
-        config['bot'][side]['hsl'].update(enabled=mode != 'unified', red_threshold=.02,
+        config['bot'][side]['hsl'].update(enabled=enabled and mode != 'unified', red_threshold=.02,
             ema_span_minutes=2.5, cooldown_minutes_after_red=5,
             restart_after_red_policy='always')
     if mode == 'unified':
-        config['bot']['hsl'].update(enabled=True, red_threshold=.015, ema_span_minutes=2.75,
+        config['bot']['hsl'].update(enabled=enabled, red_threshold=.015, ema_span_minutes=2.75,
             cooldown_minutes_after_red=7, restart_after_red_policy='never')
     if override:
         config['coin_overrides']={'AAA':{'bot':{'long':{'hsl':override}}}}
@@ -77,3 +77,13 @@ def test_shared_portfolio_candidate_and_static_coin_override_precedence():
     i=coin.param_keys.index('hsl_red_threshold')
     assert matrix[0,i]==pytest.approx(.07)
     assert matrix[0,len(coin.param_keys)+i]==pytest.approx(.04)
+
+
+@pytest.mark.parametrize('lookback',[0,'all'])
+@pytest.mark.parametrize('strategy',['ema_anchor','trailing_martingale'])
+def test_inactive_revised_zero_and_unbounded_history_execute(lookback,strategy):
+    proxy,_=make_proxy('coin',strategy,lookback=lookback,enabled=False)
+    assert proxy.runner.pnl_lookback_bars==0
+    assert proxy.runner.revised_capacity==2
+    rows=proxy.evaluate([{}])
+    assert np.isfinite(rows[0]['adg_usd'])

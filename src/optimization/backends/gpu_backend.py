@@ -3532,7 +3532,10 @@ def _gpu_pinned_hsl_bound_contract(bound_by_key) -> dict[str, float]:
     }
 
 
-def _gpu_hsl_side_enabled(config: dict, side: str) -> bool:
+def _gpu_hsl_side_enabled(config: dict, side: str, markets_by_exchange=None) -> bool:
+    from config.hsl_revised import engine, _side_has_enabled_policy
+    if engine(config) == "revised" and config["live"]["hsl_signal_mode"] == "coin":
+        return _side_has_enabled_policy(config, side, markets_by_exchange)
     globally_enabled = bool(_gpu_hsl_policy(config, side).get("enabled", False))
     if globally_enabled:
         return True
@@ -3610,21 +3613,29 @@ def _validate_hsl_bound_contracts(bound_by_key, config: dict) -> None:
 
 
 def _gpu_hsl_search_sides(
-    proxy_config: dict, suite_inputs, overrides: set[str] | None = None
+    proxy_config: dict, suite_inputs, overrides: set[str] | None = None,
+    *, markets_by_exchange=None,
 ) -> set[str]:
-    configs = (
-        [item["config"] for item in suite_inputs]
-        if suite_inputs
-        else [proxy_config]
-    )
     from config.hsl_revised import engine
-    portfolio = any(engine(item) == "revised" and item["live"]["hsl_signal_mode"] == "unified"
-                    and bool(item["bot"]["hsl"]["enabled"]) for item in configs)
+
+    contexts = []
+    for item in suite_inputs or []:
+        config = item["config"]
+        markets = markets_by_exchange
+        if "coins" in item and "exchange" in item:
+            config = deepcopy(config)
+            config.setdefault("backtest", {})["coins"] = {item["exchange"]: item["coins"]}
+            markets = {item["exchange"]: item["mss"]}
+        contexts.append((config, markets))
+    if not contexts:
+        contexts = [(proxy_config, markets_by_exchange)]
+    portfolio = any(engine(c) == "revised" and c["live"]["hsl_signal_mode"] == "unified"
+                    and bool(c["bot"]["hsl"]["enabled"]) for c, _ in contexts)
     target_sides = {
         side for side in ("long", "short")
-        if any(gpu_side_enabled(item, side) and _gpu_hsl_side_enabled(item, side)
-               and not (engine(item) == "revised" and item["live"]["hsl_signal_mode"] == "unified")
-               for item in configs)
+        if any(gpu_side_enabled(c, side) and _gpu_hsl_side_enabled(c, side, markets)
+               and not (engine(c) == "revised" and c["live"]["hsl_signal_mode"] == "unified")
+               for c, markets in contexts)
     }
     return _gpu_candidate_source_sides(target_sides, overrides or set()) | ({"portfolio"} if portfolio else set())
 
@@ -4704,7 +4715,8 @@ def run_backend(
         proxy_config, suite_inputs, gpu_optimizer_overrides
     )
     hsl_search_sides = _gpu_hsl_search_sides(
-        proxy_config, suite_inputs, gpu_optimizer_overrides
+        proxy_config, suite_inputs, gpu_optimizer_overrides,
+        markets_by_exchange=getattr(evaluator, "msss", None),
     )
     mapped = {
         name: value
