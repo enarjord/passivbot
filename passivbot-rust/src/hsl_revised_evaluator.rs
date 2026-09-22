@@ -201,7 +201,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
     };
     reasons.extend(trace.reasons);
     let episodes = trace.episodes.len();
-    let replay = controller::replay_with_events(&controller::Input {
+    let replay = controller::replay_latest_with_events(&controller::Input {
         episodes: trace.episodes,
         now: input.snapshot.now,
         start: input.snapshot.start,
@@ -213,10 +213,10 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         intervention: input.intervention,
     })?;
     let decisions = replay.decisions;
-    if decisions.iter().any(|d| d.numeric_range_approximation) {
+    if replay.numeric_range_approximation {
         reasons.insert("numeric_range_approximation".into());
     }
-    let observations = decisions.len();
+    let observations = replay.observations;
     let decision = decisions
         .into_iter()
         .last()
