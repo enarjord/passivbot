@@ -2,6 +2,8 @@
 mod revised_inputs;
 #[path = "backtest_hsl_runtime.rs"]
 pub(crate) mod revised_runtime;
+#[path = "backtest_hsl_cache.rs"]
+mod revised_cache;
 #[path = "backtest_hsl_report.rs"]
 mod revised_report;
 #[path = "backtest_revised_analysis.rs"]
@@ -667,6 +669,7 @@ pub struct Backtest<'a> {
     orch_profile: Option<OrchProfile>,
     max_tradable_coins_seen: EffectiveNPositions,
     revised_hsl_scopes: Vec<revised_runtime::Scope>,
+    revised_hsl_cutoffs: revised_cache::Cutoffs,
     revised_hsl_report: revised_report::Report,
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_coin: [Vec<HardStopPsideRuntime>; 2],
@@ -2263,6 +2266,7 @@ impl<'a> Backtest<'a> {
                 }),
             max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
             revised_hsl_scopes: Vec::new(),
+            revised_hsl_cutoffs: std::collections::BTreeMap::new(),
             revised_hsl_report: revised_report::Report::new(!backtest_params.metrics_only),
             hard_stop_pside: [
                 HardStopPsideRuntime::default(),

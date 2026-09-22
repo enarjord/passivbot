@@ -23,6 +23,8 @@ pub struct Signal {
     pub ema: Vec<f64>,
     pub panic: Vec<bool>,
     pub numeric_range_approximation: bool,
+    #[serde(skip)]
+    pub(crate) last_peak_delta: Option<f64>,
 }
 
 fn bounded(value: f64, approximate: &mut bool) -> f64 {
@@ -88,6 +90,7 @@ pub(crate) fn singleton_from_loss(
         ema: vec![raw],
         panic: vec![raw > threshold],
         numeric_range_approximation: approximate,
+        last_peak_delta: None,
     })
 }
 
@@ -188,6 +191,7 @@ pub(crate) fn signal_with_references(
         ema: Vec::with_capacity(rows.len()),
         panic: Vec::with_capacity(rows.len()),
         numeric_range_approximation: scale != 1.0,
+        last_peak_delta: None,
     };
     let last = anchor;
     let mut deltas = Vec::with_capacity(rows.len());
@@ -292,6 +296,9 @@ pub(crate) fn signal_with_references(
         out.ema.push(ema);
         out.panic.push(drawdown.min(ema) > threshold);
         previous_minute = Some(minute);
+    }
+    if scale == 1.0 && !out.numeric_range_approximation {
+        out.last_peak_delta = peak_delta;
     }
     if scale != 1.0 {
         for value in out.equity.iter_mut().chain(out.peaks.iter_mut()) {

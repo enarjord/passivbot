@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Accelerate revised-HSL backtests and CPU optimization by replaying only the latest
+  relevant episode and incrementally evaluating unchanged observations. Fills, budget/slot
+  changes, lookback clipping and sensitive numeric comparisons rebuild the shared reference.
+
 - Anchor revised HSL to scoped current equity and revoke panic as soon as the current
   raw/EMA signal recovers. Only terminal RED in the latest episode starts cooldown;
   renewed exposure clears it. Remove the revised cooldown-intervention option and retire
