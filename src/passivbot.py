@@ -103,7 +103,8 @@ from live.event_bus import (
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from runtime_identity import build_runtime_identity, write_runtime_manifest
-from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable
+from live.market_snapshot import (MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable,
+                                  SHARED_QUOTE_CLEANUP_SECONDS, SHARED_QUOTE_CANCEL_GRACE_SECONDS)
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -167,6 +168,8 @@ from sortedcontainers import SortedDict
 # The execution loop may wait this long for a websocket-triggered replan after
 # its configured execution delay. Churn-history cadence checks must include
 # this normal quiet-period wait or ordinary live operation breaks provenance.
+# Preserve the existing client-close allowance after bounded shared-quote teardown.
+BOT_CLOSE_TIMEOUT_SECONDS = SHARED_QUOTE_CLEANUP_SECONDS + SHARED_QUOTE_CANCEL_GRACE_SECONDS + 3.0
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 
@@ -7535,7 +7538,10 @@ class Passivbot:
             status="started",
             message="shutdown requested; closing background tasks and sessions",
         )
-        maintainer_tasks = []
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        maintainer_tasks = list(snapshots.pending_tasks()) if snapshots is not None else []
+        if snapshots is not None:
+            snapshots.begin_shutdown()
         try:
             self.stop_data_maintainers(verbose=False)
             for task_map_name in ("maintainers", "WS_ohlcvs_1m_tasks"):
@@ -7604,7 +7610,12 @@ class Passivbot:
                     if task is not None and not task.done():
                         task.cancel()
                 try:
-                    await asyncio.wait_for(maintainer_gather, timeout=1.0)
+                    # wait_for() waits for cancellation acknowledgement and can
+                    # overrun forever when connector cleanup suppresses cancellation.
+                    done, _ = await asyncio.wait({maintainer_gather}, timeout=1.0)
+                    if not done:
+                        raise asyncio.TimeoutError()
+                    maintainer_gather.result()
                 except (asyncio.CancelledError, asyncio.TimeoutError):
                     self._emit_shutdown_stage(
                         "maintainers_cancel_timeout",
@@ -7632,6 +7643,14 @@ class Passivbot:
                         "task_count": len(maintainer_tasks),
                         "error_type": error_type,
                     },
+                )
+        if snapshots is not None:
+            try:
+                snapshots.raise_pending_failure()
+            except Exception as exc:
+                logging.error(
+                    "[shutdown] quote cleanup failed | error_type=%s action=continue_cleanup",
+                    bounded_exception_type(exc),
                 )
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
@@ -8767,9 +8786,12 @@ class Passivbot:
             getattr(self, "maintainers", None),
             getattr(self, "WS_ohlcvs_1m_tasks", None),
         )
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        tasks: list[asyncio.Task] = list(snapshots.pending_tasks()) if snapshots is not None else []
+        if snapshots is not None:
+            snapshots.begin_shutdown()
         self.stop_data_maintainers(verbose=False)
-        tasks: list[asyncio.Task] = []
-        seen: set[int] = set()
+        seen: set[int] = {id(task) for task in tasks}
         for task_map in task_maps:
             if not isinstance(task_map, dict):
                 continue
@@ -8810,6 +8832,15 @@ class Passivbot:
             except Exception as exc:
                 logging.warning(
                     "[restart] maintainer cleanup failed | error_type=%s action=continue_cleanup",
+                    bounded_exception_type(exc),
+                )
+
+        if snapshots is not None:
+            try:
+                snapshots.raise_pending_failure()
+            except Exception as exc:
+                logging.error(
+                    "[restart] quote cleanup failed | error_type=%s action=continue_cleanup",
                     bounded_exception_type(exc),
                 )
 
@@ -21800,12 +21831,72 @@ class Passivbot:
     # Legacy file lock helpers removed
 
     async def close(self):
-        """Stop background tasks and close exchange clients."""
+        """Finish bounded quote cleanup and attempt all clients, preserving the first failure."""
         self.stop_data_maintainers()
-        await self.cca.close()
-        if self.ccp is not None:
-            await self.ccp.close()
-        self._close_live_event_pipeline(timeout=2.0)
+        first_error = None
+
+        def record_failure(exc):
+            nonlocal first_error
+            if first_error is None:
+                first_error = exc
+            elif exc is not first_error:
+                logging.warning(
+                    "[shutdown] additional close failure | error_type=%s action=preserve_first_failure",
+                    bounded_exception_type(exc),
+                )
+
+        snapshots = getattr(self, "market_snapshot_provider", None)
+        if snapshots is not None:
+            try:
+                snapshots.begin_shutdown()
+                # One bounded owner keeps its original deadline through repeated caller cancellation.
+                quote_cleanup = asyncio.create_task(snapshots.wait_pending())
+                while not quote_cleanup.done():
+                    try:
+                        await asyncio.wait({quote_cleanup})
+                    except (Exception, asyncio.CancelledError) as exc:
+                        record_failure(exc)
+                # Also retrieve an outcome completed concurrently with caller cancellation.
+                quote_cleanup.result()
+            except (Exception, asyncio.CancelledError) as exc:
+                record_failure(exc)
+        # Reserve two seconds for the synchronous pipeline flush. Run independent
+        # client closes together so one hung client cannot starve the other.
+        client_tasks = [asyncio.create_task(client.close())
+                        for client in (self.cca, self.ccp) if client is not None]
+        deadline = asyncio.get_running_loop().time() + 1.0
+        pending = set(client_tasks)
+        while pending and asyncio.get_running_loop().time() < deadline:
+            try:
+                _, pending = await asyncio.wait(
+                    pending, timeout=max(0.0, deadline - asyncio.get_running_loop().time())
+                )
+            except asyncio.CancelledError as exc:
+                record_failure(exc)
+        for task in client_tasks:
+            if task.done():
+                try:
+                    task.result()
+                except (Exception, asyncio.CancelledError) as exc:
+                    record_failure(exc)
+            else:
+                record_failure(asyncio.TimeoutError("client close deadline expired"))
+                task.cancel()
+                def finished(done):
+                    if not done.cancelled():
+                        failure = done.exception()
+                        if failure is not None:
+                            logging.warning(
+                                "[shutdown] abandoned client close failed | error_type=%s action=report_cleanup_failure",
+                                bounded_exception_type(failure),
+                            )
+                task.add_done_callback(finished)
+        try:
+            self._close_live_event_pipeline(timeout=2.0)
+        except (Exception, asyncio.CancelledError) as exc:
+            record_failure(exc)
+        if first_error is not None:
+            raise first_error
 
     def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""
@@ -22245,11 +22336,10 @@ def setup_bot(config):
 async def shutdown_bot(bot):
     """Stop background tasks and close the exchange clients gracefully."""
     print("Shutting down bot...")
-    bot.stop_data_maintainers()
     try:
-        await asyncio.wait_for(bot.close(), timeout=3.0)
+        await asyncio.wait_for(bot.close(), timeout=BOT_CLOSE_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        print("Shutdown timed out after 3 seconds. Forcing exit.")
+        print(f"Shutdown timed out after {BOT_CLOSE_TIMEOUT_SECONDS:g} seconds. Forcing exit.")
     except Exception as e:
         print(f"Error during shutdown ({bounded_exception_type(e)}).")
 

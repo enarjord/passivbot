@@ -13,6 +13,23 @@ since the latest release tag; these features may already be available when insta
   missing closes at an estimated last-fill time; delayed history rebuilds the result. Legacy
   HSL remains the default and is unchanged.
 
+- Keep shared quote requests alive when one reader times out, so revised HSL quote deadlines
+  cannot cancel ordinary planning and repeatedly restart the bot. Shutdown still cancels shared
+  requests and awaits their cleanup before closing clients through every close path. Late non-transient
+  failures, including malformed result shapes, reach
+  the next reader even after all original readers time out; freshness requirements remain unchanged.
+  Outer shutdown deadlines include quote cleanup time before the client-close allowance.
+  Replacing maintainers leaves shared quote requests alive; client and event cleanup is still
+  attempted when an earlier client close fails. Cleanup preserves the first failure and completes
+  its bounded quote wait even when the close caller is cancelled. Teardown prevents new quote
+  requests, and connector failures during cleanup remain visible and propagate from direct close.
+  Completed failures are delivered before cache reads or replacement requests even if their callback
+  has not run. Concurrent abandoned failures are retained separately and delivered together, so
+  one failed request cannot hide another. Active waiters retain ownership of their own errors;
+  unrelated reads receive only abandoned outcomes. Restart and graceful shutdown also report retained failures; independent client
+  cleanup stays bounded when a client suppresses cancellation. Abandoned readers do not leak
+  connector exception text through Python 3.14 shield diagnostics.
+
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable
   equity; reporting does not fetch data or affect trading.
