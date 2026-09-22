@@ -350,15 +350,15 @@ def _add_gpu_runner_profile(
     batch_size = int(runner_profile.get("batch_size", 0))
     dispatch_count = int(runner_profile.get("dispatch_count", 1))
     cold = bool(runner_profile.get("cold", False))
-    profile["actual_dispatch_batch_sizes"].append(batch_size)
+    profile["actual_dispatch_batch_sizes"].extend(
+        runner_profile.get("candidate_batch_sizes", [batch_size]))
     dispatch_specialization = runner_profile.get("dispatch_specialization")
     if dispatch_specialization is not None:
         profile["dispatch_specializations"].append(dict(dispatch_specialization))
     profile["dispatch_count"] += dispatch_count
-    cold_dispatches = (
+    cold_dispatches = int(runner_profile.get("cold_dispatch_count",
         int(cold) if "temporal_chunk_bars" in runner_profile
-        else dispatch_count if cold else 0
-    )
+        else dispatch_count if cold else 0))
     profile["cold_dispatch_count"] += cold_dispatches
     profile["warm_dispatch_count"] += dispatch_count - cold_dispatches
     runner_steps = int(getattr(runner, "n", 0))

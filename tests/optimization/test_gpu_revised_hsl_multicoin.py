@@ -43,7 +43,11 @@ def make_proxy(mode, strategy='trailing_martingale', sides=('long','short'), min
                     maker=.0002,taker=1e-6,exchange='binance') for c in coins}
     proxy=MpsMulticoinProxy(config=config,hlcvs=candles,mss=markets,btc=np.full(minutes,50000.),
         timestamps=timestamps,exchange='binance',batch_size=3,needed_metrics={'adg_usd'},
-        max_dispatch_candidate_bars=6000 if chunk else 1000000)
+        max_dispatch_candidate_bars=6000 * len(sides) if chunk else 1000000)
+    if chunk:
+        assert proxy.fused_runner is None  # temporal multi-coin replay is single-side
+        for runner in proxy.runners.values():
+            runner.max_dispatch_candidate_bars=500
     return proxy
 
 
@@ -152,3 +156,27 @@ def test_multicoin_static_policy_does_not_replace_other_coin_base(strategy):
     assert p.base_params['long']['hsl_red_threshold']==pytest.approx(.02)
     _,r=raw(p,[{'long_hsl_red_threshold':1e-6,'short_hsl_red_threshold':1e-6}])
     assert r['alive'].all()
+
+
+@pytest.mark.parametrize('strategy,chunk,sides',[
+    ('ema_anchor',False,('long',)),('ema_anchor',False,('long','short')),
+    ('trailing_martingale',False,('long',)),
+    ('trailing_martingale',False,('long','short')),
+    ('trailing_martingale',True,('long',))])
+def test_scratch_profiles_count_each_candidate_once(strategy,chunk,sides):
+    from optimization.gpu.service import _new_gpu_proxy_profile, _add_gpu_runner_profile
+    p=make_proxy('coin',strategy,sides=sides,chunk=chunk)
+    candidates=[{}, {}, {}]
+    runner,_=raw(p,candidates)
+    runner.revised_scratch_budget_bytes=runner._revised_bytes_per_candidate()*2
+    ends=np.array([3000,1700,500],dtype=np.int32)
+    runner,_=raw(p,candidates,end_steps=ends,profile=True)
+    steps=int((np.clip(ends,1,runner.n-1)-1).sum())
+    assert runner.last_profile['kernel_candidate_steps']==steps
+    assert runner.last_profile['candidate_batch_sizes']==[2,1]
+    if chunk:
+        assert runner.last_profile['dispatch_count']>2
+    profile=_new_gpu_proxy_profile(p,candidates,[runner],coin_count=2,side_count=len(sides))
+    _add_gpu_runner_profile(profile,runner,side_count=len(sides))
+    assert profile['kernel_candidate_bars']==steps*2*len(sides)
+    assert profile['actual_dispatch_batch_sizes']==[2,1]

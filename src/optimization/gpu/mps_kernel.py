@@ -2377,6 +2377,9 @@ class MpsEmaAnchorMulticoinRunner:
                                  for key in profiles[0] if key.endswith("_seconds")}
             self.last_profile.update(batch_size=len(params), candidate_batch_count=len(outputs),
                                      dispatch_count=sum(p.get("dispatch_count", 1) for p in profiles),
+                                     kernel_candidate_steps=sum(p["kernel_candidate_steps"] for p in profiles),
+                                     candidate_batch_sizes=[p["batch_size"] for p in profiles],
+                                     cold_dispatch_count=sum(int(p.get("cold", False)) for p in profiles),
                                      cold=any(p.get("cold", False) for p in profiles))
         return combined
 
@@ -2526,6 +2529,7 @@ class MpsEmaAnchorMulticoinRunner:
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 "dispatch_count": 1,
+                "kernel_candidate_steps": int((end_steps_mps - 1).clamp(min=0).sum().item()),
                 "cold": cold,
             }
         else:
@@ -3016,7 +3020,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
     def run(self, params, *, profile=False, end_steps=None):
         self._last_temporal_dispatch = None
         output = super().run(params, profile=profile, end_steps=end_steps)
-        if profile and self._last_temporal_dispatch is not None:
+        if (profile and self._last_temporal_dispatch is not None
+                and "candidate_batch_count" not in self.last_profile):
             self.last_profile.update(self._last_temporal_dispatch)
         return output
 
