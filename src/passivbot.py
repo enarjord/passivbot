@@ -7639,6 +7639,14 @@ class Passivbot:
                         "error_type": error_type,
                     },
                 )
+        if snapshots is not None:
+            try:
+                snapshots.raise_pending_failure()
+            except Exception as exc:
+                logging.error(
+                    "[shutdown] quote cleanup failed | error_type=%s action=continue_cleanup",
+                    bounded_exception_type(exc),
+                )
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
         if execution_loop_task is not None and not execution_loop_task.done():
@@ -8819,6 +8827,15 @@ class Passivbot:
             except Exception as exc:
                 logging.warning(
                     "[restart] maintainer cleanup failed | error_type=%s action=continue_cleanup",
+                    bounded_exception_type(exc),
+                )
+
+        if snapshots is not None:
+            try:
+                snapshots.raise_pending_failure()
+            except Exception as exc:
+                logging.error(
+                    "[restart] quote cleanup failed | error_type=%s action=continue_cleanup",
                     bounded_exception_type(exc),
                 )
 
@@ -21831,19 +21848,44 @@ class Passivbot:
                 quote_cleanup = asyncio.create_task(snapshots.wait_pending())
                 while not quote_cleanup.done():
                     try:
-                        await asyncio.shield(quote_cleanup)
+                        await asyncio.wait({quote_cleanup})
                     except (Exception, asyncio.CancelledError) as exc:
                         record_failure(exc)
                 # Also retrieve an outcome completed concurrently with caller cancellation.
                 quote_cleanup.result()
             except (Exception, asyncio.CancelledError) as exc:
                 record_failure(exc)
-        for client in (self.cca, self.ccp):
-            if client is not None:
+        # Reserve two seconds for the synchronous pipeline flush. Run independent
+        # client closes together so one hung client cannot starve the other.
+        client_tasks = [asyncio.create_task(client.close())
+                        for client in (self.cca, self.ccp) if client is not None]
+        deadline = asyncio.get_running_loop().time() + 1.0
+        pending = set(client_tasks)
+        while pending and asyncio.get_running_loop().time() < deadline:
+            try:
+                _, pending = await asyncio.wait(
+                    pending, timeout=max(0.0, deadline - asyncio.get_running_loop().time())
+                )
+            except asyncio.CancelledError as exc:
+                record_failure(exc)
+        for task in client_tasks:
+            if task.done():
                 try:
-                    await client.close()
+                    task.result()
                 except (Exception, asyncio.CancelledError) as exc:
                     record_failure(exc)
+            else:
+                record_failure(asyncio.TimeoutError("client close deadline expired"))
+                task.cancel()
+                def finished(done):
+                    if not done.cancelled():
+                        failure = done.exception()
+                        if failure is not None:
+                            logging.warning(
+                                "[shutdown] abandoned client close failed | error_type=%s action=report_cleanup_failure",
+                                bounded_exception_type(failure),
+                            )
+                task.add_done_callback(finished)
         try:
             self._close_live_event_pipeline(timeout=2.0)
         except (Exception, asyncio.CancelledError) as exc:

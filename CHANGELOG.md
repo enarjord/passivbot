@@ -23,6 +23,10 @@ since the latest release tag; these features may already be available when insta
   attempted when an earlier client close fails. Cleanup preserves the first failure and completes
   its bounded quote wait even when the close caller is cancelled. Teardown prevents new quote
   requests, and connector failures during cleanup remain visible and propagate from direct close.
+  Completed failures are delivered before cache reads or replacement requests even if their callback
+  has not run. Restart and graceful shutdown also report retained failures; independent client
+  cleanup stays bounded when a client suppresses cancellation. Abandoned readers do not leak
+  connector exception text through Python 3.14 shield diagnostics.
 
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable

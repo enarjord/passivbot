@@ -952,3 +952,130 @@ async def test_shutdown_reports_failure_after_bounded_abandonment(monkeypatch, c
         await provider.wait_pending()
     assert 'report_cleanup_failure' in caplog.text and 'late-secret' not in caplog.text
     await provider.wait_pending()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
+@pytest.mark.parametrize('cached', [False, True])
+async def test_completed_fatal_precedes_callback_cache_and_replacement(strategy, cached):
+    started, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+    primary = ValueError('private-connector-detail')
+    async def fetch(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            started.set()
+            await release.wait()
+            raise primary
+        return {'A': {'bid': 99., 'ask': 101., 'last': 100.}}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch,
+        fetch_tickers_for_symbols=fetch, ticker_strategy=strategy)
+    abandoned = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    abandoned.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await abandoned
+    owned = provider.pending_tasks()[0]
+    if cached:
+        provider._cache['A'] = provider._snapshot_from_ticker('A',
+            {'bid': 99., 'ask': 101., 'last': 100.}, fetched_ms=10**15)
+    # The failing fetch runs first; the new reader then runs before its callbacks.
+    release.set()
+    async def read_before_callback():
+        assert owned.done() and provider._pending_failure is None
+        return await provider.get_snapshots(['A'])
+    reader = asyncio.create_task(read_before_callback())
+    with pytest.raises(ValueError) as raised:
+        await reader
+    assert raised.value is primary and calls == 1
+    await asyncio.sleep(0)
+    assert provider._pending_failure is None  # callback cannot replay delivered failure
+    assert (await provider.get_snapshots(['A']))['A'].last == 100.
+    assert calls == (1 if cached else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('lifecycle', ['cleanup_for_restart', 'shutdown_gracefully'])
+@pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
+async def test_lifecycle_reports_failure_retained_before_shutdown(lifecycle, strategy, caplog):
+    from passivbot import Passivbot
+    from unittest.mock import AsyncMock
+    started, release = asyncio.Event(), asyncio.Event()
+    primary = ValueError('private-failure-text')
+    async def fetch(*args):
+        started.set()
+        await release.wait()
+        raise primary
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch,
+        fetch_tickers_for_symbols=fetch, ticker_strategy=strategy)
+    reader = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    reader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await reader
+    owned = provider.pending_tasks()
+    release.set()
+    await asyncio.wait(owned)
+    assert provider._pending_failure is primary and provider.pending_tasks() == ()
+    calls = []
+    class Client:
+        async def close(self):
+            calls.append('client')
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    bot.maintainers, bot.WS_ohlcvs_1m_tasks = {}, {}
+    bot.cca, bot.ccp = Client(), None
+    bot.monitor_publisher = None
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._close_live_event_pipeline = lambda **kwargs: True
+    bot._emit_shutdown_stage = lambda *args, **kwargs: None
+    await getattr(bot, lifecycle)()
+    assert calls == ['client'] and provider._pending_failure is None
+    assert 'quote cleanup failed' in caplog.text and 'ValueError' in caplog.text
+    assert 'private-failure-text' not in caplog.text
+    await provider.wait_pending()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('external_cancel', [False, True])
+async def test_close_bounds_all_clients_even_if_they_suppress_cancellation(external_cancel, caplog):
+    from passivbot import Passivbot
+    started, release = asyncio.Event(), asyncio.Event()
+    calls, owned = [], []
+    class Client:
+        def __init__(self, name):
+            self.name = name
+        async def close(self):
+            owned.append(asyncio.current_task())
+            calls.append(self.name)
+            started.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+                raise ValueError('late-private-text')
+    bot = Passivbot.__new__(Passivbot)
+    bot.cca, bot.ccp = Client('rest'), Client('stream')
+    bot._close_live_event_pipeline = lambda **kwargs: calls.append('pipeline')
+    t0 = asyncio.get_running_loop().time()
+    closer = asyncio.create_task(bot.close())
+    await started.wait()
+    if external_cancel:
+        closer.cancel()
+    try:
+        done, pending = await asyncio.wait({closer}, timeout=1.5)
+        assert not pending, 'cleanup swallowed cancellation and hung on another client'
+        with pytest.raises(asyncio.CancelledError if external_cancel else asyncio.TimeoutError):
+            closer.result()
+        assert asyncio.get_running_loop().time() - t0 < 1.5
+        assert calls == ['rest', 'stream', 'pipeline']
+        assert len(owned) == 2 and all(t.cancelling() for t in owned)
+    finally:
+        release.set()
+        await asyncio.gather(*owned, return_exceptions=True)
+        await asyncio.sleep(0)
+    assert 'late-private-text' not in caplog.text
