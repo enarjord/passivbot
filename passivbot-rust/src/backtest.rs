@@ -670,6 +670,7 @@ pub struct Backtest<'a> {
     max_tradable_coins_seen: EffectiveNPositions,
     revised_hsl_scopes: Vec<revised_runtime::Scope>,
     revised_hsl_cutoffs: revised_cache::Cutoffs,
+    revised_hsl_traces: revised_cache::Traces,
     revised_hsl_report: revised_report::Report,
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_coin: [Vec<HardStopPsideRuntime>; 2],
@@ -2267,6 +2268,7 @@ impl<'a> Backtest<'a> {
             max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
             revised_hsl_scopes: Vec::new(),
             revised_hsl_cutoffs: std::collections::BTreeMap::new(),
+            revised_hsl_traces: std::collections::BTreeMap::new(),
             revised_hsl_report: revised_report::Report::new(!backtest_params.metrics_only),
             hard_stop_pside: [
                 HardStopPsideRuntime::default(),

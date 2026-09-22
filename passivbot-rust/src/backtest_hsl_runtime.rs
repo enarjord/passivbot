@@ -184,6 +184,9 @@ impl Backtest<'_> {
             if let Some(scope) = self.advance_revised_scope(k, side, coin, &policy) {
                 return Ok(scope);
             }
+            if let Some(scope) = self.replay_revised_trace(k, side, coin, &policy) {
+                return Ok(scope);
+            }
         }
         let cooldown = policy.cooldown_minutes_after_red * 60_000.0;
         if !cooldown.is_finite() || cooldown < 0.0 || cooldown >= i64::MAX as f64 {
@@ -214,7 +217,7 @@ impl Backtest<'_> {
         } else {
             observed.snapshot.balance
         };
-        let mut result = evaluator::evaluate(evaluator::Input {
+        let mut result = evaluator::evaluate_for_simulator(evaluator::Input {
             snapshot: observed.snapshot,
             slots,
             span: policy.ema_span_minutes,
@@ -223,6 +226,7 @@ impl Backtest<'_> {
             restart,
         })?;
         result.reasons.extend(observed.reasons);
+        self.seed_revised_trace((side, coin), &mut result);
         Ok(Scope {
             timestamp,
             fill_count: self.fills.len(),

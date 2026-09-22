@@ -163,7 +163,15 @@ fn already_normalized(snapshot: &Snapshot) -> Result<bool, String> {
     }))
 }
 
-pub fn evaluate(mut input: Input) -> Result<Output, String> {
+pub fn evaluate(input: Input) -> Result<Output, String> {
+    evaluate_inner::<false>(input)
+}
+
+pub(crate) fn evaluate_for_simulator(input: Input) -> Result<Output, String> {
+    evaluate_inner::<true>(input)
+}
+
+fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> {
     validate_settings(input.span, input.threshold)?;
     input
         .snapshot
@@ -203,7 +211,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
     };
     reasons.extend(trace.reasons);
     let episodes = trace.episodes.len();
-    let replay = controller::replay_latest_with_events(&controller::Input {
+    let replay_input = controller::Input {
         episodes: trace.episodes,
         now: input.snapshot.now,
         start: input.snapshot.start,
@@ -212,7 +220,12 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         threshold: input.threshold,
         cooldown_ms: input.cooldown_ms,
         restart: input.restart,
-    })?;
+    };
+    let replay = if SEED {
+        controller::replay_latest_with_seed(&replay_input)
+    } else {
+        controller::replay_latest_with_events(&replay_input)
+    }?;
     let decisions = replay.decisions;
     if replay.numeric_range_approximation {
         reasons.insert("numeric_range_approximation".into());
