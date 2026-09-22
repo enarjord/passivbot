@@ -7540,6 +7540,8 @@ class Passivbot:
         )
         snapshots = getattr(self, "market_snapshot_provider", None)
         maintainer_tasks = list(snapshots.pending_tasks()) if snapshots is not None else []
+        if snapshots is not None:
+            snapshots.cancel_pending()
         try:
             self.stop_data_maintainers(verbose=False)
             for task_map_name in ("maintainers", "WS_ohlcvs_1m_tasks"):
@@ -8729,9 +8731,6 @@ class Passivbot:
         revised_owner = getattr(self, "_hsl_revised_live", None)
         if revised_owner is not None:
             revised_owner.cancel_inputs()
-        snapshots = getattr(self, "market_snapshot_provider", None)
-        if snapshots is not None:
-            snapshots.cancel_pending()
         if not hasattr(self, "maintainers"):
             return
         res = {}
@@ -8776,6 +8775,8 @@ class Passivbot:
         )
         snapshots = getattr(self, "market_snapshot_provider", None)
         tasks: list[asyncio.Task] = list(snapshots.pending_tasks()) if snapshots is not None else []
+        if snapshots is not None:
+            snapshots.cancel_pending()
         self.stop_data_maintainers(verbose=False)
         seen: set[int] = {id(task) for task in tasks}
         for task_map in task_maps:
@@ -21811,12 +21812,20 @@ class Passivbot:
         """Stop background tasks and close exchange clients."""
         self.stop_data_maintainers()
         snapshots = getattr(self, "market_snapshot_provider", None)
-        if snapshots is not None:
-            await snapshots.wait_pending()
-        await self.cca.close()
-        if self.ccp is not None:
-            await self.ccp.close()
-        self._close_live_event_pipeline(timeout=2.0)
+        try:
+            if snapshots is not None:
+                snapshots.cancel_pending()
+                await snapshots.wait_pending()
+        finally:
+            # Each resource still needs cleanup if an earlier close fails or is cancelled.
+            try:
+                await self.cca.close()
+            finally:
+                try:
+                    if self.ccp is not None:
+                        await self.ccp.close()
+                finally:
+                    self._close_live_event_pipeline(timeout=2.0)
 
     def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""

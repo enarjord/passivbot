@@ -19,6 +19,8 @@ since the latest release tag; these features may already be available when insta
   failures, including malformed result shapes, reach
   the next reader even after all original readers time out; freshness requirements remain unchanged.
   Outer shutdown deadlines include quote cleanup time before the client-close allowance.
+  Replacing maintainers leaves shared quote requests alive; client and event cleanup is still
+  attempted when an earlier client close fails.
 
 - Report revised-HSL account and health equity from current balances, positions and cached
   quotes instead of retaining the startup placeholder. Missing or stale inputs show unavailable

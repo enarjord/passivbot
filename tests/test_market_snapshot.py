@@ -98,7 +98,12 @@ async def test_bot_shutdown_cancels_provider_owned_requests():
     provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
     waiter = asyncio.create_task(provider.get_snapshots(['A']))
     await started.wait()
-    Passivbot.stop_data_maintainers(SimpleNamespace(market_snapshot_provider=provider))
+    from unittest.mock import AsyncMock
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    bot.cca, bot.ccp = SimpleNamespace(close=AsyncMock()), None
+    bot._close_live_event_pipeline = lambda **kwargs: True
+    await bot.close()
     with pytest.raises(asyncio.CancelledError):
         await waiter
     assert provider._fetch_task is None
@@ -663,3 +668,66 @@ async def test_outer_close_deadline_allows_slow_provider_cleanup(caller, monkeyp
     assert provider.pending_tasks() == ()
     with pytest.raises(asyncio.CancelledError):
         await reader
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('strategy', ['bulk', 'symbols'])
+async def test_replacing_maintainers_preserves_shared_quote_readers(strategy):
+    from passivbot import Passivbot
+    started, release = asyncio.Event(), asyncio.Event()
+    async def fetch(*args):
+        started.set()
+        await release.wait()
+        return {'A': {'bid': 99., 'ask': 101., 'last': 100.}}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch,
+        fetch_tickers_for_symbols=fetch, ticker_strategy=strategy)
+    ordinary = asyncio.create_task(provider.get_snapshots(['A']))
+    protective = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    shared = provider.pending_tasks()[0]
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    bot.ws_enabled = False
+    bot.maintain_hourly_cycle = lambda: asyncio.Event().wait()
+    old = asyncio.create_task(asyncio.Event().wait())
+    bot.maintainers = {'maintain_hourly_cycle': old}
+    try:
+        await bot.start_data_maintainers()
+        await asyncio.sleep(0)
+        assert old.cancelled()
+        assert not shared.cancelling()
+        assert not ordinary.done() and not protective.done()
+        release.set()
+        for reader in (ordinary, protective):
+            assert (await reader)['A'].last == 100.
+    finally:
+        bot.stop_data_maintainers(verbose=False)
+        for task in bot.maintainers.values():
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bot_type', ['base', 'bitunix'])
+@pytest.mark.parametrize('failure', ['rest', 'stream', 'rest_cancelled'])
+async def test_close_attempts_all_resources_after_client_failure(bot_type, failure):
+    from passivbot import Passivbot
+    from exchanges.bitunix import BitunixBot
+    calls = []
+    class Client:
+        def __init__(self, name):
+            self.name = name
+        async def close(self):
+            calls.append(self.name)
+            if failure == self.name:
+                raise RuntimeError('test close failure')
+            if failure == 'rest_cancelled' and self.name == 'rest':
+                raise asyncio.CancelledError()
+    cls = Passivbot if bot_type == 'base' else BitunixBot
+    bot = cls.__new__(cls)
+    bot.cca, bot.ccp = Client('rest'), Client('stream')
+    bot._close_live_event_pipeline = lambda **kwargs: calls.append('pipeline')
+    error = asyncio.CancelledError if failure == 'rest_cancelled' else RuntimeError
+    with pytest.raises(error):
+        await bot.close()
+    assert calls == ['rest', 'stream', 'pipeline']
