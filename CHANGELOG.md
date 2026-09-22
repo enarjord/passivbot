@@ -25,7 +25,8 @@ since the latest release tag; these features may already be available when insta
   requests, and connector failures during cleanup remain visible and propagate from direct close.
   Completed failures are delivered before cache reads or replacement requests even if their callback
   has not run. Concurrent abandoned failures are retained separately and delivered together, so
-  one failed request cannot hide another. Restart and graceful shutdown also report retained failures; independent client
+  one failed request cannot hide another. Active waiters retain ownership of their own errors;
+  unrelated reads receive only abandoned outcomes. Restart and graceful shutdown also report retained failures; independent client
   cleanup stays bounded when a client suppresses cancellation. Abandoned readers do not leak
   connector exception text through Python 3.14 shield diagnostics.
 

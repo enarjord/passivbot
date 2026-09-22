@@ -77,6 +77,7 @@ class MarketSnapshotProvider:
         self._symbol_fetch_tasks: dict[tuple[str, ...], asyncio.Task] = {}
         self._pending_failures: dict[asyncio.Task, Exception] = {}
         self._observed_tasks = weakref.WeakSet()
+        self._active_readers: dict[asyncio.Task, int] = {}
         self._closing = False
         self._shutdown_tasks: tuple[asyncio.Task, ...] = ()
 
@@ -324,6 +325,7 @@ class MarketSnapshotProvider:
             self._pending_failures[task] = failure
 
     async def _await_shared(self, task: asyncio.Task) -> dict[str, Any]:
+        self._active_readers[task] = self._active_readers.get(task, 0) + 1
         try:
             # wait() isolates reader cancellation without shield() logging an
             # abandoned connector exception (including its private text) on Python 3.14.
@@ -334,15 +336,24 @@ class MarketSnapshotProvider:
             if not self._closing:
                 self._pending_failures.pop(task, None)  # delivered to this active reader
             raise
+        finally:
+            remaining = self._active_readers[task] - 1
+            if remaining:
+                self._active_readers[task] = remaining
+            else:
+                self._active_readers.pop(task)
 
     def raise_pending_failure(self) -> None:
         """Observe completed outcomes before callbacks, then deliver each failure once."""
         for task in (self._fetch_task, *self._symbol_fetch_tasks.values(), *self._shutdown_tasks):
             if task is not None:
                 self._record_completed_failure(task)
-        if self._pending_failures:
-            failures = list(self._pending_failures.values())
-            self._pending_failures.clear()
+        # Active waiters own their request's result. Only abandoned outcomes
+        # belong to unrelated reads; teardown must report all retained failures.
+        eligible = [task for task in self._pending_failures
+                    if self._closing or not self._active_readers.get(task)]
+        if eligible:
+            failures = [self._pending_failures.pop(task) for task in eligible]
             if len(failures) == 1:
                 raise failures[0]
             # A reader or lifecycle boundary receives every concurrent outcome.

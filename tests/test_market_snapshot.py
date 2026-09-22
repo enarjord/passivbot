@@ -1241,3 +1241,76 @@ async def test_active_reader_does_not_consume_other_abandoned_failure(same_excep
     assert raised.value is failures['B']
     assert not provider._pending_failures
     provider.raise_pending_failure()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('read_kind', ['cached', 'same_key', 'other_key'])
+@pytest.mark.parametrize('callbacks_completed', [False, True])
+@pytest.mark.parametrize('waiter_count', [1, 2])
+async def test_unrelated_read_does_not_drain_failure_with_active_waiters(read_kind, callbacks_completed, waiter_count):
+    started, release, callback_seen = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    failure = ValueError('request-A-failure')
+    calls = []
+    async def fetch(symbols):
+        calls.append(tuple(symbols))
+        if len(calls) == 1:
+            started.set()
+            await release.wait()
+            raise failure
+        return {s: {'bid': 99., 'ask': 101., 'last': 100.} for s in symbols}
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=None,
+        fetch_tickers_for_symbols=fetch, ticker_strategy='symbols')
+    readers = [asyncio.create_task(provider.get_snapshots(['A'])) for _ in range(waiter_count)]
+    await started.wait()
+    owned = provider.pending_tasks()[0]
+    assert provider._active_readers[owned] == waiter_count
+    owned.add_done_callback(lambda _: callback_seen.set())
+    if read_kind == 'cached':
+        provider._cache['B'] = provider._snapshot_from_ticker('B',
+            {'bid': 99., 'ask': 101., 'last': 100.}, fetched_ms=10**15)
+    release.set()
+    async def read_during_delivery():
+        assert owned.done()
+        if callbacks_completed:
+            # One loop turn executes task callbacks, before original waiters resume.
+            await asyncio.sleep(0)
+            assert callback_seen.is_set()
+        assert provider._active_readers[owned] == waiter_count
+        symbol = 'A' if read_kind == 'same_key' else 'B'
+        return (await provider.get_snapshots([symbol]))[symbol]
+    unrelated = asyncio.create_task(read_during_delivery())
+    assert (await unrelated).last == 100.
+    for reader in readers:
+        with pytest.raises(ValueError) as raised:
+            await reader
+        assert raised.value is failure
+    assert not provider._pending_failures and not provider._active_readers
+    provider.raise_pending_failure()
+    assert len(calls) == (1 if read_kind == 'cached' else 2)
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_fetch_completion_retains_undelivered_failure():
+    started, release = asyncio.Event(), asyncio.Event()
+    failure = ValueError('abandoned-at-completion')
+    async def fetch():
+        started.set()
+        await release.wait()
+        raise failure
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    reader = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    owned = provider.pending_tasks()[0]
+    release.set()
+    async def abandon_before_resume():
+        assert owned.done() and not reader.done()
+        reader.cancel()
+    await asyncio.create_task(abandon_before_resume())
+    with pytest.raises(asyncio.CancelledError):
+        await reader
+    assert not provider._active_readers
+    with pytest.raises(ValueError) as raised:
+        await provider.get_snapshots(['A'])
+    assert raised.value is failure
+    assert not provider._pending_failures
+    provider.raise_pending_failure()
