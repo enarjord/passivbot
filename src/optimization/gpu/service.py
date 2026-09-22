@@ -350,15 +350,15 @@ def _add_gpu_runner_profile(
     batch_size = int(runner_profile.get("batch_size", 0))
     dispatch_count = int(runner_profile.get("dispatch_count", 1))
     cold = bool(runner_profile.get("cold", False))
-    profile["actual_dispatch_batch_sizes"].append(batch_size)
+    profile["actual_dispatch_batch_sizes"].extend(
+        runner_profile.get("candidate_batch_sizes", [batch_size]))
     dispatch_specialization = runner_profile.get("dispatch_specialization")
     if dispatch_specialization is not None:
         profile["dispatch_specializations"].append(dict(dispatch_specialization))
     profile["dispatch_count"] += dispatch_count
-    cold_dispatches = (
+    cold_dispatches = int(runner_profile.get("cold_dispatch_count",
         int(cold) if "temporal_chunk_bars" in runner_profile
-        else dispatch_count if cold else 0
-    )
+        else dispatch_count if cold else 0))
     profile["cold_dispatch_count"] += cold_dispatches
     profile["warm_dispatch_count"] += dispatch_count - cold_dispatches
     runner_steps = int(getattr(runner, "n", 0))
@@ -3040,9 +3040,6 @@ class MpsMulticoinProxy:
         max_dispatch_candidate_bars: int = MPS_MAX_DISPATCH_CANDIDATE_BARS,
         prepared_data_cache: dict | None = None,
     ):
-        from config.hsl_revised import engine
-        if engine(config) == "revised":
-            raise ValueError("Revised GPU multicoin integration is not available yet")
         try:
             import torch
         except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
@@ -3187,6 +3184,14 @@ class MpsMulticoinProxy:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
+        from optimization.gpu.revised_hsl import project_bot
+        hsl_config = backtest_params.get("equity_hard_stop_loss", {})
+        self.hsl_engine = hsl_config.get("engine", "legacy")
+        self.hsl_signal_mode = (hsl_config["mode"] if self.hsl_engine == "revised"
+                                else hsl_config.get("signal_mode", "unified"))
+        projected = [{side: project_bot(payload, c, side, config)
+                      for side in ("long", "short")} for c in range(coin_count)]
+
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
@@ -3221,16 +3226,13 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
         )
-        signal_mode = (
-            backtest_params.get("equity_hard_stop_loss", {})
-            .get("signal_mode", "unified")
-        )
+        signal_mode = self.hsl_signal_mode
         hsl_enabled_sides = [
             side
             for side in self.sides
             if any(
                 bool(item[side].get("hsl_enabled"))
-                for item in payload.bot_params_list
+                for item in projected
             )
         ]
         if hsl_enabled_sides:
@@ -3247,7 +3249,7 @@ class MpsMulticoinProxy:
                         bool(item[side].get("hsl_enabled"))
                         for side in hsl_enabled_sides
                     )
-                    for item in payload.bot_params_list
+                    for item in projected
                 ],
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
@@ -3265,7 +3267,7 @@ class MpsMulticoinProxy:
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         self.base_params = {}
         for side in self.sides:
-            first_bot = payload.bot_params_list[0][side]
+            first_bot = projected[0][side]
             first_strategy = dict(payload.strategy_params_list[0][side])
             if self.strategy_kind == "trailing_martingale":
                 first_strategy = flatten_trailing_martingale_params(
@@ -3320,7 +3322,9 @@ class MpsMulticoinProxy:
                 )
             base_bot = flatten_shared_bot_side(config["bot"][side])
             first_strategy.update(_unstuck_params(base_bot))
-            first_strategy.update(_hsl_params(base_bot, signal_mode=signal_mode))
+            hsl_bot = (project_bot(payload, 0, side, config, base=True)
+                       if self.hsl_engine == "revised" else base_bot)
+            first_strategy.update(_hsl_params(hsl_bot, signal_mode=signal_mode))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]
@@ -3561,6 +3565,9 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
+        if self.hsl_engine == "revised":
+            common_runner_kwargs.update(hsl_engine="revised",
+                pnl_lookback_bars=_revised_hsl_lookback_bars(backtest_params, hsl_enabled=bool(hsl_enabled_sides)))
         if self.shared_account_fused:
             fused_runner_cls = (
                 MpsTrailingMartingaleMulticoinFusedRunner
@@ -3571,13 +3578,17 @@ class MpsMulticoinProxy:
                 long_coin_overrides=per_side_coin_overrides["long"],
                 short_coin_overrides=per_side_coin_overrides["short"],
                 hsl_panic_market_long=str(
-                    flatten_shared_bot_side(config["bot"]["long"]).get(
+                    (project_bot(payload, 0, "long", config, base=True)
+                     if self.hsl_engine == "revised"
+                     else flatten_shared_bot_side(config["bot"]["long"])).get(
                         "hsl_panic_close_order_type", "limit"
                     )
                 ).strip().lower()
                 == "market",
                 hsl_panic_market_short=str(
-                    flatten_shared_bot_side(config["bot"]["short"]).get(
+                    (project_bot(payload, 0, "short", config, base=True)
+                     if self.hsl_engine == "revised"
+                     else flatten_shared_bot_side(config["bot"]["short"])).get(
                         "hsl_panic_close_order_type", "limit"
                     )
                 ).strip().lower()
@@ -3597,7 +3608,9 @@ class MpsMulticoinProxy:
                 runner_kwargs = {
                     "side": side,
                     "hsl_panic_market": str(
-                        flatten_shared_bot_side(config["bot"][side]).get(
+                        (project_bot(payload, 0, side, config, base=True)
+                         if self.hsl_engine == "revised"
+                         else flatten_shared_bot_side(config["bot"][side])).get(
                             "hsl_panic_close_order_type", "limit"
                         )
                     ).strip().lower()
@@ -3622,6 +3635,12 @@ class MpsMulticoinProxy:
             if len(self.sides) != 1:
                 raise ValueError("side is required for dual-side multicoin parameters")
             side = self.sides[0]
+        if self.hsl_engine == "revised" and self.hsl_signal_mode == "unified":
+            candidates = [dict(c) for c in candidates]
+            for candidate in candidates:
+                for key in ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_minutes_after_red"):
+                    if key in candidate:
+                        candidate[f"{side}_{key}"] = candidate[key]
         param_keys = getattr(self, "param_keys", EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         return _candidate_parameter_matrix(
             candidates,

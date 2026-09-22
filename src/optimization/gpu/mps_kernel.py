@@ -970,6 +970,8 @@ def _ema_anchor_multicoin_shader_library(
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
     cuda_coin_capacity: int | None = None,
+    revised_capacity: int = 0,
+    revised_lookback: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -986,6 +988,9 @@ def _ema_anchor_multicoin_shader_library(
     )
     source = _with_btc_risk(source, btc_risk_enabled)
     source = _with_equity_balance_diff(source, equity_balance_diff_enabled)
+    if revised_capacity:
+        source = (f"#define PASSIVBOT_HSL_REVISED_LOOKBACK {revised_lookback}\n"
+                  + _with_revised_hsl(source, revised_capacity))
     return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
@@ -1001,6 +1006,8 @@ def _trailing_martingale_multicoin_shader_library(
     entry_interval_enabled: bool = False,
     temporal_chunking: bool = False,
     cuda_coin_capacity: int | None = None,
+    revised_capacity: int = 0,
+    revised_lookback: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1022,6 +1029,9 @@ def _trailing_martingale_multicoin_shader_library(
         if "#if PASSIVBOT_TM_MULTICOIN_CHUNKED" not in source:
             raise RuntimeError("MPS source is missing the multicoin replay-state contract")
         source = "#define PASSIVBOT_TM_MULTICOIN_CHUNKED 1\n" + source
+    if revised_capacity:
+        source = (f"#define PASSIVBOT_HSL_REVISED_LOOKBACK {revised_lookback}\n"
+                  + _with_revised_hsl(source, revised_capacity))
     return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity)
 
 
@@ -1976,6 +1986,8 @@ class MpsEmaAnchorMulticoinRunner:
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
+        hsl_engine: str = "legacy",
+        pnl_lookback_bars: int = 0,
     ):
         if side not in {"long", "short"}:
             raise ValueError(
@@ -1989,6 +2001,8 @@ class MpsEmaAnchorMulticoinRunner:
         self.recovery_distribution_enabled = bool(recovery_distribution_enabled)
         self.dynamic_wel_by_tradability = bool(dynamic_wel_by_tradability)
         fused = self.scalar_cols == MPS_MULTICOIN_FUSED_SCALAR_COLS
+        self.long_enabled = fused or side == "long"
+        self.short_enabled = fused or side == "short"
         if self.hsl_raw_tail_enabled:
             self.scalar_cols = (
                 MPS_MULTICOIN_FUSED_SCALAR_COLS
@@ -2027,6 +2041,19 @@ class MpsEmaAnchorMulticoinRunner:
         self.n = int(data["n"])
         self.n_coins = int(data["n_coins"])
         self.n_days = int(data["n_days"])
+        if hsl_engine not in {"legacy", "revised"}:
+            raise ValueError("Unknown GPU HSL engine")
+        self.hsl_engine = hsl_engine
+        self.pnl_lookback_bars = int(pnl_lookback_bars)
+        self.revised_capacity = 0
+        self._revised_buffers = {}
+        self.revised_scratch_budget_bytes = 512 * 1024 * 1024
+        self.revised_scopes = (2 if fused else 1) * (self.n_coins + 1)
+        if hsl_engine == "revised":
+            if self.interval_minutes != 1 or (pnl_lookback_bars != 0 and not 1440 <= pnl_lookback_bars <= 90 * 1440):
+                raise ValueError("Revised GPU HSL requires 1m candles and 1..90d lookback")
+            self.revised_capacity = min(self.n + 2, pnl_lookback_bars + 2)
+
         self.btc_prices = _btc_risk_price_tensor(
             btc_prices, expected_count=self.n
         )
@@ -2279,6 +2306,8 @@ class MpsEmaAnchorMulticoinRunner:
         )
         if self.recovery_distribution_enabled:
             kernel_args += (recovery_samples,)
+        if self.revised_capacity:
+            kernel_args += self._revised_hsl_buffers(batch_size)
         library.passivbot_ema_anchor_multicoin(
             *kernel_args,
             threads=(batch_size, 1, 1),
@@ -2298,9 +2327,61 @@ class MpsEmaAnchorMulticoinRunner:
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
         )
-        if self.cuda_coin_capacity is not None:
+        if self.revised_capacity:
+            args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars)
+        elif self.cuda_coin_capacity is not None:
             args += (self.cuda_coin_capacity,)
         return _ema_anchor_multicoin_shader_library, args
+
+    def _revised_bytes_per_candidate(self):
+        _, nodes = _revised_hsl_layout(self.revised_capacity)
+        return self.revised_scopes * (nodes * 32 + self.revised_capacity * 8)
+
+    def _revised_hsl_buffers(self, batch_size):
+        _, nodes = _revised_hsl_layout(self.revised_capacity)
+        if batch_size * self._revised_bytes_per_candidate() > self.revised_scratch_budget_bytes:
+            raise ValueError("Revised HSL GPU batch exceeds its scratch budget")
+        if batch_size not in self._revised_buffers:
+            self._revised_buffers = {batch_size: (
+                torch.empty((batch_size, self.revised_scopes, nodes, 32),
+                            dtype=torch.uint8, device=gpu_device()),
+                torch.empty((batch_size, self.revised_scopes, self.revised_capacity * 2),
+                            dtype=torch.int32, device=gpu_device()),
+            )}
+        return self._revised_buffers[batch_size]
+
+    def _run_revised_batches(self, params, *, profile, end_steps):
+        limit = self.revised_scratch_budget_bytes // self._revised_bytes_per_candidate()
+        if limit < 1:
+            raise ValueError("Revised HSL history exceeds the GPU scratch budget")
+        if len(params) <= limit:
+            return None
+        outputs, profiles = [], []
+        for start in range(0, len(params), limit):
+            result = self.run(params[start:start + limit], profile=profile,
+                              end_steps=None if end_steps is None else end_steps[start:start + limit])
+            outputs.append({k: v.clone() if isinstance(v, torch.Tensor) else v
+                            for k, v in result.items()})
+            profiles.append(dict(self.last_profile))
+        combined = {}
+        for key, value in outputs[0].items():
+            if isinstance(value, torch.Tensor):
+                combined[key] = torch.cat([o[key] for o in outputs], dim=0)
+            else:
+                if any(o[key] != value for o in outputs):
+                    raise ValueError(f"GPU sub-batches disagree on {key}")
+                combined[key] = value
+        self.last_profile = {}
+        if profile:
+            self.last_profile = {key: sum(p.get(key, 0) for p in profiles)
+                                 for key in profiles[0] if key.endswith("_seconds")}
+            self.last_profile.update(batch_size=len(params), candidate_batch_count=len(outputs),
+                                     dispatch_count=sum(p.get("dispatch_count", 1) for p in profiles),
+                                     kernel_candidate_steps=sum(p["kernel_candidate_steps"] for p in profiles),
+                                     candidate_batch_sizes=[p["batch_size"] for p in profiles],
+                                     cold_dispatch_count=sum(int(p.get("cold", False)) for p in profiles),
+                                     cold=any(p.get("cold", False) for p in profiles))
+        return combined
 
     def _decode(self, daily, scalars, gaps) -> dict:
         return _decode_outputs(daily, scalars, gaps)
@@ -2365,6 +2446,17 @@ class MpsEmaAnchorMulticoinRunner:
         profile: bool = False,
         end_steps: np.ndarray | None = None,
     ) -> dict:
+        if self.revised_capacity:
+            split = self._run_revised_batches(params, profile=profile, end_steps=end_steps)
+            if split is not None:
+                return split
+            keys = (TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+                    if self.coin_override_label == "Trailing Martingale"
+                    else EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+            policy_matrix = np.asarray(params, dtype=np.float32)
+            if policy_matrix.ndim == 2 and policy_matrix.shape[1] == len(keys):
+                policy_matrix = np.concatenate((policy_matrix, policy_matrix), axis=1)
+            MpsEmaAnchorRunner._validate_revised_hsl_params(self, policy_matrix, keys)
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
         packed = time.perf_counter() if profile else 0.0
@@ -2437,6 +2529,7 @@ class MpsEmaAnchorMulticoinRunner:
                 "kernel_seconds": finished - dispatched,
                 "batch_size": batch_size,
                 "dispatch_count": 1,
+                "kernel_candidate_steps": int((end_steps_mps - 1).clamp(min=0).sum().item()),
                 "cold": cold,
             }
         else:
@@ -2495,6 +2588,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
+        hsl_engine: str = "legacy",
+        pnl_lookback_bars: int = 0,
     ):
         super().__init__(
             run,
@@ -2518,6 +2613,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
+            hsl_engine=hsl_engine,
+            pnl_lookback_bars=pnl_lookback_bars,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -2629,6 +2726,8 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
         )
         if self.recovery_distribution_enabled:
             kernel_args += (recovery_samples,)
+        if self.revised_capacity:
+            kernel_args += self._revised_hsl_buffers(batch_size)
         library.passivbot_ema_anchor_multicoin_fused(
             *kernel_args,
             threads=(batch_size, 1, 1),
@@ -2720,6 +2819,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
+        hsl_engine: str = "legacy",
+        pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         interrupt_check=None,
     ):
@@ -2752,6 +2853,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
+            hsl_engine=hsl_engine,
+            pnl_lookback_bars=pnl_lookback_bars,
         )
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
@@ -2788,7 +2891,9 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             self.entry_interval_enabled,
             self.max_dispatch_candidate_bars is not None,
         )
-        if self.cuda_coin_capacity is not None:
+        if self.revised_capacity:
+            args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars)
+        elif self.cuda_coin_capacity is not None:
             args += (self.cuda_coin_capacity,)
         return _trailing_martingale_multicoin_shader_library, args
 
@@ -2838,6 +2943,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         )
         if self.recovery_distribution_enabled:
             kernel_args += (recovery_samples,)
+        if self.revised_capacity:
+            kernel_args += self._revised_hsl_buffers(batch_size)
         if self.max_dispatch_candidate_bars is None:
             dispatch_options = {"threads": (batch_size, 1, 1)}
             if gpu_device(torch) == "cuda":
@@ -2913,7 +3020,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
     def run(self, params, *, profile=False, end_steps=None):
         self._last_temporal_dispatch = None
         output = super().run(params, profile=profile, end_steps=end_steps)
-        if profile and self._last_temporal_dispatch is not None:
+        if (profile and self._last_temporal_dispatch is not None
+                and "candidate_batch_count" not in self.last_profile):
             self.last_profile.update(self._last_temporal_dispatch)
         return output
 
@@ -2954,6 +3062,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         btc_risk_enabled: bool | None = None,
         equity_balance_diff_enabled: bool = False,
         entry_interval_enabled: bool = False,
+        hsl_engine: str = "legacy",
+        pnl_lookback_bars: int = 0,
     ):
         super().__init__(
             run,
@@ -2977,6 +3087,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             btc_risk_enabled=btc_risk_enabled,
             equity_balance_diff_enabled=equity_balance_diff_enabled,
             entry_interval_enabled=entry_interval_enabled,
+            hsl_engine=hsl_engine,
+            pnl_lookback_bars=pnl_lookback_bars,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -3086,6 +3198,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         )
         if self.recovery_distribution_enabled:
             kernel_args += (recovery_samples,)
+        if self.revised_capacity:
+            kernel_args += self._revised_hsl_buffers(batch_size)
         library.passivbot_trailing_martingale_multicoin_fused(
             *kernel_args,
             threads=(batch_size, 1, 1),

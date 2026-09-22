@@ -65,18 +65,13 @@ def test_portfolio_bounds_are_validated_using_the_portfolio_policy():
                                  'hsl_ema_span_minutes':Bound(1.,2.5)},c)
 
 
-def test_multicoin_revised_scope_is_rejected_explicitly():
+@pytest.mark.parametrize('mode',['coin','pside','unified'])
+def test_multicoin_revised_scope_is_supported(mode):
     from optimization.backends.gpu_backend import _validate_scope_config
-    from optimization.gpu.service import MpsMulticoinProxy
-    c = config('unified')
+    c = config(mode)
     c['optimize']['scoring'] = [{'metric': 'adg_usd', 'goal': 'max'}]
     c['optimize']['limits'] = []
-    with pytest.raises(ValueError, match='exactly one prepared coin'):
-        _validate_scope_config(c, exchanges=['binance'], coin_count=2)
-    with pytest.raises(ValueError, match='multicoin integration'):
-        MpsMulticoinProxy(config=c, hlcvs=None, mss=None, btc=None,
-                         timestamps=None, exchange='binance', batch_size=1,
-                         needed_metrics={'adg_usd'})
+    _validate_scope_config(c, exchanges=['binance'], coin_count=2)
 
 
 @pytest.mark.parametrize('base_enabled,override_enabled', [(True,False),(False,True)])

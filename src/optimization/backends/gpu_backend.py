@@ -1706,9 +1706,6 @@ def _validate_scope_config(
                 _validate_tm_multicoin_market_runtime_scope(
                     config, enabled_sides
                 )
-    from config.hsl_revised import engine
-    if engine(config) == "revised" and coin_count > 1:
-        raise ValueError("Revised GPU HSL currently requires exactly one prepared coin")
     if coin_count > 1:
         if coin_count > MPS_MULTICOIN_MAX_COINS:
             raise ValueError(

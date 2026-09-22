@@ -15,14 +15,21 @@ pytestmark=pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('mode',['coin','pside','unified'])
-async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
+@pytest.mark.parametrize('mode,coin_count,suite',
+    [(m,c,False) for m in ('coin','pside','unified') for c in (1,2)]
+    + [(m,2,True) for m in ('coin','pside','unified')])
+async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode,coin_count,suite):
     from optimize import main
     from optimization.shape import build_optimization_shape
     from config.optimize_bounds import set_flat_optimize_bound
     import msgpack
 
     cfg=offline_cli_config(tmp_path,monkeypatch,mode)
+    if coin_count==2:
+        add_offline_coin(tmp_path,cfg)
+    if suite:
+        cfg['live']['approved_coins']['short']=list(cfg['live']['approved_coins']['long'])
+        cfg['bot']['short']['risk'].update(n_positions=0,total_wallet_exposure_limit=0.)
     cfg['live']['strategy_kind']='trailing_martingale'
     cfg['optimize'].update(backend='gpu',iters=32,n_cpus=1,population_size=4,
         scoring=[{'metric':'adg_usd','goal':'max'}],limits=[],seed=42,
@@ -37,6 +44,12 @@ async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
         set_flat_optimize_bound(cfg['optimize']['bounds'],'trailing_martingale',key,[value,value])
     target=cfg['optimize']['bounds'] if mode=='unified' else cfg['optimize']['bounds']['long']
     target['hsl']['red_threshold']=[.01,.2]
+    if suite:
+        path='bot.hsl.red_threshold' if mode=='unified' else 'bot.long.hsl.red_threshold'
+        cfg['backtest'].update(suite_enabled=True,scenarios=[
+            {'label':'both','coins':['BTC','ETH'],'overrides':{path:.015}},
+            {'label':'subset','coins':['ETH'],'overrides':{path:.1}},
+        ])
     guard=tmp_path/'guard';guard.mkdir()
     (guard/'sitecustomize.py').write_text(
         "import socket\n_connect=socket.socket.connect\n"
@@ -47,7 +60,7 @@ async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
         "socket.socket.connect=connect\nsocket.getaddrinfo=denied\n")
     monkeypatch.setenv('PYTHONPATH',str(guard)+os.pathsep+os.environ.get('PYTHONPATH',''))
     path=tmp_path/'config.json';path.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sys,'argv',['optimize',str(path),'--suite','n'])
+    monkeypatch.setattr(sys,'argv',['optimize',str(path),'--suite','y' if suite else 'n'])
     with pytest.raises(SystemExit) as finished:
         await main()
     assert finished.value.code==0
@@ -66,7 +79,7 @@ async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
     before = artifacts[0].stat().st_size
     cfg['optimize']['iters'] = 48
     path.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sys, 'argv', ['optimize', str(path), '--suite', 'n',
+    monkeypatch.setattr(sys, 'argv', ['optimize', str(path), '--suite', 'y' if suite else 'n',
                                     '--resume', str(artifacts[0].parent)])
     with pytest.raises(SystemExit) as finished:
         await main()
@@ -75,3 +88,33 @@ async def test_revised_gpu_optimizer_cli_is_offline(tmp_path,monkeypatch,mode):
     resumed = pickle.loads(checkpoint.read_bytes())
     assert resumed['exact_done'] > state['exact_done']
     assert resumed['optimizer_evaluation_contract'] == state['optimizer_evaluation_contract']
+
+
+def add_offline_coin(root,cfg):
+    """Duplicate the synthetic fixture under a second public symbol, offline."""
+    from copy import deepcopy
+    import numpy as np
+    from ohlcv_catalog import OhlcvCatalog
+    from ohlcv_store import OhlcvStore
+    from test_simulation_offline import START
+    from test_hsl_revised_offline_runtime import runtime_inputs
+    cache=root/'caches'
+    for path in cache.rglob('*.json'):
+        values=json.loads(path.read_text())
+        if path.name=='markets.json':
+            market=deepcopy(values['BTC/USDT:USDT'])
+            market.update(id='ETHUSDT',symbol='ETH/USDT:USDT',base='ETH')
+            values['ETH/USDT:USDT']=market
+        elif 'BTC' in values:
+            values['ETH']=deepcopy(values['BTC'])
+            if path.name.endswith('_symbols.json'):
+                values['ETH']={'binanceusdm':'ETH/USDT:USDT'}
+        path.write_text(json.dumps(values))
+    cfg['live']['approved_coins']['long']=['BTC','ETH']
+    _,_,candles,_=runtime_inputs(cfg['live']['hsl_signal_mode'])
+    stamps=START+np.arange(-1,1441,dtype=np.int64)*60000
+    rows=np.concatenate([candles[:1,0],candles[:,0],
+                         np.repeat(candles[-1:,0],1441-len(candles),axis=0)])
+    rows[:,:3]*=1.1
+    store=OhlcvStore(cache/'ohlcvs',OhlcvCatalog(cache/'ohlcvs/catalog.sqlite'))
+    store.write_rows('binance','1m','ETH/USDT:USDT',stamps,rows.astype(np.float32))

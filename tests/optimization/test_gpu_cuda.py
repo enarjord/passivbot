@@ -338,7 +338,7 @@ def test_tm_unchunked_dispatch_keeps_apple_launch_options(monkeypatch, device):
         )},
         btc_prices_enabled=False, equity_balance_diff_enabled=False,
         entry_interval_enabled=False, recovery_distribution_enabled=False,
-        max_dispatch_candidate_bars=None,
+        max_dispatch_candidate_bars=None, revised_capacity=0,
     )
     calls = []
     library = SimpleNamespace(

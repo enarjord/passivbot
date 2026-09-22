@@ -160,6 +160,7 @@ def test_gpu_candidate_packing_couples_after_candidate_and_exact_coin_values(
 
     cls = service.MpsSingleCoinProxy if single else service.MpsMulticoinProxy
     proxy = cls.__new__(cls)
+    proxy.hsl_engine = "legacy"
     prefix = "EMA_ANCHOR" if kind == "ema_anchor" else "TRAILING_MARTINGALE"
     keys = getattr(
         model,
