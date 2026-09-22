@@ -728,10 +728,18 @@ async def _run_fake_cycle_ready(bot):
         # remains pending after a bounded number of production passes; never
         # await arbitrary ordinary work to completion before protection.
         for attempt in range(8):
+            # poll_inputs() runs at the start of cycle(). A read completing
+            # during that cycle still needs a subsequent consuming pass.
+            completed_before = {task for task in (getattr(instance, '_fill_task', None),
+                getattr(instance, '_source_task', None)) if task is not None and task.done()}
             result = await instance.cycle()
             input_tasks = [task for task in (getattr(instance, '_fill_task', None),
-                getattr(instance, '_source_task', None)) if task is not None and not task.done()]
-            if not result['updated'] or (result['ordinary_executed'] and not input_tasks):
+                getattr(instance, '_source_task', None)) if task is not None]
+            for task in input_tasks:
+                if task.done():
+                    task.result()  # Never relegate a final-step failure to shutdown.
+            inputs_consumed = all(task in completed_before for task in input_tasks)
+            if not result['updated'] or (result['ordinary_executed'] and inputs_consumed):
                 return dict(result, engine='revised', passes=attempt+1)
             # A completed ordinary plan does not settle newly scheduled history
             # reads. Give them the same bounded opportunity before advancing the
@@ -740,6 +748,9 @@ async def _run_fake_cycle_ready(bot):
                 if task is not None and not task.done()]
             if pending:
                 await asyncio.wait(pending, timeout=.25)
+                for task in input_tasks:
+                    if task.done():
+                        task.result()  # Includes completion during the final bounded wait.
         return dict(result, engine='revised', passes=8, preparation_pending=True)
     if getattr(bot, "_risk_input_recovery", None) is not None:
         if await risk_input_recovery.protect_before_history_refresh(bot):

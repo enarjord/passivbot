@@ -242,7 +242,8 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
 
 
 @pytest.mark.asyncio
-async def test_fake_cycle_settles_current_source_before_advancing_scenario(monkeypatch):
+@pytest.mark.parametrize("finishes_during_cycle", [False, True])
+async def test_fake_cycle_settles_current_source_before_advancing_scenario(monkeypatch, finishes_during_cycle):
     import asyncio
     from types import SimpleNamespace
     from live import hsl_revised_live
@@ -250,6 +251,8 @@ async def test_fake_cycle_settles_current_source_before_advancing_scenario(monke
     seen = []
     async def cycle():
         seen.append(reads.done())
+        if finishes_during_cycle:
+            await reads
         return dict(updated=True, ordinary_executed=True)
     instance = SimpleNamespace(cycle=cycle, _ordinary=None, _source_task=reads)
     monkeypatch.setattr(hsl_revised_live, "owner", lambda bot: instance)
@@ -257,3 +260,45 @@ async def test_fake_cycle_settles_current_source_before_advancing_scenario(monke
     result = await runner._run_fake_cycle_ready(bot)
     assert seen == [False, True]
     assert result["ordinary_executed"] and result["passes"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("updated", [False, True])
+async def test_fake_cycle_raises_read_failure_that_finishes_during_final_pass(monkeypatch, updated):
+    import asyncio
+    from types import SimpleNamespace
+    from live import hsl_revised_live
+    async def read():
+        await asyncio.sleep(0)
+        raise RuntimeError("unexpected history failure")
+    reads = asyncio.create_task(read())
+    async def cycle():
+        await asyncio.sleep(.01)
+        return dict(updated=updated, ordinary_executed=True)
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _fill_task=reads)
+    monkeypatch.setattr(hsl_revised_live, "owner", lambda bot: instance)
+    bot = SimpleNamespace(config={"live": {"hsl_engine": "revised"}})
+    with pytest.raises(RuntimeError, match="unexpected history failure"):
+        await runner._run_fake_cycle_ready(bot)
+
+
+@pytest.mark.asyncio
+async def test_fake_cycle_raises_read_failure_in_last_bounded_wait(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from live import hsl_revised_live
+    calls = 0
+    async def read():
+        raise RuntimeError("last wait history failure")
+    async def cycle():
+        nonlocal calls
+        calls += 1
+        if calls == 8:
+            instance._fill_task = asyncio.create_task(read())
+        return dict(updated=True, ordinary_executed=False)
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None)
+    monkeypatch.setattr(hsl_revised_live, "owner", lambda bot: instance)
+    bot = SimpleNamespace(config={"live": {"hsl_engine": "revised"}})
+    with pytest.raises(RuntimeError, match="last wait history failure"):
+        await runner._run_fake_cycle_ready(bot)
+    assert calls == 8
