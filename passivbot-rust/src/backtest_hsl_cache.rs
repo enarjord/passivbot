@@ -1,7 +1,7 @@
 //! Disposable simulator-only shortcuts over immutable, ordered execution facts.
 //! A miss returns to the shared best-effort reconstruction; it never reuses
 //! permission after an input change.
-use super::revised_runtime::{Policy, Scope};
+use super::revised_runtime::{Scope, SignalSettings};
 use super::*;
 use crate::hsl_revised_controller::Action;
 
@@ -143,13 +143,12 @@ impl Backtest<'_> {
         k: usize,
         side: Option<usize>,
         coin: Option<usize>,
-        policy: &Policy,
+        settings: SignalSettings,
     ) -> Option<Scope> {
         let previous = self
             .revised_hsl_scopes
             .iter()
-            .find(|s| s.side == side && s.coin == coin)?
-            .clone();
+            .find(|s| s.side == side && s.coin == coin)?;
         let cursor = previous.result.cursor.as_ref()?;
         let now = (self.first_timestamp_ms + (k as u64 + 1) * self.interval_ms) as i64;
         let start =
@@ -178,10 +177,10 @@ impl Backtest<'_> {
         if exposed != cursor.exposed {
             return None;
         }
-        let mut next = previous.clone();
-        next.timestamp = now;
-        next.result.events.clear();
-        let d = next.result.decision.as_mut()?;
+        let mut decision = prior.clone();
+        let mut events = Vec::new();
+        let mut next_peak = cursor.peak_delta;
+        let d = &mut decision;
         d.timestamp = now;
         if cursor.exposed {
             let peak_delta = cursor.peak_delta.max(upnl);
@@ -190,72 +189,79 @@ impl Backtest<'_> {
                 return None;
             }
             let raw = (peak_delta - upnl) / denominator;
-            let alpha = 2.0 / (policy.ema_span_minutes + 1.0);
+            let alpha = 2.0 / (settings.span + 1.0);
             let ema = alpha * raw + (1.0 - alpha) * prior.ema;
             let score = raw.min(ema);
             // Let the batch reference adjudicate comparisons near RED, including
             // very small configured thresholds and cancellation-sensitive values.
             if !raw.is_finite()
                 || !ema.is_finite()
-                || (score - policy.red_threshold).abs() <= 1e-12 * score.abs().max(1.0)
+                || (score - settings.threshold).abs() <= 1e-12 * score.abs().max(1.0)
             {
                 return None;
             }
             d.raw = raw;
             d.ema = ema;
             d.flat_at = None;
-            if score > policy.red_threshold {
+            if score > settings.threshold {
                 d.action = Action::Panic;
                 d.reason = "drawdown";
                 if d.red_at.is_none() {
                     d.red_at = Some(now);
-                    next.result
-                        .events
-                        .push(crate::hsl_revised_controller::LifecycleEvent {
-                            timestamp: now,
-                            kind: "red",
-                            red_at: now,
-                            flat_at: None,
-                            reason: "drawdown",
-                            raw: Some(raw),
-                            ema: Some(ema),
-                        });
+                    events.push(crate::hsl_revised_controller::LifecycleEvent {
+                        timestamp: now,
+                        kind: "red",
+                        red_at: now,
+                        flat_at: None,
+                        reason: "drawdown",
+                        raw: Some(raw),
+                        ema: Some(ema),
+                    });
                 }
             } else {
                 d.action = Action::Normal;
                 d.reason = "green";
                 d.red_at = None;
             }
-            next.result.cursor.as_mut()?.peak_delta = peak_delta;
+            next_peak = peak_delta;
         } else {
             d.reason = "green";
             if d.action == Action::Halted
-                && policy.restart_after_red_policy.as_deref() == Some("always")
-                && d.flat_at.is_some_and(|flat| {
-                    now >= flat + (policy.cooldown_minutes_after_red * 60_000.0).round() as i64
-                })
+                && settings.restart == crate::hsl_revised_controller::Restart::Always
+                && d.flat_at
+                    .is_some_and(|flat| now >= flat + settings.cooldown_ms)
             {
-                next.result
-                    .events
-                    .push(crate::hsl_revised_controller::LifecycleEvent {
-                        timestamp: now,
-                        kind: "restart",
-                        red_at: d.red_at?,
-                        flat_at: d.flat_at,
-                        reason: "cooldown_complete",
-                        raw: None,
-                        ema: None,
-                    });
+                events.push(crate::hsl_revised_controller::LifecycleEvent {
+                    timestamp: now,
+                    kind: "restart",
+                    red_at: d.red_at?,
+                    flat_at: d.flat_at,
+                    reason: "cooldown_complete",
+                    raw: None,
+                    ema: None,
+                });
                 d.action = Action::Normal;
                 d.reason = "cooldown_complete";
                 d.red_at = None;
                 d.flat_at = None;
             }
         }
-        next.result.observations += 1;
         self.revised_hsl_traces
             .get_mut(&(side, coin))?
             .append(now, upnl, exposed);
+        // All fallible checks precede moving the old result. The outer loop
+        // replaces the complete scope batch atomically after successful evaluation.
+        let index = self
+            .revised_hsl_scopes
+            .iter()
+            .position(|s| s.side == side && s.coin == coin)
+            .unwrap();
+        let mut next = self.revised_hsl_scopes.swap_remove(index);
+        next.timestamp = now;
+        next.result.decision = Some(decision);
+        next.result.events = events;
+        next.result.cursor.as_mut().unwrap().peak_delta = next_peak;
+        next.result.observations += 1;
         Some(next)
     }
     fn revised_scope_upnl(
@@ -265,7 +271,8 @@ impl Backtest<'_> {
         coin: Option<usize>,
     ) -> Option<(f64, bool)> {
         let mut total = crate::hsl_revised_sum::CurrencySum::new();
-        let mut values = Vec::new();
+        let mut first = None;
+        let mut multiple = false;
         for c in 0..self.n_coins {
             if coin.is_some_and(|v| v != c) {
                 continue;
@@ -307,18 +314,21 @@ impl Backtest<'_> {
                 if !value.is_finite() || value.abs() > 1e100 {
                     return None;
                 }
-                values.push(value);
+                if let Some(initial) = first {
+                    if !multiple {
+                        total.add(initial);
+                        multiple = true;
+                    }
+                    total.add(value);
+                } else {
+                    first = Some(value);
+                }
             }
         }
-        let exposed = !values.is_empty();
-        let upnl = if values.is_empty() {
-            0.0 // The simulator has just proved this scope flat.
-        } else if values.len() == 1 {
-            values[0]
+        let exposed = first.is_some();
+        let upnl = if !multiple {
+            first.unwrap_or(0.0) // Zero only after proving this scope flat.
         } else {
-            for value in values {
-                total.add(value);
-            }
             let mut reasons = std::collections::BTreeSet::new();
             let value = total.value(&mut reasons);
             if !reasons.is_empty() {
@@ -365,14 +375,13 @@ impl Backtest<'_> {
         k: usize,
         side: Option<usize>,
         coin: Option<usize>,
-        policy: &Policy,
+        settings: SignalSettings,
     ) -> Option<Scope> {
-        use crate::hsl_revised_controller::{self as controller, Restart};
+        use crate::hsl_revised_controller as controller;
         let previous = self
             .revised_hsl_scopes
             .iter()
-            .find(|s| s.side == side && s.coin == coin)?
-            .clone();
+            .find(|s| s.side == side && s.coin == coin)?;
         let cursor = previous.result.cursor.as_ref()?;
         let now = (self.first_timestamp_ms + (k as u64 + 1) * self.interval_ms) as i64;
         let start =
@@ -425,34 +434,36 @@ impl Backtest<'_> {
         }
         trace.fill_count = self.fills.len();
         trace.append(now, upnl, exposed);
-        let mut episodes = trace.episodes.clone();
+        let mut episodes = std::mem::take(&mut trace.episodes);
         if let Some(reference) = trace.reference {
             episodes[0].entry_reference_delta = Some(reference - trace.cashflow);
         }
-        let replay = controller::replay_latest_with_events(&controller::Input {
+        let input = controller::Input {
             episodes,
             now,
             start,
             budget,
-            span: policy.ema_span_minutes,
-            threshold: policy.red_threshold,
-            cooldown_ms: (policy.cooldown_minutes_after_red * 60_000.0).round() as i64,
-            restart: if policy.restart_after_red_policy.as_deref() == Some("always") {
-                Restart::Always
-            } else {
-                Restart::Never
-            },
-        })
-        .ok()?;
+            span: settings.span,
+            threshold: settings.threshold,
+            cooldown_ms: settings.cooldown_ms,
+            restart: settings.restart,
+        };
+        let replay = controller::replay_latest_with_events(&input);
+        // Restore facts even if reference evaluation fails; no decision is cached.
+        trace.episodes = input.episodes;
+        let replay = replay.ok()?;
         // Numerical reuse must not decide a threshold comparison at rounding
         // distance, including the terminal sample of a now-flat episode.
-        if replay.numeric_range_approximation
-            || replay.cursor.as_ref()?.threshold_sensitive
-        {
+        if replay.numeric_range_approximation || replay.cursor.as_ref()?.threshold_sensitive {
             return None;
         }
         let decision = replay.decisions.into_iter().last()?;
-        let mut result = previous.result.clone();
+        let index = self
+            .revised_hsl_scopes
+            .iter()
+            .position(|s| s.side == side && s.coin == coin)
+            .unwrap();
+        let mut result = self.revised_hsl_scopes.swap_remove(index).result;
         result.decision = Some(decision);
         result.events = replay.events;
         result.observations = replay.observations;
