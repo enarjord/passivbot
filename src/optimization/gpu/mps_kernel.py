@@ -100,12 +100,19 @@ _TM_VOLATILITY_DISABLED_DEFINE = (
 )
 
 
+def _revised_hsl_layout(capacity: int) -> tuple[int, int]:
+    blocks = (capacity + 63) // 64
+    tree_size = 1 << (blocks - 1).bit_length()
+    storage_nodes = 2 * tree_size + (capacity + 3) // 4
+    return tree_size, storage_nodes
+
+
 def _with_revised_hsl(source: str, capacity: int) -> str:
     if not capacity:
         return source
     if not 1 <= capacity <= 90 * 1440 + 2:
         raise ValueError("Invalid revised GPU HSL window capacity")
-    tree_size = 1 << (capacity - 1).bit_length()
+    tree_size, _ = _revised_hsl_layout(capacity)
     return (f"#define PASSIVBOT_HSL_REVISED 1\n"
             f"#define PASSIVBOT_HSL_REVISED_CAPACITY {capacity}\n"
             f"#define PASSIVBOT_HSL_REVISED_TREE_SIZE {tree_size}\n" + source)
@@ -1703,8 +1710,8 @@ class MpsEmaAnchorRunner:
                 raise ValueError("Revised unified GPU HSL requires one shared policy")
 
     def _revised_bytes_per_candidate(self):
-        tree_size = 1 << (self.revised_capacity - 1).bit_length()
-        return 2 * (2 * tree_size * 32 + self.revised_capacity * 8)
+        tree_size, storage_nodes = _revised_hsl_layout(self.revised_capacity)
+        return 2 * (storage_nodes * 32 + self.revised_capacity * 8)
 
     def _run_revised_batches(self, params, **kwargs):
         """Partition independent candidates before allocating bounded history scratch."""
@@ -1749,13 +1756,13 @@ class MpsEmaAnchorRunner:
     def _revised_hsl_buffers(self, batch_size):
         if not self.revised_capacity:
             return ()
-        tree_size = 1 << (self.revised_capacity - 1).bit_length()
+        tree_size, storage_nodes = _revised_hsl_layout(self.revised_capacity)
         nbytes = batch_size * self._revised_bytes_per_candidate()
         if nbytes > self.revised_scratch_budget_bytes:
             raise ValueError("Revised HSL GPU batch exceeds its 512 MiB scratch budget")
         if batch_size not in self._revised_buffers:
             self._revised_buffers = {batch_size: (
-                torch.empty((batch_size, 2, 2 * tree_size, 32), dtype=torch.uint8, device=gpu_device()),
+                torch.empty((batch_size, 2, storage_nodes, 32), dtype=torch.uint8, device=gpu_device()),
                 torch.empty((batch_size, 2, 2 * self.revised_capacity), dtype=torch.int32, device=gpu_device()),
             )}
         return self._revised_buffers[batch_size]

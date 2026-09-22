@@ -31,7 +31,7 @@ kernel void revised_window_probe(
     uint b [[thread_position_in_grid]]
 ) {
     const int steps = settings[0], capacity = settings[1], tree_size = settings[2];
-    device RevisedHslNode* tree = trees + int(b) * tree_size * 2;
+    device RevisedHslNode* tree = trees + int(b) * revised_hsl_storage_nodes(capacity, tree_size);
     device int* clock = times + int(b) * capacity;
     RevisedHslWindow w = revised_hsl_init(tree, capacity, tree_size, inputs[int(b)*steps*4+3]);
     for (int i = 0; i < steps; ++i) {
@@ -52,13 +52,14 @@ kernel void revised_window_probe(
 def run_window(inputs, minutes, lookback):
     candidates, steps, _ = inputs.shape
     capacity = min(lookback + 1, steps)
-    tree_size = 1 << (capacity - 1).bit_length()
+    from optimization.gpu.mps_kernel import _revised_hsl_layout
+    tree_size, storage_nodes = _revised_hsl_layout(capacity)
     device = gpu_device()
     args = [
         torch.tensor(inputs, dtype=torch.float32, device=device),
         torch.tensor(minutes, dtype=torch.int32, device=device),
         torch.tensor([steps, capacity, tree_size, lookback], dtype=torch.int32, device=device),
-        torch.empty((candidates, 2 * tree_size, 32), dtype=torch.uint8, device=device),
+        torch.empty((candidates, storage_nodes, 32), dtype=torch.uint8, device=device),
         torch.empty((candidates, capacity), dtype=torch.int32, device=device),
         torch.empty((candidates, steps, 2), dtype=torch.float32, device=device),
     ]
@@ -66,7 +67,7 @@ def run_window(inputs, minutes, lookback):
     return args[-1].cpu().numpy()
 
 
-@pytest.mark.parametrize("lookback", [1, 17, 173, 2000])
+@pytest.mark.parametrize("lookback", [1, 17, 63, 64, 65, 127, 128, 173, 2000])
 @pytest.mark.parametrize("span", [1., 2.5, 308., 10000.5])
 def test_changed_anchor_expiration_and_same_minute_match_rust(lookback, span):
     import passivbot_rust
@@ -119,7 +120,7 @@ kernel void revised_controller_probe(
     device int* times [[buffer(4)]], device float* realized [[buffer(5)]],
     device float* output [[buffer(6)]], uint b [[thread_position_in_grid]]
 ) {
-    RevisedHslController h = revised_hsl_controller_init(tree, 64, 64, policy[0]);
+    RevisedHslController h = revised_hsl_controller_init(tree, 64, 1, policy[0]);
     for (int i = 0; i < int(policy[4]); ++i) {
         bool valid = revised_hsl_observe(h, tree, times, realized,
             flags[i*3], int(policy[5]), inputs[i*3], inputs[i*3+1], inputs[i*3+2],
@@ -138,7 +139,7 @@ def run_controller(events, span, never, lookback=100):
     values = torch.tensor([[e[1], e[2], e[3]] for e in events], device=device, dtype=torch.float32)
     flags = torch.tensor([[e[0], e[4], e[5]] for e in events], device=device, dtype=torch.int32)
     policy = torch.tensor([span, .1, 10, never, len(events), lookback], device=device)
-    tree = torch.empty((128, 32), device=device, dtype=torch.uint8)
+    tree = torch.empty((18, 32), device=device, dtype=torch.uint8)
     times = torch.empty(64, device=device, dtype=torch.int32)
     realized = torch.empty(64, device=device)
     output = torch.empty((len(events), 3), device=device)
@@ -201,3 +202,14 @@ def test_never_cooldown_is_forgotten_when_terminal_leaves_lookback():
     actual = run_controller(events, 1., True, lookback=10)
     assert actual[2,0] == 1
     assert actual[-1,0] == 0
+
+
+def test_ninety_day_history_layout_is_compact_and_aligned():
+    from optimization.gpu.mps_kernel import _revised_hsl_layout
+    capacity = 90 * 1440 + 2
+    tree_size, nodes = _revised_hsl_layout(capacity)
+    assert tree_size * 64 >= capacity
+    assert nodes * 32 >= tree_size * 2 * 32 + capacity * 8
+    assert nodes * 32 + capacity * 8 < 2_300_000
+    # 64 coins, both sides, fit within the same 512 MiB candidate budget.
+    assert 128 * (nodes * 32 + capacity * 8) < 512 * 1024 * 1024

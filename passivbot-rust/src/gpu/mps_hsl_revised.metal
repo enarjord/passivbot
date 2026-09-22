@@ -1,6 +1,7 @@
 // Revised HSL arithmetic over factual PNL + UPNL samples. No trading state or
 // episode inference lives here. Both Metal and CUDA consume this scalar source.
-// A candidate owns a bounded ring and a segment tree of chronological summaries.
+// A candidate owns a bounded ring of compact samples and a tree over 64-sample
+// blocks. Partial boundary blocks are visited directly; complete blocks aggregate.
 struct RevisedHslNode {
     float peak;
     float first;
@@ -19,6 +20,7 @@ struct RevisedHslWindow {
     int tree_size;
     float alpha;
     int last_minute;
+    RevisedHslNode block_prefix; // Completed samples before the replaceable last row.
 };
 
 inline RevisedHslNode revised_hsl_empty_node() {
@@ -47,6 +49,27 @@ inline RevisedHslNode revised_hsl_join(RevisedHslNode l, RevisedHslNode r) {
     return n;
 }
 
+inline int revised_hsl_storage_nodes(int capacity, int tree_size) {
+    // Four two-float samples fit in one 32-byte node-sized allocation.
+    return 2 * tree_size + (capacity + 3) / 4;
+}
+
+inline device float2* revised_hsl_samples(device RevisedHslNode* tree, int tree_size) {
+    return reinterpret_cast<device float2*>(tree + 2 * tree_size);
+}
+
+inline RevisedHslNode revised_hsl_sample(float2 row, float alpha) {
+    RevisedHslNode n;
+    n.peak = row.y;
+    n.first = n.last = row.x;
+    n.loss = alpha * (row.y - row.x);
+    n.weight = alpha;
+    n.decay = 1.0f - alpha;
+    n.count = 1;
+    n.rising = row.x == row.y;
+    return n;
+}
+
 inline void revised_hsl_set(
     device RevisedHslNode* tree, int tree_size, int slot, RevisedHslNode n
 ) {
@@ -69,6 +92,7 @@ inline RevisedHslWindow revised_hsl_init(
     w.tree_size = tree_size;
     w.alpha = 2.0f / (span + 1.0f);
     w.last_minute = -1;
+    w.block_prefix = revised_hsl_empty_node();
     for (int i = 0; i < 2 * tree_size; ++i) tree[i] = revised_hsl_empty_node();
     return w;
 }
@@ -92,15 +116,18 @@ inline bool revised_hsl_push(
     const bool replace = w.count > 0 && minute == w.last_minute;
     if (!replace && w.count == w.capacity) return false;
     int slot = (w.head + w.count - (replace ? 1 : 0)) % w.capacity;
-    RevisedHslNode n;
-    n.peak = replace ? fmax(tree[w.tree_size + slot].peak, value) : value;
-    n.first = n.last = value;
-    n.loss = w.alpha * (n.peak - value);
-    n.weight = w.alpha;
-    n.decay = 1.0f - w.alpha;
-    n.count = 1;
-    n.rising = n.peak == value;
-    revised_hsl_set(tree, w.tree_size, slot, n);
+    device float2* samples = revised_hsl_samples(tree, w.tree_size);
+    float peak = replace ? fmax(samples[slot].y, value) : value;
+    samples[slot] = float2(value, peak);
+    int block = slot / 64;
+    if (!replace) {
+        w.block_prefix = slot % 64 == 0 ? revised_hsl_empty_node()
+            : tree[w.tree_size + block];
+    }
+    RevisedHslNode n = revised_hsl_join(w.block_prefix,
+        revised_hsl_sample(samples[slot], w.alpha));
+    tree[w.tree_size + block] = n;
+    if (slot % 64 == 63) revised_hsl_set(tree, w.tree_size, block, n);
     times[slot] = minute;
     w.last_minute = minute;
     if (!replace) ++w.count;
@@ -111,7 +138,7 @@ inline bool revised_hsl_push(
 // At most one right sibling per level is pending (90d of minutes < 2^18).
 inline void revised_hsl_visit(
     device RevisedHslNode* tree, int tree_size, int begin, int end,
-    float offset, thread float& peak, thread float& ema
+    float offset, float alpha, thread float& peak, thread float& ema
 ) {
     int pending_index[32];
     int pending_lo[32];
@@ -119,7 +146,7 @@ inline void revised_hsl_visit(
     int count = 1;
     pending_index[0] = 1;
     pending_lo[0] = 0;
-    pending_hi[0] = tree_size;
+    pending_hi[0] = tree_size * 64;
     while (count > 0) {
         --count;
         int index = pending_index[count];
@@ -154,6 +181,17 @@ inline void revised_hsl_visit(
                 continue;
             }
         }
+        if (hi - lo == 64) {
+            device float2* samples = revised_hsl_samples(tree, tree_size);
+            for (int slot = max(lo, begin); slot < min(hi, end); ++slot) {
+                float2 row = samples[slot];
+                peak = fmax(peak, row.y);
+                float raw = offset + peak > 0.0f
+                    ? (peak - row.x) / (offset + peak) : 1.0f;
+                ema = ema * (1.0f - alpha) + raw * alpha;
+            }
+            continue;
+        }
         int mid = (lo + hi) / 2;
         pending_index[count] = index * 2 + 1;
         pending_lo[count] = mid;
@@ -169,17 +207,18 @@ inline float2 revised_hsl_signal_peak(
     float offset, float entry_reference, thread float& result_peak
 ) {
     if (w.count == 0 || !isfinite(offset)) return float2(NAN, NAN);
-    RevisedHslNode first = tree[w.tree_size + w.head];
-    float peak = fmax(first.peak, entry_reference);
+    device float2* samples = revised_hsl_samples(tree, w.tree_size);
+    float2 first = samples[w.head];
+    float peak = fmax(first.y, entry_reference);
     float ema = offset + peak > 0.0f
-        ? (peak - first.last) / (offset + peak) : 1.0f;
+        ? (peak - first.x) / (offset + peak) : 1.0f;
     // Seed EMA with the first raw drawdown, then visit the remaining ring.
     int begin = (w.head + 1) % w.capacity;
     int remaining = w.count - 1;
     int n = min(remaining, w.capacity - begin);
-    revised_hsl_visit(tree, w.tree_size, begin, begin + n, offset, peak, ema);
-    revised_hsl_visit(tree, w.tree_size, 0, remaining - n, offset, peak, ema);
-    float last = tree[w.tree_size + (w.head + w.count - 1) % w.capacity].last;
+    revised_hsl_visit(tree, w.tree_size, begin, begin + n, offset, w.alpha, peak, ema);
+    revised_hsl_visit(tree, w.tree_size, 0, remaining - n, offset, w.alpha, peak, ema);
+    float last = samples[(w.head + w.count - 1) % w.capacity].x;
     float raw = offset + peak > 0.0f ? (peak - last) / (offset + peak) : 1.0f;
     result_peak = peak;
     return float2(raw, ema);

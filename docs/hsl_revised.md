@@ -141,6 +141,8 @@ families. They use bounded per-candidate history, recompute drawdown when its eq
 changes, and derive current panic and terminal cooldown without latching past decisions.
 The same Rust-owned shader source runs on Metal and CUDA. Candidate batches are partitioned
 to keep history scratch below 512 MiB; temporal replay rebinds that scratch explicitly.
+History stores two floats per minute plus summaries of completed 64-minute blocks;
+partial boundary blocks are evaluated directly, including same-minute replacement peaks.
 
 The public GPU optimizer selector remains unavailable for revised HSL until configuration,
 multicoin integration and exact-validation coverage are complete. These internal runners
