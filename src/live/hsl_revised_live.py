@@ -82,7 +82,6 @@ class Wave:
     balance: float
     generation: int
     required_fills: tuple | None = None
-    strategy_balance: float | None = None
 
     def permission(self, symbol, side):
         if any(matches(item.scope, symbol, side) for item in self.unavailable):
@@ -172,12 +171,7 @@ class Owner:
                 or wave.positions != runtime.observe_positions(bot).payload
                 or wave.open_orders != runtime.observe_open_orders(bot)):
             return False
-        # Ordinary Rust sizing consumes the hysteresis balance. Raw balance may
-        # move on a confirming read without changing that input; admit() still
-        # recomputes HSL with fresh raw balance and requires the same action.
-        if (wave.strategy_balance is None and wave.balance != bot.get_raw_balance()
-                or wave.strategy_balance is not None
-                and wave.strategy_balance != bot.get_hysteresis_snapped_balance()):
+        if wave.balance != bot.get_raw_balance():
             return False
         return True
 
@@ -210,8 +204,7 @@ class Owner:
 
     def bind(self, wave, cancels, creates, *, ordinary=False):
         if ordinary:
-            wave = replace(wave, required_fills=self.required_fill_facts(),
-                           strategy_balance=self.bot.get_hysteresis_snapped_balance())
+            wave = replace(wave, required_fills=self.required_fill_facts())
         # A fresh owner must not recycle an old order's receipt identifier.
         token = uuid4().hex
         self._waves[token] = wave
@@ -402,7 +395,7 @@ class Owner:
 
     def account_facts(self):
         bot = self.bot
-        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_raw_balance(),
+        return (runtime.observe_positions(bot), runtime.observe_open_orders(bot), bot.get_hysteresis_snapped_balance(),
                 self.required_fill_facts())
 
     @staticmethod
@@ -428,6 +421,11 @@ class Owner:
             return None
         cancels, creates = await bot.calc_orders_to_cancel_and_create()
         if not self.same_account_facts(account, self.account_facts()):
+            return None
+        # Preparation may span confirming raw-balance changes. Ordinary Rust
+        # risk consumes the latest raw balance at its actual calculation, so
+        # reconciliation and submission must retain that exact observation.
+        if bot._hsl_revised_planning_wave.balance != bot.get_raw_balance():
             return None
         return cancels, creates, bot._current_planning_snapshot
 
@@ -511,19 +509,25 @@ class Owner:
                     if not handled:
                         raise
                     bot._log_staged_execution_defer(details)
+            protective_work = False
+            if plan is not None:
+                # Service ready work before a new confirming account read can
+                # invalidate it. Protection still gets first turn; every write
+                # retains its current-input and exact raw-balance admission.
+                protective_work = await self.protect(deferred_reports=reports)
+                cancels, creates, snapshot = plan
+                bot._current_planning_snapshot = snapshot
+                await bot.execute_order_plan_to_exchange(cancels, creates)
             if not await bot.refresh_protective_authoritative_state(require_balance=True):
-                return dict(updated=False, ordinary_completed=completed_plan)
+                return dict(updated=False, ordinary_completed=completed_plan,
+                            ordinary_executed=plan is not None, protective_work=protective_work)
             self.remember_position()
             now = self._schedule_clock()
             if now >= self._next_history:
                 self.schedule_history()
                 self._next_history = now + 5.
             self.schedule_sources()
-            protective_work = await self.protect(deferred_reports=reports)
-            if plan is not None:
-                cancels, creates, snapshot = plan
-                bot._current_planning_snapshot = snapshot
-                await bot.execute_order_plan_to_exchange(cancels, creates)
+            protective_work = await self.protect(deferred_reports=reports) or protective_work
             if self._ordinary is None:
                 self._ordinary = asyncio.create_task(self._ordinary_plan())
             return dict(updated=True, ordinary_completed=completed_plan,

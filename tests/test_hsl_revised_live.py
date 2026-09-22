@@ -244,7 +244,8 @@ def test_revised_wave_is_not_execution_authority_after_inputs_change(monkeypatch
 @pytest.mark.asyncio
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 @pytest.mark.parametrize('raw_balance_drift', [False, True])
-async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monkeypatch, mode, raw_balance_drift):
+@pytest.mark.parametrize('execution', ['direct', 'owner_refresh_drift'])
+async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monkeypatch, mode, raw_balance_drift, execution):
     import asyncio
     user = f'fake_revised_green_{tmp_path.name}'
     _cleanup_fake_user_state(user)
@@ -292,8 +293,23 @@ async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monk
             assert bot.get_raw_balance() != raw
             assert bot.get_hysteresis_snapped_balance() == strategy
         bot._current_planning_snapshot = snapshot
-        await bot.execute_order_plan_to_exchange(cancels, creates)
-        assert any(call['method'] == 'create_order' for call in bot.cca.export_request_log())
+        if execution == 'direct':
+            await bot.execute_order_plan_to_exchange(cancels, creates)
+        else:
+            # Exercise the production owner, with every subsequent confirming
+            # account read changing raw balance inside the same sizing band.
+            async def ready():
+                return plan
+            instance._ordinary = asyncio.create_task(ready())
+            await instance._ordinary
+            refresh = bot.refresh_protective_authoritative_state
+            async def drifting_refresh(**kwargs):
+                bot.cca.balance_total += .001
+                return await refresh(**kwargs)
+            monkeypatch.setattr(bot, 'refresh_protective_authoritative_state', drifting_refresh)
+            result = await instance.cycle()
+            assert result['ordinary_completed']
+        assert any(call['method'] == 'create_order' for call in bot.cca.export_request_log()) == (not raw_balance_drift)
         completed.append(True)
         return {'green_entries': True}
 
@@ -932,8 +948,8 @@ async def test_deferred_cancellation_has_no_submission_provenance(monkeypatch, a
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('stage', ['universe', 'market', 'reconcile'])
-@pytest.mark.parametrize('change', ['position', 'balance', 'order', 'fill_pnl', 'fill_fee', 'unchanged_confirmation'])
+@pytest.mark.parametrize('stage', ['universe', 'market', 'reconcile', 'after_rust'])
+@pytest.mark.parametrize('change', ['position', 'balance', 'strategy_balance', 'order', 'fill_pnl', 'fill_fee', 'unchanged_confirmation'])
 async def test_pending_planner_requires_unchanged_account_facts(stage, change):
     import asyncio
     from test_hsl_revised_runtime import bot as make_bot, NOW, SYMBOL
@@ -954,6 +970,9 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
     bot._current_planning_snapshot = object()
     async def reconcile():
         await step('reconcile')
+        from types import SimpleNamespace
+        bot._hsl_revised_planning_wave = SimpleNamespace(balance=bot.get_raw_balance())
+        await step('after_rust')
         return [], []
     bot.calc_orders_to_cancel_and_create = reconcile
     task = asyncio.create_task(instance._ordinary_plan())
@@ -965,6 +984,8 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
         bot.positions['NEW/USDT:USDT'] = {'long': dict(size=1., price=100.)}
     elif change == 'balance':
         bot.get_raw_balance = lambda: 900.
+    elif change == 'strategy_balance':
+        bot.get_hysteresis_snapped_balance = lambda: 900.
     elif change == 'order':
         bot.open_orders[SYMBOL] = [dict(id='expected-own-order', qty=1., price=100.)]
     elif change.startswith('fill_'):
@@ -976,8 +997,9 @@ async def test_pending_planner_requires_unchanged_account_facts(stage, change):
         bot.open_orders['FLAT/USDT:USDT'] = []
     release.set()
     result = await task
-    assert (result is not None) == (change == 'unchanged_confirmation')
-    if change != 'unchanged_confirmation' and stage != 'reconcile':
+    allowed = change == 'unchanged_confirmation' or (change == 'balance' and stage != 'after_rust')
+    assert (result is not None) == allowed
+    if not allowed and stage in {'universe', 'market'}:
         assert 'reconcile' not in reached
 
 
@@ -1288,7 +1310,7 @@ def test_write_admission_evaluates_only_its_authorizing_scope(monkeypatch, mode)
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 @pytest.mark.parametrize('side', ['long', 'short'])
 @pytest.mark.parametrize('change', ['raw_only', 'strategy', 'risk_action', 'stale_balance', 'pending_balance'])
-def test_ordinary_admission_rechecks_risk_without_rejecting_raw_balance_drift(monkeypatch, mode, side, change):
+def test_ordinary_admission_rejects_changed_risk_inputs(monkeypatch, mode, side, change):
     from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
     import utils
     monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
@@ -1320,4 +1342,4 @@ def test_ordinary_admission_rechecks_risk_without_rejecting_raw_balance_drift(mo
         ledger.surfaces['balance'].updated_ms = NOW-10_001
     elif change == 'pending_balance':
         bot._authoritative_pending_confirmations = {'balance': ledger.epoch+1}
-    assert instance.admit(order) == (change == 'raw_only')
+    assert not instance.admit(order)
