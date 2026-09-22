@@ -258,6 +258,7 @@ class PymooAsyncRecordingRunner:
             poll_interval_seconds=self.poll_interval_seconds,
             on_result=_on_result,
             pending_health_check=lambda: self._raise_if_pool_workers_exited(workers),
+            progress_label="Optimizer population",
         )
 
         return [payload for payload in ordered_results if payload is not None]

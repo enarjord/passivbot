@@ -226,6 +226,8 @@ def _evaluate_starting_individuals(
         poll_interval_seconds=runner.poll_interval_seconds,
         on_interrupt=_on_interrupt,
         pending_health_check=lambda: runner._raise_if_pool_workers_exited(workers),
+        progress_label="Optimizer starting configs",
+        progress_total=len(starting_individuals),
     )
     slim_payloads = [payload for payload in ordered_payloads if payload is not None]
     log_seed_memory(

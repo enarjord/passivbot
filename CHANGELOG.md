@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Report bounded optimizer population and starting-config progress every five minutes while CPU
+  evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
+
 - Revised HSL services completed ordinary plans before the next account refresh can invalidate
   them. Slow preparation tolerates raw-balance drift while preserving its strategy inputs;
   final Rust calculation and connector admission still require the same raw balance, so
