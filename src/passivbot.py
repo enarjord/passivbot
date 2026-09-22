@@ -103,7 +103,8 @@ from live.event_bus import (
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from runtime_identity import build_runtime_identity, write_runtime_manifest
-from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable
+from live.market_snapshot import (MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable,
+                                  SHARED_QUOTE_CLEANUP_SECONDS, SHARED_QUOTE_CANCEL_GRACE_SECONDS)
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -167,6 +168,8 @@ from sortedcontainers import SortedDict
 # The execution loop may wait this long for a websocket-triggered replan after
 # its configured execution delay. Churn-history cadence checks must include
 # this normal quiet-period wait or ordinary live operation breaks provenance.
+# Preserve the existing client-close allowance after bounded shared-quote teardown.
+BOT_CLOSE_TIMEOUT_SECONDS = SHARED_QUOTE_CLEANUP_SECONDS + SHARED_QUOTE_CANCEL_GRACE_SECONDS + 3.0
 EXECUTION_SCHEDULED_WAIT_SECONDS = 30
 
 
@@ -22254,9 +22257,9 @@ async def shutdown_bot(bot):
     """Stop background tasks and close the exchange clients gracefully."""
     print("Shutting down bot...")
     try:
-        await asyncio.wait_for(bot.close(), timeout=3.0)
+        await asyncio.wait_for(bot.close(), timeout=BOT_CLOSE_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        print("Shutdown timed out after 3 seconds. Forcing exit.")
+        print(f"Shutdown timed out after {BOT_CLOSE_TIMEOUT_SECONDS:g} seconds. Forcing exit.")
     except Exception as e:
         print(f"Error during shutdown ({bounded_exception_type(e)}).")
 

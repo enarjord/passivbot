@@ -12,6 +12,14 @@ from live.diagnostic_safety import bounded_exception_type
 from utils import utc_ms
 
 
+SHARED_QUOTE_CLEANUP_SECONDS = 10.0
+SHARED_QUOTE_CANCEL_GRACE_SECONDS = 1.0
+
+
+class MarketSnapshotPayloadError(RuntimeError):
+    """Provider-generated structural error with a safe actionable diagnostic."""
+
+
 class MarketSnapshotUnavailable(RuntimeError):
     """Transient ticker fetch failure or incomplete current quotes."""
 
@@ -115,6 +123,8 @@ class MarketSnapshotProvider:
                 len(missing),
                 bounded_exception_type(exc),
             )
+            if isinstance(exc, MarketSnapshotPayloadError):
+                raise
             if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                 raise
             error_type = (MarketSnapshotUnavailable if isinstance(exc, (MarketSnapshotUnavailable, NetworkError, OSError))
@@ -168,6 +178,8 @@ class MarketSnapshotProvider:
                     len(missing_after),
                     bounded_exception_type(exc),
                 )
+                if isinstance(exc, MarketSnapshotPayloadError):
+                    raise
                 if not isinstance(exc, (NetworkError, OSError, RuntimeError)):
                     raise
                 error_type = (MarketSnapshotUnavailable if isinstance(exc, (MarketSnapshotUnavailable, NetworkError, OSError))
@@ -249,7 +261,7 @@ class MarketSnapshotProvider:
         # all time out before a connector returns a malformed result.
         fetched = await fetcher(*args)
         if not isinstance(fetched, dict):
-            raise RuntimeError(
+            raise MarketSnapshotPayloadError(
                 f"[market] ticker snapshot fetch returned non-dict for {self.exchange_name}: "
                 f"{type(fetched).__name__}"
             )
@@ -316,7 +328,7 @@ class MarketSnapshotProvider:
             if not task.cancelling():
                 task.cancel()
 
-    async def wait_pending(self, *, timeout_seconds: float = 10.0) -> None:
+    async def wait_pending(self, *, timeout_seconds: float = SHARED_QUOTE_CLEANUP_SECONDS) -> None:
         """Bounded cleanup for direct client-close paths after cancellation."""
         tasks = self.pending_tasks()
         if not tasks:
@@ -326,7 +338,7 @@ class MarketSnapshotProvider:
             self._log.warning("[market] shared quote cleanup timed out | task_count=%d action=cancel_remaining", len(pending))
             for task in pending:
                 task.cancel()
-            _, pending = await asyncio.wait(pending, timeout=1.0)
+            _, pending = await asyncio.wait(pending, timeout=SHARED_QUOTE_CANCEL_GRACE_SECONDS)
             if pending:
                 self._log.warning("[market] shared quote cancellation grace expired | task_count=%d action=abandon_pending", len(pending))
         # Completion callbacks retrieve every result/failure, including tasks

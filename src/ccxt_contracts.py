@@ -15,7 +15,7 @@ import ccxt
 
 from config.load import prepare_config
 from config.schema import get_template_config
-from passivbot import setup_bot
+from passivbot import BOT_CLOSE_TIMEOUT_SECONDS, setup_bot
 from utils import _build_coin_symbol_maps, filter_markets
 
 
@@ -378,7 +378,7 @@ async def capture_contract_snapshot(
         return snapshot
     finally:
         try:
-            await asyncio.wait_for(bot.close(), timeout=3.0)
+            await asyncio.wait_for(bot.close(), timeout=BOT_CLOSE_TIMEOUT_SECONDS)
         except Exception:
             pass
 

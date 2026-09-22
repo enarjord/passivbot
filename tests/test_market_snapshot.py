@@ -622,3 +622,44 @@ async def test_shared_quote_cleanup_repeated_cancellation_waits_then_is_bounded(
     with pytest.raises(asyncio.CancelledError):
         await reader
     assert shared.done() and provider.pending_tasks() == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('caller', ['shutdown_bot', 'contract_capture'])
+async def test_outer_close_deadline_allows_slow_provider_cleanup(caller, monkeypatch):
+    from passivbot import Passivbot, shutdown_bot, BOT_CLOSE_TIMEOUT_SECONDS
+    import ccxt_contracts
+    from live.market_snapshot import SHARED_QUOTE_CLEANUP_SECONDS, SHARED_QUOTE_CANCEL_GRACE_SECONDS
+    assert BOT_CLOSE_TIMEOUT_SECONDS == SHARED_QUOTE_CLEANUP_SECONDS + SHARED_QUOTE_CANCEL_GRACE_SECONDS + 3.0
+    started = asyncio.Event()
+    calls = []
+    async def fetch():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await asyncio.sleep(3.2)  # outlast the former outer three-second limit
+            calls.append('quote_stopped')
+            raise
+    class Client:
+        async def close(self):
+            assert calls == ['quote_stopped']
+            calls.append('client_closed')
+    provider = MarketSnapshotProvider(exchange_name='fake', fetch_tickers=fetch)
+    reader = asyncio.create_task(provider.get_snapshots(['A']))
+    await started.wait()
+    bot = Passivbot.__new__(Passivbot)
+    bot.market_snapshot_provider = provider
+    bot.exchange = 'fake'
+    bot.cca, bot.ccp = Client(), None
+    bot._close_live_event_pipeline = lambda **kwargs: True
+    if caller == 'shutdown_bot':
+        await shutdown_bot(bot)
+    else:
+        monkeypatch.setattr(ccxt_contracts, 'prepare_live_config_for_user', lambda _: {})
+        monkeypatch.setattr(ccxt_contracts, 'setup_bot', lambda _: bot)
+        await ccxt_contracts.capture_contract_snapshot(user='synthetic', sections=())
+    assert calls == ['quote_stopped', 'client_closed']
+    assert provider.pending_tasks() == ()
+    with pytest.raises(asyncio.CancelledError):
+        await reader
