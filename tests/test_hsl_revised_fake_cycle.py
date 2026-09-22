@@ -24,9 +24,6 @@ async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkey
     legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
-    # Replay equality needs a fixed startup boundary. Keep real warmup, but
-    # finish it before advancing the scenario clock instead of racing its jitter.
-    cfg['live']['defer_broad_candle_warmup'] = False
     if side == 'short':
         cfg['bot']['short'] = deepcopy(cfg['bot']['long'])
         cfg['bot']['long']['hsl']['enabled'] = False
@@ -219,6 +216,7 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
         return True
     bot.refresh_protective_authoritative_state = refresh
     instance = Owner(bot)
+    instance._plan_account_matches = lambda *args: True
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
     async def protect(**kwargs):

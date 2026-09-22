@@ -202,6 +202,14 @@ class Owner:
         after = current.permission(order["symbol"], order["position_side"])
         return after[0] != "unavailable" and before == after
 
+    def _plan_account_matches(self, cancels, creates, now):
+        # A background fill confirmation can invalidate a completed plan before
+        # it is serviced. Discard that cohort instead of reporting an execution
+        # turn in which every connector receipt is already known to be stale.
+        tokens = {order.get('_hsl_revised_wave') for order in (*cancels, *creates)}
+        return all(isinstance(self._waves.get(token), Wave)
+                   and self._account_matches(self._waves[token], now) for token in tokens)
+
     def bind(self, wave, cancels, creates, *, ordinary=False):
         if ordinary:
             wave = replace(wave, required_fills=self.required_fill_facts())
@@ -516,8 +524,11 @@ class Owner:
                 # retains its current-input and exact raw-balance admission.
                 protective_work = await self.protect(deferred_reports=reports)
                 cancels, creates, snapshot = plan
-                bot._current_planning_snapshot = snapshot
-                await bot.execute_order_plan_to_exchange(cancels, creates)
+                if self._plan_account_matches(cancels, creates, int(utc_ms())):
+                    bot._current_planning_snapshot = snapshot
+                    await bot.execute_order_plan_to_exchange(cancels, creates)
+                else:
+                    plan = None
             if not await bot.refresh_protective_authoritative_state(require_balance=True):
                 return dict(updated=False, ordinary_completed=completed_plan,
                             ordinary_executed=plan is not None, protective_work=protective_work)

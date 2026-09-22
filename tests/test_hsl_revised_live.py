@@ -1017,6 +1017,7 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
         _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None,
         live_value=lambda key: .05)
     instance = hsl_revised_live.Owner(bot)
+    instance._plan_account_matches = lambda *args: True
     instance.remember_position = lambda: None
     instance.schedule_history = instance.schedule_sources = lambda: None
     instance.protect = noop
@@ -1343,3 +1344,46 @@ def test_ordinary_admission_rejects_changed_risk_inputs(monkeypatch, mode, side,
     elif change == 'pending_balance':
         bot._authoritative_pending_confirmations = {'balance': ledger.epoch+1}
     assert not instance.admit(order)
+
+
+@pytest.mark.asyncio
+async def test_completed_plan_invalidated_by_fill_confirmation_is_replanned(monkeypatch):
+    import asyncio
+    import utils
+    from test_hsl_revised_runtime import bot as make_bot, quotes, NOW, SYMBOL
+    monkeypatch.setattr(utils, 'utc_ms', lambda: NOW)
+    bot = make_bot()
+    bot.get_exchange_time = lambda: NOW
+    bot.approved_coins_minus_ignored_coins = {'long': {SYMBOL}, 'short': set()}
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._staged_planner_required_surfaces = lambda **kwargs: set()
+    bot._begin_live_event_cycle = lambda **kwargs: None
+    ledger = bot._ensure_freshness_ledger()
+    ledger.begin_epoch()
+    ledger.stamp('open_orders', now_ms=NOW)
+    instance = hsl_revised_live.owner(bot)
+    wave = instance.capture(quotes())
+    order = dict(symbol=SYMBOL, position_side='long', reduce_only=True)
+    instance.bind(wave, (), (order,), ordinary=True)
+    assert instance._plan_account_matches([], [order], NOW)
+    async def prepared():
+        return [], [order], object()
+    instance._ordinary = asyncio.create_task(prepared())
+    await instance._ordinary
+    calls = []
+    async def protect(**kwargs):
+        # A delayed fill observation requires another account confirmation.
+        bot._authoritative_pending_confirmations = {'balance': ledger.epoch+1}
+        return False
+    async def refresh(**kwargs):
+        calls.append('refresh')
+        return False
+    async def execute(*args):
+        calls.append('write')
+    instance.protect = protect
+    bot.refresh_protective_authoritative_state = refresh
+    bot.execute_order_plan_to_exchange = execute
+    result = await instance.cycle()
+    assert result['ordinary_completed'] and not result['ordinary_executed']
+    assert instance._ordinary is None
+    assert calls == ['refresh']

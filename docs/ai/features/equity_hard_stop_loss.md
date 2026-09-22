@@ -638,7 +638,9 @@ need not discard expensive preparation: Rust consumes the latest raw balance in 
 calculation. That captured raw balance must remain unchanged through reconciliation and admission.
 A completed ordinary plan gets a protective pass and its guarded execution before the next
 account refresh, avoiding deterministic invalidation by that confirming read; the subsequent
-refresh still receives its own protective pass. Stale or changed receipts remain inadmissible. Enabled ordinary fill consumers also bind the
+refresh still receives its own protective pass. If account facts or pending confirmations already
+invalidate that completed plan, discard it for replanning instead of reporting an execution turn.
+Stale or changed receipts remain inadmissible. Enabled ordinary fill consumers also bind the
 canonical fill signature and readiness to their plan and connector receipt, including PnL/fee-only
 enrichment. This does not impose ordinary fill requirements on protective closes or otherwise
 valid plans without those consumers. A failed or incomplete background fill refresh requires a
