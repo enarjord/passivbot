@@ -4,7 +4,7 @@
 
 The runtime rules below describe legacy HSL, which remains the trading default.
 The `hsl_revised*` Rust components implement the approved
-[best-effort redesign](../../plans/hsl_best_effort_redesign.md). Backtests and CPU
+[best-effort redesign](../../plans/hsl_best_effort_redesign.md). Backtests, CPU/GPU
 optimization and live execution can explicitly select this engine. Its historical candle projection deliberately
 uses the finest causal source throughout lookback, including internal/suffix gaps;
 the legacy prefix-only coarse-candle restriction below does not apply to those
@@ -13,8 +13,9 @@ Offline qualification is distinct from operator-approved live exchange validatio
 
 `live.hsl_engine` is the startup-only shared selector (`legacy` default, `revised`
 opt-in). It cannot be varied by scenario or optimizer override. Backtest payloads and
-CPU optimizer and live entry points support coin, pside and unified modes; the GPU backend
-rejects revised selection. The [live validation checklist](../../hsl_revised_live_validation.md)
+CPU optimizer and live entry points support coin, pside and unified modes. The Metal/CUDA
+GPU backend supports revised single- and multi-coin 1m screening for both strategy families
+in all three modes, retaining exact Rust validation and its documented execution/metric limits. The [live validation checklist](../../hsl_revised_live_validation.md)
 defines operator checks and rollback; no default or running process changes implicitly.
 Revised configuration requires explicit restart policy when enabled, explicit
 `bot.hsl` for unified mode, and a finite 1–90 day enabled lookback. Removed fields
@@ -36,11 +37,11 @@ remain invalid. This exception does not authorize any order or waive execution i
 
 For the revised estimator, incomplete initial exposure seeds one scope-level entry-value
 peak, even with usable candles. The relative reference is
-`-(retained_net_realized_pnl + current_upnl)`; sum selected currency components before
+`-retained_net_realized_pnl` in the current-equity coordinate system; sum selected currency components before
 normalization. It adds no price/EMA sample or claimed opening timestamp. A supported
 flatten resets it, and a fresh reconstruction replaces it when opening evidence changes.
 This explicitly accepted approximation may include loss originating before lookback;
-actual out-of-window fills/cashflows remain excluded. See the [reference policy](../../plans/hsl_best_effort_redesign.md#missing-opening-with-usable-candles).
+actual out-of-window fills/cashflows remain excluded. See the [current signal and estimator rules](../../hsl_revised.md#best-effort-history).
 
 The shared experimental `hsl_revised_evaluate` boundary composes normalized factual
 snapshots into current permissions. It validates selected current inputs before
