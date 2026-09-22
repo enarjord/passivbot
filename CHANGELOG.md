@@ -13,6 +13,9 @@ since the latest release tag; these features may already be available when insta
   all signal modes and one or both position sides, with bounded independent history,
   static coin-policy overrides, exact Rust validation and checkpoint resume.
 
+- Further reduce revised-HSL replay allocations by reading bounded episode samples
+  directly, preserving duplicate-minute observations and the numerical reference.
+
 - Reduce revised-HSL GPU history memory by storing compact minute samples and
   summaries of completed blocks, preserving same-minute peak/EMA updates and
   bounded-lookback behavior while allowing larger candidate batches.
