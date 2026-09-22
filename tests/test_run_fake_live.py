@@ -2456,3 +2456,34 @@ async def test_reconstruction_scope_recovery_with_fake_exchange(tmp_path, monkey
         assert seen[0] == seen[1]
     finally:
         _cleanup_fake_user_state(user)
+
+
+def test_replay_comparison_ignores_only_revised_scheduler_pass_count():
+    from copy import deepcopy
+    result = dict(updated=True, ordinary_completed=True, ordinary_executed=True,
+                  protective_work=False, engine="revised", passes=2)
+    left = {"step_summaries": [dict(step_index=1, result=str(result), fills=1,
+                                    open_orders=0, positions=[])]}
+    left.update(fake_exchange_state={}, fills=[], positions=[], hsl_trace={})
+    right = deepcopy(left)
+    right["step_summaries"][0]["result"] = str(dict(result, passes=3))
+    original = deepcopy(right)
+    assert _compare_run_artifacts(left, right)["match"]
+    assert right == original  # Full diagnostics remain in the saved artifacts.
+    for key, value in [("updated", False), ("ordinary_completed", False),
+                       ("ordinary_executed", False), ("protective_work", True),
+                       ("preparation_pending", True), ("current_io_unavailable", True)]:
+        right["step_summaries"][0]["result"] = str(dict(result, **{key: value}))
+        assert not _compare_run_artifacts(left, right)["match"], key
+    right["step_summaries"][0]["result"] = str(dict(result, passes=3))
+    right["step_summaries"][0]["fills"] = 2
+    assert not _compare_run_artifacts(left, right)["match"]
+
+
+def test_replay_comparison_retains_nonrevised_and_malformed_results():
+    for result in ["opaque", "{bad", "{'engine': 'legacy', 'passes': 2}"]:
+        left = {"step_summaries": [{"result": result}]}
+        right = {"step_summaries": [{"result": result + " changed"}]}
+        for payload in (left, right):
+            payload.update(fake_exchange_state={}, fills=[], positions=[], hsl_trace={})
+        assert not _compare_run_artifacts(left, right)["match"]

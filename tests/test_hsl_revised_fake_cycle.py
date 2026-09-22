@@ -99,7 +99,7 @@ async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkey
             repeated_trace, = (tmp_path / 'repeat').rglob('hsl_trace.json')
             second = runner._load_run_artifacts(repeated_trace.parent)
             comparison = runner._compare_run_artifacts(first, second)
-            assert comparison['match'], comparison['diffs']
+            assert comparison['match'], json.dumps(comparison['diffs'], indent=2)
     finally:
         _cleanup_fake_user_state(user)
 
@@ -239,3 +239,21 @@ async def test_ready_ordinary_plan_is_serviced_before_balance_refresh_with_prote
     finally:
         instance.cancel_inputs()
         await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_fake_cycle_settles_current_source_before_advancing_scenario(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from live import hsl_revised_live
+    reads = asyncio.create_task(asyncio.sleep(.01))
+    seen = []
+    async def cycle():
+        seen.append(reads.done())
+        return dict(updated=True, ordinary_executed=True)
+    instance = SimpleNamespace(cycle=cycle, _ordinary=None, _source_task=reads)
+    monkeypatch.setattr(hsl_revised_live, "owner", lambda bot: instance)
+    bot = SimpleNamespace(config={"live": {"hsl_engine": "revised"}})
+    result = await runner._run_fake_cycle_ready(bot)
+    assert seen == [False, True]
+    assert result["ordinary_executed"] and result["passes"] == 2

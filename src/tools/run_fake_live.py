@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import asyncio
 import json
 import logging
@@ -728,10 +729,14 @@ async def _run_fake_cycle_ready(bot):
         # await arbitrary ordinary work to completion before protection.
         for attempt in range(8):
             result = await instance.cycle()
-            if not result['updated'] or result['ordinary_executed']:
+            input_tasks = [task for task in (getattr(instance, '_fill_task', None),
+                getattr(instance, '_source_task', None)) if task is not None and not task.done()]
+            if not result['updated'] or (result['ordinary_executed'] and not input_tasks):
                 return dict(result, engine='revised', passes=attempt+1)
-            pending = [task for task in (instance._ordinary,
-                getattr(instance, '_fill_task', None), getattr(instance, '_source_task', None))
+            # A completed ordinary plan does not settle newly scheduled history
+            # reads. Give them the same bounded opportunity before advancing the
+            # scenario clock; the next production pass observes their results.
+            pending = [task for task in (instance._ordinary, *input_tasks)
                 if task is not None and not task.done()]
             if pending:
                 await asyncio.wait(pending, timeout=.25)
@@ -850,7 +855,23 @@ def _canonical_hsl_trace(trace: dict[str, Any]) -> dict[str, Any]:
 
 def _canonicalize_artifact(name: str, payload: Any) -> Any:
     if name == "step_summaries":
-        return payload
+        # The saved report retains scheduler diagnostics. Replay equivalence
+        # compares outcomes, not how many async owner passes settled a step.
+        # Readiness, pending work, protection and all exchange facts stay strict.
+        normalized = []
+        for step in payload:
+            step = dict(step)
+            result = step.get("result")
+            if isinstance(result, str):
+                try:
+                    parsed = ast.literal_eval(result)
+                except (ValueError, SyntaxError):
+                    parsed = None
+                if isinstance(parsed, dict) and parsed.get("engine") == "revised":
+                    parsed.pop("passes", None)
+                    step["result"] = parsed
+            normalized.append(step)
+        return normalized
     if name == "fills":
         return sorted(
             [_canonical_fill(fill) for fill in payload],
