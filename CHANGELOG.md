@@ -13,6 +13,9 @@ since the latest release tag; these features may already be available when insta
 - Reduce revised-HSL CPU allocations by streaming the shared numerical signal into
   its controller and reusing validated simulator buffers and policy references.
   Diagnostic output, current decisions, and reconstruction fallbacks are preserved.
+- Reduce revised-HSL Trailing Martingale Metal optimizer overhead by sizing private arrays to
+  the prepared coin count, preserving full-capacity results and temporal replay.
+
 - Support revised HSL in multi-coin Metal/CUDA optimization for both strategy families,
   all signal modes and one or both position sides, with bounded independent history,
   static coin-policy overrides, exact Rust validation and checkpoint resume.

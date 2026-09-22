@@ -457,3 +457,18 @@ def test_cuda_temporal_batch_increase_preserves_outputs_and_partial_tail(cuda, c
         assert actual.keys() == baseline.keys()
         for key in baseline:
             np.testing.assert_array_equal(actual[key], baseline[key], err_msg=key)
+
+
+def test_mps_coin_capacity_is_explicit_and_preserves_other_source(monkeypatch):
+    import sys
+    from optimization.gpu.runtime import compile_shader
+
+    sources = []
+    torch = SimpleNamespace(
+        backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+        mps=SimpleNamespace(compile_shader=lambda source: sources.append(source)),
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    source = "constant int MAX_COINS = 64; // 64 remains elsewhere"
+    compile_shader(source, mps_coin_capacity=4)
+    assert sources == ["constant int MAX_COINS = 4; // 64 remains elsewhere"]

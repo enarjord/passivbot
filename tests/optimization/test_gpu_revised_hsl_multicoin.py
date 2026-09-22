@@ -16,11 +16,11 @@ pytestmark = pytest.mark.skipif(
 
 
 def make_proxy(mode, strategy='trailing_martingale', sides=('long','short'), minutes=3000,
-               engine='revised', enabled=True, override=None, chunk=False, lookback=1):
+               engine='revised', enabled=True, override=None, chunk=False, lookback=1, coin_count=2):
     config=(generated_template(get_template_config(),mode) if engine=='revised'
             else get_template_config())
     config['live'].update(hsl_engine=engine,hsl_signal_mode=mode)
-    coins=['AAA','BBB']
+    coins=['AAA','BBB']+[f'COIN{i}' for i in range(2,coin_count)]
     config['live'].update(strategy_kind=strategy,
         approved_coins={s:coins if s in sides else [] for s in ('long','short')},
         ignored_coins={'long':[],'short':[]},pnls_max_lookback_days=lookback,max_warmup_minutes=60)
@@ -38,12 +38,12 @@ def make_proxy(mode, strategy='trailing_martingale', sides=('long','short'), min
         config['coin_overrides']={'AAA':{'bot':{'long':{'hsl':override}}}}
     config=prepare_config(config,verbose=False,target='canonical',runtime=None)
     config['backtest']['coins']={'binance':coins}
-    candles,timestamps=_synthetic_hlcvs(minutes,2,43)
+    candles,timestamps=_synthetic_hlcvs(minutes,len(coins),43)
     markets={c:dict(qty_step=.001,price_step=.01,min_qty=.001,min_cost=1.,c_mult=1.,
                     maker=.0002,taker=1e-6,exchange='binance') for c in coins}
     proxy=MpsMulticoinProxy(config=config,hlcvs=candles,mss=markets,btc=np.full(minutes,50000.),
         timestamps=timestamps,exchange='binance',batch_size=3,needed_metrics={'adg_usd'},
-        max_dispatch_candidate_bars=6000 * len(sides) if chunk else 1000000)
+        max_dispatch_candidate_bars=minutes * len(coins) * len(sides) if chunk else 1000000)
     if chunk:
         assert proxy.fused_runner is None  # temporal multi-coin replay is single-side
         for runner in proxy.runners.values():
@@ -180,3 +180,33 @@ def test_scratch_profiles_count_each_candidate_once(strategy,chunk,sides):
     _add_gpu_runner_profile(profile,runner,side_count=len(sides))
     assert profile['kernel_candidate_bars']==steps*2*len(sides)
     assert profile['actual_dispatch_batch_sizes']==[2,1]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Metal specialization")
+@pytest.mark.parametrize('strategy',['ema_anchor','trailing_martingale'])
+@pytest.mark.parametrize('mode',['coin','pside','unified'])
+@pytest.mark.parametrize('sides',[('long',),('long','short')])
+def test_metal_revised_capacity_matches_full_arrays(strategy,mode,sides):
+    candidates=[{}, {'long_hsl_red_threshold':1e-6,'short_hsl_red_threshold':1e-6,
+                     'hsl_red_threshold':1e-6}]
+    small=make_proxy(mode,strategy,sides,coin_count=3)
+    runner,actual=raw(small,candidates)
+    assert runner.mps_coin_capacity==(4 if strategy=="trailing_martingale" else None)
+    full=make_proxy(mode,strategy,sides,coin_count=3)
+    full_runner=full.fused_runner if full.fused_runner else full.runners['long']
+    if strategy=="trailing_martingale":
+        full_runner.mps_coin_capacity=64
+    _,expected=raw(full,candidates)
+    compare(actual,expected)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Metal specialization")
+def test_metal_capacity_replay_layout_matches_compiled_variant():
+    small=make_proxy('coin',sides=('long',),coin_count=3,chunk=True)
+    runner,actual=raw(small,[{}])
+    full=make_proxy('coin',sides=('long',),coin_count=3,chunk=True)
+    full_runner=full.runners['long']
+    full_runner.mps_coin_capacity=64
+    _,expected=raw(full,[{}])
+    compare(actual,expected)
+    assert 0 < runner._replay_state_bytes < full_runner._replay_state_bytes
