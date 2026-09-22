@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce revised-HSL GPU history memory by storing compact minute samples and
+  summaries of completed blocks, preserving same-minute peak/EMA updates and
+  bounded-lookback behavior while allowing larger candidate batches.
+
 - Add offline revised-HSL single-coin GPU qualification on Metal and CUDA, with
   bounded history scratch and current-equity signal parity tests. Public GPU optimization
   remains gated while the remaining integration is completed.

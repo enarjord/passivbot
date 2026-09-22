@@ -520,7 +520,7 @@ inline void bind_revised_hsl(
     thread HslState& h, device RevisedHslNode* trees, device int* rows,
     int scope, int capacity, int tree_size, int lookback, bool initialize, bool owner
 ) {
-    h.revised_tree = trees + scope * tree_size * 2;
+    h.revised_tree = trees + scope * revised_hsl_storage_nodes(capacity, tree_size);
     h.revised_times = rows + scope * capacity * 2;
     h.revised_realized = reinterpret_cast<device float*>(h.revised_times + capacity);
     h.revised_lookback = lookback;
