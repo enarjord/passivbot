@@ -177,19 +177,21 @@ impl Report {
             self.summary.worst_ema = self.summary.worst_ema.max(d.ema);
         }
         self.sequence += 1;
-        self.samples.push(Sample {
-            sequence: self.sequence,
-            timestamp: now,
-            side: key.0,
-            coin: key.1,
-            phase,
-            action: decision.map(|d| d.action),
-            raw: decision.map(|d| d.raw),
-            ema: decision.map(|d| d.ema),
-            red_at: decision.and_then(|d| d.red_at),
-            flat_at: decision.and_then(|d| d.flat_at),
-            reasons: output.reasons.iter().cloned().collect(),
-        });
+        if self.detailed {
+            self.samples.push(Sample {
+                sequence: self.sequence,
+                timestamp: now,
+                side: key.0,
+                coin: key.1,
+                phase,
+                action: decision.map(|d| d.action),
+                raw: decision.map(|d| d.raw),
+                ema: decision.map(|d| d.ema),
+                red_at: decision.and_then(|d| d.red_at),
+                flat_at: decision.and_then(|d| d.flat_at),
+                reasons: output.reasons.iter().cloned().collect(),
+            });
+        }
         self.scopes.insert(key, scope);
         if !self.detailed {
             self.samples.clear();
@@ -427,7 +429,7 @@ impl Report {
 
 impl Backtest<'_> {
     /// Reporting survives result-array draining and never supplies replay input.
-    pub fn revised_hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
+    pub fn revised_hsl_report_metadata(&self) -> Result<Option<serde_json::Value>, String> {
         let Some(config) = &self.backtest_params.equity_hard_stop_loss.revised else {
             return Ok(None);
         };
@@ -446,10 +448,6 @@ impl Backtest<'_> {
         }
         let summary =
             serde_json::to_value(&self.revised_hsl_report.summary).map_err(|e| e.to_string())?;
-        let samples =
-            serde_json::to_value(&self.revised_hsl_report.samples).map_err(|e| e.to_string())?;
-        let events =
-            serde_json::to_value(&self.revised_hsl_report.events).map_err(|e| e.to_string())?;
         let scopes = self
             .revised_hsl_report
             .scopes
@@ -464,8 +462,27 @@ impl Backtest<'_> {
             "schema_version": 1, "engine": "revised", "mode": config.mode,
             "detailed": self.revised_hsl_report.detailed, "scopes": scopes,
             "coins": self.backtest_params.coins, "summary": summary,
-            "samples": samples, "events": events,
+            "samples": [], "events": [],
         })))
+    }
+
+    /// Borrow the diagnostic trace without a second per-field JSON allocation.
+    pub fn revised_hsl_samples(&self) -> &[Sample] {
+        &self.revised_hsl_report.samples
+    }
+
+    pub fn revised_hsl_events(&self) -> &[Event] {
+        &self.revised_hsl_report.events
+    }
+
+    #[cfg(test)]
+    pub fn revised_hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
+        let Some(mut value) = self.revised_hsl_report_metadata()? else {
+            return Ok(None);
+        };
+        value["samples"] = serde_json::to_value(self.revised_hsl_samples()).map_err(|e| e.to_string())?;
+        value["events"] = serde_json::to_value(self.revised_hsl_events()).map_err(|e| e.to_string())?;
+        Ok(Some(value))
     }
 
     pub(super) fn revised_report_key(&self, side: usize, coin: usize) -> Key {
