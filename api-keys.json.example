@@ -37,6 +37,13 @@
         "secret": "secret",
         "passphrase": "passphrase"
     },
+    "lighter_01": {
+        "exchange": "lighter",
+        "account_index": 123,
+        "api_key_index": 4,
+        "private_key": "YOUR_80_HEX_CHARACTER_L2_API_PRIVATE_KEY",
+        "signer_path": "/absolute/path/to/compatible-lighter-signer"
+    },
     "hyperliquid_01" : {
         "exchange": "hyperliquid",
         "wallet_address": "wallet_address",

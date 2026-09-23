@@ -1,0 +1,392 @@
+"""Lighter USDC perpetuals through CCXT, using an existing L2 API key."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import math
+import re
+import secrets
+from pathlib import Path
+
+import ccxt.async_support as ccxt_async
+import ccxt.pro as ccxt_pro
+
+from config.access import require_live_value
+from exchanges.ccxt_bot import CCXTBot
+
+# CCXT 4.5.66's ctypes ABI matches this official lighter-python revision.
+SIGNER_REVISION = "8bac9f56b9d0dd0eedaeb53a00ccb4fc9d77082e"
+SIGNER_SHA256 = {
+    "linux-amd64": "28d27620a648510e826250707246fca84d299df59080385cc6649c601e94944c",
+    "linux-arm64": "a56b761531dc9242456993c45739115fa235dd1ad095cb3b27c30e4d074db3ad",
+    "darwin-arm64": "581a8416fbfdd1196c21fb8e3a9af1dd39a8d5f2c65dce6e9d5abf2319fc8919",
+    "windows-amd64": "b1ffc4bdaefa595112f3429cab9536fe92d6e6bdd52057b6faedeb78cb2975b0",
+}
+
+
+def finite(value, name: str, *, positive=False):
+    if isinstance(value, bool):
+        raise ValueError(f"Lighter {name} must be numeric")
+    number = float(value)
+    if not math.isfinite(number) or (positive and number <= 0):
+        raise ValueError(f"Lighter invalid {name}")
+    return number
+
+
+def encode_client_id(value: str) -> int:
+    # Four namespace bits, twelve order-type bits, thirty-two random bits.
+    if not re.fullmatch(r"0x0[0-9a-f]{11}", value):
+        raise ValueError("Lighter requires a generated Passivbot client order ID")
+    return (0xB << 44) | int(value[2:], 16)
+
+
+def decode_client_id(value) -> str:
+    text = str(value or "")
+    if text.isdecimal():
+        number = int(text)
+        if 0 <= number < 2**48 and number >> 44 == 0xB:
+            return f"0x{number & ((1 << 44) - 1):012x}"
+    return text
+
+
+def client_config(user: dict) -> dict:
+    """Do not pass an L2 key as CCXT's L1 privateKey (which rotates keys)."""
+    account = user["account_index"]
+    key_index = user["api_key_index"]
+    if isinstance(account, bool) or not isinstance(account, int) or account < 0:
+        raise ValueError("Lighter account_index must be a nonnegative integer")
+    if (
+        isinstance(key_index, bool)
+        or not isinstance(key_index, int)
+        or not 4 <= key_index <= 254
+    ):
+        raise ValueError("Lighter api_key_index must be an integer between 4 and 254")
+    private_key = user["private_key"].removeprefix("0x")
+    if not re.fullmatch(r"[0-9a-fA-F]{80}", private_key):
+        raise ValueError("Lighter private_key must be an L2 API private key")
+    options = dict(user.get("options", {}))
+    path = str(Path(user["signer_path"]).expanduser().resolve())
+    if not Path(path).is_file():
+        raise ValueError(
+            "Lighter signer_path must identify the compatible official signer"
+        )
+    if (
+        hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        not in SIGNER_SHA256.values()
+    ):
+        raise ValueError(
+            f"Lighter signer must match official revision {SIGNER_REVISION}"
+        )
+    options.update(
+        {
+            "accountIndex": account,
+            "apiKeyIndex": key_index,
+            "libraryPath": path,
+            "builderFee": False,
+            "defaultType": "swap",
+            "auths": {
+                str(account): {
+                    str(key_index): {
+                        "signer": None,
+                        "lighterPrivateKey": private_key,
+                        "deadline": None,
+                        "token": None,
+                    }
+                }
+            },
+        }
+    )
+    return {"enableRateLimit": True, "timeout": 30000, "options": options}
+
+
+class _LighterMixin:
+    def create_order_request(self, symbol, type, side, amount, price=None, params=None):
+        requests = super().create_order_request(
+            symbol, type, side, amount, price, params or {}
+        )
+        # CCXT 4.5.66 omits these with builderFee=False but its ctypes signer
+        # still requires them. Zero is the official SDK's no-integrator value.
+        for request in requests:
+            request.update(
+                integrator_account_index=0,
+                integrator_taker_fee=0,
+                integrator_maker_fee=0,
+            )
+        return requests
+
+    async def prepare_api_key(self):
+        account, key = str(self.options["accountIndex"]), str(
+            self.options["apiKeyIndex"]
+        )
+        signer = await self.load_account(
+            self.options["chainId"],
+            self.get_lighter_private_key(account, key),
+            key,
+            account,
+        )
+        if signer is None:
+            raise ValueError("Lighter existing API key signer is unavailable")
+
+    async def fetch_ohlcv(
+        self, symbol, timeframe="1h", since=None, limit=None, params=None
+    ):
+        # The API tail-anchors over-wide ranges and returns at most 500 candles.
+        # A bounded half-open range prevents an old since silently losing its
+        # first half when CCXT/the candle manager requests 1,000 rows.
+        params = dict(params or {})
+        count = min(500, int(limit)) if limit is not None else 500
+        if count <= 0:
+            raise ValueError("Lighter candle limit must be positive")
+        duration = self.parse_timeframe(timeframe) * 1000
+        end = int(params.get("until", self.milliseconds()))
+        if since is None:
+            since = end // duration * duration - count * duration
+        params["until"] = min(end, int(since) + count * duration)
+        return await super().fetch_ohlcv(symbol, timeframe, int(since), count, params)
+
+    async def fetch_open_orders(self, symbol=None, since=None, limit=None, params=None):
+        await self.load_markets()
+        await self.prepare_api_key()
+        request = {"account_index": self.options["accountIndex"], "market_type": "perp"}
+        if symbol is not None:
+            request["market_id"] = self.market(symbol)["id"]
+        request.update(params or {})
+        response = await self.privateGetAccountActiveOrders(request)
+        rows = response["orders"]
+        if not isinstance(rows, list):
+            raise ValueError("Lighter active orders must be a complete list")
+        for row in rows:
+            amount = finite(row["initial_base_amount"], "order amount", positive=True)
+            remaining = finite(
+                row["remaining_base_amount"], "remaining order amount", positive=True
+            )
+            finite(row["price"], "order price", positive=True)
+            if (
+                remaining > amount
+                or not isinstance(row["reduce_only"], bool)
+                or not isinstance(row["is_ask"], bool)
+            ):
+                raise ValueError("Lighter invalid active order semantics")
+        orders = self.parse_orders(rows, None, since, limit)
+        ids = [o["id"] for o in orders]
+        if any(not value for value in ids) or len(set(ids)) != len(ids):
+            raise ValueError(
+                "Lighter active order identities are missing or duplicated"
+            )
+        return orders
+
+    async def create_order(self, symbol, type, side, amount, price=None, params=None):
+        params = dict(params or {})
+        client_id = decode_client_id(params["clientOrderId"])
+        # A sendTx receipt is not an order acknowledgement. Resolve the exact
+        # client identity from exchange state; never retry a possibly sent write.
+        await super().create_order(symbol, type, side, amount, price, params)
+        for attempt in range(5):
+            await asyncio.sleep(1)
+            active = await self.fetch_open_orders(symbol)
+            matches = [o for o in active if o["clientOrderId"] == client_id]
+            if not matches:
+                closed = await self.fetch_closed_orders(symbol, limit=100)
+                matches = [o for o in closed if o["clientOrderId"] == client_id]
+            if len(matches) == 1:
+                return matches[0]
+            if len(matches) > 1:
+                raise ValueError("Lighter duplicate client order identity")
+        raise ccxt_async.RequestTimeout(
+            "Lighter submitted order has no confirmed exchange acknowledgement"
+        )
+
+    async def cancel_order(self, id, symbol=None, params=None):
+        await super().cancel_order(id, symbol, params or {})
+        # A cancel transaction may still be pending; absence from authoritative
+        # active orders confirms removal without claiming cancellation over a fill.
+        for attempt in range(5):
+            await asyncio.sleep(1)
+            active = await self.fetch_open_orders(symbol)
+            if all(o["id"] != str(id) for o in active):
+                return {
+                    "id": str(id),
+                    "symbol": symbol,
+                    "status": "success",
+                    "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+                }
+        raise ccxt_async.RequestTimeout(
+            "Lighter cancellation has not left active orders"
+        )
+
+    def parse_order(self, order, market=None):
+        parsed = super().parse_order(order, market)
+        parsed["clientOrderId"] = decode_client_id(parsed["clientOrderId"])
+        return parsed
+
+    async def fetch_balance(self, params=None):
+        result = await super().fetch_balance(params or {})
+        rows = result["info"]["accounts"]
+        if (
+            len(rows) != 1
+            or int(rows[0]["account_index"]) != self.options["accountIndex"]
+        ):
+            raise ValueError("Lighter returned an unexpected account")
+        # collateral is the realized derivatives wallet, excluding unrealized PnL.
+        collateral = finite(rows[0]["collateral"], "collateral")
+        result["total"]["USDC"] = collateral
+        result["USDC"]["total"] = collateral
+        return result
+
+    async def fetch_positions(self, symbols=None, params=None):
+        await self.load_markets()
+        response = await self.publicGetAccount(
+            {"by": "index", "value": self.options["accountIndex"], **(params or {})}
+        )
+        rows = response["accounts"]
+        if (
+            len(rows) != 1
+            or int(rows[0]["account_index"]) != self.options["accountIndex"]
+        ):
+            raise ValueError("Lighter returned an unexpected account")
+        positions = rows[0]["positions"]
+        if not isinstance(positions, list):
+            raise ValueError("Lighter positions must be a list")
+        for row in positions:
+            size = finite(row["position"], "position size")
+            if (
+                size < 0
+                or row["sign"] not in (-1, 1)
+                or row["margin_mode"] not in (0, 1)
+            ):
+                raise ValueError("Lighter invalid position size, sign, or margin mode")
+            if size:
+                finite(row["avg_entry_price"], "entry price", positive=True)
+        return self.parse_positions(positions, symbols)
+
+
+class AsyncLighter(_LighterMixin, ccxt_async.lighter):
+    pass
+
+
+class ProLighter(_LighterMixin, ccxt_pro.lighter):
+    pass
+
+
+class LighterBot(CCXTBot):
+    def __init__(self, config):
+        super().__init__(config)
+        self.quote = "USDC"
+        self.hedge_mode = False
+        self._lighter_write_lock = asyncio.Lock()
+
+    def create_ccxt_sessions(self):
+        config = client_config(self.user_info)
+        self.cca = AsyncLighter(config)
+        self._apply_endpoint_override(self.cca)
+        self.ccp = (
+            ProLighter(client_config(self.user_info)) if self.ws_enabled else None
+        )
+        if self.ccp is not None:
+            self._apply_endpoint_override(self.ccp)
+
+    def format_custom_id_single(self, order_type_id):
+        if not 0 <= order_type_id < 4096:
+            raise ValueError("Lighter order type exceeds the client-ID encoding range")
+        return f"0x{order_type_id:04x}{secrets.randbits(32):08x}"
+
+    def _market_snapshot_ticker_strategy(self):
+        return "symbols"
+
+    async def fetch_tickers_for_symbols(self, symbols):
+        symbols = list(dict.fromkeys(symbols))
+        if not symbols:
+            return {}
+        # Lighter's ticker has last price but no bid/ask. Read actual depth for
+        # requested symbols; never substitute a last trade for the spread.
+        tickers = await self.cca.fetch_tickers(symbols)
+
+        async def fetch_book(symbol):
+            if self.ccp is not None:
+                return await asyncio.wait_for(
+                    self.ccp.watch_order_book(symbol, limit=10), timeout=15
+                )
+            return await self.cca.fetch_order_book(symbol, limit=10)
+
+        if self.ccp is not None:
+            # CCXT owns subscription reuse and sequence validation. Consume a
+            # fresh update for each requested book, never an untimed cached row.
+            books = await asyncio.gather(
+                *(fetch_book(s) for s in symbols), return_exceptions=True
+            )
+            for book in books:
+                if isinstance(book, BaseException):
+                    raise book
+        else:
+            books = [await fetch_book(symbol) for symbol in symbols]
+        result = {}
+        for symbol, book in zip(symbols, books):
+            bid = finite(book["bids"][0][0], "best bid", positive=True)
+            ask = finite(book["asks"][0][0], "best ask", positive=True)
+            last = finite(tickers[symbol]["last"], "last trade", positive=True)
+            if bid > ask:
+                raise ValueError("Lighter crossed order book")
+            result[symbol] = {
+                "bid": bid,
+                "ask": ask,
+                "last": last,
+                "source": "lighter_order_book_and_ticker",
+            }
+        return result
+
+    async def fetch_tickers(self):
+        return await self.fetch_tickers_for_symbols(sorted(self.markets_dict))
+
+    def _get_position_side_for_order(self, order):
+        return self._normalize_one_way_position_side(order)
+
+    def _build_order_params(self, order):
+        side, pside = order["side"], order["position_side"]
+        if side not in {"buy", "sell"} or pside not in {"long", "short"}:
+            raise ValueError("Lighter order requires explicit side and position_side")
+        reduce_only = (side == "sell" and pside == "long") or (
+            side == "buy" and pside == "short"
+        )
+        params = {
+            "clientOrderId": encode_client_id(order["custom_id"]),
+            "reduceOnly": reduce_only,
+        }
+        if order.get("type", "limit") == "limit":
+            params["timeInForce"] = "GTT"
+            if require_live_value(self.config, "time_in_force") == "post_only":
+                params.update(postOnly=True, orderExpiry=-1)
+        return params
+
+    async def update_exchange_config(self):
+        # Lighter positions are intrinsically one-way; there is no hedge-mode mutation.
+        await self.cca.prepare_api_key()
+
+    async def update_exchange_config_by_symbols(self, symbols):
+        async with self._lighter_write_lock:
+            for symbol in symbols:
+                mode = self._get_margin_mode_for_symbol(symbol)
+                await self.cca.set_leverage(
+                    self._calc_leverage_for_symbol(symbol), symbol, {"marginMode": mode}
+                )
+                self._record_live_margin_mode(symbol, mode)
+
+    def set_market_specific_settings(self):
+        super().set_market_specific_settings()
+        for symbol in self.symbols_requiring_market_sizing():
+            # CCXT's quote_multiplier is a wire scaling factor, not contract size.
+            self.c_mults[symbol] = 1.0
+            fraction = finite(
+                self.markets_dict[symbol]["info"]["min_initial_margin_fraction"],
+                "minimum margin fraction",
+                positive=True,
+            )
+            self.max_leverage[symbol] = 10000 / fraction
+
+    async def execute_order(self, order):
+        async with self._lighter_write_lock:
+            return await super().execute_order(order)
+
+    async def execute_cancellation(self, order):
+        async with self._lighter_write_lock:
+            return await super().execute_cancellation(order)

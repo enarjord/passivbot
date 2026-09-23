@@ -766,7 +766,7 @@ def get_quote(exchange, quote=None):
         return quote
     # Legacy hardcoded defaults for backward compatibility
     exchange = to_ccxt_exchange_id(exchange)
-    return "USDC" if exchange in ["hyperliquid", "defx", "paradex"] else "USDT"
+    return "USDC" if exchange in ["hyperliquid", "defx", "paradex", "lighter"] else "USDT"
 
 
 def remove_powers_of_ten(text):

@@ -850,6 +850,13 @@ def compute_psize_pprice(
     return final_state
 
 
+def apply_exchange_raw_position_overrides(events: List[Dict[str, object]]) -> None:
+    apply_hyperliquid_raw_psize_overrides(events)
+    from exchanges.lighter_fill_events import apply_lighter_raw_position_overrides
+
+    apply_lighter_raw_position_overrides(events)
+
+
 def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> None:
     """
     Improve Hyperliquid psize/pprice annotations from raw fill startPosition data.
@@ -3912,7 +3919,7 @@ class FillEventsManager:
                 ensure_qty_signage(payload)
                 order_same_timestamp_fills(payload)
                 compute_psize_pprice(payload)
-                apply_hyperliquid_raw_psize_overrides(payload)
+                apply_exchange_raw_position_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
                 normalized_days = {_day_key(ev.timestamp) for ev in self._events}
@@ -4753,7 +4760,7 @@ class FillEventsManager:
         ensure_qty_signage(payload)
         order_same_timestamp_fills(payload)
         compute_psize_pprice(payload)
-        apply_hyperliquid_raw_psize_overrides(payload)
+        apply_exchange_raw_position_overrides(payload)
         self._events = [FillEvent.from_dict(ev) for ev in payload]
         self.cache.save(self._events)
         self.cache.update_metadata_from_events(
@@ -5196,7 +5203,7 @@ class FillEventsManager:
             ensure_qty_signage(payload)
             order_same_timestamp_fills(payload)
             compute_psize_pprice(payload)
-            apply_hyperliquid_raw_psize_overrides(payload)
+            apply_exchange_raw_position_overrides(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
             self._events = [FillEvent.from_dict(ev) for ev in payload]
@@ -8280,6 +8287,7 @@ EXCHANGE_BOT_CLASSES: Dict[str, Tuple[str, str]] = {
     "kucoin": ("exchanges.kucoin", "KucoinBot"),
     "okx": ("exchanges.okx", "OKXBot"),
     "weex": ("exchanges.weex", "WeexBot"),
+    "lighter": ("exchanges.lighter", "LighterBot"),
 }
 
 
@@ -8443,10 +8451,14 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return KucoinFetcher(api=bot.cca)
     if exchange == "okx":
         return OkxFetcher(api=bot.cca)
+    if exchange == "lighter":
+        from exchanges.lighter_fill_events import LighterFetcher
+
+        return LighterFetcher(api=bot.cca)
     if exchange == "weex":
         return WeexFetcher(api=bot.cca)
     supported = (
-        "binance, bitget, bitunix, bybit, fake, gateio, hyperliquid, kucoin, okx, weex"
+        "binance, bitget, bitunix, bybit, fake, gateio, hyperliquid, kucoin, lighter, okx, weex"
     )
     raise ValueError(
         f"Unsupported exchange '{exchange}' for live fill events; realized PnL, "

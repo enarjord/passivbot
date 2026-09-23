@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add Lighter USDC perpetual trading through CCXT, including existing API-key authentication,
+  one-way and reduce-only orders, cross/isolated margin, leverage, live market data, and
+  paginated fill/PnL history with restart reconstruction. See the Lighter setup guide.
+
 - Make offline revised-HSL replay comparisons insensitive to async scheduler pass counts,
   while retaining raw diagnostics and strict trading/readiness comparisons. Settle pending
   history reads within the existing bounded fake-cycle loop before advancing scenario time.

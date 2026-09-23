@@ -6,7 +6,7 @@ requires explicit user approval; prefer offline request-construction tests.
 ## Supported Live-Exchange Boundary
 
 The supported production live connectors are Binance, Bybit, Bitget, Bitunix, OKX, Gate.io,
-KuCoin, Hyperliquid, and WEEX. The fake connector is an offline deterministic test harness, not an
+KuCoin, Hyperliquid, WEEX, and Lighter. The fake connector is an offline deterministic test harness, not an
 exchange.
 
 Defx is deliberately unsupported. `src/exchanges/defx.py` and the `setup_bot()` routing branch are
@@ -734,6 +734,36 @@ Handling:
    it is not a supported WEEX data source in this release.
 
 Primary reference: [WEEX V3 trade-detail API](https://www.weex.com/api-doc/contract/Transaction_API/GetTradeDetails).
+
+## Lighter USDC perpetuals
+
+Use the dedicated CCXT adapter and existing L2 API key, with the official signer revision
+specified in [the setup guide](../../exchanges/lighter.md). Never pass that key as CCXT's L1
+`privateKey`: the default L1 setup rotates API keys and may approve builder fees. Force
+`builderFee=false` and provide the official zero-valued integrator signing fields.
+
+Lighter is one-way. Normalize authoritative buy/sell plus explicit `reduce_only` into position
+side; every close must be reduce-only. Encode Passivbot client IDs into the exchange's 48-bit
+integer range with a namespace and reversible order-type marker. Do not infer ownership from
+side, price, or quantity. Quantities are base units, not `quote_multiplier` contracts.
+
+Serialize signed writes and propagate failures. A `sendTx` receipt is pending transaction evidence,
+not an active-order acknowledgement. Confirm the exact client ID through active/inactive orders;
+confirm cancellation by authoritative active-order removal. Never blindly resubmit an uncertain
+write. Fetch all active perpetual orders in one request, rather than only configured markets.
+
+Cap candle pages at 500 and bound the end of each request to prevent the exchange from silently
+tail-anchoring an over-wide warmup window. Verify the pinned signer hash before native loading.
+
+Use actual order-book quotes because ticker responses lack bid/ask. Keep cross/isolated margin
+and leverage together in their per-market configuration transaction. Balance is realized USDC
+collateral and must validate the exact requested account, not CCXT's missing-field zero defaults.
+
+Cursor-paginate all perpetual trades and reject missing pages, stalled cursors, or conflicting
+identities. Retain raw pre-fill position evidence for restart reconstruction, and split one-way
+position flips into close/open components. Reductions require authoritative account-side PnL,
+except omitted zero values independently proven by the exchange's before-state. Preserve missing
+fee evidence for the canonical best-effort fee policy rather than fabricating zero fees.
 
 ## Unavailable Configured Live Markets
 
