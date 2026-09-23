@@ -413,6 +413,20 @@ def test_missing_pnl_and_nonfinite_trade_fail_closed():
     assert f.normalize_trade(row)[0]["fees"] is None
 
 
+def test_omitted_zero_pnl_requires_original_decimal_evidence():
+    f, _ = fetcher()
+    row = trade(
+        taker_position_size_before="-1000000",
+        taker_entry_quote_before="100000000000.000002",
+        size="1000000",
+        price="100000",
+    )
+    with pytest.raises(ValueError, match="missing realized PnL"):
+        f.normalize_trade(row)
+    row["taker_entry_quote_before"] = "100000000000"
+    assert f.normalize_trade(row)[0]["pnl"] == 0.0
+
+
 @pytest.mark.asyncio
 async def test_trade_cursor_deduplication_and_range():
     newest = trade(trade_id=12, timestamp=3000)

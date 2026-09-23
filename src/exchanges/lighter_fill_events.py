@@ -101,12 +101,13 @@ def normalize_lighter_trade(row, account, market):
     if reducing and pnl_key not in row:
         # Sparse JSON may omit a zero PnL. Accept that only if the exact
         # exchange before-state proves zero at USDC's six-decimal precision.
+        native_before = abs(Decimal(str(row[f"{role}_position_size_before"])))
         gross = (
             (
-                Decimal(str(price))
-                - Decimal(str(entry_quote)) / abs(Decimal(str(before)))
+                Decimal(str(row["price"]))
+                - Decimal(str(row[f"{role}_entry_quote_before"])) / native_before
             )
-            * Decimal(str(close_qty))
+            * min(native_before, Decimal(str(row["size"])))
             * (1 if before > 0 else -1)
         )
         if abs(gross) >= Decimal("0.000001"):
