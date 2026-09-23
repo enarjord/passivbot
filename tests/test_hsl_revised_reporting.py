@@ -192,3 +192,14 @@ def test_inactive_coin_scope_has_no_native_permission_or_green_plot():
     assert all("inactive_scope" in row["reasons"] for row in rows)
     assert create_forager_hard_stop_drawdown_figure(
         pd.DataFrame(), {}, hard_stop_plot_data=data, autoplot=False, return_figures=True) == {}
+
+
+def test_report_rows_and_reason_lists_are_independent():
+    report = run(payload("coin"))[4]["revised"]
+    before = deepcopy(report)
+    assert len(report["samples"]) > 2
+    report["samples"][0]["raw"] = -123.0
+    report["samples"][0]["reasons"].append("caller annotation")
+    assert report["samples"][1:] == before["samples"][1:]
+    assert report["events"] == before["events"]
+    assert run(payload("coin"))[4]["revised"] == before

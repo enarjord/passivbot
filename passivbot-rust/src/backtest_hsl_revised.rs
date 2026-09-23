@@ -890,6 +890,18 @@ mod tests {
             assert_eq!(panics[0].index, 3, "{mode}");
             assert_eq!(panics[0].fill_qty, -10.0);
             let report = bt.revised_hsl_report_value().unwrap().unwrap();
+            // Native Python transport must preserve the complete serde schema,
+            // including optional values and normal/panic/halted transitions.
+            pyo3::prepare_freethreaded_python();
+            pyo3::Python::with_gil(|py| {
+                use pyo3::prelude::*;
+                let actual = crate::python::revised_hsl_report_to_py(py, &bt).unwrap().unwrap();
+                let encoded: String = py.import_bound("json").unwrap()
+                    .call_method1("dumps", (actual,)).unwrap().extract().unwrap();
+                let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+                assert_eq!(decoded, report, "direct report transport: {mode}");
+            });
+
             assert_eq!(report["summary"]["triggers"], 1, "{mode}: {report}");
             assert_eq!(report["summary"]["restarts"], 0);
             assert_eq!(report["summary"]["panic_close_fills"], 1);

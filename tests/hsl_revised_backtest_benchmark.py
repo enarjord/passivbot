@@ -5,11 +5,15 @@ Run from the repository root with the current rebuilt extension:
 
 Compare the digest across builds before interpreting elapsed-time differences.
 This exercises the shared native adapter without live exchange access.
+Use --detailed to include standalone backtest report conversion; the default
+measures the metrics-only path used by CPU optimization. --runs reports repeated
+timings and their median.
 """
 import argparse
 import hashlib
 import json
 import time
+import statistics
 
 import numpy as np
 import passivbot_rust
@@ -24,7 +28,11 @@ def main():
     parser.add_argument("--lookback-days", type=float, default=7)
     parser.add_argument("--mode", choices=("coin", "pside", "unified"), default="coin")
     parser.add_argument("--red-threshold", type=float, default=.99)
+    parser.add_argument("--detailed", action="store_true", help="Include full report conversion, as in standalone backtests")
+    parser.add_argument("--runs", type=int, default=3)
     options = parser.parse_args()
+    if options.runs < 1:
+        parser.error("--runs must be positive")
     if options.minutes < 41:
         parser.error("--minutes must be at least 41")
     artifact = verify_loaded_runtime_extension()
@@ -33,7 +41,7 @@ def main():
     args[0] = np.array([[[p * 1.002, p * .998, p, 1000.]] for p in marks])
     args[1] = np.full(options.minutes, 50000.)
     params = args[-1]
-    params.update(last_valid_indices=[options.minutes - 1], metrics_only=True,
+    params.update(last_valid_indices=[options.minutes - 1], metrics_only=not options.detailed,
                   pnls_max_lookback_days=options.lookback_days)
     hsl = params["equity_hard_stop_loss"]
     policies = list(hsl["sides"])
@@ -43,12 +51,17 @@ def main():
         policies.append(hsl["portfolio"])
     for policy in policies:
         policy["red_threshold"] = options.red_threshold
-    start = time.perf_counter()
-    result = passivbot_rust.run_backtest(*args)
-    elapsed = time.perf_counter() - start
+    timings = []
+    result = None
+    for _ in range(options.runs):
+        result = None  # Release the previous output outside the timed native call.
+        start = time.perf_counter()
+        result = passivbot_rust.run_backtest(*args)
+        timings.append(time.perf_counter() - start)
+    elapsed = statistics.median(timings)
     digest = hashlib.sha256(json.dumps(result, sort_keys=True,
         default=lambda value: value.tolist()).encode()).hexdigest()
-    print(json.dumps(dict(fixture=vars(options), seconds=elapsed, result_sha256=digest,
+    print(json.dumps(dict(fixture=vars(options), seconds=elapsed, run_seconds=timings, result_sha256=digest,
         artifact=artifact, summary=result[4]["revised"]["summary"]), sort_keys=True))
 
 

@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Speed up revised HSL backtests by converting diagnostic samples directly to Python, without an intermediate JSON tree; preserve complete reports and skip unused sample construction during optimizer evaluations. Compute worst-percentile statistics by selecting and sorting only the required tail, and avoid unused EMA suffix statistics.
+
 - Make offline revised-HSL replay comparisons insensitive to async scheduler pass counts,
   while retaining raw diagnostics and strict trading/readiness comparisons. Settle pending
   history reads within the existing bounded fake-cycle loop before advancing scenario time.
