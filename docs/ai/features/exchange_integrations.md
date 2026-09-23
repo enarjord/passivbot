@@ -564,6 +564,12 @@ are explicitly disabled, live market snapshots select this targeted REST path di
 opening or waiting for a public ticker socket; unbounded bulk requests and requests above the
 eight-symbol limit fail closed.
 
+Live snapshots default to targeted ticker reads even with WebSockets enabled. Only requested
+symbols participate in the bounded readiness wait, so an unrelated silent market cannot delay
+protection of a held position. This still uses the shared websocket cache and retains its freshness
+checks and capped depth fallback. An explicit `market_snapshot_ticker_strategy=bulk` remains an
+operator override.
+
 Bitunix klines return at most 200 rows. The live field names are inverted relative to their units:
 `quoteVol` is base quantity and `baseVol` is quote notional; normalize `quoteVol` as CCXT base
 volume so Passivbot's generic quote-volume calculation remains dimensionally correct. Missing,

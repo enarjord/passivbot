@@ -78,7 +78,7 @@ def test_cross_pair_cashflow_cohort_does_not_invent_global_profit_peak():
 @pytest.mark.parametrize("missing", [True, False])
 def test_mixed_price_grid_keeps_other_pair_history_and_matches_oracle(missing):
     a = cases.pair("A", size=10, basis=100, mark=100,
-                   prices={0:100, M:120, 2*M:80, 3*M:100})
+                   fills=[Fill("entry", 0, 10, 100, 0)], prices={0:100, M:120, 2*M:80, 3*M:100})
     b = cases.pair("B", size=1, basis=100, mark=90,
                    prices={} if missing else {2*M:90})
     snapshot = cases.frame(a,b, balance=1000)

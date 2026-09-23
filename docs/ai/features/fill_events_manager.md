@@ -2,6 +2,13 @@
 
 ## Contract
 
+All trading writes also share the [bounded position-to-fill settling gate](equity_hard_stop_loss.md#bounded-position-to-fill-settling).
+It schedules tail fetches after position changes and temporarily defers affected coin-sides;
+it is not the trailing reconstruction or historical-PnL proof described below. A successful
+qualifying fetch need not contain the expected fill. Its 15-second maximum cannot be renewed by
+repeated changes, failures or a hung request. Expiry releases the settling gate, not required
+strategy inputs; revised HSL still uses the Rust best-effort reconciler independently.
+
 1. Build a deduplicated fill-event stream per exchange/account.
 2. Preserve source data needed for realized PnL reconstruction.
 3. Keep fetch behavior explicit and observable during investigations.
@@ -37,8 +44,8 @@
    Preserving that distinction ensures the next incremental refresh covers fills
    after a repaired historical range and fills which occurred while the bot was
    offline.
-9. A position whose latest fill identity or reconstructed after-state does not
-   match the authoritative exchange position remains nontradable. Live orchestration
+9. Trailing-dependent ordinary planning requires its latest fill identity and reconstructed
+   after-state to match the authoritative exchange position. Live orchestration
    retries from the position/fill anchor with bounded in-memory backoff. Direction,
    quantity, and price alone do not prove a flat-to-position transition when truncated
    history has polluted reconstructed `psize`/`pprice`. An explicit exchange position

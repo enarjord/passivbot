@@ -296,12 +296,11 @@ pub fn prepare(input: &Input) -> Result<Output, String> {
     }
     let mut sizes: Vec<_> = pairs
         .iter()
-        .zip(&selected)
-        .map(|(h, p)| {
+        .map(|h| {
             h.history
                 .events
                 .first()
-                .map_or(p.position.size.abs(), |e| e.before)
+                .map_or(h.history.opening_size.abs(), |e| e.before)
         })
         .collect();
     let mut counts = vec![0; pairs.len()];

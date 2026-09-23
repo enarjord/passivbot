@@ -761,6 +761,13 @@ authorized trial; selecting revised does not switch an already-running process.
 Use `backtest.offline=true` with a complete local market-data cache for offline runs;
 selecting the revised engine alone does not disable public market-data downloads.
 
+Revised backtests save HSL summaries and RED/flat/restart transitions by default.
+Set `backtest.hsl_detailed_report=true` (CLI: `--backtest.hsl_detailed_report true`)
+to also retain per-minute drawdown, EMA and controller samples and enable HSL drawdown
+plots. This diagnostic option increases runtime and memory use; it does not change fills,
+equity or analysis metrics. Disabling plots does not override an explicit report opt-in.
+Metrics-only optimizer evaluations always omit sample and event lists. Legacy HSL is unaffected.
+
 For revised `coin`/`pside`, use `bot.long.hsl` and `bot.short.hsl`. Revised `unified`
 requires an explicitly supplied `bot.hsl` block, even when side settings match or HSL
 is disabled. Supply all six fields: `enabled`, `red_threshold`, `ema_span_minutes`,

@@ -148,8 +148,12 @@ def test_hand_calculated_fill_history_and_fee_accounting():
 
 
 @pytest.mark.parametrize("missing,equity,panic", [
-    (0, (1032, 1032, 1011, 985, 955), True),
-    (1, (1012, 1011, 971, 955, 955), True),
+    # Missing first entry: remain flat until the retained +1 at 80. Its
+    # half-unit remainder contributes -5 UPNL at 70; retained cashflow is -12.
+    (0, (1012, 1012, 1011, 995, 955), True),
+    # Missing add: the known unit remains one unit until its half reduction.
+    # UPNL is -20 at 80, then -.5 * 30 = -15 at 70. Reconcile only at now.
+    (1, (1012, 1011, 991, 985, 955), True),
     # Preserve both known +1 fills until the final current-size adjustment:
     # 2 units at basis 90 give UPNL -20/-40 at marks 80/70. Missing
     # reduction PnL remains unknown; endpoint UPNL is -45 at size 1.5.
@@ -172,15 +176,15 @@ def test_missing_open_middle_or_latest_fill_still_evaluates_and_repairs(missing,
     assert not repaired.reasons
 
 
-def test_missing_opening_uses_earliest_retained_price_without_poisoning_clean_episode():
+def test_missing_inventory_is_added_locally_without_poisoning_clean_episode():
     position = Position(2, 100, 80)
     fills = [Fill("old-add", M, 5, 50, 0), Fill("old-close", 2 * M, -7, 40, -70),
              Fill("new-open", 3 * M, 2, 100, 0)]
     history = reconstruct(position, fills, {M: 50, 2 * M: 40, 3 * M: 100, 4 * M: 80}, 0, 4 * M)
-    assert history.sizes == (7, 0, 2, 2)
+    assert history.sizes == (5, 0, 2, 2)  # Missing two units are inferred only at the close.
     assert history.bases == (50, 0, 100, 100)
     assert history.rows[-1].upnl == -40
-    assert "estimated_opening_basis" in history.reasons
+    assert "local_quantity_reconciliation" in history.reasons
     current_episode = tuple(r for r in history.rows if r.timestamp >= 3 * M)
     assert signal(current_episode, 100, 1, ".2").panic[-1]
 
@@ -386,7 +390,10 @@ def test_one_minute_close_in_window_survives_straddling_open():
     candles = [Candle(0, 1, 100, 120, 100, 120), Candle(M, 1, 120, 120, 80, 80)]
     prices = minute_prices(candles, M // 2, 2 * M)
     assert prices == {M: 120, 2 * M: 80}
-    history = reconstruct(Position(1, 100, 80), [], prices, M // 2, 2 * M)
+    # Establish exposure inside the window; absent fill evidence must not
+    # project current inventory backward merely because old candles exist.
+    history = reconstruct(Position(1, 100, 80), [Fill("open", M // 2, 1, 100, 0)],
+                          prices, M // 2, 2 * M)
     assert signal(history.rows, 100, 1, ".2").panic[-1]
 
 

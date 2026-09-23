@@ -10,6 +10,19 @@ since the latest release tag; these features may already be available when insta
   one-way and reduce-only orders, cross/isolated margin, leverage, live and historical market data, and
   paginated fill/PnL history with restart reconstruction. See the Lighter setup guide.
 
+- Default Bitunix live quote refreshes to the requested symbols so unrelated quiet markets cannot
+  delay protective or ordinary order planning. Explicit bulk overrides remain supported.
+
+- Reconcile incomplete revised-HSL fill history locally, preserving completed episodes when a
+  new position arrives before its entry fill and retaining losses from partial-close histories.
+- Share a coin-side position/fill settling gate across trading actions: start qualifying fill
+  reads at least five seconds after a noticed position change, with a 15-second hard cap per
+  unresolved burst so failed requests or repeated changes cannot indefinitely block this gate.
+
+- Make revised-HSL per-minute backtest diagnostics opt-in with `backtest.hsl_detailed_report=true`. Default backtests retain summaries and RED/flat/restart events with lower runtime and memory use; enable the option for full traces and HSL drawdown plots. Trading results and analysis metrics are unchanged.
+
+- Speed up revised HSL backtests by converting diagnostic samples directly to Python, without an intermediate JSON tree; preserve complete reports and skip unused sample construction during optimizer evaluations. Compute worst-percentile statistics by selecting and sorting only the required tail, and avoid unused EMA suffix statistics.
+
 - Make offline revised-HSL replay comparisons insensitive to async scheduler pass counts,
   while retaining raw diagnostics and strict trading/readiness comparisons. Settle pending
   history reads within the existing bounded fake-cycle loop before advancing scenario time.

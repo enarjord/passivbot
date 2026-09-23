@@ -29,6 +29,7 @@ impl Backtest<'_> {
 
     /// A scope-flat observation uses only preceding completed candles and the
     /// just-observed execution. No current bar close is available at its open.
+    #[cfg(test)]
     pub(super) fn revised_hsl_inputs_at(
         &self,
         k: usize,
@@ -327,6 +328,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: false,
+            hsl_detailed_report: true,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -890,6 +892,18 @@ mod tests {
             assert_eq!(panics[0].index, 3, "{mode}");
             assert_eq!(panics[0].fill_qty, -10.0);
             let report = bt.revised_hsl_report_value().unwrap().unwrap();
+            // Native Python transport must preserve the complete serde schema,
+            // including optional values and normal/panic/halted transitions.
+            pyo3::prepare_freethreaded_python();
+            pyo3::Python::with_gil(|py| {
+                use pyo3::prelude::*;
+                let actual = crate::python::revised_hsl_report_to_py(py, &bt).unwrap().unwrap();
+                let encoded: String = py.import_bound("json").unwrap()
+                    .call_method1("dumps", (actual,)).unwrap().extract().unwrap();
+                let decoded: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+                assert_eq!(decoded, report, "direct report transport: {mode}");
+            });
+
             assert_eq!(report["summary"]["triggers"], 1, "{mode}: {report}");
             assert_eq!(report["summary"]["restarts"], 0);
             assert_eq!(report["summary"]["panic_close_fills"], 1);

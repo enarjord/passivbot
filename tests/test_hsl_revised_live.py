@@ -15,7 +15,7 @@ import tools.run_fake_live as runner
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('side', ['long', 'short'])
-@pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write', 'slow_projection', 'slow_sink'])
+@pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write', 'slow_projection', 'slow_sink', 'scoped_quotes'])
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_path, monkeypatch, mode, path, side):
     import passivbot_rust as pbr
@@ -86,9 +86,17 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                 monkeypatch.setattr(market_data, 'filter_fresh_market_snapshot_creations', original_filter)
             assert boundary_reached
             assert not any(c['method'] == 'create_order' for c in bot.cca.export_request_log())
-        elif path in {'wave', 'slow_projection', 'slow_sink'}:
+        elif path in {'wave', 'slow_projection', 'slow_sink', 'scoped_quotes'}:
             report_calls = []
             clock_offset = [0]
+            if path == 'scoped_quotes':
+                from types import SimpleNamespace
+                from unittest.mock import AsyncMock
+                from live.market_data import market_snapshot_ticker_strategy
+                provider = bot.market_snapshot_provider
+                provider._ticker_strategy = market_snapshot_ticker_strategy(
+                    SimpleNamespace(exchange='bitunix', config={'live': {}}))
+                provider._fetch_tickers = AsyncMock(side_effect=AssertionError('unrelated bulk wait'))
             if path.startswith('slow_'):
                 import utils
                 from live import hsl_revised_diagnostics as reporting
@@ -108,6 +116,8 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                     bot._emit_live_event = slow_report
                 bot._hsl_revised_diagnostic_event = None
             assert await instance.protect()
+            if path == 'scoped_quotes':
+                provider._fetch_tickers.assert_not_awaited()
             if path.startswith('slow_'):
                 assert report_calls and all(report_calls)
                 clock_offset[0] = 0
@@ -560,6 +570,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
         for _ in range(2):
             await bot.refresh_protective_authoritative_state(require_balance=True)
             instance.remember_position()
+            bot.cca.now_ms += 5_000  # shared post-position settling before fetch
             await asyncio.sleep(.002)
             await bot.update_pnls(source='hsl_revised')
         await bot.refresh_protective_authoritative_state(require_balance=True)
@@ -1557,6 +1568,7 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
         for _ in range(2):
             await bot.refresh_protective_authoritative_state(require_balance=True)
             instance.remember_position()
+            bot.cca.now_ms += 5_000  # shared post-position settling before fetch
             await asyncio.sleep(.002)
             await bot.update_pnls(source='hsl_revised')
         await bot.refresh_protective_authoritative_state(require_balance=True)

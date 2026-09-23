@@ -84,6 +84,7 @@ def _parse_timeframe_to_ms(timeframe: str) -> int:
 
 
 class FakeCCXTClient:
+    _position_fill_transport_guard = True
     id = "fake"
 
     def __init__(self, scenario: dict, *, quote: str = "USDT") -> None:
@@ -738,6 +739,8 @@ class FakeCCXTClient:
         price: Optional[float] = None,
         params: Optional[dict] = None,
     ) -> dict:
+        from live.position_fill_sync import check_transport_admission
+        check_transport_admission()
         params = params or {}
         order_type = str(type or "limit").lower()
         order_side = str(side).lower()
@@ -825,6 +828,8 @@ class FakeCCXTClient:
         return _copy_order(order)
 
     async def cancel_order(self, order_id: str, symbol: str = None, params: Optional[dict] = None) -> dict:
+        from live.position_fill_sync import check_transport_admission
+        check_transport_admission()
         found = str(order_id) in self.open_orders
         self._record_request(
             "cancel_order",

@@ -275,6 +275,28 @@ pub(crate) fn compose_prepared(
             }
             (upnl.value(&mut reasons), exposed)
         };
+        // A current unexplained opening after a flat reconstructed tail has no
+        // evidenced historical duration. Seed its entry value but not an EMA of
+        // idle flat minutes or an invented position across old candles.
+        if timestamp == input.now
+            && exposed
+            && prepared.pairs.iter().all(|p| {
+                p.history
+                    .events
+                    .last()
+                    .map_or(p.history.opening_size.abs(), |e| e.after)
+                    == 0.0
+            })
+            && prepared
+                .pairs
+                .iter()
+                .any(|p| p.history.reasons.contains("estimated_current_opening"))
+        {
+            points.clear();
+            opened_at = None;
+            entry_reference_delta = Some(realized);
+            reasons.insert("estimated_entry_peak".into());
+        }
         points.push(Point {
             timestamp,
             pnl: realized,

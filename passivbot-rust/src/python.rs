@@ -1858,7 +1858,7 @@ fn run_backtest_core<'py>(
         } else {
             struct_to_py_dict(py, &analysis_btc)?
         };
-        let revised_hsl_report = backtest.revised_hsl_report_value().map_err(PyValueError::new_err)?;
+        let revised_hsl_report = revised_hsl_report_to_py(py, &backtest)?;
         if revised_hsl_report.is_some() {
             // Removed trading tiers are absent, never constant zero objectives.
             for analysis in [&py_analysis_usd, &py_analysis_btc] {
@@ -1883,7 +1883,7 @@ fn run_backtest_core<'py>(
                     py_extra.set_item(RUST_PROFILE_KEY, profile_to_py_dict(py, &rust_profile, profile_total_start)?)?;
                 }
                 if let Some(report) = &revised_hsl_report {
-                    py_extra.set_item("revised", json_value_to_py(py, report)?)?;
+                    py_extra.set_item("revised", report)?;
                 }
                 py_extra.into_py(py)
             } else {
@@ -1929,7 +1929,7 @@ fn run_backtest_core<'py>(
         }
         let py_hard_stop_plot = PyDict::new_bound(py);
         if let Some(report) = revised_hsl_report {
-            py_hard_stop_plot.set_item("revised", json_value_to_py(py, &report)?)?;
+            py_hard_stop_plot.set_item("revised", report)?;
         }
         py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
         py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
@@ -2012,6 +2012,43 @@ fn run_backtest_core<'py>(
             py_hard_stop_plot.into_py(py),
         ))
     })
+}
+
+/// Preserve the public report schema while avoiding a huge intermediate JSON tree.
+/// Static field names and enum strings are shared; each row/list remains independent.
+pub(crate) fn revised_hsl_report_to_py(py: Python<'_>, backtest: &Backtest<'_>) -> PyResult<Option<PyObject>> {
+    let Some(metadata) = backtest.revised_hsl_report_metadata().map_err(PyValueError::new_err)? else {
+        return Ok(None);
+    };
+    let report = json_value_to_py(py, &metadata)?;
+    let report_dict = report.bind(py).downcast::<PyDict>()?;
+    macro_rules! fields {
+        ($dict:ident, $row:ident, $($field:ident),+ $(,)?) => {
+            $($dict.set_item(pyo3::intern!(py, stringify!($field)), &$row.$field)?;)+
+        };
+    }
+    let samples = PyList::empty_bound(py);
+    for row in backtest.revised_hsl_samples() {
+        let dict = PyDict::new_bound(py);
+        fields!(dict, row, sequence, timestamp, side, coin, raw, ema, red_at, flat_at, reasons);
+        dict.set_item(pyo3::intern!(py, "phase"), pyo3::types::PyString::intern_bound(py, row.phase))?;
+        let action = row.action.map(|action| match action {
+            crate::hsl_revised_controller::Action::Normal => pyo3::intern!(py, "normal"),
+            crate::hsl_revised_controller::Action::Panic => pyo3::intern!(py, "panic"),
+            crate::hsl_revised_controller::Action::Halted => pyo3::intern!(py, "halted"),
+        });
+        dict.set_item(pyo3::intern!(py, "action"), action)?;
+        samples.append(dict)?;
+    }
+    let events = PyList::empty_bound(py);
+    for row in backtest.revised_hsl_events() {
+        let dict = PyDict::new_bound(py);
+        fields!(dict, row, sequence, observed_at, side, coin, kind, reconstructed_at, reason);
+        events.append(dict)?;
+    }
+    report_dict.set_item(pyo3::intern!(py, "samples"), samples)?;
+    report_dict.set_item(pyo3::intern!(py, "events"), events)?;
+    Ok(Some(report))
 }
 
 fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {
@@ -2202,6 +2239,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         },
         metrics_only: dict
             .get_item("metrics_only")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+        hsl_detailed_report: dict
+            .get_item("hsl_detailed_report")?
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),

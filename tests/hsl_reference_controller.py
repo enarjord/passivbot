@@ -52,7 +52,10 @@ def replay(episodes, *, now, start, budget, span, threshold, cooldown,
     previous_time = None
     previous_flat = False
     for episode in episodes:
-        if episode.entry_reference_delta is not None and (previous_time is not None or episode.entry_reference is not None):
+        current_singleton = (len(episode.points) == 1 and episode.points[0].exposed
+                             and not episode.points[0].flatten
+                             and episode.points[0].observation.timestamp == now)
+        if episode.entry_reference_delta is not None and ((previous_time is not None and not current_singleton) or episode.entry_reference is not None):
             raise ValueError("entry delta requires only the initial incomplete episode")
         if not episode.points:
             raise ValueError("empty episode")

@@ -183,7 +183,7 @@ def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
 
 
 def test_coarse_source_gaps_are_native_estimates_not_candle_ledger_writes():
-    value = bot()
+    value = bot(events=[event(timestamp=NOW-900_000, side="buy", qty=10., price=100., pnl=0.)])
     tape = capture_candles([dict(ts=NOW-900_000, o=100., h=120., l=80., c=90.)],
                           minutes=15, observed_at=NOW)
     sources = {SYMBOL: Sources((tape,), (Failure("1m", "fetch", "TimeoutError"),), 0)}
@@ -400,7 +400,7 @@ def test_damaged_retained_fill_cannot_supply_empty_flat_proof(changes):
 
 
 def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
-    value = bot()
+    value = bot(events=[event(timestamp=NOW-7*60_000, side="buy", qty=100., price=100., pnl=0.)])
     value.positions[SYMBOL]["long"]["size"] = 100.
     value.config["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.5
     rows = [dict(ts=NOW-(6-i)*60_000, o=p, h=p, l=p, c=p)

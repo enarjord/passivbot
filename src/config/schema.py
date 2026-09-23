@@ -142,6 +142,7 @@ def get_template_config():
                 ],
                 "filter_by_min_effective_cost": False,
                 "gap_tolerance_ohlcvs_minutes": 120,
+                "hsl_detailed_report": False,
                 "hlcvs_data_dir": None,
                 "hlcvs_data_override_mode": "intersection",
                 "liquidation_threshold": 0.05,

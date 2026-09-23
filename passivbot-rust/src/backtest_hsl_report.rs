@@ -109,6 +109,7 @@ pub(super) struct Report {
     pub events: Vec<Event>,
     timestamp: Option<i64>,
     detailed: bool,
+    retain_events: bool,
     sequence: u64,
     stats: LifecycleStats,
     // One bar-close maximum per signal category: global, long, short.
@@ -116,9 +117,10 @@ pub(super) struct Report {
 }
 
 impl Report {
-    pub(super) fn new(detailed: bool) -> Self {
+    pub(super) fn new(detailed: bool, retain_events: bool) -> Self {
         Self {
             detailed,
+            retain_events,
             ..Self::default()
         }
     }
@@ -177,24 +179,22 @@ impl Report {
             self.summary.worst_ema = self.summary.worst_ema.max(d.ema);
         }
         self.sequence += 1;
-        self.samples.push(Sample {
-            sequence: self.sequence,
-            timestamp: now,
-            side: key.0,
-            coin: key.1,
-            phase,
-            action: decision.map(|d| d.action),
-            raw: decision.map(|d| d.raw),
-            ema: decision.map(|d| d.ema),
-            red_at: decision.and_then(|d| d.red_at),
-            flat_at: decision.and_then(|d| d.flat_at),
-            reasons: output.reasons.iter().cloned().collect(),
-        });
-        self.scopes.insert(key, scope);
-        if !self.detailed {
-            self.samples.clear();
-            self.events.clear();
+        if self.detailed {
+            self.samples.push(Sample {
+                sequence: self.sequence,
+                timestamp: now,
+                side: key.0,
+                coin: key.1,
+                phase,
+                action: decision.map(|d| d.action),
+                raw: decision.map(|d| d.raw),
+                ema: decision.map(|d| d.ema),
+                red_at: decision.and_then(|d| d.red_at),
+                flat_at: decision.and_then(|d| d.flat_at),
+                reasons: output.reasons.iter().cloned().collect(),
+            });
         }
+        self.scopes.insert(key, scope);
     }
 
     fn trigger(
@@ -219,15 +219,17 @@ impl Report {
         scope.exit_started = Some(now);
         scope.red = true;
         self.sequence += 1;
-        self.events.push(Event {
-            sequence: self.sequence,
-            observed_at: now,
-            side: key.0,
-            coin: key.1,
-            kind: "red",
-            reconstructed_at: reconstructed,
-            reason,
-        });
+        if self.retain_events {
+            self.events.push(Event {
+                sequence: self.sequence,
+                observed_at: now,
+                side: key.0,
+                coin: key.1,
+                kind: "red",
+                reconstructed_at: reconstructed,
+                reason,
+            });
+        }
     }
 
     fn restart(
@@ -257,15 +259,17 @@ impl Report {
         scope.restarted_without_retrigger = true;
         scope.red = false;
         self.sequence += 1;
-        self.events.push(Event {
-            sequence: self.sequence,
-            observed_at: now,
-            side: key.0,
-            coin: key.1,
-            kind: "restart",
-            reconstructed_at: reconstructed,
-            reason,
-        });
+        if self.retain_events {
+            self.events.push(Event {
+                sequence: self.sequence,
+                observed_at: now,
+                side: key.0,
+                coin: key.1,
+                kind: "restart",
+                reconstructed_at: reconstructed,
+                reason,
+            });
+        }
     }
 
     fn event(&mut self, key: Key, now: i64, event: &LifecycleEvent, scope: &mut Scope) {
@@ -293,15 +297,17 @@ impl Report {
                 }
                 Self::finish_loss(&mut self.stats, scope);
                 self.sequence += 1;
-                self.events.push(Event {
-                    sequence: self.sequence,
-                    observed_at: now,
-                    side: key.0,
-                    coin: key.1,
-                    kind: "flat",
-                    reconstructed_at: Some(event.timestamp),
-                    reason: event.reason,
-                });
+                if self.retain_events {
+                    self.events.push(Event {
+                        sequence: self.sequence,
+                        observed_at: now,
+                        side: key.0,
+                        coin: key.1,
+                        kind: "flat",
+                        reconstructed_at: Some(event.timestamp),
+                        reason: event.reason,
+                    });
+                }
             }
             "restart" => self.restart(key, now, Some(event.timestamp), event.reason, scope),
             _ => unreachable!("Rust lifecycle producer emitted unknown kind"),
@@ -343,8 +349,8 @@ impl Report {
                 scope.consumed.retain(|(t, _), _| *t == now);
                 *scope.consumed.entry((now, "flat")).or_insert(0) += 1;
                 scope.watermark = Some(now);
-                if self.detailed {
-                    self.sequence += 1;
+                self.sequence += 1;
+                if self.retain_events {
                     self.events.push(Event {
                         sequence: self.sequence,
                         observed_at: now,
@@ -427,7 +433,7 @@ impl Report {
 
 impl Backtest<'_> {
     /// Reporting survives result-array draining and never supplies replay input.
-    pub fn revised_hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
+    pub fn revised_hsl_report_metadata(&self) -> Result<Option<serde_json::Value>, String> {
         let Some(config) = &self.backtest_params.equity_hard_stop_loss.revised else {
             return Ok(None);
         };
@@ -446,10 +452,6 @@ impl Backtest<'_> {
         }
         let summary =
             serde_json::to_value(&self.revised_hsl_report.summary).map_err(|e| e.to_string())?;
-        let samples =
-            serde_json::to_value(&self.revised_hsl_report.samples).map_err(|e| e.to_string())?;
-        let events =
-            serde_json::to_value(&self.revised_hsl_report.events).map_err(|e| e.to_string())?;
         let scopes = self
             .revised_hsl_report
             .scopes
@@ -464,8 +466,29 @@ impl Backtest<'_> {
             "schema_version": 1, "engine": "revised", "mode": config.mode,
             "detailed": self.revised_hsl_report.detailed, "scopes": scopes,
             "coins": self.backtest_params.coins, "summary": summary,
-            "samples": samples, "events": events,
+            "samples": [], "events": [],
         })))
+    }
+
+    /// Borrow the diagnostic trace without a second per-field JSON allocation.
+    pub fn revised_hsl_samples(&self) -> &[Sample] {
+        &self.revised_hsl_report.samples
+    }
+
+    pub fn revised_hsl_events(&self) -> &[Event] {
+        &self.revised_hsl_report.events
+    }
+
+    #[cfg(test)]
+    pub fn revised_hsl_report_value(&self) -> Result<Option<serde_json::Value>, String> {
+        let Some(mut value) = self.revised_hsl_report_metadata()? else {
+            return Ok(None);
+        };
+        value["samples"] =
+            serde_json::to_value(self.revised_hsl_samples()).map_err(|e| e.to_string())?;
+        value["events"] =
+            serde_json::to_value(self.revised_hsl_events()).map_err(|e| e.to_string())?;
+        Ok(Some(value))
     }
 
     pub(super) fn revised_report_key(&self, side: usize, coin: usize) -> Key {
@@ -620,8 +643,8 @@ mod tests {
     }
     #[test]
     fn metrics_only_keeps_identical_summary_without_per_bar_artifacts() {
-        let mut detailed = Report::new(true);
-        let mut compact = Report::new(false);
+        let mut detailed = Report::new(true, true);
+        let mut compact = Report::new(false, false);
         for report in [&mut detailed, &mut compact] {
             report.observe(
                 (None, None),
@@ -661,7 +684,7 @@ mod tests {
     #[test]
     fn lifecycle_metrics_include_open_halts_partial_exits_and_retriggers() {
         let key = (Some(LONG), Some(0));
-        let mut report = Report::new(false);
+        let mut report = Report::new(false, false);
         let event = |timestamp, kind, red_at| LifecycleEvent {
             timestamp,
             kind,
@@ -736,7 +759,7 @@ mod tests {
     #[test]
     fn repanic_flat_latency_uses_new_exit_but_keeps_continuous_halt_duration() {
         let key = (None, None);
-        let mut report = Report::new(false);
+        let mut report = Report::new(false, false);
         let mut events = zero_cooldown_events(60_000);
         events.pop(); // RED then flat, held in cooldown.
         report.observe(
@@ -768,8 +791,51 @@ mod tests {
         assert_eq!(m.triggers_long + m.triggers_short, 0);
     }
     #[test]
+    fn event_only_report_preserves_zero_cooldown_and_liquidation_sequences() {
+        let key = (None, None);
+        let mut detailed = Report::new(true, true);
+        let mut compact = Report::new(false, true);
+        for report in [&mut detailed, &mut compact] {
+            report.observe(
+                key,
+                60_000,
+                "scope_flat",
+                &output(60_000, Action::Normal, zero_cooldown_events(60_000)),
+            );
+            report.observe(
+                key,
+                120_000,
+                "bar_close",
+                &output(120_000, Action::Panic, vec![]),
+            );
+            report.panic_fill(key, -20.0, 1000.0);
+            report.observed_flat(key, 180_000);
+            report.observed_flat(key, 180_000);
+            let mut events = zero_cooldown_events(180_000);
+            events.remove(0);
+            report.observe(
+                key,
+                180_000,
+                "scope_flat",
+                &output(180_000, Action::Normal, events),
+            );
+        }
+        assert!(!detailed.samples.is_empty());
+        assert!(compact.samples.is_empty());
+        assert_eq!(compact.events.len(), 6);
+        assert_eq!(
+            serde_json::to_value(&detailed.events).unwrap(),
+            serde_json::to_value(&compact.events).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&detailed.summary).unwrap(),
+            serde_json::to_value(&compact.summary).unwrap()
+        );
+    }
+
+    #[test]
     fn fill_proven_flat_is_not_recounted_by_later_replay() {
-        let mut report = Report::new(true);
+        let mut report = Report::new(true, true);
         let key = (None, None);
         let mut events = zero_cooldown_events(60_000);
         events.truncate(1);

@@ -334,14 +334,14 @@ mod tests {
     }
 
     #[test]
-    fn selected_sparse_prices_reach_current_permission() {
+    fn missing_opening_uses_current_basis_without_inventing_old_exposure() {
         let output = evaluate(fixture()).unwrap();
-        assert_eq!(output.observations, 4);
+        assert_eq!(output.observations, 1);
         assert!(output.reasons.contains("backfilled_price"));
         assert!(output.reasons.contains("forward_filled_price"));
         let decision = output.decision.unwrap();
-        assert_eq!(decision.action, controller::Action::Panic);
-        assert!((decision.raw - 100.0 / 1100.0).abs() < 1e-14);
+        assert_eq!(decision.action, controller::Action::Normal);
+        assert_eq!(decision.raw, 0.0);
     }
     #[test]
     fn dense_reuse_matches_full_normalization_and_reconstruction() {
