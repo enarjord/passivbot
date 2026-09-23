@@ -23,6 +23,7 @@ def test_order_churn_rollout_allowlist_matches_supported_connector_contract():
         "kucoin",
         "okx",
         "weex",
+        "lighter",
     }
     assert connector_supports_order_churn_gate(SimpleNamespace(exchange="weex")) is True
     assert connector_supports_order_churn_gate(SimpleNamespace(exchange="bitunix")) is True

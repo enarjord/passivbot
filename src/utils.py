@@ -717,7 +717,13 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
     ex = to_ccxt_exchange_id(exchange_id)
     client_id = to_ccxt_client_id(ex)
     try:
-        cc = getattr(ccxt, client_id)(
+        if client_id == "lighter":
+            from exchanges.lighter import AsyncLighter
+
+            client_class = AsyncLighter
+        else:
+            client_class = getattr(ccxt, client_id)
+        cc = client_class(
             {
                 "enableRateLimit": bool(enable_rate_limit),
                 # Default ccxt timeout can be too low for long lookbacks; raise to be tolerant.

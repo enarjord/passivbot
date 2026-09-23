@@ -65,9 +65,10 @@ for example, CCXT's ETH market is `ETH/USDC:USDC`.
   order updates supplement authoritative REST reconciliation.
 - Lighter's bulk ticker lacks bid/ask. Market snapshots combine its last-trade price with actual
   order-book quotes, using CCXT Pro when enabled and REST when WebSockets are disabled.
-- Candles use bounded 500-row `since`/`limit` requests, preserving the requested oldest candle. Live warmup, EMA/trailing inputs, and HSL
-  candle reads use the shared candlestick manager. Lighter is not a bulk historical backtest-data
-  provider; use supported historical data sources for optimization.
+- Candles use bounded 500-row `since`/`limit` requests, preserving the requested oldest candle.
+  Live warmup, EMA/trailing inputs, HSL, and historical downloads use the shared candlestick manager.
+  Market-age discovery walks daily candles backward to the first available page. Backtesting and
+  optimization can use `backtest.exchanges = ["lighter"]`, subject to available exchange history.
 
 Standard accounts allow 60 REST requests per minute. The connector retains CCXT's rate limiter;
 large coin universes and cold candle caches therefore take longer to initialize. WebSocket

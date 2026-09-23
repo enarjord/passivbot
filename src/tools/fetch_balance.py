@@ -55,6 +55,11 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
     if not exchange_id:
         raise KeyError("missing 'exchange' in user info")
 
+    if exchange_id.lower() == "lighter":
+        from exchanges.lighter_credentials import client_config
+
+        return ccxt.lighter(client_config(user_info))
+
     # ccxt exposes exchanges as attributes on the ccxt module
     exchange_cls = getattr(ccxt, exchange_id, None) or getattr(ccxt, exchange_id.lower(), None)
     if exchange_cls is None:

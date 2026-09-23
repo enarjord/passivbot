@@ -169,10 +169,83 @@ def test_credentials_cannot_trigger_l1_key_rotation_or_builder_approval(
     assert config["options"]["accountIndex"] == 123
     assert config["options"]["builderFee"] is False
     assert config["options"]["auths"]["123"]["4"]["lighterPrivateKey"] == "a" * 80
+    from tools.fetch_balance import build_exchange
+
+    balance_client = build_exchange({**user, "exchange": "lighter"})
+    assert balance_client.options["accountIndex"] == 123
+    assert not balance_client.privateKey
+    assert balance_client.options["builderFee"] is False
     with pytest.raises(ValueError):
         client_config({**user, "api_key_index": 0})
     with pytest.raises(ValueError):
         client_config({**user, "private_key": "a" * 64})
+
+
+@pytest.mark.asyncio
+async def test_public_data_client_and_backward_listing_discovery():
+    from utils import load_ccxt_instance
+
+    x = load_ccxt_instance("lighter")
+    assert isinstance(x, AsyncLighter)
+    day = 86_400_000
+    x.milliseconds = lambda: 1200 * day
+    first = [550 * day, 1, 2, 1, 2, 10]
+    x.fetch_ohlcv = AsyncMock(side_effect=[[[700 * day, 1, 2, 1, 2, 10]], [first], []])
+    try:
+        assert await x.fetch_first_candle(SYMBOL) == first
+        assert [c.kwargs["params"]["until"] for c in x.fetch_ohlcv.call_args_list] == [
+            1200 * day,
+            700 * day,
+            550 * day,
+        ]
+        x.fetch_ohlcv = AsyncMock(return_value=[[1200 * day, 1, 2, 1, 2, 10]])
+        with pytest.raises(ValueError, match="progress"):
+            await x.fetch_first_candle(SYMBOL)
+        x.fetch_ohlcv = AsyncMock(side_effect=RuntimeError("unavailable"))
+        with pytest.raises(RuntimeError):
+            await x.fetch_first_candle(SYMBOL)
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
+async def test_historical_manager_uses_lighter_listing_and_base_units(tmp_path):
+    from hlcv_preparation import HLCVManager
+
+    x = exchange()
+    x.fetch_first_candle = AsyncMock(return_value=[1700000000000, 1, 2, 1, 2, 10])
+    manager = HLCVManager("lighter", cc=x)
+    manager.markets = {SYMBOL: market()}
+    manager.cache_filepaths["first_timestamps"] = str(tmp_path / "first.json")
+    try:
+        assert await manager.get_first_timestamp("ETH") == 1700000000000
+        x.fetch_first_candle.assert_awaited_once_with(SYMBOL)
+        settings = manager.get_market_specific_settings("ETH")
+        assert settings["c_mult"] == 1.0
+        assert settings["hedge_mode"] is False
+    finally:
+        await manager.aclose()
+        await x.close()
+
+
+@pytest.mark.asyncio
+async def test_live_market_age_discovery_uses_lighter_daily_history(
+    tmp_path, monkeypatch
+):
+    import procedures
+
+    monkeypatch.chdir(tmp_path)
+    x = exchange()
+    first = 1700000000000
+    x.fetch_first_candle = AsyncMock(return_value=[first, 1, 2, 1, 2, 10])
+    monkeypatch.setattr(procedures, "load_ccxt_instance", lambda _: x)
+    monkeypatch.setattr(procedures, "coin_to_symbol", lambda *_: SYMBOL)
+    monkeypatch.setattr(
+        procedures, "load_markets", AsyncMock(return_value={SYMBOL: market()})
+    )
+    result = await procedures.get_first_timestamps_unified([SYMBOL], exchange="lighter")
+    assert result == {SYMBOL: first}
+    x.fetch_first_candle.assert_awaited_once_with(SYMBOL)
 
 
 @pytest.mark.asyncio

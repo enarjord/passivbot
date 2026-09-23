@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import math
 import re
 import secrets
-from pathlib import Path
 
 import ccxt.async_support as ccxt_async
 import ccxt.pro as ccxt_pro
@@ -15,14 +13,7 @@ import ccxt.pro as ccxt_pro
 from config.access import require_live_value
 from exchanges.ccxt_bot import CCXTBot
 
-# CCXT 4.5.66's ctypes ABI matches this official lighter-python revision.
-SIGNER_REVISION = "8bac9f56b9d0dd0eedaeb53a00ccb4fc9d77082e"
-SIGNER_SHA256 = {
-    "linux-amd64": "28d27620a648510e826250707246fca84d299df59080385cc6649c601e94944c",
-    "linux-arm64": "a56b761531dc9242456993c45739115fa235dd1ad095cb3b27c30e4d074db3ad",
-    "darwin-arm64": "581a8416fbfdd1196c21fb8e3a9af1dd39a8d5f2c65dce6e9d5abf2319fc8919",
-    "windows-amd64": "b1ffc4bdaefa595112f3429cab9536fe92d6e6bdd52057b6faedeb78cb2975b0",
-}
+from exchanges.lighter_credentials import SIGNER_REVISION, SIGNER_SHA256, client_config
 
 
 def finite(value, name: str, *, positive=False):
@@ -48,56 +39,6 @@ def decode_client_id(value) -> str:
         if 0 <= number < 2**48 and number >> 44 == 0xB:
             return f"0x{number & ((1 << 44) - 1):012x}"
     return text
-
-
-def client_config(user: dict) -> dict:
-    """Do not pass an L2 key as CCXT's L1 privateKey (which rotates keys)."""
-    account = user["account_index"]
-    key_index = user["api_key_index"]
-    if isinstance(account, bool) or not isinstance(account, int) or account < 0:
-        raise ValueError("Lighter account_index must be a nonnegative integer")
-    if (
-        isinstance(key_index, bool)
-        or not isinstance(key_index, int)
-        or not 4 <= key_index <= 254
-    ):
-        raise ValueError("Lighter api_key_index must be an integer between 4 and 254")
-    private_key = user["private_key"].removeprefix("0x")
-    if not re.fullmatch(r"[0-9a-fA-F]{80}", private_key):
-        raise ValueError("Lighter private_key must be an L2 API private key")
-    options = dict(user.get("options", {}))
-    path = str(Path(user["signer_path"]).expanduser().resolve())
-    if not Path(path).is_file():
-        raise ValueError(
-            "Lighter signer_path must identify the compatible official signer"
-        )
-    if (
-        hashlib.sha256(Path(path).read_bytes()).hexdigest()
-        not in SIGNER_SHA256.values()
-    ):
-        raise ValueError(
-            f"Lighter signer must match official revision {SIGNER_REVISION}"
-        )
-    options.update(
-        {
-            "accountIndex": account,
-            "apiKeyIndex": key_index,
-            "libraryPath": path,
-            "builderFee": False,
-            "defaultType": "swap",
-            "auths": {
-                str(account): {
-                    str(key_index): {
-                        "signer": None,
-                        "lighterPrivateKey": private_key,
-                        "deadline": None,
-                        "token": None,
-                    }
-                }
-            },
-        }
-    )
-    return {"enableRateLimit": True, "timeout": 30000, "options": options}
 
 
 class _LighterMixin:
@@ -144,6 +85,25 @@ class _LighterMixin:
             since = end // duration * duration - count * duration
         params["until"] = min(end, int(since) + count * duration)
         return await super().fetch_ohlcv(symbol, timeframe, int(since), count, params)
+
+    async def fetch_first_candle(self, symbol):
+        """Find the first available daily candle without an epoch-sized range."""
+        day = 86_400_000
+        until = self.milliseconds() // day * day
+        first = None
+        while until > 0:
+            since = max(0, until - 500 * day)
+            rows = await self.fetch_ohlcv(
+                symbol, "1d", since=since, limit=500, params={"until": until}
+            )
+            if not rows:
+                return first
+            timestamp = int(rows[0][0])
+            if not since <= timestamp < until:
+                raise ValueError("Lighter first-candle pagination did not progress")
+            first = rows[0]
+            until = timestamp
+        return first
 
     async def fetch_open_orders(self, symbol=None, since=None, limit=None, params=None):
         await self.load_markets()

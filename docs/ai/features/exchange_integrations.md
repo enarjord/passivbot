@@ -753,7 +753,10 @@ confirm cancellation by authoritative active-order removal. Never blindly resubm
 write. Fetch all active perpetual orders in one request, rather than only configured markets.
 
 Cap candle pages at 500 and bound the end of each request to prevent the exchange from silently
-tail-anchoring an over-wide warmup window. Verify the pinned signer hash before native loading.
+tail-anchoring an over-wide warmup window. Public data clients and historical preparation must use
+the same adapter. Discover market age by walking bounded daily pages backward, not by requesting
+one pre-listing day from the epoch. Historical sizing uses base units and one-way positions.
+Verify the pinned signer hash before native loading.
 
 Use actual order-book quotes because ticker responses lack bid/ask. Keep cross/isolated margin
 and leverage together in their per-market configuration transaction. Balance is realized USDC
