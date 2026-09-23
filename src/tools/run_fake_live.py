@@ -473,6 +473,8 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
+        from live import position_fill_sync
+        position_fill_sync.state(bot).clock = lambda: fake_client.now_ms / 1000.
         from live import hsl_revised_live
         if hsl_revised_live.selected(bot):
             # Retry cadence follows scenario time, while acquisition timestamps,

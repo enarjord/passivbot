@@ -579,21 +579,22 @@ it does not treat stale or missing current positions as flat.
 
 One pure Rust reconciler owns estimated position/basis history, explicit current-position
 adjustments and the path used to derive scope-flat boundaries. For each coin-side, canonicalize
-identities/revisions and causal timestamps, then let `S` be cumulative usable quantity changes in
-increase/reduction units, including zero. The opening inventory is
-`max(0, -min(S), abs(current_size) - S[-1])`. Walk forward without changing known fill quantities.
+identities/revisions and causal timestamps. Walk forward with the smallest inventory needed
+for each contiguous reduction run. A leading reduction run supplies estimated opening inventory;
+an interior deficit is a local pre-reduction adjustment and cannot rewrite earlier completed
+entry/exit episodes. A nonempty reduction-only tape is left-censored: its current remaining
+inventory stays in that same estimated episode, preserving partial-close losses.
 The initial basis uses the earliest usable retained fill price, otherwise current basis/mark;
 adds update contract-aware weighted basis, reductions retain it, and flats reset it.
 Unknown quantities omit only their position transition; independently usable PnL/fees remain.
 
-Differences from current exchange size/basis become explicit estimated adjustments with no
-invented execution price, fee or realized PnL. An unexplained larger current size is carried from
-the opening, which may retain old losses until a missing add arrives and restores a historical
-flat. An unexplained reduction applies at the current endpoint; for an exchange-flat pair its
-estimated application time is the latest retained fill timestamp, consistently in samples and
-cooldown. The observed fill itself is unchanged. Empty retained history creates no historical
-cooldown anchor. Quantity rounding never changes the actual current endpoint and is constrained
-by the exchange quantity quantum when supplied.
+Differences from current exchange size/basis become explicit estimated endpoint adjustments with
+no invented execution price, fee or realized PnL. If retained history ends flat but current
+exposure is nonzero, preserve the completed episodes and estimate a new current episode from
+current position/basis/mark. Do not invent its age or apply older candles to that new exposure.
+An exchange-flat endpoint applies at the latest retained fill timestamp for samples and cooldown.
+Empty retained history creates no historical cooldown anchor. Quantity rounding never changes
+the actual current endpoint and is constrained by the exchange quantity quantum when supplied.
 
 Aggregate scope boundaries require every estimated member position to be zero. Known global
 execution ordering may expose distinct same-time flats; otherwise a cross-pair timestamp cohort
@@ -701,3 +702,25 @@ exchange-time lifecycle anchors and approximation evidence remain part of determ
 Public revised live selection is supported explicitly; the offline fake CLI uses the same
 entry points without a test-local activation bypass. Live deployment requires separate operator
 authorization and validation, and legacy remains the default.
+
+### Bounded position-to-fill settling
+
+Both engines share one observation-scheduling gate, independent of HSL readiness. After noticing
+a size or basis change, defer creates and cancels for that coin-side. A qualifying fill refresh
+must **start at least five seconds after** its latest observed change; completing an older request
+does not qualify. Successful fetch completion releases the gate even if the expected execution
+is still absent. The revised Rust reconciler estimates from the evidence actually returned.
+
+The wait has a **15-second hard cap from the first unresolved change**. Failed, hung or skipped
+requests, repeated snapshots and subsequent changes do not extend it. On expiry, log a diagnostic
+and resume fetching as well as release this synchronization gate, even if the latest change is
+less than five seconds old. This bounded exception prevents continuous changes from starving
+acquisition indefinitely; current-input validation, Rust intent and other
+ordinary readiness rules still apply. An expired burst remains expired until a qualifying fetch
+succeeds; only then can a later change start another bounded wait. No local gate is persisted.
+
+A shared account endpoint may service already-settled scopes while another scope is settling;
+only eligible unchanged scopes receive its confirmation receipt. Coin mode leaves unrelated
+coin-sides executable. Revised pside/unified decisions depend on all contributing coin-sides,
+so writes using those aggregate decisions also wait for their dependencies, under the same cap.
+Recheck admission at the connector boundary, including writes queued behind another write.

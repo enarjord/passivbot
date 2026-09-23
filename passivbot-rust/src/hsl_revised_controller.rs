@@ -39,7 +39,8 @@ pub struct Episode {
     #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference: Option<f64>,
     /// Estimated entry value relative to the shared current budget. Only the
-    /// incomplete initial episode may carry this reference; it adds no EMA row.
+    /// incomplete initial episode or estimated current singleton may carry this
+    /// reference; it adds no EMA row.
     #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference_delta: Option<f64>,
 }
@@ -158,10 +159,18 @@ fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
     let mut previous_time = None;
     let mut previous_flat = false;
     for episode in &input.episodes {
+        let current_singleton = episode.points.len() == 1
+            && episode.points[0].timestamp == input.now
+            && episode.points[0].exposed
+            && !episode.points[0].flatten;
         if episode.entry_reference_delta.is_some()
-            && (previous_time.is_some() || episode.entry_reference.is_some())
+            && ((previous_time.is_some() && !current_singleton)
+                || episode.entry_reference.is_some())
         {
-            return Err("entry delta requires only the initial incomplete episode".into());
+            return Err(
+                "entry delta requires an initial incomplete episode or current exposed singleton"
+                    .into(),
+            );
         }
         if episode.points.is_empty() {
             return Err("empty HSL episode".into());

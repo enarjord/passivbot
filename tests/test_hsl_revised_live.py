@@ -560,6 +560,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
         for _ in range(2):
             await bot.refresh_protective_authoritative_state(require_balance=True)
             instance.remember_position()
+            bot.cca.now_ms += 5_000  # shared post-position settling before fetch
             await asyncio.sleep(.002)
             await bot.update_pnls(source='hsl_revised')
         await bot.refresh_protective_authoritative_state(require_balance=True)
@@ -1557,6 +1558,7 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
         for _ in range(2):
             await bot.refresh_protective_authoritative_state(require_balance=True)
             instance.remember_position()
+            bot.cca.now_ms += 5_000  # shared post-position settling before fetch
             await asyncio.sleep(.002)
             await bot.update_pnls(source='hsl_revised')
         await bot.refresh_protective_authoritative_state(require_balance=True)

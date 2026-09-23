@@ -312,14 +312,14 @@ def test_quantity_roundoff_scale_resets_after_later_episode_opening():
 
 @pytest.mark.parametrize("step", [None, .0001220703125])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_scale_only_rounding_does_not_certify_a_real_residual_flat(step, side):
+def test_left_censored_close_keeps_current_endpoint_exact(step, side):
     d = 1 if side == "long" else -1
     residual = .0001220703125
     fills = [Fill("old_close", 1, -residual*d, 100, -1),
              Fill("later_add", 2, 1e12*d, 100, 0)]
     p = cases.pair(size=(1e12+residual)*d, basis=100, pside=side, fills=fills)
     result = rust(payload(cases.frame(p), quantity_step=step))
-    assert not result["boundaries"]
+    assert [b["timestamp"] for b in result["boundaries"]] == [1]
     assert result["pairs"][0]["history"]["opening_size"] != 0
     assert result["pairs"][0]["history"]["samples"][-1]["size"] == float(p.position.size)
 

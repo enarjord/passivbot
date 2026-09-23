@@ -8,7 +8,7 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import hsl_protection, hsl_revised_live
+from live import hsl_protection, hsl_revised_live, position_fill_sync
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
@@ -1135,7 +1135,17 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of orders after throttling and bookkeeping."""
     passivbot_cls = _pb_attr("Passivbot")
     requested_orders = list(orders)
-    orders = requested_orders[: int(bot.live_value("max_n_creations_per_batch"))]
+    orders = [order for order in orders if position_fill_sync.permits(bot, order)]
+    _record_fresh_entry_orders(
+        bot,
+        "record_blocked_orders",
+        _orders_removed_by_identity(requested_orders, orders),
+        "position_fill_settling",
+    )
+    if not orders:
+        return []
+    requested_orders = orders
+    orders = orders[: int(bot.live_value("max_n_creations_per_batch"))]
     _record_fresh_entry_orders(
         bot,
         "record_blocked_orders",
@@ -1377,6 +1387,9 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
     """Submit a batch of cancellations, prioritising reduce-only orders."""
     passivbot_cls = _pb_attr("Passivbot")
     max_cancellations = int(bot.live_value("max_n_cancellations_per_batch"))
+    orders = [order for order in orders if position_fill_sync.permits(bot, order)]
+    if not orders:
+        return []
     requested_orders = list(orders)
     if len(orders) > max_cancellations:
         try:

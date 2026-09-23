@@ -345,6 +345,11 @@ impl Backtest<'_> {
         output: &mut crate::hsl_revised_evaluator::Output,
     ) {
         self.revised_hsl_traces.remove(&key);
+        // With no observed opening, each capture is a fresh current-position
+        // estimate. Extending yesterday's estimate would invent episode age.
+        if output.reasons.contains("estimated_current_opening") {
+            return;
+        }
         if let Some(episodes) = output.cursor.as_mut().and_then(|c| c.seed.take()) {
             if episodes.iter().any(|e| {
                 e.entry_reference.is_some()

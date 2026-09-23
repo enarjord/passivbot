@@ -311,7 +311,7 @@ def scope_boundaries(snapshot, mode, *, pside=None, symbol=None):
     for pair in pairs:
         paths[pair.key], quality, conflicts[pair.key] = _steps(pair, snapshot.start, snapshot.now)
         reasons.update(quality)
-    sizes = {p.key: (paths[p.key][0].before if paths[p.key] else abs(dec(p.position.size)))
+    sizes = {p.key: (paths[p.key][0].before if paths[p.key] else dec(0))
              for p in pairs}
     consumed = {p.key: [] for p in pairs}
     timeline = sorted((s for steps in paths.values() for s in steps), key=lambda s: s.fill.timestamp)

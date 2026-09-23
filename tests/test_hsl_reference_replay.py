@@ -126,7 +126,7 @@ def test_old_missing_opening_does_not_poison_later_flat():
     trace = scope_boundaries(frame(pair(fills=tape)), "unified")
     assert [b.timestamp for b in trace.boundaries] == [2 * M, 4 * M]
     assert [b.observation.pnl for b in trace.boundaries] == [-70, -110]
-    assert "estimated_opening_basis" in trace.reasons
+    assert "local_quantity_reconciliation" in trace.reasons
 
 
 def test_missing_reduction_preserves_quantities_and_reconciles_current_flat():

@@ -68,6 +68,11 @@ def oracle(snapshot, mode, **selectors):
     if any("estimated_opening_basis" in h.reasons for h in histories):
         reference_delta = -sum((h.rows[-1].pnl for h in histories), dec(0))
         episodes[0] = replace(episodes[0], entry_reference_delta=reference_delta)
+    if (any("estimated_current_opening" in h.reasons for h in histories)
+            and all((_steps(p, snapshot.start, snapshot.now)[0][-1].after
+                     if _steps(p, snapshot.start, snapshot.now)[0] else 0) == 0 for p in selected)):
+        last = episodes[-1].points[-1]
+        episodes[-1] = Episode((last,), entry_reference_delta=last.observation.pnl)
     return episodes
 
 
@@ -351,7 +356,7 @@ def test_missing_opening_with_flat_candles_seeds_entry_peak(pside, mode, selecto
     actual, expected = compare(snapshot, mode, **selectors)
     assert actual["episodes"][0]["entry_reference_delta"] == 0
     assert "estimated_entry_peak" in actual["reasons"]
-    assert len(actual["episodes"][0]["points"]) == 5  # no synthetic EMA row
+    assert len(actual["episodes"][0]["points"]) == 1  # no invented historical exposure or idle-minute EMA
     settings = dict(now=snapshot.now, start=0, budget=1000, span=10_000.5,
                     threshold=.08, cooldown=0, restart="always")
     reference = replay(expected, **settings)
