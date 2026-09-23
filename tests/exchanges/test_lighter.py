@@ -489,6 +489,147 @@ async def test_fill_manager_restart_and_truncated_position_evidence(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["buy", "sell"])
+@pytest.mark.parametrize("legacy_cache", [False, True])
+async def test_flip_legs_survive_refresh_deduplication_and_restart(
+    tmp_path, side, legacy_cache
+):
+    from fill_events_manager import FillEvent, FillEventsManager
+
+    buying = side == "buy"
+    pnl = 0.6 if buying else -0.6
+    row = trade(
+        ask_account_id=456 if buying else 123,
+        bid_account_id=123 if buying else 456,
+        is_maker_ask=buying,
+        taker_position_size_before="-.006" if buying else ".006",
+        taker_entry_quote_before="12.6",
+        **{"bid_account_pnl" if buying else "ask_account_pnl": str(pnl)},
+    )
+    f, api = fetcher()
+    api.privateGetTrades.side_effect = None
+    api.privateGetTrades.return_value = {"trades": [row]}
+    manager = FillEventsManager(
+        exchange="lighter", user="fixture", fetcher=f, cache_path=tmp_path
+    )
+    if legacy_cache:
+        # Older normalization retained only the opening leg with the raw trade
+        # source identity. A history refresh must restore the lost closing leg.
+        opening = f.normalize_trade(row)[1]
+        opening["source_ids"] = [str(row["trade_id"])]
+        manager.cache.save([FillEvent.from_dict(opening)])
+
+    def assert_complete(current):
+        events = {event.id: event for event in current._events}
+        assert len(current._events) == 2
+        assert set(events) == {"10:close", "10:open"}
+        close, opened = events["10:close"], events["10:open"]
+        assert close.source_ids == ["10:close"]
+        assert opened.source_ids == ["10:open"]
+        assert close.position_side == ("short" if buying else "long")
+        assert opened.position_side == ("long" if buying else "short")
+        assert close.pnl == pytest.approx(pnl)
+        assert opened.pnl == 0
+        assert sum(event.fee_paid for event in current._events) == pytest.approx(
+            -0.0056
+        )
+        assert close.psize == 0
+        assert close.pprice == 0
+        assert abs(opened.psize) == pytest.approx(0.004)
+        assert opened.pprice == 2000
+
+    await manager.refresh(start_ms=row["timestamp"])
+    assert_complete(manager)
+    await manager.refresh(start_ms=row["timestamp"])
+    assert_complete(manager)
+    restarted = FillEventsManager(
+        exchange="lighter", user="fixture", fetcher=f, cache_path=tmp_path
+    )
+    await restarted.ensure_loaded()
+    assert_complete(restarted)
+    await restarted.refresh(start_ms=row["timestamp"])
+    assert_complete(restarted)
+
+
+def test_balance_tool_direct_script_resolves_lighter_imports(tmp_path):
+    import json
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    keys = tmp_path / "keys.json"
+    keys.write_text(
+        json.dumps(
+            {
+                "fixture": {
+                    "exchange": "lighter",
+                    "account_index": True,
+                    "api_key_index": 4,
+                }
+            }
+        )
+    )
+    script = Path(__file__).resolve().parents[2] / "src/tools/fetch_balance.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--user", "fixture", "--api-keys", str(keys)],
+        cwd=tmp_path,
+        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    # Invalid local credentials stop before any network request, after imports.
+    assert result.returncode == 1
+    assert "account_index must be a nonnegative integer" in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    assert not result.stdout
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize(
+    "accounts",
+    [
+        [],
+        [{"account_index": 123, "collateral": "12"}] * 2,
+        [{"account_index": 456, "collateral": "12"}],
+        [{"account_index": 123.5, "collateral": "12"}],
+        [{"account_index": 123}],
+        [{"account_index": 123, "collateral": "nan"}],
+        [{"account_index": 123, "collateral": "inf"}],
+        [{"account_index": 123, "collateral": True}],
+        [{"account_index": 123, "collateral": "0"}],
+        [{"account_index": 123, "collateral": "12.345678"}],
+    ],
+)
+async def test_sync_and_async_balance_validate_account_and_collateral(sync, accounts):
+    from unittest.mock import Mock
+    from exchanges.lighter_balance import SyncLighterBalance
+
+    x = SyncLighterBalance({"options": {"accountIndex": 123}}) if sync else exchange()
+    x.set_markets([market()])
+    x.publicGetAccount = (Mock if sync else AsyncMock)(
+        return_value={"accounts": accounts}
+    )
+    valid = len(accounts) == 1 and accounts[0].get("collateral") in ("0", "12.345678")
+    try:
+        if valid:
+            result = x.fetch_balance() if sync else await x.fetch_balance()
+            assert result["total"]["USDC"] == float(accounts[0]["collateral"])
+            assert result["USDC"]["total"] == result["total"]["USDC"]
+        else:
+            with pytest.raises((ValueError, KeyError, TypeError)):
+                if sync:
+                    x.fetch_balance()
+                else:
+                    await x.fetch_balance()
+    finally:
+        if not sync:
+            await x.close()
+
+
+@pytest.mark.asyncio
 async def test_candle_requests_cannot_tail_skip_the_oldest_page():
     x = exchange()
     try:

@@ -12,6 +12,7 @@ import ccxt.pro as ccxt_pro
 
 from config.access import require_live_value
 from exchanges.ccxt_bot import CCXTBot
+from exchanges.lighter_balance import validate_balance
 
 from exchanges.lighter_credentials import SIGNER_REVISION, SIGNER_SHA256, client_config
 
@@ -182,17 +183,7 @@ class _LighterMixin:
 
     async def fetch_balance(self, params=None):
         result = await super().fetch_balance(params or {})
-        rows = result["info"]["accounts"]
-        if (
-            len(rows) != 1
-            or int(rows[0]["account_index"]) != self.options["accountIndex"]
-        ):
-            raise ValueError("Lighter returned an unexpected account")
-        # collateral is the realized derivatives wallet, excluding unrealized PnL.
-        collateral = finite(rows[0]["collateral"], "collateral")
-        result["total"]["USDC"] = collateral
-        result["USDC"]["total"] = collateral
-        return result
+        return validate_balance(result, self.options["accountIndex"])
 
     async def fetch_positions(self, symbols=None, params=None):
         await self.load_markets()

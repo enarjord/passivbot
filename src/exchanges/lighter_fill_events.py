@@ -154,9 +154,13 @@ def normalize_lighter_trade(row, account, market):
         else:
             after_size = abs(before) + qty
             after_price = (entry_quote + qty * price) / after_size
+        event_id = str(row["trade_id"]) + (f":{kind}" if len(pieces) > 1 else "")
         events.append(
             {
-                "id": str(row["trade_id"]) + (f":{kind}" if len(pieces) > 1 else ""),
+                "id": event_id,
+                # Each flip leg is a distinct execution component. The raw
+                # trade ID alone would make the cache replace one with the other.
+                "source_ids": [event_id],
                 "order_id": str(row[f"{leg}_id"]),
                 "timestamp": timestamp,
                 "datetime": _fill_datetime(timestamp),

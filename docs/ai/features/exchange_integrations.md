@@ -767,10 +767,12 @@ Verify the pinned signer hash before native loading.
 Use actual order-book quotes because ticker responses lack bid/ask. Keep cross/isolated margin
 and leverage together in their per-market configuration transaction. Balance is realized USDC
 collateral and must validate the exact requested account, not CCXT's missing-field zero defaults.
+The synchronous balance CLI and asynchronous trading adapter share this validation.
 
 Cursor-paginate all perpetual trades and reject missing pages, stalled cursors, or conflicting
 identities. Retain raw pre-fill position evidence for restart reconstruction, and split one-way
-position flips into close/open components. Reductions require authoritative account-side PnL,
+position flips into close/open components with distinct event and source identities so cache
+deduplication retains both legs. Reductions require authoritative account-side PnL,
 except omitted zero values independently proven by the exchange's before-state. Preserve missing
 fee evidence for the canonical best-effort fee policy rather than fabricating zero fees.
 
