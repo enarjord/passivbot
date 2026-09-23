@@ -323,6 +323,9 @@ async def test_fake_client_request_log_counts_order_writes():
     bot.bot_id = "fake_bot"
     bot.cca = client
     bot.open_orders = {}
+    bot.recent_order_cancellations = []
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
     bot._build_order_params = lambda _order: {
         "positionSide": "LONG",
         "clientOrderId": "pb-test",
@@ -342,7 +345,7 @@ async def test_fake_client_request_log_counts_order_writes():
     }
 
     order = await bot.execute_order(requested)
-    await bot.execute_cancellation(order)
+    await bot.execute_cancellation({**requested, "id": order["id"]})
 
     summary = _summarize_remote_calls(client.export_request_log())
 
@@ -350,9 +353,10 @@ async def test_fake_client_request_log_counts_order_writes():
     assert summary["by_method"]["cancel_order"] == 1
     assert summary["by_category"]["order_write"] == 2
     assert [event_type for event_type, _kwargs in emitted] == [
-        "execution.create_sent",
         "execution.create_connector_call_started",
+        "execution.create_sent",
         "execution.cancel_connector_call_started",
+        "execution.cancel_sent",
     ]
 
 
@@ -1813,7 +1817,8 @@ async def test_fake_cycle_defers_unknown_episode_and_preserves_red_supervision(
     async def unavailable(bot):
         raise AuthoritativeSurfaceUnavailable("hsl_episode_boundaries", "fill tape pending")
 
-    async def supervise():
+    async def supervise(*, single_pass):
+        assert single_pass
         calls.append("supervisor")
 
     monkeypatch.setattr(run_fake_live_module, "_run_fake_cycle_ready", unavailable)
@@ -1918,6 +1923,12 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
             # New exchange exposure arrives after the long-owned unified
             # commitment. Its own outage grace has not elapsed.
             bot.cca._load_boot_position(dict(symbol=symbol, position_side='short', qty=1.0, price=97.0))
+            await bot.refresh_protective_authoritative_state(require_balance=False)
+            # Position settling is bounded independently of the HSL outage grace.
+            from live.position_fill_sync import state as sync_state
+            assert sync_state(bot).blocked((symbol, 'short'))
+            bot.cca.now_ms += 15_000
+            assert not sync_state(bot).blocked((symbol, 'short'))
         if failure == 'inactive_committed':
             bot.config['bot']['long']['risk']['n_positions'] = 0
         if failure == 'restart_partial':
@@ -1931,6 +1942,10 @@ async def test_unready_hsl_grace_and_exit_with_real_rust_and_fake_exchange(tmp_p
             await recovery.protect_unready_hsl(bot)
             await bot.refresh_protective_authoritative_state(require_balance=False)
             assert bot.positions[symbol]['long']['size'] == 2.5
+            from live.position_fill_sync import state as sync_state
+            assert sync_state(bot).blocked((symbol, 'long'))
+            bot.cca.now_ms += 15_000
+            assert not sync_state(bot).blocked((symbol, 'long'))
             # Discard all recovery RAM. Only the journal survives controller
             # restart; a recovered price must not abandon the remaining close.
             from live.hsl_protection import ProtectionHealth
@@ -2080,6 +2095,10 @@ async def test_normal_red_closes_before_bookkeeping_with_real_rust_and_fake_exch
             from live import risk_input_recovery as recovery, hsl_protection as protection
             bot.cca._load_boot_position(dict(symbol=symbol, position_side='short', qty=2.0, price=80.0))
             await bot.refresh_protective_authoritative_state()
+            from live.position_fill_sync import state as sync_state
+            assert sync_state(bot).blocked((symbol, 'short'))
+            bot.cca.now_ms += 15_000
+            assert not sync_state(bot).blocked((symbol, 'short'))
             scope = protection.scope_for(bot, 'short', symbol)
             protection.manager(bot).unavailable(scope, now_ms=bot.get_exchange_time()-120_000,
                                                 reason='history', grace_ms=120_000)

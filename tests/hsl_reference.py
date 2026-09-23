@@ -207,13 +207,22 @@ def ordered_fills(fills, start, end, direction):
 
 
 def quantity_path(ordered, current, direction):
-    """Minimum opening inventory; known deltas are never clamped or rewritten."""
-    prefix = [Decimal(0)]
-    for fill in ordered:
-        prefix.append(prefix[-1] + _estimated_delta(fill) * direction)
-    opening = max(Decimal(0), -min(prefix), current - prefix[-1])
-    return [(fill, opening + prefix[i], opening + prefix[i+1],
-             _estimated_delta(fill) * direction) for i, fill in enumerate(ordered)], opening
+    """Explain each reduction locally; current position does not alter the prefix."""
+    runs, subtotal = {}, Decimal(0)
+    for i in reversed(range(len(ordered))):
+        delta = _estimated_delta(ordered[i]) * direction
+        subtotal = Decimal(0) if delta > 0 else subtotal - delta
+        runs[i] = subtotal
+    opening = runs.get(0, Decimal(0))
+    if ordered and all(_estimated_delta(f) * direction <= 0 for f in ordered):
+        opening += abs(current)
+    quantity, steps = opening, []
+    for i, fill in enumerate(ordered):
+        delta = _estimated_delta(fill) * direction
+        before = max(quantity, runs[i])
+        steps.append((fill, before, before + delta, delta))
+        quantity = before + delta
+    return steps, opening
 
 
 def reconstruct(position, fills, prices, start, end):
@@ -240,11 +249,18 @@ def reconstruct(position, fills, prices, start, end):
     states = [(start - 1, quantity, basis, Decimal(0))]
     cumulative = Decimal(0)
     cashflows = []
+    prior = quantity
     for f, before, after, delta in steps:
+        if before != prior:
+            reasons.add("local_quantity_reconciliation")
+        prior = after
         price = dec(f.price) if _positive(f.price) else (
             basis if basis > 0 else current_basis if current_basis > 0 else mark)
         if not _positive(f.price):
             reasons.add("estimated_fill_price")
+        if before and not basis:
+            basis = price
+            reasons.add("local_basis_reconciliation")
         if delta > 0:
             if position.inverse and before and basis:
                 basis = (before + delta) / (before / basis + delta / price)
@@ -265,6 +281,8 @@ def reconstruct(position, fills, prices, start, end):
     if size and basis != current_basis:
         reasons.add("current_basis_reconciliation")
     tail = steps[-1][2] if steps else quantity
+    if not tail and size:
+        reasons.add("estimated_current_opening")
     if tail != abs(size):
         reasons.add("current_quantity_reconciliation")
         if not size and ordered:

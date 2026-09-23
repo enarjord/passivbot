@@ -13052,6 +13052,11 @@ class Passivbot:
         """Fetch latest fills while holding the fill-cache single-flight lock."""
         if self.stop_signal_received:
             return False
+        from live import position_fill_sync
+
+        if not position_fill_sync.fetch_ready(self):
+            self._last_fill_refresh_block_reason = "position_fill_settling"
+            return False
         self._last_fill_refresh_block_reason = None
         fill_refresh_attempt_generation = (
             max(
@@ -13099,11 +13104,19 @@ class Passivbot:
         def flush_enriched_events() -> list[tuple[object, object]]:
             return []
 
-        async def refresh_evidence(operation, **kwargs):
+        async def refresh_evidence(operation, *, confirms_tail=True, **kwargs):
             nonlocal fill_capture_interval
             started_ms = int(utc_ms())
+            sync = position_fill_sync.state(self)
+            if not sync.fetch_ready():
+                raise position_fill_sync.Settling()
+            receipt = sync.begin_fetch()
             try:
                 result = await operation(**kwargs)
+                if result is False:
+                    raise position_fill_sync.FetchSkipped()
+                if confirms_tail:
+                    sync.finish_fetch(receipt)
                 fill_capture_interval = (
                     started_ms if fill_capture_interval is None else fill_capture_interval[0],
                     int(utc_ms()),
@@ -13314,6 +13327,7 @@ class Passivbot:
                 try:
                     await refresh_evidence(
                         repair_degraded,
+                        confirms_tail=False,
                         start_ms=(
                             None
                             if required_pnl_start_ms is None
@@ -13644,6 +13658,14 @@ class Passivbot:
             )
 
             return fills_ready
+
+        except position_fill_sync.FetchSkipped:
+            self._last_fill_refresh_block_reason = "fill_refresh_skipped"
+            return False
+
+        except position_fill_sync.Settling:
+            self._last_fill_refresh_block_reason = "position_fill_settling"
+            return False
 
         except RateLimitExceeded as e:
             flush_enriched_events()
@@ -16035,9 +16057,9 @@ class Passivbot:
             for symbol, by_pside in positions_new.items()
             for pside, position in by_pside.items()
         }
-        previous_position_state = getattr(
-            self, "_trailing_authoritative_position_state", None
-        )
+        from live import position_fill_sync
+
+        previous_position_state = position_fill_sync.state(self).positions
         previous_snapshot_fill_epochs = dict(
             getattr(self, "_trailing_position_snapshot_fill_epochs", {}) or {}
         )
@@ -16045,7 +16067,7 @@ class Passivbot:
         current_fill_epochs = {
             key: str(anchor["epoch"]) for key, anchor in current_fill_anchors.items()
         }
-        self._trailing_authoritative_position_state = position_state
+        position_fill_sync.observe(self, position_state)
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
         pending = dict(

@@ -334,9 +334,11 @@ def test_relative_entry_seed_applies_before_flat_and_expires_with_initial_sample
     assert run(first, rest, now=120_000, start=60_001, restart="never")[-1].action == "normal"
 
 
-def test_relative_entry_seed_is_not_allowed_after_supported_flat():
+def test_relative_entry_seed_after_flat_requires_current_singleton():
+    result = run(stopped(), Episode((point(300, upnl=-100),), entry_reference_delta=0))
+    assert result[-1].action == "panic"
     with pytest.raises(ValueError, match="initial incomplete"):
-        run(stopped(), Episode((point(300),), entry_reference_delta=100))
+        run(stopped(), Episode((point(300), point(400)), entry_reference_delta=100))
     with pytest.raises(ValueError, match="initial incomplete"):
         run(Episode((point(300),), entry_reference=1100, entry_reference_delta=100))
 

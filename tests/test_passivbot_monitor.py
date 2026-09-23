@@ -5626,6 +5626,9 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             assert context["action"] == "cancel"
             assert context["orders"][0] is orders[0]
             assert context["wave"] is self._order_wave_in_progress
+            # Model the connector's actual admission, not batch scheduling.
+            from live.executor import record_cancel_connector_admission
+            record_cancel_connector_admission(self, orders[0])
             return [
                 {
                     "status": "success",
