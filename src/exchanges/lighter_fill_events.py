@@ -96,17 +96,18 @@ class LighterFetcher(BaseFetcher):
 
 
 def normalize_lighter_trade(row, account, market):
-    ask, bid = int(row["ask_account_id"]), int(row["bid_account_id"])
-    if (ask == account) == (bid == account):
+    ask, bid = str(row["ask_account_id"]), str(row["bid_account_id"])
+    account_id = str(account)
+    if (ask == account_id) == (bid == account_id):
         raise ValueError("Lighter trade must identify exactly one account side")
-    leg, side = ("ask", "sell") if ask == account else ("bid", "buy")
+    leg, side = ("ask", "sell") if ask == account_id else ("bid", "buy")
     maker_ask = row["is_maker_ask"]
     if not isinstance(maker_ask, bool):
         raise ValueError("Lighter is_maker_ask must be boolean")
     role = "maker" if maker_ask == (leg == "ask") else "taker"
     before = finite(row[f"{role}_position_size_before"], "pre-fill position")
     entry_quote = finite(row[f"{role}_entry_quote_before"], "pre-fill entry quote")
-    if entry_quote < 0 or (before == 0 and entry_quote != 0):
+    if entry_quote < 0 or (before == 0) != (entry_quote == 0):
         raise ValueError("Lighter contradictory pre-fill position and entry quote")
     quantity = finite(row["size"], "fill size", positive=True)
     price = finite(row["price"], "fill price", positive=True)

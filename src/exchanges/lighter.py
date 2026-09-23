@@ -238,11 +238,7 @@ class AsyncLighter(_LighterMixin, ccxt_async.lighter):
 
 
 class ProLighter(_LighterMixin, ccxt_pro.lighter):
-    async def watch_orders(self, symbol=None, since=None, limit=None, params=None):
-        orders = await super().watch_orders(symbol, since, limit, params or {})
-        for order in orders:
-            self._validate_order_owner(order["info"])
-        return orders
+    pass
 
 
 class LighterBot(CCXTBot):
@@ -316,6 +312,10 @@ class LighterBot(CCXTBot):
 
     def _get_position_side_for_order(self, order):
         return self._normalize_one_way_position_side(order)
+
+    def _normalize_order_update(self, order):
+        self.cca._validate_order_owner(order["info"])
+        return super()._normalize_order_update(order)
 
     def _build_order_params(self, order):
         side, pside = order["side"], order["position_side"]

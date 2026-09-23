@@ -759,6 +759,8 @@ confirm cancellation by authoritative active-order removal. Never blindly resubm
 write. Fetch all active perpetual orders in one request, rather than only configured markets.
 Validate ownership in active, closed, and streamed order responses, and reject duplicate position markets
 instead of allowing a later row to overwrite exposure or invent hedged state.
+Stream ownership checks belong in per-row normalization so malformed updates request an account
+refresh while valid rows in the same batch remain usable, without consuming the reconnect budget.
 
 Cap candle pages at 500 and bound the end of each request to prevent the exchange from silently
 tail-anchoring an over-wide warmup window. Public data clients and historical preparation must use
@@ -780,6 +782,7 @@ position flips into close/open components with distinct event and source identit
 deduplication retains both legs. Reductions require authoritative account-side PnL,
 except omitted zero values independently proven by the exchange's before-state. Preserve missing
 fee evidence for the canonical best-effort fee policy rather than fabricating zero fees.
+A nonzero pre-fill position requires a strictly positive entry quote; a flat position requires zero.
 
 ## Unavailable Configured Live Markets
 

@@ -335,25 +335,50 @@ async def test_order_snapshots_and_confirmation_history_validate_owner(closed, o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("owner", [123, 456])
-async def test_order_stream_validates_owner(owner):
+@pytest.mark.parametrize("owner", [456, "missing"])
+async def test_order_stream_isolates_bad_ownership_and_refreshes_account(owner):
     import ccxt.pro as ccxt_pro
     from exchanges.lighter import ProLighter
+    from unittest.mock import Mock
 
     x = ProLighter({"options": {"accountIndex": 123}})
     x.set_markets([market()])
-    order = x.parse_order(raw_order(owner_account_index=owner))
+    bad = raw_order(order_id="bad", owner_account_index=owner)
+    if owner == "missing":
+        del bad["owner_account_index"]
+    orders = [
+        x.parse_order(raw_order(order_id="good-1")),
+        x.parse_order(bad),
+        x.parse_order(raw_order(order_id="good-2")),
+    ]
+    b = bot()
+    b.cca = exchange()
+    b.ccp = x
+    b.stop_websocket = False
+    b._health_ws_reconnects = 0
+    b._mark_account_critical_state_dirty = Mock()
+    b.handle_order_update = Mock()
     try:
         with patch.object(
-            ccxt_pro.lighter, "watch_orders", new=AsyncMock(return_value=[order])
+            ccxt_pro.lighter,
+            "watch_orders",
+            new=AsyncMock(side_effect=[orders, asyncio.CancelledError()]),
         ):
-            if owner == 123:
-                assert await x.watch_orders() == [order]
-            else:
-                with pytest.raises(ValueError, match="unexpected account"):
-                    await x.watch_orders()
+            await b.watch_orders()
+        b.handle_order_update.assert_called_once()
+        assert [order["id"] for order in b.handle_order_update.call_args.args[0]] == [
+            "good-1",
+            "good-2",
+        ]
+        b._mark_account_critical_state_dirty.assert_called_once()
+        assert (
+            b._mark_account_critical_state_dirty.call_args.kwargs["reason"]
+            == "order_ws_semantics_unavailable"
+        )
+        assert b._health_ws_reconnects == 0
     finally:
         await x.close()
+        await b.cca.close()
 
 
 @pytest.mark.asyncio
@@ -510,6 +535,32 @@ def test_missing_pnl_and_nonfinite_trade_fail_closed():
     row = trade()
     del row["taker_fee"]
     assert f.normalize_trade(row)[0]["fees"] is None
+
+
+@pytest.mark.parametrize("before", [".02", "-.02"])
+@pytest.mark.parametrize("buying", [False, True])
+def test_existing_position_requires_positive_entry_quote(before, buying):
+    f, _ = fetcher()
+    row = trade(
+        ask_account_id=456 if buying else 123,
+        bid_account_id=123 if buying else 456,
+        is_maker_ask=buying,
+        taker_position_size_before=before,
+        taker_entry_quote_before="0",
+        **{"bid_account_pnl" if buying else "ask_account_pnl": "0"},
+    )
+    with pytest.raises(ValueError, match="contradictory pre-fill"):
+        f.normalize_trade(row)
+    row["taker_entry_quote_before"] = "40"
+    assert f.normalize_trade(row)[0]["pprice"] == 2000
+
+
+@pytest.mark.parametrize("account_id", [123.5, True, None])
+def test_trade_account_identity_is_not_coerced_to_requested_account(account_id):
+    f, _ = fetcher()
+    with pytest.raises(ValueError, match="exactly one account side"):
+        f.normalize_trade(trade(bid_account_id=account_id))
+    assert f.normalize_trade(trade(bid_account_id="123"))[0]["position_side"] == "long"
 
 
 def test_omitted_zero_pnl_requires_original_decimal_evidence():
