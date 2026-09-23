@@ -770,7 +770,9 @@ collateral and must validate the exact requested account, not CCXT's missing-fie
 The synchronous balance CLI and asynchronous trading adapter share this validation.
 
 Cursor-paginate all perpetual trades and reject missing pages, stalled cursors, or conflicting
-identities. Retain raw pre-fill position evidence for restart reconstruction, and split one-way
+identities. A full page without a continuation cursor cannot prove complete history unless the
+descending page has already crossed the requested start. Retain raw pre-fill position evidence
+for restart reconstruction, and split one-way
 position flips into close/open components with distinct event and source identities so cache
 deduplication retains both legs. Reductions require authoritative account-side PnL,
 except omitted zero values independently proven by the exchange's before-state. Preserve missing

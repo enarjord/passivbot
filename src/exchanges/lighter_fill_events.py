@@ -52,9 +52,15 @@ class LighterFetcher(BaseFetcher):
                     continue
                 events.extend(self.normalize_trade(row))
             cursor = response.get("next_cursor")
-            if not cursor or (
-                since_ms is not None and oldest is not None and oldest < since_ms
-            ):
+            if since_ms is not None and oldest is not None and oldest < since_ms:
+                break
+            if not cursor:
+                # A full page cannot prove the end of history. Without a
+                # cursor, silently stopping would certify a truncated window.
+                if len(rows) >= self.trade_limit:
+                    raise ValueError(
+                        "Lighter full trade page is missing a continuation cursor"
+                    )
                 break
             if cursor in cursors or not rows or not added:
                 raise ValueError("Lighter trade pagination made no progress")

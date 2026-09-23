@@ -459,6 +459,90 @@ async def test_stuck_cursor_does_not_publish_partial_history():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", [None, "", "missing"])
+@pytest.mark.parametrize("later_page", [False, True])
+async def test_full_trade_page_without_cursor_does_not_publish_partial_history(
+    cursor, later_page
+):
+    terminal = {
+        "trades": [
+            trade(trade_id=12, timestamp=3000),
+            trade(trade_id=11, timestamp=2000),
+        ]
+    }
+    if cursor != "missing":
+        terminal["next_cursor"] = cursor
+    pages = []
+    if later_page:
+        pages.append(
+            {
+                "trades": [
+                    trade(trade_id=14, timestamp=5000),
+                    trade(trade_id=13, timestamp=4000),
+                ],
+                "next_cursor": "page-2",
+            }
+        )
+    pages.append(terminal)
+    f, _ = fetcher(pages)
+    f.trade_limit = 2
+    callback = []
+    with pytest.raises(ValueError, match="missing a continuation cursor"):
+        await f.fetch(1000, 6000, {}, callback.extend)
+    assert not callback
+
+
+@pytest.mark.asyncio
+async def test_cursorless_full_page_keeps_fill_coverage_unproven(tmp_path):
+    from fill_events_manager import FillEventsManager
+
+    f, _ = fetcher(
+        [
+            {
+                "trades": [
+                    trade(trade_id=12, timestamp=3000),
+                    trade(trade_id=11, timestamp=2000),
+                ]
+            }
+        ]
+    )
+    f.trade_limit = 2
+    manager = FillEventsManager(
+        exchange="lighter", user="fixture", fetcher=f, cache_path=tmp_path
+    )
+    with pytest.raises(ValueError, match="missing a continuation cursor"):
+        await manager.refresh(start_ms=1000, end_ms=4000)
+    assert not manager._events
+    assert manager.cache.get_known_gaps()
+    assert not manager.get_coverage_status(start_ms=1000, end_ms=4000)["ready"]
+    restarted = FillEventsManager(
+        exchange="lighter", user="fixture", fetcher=f, cache_path=tmp_path
+    )
+    await restarted.ensure_loaded()
+    assert not restarted._events
+    assert not restarted.get_coverage_status(start_ms=1000, end_ms=4000)["ready"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crossed_start", [False, True])
+async def test_trade_history_requires_short_terminal_page_or_crossed_start(
+    crossed_start,
+):
+    rows = [trade(trade_id=12, timestamp=3000), trade(trade_id=11, timestamp=2000)]
+    if crossed_start:
+        pages, since, expected = [{"trades": rows}], 2500, ["12"]
+    else:
+        pages = [
+            {"trades": rows, "next_cursor": "page-2"},
+            {"trades": [trade(trade_id=10, timestamp=1000)]},
+        ]
+        since, expected = 1000, ["10", "11", "12"]
+    f, _ = fetcher(pages)
+    f.trade_limit = 2
+    assert [event["id"] for event in await f.fetch(since, 4000, {})] == expected
+
+
+@pytest.mark.asyncio
 async def test_fill_manager_restart_and_truncated_position_evidence(tmp_path):
     from fill_events_manager import FillEventsManager
 
