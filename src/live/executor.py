@@ -18,11 +18,11 @@ from utils import utc_ms as _utils_utc_ms
 
 
 class DeferredOrderCreation:
-    """An order deliberately withheld before the exchange connector was called."""
+    """An order deliberately withheld before exchange submission."""
 
 
 class DeferredOrderCancellation:
-    """A cancellation withheld before calling the exchange connector."""
+    """A cancellation withheld before exchange submission."""
 
 
 def _passivbot_module():

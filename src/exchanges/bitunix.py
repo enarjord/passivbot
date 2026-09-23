@@ -449,6 +449,8 @@ class BitunixClient:
         url = f"{self.rest_url}{path}" + (f"?{query}" if query else "")
         await self._throttle(cancel=cancel)
         session = await self._get_session()
+        from live.position_fill_sync import check_transport_admission
+        check_transport_admission()
         try:
             async with session.request(
                 method,

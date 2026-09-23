@@ -720,7 +720,16 @@ ordinary readiness rules still apply. An expired burst remains expired until a q
 succeeds; only then can a later change start another bounded wait. No local gate is persisted.
 
 A shared account endpoint may service already-settled scopes while another scope is settling;
-only eligible unchanged scopes receive its confirmation receipt. Coin mode leaves unrelated
-coin-sides executable. Revised pside/unified decisions depend on all contributing coin-sides,
+only eligible unchanged scopes receive its confirmation receipt. A successful cap-authorized
+fetch also closes its expired burst so subsequent changes start a new bounded wait. Skipped fetches
+never publish a new capture interval or authoritative fill generation. Coin mode leaves unrelated
+coin-sides executable. Enabled revised pside/unified decisions depend on all contributing coin-sides,
 so writes using those aggregate decisions also wait for their dependencies, under the same cap.
 Recheck admission at the connector boundary, including writes queued behind another write.
+A task-local order context also checks after CCXT throttling and at the native/fake transport
+boundary, so legacy requests queued inside a connector cannot bypass a newly started wait.
+Unrelated account reads carry no order context.
+
+The offline fake runner advances a separate settling clock for a simulated fetch wait within a
+market bar and bounds coin RED supervision to one pass. It leaves market timestamps unchanged.
+Adversarial timing tests can supply their own clock to exercise the actual gate without this shim.

@@ -5659,7 +5659,10 @@ async def test_update_pnls_pending_enrichment_advances_only_trailing_fetch_gener
     if observation_change == 'epoch':
         bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.begin_epoch()
     elif observation_change in {'position', 'concurrent'}:
-        bot._pnls_manager.refresh_latest.side_effect = lambda **kwargs: ledger.stamp('positions', now_ms=1_700_000_060_000)
+        def observe_positions(**kwargs):
+            ledger.stamp('positions', now_ms=1_700_000_060_000)
+            # A completed refresh returns None, not stamp's unchanged=False.
+        bot._pnls_manager.refresh_latest.side_effect = observe_positions
 
     result = await bot.update_pnls()
 
@@ -6042,8 +6045,8 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
-    assert bot._last_fill_refresh_pending_pnl_count == 0
-    assert bot._last_fill_refresh_block_reason == "fill_history_coverage"
+    assert bot._hsl_revised_fill_capture_interval is None
+    assert bot._last_fill_refresh_block_reason == "fill_refresh_skipped"
     ledger = getattr(bot, "freshness_ledger", None)
     assert ledger is None or ledger.surface_signature("fills") is None
     assert bot._trailing_fill_fetch_generation == 7

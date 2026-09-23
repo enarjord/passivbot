@@ -13113,7 +13113,9 @@ class Passivbot:
             receipt = sync.begin_fetch()
             try:
                 result = await operation(**kwargs)
-                if confirms_tail and result is not False:
+                if result is False:
+                    raise position_fill_sync.FetchSkipped()
+                if confirms_tail:
                     sync.finish_fetch(receipt)
                 fill_capture_interval = (
                     started_ms if fill_capture_interval is None else fill_capture_interval[0],
@@ -13656,6 +13658,10 @@ class Passivbot:
             )
 
             return fills_ready
+
+        except position_fill_sync.FetchSkipped:
+            self._last_fill_refresh_block_reason = "fill_refresh_skipped"
+            return False
 
         except position_fill_sync.Settling:
             self._last_fill_refresh_block_reason = "position_fill_settling"

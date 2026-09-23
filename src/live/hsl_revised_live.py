@@ -46,26 +46,29 @@ def connector_write(action):
     def decorate(operation):
         @wraps(operation)
         async def submit(bot, order):
-            if not position_fill_sync.permits(bot, order):
-                from live import executor
-                return (executor.DeferredOrderCreation() if action == "create"
-                        else executor.DeferredOrderCancellation())
-            if not selected(bot):
-                return await operation(bot, order)
             from live import executor
-            instance = owner(bot)
-            async with instance._write_lock:
-                if not instance.admit(order):
-                    return (executor.DeferredOrderCreation() if action == "create"
-                            else executor.DeferredOrderCancellation())
-                if action == "cancel":
-                    executor.record_cancel_connector_admission(bot, order)
-                try:
-                    return await operation(bot, order)
-                finally:
-                    # Reads completed while the call was pending cannot confirm
-                    # its final outcome. Mark all current account inputs pending.
-                    bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+            deferred = (executor.DeferredOrderCreation if action == "create"
+                        else executor.DeferredOrderCancellation)
+            if not position_fill_sync.permits(bot, order):
+                return deferred()
+            try:
+                with position_fill_sync.connector_context(bot, order):
+                    if not selected(bot):
+                        return await operation(bot, order)
+                    instance = owner(bot)
+                    async with instance._write_lock:
+                        if not instance.admit(order):
+                            return deferred()
+                        if action == "cancel":
+                            executor.record_cancel_connector_admission(bot, order)
+                        try:
+                            return await operation(bot, order)
+                        finally:
+                            # Reads completed while the call was pending cannot
+                            # confirm its final outcome.
+                            bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+            except position_fill_sync.WriteDeferred:
+                return deferred()
         return submit
     return decorate
 

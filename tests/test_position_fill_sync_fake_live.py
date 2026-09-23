@@ -158,6 +158,9 @@ async def test_pending_history_cannot_starve_real_protective_execution(
                 assert attempts == [5.0]
             else:
                 await asyncio.wait_for(task, 3.0)
+            if failure == "fetch_skipped":
+                assert bot._hsl_revised_fill_capture_interval is None
+                assert bot._last_fill_refresh_block_reason == "fill_refresh_skipped"
             if failure == "missing_forever":
                 # Successful late fetch with no opening fill releases immediately;
                 # observed current loss is still protected by Rust.

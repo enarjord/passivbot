@@ -5,12 +5,54 @@ permission. Expiry releases only this gate. Current account/quote and Rust inten
 checks still apply. A failed/missing fill can never renew the deadline.
 """
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import wraps
 import logging
 import time
 
 SETTLE_SECONDS = 5.0
 MAX_WAIT_SECONDS = 15.0
+
+
+class FetchSkipped(Exception):
+    """No exchange fetch occurred; do not renew any acquisition receipt."""
+
+
+class WriteDeferred(Exception):
+    """Observation changed while a connector request was queued."""
+
+
+_write_context = ContextVar("position_fill_write", default=None)
+
+
+def check_transport_admission():
+    context = _write_context.get()
+    if context is not None and not permits(*context):
+        raise WriteDeferred()
+
+
+@contextmanager
+def connector_context(bot, order):
+    client = getattr(bot, "cca", None)
+    # CCXT fetch2 awaits its limiter before entering fetch. Install once; task
+    # context keeps unrelated account reads and sibling writes independent.
+    fetch = getattr(client, "fetch", None)
+    if callable(fetch) and not getattr(client, "_position_fill_transport_guard", False):
+
+        @wraps(fetch)
+        async def guarded_fetch(*args, **kwargs):
+            check_transport_admission()
+            return await fetch(*args, **kwargs)
+
+        client.fetch = guarded_fetch
+        client._position_fill_transport_guard = True
+    token = _write_context.set((bot, order))
+    try:
+        yield
+    finally:
+        _write_context.reset(token)
 
 
 class Settling(Exception):
@@ -81,7 +123,7 @@ class PositionFillSync:
         return {
             key: p.revision
             for key, p in self.pending.items()
-            if now - p.changed >= SETTLE_SECONDS
+            if self.expired(key) or now - p.changed >= SETTLE_SECONDS
         }
 
     def finish_fetch(self, receipt):
@@ -116,8 +158,12 @@ def permits(bot, order):
     config = getattr(bot, "config", {})
     if config.get("live", {}).get("hsl_engine") == "revised":
         mode = config.get("live", {}).get("hsl_signal_mode", "coin")
-        if mode == "unified":
+        if mode == "unified" and config.get("bot", {}).get("hsl", {}).get(
+            "enabled", False
+        ):
             keys.update(gate.pending)
-        elif mode == "pside":
+        elif mode == "pside" and config.get("bot", {}).get(key[1], {}).get(
+            "hsl", {}
+        ).get("enabled", False):
             keys.update(k for k in gate.pending if k[1] == key[1])
     return not any(gate.blocked(k) for k in keys)

@@ -474,7 +474,9 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         fake_client = bot.cca
         from live import position_fill_sync
-        position_fill_sync.state(bot).clock = lambda: fake_client.now_ms / 1000.
+        settle_offset = [0.0]
+        settle_clock = lambda: fake_client.now_ms / 1000. + settle_offset[0]
+        position_fill_sync.state(bot).clock = settle_clock
         from live import hsl_revised_live
         if hsl_revised_live.selected(bot):
             # Retry cadence follows scenario time, while acquisition timestamps,
@@ -482,15 +484,24 @@ def _install_runtime_overrides(bot, scenario: dict) -> None:
             hsl_revised_live.owner(bot)._schedule_clock = lambda: fake_client.now_ms / 1000.
         bot.get_exchange_time = lambda: int(fake_client.now_ms)
         update_pnls = getattr(bot, "update_pnls", None)
-        if isinstance(update_pnls, MethodType):
-            original_update_pnls = update_pnls.__func__
+        if callable(update_pnls):
+            original_update_pnls = update_pnls
 
             async def update_fake_pnls(self, *, source="direct", since_ms=None):
+                sync = position_fill_sync.state(self)
+                if sync.clock is settle_clock and not sync.fetch_ready():
+                    # Simulate the finite settling wait inside this market bar.
+                    # Do not trap a legacy supervisor on a frozen scenario clock,
+                    # or consume wall-clock seconds for every deterministic pass.
+                    deadline = min(min(p.changed + position_fill_sync.SETTLE_SECONDS,
+                                       p.first + position_fill_sync.MAX_WAIT_SECONDS)
+                                   for p in sync.pending.values())
+                    settle_offset[0] += max(0.0, deadline - settle_clock())
                 # Cache refresh watermarks use wall time, while scenarios can
                 # replay any date. Fetch the finite fake tape explicitly so a
                 # wall-clock overlap cannot skip scenario closing fills.
                 return await original_update_pnls(
-                    self, source=source, since_ms=0 if since_ms is None else since_ms
+                    source=source, since_ms=0 if since_ms is None else since_ms
                 )
 
             bot.update_pnls = MethodType(update_fake_pnls, bot)
@@ -715,7 +726,7 @@ async def _run_fake_cycle(bot):
             return {"cooldown_supervisor": True}
         if bot._equity_hard_stop_signal_mode() == "coin":
             if bot._equity_hard_stop_coin_red_active():
-                await bot._equity_hard_stop_run_coin_red_supervisor()
+                await bot._equity_hard_stop_run_coin_red_supervisor(single_pass=True)
                 return {"red_supervisor": True, "mode": "coin"}
         elif _fake_active_red_psides(bot):
             return await _run_fake_red_supervisor_step(bot)
@@ -774,7 +785,7 @@ async def _run_fake_cycle_ready(bot):
                 # pside stepping shim. The production path uses protective planning
                 # and its own authoritative refresh contract, which prevents normal
                 # staged planning from running while post-write confirmation is due.
-                await bot._equity_hard_stop_run_coin_red_supervisor()
+                await bot._equity_hard_stop_run_coin_red_supervisor(single_pass=True)
                 return {"red_supervisor": True, "mode": "coin"}
         else:
             if any(

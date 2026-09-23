@@ -83,7 +83,10 @@ def test_scope_dependency_for_both_create_and_cancel(mode, blocked):
     sync, now = gate()
     bot = SimpleNamespace(
         _position_fill_sync=sync,
-        config={"live": {"hsl_engine": "revised", "hsl_signal_mode": mode}},
+        config={
+            "live": {"hsl_engine": "revised", "hsl_signal_mode": mode},
+            "bot": {"hsl": {"enabled": True}, "long": {"hsl": {"enabled": True}}},
+        },
     )
     for key, expected in zip((A, B, C), blocked):
         assert permits(bot, dict(symbol=key[0], position_side=key[1])) is not expected
@@ -190,3 +193,33 @@ async def test_new_change_while_queued_is_checked_again_at_connector(
     )
     assert isinstance(result, expected)
     assert not calls
+
+
+def test_successful_cap_authorized_fetch_rearms_a_new_burst():
+    sync, now = gate()
+    now[0] = 14.9
+    sync.observe({A: (2, 100), B: (0, 0), C: (0, 0)})
+    now[0] = 15
+    assert sync.fetch_ready() and not sync.blocked(A)
+    sync.finish_fetch(sync.begin_fetch())
+    assert A not in sync.pending
+    now[0] = 16
+    sync.observe({A: (3, 100), B: (0, 0), C: (0, 0)})
+    assert sync.blocked(A) and not sync.fetch_ready()
+    now[0] = 21
+    assert sync.fetch_ready()
+
+
+@pytest.mark.parametrize("mode", ["pside", "unified"])
+def test_disabled_aggregate_policy_keeps_only_own_coin_side_dependency(mode):
+    sync, now = gate()
+    bot = SimpleNamespace(
+        _position_fill_sync=sync,
+        config={
+            "live": {"hsl_engine": "revised", "hsl_signal_mode": mode},
+            "bot": {"hsl": {"enabled": False}, "long": {"hsl": {"enabled": False}}},
+        },
+    )
+    assert not permits(bot, dict(symbol=A[0], position_side=A[1]))
+    assert permits(bot, dict(symbol=B[0], position_side=B[1]))
+    assert permits(bot, dict(symbol=C[0], position_side=C[1]))
