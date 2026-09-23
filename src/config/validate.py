@@ -88,6 +88,8 @@ def validate_config(
     from .hsl_revised import normalize_revised
     from .schema import get_template_config
     normalize_revised(config, get_template_config(), verbose=verbose)
+    if not isinstance(config["backtest"]["hsl_detailed_report"], bool):
+        raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
     require_config_dict(config, "monitor")

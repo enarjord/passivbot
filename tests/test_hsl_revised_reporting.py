@@ -14,7 +14,13 @@ from backtest_artifacts import load_backtest_artifact
 from hsl_revised_reporting import revised_report
 from plotting import create_forager_hard_stop_drawdown_figure
 from test_backtest_artifacts import _write_artifact
-from test_hsl_revised_backtest_config import inputs, payload, prepared_payload, run
+from test_hsl_revised_backtest_config import inputs, payload as base_payload, prepared_payload, run
+
+
+def payload(*args, **kwargs):
+    result = base_payload(*args, **kwargs)
+    result[-1]["hsl_detailed_report"] = True
+    return result
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
@@ -203,3 +209,50 @@ def test_report_rows_and_reason_lists_are_independent():
     assert report["samples"][1:] == before["samples"][1:]
     assert report["events"] == before["events"]
     assert run(payload("coin"))[4]["revised"] == before
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
+def test_default_report_preserves_trading_metrics_and_events_without_samples(mode):
+    # Exercise canonical default transport rather than the plotting fixture opt-in.
+    args = base_payload(mode)
+    assert args[-1]["hsl_detailed_report"] is False
+    compact = run(args)
+    args[-1]["hsl_detailed_report"] = True
+    detailed = run(args)
+    for actual, expected in zip(compact[:4], detailed[:4]):
+        np.testing.assert_equal(actual, expected)
+    compact_report = compact[4]["revised"]
+    detailed_report = detailed[4]["revised"]
+    assert compact_report["detailed"] is False
+    assert compact_report["samples"] == []
+    assert detailed_report["detailed"] is True
+    assert detailed_report["samples"]
+    assert compact_report["events"]
+    assert {k: v for k, v in compact_report.items() if k not in {"detailed", "samples"}} == {
+        k: v for k, v in detailed_report.items() if k not in {"detailed", "samples"}}
+    args[-1]["metrics_only"] = True  # Opt-in cannot inflate optimizer results.
+    metrics = run(args)
+    assert metrics[2:4] == detailed[2:4]
+    assert metrics[4]["revised"]["samples"] == []
+    assert metrics[4]["revised"]["events"] == []
+    assert metrics[4]["revised"]["detailed"] is False
+
+
+@pytest.mark.parametrize("detailed", [False, True])
+def test_report_option_roundtrips_and_is_strictly_boolean(detailed):
+    from config import prepare_config
+    from config_utils import strip_config_metadata
+    cfg, markets, _ = inputs()
+    cfg["backtest"]["hsl_detailed_report"] = detailed
+    normalized = prepare_config(cfg, verbose=False, target="canonical", runtime=None)
+    persisted = json.loads(json.dumps(strip_config_metadata(normalized)))
+    reloaded = prepare_config(persisted, verbose=False, target="canonical", runtime=None)
+    assert reloaded["backtest"]["hsl_detailed_report"] is detailed
+    reloaded["backtest"]["coins"] = {"binance": ["AAA"]}
+    assert base_payload(cfg=reloaded, mss=markets)[-1]["hsl_detailed_report"] is detailed
+    for bad in ["false", 0, None]:
+        cfg["backtest"]["hsl_detailed_report"] = bad
+        with pytest.raises(ValueError, match="hsl_detailed_report must be a boolean"):
+            prepare_config(cfg, verbose=False, target="canonical", runtime=None)
+    del cfg["backtest"]["hsl_detailed_report"]
+    assert prepare_config(cfg, verbose=False, target="canonical", runtime=None)["backtest"]["hsl_detailed_report"] is False

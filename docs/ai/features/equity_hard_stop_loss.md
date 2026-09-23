@@ -505,9 +505,13 @@ no account-equity substitution on the revised path. The existing legacy analysis
 ### Revised backtest report consumers
 
 The versioned `hsl_report.json` artifact preserves the native report even when plots are disabled.
-It records engine, mode, detailed/metrics-only status, dataset coin order, effective native policies
-for observed scopes, summary, samples and lifecycle events. Artifact workspaces expose `hsl_report`;
-older artifacts have no report. Compact runs keep summaries/policies and explicitly omit samples.
+It records engine, mode, sample-detail status, dataset coin order, effective native policies
+for observed scopes, summary, samples and lifecycle events. Standalone backtests retain summaries
+and lifecycle events by default, with `detailed=false` and an empty `samples` list.
+`backtest.hsl_detailed_report=true` opts into per-observation samples and HSL drawdown plots.
+Metrics-only optimizer runs omit both samples and event lists regardless of this option, while
+retaining identical summaries and analysis metrics. Reporting never changes trading inputs or
+decisions. Artifact workspaces expose `hsl_report`; older artifacts have no report.
 
 Revised plots use native raw drawdown, drawdown EMA and controller actions, with one figure per
 observed coin-side, side, or portfolio scope. Thresholds come from the native effective policy,
