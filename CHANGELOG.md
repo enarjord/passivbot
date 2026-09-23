@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Default Bitunix live quote refreshes to the requested symbols so unrelated quiet markets cannot
+  delay protective or ordinary order planning. Explicit bulk overrides remain supported.
+
 - Reconcile incomplete revised-HSL fill history locally, preserving completed episodes when a
   new position arrives before its entry fill and retaining losses from partial-close histories.
 - Share a coin-side position/fill settling gate across trading actions: start qualifying fill
