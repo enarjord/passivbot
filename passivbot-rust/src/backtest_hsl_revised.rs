@@ -29,6 +29,7 @@ impl Backtest<'_> {
 
     /// A scope-flat observation uses only preceding completed candles and the
     /// just-observed execution. No current bar close is available at its open.
+    #[cfg(test)]
     pub(super) fn revised_hsl_inputs_at(
         &self,
         k: usize,
