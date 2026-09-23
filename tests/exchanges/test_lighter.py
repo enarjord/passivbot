@@ -76,6 +76,7 @@ def raw_order(**changes):
         "order_id": "281474976710660",
         "client_order_index": encode_client_id("0x000100000001"),
         "market_index": 0,
+        "owner_account_index": 123,
         "timestamp": 1700000000,
         "updated_at": 1700000001,
         "is_ask": False,
@@ -309,6 +310,104 @@ async def test_all_market_orders_are_unfiltered_and_remaining_quantity_preserved
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("closed", [False, True])
+@pytest.mark.parametrize("owner", [123, "123", 456, 123.5, None, "missing"])
+async def test_order_snapshots_and_confirmation_history_validate_owner(closed, owner):
+    x = exchange()
+    row = raw_order()
+    if owner == "missing":
+        del row["owner_account_index"]
+    else:
+        row["owner_account_index"] = owner
+    x.prepare_api_key = AsyncMock()
+    x.load_account = AsyncMock(return_value=object())
+    x.privateGetAccountActiveOrders = AsyncMock(return_value={"orders": [row]})
+    x.privateGetAccountInactiveOrders = AsyncMock(return_value={"orders": [row]})
+    fetch = x.fetch_closed_orders if closed else x.fetch_open_orders
+    try:
+        if owner in (123, "123"):
+            assert len(await fetch(SYMBOL)) == 1
+        else:
+            with pytest.raises((ValueError, KeyError)):
+                await fetch(SYMBOL)
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", [123, 456])
+async def test_order_stream_validates_owner(owner):
+    import ccxt.pro as ccxt_pro
+    from exchanges.lighter import ProLighter
+
+    x = ProLighter({"options": {"accountIndex": 123}})
+    x.set_markets([market()])
+    order = x.parse_order(raw_order(owner_account_index=owner))
+    try:
+        with patch.object(
+            ccxt_pro.lighter, "watch_orders", new=AsyncMock(return_value=[order])
+        ):
+            if owner == 123:
+                assert await x.watch_orders() == [order]
+            else:
+                with pytest.raises(ValueError, match="unexpected account"):
+                    await x.watch_orders()
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("opposite_sign", [False, True])
+async def test_duplicate_one_way_position_markets_are_rejected(opposite_sign):
+    x = exchange()
+    first = {
+        "market_id": 0,
+        "position": ".01",
+        "avg_entry_price": "2000",
+        "sign": 1,
+        "margin_mode": 0,
+    }
+    second = {**first, "market_id": "0", "sign": -1 if opposite_sign else 1}
+    x.publicGetAccount = AsyncMock(
+        return_value={
+            "accounts": [{"account_index": 123, "positions": [first, second]}]
+        }
+    )
+    try:
+        with pytest.raises(ValueError, match="duplicate one-way position market"):
+            await x.fetch_positions()
+        x.publicGetAccount.return_value["accounts"][0]["positions"] = [first]
+        positions = await x.fetch_positions()
+        assert len(positions) == 1
+        assert positions[0]["contracts"] == 0.01
+        assert positions[0]["side"] == "long"
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", [{"sign": True}, {"margin_mode": False}])
+async def test_boolean_position_enums_are_rejected(change):
+    x = exchange()
+    row = {
+        "market_id": 0,
+        "position": ".01",
+        "avg_entry_price": "2000",
+        "sign": 1,
+        "margin_mode": 0,
+        **change,
+    }
+    x.publicGetAccount = AsyncMock(
+        return_value={"accounts": [{"account_index": 123, "positions": [row]}]}
+    )
+    try:
+        with pytest.raises(ValueError, match="invalid position"):
+            await x.fetch_positions()
+    finally:
+        await x.close()
+
+
+@pytest.mark.asyncio
 async def test_raw_side_and_close_only_required():
     x = exchange()
     try:
@@ -521,6 +620,67 @@ async def test_cursorless_full_page_keeps_fill_coverage_unproven(tmp_path):
     await restarted.ensure_loaded()
     assert not restarted._events
     assert not restarted.get_coverage_status(start_ms=1000, end_ms=4000)["ready"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("across_pages", [False, True])
+async def test_non_descending_trade_pages_cannot_certify_coverage(
+    tmp_path, across_pages
+):
+    from fill_events_manager import FillEventsManager
+
+    if across_pages:
+        pages = [
+            {
+                "trades": [
+                    trade(trade_id=14, timestamp=5000),
+                    trade(trade_id=12, timestamp=3000),
+                ],
+                "next_cursor": "page-2",
+            },
+            {
+                "trades": [
+                    trade(trade_id=13, timestamp=4000),
+                    trade(trade_id=10, timestamp=1000),
+                ],
+                "next_cursor": "page-3",
+            },
+        ]
+    else:
+        # An old interior row must not make this page prove the start boundary.
+        pages = [
+            {
+                "trades": [
+                    trade(trade_id=14, timestamp=5000),
+                    trade(trade_id=10, timestamp=1000),
+                    trade(trade_id=12, timestamp=3000),
+                ],
+                "next_cursor": "page-2",
+            }
+        ]
+    f, _ = fetcher(pages)
+    manager = FillEventsManager(
+        exchange="lighter", user="fixture", fetcher=f, cache_path=tmp_path
+    )
+    with pytest.raises(ValueError, match="descending timestamp order"):
+        await manager.refresh(start_ms=2000, end_ms=6000)
+    assert not manager._events
+    assert not manager.get_coverage_status(start_ms=2000, end_ms=6000)["ready"]
+
+
+@pytest.mark.asyncio
+async def test_equal_timestamp_trades_and_identical_page_overlap_are_preserved():
+    a, b = trade(trade_id=13, timestamp=3000), trade(trade_id=12, timestamp=3000)
+    c, d = trade(trade_id=11, timestamp=2000), trade(trade_id=10, timestamp=1000)
+    f, _ = fetcher(
+        [{"trades": [a, b, c], "next_cursor": "page-2"}, {"trades": [b, c, d]}]
+    )
+    assert [event["id"] for event in await f.fetch(1000, 4000, {})] == [
+        "10",
+        "11",
+        "12",
+        "13",
+    ]
 
 
 @pytest.mark.asyncio

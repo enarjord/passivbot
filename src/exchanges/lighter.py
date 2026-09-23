@@ -43,6 +43,10 @@ def decode_client_id(value) -> str:
 
 
 class _LighterMixin:
+    def _validate_order_owner(self, order):
+        if str(order["owner_account_index"]) != str(self.options["accountIndex"]):
+            raise ValueError("Lighter order belongs to an unexpected account")
+
     def create_order_request(self, symbol, type, side, amount, price=None, params=None):
         requests = super().create_order_request(
             symbol, type, side, amount, price, params or {}
@@ -118,6 +122,7 @@ class _LighterMixin:
         if not isinstance(rows, list):
             raise ValueError("Lighter active orders must be a complete list")
         for row in rows:
+            self._validate_order_owner(row)
             amount = finite(row["initial_base_amount"], "order amount", positive=True)
             remaining = finite(
                 row["remaining_base_amount"], "remaining order amount", positive=True
@@ -135,6 +140,14 @@ class _LighterMixin:
             raise ValueError(
                 "Lighter active order identities are missing or duplicated"
             )
+        return orders
+
+    async def fetch_closed_orders(
+        self, symbol=None, since=None, limit=None, params=None
+    ):
+        orders = await super().fetch_closed_orders(symbol, since, limit, params or {})
+        for order in orders:
+            self._validate_order_owner(order["info"])
         return orders
 
     async def create_order(self, symbol, type, side, amount, price=None, params=None):
@@ -192,18 +205,26 @@ class _LighterMixin:
         )
         rows = response["accounts"]
         if (
-            len(rows) != 1
-            or int(rows[0]["account_index"]) != self.options["accountIndex"]
+            not isinstance(rows, list)
+            or len(rows) != 1
+            or str(rows[0]["account_index"]) != str(self.options["accountIndex"])
         ):
             raise ValueError("Lighter returned an unexpected account")
         positions = rows[0]["positions"]
         if not isinstance(positions, list):
             raise ValueError("Lighter positions must be a list")
+        market_ids = set()
         for row in positions:
+            market_id = str(row["market_id"])
+            if market_id in market_ids:
+                raise ValueError("Lighter duplicate one-way position market")
+            market_ids.add(market_id)
             size = finite(row["position"], "position size")
             if (
                 size < 0
+                or type(row["sign"]) is not int
                 or row["sign"] not in (-1, 1)
+                or type(row["margin_mode"]) is not int
                 or row["margin_mode"] not in (0, 1)
             ):
                 raise ValueError("Lighter invalid position size, sign, or margin mode")
@@ -217,7 +238,11 @@ class AsyncLighter(_LighterMixin, ccxt_async.lighter):
 
 
 class ProLighter(_LighterMixin, ccxt_pro.lighter):
-    pass
+    async def watch_orders(self, symbol=None, since=None, limit=None, params=None):
+        orders = await super().watch_orders(symbol, since, limit, params or {})
+        for order in orders:
+            self._validate_order_owner(order["info"])
+        return orders
 
 
 class LighterBot(CCXTBot):

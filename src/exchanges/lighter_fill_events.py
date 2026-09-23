@@ -27,23 +27,33 @@ class LighterFetcher(BaseFetcher):
         if until_ms is not None:
             params["from"] = int(until_ms)
         cursors, trades, events = set(), {}, []
+        last_timestamp = None
         for _ in range(10000):
             response = await self.api.privateGetTrades(params)
             rows = response["trades"]
             if not isinstance(rows, list):
                 raise ValueError("Lighter trade page must contain a list")
-            oldest = None
+            page_last_timestamp = None
             added = 0
             for row in rows:
                 timestamp = int(row["timestamp"])
                 if timestamp <= 0:
                     raise ValueError("Lighter invalid trade timestamp")
-                oldest = timestamp if oldest is None else min(oldest, timestamp)
+                if page_last_timestamp is not None and timestamp > page_last_timestamp:
+                    raise ValueError(
+                        "Lighter trade page is not in descending timestamp order"
+                    )
+                page_last_timestamp = timestamp
                 identity = str(row["trade_id"])
                 if identity in trades:
                     if row != trades[identity]:
                         raise ValueError("Lighter conflicting duplicate trade")
                     continue
+                if last_timestamp is not None and timestamp > last_timestamp:
+                    raise ValueError(
+                        "Lighter trade pagination is not in descending timestamp order"
+                    )
+                last_timestamp = timestamp
                 trades[identity] = row
                 added += 1
                 if since_ms is not None and timestamp < since_ms:
@@ -52,7 +62,11 @@ class LighterFetcher(BaseFetcher):
                     continue
                 events.extend(self.normalize_trade(row))
             cursor = response.get("next_cursor")
-            if since_ms is not None and oldest is not None and oldest < since_ms:
+            if (
+                since_ms is not None
+                and page_last_timestamp is not None
+                and page_last_timestamp < since_ms
+            ):
                 break
             if not cursor:
                 # A full page cannot prove the end of history. Without a

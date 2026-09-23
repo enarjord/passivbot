@@ -757,6 +757,8 @@ Serialize signed writes and propagate failures. A `sendTx` receipt is pending tr
 not an active-order acknowledgement. Confirm the exact client ID through active/inactive orders;
 confirm cancellation by authoritative active-order removal. Never blindly resubmit an uncertain
 write. Fetch all active perpetual orders in one request, rather than only configured markets.
+Validate ownership in active, closed, and streamed order responses, and reject duplicate position markets
+instead of allowing a later row to overwrite exposure or invent hedged state.
 
 Cap candle pages at 500 and bound the end of each request to prevent the exchange from silently
 tail-anchoring an over-wide warmup window. Public data clients and historical preparation must use
@@ -770,9 +772,10 @@ collateral and must validate the exact requested account, not CCXT's missing-fie
 The synchronous balance CLI and asynchronous trading adapter share this validation.
 
 Cursor-paginate all perpetual trades and reject missing pages, stalled cursors, or conflicting
-identities. A full page without a continuation cursor cannot prove complete history unless the
-descending page has already crossed the requested start. Retain raw pre-fill position evidence
-for restart reconstruction, and split one-way
+identities. Validate descending timestamps within and across pages while allowing identical
+overlap and equal-timestamp fills. A full page without a continuation cursor cannot prove complete
+history unless the validated descending page has already crossed the requested start. Retain raw
+pre-fill position evidence for restart reconstruction, and split one-way
 position flips into close/open components with distinct event and source identities so cache
 deduplication retains both legs. Reductions require authoritative account-side PnL,
 except omitted zero values independently proven by the exchange's before-state. Preserve missing
