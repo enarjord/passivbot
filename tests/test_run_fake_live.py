@@ -323,6 +323,9 @@ async def test_fake_client_request_log_counts_order_writes():
     bot.bot_id = "fake_bot"
     bot.cca = client
     bot.open_orders = {}
+    bot.recent_order_cancellations = []
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
     bot._build_order_params = lambda _order: {
         "positionSide": "LONG",
         "clientOrderId": "pb-test",
@@ -342,7 +345,7 @@ async def test_fake_client_request_log_counts_order_writes():
     }
 
     order = await bot.execute_order(requested)
-    await bot.execute_cancellation(order)
+    await bot.execute_cancellation({**requested, "id": order["id"]})
 
     summary = _summarize_remote_calls(client.export_request_log())
 
@@ -350,9 +353,10 @@ async def test_fake_client_request_log_counts_order_writes():
     assert summary["by_method"]["cancel_order"] == 1
     assert summary["by_category"]["order_write"] == 2
     assert [event_type for event_type, _kwargs in emitted] == [
-        "execution.create_sent",
         "execution.create_connector_call_started",
+        "execution.create_sent",
         "execution.cancel_connector_call_started",
+        "execution.cancel_sent",
     ]
 
 

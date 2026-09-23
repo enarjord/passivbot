@@ -7,7 +7,7 @@ checks still apply. A failed/missing fill can never renew the deadline.
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import wraps
 import logging
 import time
@@ -27,10 +27,43 @@ class WriteDeferred(Exception):
 _write_context = ContextVar("position_fill_write", default=None)
 
 
-def check_transport_admission():
+@dataclass
+class WriteContext:
+    bot: object
+    order: dict
+    guarded: bool
+    submitted: bool = False
+    callbacks: list = field(default_factory=list)
+
+
+def defer_submission(callback):
+    """Queue provenance until the transport has admitted the actual write."""
     context = _write_context.get()
-    if context is not None and not permits(*context):
+    if context is None or not context.guarded or context.submitted:
+        return False
+    context.callbacks.append(callback)
+    return True
+
+
+def check_transport_admission(*, is_write=True):
+    context = _write_context.get()
+    if context is None:
+        return
+    if not permits(context.bot, context.order):
+        if context.submitted:
+            # A prior attempt may already exist at the exchange. Preserve its
+            # ambiguous submission provenance instead of reporting "never sent".
+            from ccxt.base.errors import NetworkError
+
+            raise NetworkError(
+                "position/fill settling deferred a submitted request retry"
+            )
         raise WriteDeferred()
+    if is_write and not context.submitted:
+        context.submitted = True
+        callbacks, context.callbacks = context.callbacks, []
+        for callback in callbacks:
+            callback()
 
 
 @contextmanager
@@ -43,12 +76,17 @@ def connector_context(bot, order):
 
         @wraps(fetch)
         async def guarded_fetch(*args, **kwargs):
-            check_transport_admission()
+            method = kwargs.get("method", args[1] if len(args) > 1 else "GET")
+            check_transport_admission(is_write=method.upper() != "GET")
             return await fetch(*args, **kwargs)
 
         client.fetch = guarded_fetch
         client._position_fill_transport_guard = True
-    token = _write_context.set((bot, order))
+    token = _write_context.set(
+        WriteContext(
+            bot, order, bool(getattr(client, "_position_fill_transport_guard", False))
+        )
+    )
     try:
         yield
     finally:

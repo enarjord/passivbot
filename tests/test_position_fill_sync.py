@@ -106,12 +106,21 @@ def test_restart_does_not_restore_expired_local_gate():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["create", "cancel"])
 @pytest.mark.parametrize("engine", ["legacy", "revised"])
-async def test_connector_boundary_defers_all_actions_before_any_io(action, engine):
+async def test_connector_boundary_defers_all_actions_before_any_io(
+    action, engine, monkeypatch
+):
     from live.hsl_revised_live import connector_write
     from live.executor import DeferredOrderCreation, DeferredOrderCancellation
 
     sync, now = gate()
-    called = []
+    called, recorded = [], []
+    from live import executor
+
+    monkeypatch.setattr(
+        executor,
+        "record_cancel_connector_admission",
+        lambda bot, order: recorded.append(order),
+    )
     bot = SimpleNamespace(
         _position_fill_sync=sync, config={"live": {"hsl_engine": engine}}
     )
@@ -127,12 +136,13 @@ async def test_connector_boundary_defers_all_actions_before_any_io(action, engin
         result,
         DeferredOrderCreation if action == "create" else DeferredOrderCancellation,
     )
-    assert not called
+    assert not called and not recorded
     if engine == "legacy":
         other = dict(symbol=B[0], position_side=B[1])
         assert await write(bot, other) == "sent"
         now[0] = 15
         assert await write(bot, order) == "sent"
+        assert recorded == ([other, order] if action == "cancel" else [])
 
 
 @pytest.mark.asyncio

@@ -728,7 +728,10 @@ so writes using those aggregate decisions also wait for their dependencies, unde
 Recheck admission at the connector boundary, including writes queued behind another write.
 A task-local order context also checks after CCXT throttling and at the native/fake transport
 boundary, so legacy requests queued inside a connector cannot bypass a newly started wait.
-Unrelated account reads carry no order context.
+Unrelated account reads carry no order context. Submission ownership and cancellation provenance
+are recorded only after final write admission, not when a request joins the connector queue.
+A deferred first attempt leaves neither record. If an earlier transport attempt was submitted,
+a subsequently blocked retry preserves ambiguous ownership and requests normal account recovery.
 
 The offline fake runner advances a separate settling clock for a simulated fetch wait within a
 market bar and bounds coin RED supervision to one pass. It leaves market timestamps unchanged.

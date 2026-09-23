@@ -54,6 +54,8 @@ def connector_write(action):
             try:
                 with position_fill_sync.connector_context(bot, order):
                     if not selected(bot):
+                        if action == "cancel":
+                            executor.record_cancel_connector_admission(bot, order)
                         return await operation(bot, order)
                     instance = owner(bot)
                     async with instance._write_lock:

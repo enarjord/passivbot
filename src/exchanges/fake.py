@@ -84,6 +84,7 @@ def _parse_timeframe_to_ms(timeframe: str) -> int:
 
 
 class FakeCCXTClient:
+    _position_fill_transport_guard = True
     id = "fake"
 
     def __init__(self, scenario: dict, *, quote: str = "USDT") -> None:

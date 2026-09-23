@@ -1092,7 +1092,9 @@ async def execute_order_plan(
 
 
 def record_create_connector_admission(bot, order: dict) -> None:
-    """Record submission only once the per-order account-generation guard admits it."""
+    """Publish ownership only after the final guarded transport admission."""
+    if position_fill_sync.defer_submission(lambda: record_create_connector_admission(bot, order)):
+        return
     passivbot_cls = _pb_attr("Passivbot")
     context = getattr(bot, "_execution_connector_call_context", None) or {}
     wave = context.get("wave")
@@ -1116,7 +1118,9 @@ def record_create_connector_admission(bot, order: dict) -> None:
 
 
 def record_cancel_connector_admission(bot, order: dict) -> None:
-    """Cancellation provenance starts only when the connector call is admitted."""
+    """Cancellation provenance starts only after final transport admission."""
+    if position_fill_sync.defer_submission(lambda: record_cancel_connector_admission(bot, order)):
+        return
     passivbot_cls = _pb_attr("Passivbot")
     context = getattr(bot, "_execution_connector_call_context", None) or {}
     index = next((idx for idx, candidate in enumerate(context.get("orders", []))
@@ -1424,34 +1428,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                     "[event] cancellation-capacity emitter failed | error_type=%s",
                     bounded_exception_type(exc),
                 )
-    grouped_orders: dict[str, list[dict]] = defaultdict(list)
-    for order in orders:
-        if hsl_revised_live.selected(bot):
-            continue
-        bot.add_to_recent_order_cancellations(order)
-        bot.log_order_action(
-            order,
-            "cancelling order",
-            context=order.get("_context", "plan_sync"),
-            level=logging.DEBUG,
-            delta=order.get("_delta"),
-        )
-        grouped_orders[order["symbol"]].append(order)
-    if grouped_orders:
-        bot._log_order_action_summary(grouped_orders, "cancel")
     wave = getattr(bot, "_order_wave_in_progress", None)
-    if not hsl_revised_live.selected(bot):
-        for idx, order in enumerate(orders):
-            passivbot_cls._emit_execution_order_event(
-                bot,
-                event_type=EventTypes.EXECUTION_CANCEL_SENT,
-                order=order,
-                action="cancel",
-                status="started",
-                reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
-                index=idx,
-                wave=wave,
-            )
     connector_call_context = {
         "action": "cancel",
         "orders": orders,
