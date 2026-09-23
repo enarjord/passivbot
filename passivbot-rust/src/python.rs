@@ -2242,6 +2242,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        hsl_detailed_report: dict
+            .get_item("hsl_detailed_report")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
         skip_btc_analysis: dict
             .get_item("skip_btc_analysis")?
             .map(|item| item.extract::<bool>())

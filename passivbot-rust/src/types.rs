@@ -320,6 +320,7 @@ pub struct BacktestParams {
     pub btc_collateral_cap: f64,
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
+    pub hsl_detailed_report: bool,
     pub skip_btc_analysis: bool,
     pub filter_by_min_effective_cost: bool,
     pub dynamic_wel_by_tradability: bool,

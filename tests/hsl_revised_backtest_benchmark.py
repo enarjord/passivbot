@@ -5,7 +5,8 @@ Run from the repository root with the current rebuilt extension:
 
 Compare the digest across builds before interpreting elapsed-time differences.
 This exercises the shared native adapter without live exchange access.
-Use --detailed to include standalone backtest report conversion; the default
+Use --detailed for standalone backtest results, and add --hsl-detailed-report
+to include per-minute HSL samples. The default
 measures the metrics-only path used by CPU optimization. --runs reports repeated
 timings and their median.
 """
@@ -28,9 +29,12 @@ def main():
     parser.add_argument("--lookback-days", type=float, default=7)
     parser.add_argument("--mode", choices=("coin", "pside", "unified"), default="coin")
     parser.add_argument("--red-threshold", type=float, default=.99)
-    parser.add_argument("--detailed", action="store_true", help="Include full report conversion, as in standalone backtests")
+    parser.add_argument("--detailed", action="store_true", help="Include standalone backtest results and HSL transitions")
+    parser.add_argument("--hsl-detailed-report", action="store_true", help="Include per-minute HSL samples (requires --detailed)")
     parser.add_argument("--runs", type=int, default=3)
     options = parser.parse_args()
+    if options.hsl_detailed_report and not options.detailed:
+        parser.error("--hsl-detailed-report requires --detailed")
     if options.runs < 1:
         parser.error("--runs must be positive")
     if options.minutes < 41:
@@ -42,6 +46,7 @@ def main():
     args[1] = np.full(options.minutes, 50000.)
     params = args[-1]
     params.update(last_valid_indices=[options.minutes - 1], metrics_only=not options.detailed,
+                  hsl_detailed_report=options.hsl_detailed_report,
                   pnls_max_lookback_days=options.lookback_days)
     hsl = params["equity_hard_stop_loss"]
     policies = list(hsl["sides"])
