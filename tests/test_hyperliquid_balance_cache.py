@@ -1040,6 +1040,9 @@ async def test_hyperliquid_already_gone_cancel_requests_full_confirmation(stubbe
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.user_info = {"is_vault": False}
     bot.cca = _AlreadyGoneCancelCCA()
+    bot.recent_order_cancellations = []
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
     bot._emit_execution_connector_call_started_event = lambda **kwargs: markers.append(
         ("event", kwargs)
     )
