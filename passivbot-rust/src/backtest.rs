@@ -1393,6 +1393,7 @@ impl<'a> Backtest<'a> {
                         (0.0, 0.0)
                     };
                     Some(orchestrator::NextCandle {
+                        limit_order_fill_buffer_pct: self.backtest_params.limit_order_fill_buffer_pct,
                         low,
                         high,
                         tradable: tradable_next,
@@ -1687,6 +1688,7 @@ impl<'a> Backtest<'a> {
                     (0.0, 0.0)
                 };
                 Some(orchestrator::NextCandle {
+                    limit_order_fill_buffer_pct: self.backtest_params.limit_order_fill_buffer_pct,
                     low,
                     high,
                     tradable: tradable_next,
@@ -1870,6 +1872,8 @@ impl<'a> Backtest<'a> {
             backtest_params.taker_fee.is_finite(),
             "backtest taker_fee must be finite"
         );
+        crate::limit_fills::validate_buffer(backtest_params.limit_order_fill_buffer_pct)
+            .expect("invalid backtest fill buffer");
         let mut balance = Balance::default();
         balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
         balance.btc_collateral_ltv_cap = backtest_params.btc_collateral_ltv_cap;
@@ -4989,13 +4993,13 @@ impl<'a> Backtest<'a> {
             return false;
         }
         // check if filled in current candle (pass k+1 to check if will fill in next candle)
-        if order.qty > 0.0 {
-            self.hlcvs_value(k, idx, LOW) < order.price
-        } else if order.qty < 0.0 {
-            self.hlcvs_value(k, idx, HIGH) > order.price
-        } else {
-            false
-        }
+        crate::limit_fills::crosses_limit(
+            self.hlcvs_value(k, idx, LOW),
+            self.hlcvs_value(k, idx, HIGH),
+            order.qty,
+            order.price,
+            self.backtest_params.limit_order_fill_buffer_pct,
+        )
     }
 
     fn force_close_delisted_positions(&mut self, k: usize) -> Result<(), String> {
@@ -6715,6 +6719,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6790,6 +6795,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6853,6 +6859,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
         let mut bt = Backtest::new(
@@ -6954,6 +6961,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
         let mut bt = Backtest::new(
@@ -7140,6 +7148,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 candle_interval_minutes: 1,
             };
             let mut bt = Backtest::new(
@@ -7298,6 +7307,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7367,6 +7377,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7442,6 +7453,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7512,6 +7524,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7606,6 +7619,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.5,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7689,6 +7703,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7771,6 +7786,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7862,6 +7878,7 @@ mod tests {
             market_orders_allowed: true,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7941,6 +7958,7 @@ mod tests {
             market_orders_allowed: true,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7972,6 +7990,102 @@ mod tests {
         assert_eq!(bt.fills[0].liquidity, "maker");
         assert_eq!(bt.fills[0].fill_price, 100.0);
         assert!((bt.fills[0].fee_paid + 100.0 * 0.0002).abs() < 1e-12);
+    }
+
+    #[test]
+    fn limit_fill_buffer_covers_entries_closes_market_bypass_and_peek_cache() {
+        let hlcvs = Array3::from_shape_vec(
+            (3, 1, 4),
+            vec![
+                100.005, 99.995, 100.0, 1.0,
+                100.0 * (1.0 + 0.0001), 100.0 * (1.0 - 0.0001), 100.0, 1.0,
+                100.02, 99.98, 100.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
+        bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.00099,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: true,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0001,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams {
+                maker_fee: 0.0002,
+                ..Default::default()
+            }],
+            &backtest_params,
+        );
+        for (qty, order_type) in [
+            (1.0, OrderType::EntryGridNormalLong),
+            (-1.0, OrderType::EntryGridNormalShort),
+            (-1.0, OrderType::CloseGridLong),
+            (1.0, OrderType::CloseGridShort),
+            (-1.0, OrderType::ClosePanicLong),
+            (1.0, OrderType::ClosePanicShort),
+        ] {
+            let order = BacktestOrder {
+                order: Order { qty, price: 100.0, order_type },
+                execution_type: orchestrator::ExecutionType::Limit,
+            };
+            assert!(bt.order_fill_execution(0, 0, &order).is_none());
+            assert!(bt.order_fill_execution(1, 0, &order).is_none());
+            let fill = bt.order_fill_execution(2, 0, &order).unwrap();
+            assert_eq!(fill.price, 100.0);
+            assert_eq!(fill.fee_rate, 0.0002);
+            assert_eq!(fill.liquidity, "maker");
+            if !matches!(order_type, OrderType::ClosePanicLong | OrderType::ClosePanicShort) {
+                let market = BacktestOrder { execution_type: orchestrator::ExecutionType::Market, ..order };
+                let fill = bt.order_fill_execution(0, 0, &market).unwrap();
+                assert_eq!(fill.liquidity, "taker");
+            }
+        }
+        // The initial and cached next-candle hints must carry the same buffer.
+        let input = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(input.symbols[0].next_candle.as_ref().unwrap().limit_order_fill_buffer_pct, 0.0001);
+        bt.orchestrator_input_cache = Some(input);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(input.symbols[0].next_candle.as_ref().unwrap().limit_order_fill_buffer_pct, 0.0001);
     }
 
     #[test]
@@ -8043,6 +8157,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8169,6 +8284,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8278,6 +8394,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8355,6 +8472,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8424,6 +8542,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8494,6 +8613,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8574,6 +8694,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8681,6 +8802,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
@@ -8772,6 +8894,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8889,6 +9012,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9001,6 +9125,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9098,6 +9223,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9177,6 +9303,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
@@ -9259,6 +9386,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9344,6 +9472,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9435,6 +9564,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9514,6 +9644,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9610,6 +9741,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9708,6 +9840,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9803,6 +9936,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10032,6 +10166,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10187,6 +10322,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10280,6 +10416,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             candle_interval_minutes: 1,
@@ -10383,6 +10520,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10517,6 +10655,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10610,6 +10749,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10668,6 +10808,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10727,6 +10868,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
@@ -10802,6 +10944,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10874,6 +11017,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10951,6 +11095,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11022,6 +11167,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11101,6 +11247,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11195,6 +11342,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11294,6 +11442,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11370,6 +11519,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11480,6 +11630,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11560,6 +11711,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11642,6 +11794,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11729,6 +11882,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11828,6 +11982,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -11901,6 +12056,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11978,6 +12134,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };

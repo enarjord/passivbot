@@ -1994,6 +1994,11 @@ class MpsSingleCoinProxy:
                 f"prepared {len(payload.bot_params_list)}"
             )
         backtest_params = payload.backtest_params
+        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+            raise ValueError(
+                "GPU optimization does not support nonzero "
+                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+            )
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
@@ -3184,6 +3189,11 @@ class MpsMulticoinProxy:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
+        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+            raise ValueError(
+                "GPU optimization does not support nonzero "
+                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+            )
         from optimization.gpu.revised_hsl import project_bot
         hsl_config = backtest_params.get("equity_hard_stop_loss", {})
         self.hsl_engine = hsl_config.get("engine", "legacy")

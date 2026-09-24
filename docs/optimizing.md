@@ -498,6 +498,8 @@ change; old screening checkpoints are incompatible.
 
 The following boundaries are intentional rather than silent fallbacks:
 
+- `backtest.limit_order_fill_buffer_pct` must be zero. Use a CPU optimizer (`pymoo` or `deap`) for nonzero limit-fill buffers; the GPU screening model does not implement them.
+
 - `trailing_grid_v7` is outside the Apple MPS implementation. Use `optimize.backend: "pymoo"` or
   `"deap"` for it; GPU optimization never substitutes EMA Anchor or Trailing Martingale behavior.
 - `backtest.btc_collateral_cap` must be zero. Positive BTC collateral changes the simulated

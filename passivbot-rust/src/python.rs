@@ -2285,6 +2285,13 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.001),
+        // Legacy native payloads predate this optional simulation setting.
+        // Default only absence; explicit malformed values still fail below.
+        limit_order_fill_buffer_pct: dict
+            .get_item("limit_order_fill_buffer_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.0),
         market_order_slippage_pct: dict
             .get_item("market_order_slippage_pct")?
             .map(|item| item.extract::<f64>())
@@ -2301,6 +2308,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(1), // default to 1m candles
     };
+    crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
+        .map_err(PyValueError::new_err)?;
     if let Some(revised) = &params.equity_hard_stop_loss.revised {
         revised.validate(&params.coins, params.pnls_max_lookback_days, params.candle_interval_minutes)
             .map_err(PyValueError::new_err)?;

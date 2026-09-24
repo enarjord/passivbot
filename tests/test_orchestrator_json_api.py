@@ -5288,3 +5288,28 @@ def test_unstuck_uses_independent_spans_and_scopes_missing_emas(side):
     sym[side]["bot_params"]["unstuck_ema_gating_enabled"] = False
     del sym["emas"]["m1"]["close"][3:]
     assert unstuck_orders()
+
+
+@pytest.mark.parametrize("buffer", [-0.0001, 1.0, 2.0])
+def test_next_candle_rejects_invalid_fill_buffer(buffer):
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(0, bid=100.0, ask=101.0)
+    symbol["next_candle"] = {
+        "low": 99.0, "high": 102.0, "tradable": True,
+        "limit_order_fill_buffer_pct": buffer,
+    }
+    inp = make_input(balance=1000.0, symbols=[symbol])
+    with pytest.raises(ValueError, match="limit_order_fill_buffer_pct"):
+        compute(pbr, inp)
+
+
+def test_next_candle_missing_fill_buffer_matches_zero():
+    import passivbot_rust as pbr
+
+    symbol = make_symbol(0, bid=100.0, ask=101.0)
+    symbol["next_candle"] = {"low": 99.0, "high": 102.0, "tradable": True}
+    inp = make_input(balance=1000.0, symbols=[symbol])
+    expected = compute(pbr, inp)
+    symbol["next_candle"]["limit_order_fill_buffer_pct"] = 0.0
+    assert compute(pbr, inp) == expected

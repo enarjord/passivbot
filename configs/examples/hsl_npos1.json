@@ -21,6 +21,7 @@
         "liquidation_threshold": 0.05,
         "maker_fee_override": 0.0004,
         "market_order_slippage_pct": 0.0005,
+        "limit_order_fill_buffer_pct": 0.0,
         "market_settings_sources": {},
         "max_warmup_minutes": 0,
         "ohlcv_source_dir": null,
