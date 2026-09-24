@@ -79,6 +79,17 @@ def _validate_startup_phase_budgets(live_config: dict) -> None:
                 raise ValueError(f"{value_path} must be >= 0")
 
 
+def validate_limit_order_fill_buffer_pct(value) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0.0 <= value < 1.0
+    ):
+        raise ValueError("backtest.limit_order_fill_buffer_pct must be finite and in [0, 1)")
+    return float(value)
+
+
 def validate_config(
     config: dict, *, raw_optimize=None, verbose: bool = True, tracker=None
 ) -> None:
@@ -88,8 +99,11 @@ def validate_config(
     from .hsl_revised import normalize_revised
     from .schema import get_template_config
     normalize_revised(config, get_template_config(), verbose=verbose)
+    if not isinstance(config["backtest"]["hsl_detailed_report"], bool):
+        raise ValueError("backtest.hsl_detailed_report must be a boolean")
     if not isinstance(config.get("backtest", {}).get("offline", False), bool):
         raise ValueError("backtest.offline must be a boolean")
+    validate_limit_order_fill_buffer_pct(config["backtest"]["limit_order_fill_buffer_pct"])
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
@@ -152,9 +166,10 @@ def validate_config(
                         ),
                     )
     normalize_hsl_signal_mode(config["live"]["hsl_signal_mode"])
-    normalize_hsl_cooldown_position_policy(
-        config["live"]["hsl_position_during_cooldown_policy"]
-    )
+    if config["live"].get("hsl_engine", "legacy") != "revised":
+        normalize_hsl_cooldown_position_policy(
+            config["live"]["hsl_position_during_cooldown_policy"]
+        )
     _validate_startup_phase_budgets(config["live"])
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")

@@ -1149,6 +1149,10 @@ inline void passivbot_single_coin_impl(
     device int* gap_hist,
     device float2* rolling_pnl_values,
     device int2* rolling_pnl_indices,
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
@@ -1217,9 +1221,17 @@ inline void passivbot_single_coin_impl(
     short_hsl.enabled = false;
 #endif
     const bool long_coin_hsl_rolling = long_hsl.enabled
-        && long_hsl.signal_mode == HSL_SIGNAL_COIN && pnl_lookback_bars > 0;
+        && long_hsl.signal_mode == HSL_SIGNAL_COIN && pnl_lookback_bars > 0
+#if PASSIVBOT_HSL_REVISED
+        && false
+#endif
+        ;
     const bool short_coin_hsl_rolling = short_hsl.enabled
-        && short_hsl.signal_mode == HSL_SIGNAL_COIN && pnl_lookback_bars > 0;
+        && short_hsl.signal_mode == HSL_SIGNAL_COIN && pnl_lookback_bars > 0
+#if PASSIVBOT_HSL_REVISED
+        && false
+#endif
+        ;
     HslRollingPnlWindow long_rolling_pnl = init_hsl_rolling_pnl_window();
     HslRollingPnlWindow short_rolling_pnl = init_hsl_rolling_pnl_window();
     const int long_rolling_base = int(b) * 2 * rolling_capacity;
@@ -1301,7 +1313,25 @@ inline void passivbot_single_coin_impl(
         gap_hist[int(b) * GAP_BINS + j] = 0;
     }
 
+#if PASSIVBOT_HSL_REVISED
+    const bool revised_unified = long_hsl.signal_mode == HSL_SIGNAL_UNIFIED;
+    const bool revised_long_owner = long_enabled || !short_enabled;
+    const bool revised_initialize = true;
+    bind_revised_hsl(long_hsl, revised_trees, revised_rows, int(b) * 2,
+        PASSIVBOT_HSL_REVISED_CAPACITY, PASSIVBOT_HSL_REVISED_TREE_SIZE,
+        pnl_lookback_bars, revised_initialize, !revised_unified || revised_long_owner);
+    bind_revised_hsl(short_hsl, revised_trees, revised_rows,
+        int(b) * 2 + (revised_unified ? 0 : 1),
+        PASSIVBOT_HSL_REVISED_CAPACITY, PASSIVBOT_HSL_REVISED_TREE_SIZE,
+        pnl_lookback_bars, revised_initialize, !revised_unified || !revised_long_owner);
+#endif
     for (int k = 1; k < T - 1; ++k) {
+#if PASSIVBOT_HSL_REVISED
+        if (!long_hsl.revised_valid || !short_hsl.revised_valid) {
+            scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+            return;
+        }
+#endif
         const int bo = k * 5;
         const int fo = k * 11;
         const float high = bars[bo + 0];
@@ -2120,6 +2150,12 @@ inline void passivbot_single_coin_impl(
                 long_blocking_orders, short_blocking_orders,
                 kf, interval_ms
             );
+#if PASSIVBOT_HSL_REVISED
+            if (!hsl_update_valid) {
+                scalars[int(b) * SCALAR_COLS + 9] = -2.0f;
+                return;
+            }
+#endif
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
             if (hsl_update_valid && long_hsl_sample_enabled) {
                 update_hsl_drawdown_ema_tail_stats(
@@ -2452,6 +2488,10 @@ kernel void passivbot_ema_anchor(
     device int* gap_hist,
     device float2* rolling_pnl_values,
     device int2* rolling_pnl_indices,
+#if PASSIVBOT_HSL_REVISED
+    device RevisedHslNode* revised_trees,
+    device int* revised_rows,
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
     device float* recovery_samples,
 #endif
@@ -2467,6 +2507,9 @@ kernel void passivbot_ema_anchor(
 #endif
         daily, scalars, gap_hist,
         rolling_pnl_values, rolling_pnl_indices,
+#if PASSIVBOT_HSL_REVISED
+        revised_trees, revised_rows,
+#endif
 #ifdef PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED
         recovery_samples,
 #endif

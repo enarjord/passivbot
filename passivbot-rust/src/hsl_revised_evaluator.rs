@@ -1,7 +1,7 @@
 //! Snapshot-to-permission composition shared by revised runtime adapters.
 //! No prior decision, saved EMA, journal or cached permission is an input.
 use crate::hsl_revised::validate_settings;
-use crate::hsl_revised_controller::{self as controller, Decision, Intervention, Restart};
+use crate::hsl_revised_controller::{self as controller, Decision, Restart};
 use crate::hsl_revised_snapshot::{self as snapshot, Input as Snapshot, Mode};
 use crate::hsl_revised_trace::{compose_prepared, compose_with_cashflow_peaks};
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -19,10 +19,9 @@ pub struct Input {
     pub threshold: f64,
     pub cooldown_ms: i64,
     pub restart: Restart,
-    pub intervention: Intervention,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Output {
     pub decision: Option<Decision>,
     /// Reconstructed in-window lifecycle, for diagnostics only. Repeated evaluation
@@ -31,6 +30,8 @@ pub struct Output {
     pub reasons: BTreeSet<String>,
     pub observations: usize,
     pub episodes: usize,
+    #[serde(skip)]
+    pub(crate) cursor: Option<controller::Cursor>,
 }
 
 /// Normalize only selected pairs to one bounded minute grid. Source-resolution
@@ -162,7 +163,15 @@ fn already_normalized(snapshot: &Snapshot) -> Result<bool, String> {
     }))
 }
 
-pub fn evaluate(mut input: Input) -> Result<Output, String> {
+pub fn evaluate(input: Input) -> Result<Output, String> {
+    evaluate_inner::<false>(input)
+}
+
+pub(crate) fn evaluate_for_simulator(input: Input) -> Result<Output, String> {
+    evaluate_inner::<true>(input)
+}
+
+fn evaluate_inner<const SEED: bool>(mut input: Input) -> Result<Output, String> {
     validate_settings(input.span, input.threshold)?;
     input
         .snapshot
@@ -185,6 +194,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
             reasons,
             observations: 0,
             episodes: 0,
+            cursor: None,
         });
     }
     let budget = if matches!(input.snapshot.mode, Mode::Coin) {
@@ -201,7 +211,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
     };
     reasons.extend(trace.reasons);
     let episodes = trace.episodes.len();
-    let replay = controller::replay_latest_with_events(&controller::Input {
+    let replay_input = controller::Input {
         episodes: trace.episodes,
         now: input.snapshot.now,
         start: input.snapshot.start,
@@ -210,8 +220,12 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         threshold: input.threshold,
         cooldown_ms: input.cooldown_ms,
         restart: input.restart,
-        intervention: input.intervention,
-    })?;
+    };
+    let replay = if SEED {
+        controller::replay_latest_with_seed(&replay_input)
+    } else {
+        controller::replay_latest_with_events(&replay_input)
+    }?;
     let decisions = replay.decisions;
     if replay.numeric_range_approximation {
         reasons.insert("numeric_range_approximation".into());
@@ -227,6 +241,7 @@ pub fn evaluate(mut input: Input) -> Result<Output, String> {
         reasons,
         observations,
         episodes,
+        cursor: replay.cursor,
     })
 }
 
@@ -313,20 +328,20 @@ mod tests {
                 }]
             },
             "slots": 1, "span": 1, "threshold": 0.05, "cooldown_ms": 0,
-            "restart": "always", "intervention": "panic"
+            "restart": "always"
         }))
         .unwrap()
     }
 
     #[test]
-    fn selected_sparse_prices_reach_current_permission() {
+    fn missing_opening_uses_current_basis_without_inventing_old_exposure() {
         let output = evaluate(fixture()).unwrap();
-        assert_eq!(output.observations, 4);
+        assert_eq!(output.observations, 1);
         assert!(output.reasons.contains("backfilled_price"));
         assert!(output.reasons.contains("forward_filled_price"));
         let decision = output.decision.unwrap();
-        assert_eq!(decision.action, controller::Action::Panic);
-        assert!((decision.raw - 100.0 / 1100.0).abs() < 1e-14);
+        assert_eq!(decision.action, controller::Action::Normal);
+        assert_eq!(decision.raw, 0.0);
     }
     #[test]
     fn dense_reuse_matches_full_normalization_and_reconstruction() {

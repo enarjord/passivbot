@@ -2593,3 +2593,60 @@ def test_setup_bot_bitunix_uses_native_adapter():
             result = setup_bot(config)
     assert result is mock_cls.return_value
     mock_cls.assert_called_once_with(config)
+
+
+@pytest.mark.parametrize('configured, expected', [(None, 'symbols'), ('auto', 'symbols'), ('symbols', 'symbols'), ('bulk', 'bulk')])
+def test_bitunix_snapshot_default_is_scoped_but_preserves_override(configured, expected):
+    bot = build_contract_bot('bitunix')
+    bot.ws_enabled = True
+    if configured is None:
+        bot.config['live'].pop('market_snapshot_ticker_strategy', None)
+    else:
+        bot.config['live']['market_snapshot_ticker_strategy'] = configured
+    assert bot._market_snapshot_ticker_strategy() == expected
+
+
+@pytest.mark.asyncio
+async def test_revised_quote_refresh_does_not_wait_for_unrelated_bitunix_market(monkeypatch):
+    """Exercise the real connector/provider/owner with offline websocket receipts."""
+    from live.hsl_revised_live import Owner
+    from live.market_snapshot import MarketSnapshotProvider
+    import live.market_snapshot as snapshots
+
+    client = _prepared_client()
+    symbol = 'BTC/USDT:USDT'
+    absent = {**_market(), 'id': 'ETHUSDT', 'symbol': 'ETH/USDT:USDT'}
+    client.markets[absent['symbol']] = absent
+    client.markets_by_id[absent['id']] = absent
+    client.symbols.append(absent['symbol'])
+    client._ensure_ticker_tasks = lambda: None
+    # No packet will arrive for the unrelated market. Waiting for it is the bug.
+    client._ticker_ready.wait = AsyncMock(side_effect=AssertionError('unrelated ticker wait'))
+    client._fetch_depth_ticker = AsyncMock(side_effect=AssertionError('unneeded REST fallback'))
+    clock = [1_000_000]
+    monkeypatch.setattr(snapshots, 'utc_ms', lambda: clock[0])
+    bot = build_contract_bot('bitunix')
+    bot.ws_enabled = True
+    bot.config['live']['market_snapshot_ticker_strategy'] = 'auto'
+    bot.cca = client
+    bot.markets_dict = client.markets
+    provider = MarketSnapshotProvider(exchange_name='bitunix', fetch_tickers=bot.fetch_tickers,
+        fetch_tickers_for_symbols=bot.fetch_tickers_for_symbols,
+        ticker_strategy=bot._market_snapshot_ticker_strategy())
+    owner = Owner(SimpleNamespace(_get_orchestrator_market_snapshots=provider.get_snapshots))
+    try:
+        # Every pass expires the provider cache, reproducing repeated refreshes.
+        for price in (100., 90., 105.):
+            clock[0] += 11_000
+            client._ticker_cache[symbol] = dict(symbol=symbol, bid=price-1, ask=price+1,
+                                                last=price, timestamp=clock[0])
+            client._ticker_received_monotonic[symbol] = time.monotonic()
+            quotes = await owner.acquire_quotes({symbol})
+            assert quotes[symbol].last == price
+            assert quotes[symbol].fetched_ms == clock[0]
+            assert not owner._quote_tasks
+        client._ticker_ready.wait.assert_not_awaited()
+        client._fetch_depth_ticker.assert_not_awaited()
+    finally:
+        owner.cancel_inputs()
+        provider.cancel_pending()

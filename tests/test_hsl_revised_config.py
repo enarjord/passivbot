@@ -104,12 +104,11 @@ def test_lookback_boundaries_and_fractional_ema_are_preserved(days):
     assert result["bot"]["long"]["hsl"]["ema_span_minutes"] == 2.5
 
 
-@pytest.mark.parametrize("policy", ["manual", "tp_only", "graceful_stop"])
-def test_removed_intervention_policy_needs_explicit_migration(policy):
+@pytest.mark.parametrize("policy", ["panic", "normal", "manual", "tp_only", "graceful_stop"])
+def test_removed_intervention_policy_is_stripped_from_revised_config(policy):
     cfg = source()
     cfg["live"]["hsl_position_during_cooldown_policy"] = policy
-    with pytest.raises(ValueError, match="panic or normal"):
-        prepared(cfg)
+    assert "hsl_position_during_cooldown_policy" not in prepared(cfg)["live"]
 
 
 @pytest.mark.parametrize("section", ["bounds", "fixed_runtime_overrides"])

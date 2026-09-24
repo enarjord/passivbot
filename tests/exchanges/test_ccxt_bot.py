@@ -695,6 +695,9 @@ class TestCCXTBotConnectorCallEvents:
         bot = CCXTBot.__new__(CCXTBot)
         bot.exchange = "binance"
         bot.cca = CCA()
+        bot.recent_order_cancellations = []
+        bot.log_order_action = lambda *args, **kwargs: None
+        bot._log_order_action_summary = lambda *args, **kwargs: None
 
         def fail_emit(*_args, **_kwargs):
             raise RuntimeError("diagnostic sink unavailable")

@@ -99,10 +99,10 @@ def test_latest_fill_is_scoped_and_aggregate_flat_is_not_net_exposure(mode):
                  prices={i*M:100 for i in range(28)})
     combined = replace(snapshot, pairs=(*snapshot.pairs, other))
     actual = result(combined, mode, 'long')
-    expected = 'halted' if mode == 'unified' else 'normal'
+    expected = 'normal'  # Later GREEN episode supersedes the earlier stop.
     assert actual['decision']['action'] == expected
     if mode == 'unified':
-        assert actual['decision']['flat_at'] == 26*M
+        assert actual['decision']['flat_at'] is None
     else:
         assert [e['timestamp'] for e in actual['events'] if e['kind'] == 'flat'] == [20*M]
     a = damaged('long', size=2).pairs[0]

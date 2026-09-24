@@ -188,6 +188,21 @@ unstuck span genes and materializes explicit runtime spans in saved candidates a
 GPU packing preserves the dependency on candidate strategy genes while retaining strategy coin
 pins. This is optimizer configuration finalization, not a live/backtest coupling mode.
 
+## Backtest Limit Fill Buffer
+
+`backtest.limit_order_fill_buffer_pct` is a simulation-only ratio, defaulting to `0.0`.
+Limit buys require `low < price * (1 - buffer)` and limit sells require
+`high > price * (1 + buffer)`. Equality never fills. The buffer changes eligibility only:
+filled limit orders retain the original order price and maker fees. Market execution bypasses it.
+The actual fill and next-candle ladder-expansion hint share the same Rust predicate; raw candles
+used for indicators, trailing extrema, equity, and risk remain unchanged. Live inputs do not
+forward this setting. CPU optimization treats it as fixed evaluation policy; GPU screening
+rejects nonzero values until it implements the same contract.
+The native backtest payload loader accepts an absent buffer as `0.0` for payloads from before
+this setting existed; explicit invalid values still fail. Canonical Python loading always supplies
+the field. Orchestrator next-candle hints likewise default absence to zero and reject non-finite
+values or ratios outside `[0, 1)` before order construction.
+
 ## Live/Backtest Market Slippage Boundary
 
 `backtest.market_order_slippage_pct` is a backtest simulation knob only. Live orchestrator input

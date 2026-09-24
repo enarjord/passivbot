@@ -71,16 +71,6 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
             instance = hsl_revised_live.Owner(bot)
             bot._hsl_revised_live = instance
             result = await instance.protect()
-            if current_size == 2.:
-                # The same tape can mean residual old inventory or a missing new
-                # add. The approved minimum-opening rule retains the old loss.
-                # It must evaluate and close the full current size, not go blind.
-                assert result is True
-                await bot.refresh_protective_authoritative_state()
-                assert bot.positions[symbol][side]['size'] == 0.
-                assert any(c['method']=='create_order' for c in bot.cca.export_request_log())
-                completed.append(True)
-                return {'residual_inventory_evaluated': True}
             assert result is False
             assert not any(c['method']=='create_order' for c in bot.cca.export_request_log())
             assert abs(bot.positions[symbol][side]['size']) == current_size

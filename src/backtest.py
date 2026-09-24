@@ -295,7 +295,6 @@ def _resolve_backtest_revised_hsl(config, coin_policies):
     return {
         "engine": "revised",
         "mode": mode,
-        "intervention": require_config_value(config, "live.hsl_position_during_cooldown_policy"),
         "sides": [deepcopy(config["bot"][side]["hsl"]) for side in POSITION_SIDES],
         "portfolio": deepcopy(config["bot"]["hsl"]) if mode == "unified" else None,
         "coins": coin_policies if mode == "coin" else {},
@@ -958,6 +957,7 @@ class BacktestExecutionSettings:
     market_orders_allowed: bool
     market_order_near_touch_threshold: float
     market_order_slippage_pct: float
+    limit_order_fill_buffer_pct: float
     pnls_max_lookback_days: str | float
     pnls_max_lookback_days_backtest_value: float
 
@@ -2408,6 +2408,11 @@ def get_backtest_execution_settings(
 ) -> BacktestExecutionSettings:
     if not is_runtime_compiled:
         config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    from config.validate import validate_limit_order_fill_buffer_pct
+
+    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
+        require_config_value(config, "backtest.limit_order_fill_buffer_pct")
+    )
     market_order_slippage_pct = float(
         get_optional_config_value(config, "backtest.market_order_slippage_pct", 0.0005)
         or 0.0
@@ -2437,6 +2442,7 @@ def get_backtest_execution_settings(
         market_orders_allowed=market_orders_allowed,
         market_order_near_touch_threshold=market_order_near_touch_threshold,
         market_order_slippage_pct=market_order_slippage_pct,
+        limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
         pnls_max_lookback_days=pnls_max_lookback.display_value,
         pnls_max_lookback_days_backtest_value=pnls_max_lookback.to_backtest_days_value(),
     )
@@ -2459,6 +2465,10 @@ def log_backtest_execution_settings(
     logging.info(
         "[backtest]   market_order_slippage_pct = %s (backtest)",
         execution_settings.market_order_slippage_pct,
+    )
+    logging.info(
+        "[backtest]   limit_order_fill_buffer_pct = %s (backtest)",
+        execution_settings.limit_order_fill_buffer_pct,
     )
     logging.info(
         "[backtest]   pnls_max_lookback_days = %s (live)",
@@ -2760,6 +2770,7 @@ def prep_backtest_args(
             "trade_start_indices": [],
             "global_warmup_bars": 0,
             "metrics_only": bool(metrics_only),
+            "hsl_detailed_report": require_config_value(config, "backtest.hsl_detailed_report"),
             "skip_btc_analysis": False,
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
@@ -2774,6 +2785,7 @@ def prep_backtest_args(
             "pnls_max_lookback_days": execution_settings.pnls_max_lookback_days_backtest_value,
             "equity_hard_stop_loss": hard_stop_cfg_long,
             "market_order_slippage_pct": execution_settings.market_order_slippage_pct,
+            "limit_order_fill_buffer_pct": execution_settings.limit_order_fill_buffer_pct,
             "market_orders_allowed": execution_settings.market_orders_allowed,
             "market_order_near_touch_threshold": execution_settings.market_order_near_touch_threshold,
             "forager_score_hysteresis_pct": float(

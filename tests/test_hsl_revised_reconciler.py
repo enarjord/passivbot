@@ -56,9 +56,9 @@ def test_ambiguous_extra_inventory_and_delayed_add_repair(native, side, mode):
         selectors['symbol'] = 'A'
     request = payload(cases.frame(p, balance=1000), mode, quantity_step=.1, **selectors)
     history = rust(request)
-    assert not history['boundaries']
-    assert history['pairs'][0]['history']['opening_size'] == d
-    assert [e['after'] for e in history['pairs'][0]['history']['events']] == [11,1,2]
+    assert [b['timestamp'] for b in history['boundaries']] == [2*cases.M]
+    assert history['pairs'][0]['history']['opening_size'] == 0
+    assert [e['after'] for e in history['pairs'][0]['history']['events']] == [10,0,1]
     repaired = json.loads(json.dumps(request))
     repaired['pairs'][0]['fills'].append(dict(identity='delayed-add', timestamp=3*cases.M+1,
         delta=d, price=100, realized=0, fee=0, sequence=None, revision=0))
@@ -88,8 +88,9 @@ def test_generated_missing_and_invalid_fields_preserve_known_deltas(native, seed
     result = compare(native, position, damaged, {t:100 for t in range(31)})
     before = abs(result['opening_size'])
     for event in result['events']:
-        assert event['before'] == before
-        assert event['after'] == pytest.approx(before + d*event['fill']['delta'])
+        if event['before'] != pytest.approx(before):
+            assert 'local_quantity_reconciliation' in event['reasons']
+        assert event['after'] == pytest.approx(event['before'] + d*event['fill']['delta'])
         assert event['after'] >= 0
         before = event['after']
     delta = result['reconciliation']['delta'] if result['reconciliation'] else 0

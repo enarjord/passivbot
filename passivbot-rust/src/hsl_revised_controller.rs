@@ -1,7 +1,7 @@
 //! Pure replay of revised scoped permission from a reconstructed episode trace.
 //! No persisted or previous controller state is accepted as authority.
 
-use crate::hsl_revised::{signal_with_references, Observation};
+use crate::hsl_revised::{visit_signal, Observation};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,8 @@ pub struct Episode {
     #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference: Option<f64>,
     /// Estimated entry value relative to the shared current budget. Only the
-    /// incomplete initial episode may carry this reference; it adds no EMA row.
+    /// incomplete initial episode or estimated current singleton may carry this
+    /// reference; it adds no EMA row.
     #[serde(default, deserialize_with = "crate::hsl_revised_json::optional")]
     pub entry_reference_delta: Option<f64>,
 }
@@ -49,13 +50,6 @@ pub struct Episode {
 pub enum Restart {
     Always,
     Never,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum Intervention {
-    Panic,
-    Normal,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,7 +66,6 @@ pub struct Input {
     pub threshold: f64,
     pub cooldown_ms: i64,
     pub restart: Restart,
-    pub intervention: Intervention,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq)]
@@ -83,7 +76,7 @@ pub enum Action {
     Halted,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Decision {
     pub timestamp: i64,
     pub action: Action,
@@ -112,6 +105,16 @@ pub struct Replay {
     pub events: Vec<LifecycleEvent>,
     pub observations: usize,
     pub numeric_range_approximation: bool,
+    pub(crate) cursor: Option<Cursor>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Cursor {
+    pub peak_delta: f64,
+    pub first_required: i64,
+    pub exposed: bool,
+    pub seed: Option<Vec<Episode>>,
+    pub threshold_sensitive: bool,
 }
 
 fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
@@ -121,74 +124,27 @@ fn cooldown_finished(flat: Option<i64>, timestamp: i64, input: &Input) -> bool {
             .is_some_and(|deadline| timestamp >= deadline)
 }
 
-fn advance_permissions(
-    timestamp: i64,
-    exposed: bool,
-    input: &Input,
-    red_at: &mut Option<i64>,
-    flat_at: &mut Option<i64>,
-    events: &mut Vec<LifecycleEvent>,
-) -> Option<&'static str> {
-    if cooldown_finished(*flat_at, timestamp, input) {
-        events.push(LifecycleEvent {
-            timestamp,
-            kind: "restart",
-            red_at: red_at.expect("flat stop has RED origin"),
-            flat_at: *flat_at,
-            reason: "cooldown_complete",
-            raw: None,
-            ema: None,
-        });
-        *red_at = None;
-        *flat_at = None;
-        return Some("cooldown_complete");
-    }
-    if flat_at.is_some() && exposed {
-        let previous_flat = *flat_at;
-        *flat_at = None;
-        if input.intervention == Intervention::Normal {
-            events.push(LifecycleEvent {
-                timestamp,
-                kind: "restart",
-                red_at: red_at.expect("flat stop has RED origin"),
-                flat_at: previous_flat,
-                reason: "normal_intervention",
-                raw: None,
-                ema: None,
-            });
-            *red_at = None;
-            return Some("normal_intervention");
-        }
-        *red_at = Some(timestamp);
-        events.push(LifecycleEvent {
-            timestamp,
-            kind: "red",
-            red_at: timestamp,
-            flat_at: None,
-            reason: "panic_intervention",
-            raw: None,
-            ema: None,
-        });
-        return Some("panic_intervention");
-    }
-    None
-}
-
 pub fn replay(input: &Input) -> Result<Vec<Decision>, String> {
     Ok(replay_with_events(input)?.decisions)
 }
 
 pub fn replay_with_events(input: &Input) -> Result<Replay, String> {
-    replay_collected::<true>(input)
+    replay_collected::<true, false>(input)
 }
 
 /// Evaluate every historical transition, but retain only the current permission.
 /// Runtime callers need the count and diagnostics, not a full decision allocation.
 pub(crate) fn replay_latest_with_events(input: &Input) -> Result<Replay, String> {
-    replay_collected::<false>(input)
+    replay_collected::<false, false>(input)
 }
 
-fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, String> {
+pub(crate) fn replay_latest_with_seed(input: &Input) -> Result<Replay, String> {
+    replay_collected::<false, true>(input)
+}
+
+fn replay_collected<const KEEP_HISTORY: bool, const SEED: bool>(
+    input: &Input,
+) -> Result<Replay, String> {
     if input.start > input.now
         || input.cooldown_ms < 0
         || !input.budget.is_finite()
@@ -203,10 +159,18 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
     let mut previous_time = None;
     let mut previous_flat = false;
     for episode in &input.episodes {
+        let current_singleton = episode.points.len() == 1
+            && episode.points[0].timestamp == input.now
+            && episode.points[0].exposed
+            && !episode.points[0].flatten;
         if episode.entry_reference_delta.is_some()
-            && (previous_time.is_some() || episode.entry_reference.is_some())
+            && ((previous_time.is_some() && !current_singleton)
+                || episode.entry_reference.is_some())
         {
-            return Err("entry delta requires only the initial incomplete episode".into());
+            return Err(
+                "entry delta requires an initial incomplete episode or current exposed singleton"
+                    .into(),
+            );
         }
         if episode.points.is_empty() {
             return Err("empty HSL episode".into());
@@ -261,138 +225,167 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
     let mut events = Vec::new();
     let mut red_at = None;
     let mut flat_at = None;
+    let mut cursor_peak = None;
+    let mut threshold_sensitive = false;
     for episode in &input.episodes {
-        let points: Vec<_> = episode
+        // Ordering and the upper bound were validated above. Borrow the
+        // in-window suffix rather than allocating references on every replay.
+        let first = episode
             .points
-            .iter()
-            .enumerate()
-            .filter(|(_, p)| input.start <= p.timestamp && p.timestamp <= input.now)
-            .collect();
+            .partition_point(|p| p.timestamp < input.start);
+        let points = &episode.points[first..];
         if points.is_empty() {
             continue;
         }
-        let reference = if points[0].0 == 0 {
+        let reference = if first == 0 {
             episode.entry_reference
         } else {
             None
         };
         if reference.is_some()
             && (points.len() != 1
-                || !points[0].1.exposed
-                || points[0].1.flatten
-                || points[0].1.timestamp != input.now)
+                || !points[0].exposed
+                || points[0].flatten
+                || points[0].timestamp != input.now)
         {
             return Err("entry reference requires the current exposed singleton".into());
         }
-        let rows: Vec<_> = points
-            .iter()
-            .map(|(_, p)| Observation {
-                timestamp_ms: p.timestamp,
-                realized: p.pnl,
-                unrealized: p.upnl,
-            })
-            .collect();
-        let relative_reference = if points[0].0 == 0 {
+        let relative_reference = if first == 0 {
             episode.entry_reference_delta
         } else {
             None
         };
-        let risk = signal_with_references(
-            &rows,
+        let decision_start = decisions.len();
+        let mut opening = episode.opened_at.filter(|t| *t >= input.start);
+        let risk = visit_signal(
+            points.len(),
+            |i| Observation {
+                timestamp_ms: points[i].timestamp,
+                realized: points[i].pnl,
+                unrealized: points[i].upnl,
+            },
+            |i| points[i].cashflow_reference_delta,
             input.budget,
             input.span,
             input.threshold,
             reference,
             relative_reference,
-            &points
-                .iter()
-                .map(|(_, p)| p.cashflow_reference_delta)
-                .collect::<Vec<_>>(),
             &anchor,
-        )?;
-        let mut opening = episode.opened_at.filter(|t| *t >= input.start);
-        for (index, (original_index, point)) in points.iter().enumerate() {
-            let t = point.timestamp;
-            let mut reason = "green";
-            // The seed precedes the opening even when timestamps tie. Process
-            // the event at its real time, before cooldown expiry at a later bar.
-            if *original_index > 0 {
-                if let Some(opened) = opening.filter(|opened| *opened <= t) {
-                    opening = None;
-                    reason = advance_permissions(
-                        opened,
-                        true,
-                        input,
-                        &mut red_at,
-                        &mut flat_at,
-                        &mut events,
-                    )
-                    .unwrap_or(reason);
+            |index, _equity, _peak, raw, ema, panic| {
+                let original_index = first + index;
+                let point = &points[index];
+                let score = raw.min(ema);
+                threshold_sensitive |=
+                    (score - input.threshold).abs() <= 1e-12 * score.abs().max(1.0);
+                let t = point.timestamp;
+                let mut reason = "green";
+                // Exposure, including a round trip between price observations, ends
+                // the previous cooldown. Historical RED is never a trading latch.
+                let reopened = original_index > 0 && opening.is_some_and(|opened| opened <= t);
+                if reopened || point.exposed {
+                    if flat_at.is_some() {
+                        events.push(LifecycleEvent {
+                            timestamp: opening.unwrap_or(t),
+                            kind: "restart",
+                            red_at: red_at.unwrap(),
+                            flat_at,
+                            reason: "exposure_resumed",
+                            raw: None,
+                            ema: None,
+                        });
+                        reason = "exposure_resumed";
+                    }
+                    if flat_at.is_some() {
+                        red_at = None;
+                    }
+                    flat_at = None;
+                    if reopened {
+                        red_at = None;
+                        opening = None;
+                    }
                 }
-            }
-            reason = advance_permissions(
-                t,
-                point.exposed,
-                input,
-                &mut red_at,
-                &mut flat_at,
-                &mut events,
-            )
-            .unwrap_or(reason);
-            if risk.panic[index] && (point.exposed || point.flatten) && red_at.is_none() {
-                red_at = Some(t);
-                flat_at = None;
-                reason = "drawdown";
-                events.push(LifecycleEvent {
+                if point.exposed || point.flatten {
+                    // Evaluate the terminal accounting sample BEFORE resetting the
+                    // episode. The closing order's type is deliberately irrelevant.
+                    if panic {
+                        if red_at.is_none() {
+                            red_at = Some(t);
+                            events.push(LifecycleEvent {
+                                timestamp: t,
+                                kind: "red",
+                                red_at: t,
+                                flat_at: None,
+                                reason: "drawdown",
+                                raw: Some(raw),
+                                ema: Some(ema),
+                            });
+                        }
+                        reason = "drawdown";
+                    } else {
+                        red_at = None;
+                        reason = "green";
+                    }
+                    if point.flatten {
+                        flat_at = red_at.map(|_| t);
+                        if let Some(red) = red_at {
+                            reason = "stop_flattened";
+                            events.push(LifecycleEvent {
+                                timestamp: t,
+                                kind: "flat",
+                                red_at: red,
+                                flat_at,
+                                reason,
+                                raw: Some(raw),
+                                ema: Some(ema),
+                            });
+                        }
+                    }
+                }
+                if cooldown_finished(flat_at, t, input) {
+                    events.push(LifecycleEvent {
+                        timestamp: t,
+                        kind: "restart",
+                        red_at: red_at.unwrap(),
+                        flat_at,
+                        reason: "cooldown_complete",
+                        raw: None,
+                        ema: None,
+                    });
+                    red_at = None;
+                    flat_at = None;
+                    reason = "cooldown_complete";
+                }
+                if !point.exposed && flat_at.is_none() {
+                    red_at = None;
+                }
+                let action = if point.exposed && panic {
+                    Action::Panic
+                } else if !point.exposed && flat_at.is_some() {
+                    Action::Halted
+                } else {
+                    Action::Normal
+                };
+                observations += 1;
+                if !KEEP_HISTORY {
+                    decisions.clear();
+                }
+                decisions.push(Decision {
                     timestamp: t,
-                    kind: "red",
-                    red_at: t,
-                    flat_at: None,
-                    reason,
-                    raw: Some(risk.raw[index]),
-                    ema: Some(risk.ema[index]),
-                });
-            }
-            if point.flatten && red_at.is_some() {
-                flat_at = Some(t);
-                reason = "stop_flattened";
-                events.push(LifecycleEvent {
-                    timestamp: t,
-                    kind: "flat",
-                    red_at: red_at.unwrap(),
+                    action,
+                    red_at,
                     flat_at,
                     reason,
-                    raw: Some(risk.raw[index]),
-                    ema: Some(risk.ema[index]),
+                    raw: raw,
+                    ema: ema,
+                    numeric_range_approximation: false,
                 });
-            }
-            if cooldown_finished(flat_at, t, input) {
-                reason =
-                    advance_permissions(t, false, input, &mut red_at, &mut flat_at, &mut events)
-                        .expect("completed cooldown emits restart");
-            }
-            let action = if red_at.is_none() {
-                Action::Normal
-            } else if point.exposed {
-                Action::Panic
-            } else {
-                Action::Halted
-            };
-            observations += 1;
-            numeric_range_approximation |= risk.numeric_range_approximation;
-            if !KEEP_HISTORY {
-                decisions.clear();
-            }
-            decisions.push(Decision {
-                timestamp: t,
-                action,
-                red_at,
-                flat_at,
-                reason,
-                raw: risk.raw[index],
-                ema: risk.ema[index],
-                numeric_range_approximation: risk.numeric_range_approximation,
-            });
+            },
+        )?;
+        cursor_peak = risk.last_peak_delta;
+        numeric_range_approximation |= risk.numeric_range_approximation;
+        let first = if KEEP_HISTORY { decision_start } else { 0 };
+        for decision in &mut decisions[first..] {
+            decision.numeric_range_approximation = risk.numeric_range_approximation;
         }
     }
     if decisions.is_empty() {
@@ -401,11 +394,69 @@ fn replay_collected<const KEEP_HISTORY: bool>(input: &Input) -> Result<Replay, S
     if decisions.last().unwrap().timestamp != input.now {
         return Err("HSL trace must end at the current observation".into());
     }
+    let relevant = if current.exposed {
+        input.episodes.last().unwrap()
+    } else {
+        input
+            .episodes
+            .iter()
+            .rev()
+            .find(|e| e.points.last().unwrap().flatten)
+            .unwrap_or(input.episodes.last().unwrap())
+    };
+    let first_required = if !current.exposed
+        && !relevant
+            .points
+            .iter()
+            .any(|p| p.exposed || p.flatten || p.pnl != current.pnl || p.upnl != 0.0)
+    {
+        i64::MAX
+    } else {
+        relevant
+            .points
+            .iter()
+            .find(|p| p.timestamp >= input.start)
+            .map_or(input.now, |p| p.timestamp)
+    };
     Ok(Replay {
         decisions,
         events,
         observations,
         numeric_range_approximation,
+        cursor: cursor_peak.map(|peak_delta| Cursor {
+            peak_delta,
+            first_required,
+            exposed: current.exposed,
+            threshold_sensitive,
+            seed: if SEED {
+                let mut first = relevant.clone();
+                // The omitted preceding episode cannot authorize cooldown for
+                // current exposure; this event no longer has a predecessor here.
+                first.opened_at = None;
+                if first
+                    .points
+                    .iter()
+                    .all(|p| !p.exposed && !p.flatten && p.pnl == current.pnl && p.upnl == 0.0)
+                {
+                    first.points = vec![current.clone()];
+                }
+                let mut seed = vec![first];
+                if !current.exposed && relevant.points.last().unwrap().flatten {
+                    let terminal = relevant.points.last().unwrap();
+                    let mut flat = terminal.clone();
+                    flat.flatten = false;
+                    seed.push(Episode {
+                        points: vec![flat, current.clone()],
+                        opened_at: None,
+                        entry_reference: None,
+                        entry_reference_delta: None,
+                    });
+                }
+                Some(seed)
+            } else {
+                None
+            },
+        }),
     })
 }
 
@@ -451,7 +502,6 @@ mod tests {
                     threshold: 0.1,
                     cooldown_ms: 0,
                     restart: Restart::Always,
-                    intervention: Intervention::Panic,
                 };
                 let full = replay_with_events(&input).unwrap();
                 let latest = replay_latest_with_events(&input).unwrap();
@@ -477,7 +527,7 @@ mod tests {
     fn reporting_keeps_zero_cooldown_stop_without_changing_permission() {
         let input: Input = serde_json::from_value(serde_json::json!({
             "now": 120000, "start": 0, "budget": 1000.0, "span": 1.0,
-            "threshold": 0.05, "cooldown_ms": 0, "restart": "always", "intervention": "panic",
+            "threshold": 0.05, "cooldown_ms": 0, "restart": "always",
             "episodes": [
                 {"points": [
                     {"timestamp": 0, "pnl": 0.0, "upnl": 0.0, "exposed": true, "flatten": false},
@@ -518,7 +568,6 @@ mod tests {
             threshold: 0.05,
             cooldown_ms: 60_000,
             restart: Restart::Always,
-            intervention: Intervention::Normal,
             episodes: vec![Episode {
                 entry_reference: None,
                 entry_reference_delta: None,
@@ -552,8 +601,8 @@ mod tests {
             }],
         };
         let result = replay(&input).unwrap();
-        assert_eq!(result.last().unwrap().action, Action::Halted);
+        assert_eq!(result.last().unwrap().action, Action::Normal);
         assert_eq!(result.last().unwrap().flat_at, None);
-        assert_eq!(result.last().unwrap().red_at, Some(60_000));
+        assert_eq!(result.last().unwrap().red_at, None);
     }
 }

@@ -4,7 +4,7 @@
 
 The runtime rules below describe legacy HSL, which remains the trading default.
 The `hsl_revised*` Rust components implement the approved
-[best-effort redesign](../../plans/hsl_best_effort_redesign.md). Backtests and CPU
+[best-effort redesign](../../plans/hsl_best_effort_redesign.md). Backtests, CPU/GPU
 optimization and live execution can explicitly select this engine. Its historical candle projection deliberately
 uses the finest causal source throughout lookback, including internal/suffix gaps;
 the legacy prefix-only coarse-candle restriction below does not apply to those
@@ -13,8 +13,9 @@ Offline qualification is distinct from operator-approved live exchange validatio
 
 `live.hsl_engine` is the startup-only shared selector (`legacy` default, `revised`
 opt-in). It cannot be varied by scenario or optimizer override. Backtest payloads and
-CPU optimizer and live entry points support coin, pside and unified modes; the GPU backend
-rejects revised selection. The [live validation checklist](../../hsl_revised_live_validation.md)
+CPU optimizer and live entry points support coin, pside and unified modes. The Metal/CUDA
+GPU backend supports revised single- and multi-coin 1m screening for both strategy families
+in all three modes, retaining exact Rust validation and its documented execution/metric limits. The [live validation checklist](../../hsl_revised_live_validation.md)
 defines operator checks and rollback; no default or running process changes implicitly.
 Revised configuration requires explicit restart policy when enabled, explicit
 `bot.hsl` for unified mode, and a finite 1–90 day enabled lookback. Removed fields
@@ -36,11 +37,11 @@ remain invalid. This exception does not authorize any order or waive execution i
 
 For the revised estimator, incomplete initial exposure seeds one scope-level entry-value
 peak, even with usable candles. The relative reference is
-`-(retained_net_realized_pnl + current_upnl)`; sum selected currency components before
+`-retained_net_realized_pnl` in the current-equity coordinate system; sum selected currency components before
 normalization. It adds no price/EMA sample or claimed opening timestamp. A supported
 flatten resets it, and a fresh reconstruction replaces it when opening evidence changes.
 This explicitly accepted approximation may include loss originating before lookback;
-actual out-of-window fills/cashflows remain excluded. See the [reference policy](../../plans/hsl_best_effort_redesign.md#missing-opening-with-usable-candles).
+actual out-of-window fills/cashflows remain excluded. See the [current signal and estimator rules](../../hsl_revised.md#best-effort-history).
 
 The shared experimental `hsl_revised_evaluate` boundary composes normalized factual
 snapshots into current permissions. It validates selected current inputs before
@@ -359,6 +360,31 @@ flatten boundaries already represented in that tape must not trigger another rep
 Corrections or late fills in the consumed window still invalidate the tape and
 request canonical reconstruction before ordinary planning.
 
+### Revised current-signal and cooldown contract
+
+The revised engine anchors scoped history to current equity: balance budget plus current
+scoped UPNL. Equivalently, historical equity is budget plus historical net realized PnL
+minus current net realized PnL plus historical UPNL. A finite nonpositive current equity
+is usable risk evidence. It is not an invalid balance or missing input.
+
+Panic permission is exactly the current raw/EMA minimum exceeding the configured RED
+threshold. No historical crossing or earlier panic decision authorizes later closes.
+A fresh GREEN result retires outstanding panic orders even after partial execution and
+without waiting for ordinary strategy readiness. Invalid/unavailable current input is
+not GREEN; normal observation freshness and connector admission still apply.
+
+Only the latest episode determines cooldown. At scope flattening, evaluate the terminal
+net-PnL sample before resetting peak/EMA. Terminal RED starts cooldown regardless of fill
+order type; terminal GREEN does not. Any subsequent exposure clears the previous restriction,
+including `never`, and is independently evaluated as a new episode. There is no revised
+intervention policy. All selected positions must be zero for aggregate flatness.
+
+Reconstruction may reclassify terminal RED after deposits, withdrawals, budget changes or
+history corrections. Use the original reconstructed flatten timestamp for remaining duration;
+never renew it to observation time. `always` expires at flatten plus configured cooldown;
+`never` lasts only within lookback. Expired evidence and older superseded episodes have no
+authority. Historical lifecycle diagnostics are not trading state. Legacy is unchanged.
+
 ### Experimental revised simulator observation ordering
 
 Revised simulator input labels retain bar-open fill timestamps and bar-end candle
@@ -479,9 +505,13 @@ no account-equity substitution on the revised path. The existing legacy analysis
 ### Revised backtest report consumers
 
 The versioned `hsl_report.json` artifact preserves the native report even when plots are disabled.
-It records engine, mode, detailed/metrics-only status, dataset coin order, effective native policies
-for observed scopes, summary, samples and lifecycle events. Artifact workspaces expose `hsl_report`;
-older artifacts have no report. Compact runs keep summaries/policies and explicitly omit samples.
+It records engine, mode, sample-detail status, dataset coin order, effective native policies
+for observed scopes, summary, samples and lifecycle events. Standalone backtests retain summaries
+and lifecycle events by default, with `detailed=false` and an empty `samples` list.
+`backtest.hsl_detailed_report=true` opts into per-observation samples and HSL drawdown plots.
+Metrics-only optimizer runs omit both samples and event lists regardless of this option, while
+retaining identical summaries and analysis metrics. Reporting never changes trading inputs or
+decisions. Artifact workspaces expose `hsl_report`; older artifacts have no report.
 
 Revised plots use native raw drawdown, drawdown EMA and controller actions, with one figure per
 observed coin-side, side, or portfolio scope. Thresholds come from the native effective policy,
@@ -515,8 +545,11 @@ objectives/limits must be meaningful for every contributing scenario. This check
 zero for a missing or inactive signal. The existing saved-fitness contract records the selected
 engine, fixed policy and source-verified implementation identity.
 
-The GPU backend does not implement revised HSL and rejects that engine before loading GPU runtime
-services. CPU policy candidates reach the same native simulator as public backtests, including
+The GPU backend supports revised HSL for single- and multi-coin 1m scenarios in both strategy families
+and all three signal modes. Canonical effective policies feed the revised shader explicitly;
+unified portfolio genes are transported to the single shared controller. Multi-coin coin controllers resolve effective overrides and current slot counts; temporal
+replay and candidate partitioning retain isolated history for every scope. GPU screening retains exact Rust validation and checkpoint engine/policy
+identity. CPU policy candidates reach the same native simulator as public backtests, including
 scenario evaluation, multiprocessing serialization and compatible saved-checkpoint resume.
 Live selection follows the same startup-only engine policy; offline optimization does not
 verify live exchange execution.
@@ -546,21 +579,22 @@ it does not treat stale or missing current positions as flat.
 
 One pure Rust reconciler owns estimated position/basis history, explicit current-position
 adjustments and the path used to derive scope-flat boundaries. For each coin-side, canonicalize
-identities/revisions and causal timestamps, then let `S` be cumulative usable quantity changes in
-increase/reduction units, including zero. The opening inventory is
-`max(0, -min(S), abs(current_size) - S[-1])`. Walk forward without changing known fill quantities.
+identities/revisions and causal timestamps. Walk forward with the smallest inventory needed
+for each contiguous reduction run. A leading reduction run supplies estimated opening inventory;
+an interior deficit is a local pre-reduction adjustment and cannot rewrite earlier completed
+entry/exit episodes. A nonempty reduction-only tape is left-censored: its current remaining
+inventory stays in that same estimated episode, preserving partial-close losses.
 The initial basis uses the earliest usable retained fill price, otherwise current basis/mark;
 adds update contract-aware weighted basis, reductions retain it, and flats reset it.
 Unknown quantities omit only their position transition; independently usable PnL/fees remain.
 
-Differences from current exchange size/basis become explicit estimated adjustments with no
-invented execution price, fee or realized PnL. An unexplained larger current size is carried from
-the opening, which may retain old losses until a missing add arrives and restores a historical
-flat. An unexplained reduction applies at the current endpoint; for an exchange-flat pair its
-estimated application time is the latest retained fill timestamp, consistently in samples and
-cooldown. The observed fill itself is unchanged. Empty retained history creates no historical
-cooldown anchor. Quantity rounding never changes the actual current endpoint and is constrained
-by the exchange quantity quantum when supplied.
+Differences from current exchange size/basis become explicit estimated endpoint adjustments with
+no invented execution price, fee or realized PnL. If retained history ends flat but current
+exposure is nonzero, preserve the completed episodes and estimate a new current episode from
+current position/basis/mark. Do not invent its age or apply older candles to that new exposure.
+An exchange-flat endpoint applies at the latest retained fill timestamp for samples and cooldown.
+Empty retained history creates no historical cooldown anchor. Quantity rounding never changes
+the actual current endpoint and is constrained by the exchange quantity quantum when supplied.
 
 Aggregate scope boundaries require every estimated member position to be zero. Known global
 execution ordering may expose distinct same-time flats; otherwise a cross-pair timestamp cohort
@@ -668,3 +702,37 @@ exchange-time lifecycle anchors and approximation evidence remain part of determ
 Public revised live selection is supported explicitly; the offline fake CLI uses the same
 entry points without a test-local activation bypass. Live deployment requires separate operator
 authorization and validation, and legacy remains the default.
+
+### Bounded position-to-fill settling
+
+Both engines share one observation-scheduling gate, independent of HSL readiness. After noticing
+a size or basis change, defer creates and cancels for that coin-side. A qualifying fill refresh
+must **start at least five seconds after** its latest observed change; completing an older request
+does not qualify. Successful fetch completion releases the gate even if the expected execution
+is still absent. The revised Rust reconciler estimates from the evidence actually returned.
+
+The wait has a **15-second hard cap from the first unresolved change**. Failed, hung or skipped
+requests, repeated snapshots and subsequent changes do not extend it. On expiry, log a diagnostic
+and resume fetching as well as release this synchronization gate, even if the latest change is
+less than five seconds old. This bounded exception prevents continuous changes from starving
+acquisition indefinitely; current-input validation, Rust intent and other
+ordinary readiness rules still apply. An expired burst remains expired until a qualifying fetch
+succeeds; only then can a later change start another bounded wait. No local gate is persisted.
+
+A shared account endpoint may service already-settled scopes while another scope is settling;
+only eligible unchanged scopes receive its confirmation receipt. A successful cap-authorized
+fetch also closes its expired burst so subsequent changes start a new bounded wait. Skipped fetches
+never publish a new capture interval or authoritative fill generation. Coin mode leaves unrelated
+coin-sides executable. Enabled revised pside/unified decisions depend on all contributing coin-sides,
+so writes using those aggregate decisions also wait for their dependencies, under the same cap.
+Recheck admission at the connector boundary, including writes queued behind another write.
+A task-local order context also checks after CCXT throttling and at the native/fake transport
+boundary, so legacy requests queued inside a connector cannot bypass a newly started wait.
+Unrelated account reads carry no order context. Submission ownership and cancellation provenance
+are recorded only after final write admission, not when a request joins the connector queue.
+A deferred first attempt leaves neither record. If an earlier transport attempt was submitted,
+a subsequently blocked retry preserves ambiguous ownership and requests normal account recovery.
+
+The offline fake runner advances a separate settling clock for a simulated fetch wait within a
+market bar and bounds coin RED supervision to one pass. It leaves market timestamps unchanged.
+Adversarial timing tests can supply their own clock to exercise the actual gate without this shim.

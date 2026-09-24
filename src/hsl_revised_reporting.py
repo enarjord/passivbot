@@ -22,7 +22,7 @@ def create_revised_hsl_figures(report, *, figsize, autoplot, return_figures, dis
         logging.warning("Revised HSL plots unavailable: native report was not supplied")
         return {}
     if not report["detailed"]:
-        logging.info("Revised HSL plots unavailable: metrics-only report contains no samples")
+        logging.info("Revised HSL drawdown plots omitted: enable backtest.hsl_detailed_report for per-minute samples (unavailable in metrics-only runs)")
         return {}
 
     samples = {}

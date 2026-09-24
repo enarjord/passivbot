@@ -426,6 +426,7 @@ def _build_case(
     )
     matrix = _parameter_matrix(param_keys, candidates, seed)
     proxy = MpsMulticoinProxy.__new__(MpsMulticoinProxy)
+    proxy.hsl_engine = "legacy"
     proxy.batch_size = candidates
     proxy.dispatch_batch_size = dispatch_batch_size
     proxy.interrupt_check = lambda: None

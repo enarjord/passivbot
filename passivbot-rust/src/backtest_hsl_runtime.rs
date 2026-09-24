@@ -1,6 +1,6 @@
 //! Revised backtest execution integration. Permission is rebuilt from simulator facts.
 use super::*;
-use crate::hsl_revised_controller::{Action, Intervention, Restart};
+use crate::hsl_revised_controller::{Action, Restart};
 use crate::hsl_revised_evaluator as evaluator;
 use crate::hsl_revised_history::PositionSide;
 use crate::hsl_revised_snapshot::Mode;
@@ -22,7 +22,6 @@ pub struct Policy {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     pub mode: String,
-    pub intervention: String,
     pub sides: [Policy; 2],
     pub portfolio: Option<Policy>,
     pub coins: BTreeMap<String, [Policy; 2]>,
@@ -33,9 +32,6 @@ impl Config {
     pub fn validate(&self, coins: &[String], lookback: f64, interval: u64) -> Result<(), String> {
         if !["coin", "pside", "unified"].contains(&self.mode.as_str()) {
             return Err("invalid revised HSL signal mode".into());
-        }
-        if !["panic", "normal"].contains(&self.intervention.as_str()) {
-            return Err("invalid revised HSL intervention policy".into());
         }
         if self.mode != "coin" && !self.coins.is_empty() {
             return Err("revised HSL coin policies require coin mode".into());
@@ -94,11 +90,23 @@ impl Config {
     }
 }
 
-#[derive(Debug)]
+/// Borrow-free numeric view of the already validated immutable policy.
+#[derive(Clone, Copy)]
+pub(super) struct SignalSettings {
+    pub span: f64,
+    pub threshold: f64,
+    pub cooldown_ms: i64,
+    pub restart: Restart,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct Scope {
-    timestamp: i64,
+    pub(super) timestamp: i64,
+    pub(super) fill_count: usize,
+    pub(super) budget: f64,
+    pub(super) slots: u64,
     pub(super) side: Option<usize>,
-    coin: Option<usize>,
+    pub(super) coin: Option<usize>,
     pub result: evaluator::Output,
 }
 
@@ -129,7 +137,7 @@ impl Backtest<'_> {
         &self,
         side: Option<usize>,
         coin: Option<usize>,
-    ) -> Result<Policy, String> {
+    ) -> Result<&Policy, String> {
         let cfg = self
             .backtest_params
             .equity_hard_stop_loss
@@ -139,11 +147,11 @@ impl Backtest<'_> {
         match side {
             None => cfg
                 .portfolio
-                .clone()
+                .as_ref()
                 .ok_or("missing revised portfolio HSL policy".into()),
             Some(side) => Ok(coin
                 .and_then(|c| cfg.coins.get(&self.backtest_params.coins[c]))
-                .map_or_else(|| cfg.sides[side].clone(), |p| p[side].clone())),
+                .map_or(&cfg.sides[side], |p| &p[side])),
         }
     }
 
@@ -166,28 +174,17 @@ impl Backtest<'_> {
     }
 
     fn evaluate_revised_scope(
-        &self,
+        &mut self,
         k: usize,
         side: Option<usize>,
         coin: Option<usize>,
         boundary: bool,
     ) -> Result<Scope, String> {
-        let cfg = self
-            .backtest_params
-            .equity_hard_stop_loss
-            .revised
-            .as_ref()
-            .ok_or("missing revised HSL config")?;
         let policy = self.revised_policy(side, coin)?;
         let restart = match policy.restart_after_red_policy.as_deref() {
             Some("always") => Restart::Always,
             Some("never") => Restart::Never,
             _ => return Err("invalid revised HSL restart policy".into()),
-        };
-        let intervention = match cfg.intervention.as_str() {
-            "panic" => Intervention::Panic,
-            "normal" => Intervention::Normal,
-            _ => return Err("invalid revised HSL intervention policy".into()),
         };
         if !["limit", "market"].contains(&policy.panic_close_order_type.as_str()) {
             return Err("invalid revised HSL panic close order type".into());
@@ -195,6 +192,20 @@ impl Backtest<'_> {
         let cooldown = policy.cooldown_minutes_after_red * 60_000.0;
         if !cooldown.is_finite() || cooldown < 0.0 || cooldown >= i64::MAX as f64 {
             return Err("invalid revised HSL cooldown".into());
+        }
+        let settings = SignalSettings {
+            span: policy.ema_span_minutes,
+            threshold: policy.red_threshold,
+            cooldown_ms: cooldown.round() as i64,
+            restart,
+        };
+        if !boundary {
+            if let Some(scope) = self.advance_revised_scope(k, side, coin, settings) {
+                return Ok(scope);
+            }
+            if let Some(scope) = self.replay_revised_trace(k, side, coin, settings) {
+                return Ok(scope);
+            }
         }
         let mode = if coin.is_some() {
             Mode::Coin
@@ -210,22 +221,32 @@ impl Backtest<'_> {
                 PositionSide::Short
             }
         });
+        let cutoff = self.revised_history_cutoff(side, coin);
         let symbol = coin.map(|c| self.backtest_params.coins[c].as_str());
-        let observed = self.revised_hsl_inputs_at(k, mode, side_name, symbol, boundary)?;
+        let observed =
+            self.revised_hsl_inputs_at_clipped(k, mode, side_name, symbol, boundary, cutoff)?;
         let timestamp = observed.snapshot.now;
         let slots = side.map_or(1, |s| observed.slots[s]) as u64;
-        let mut result = evaluator::evaluate(evaluator::Input {
+        let budget = if coin.is_some() {
+            observed.snapshot.balance / slots.max(1) as f64
+        } else {
+            observed.snapshot.balance
+        };
+        let mut result = evaluator::evaluate_for_simulator(evaluator::Input {
             snapshot: observed.snapshot,
             slots,
-            span: policy.ema_span_minutes,
-            threshold: policy.red_threshold,
-            cooldown_ms: cooldown.round() as i64,
-            restart,
-            intervention,
+            span: settings.span,
+            threshold: settings.threshold,
+            cooldown_ms: settings.cooldown_ms,
+            restart: settings.restart,
         })?;
         result.reasons.extend(observed.reasons);
+        self.seed_revised_trace((side, coin), &mut result);
         Ok(Scope {
             timestamp,
+            fill_count: self.fills.len(),
+            budget,
+            slots,
             side,
             coin,
             result,
@@ -270,7 +291,7 @@ impl Backtest<'_> {
                 .revised_policy(scope.0, scope.1)
                 .expect("validated revised HSL execution policy");
             params.hsl_enabled = policy.enabled;
-            params.hsl_panic_close_order_type = policy.panic_close_order_type;
+            params.hsl_panic_close_order_type = policy.panic_close_order_type.clone();
         }
         params
     }

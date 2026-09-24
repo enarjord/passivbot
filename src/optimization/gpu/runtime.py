@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 
@@ -46,10 +47,26 @@ def synchronize() -> None:
         torch.cuda.synchronize()
 
 
-def compile_shader(source: str, *, cuda_coin_capacity: int | None = None):
+def specialize_coin_capacity(source: str, capacity: int) -> str:
+    """Size private arrays without changing the Rust-owned shader expressions."""
+    declarations = list(re.finditer(
+        r"\bconstant\s+int\s+MAX_COINS\s*=\s*(\d+)\s*;", source
+    ))
+    if len(declarations) != 1:
+        raise ValueError("GPU coin specialization requires one MAX_COINS declaration")
+    declaration = declarations[0]
+    if type(capacity) is not int or not 1 <= capacity <= int(declaration[1]):
+        raise ValueError("GPU coin capacity must fit the shader's MAX_COINS limit")
+    return source[:declaration.start(1)] + str(capacity) + source[declaration.end(1):]
+
+
+def compile_shader(source: str, *, cuda_coin_capacity: int | None = None,
+                   mps_coin_capacity: int | None = None):
     import torch
 
     if gpu_device(torch) == "mps":
+        if mps_coin_capacity is not None:
+            source = specialize_coin_capacity(source, mps_coin_capacity)
         return torch.mps.compile_shader(source)
     from optimization.gpu.cuda_kernel import CudaShaderLibrary
 

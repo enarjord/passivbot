@@ -1731,6 +1731,10 @@ CLI_HELP_OVERRIDES = {
         "Early-stop equity floor as a fraction of starting balance. Must "
         "satisfy 0 <= x < 1; 0.05 stops once equity is <= 5 percent of start."
     ),
+    "backtest.limit_order_fill_buffer_pct": (
+        "Backtest-only required crossing beyond a limit price as part-per-one "
+        "(0.0001 = 0.01%%). Strict crossing; fills retain the limit price. Default 0.0."
+    ),
     "backtest.market_order_slippage_pct": (
         "Backtest-only simulated market-order slippage as part-per-one. Applies "
         "to market-promoted orders and market HSL panic closes; not a live "

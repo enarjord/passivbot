@@ -75,7 +75,7 @@ def test_no_history_current_loss_is_evaluated_for_every_topology(mode, side):
     assert decision.action == "panic"
     raw = json.loads(decision.payload)
     assert raw["observations"] == 1
-    assert raw["decision"]["raw"] == pytest.approx(100/1100)
+    assert raw["decision"]["raw"] == pytest.approx(100/1000)
     assert raw["decision"]["ema"] == raw["decision"]["raw"]
     assert "fill_capture_unknown" in decision.reasons
     assert decision.execution_type == ("market" if mode == "unified" else "limit")
@@ -88,7 +88,7 @@ def test_canonical_cashflows_survive_pending_quantity_and_missing_candles(mode):
     decision, = run(value)[0]
     assert decision.action == "panic"
     assert "invalid_fill_quantity" in decision.reasons
-    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(301/1301)
+    assert json.loads(decision.payload)["decision"]["raw"] == pytest.approx(301/1201)
 
 
 def test_current_quote_failure_is_scoped_before_native_evaluation():
@@ -183,7 +183,7 @@ def test_fractional_cooldown_uses_native_backtest_millisecond_rounding():
 
 
 def test_coarse_source_gaps_are_native_estimates_not_candle_ledger_writes():
-    value = bot()
+    value = bot(events=[event(timestamp=NOW-900_000, side="buy", qty=10., price=100., pnl=0.)])
     tape = capture_candles([dict(ts=NOW-900_000, o=100., h=120., l=80., c=90.)],
                           minutes=15, observed_at=NOW)
     sources = {SYMBOL: Sources((tape,), (Failure("1m", "fetch", "TimeoutError"),), 0)}
@@ -298,7 +298,7 @@ def test_empty_aggregate_side_retains_cashflows_even_without_exposure():
     requests, unavailable = capture(value, quotes(), {}, symbols={"long": [SYMBOL], "short": [SYMBOL]}, now_ms=NOW,
         utc_now_ms=NOW, max_current_age_ms=10_000)
     assert not unavailable and len(json.loads(requests[0].payload)["snapshot"]["pairs"]) == 2
-    assert json.loads(evaluate(requests)[0].payload)["decision"]["raw"] == pytest.approx(300/1300)
+    assert json.loads(evaluate(requests)[0].payload)["decision"]["raw"] == pytest.approx(300/1200)
 
 
 def test_all_flat_aggregate_with_no_history_needs_no_market_quote():
@@ -400,7 +400,7 @@ def test_damaged_retained_fill_cannot_supply_empty_flat_proof(changes):
 
 
 def test_negative_historical_equity_can_leave_a_valid_ema_above_one():
-    value = bot()
+    value = bot(events=[event(timestamp=NOW-7*60_000, side="buy", qty=100., price=100., pnl=0.)])
     value.positions[SYMBOL]["long"]["size"] = 100.
     value.config["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.5
     rows = [dict(ts=NOW-(6-i)*60_000, o=p, h=p, l=p, c=p)
@@ -775,5 +775,5 @@ def test_historical_flat_and_cooldown_survive_newer_position_reads(mode, side, c
     for started, completed in [(NOW-150, NOW-50), (NOW-500, NOW-300), (NOW-200, NOW-100)]:
         decision, = run(value, marks, fills_started_ms=started, fills_completed_ms=completed)[0]
         results.append(json.loads(decision.payload)['decision'])
-    assert results[0]['action'] == ('normal' if cooldown == 1. else 'panic')
+    assert results[0]['action'] == 'normal'
     assert results[1:] == [results[0], results[0]]

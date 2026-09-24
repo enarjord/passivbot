@@ -49,6 +49,8 @@ def test_public_payload_runs_red_panic_and_cooldown(mode):
     assert report["mode"] == mode
     assert analysis["hard_stop_triggers"] > 0
     assert report["summary"]["panic_close_fills"] > 0
+    assert report["detailed"] is False
+    assert report["samples"] == []
     assert report["summary"]["restarts"] > 0
     assert {"red", "flat", "restart"} <= {row["kind"] for row in report["events"]}
     assert any("panic" in str(fill[13]) for fill in fills)
@@ -127,17 +129,22 @@ def offline_cli_config(tmp_path, monkeypatch, mode):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
-async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("detailed", [False, True])
+async def test_backtest_cli_uses_only_offline_exchange_equivalent_data(tmp_path, monkeypatch, mode, detailed):
     from backtest import main
     cfg = offline_cli_config(tmp_path, monkeypatch, mode)
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps(cfg))
-    monkeypatch.setattr(sys, "argv", ["backtest", str(config_path), "-dp", "all"])
+    monkeypatch.setattr(sys, "argv", ["backtest", str(config_path), "-dp", "all"] +
+                        (["--backtest.hsl_detailed_report", "true"] if detailed else []))
     await main()
     artifact, = (tmp_path / "results").rglob("hsl_report.json")
     report = json.loads(artifact.read_text())
     assert report["engine"] == "revised" and report["mode"] == mode
     assert report["summary"]["panic_close_fills"] > 0
+    assert report["detailed"] is detailed
+    assert bool(report["samples"]) is detailed
+    assert report["events"]
     assert (artifact.parent / "fills.csv").exists()
 
 

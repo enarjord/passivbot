@@ -1,4 +1,4 @@
-//! Revised HSL numerical kernel. Not yet connected to any trading controller.
+//! Revised HSL numerical kernel shared by diagnostic and trading-controller consumers.
 //!
 //! Inputs are already scoped currency observations, not individual drawdown ratios.
 //! Reconstruction, lifecycle and execution adapters must not use this kernel alone
@@ -23,6 +23,8 @@ pub struct Signal {
     pub ema: Vec<f64>,
     pub panic: Vec<bool>,
     pub numeric_range_approximation: bool,
+    #[serde(skip)]
+    pub(crate) last_peak_delta: Option<f64>,
 }
 
 fn bounded(value: f64, approximate: &mut bool) -> f64 {
@@ -49,40 +51,50 @@ pub(crate) fn validate_settings(span: f64, threshold: f64) -> Result<(), String>
     Ok(())
 }
 
-/// One current observation with an independently reconstructed peak-to-current
-/// currency loss. Keep the loss through division: budget + loss may round back
-/// to budget even though their ratio is representable and relevant to a threshold.
+/// One observation with an exact reconstructed peak-to-current currency loss.
+/// The peak includes current UPNL, so realizing an existing loss is neutral.
 pub(crate) fn singleton_from_loss(
     budget: f64,
+    upnl: f64,
     loss: f64,
     span: f64,
     threshold: f64,
 ) -> Result<Signal, String> {
     validate_settings(span, threshold)?;
-    if !budget.is_finite() || budget <= 0.0 || !loss.is_finite() {
+    if !budget.is_finite() || budget <= 0.0 || !upnl.is_finite() || !loss.is_finite() {
         return Err("invalid revised HSL signal inputs".into());
     }
     let loss = loss.max(0.0);
-    let total = budget + loss;
-    let mut approximate = false;
-    let peak = bounded(total, &mut approximate);
-    let raw = if total.is_finite() {
-        loss / total
+    let mut reasons = std::collections::BTreeSet::new();
+    let equity = crate::hsl_revised_sum::currency_sum(&[budget, upnl], &mut reasons);
+    let peak = crate::hsl_revised_sum::currency_sum(&[budget, upnl, loss], &mut reasons);
+    let scale = if budget.abs().max(upnl.abs()).max(loss) > f64::MAX / 8.0 {
+        0.125
     } else {
-        // Positive operands: half scaling cannot overflow or cancel a loss.
-        (loss * 0.5) / (budget * 0.5 + loss * 0.5)
+        1.0
+    };
+    let denominator = crate::hsl_revised_sum::currency_sum(
+        &[budget * scale, upnl * scale, loss * scale],
+        &mut reasons,
+    );
+    let mut approximate = !reasons.is_empty();
+    let raw = if denominator > 0.0 {
+        bounded(loss * scale / denominator, &mut approximate)
+    } else {
+        1.0
     };
     Ok(Signal {
-        equity: vec![budget],
+        equity: vec![equity],
         peaks: vec![peak],
         raw: vec![raw],
         ema: vec![raw],
         panic: vec![raw > threshold],
         numeric_range_approximation: approximate,
+        last_peak_delta: None,
     })
 }
 
-/// Batch reference semantics: final equity equals current budget, EMA starts at
+/// Batch reference semantics: final equity equals current budget plus current UPNL, EMA starts at
 /// the first raw drawdown, and updates in the same minute replace that minute's
 /// contribution. Peak tracking still sees each ordered boundary sample.
 pub fn signal(
@@ -130,27 +142,6 @@ pub(crate) fn signal_with_references(
     point_references: &[Option<f64>],
     anchor: &Observation,
 ) -> Result<Signal, String> {
-    validate_settings(span, threshold)?;
-    if !anchor.realized.is_finite()
-        || !anchor.unrealized.is_finite()
-        || rows.is_empty()
-        || !budget.is_finite()
-        || budget <= 0.0
-        || entry_reference.is_some_and(|p| !p.is_finite())
-        || entry_reference_delta.is_some_and(|p| !p.is_finite())
-        || (entry_reference.is_some() && entry_reference_delta.is_some())
-        || (!point_references.is_empty() && point_references.len() != rows.len())
-        || point_references.iter().flatten().any(|r| !r.is_finite())
-        || (entry_reference.is_some() && point_references.iter().any(Option::is_some))
-        || rows
-            .iter()
-            .any(|r| !r.realized.is_finite() || !r.unrealized.is_finite())
-        || rows
-            .windows(2)
-            .any(|w| w[0].timestamp_ms > w[1].timestamp_ms)
-    {
-        return Err("invalid revised HSL signal inputs".into());
-    }
     let mut out = Signal {
         equity: Vec::with_capacity(rows.len()),
         peaks: Vec::with_capacity(rows.len()),
@@ -158,66 +149,137 @@ pub(crate) fn signal_with_references(
         ema: Vec::with_capacity(rows.len()),
         panic: Vec::with_capacity(rows.len()),
         numeric_range_approximation: false,
+        last_peak_delta: None,
     };
-    let last = anchor;
-    let mut deltas = Vec::with_capacity(rows.len());
-    // Subtract the common currency offset first: a large realized baseline must
-    // not erase an otherwise representable unrealized change or the budget.
-    for row in rows {
-        let realized_delta = row.realized - last.realized;
-        let unrealized_delta = row.unrealized - last.unrealized;
-        let direct = realized_delta + unrealized_delta;
-        let delta = if direct.is_finite() {
+    if !point_references.is_empty() && point_references.len() != rows.len() {
+        return Err("invalid revised HSL signal inputs".into());
+    }
+    let summary = visit_signal(
+        rows.len(),
+        |i| rows[i],
+        |i| point_references.get(i).copied().flatten(),
+        budget,
+        span,
+        threshold,
+        entry_reference,
+        entry_reference_delta,
+        anchor,
+        |_, equity, peak, raw, ema, panic| {
+            out.equity.push(equity);
+            out.peaks.push(peak);
+            out.raw.push(raw);
+            out.ema.push(ema);
+            out.panic.push(panic);
+        },
+    )?;
+    out.numeric_range_approximation = summary.numeric_range_approximation;
+    out.last_peak_delta = summary.last_peak_delta;
+    Ok(out)
+}
+
+pub(crate) struct SignalSummary {
+    pub numeric_range_approximation: bool,
+    pub last_peak_delta: Option<f64>,
+}
+
+/// The same arithmetic can stream to its controller without allocating the five
+/// diagnostic output arrays. The public numerical API collects this stream.
+pub(crate) fn visit_signal(
+    count: usize,
+    row_at: impl Fn(usize) -> Observation,
+    reference_at: impl Fn(usize) -> Option<f64>,
+    budget: f64,
+    span: f64,
+    threshold: f64,
+    entry_reference: Option<f64>,
+    entry_reference_delta: Option<f64>,
+    anchor: &Observation,
+    mut visit: impl FnMut(usize, f64, f64, f64, f64, bool),
+) -> Result<SignalSummary, String> {
+    validate_settings(span, threshold)?;
+    if !anchor.realized.is_finite()
+        || !anchor.unrealized.is_finite()
+        || count == 0
+        || !budget.is_finite()
+        || budget <= 0.0
+        || entry_reference.is_some_and(|p| !p.is_finite())
+        || entry_reference_delta.is_some_and(|p| !p.is_finite())
+        || (entry_reference.is_some() && entry_reference_delta.is_some())
+        || (0..count).filter_map(&reference_at).any(|r| !r.is_finite())
+        || (entry_reference.is_some() && (0..count).any(|i| reference_at(i).is_some()))
+        || (0..count)
+            .map(&row_at)
+            .any(|r| !r.realized.is_finite() || !r.unrealized.is_finite())
+        || (1..count).any(|i| row_at(i - 1).timestamp_ms > row_at(i).timestamp_ms)
+    {
+        return Err("invalid revised HSL signal inputs".into());
+    }
+    // Keep extreme historical currency values scaled through ratio calculation.
+    // Saturating an oversized peak before division can erase a real drawdown.
+    let scale = if budget.abs() > f64::MAX / 8.0
+        || anchor.realized.abs() > f64::MAX / 8.0
+        || (0..count)
+            .map(&row_at)
+            .any(|r| r.realized.abs().max(r.unrealized.abs()) > f64::MAX / 8.0)
+        || entry_reference.is_some_and(|r| r.abs() > f64::MAX / 8.0)
+        || entry_reference_delta.is_some_and(|r| r.abs() > f64::MAX / 8.0)
+        || (0..count)
+            .filter_map(&reference_at)
+            .any(|r| r.abs() > f64::MAX / 8.0)
+    {
+        0.125
+    } else {
+        1.0
+    };
+    let budget = budget * scale;
+    let entry_reference = entry_reference.map(|r| r * scale);
+    let entry_reference_delta = entry_reference_delta.map(|r| r * scale);
+    let mut approximate = scale != 1.0;
+    // Keep the same currency subtraction order as the collected reference.
+    let delta = |row: &Observation, approximate: &mut bool| {
+        let direct = (row.realized * scale - anchor.realized * scale) + row.unrealized * scale;
+        if direct.is_finite() {
             direct
         } else {
-            // Opposite oversized deltas may cancel to a representable result.
-            // Do not saturate each independently and erase that residual risk.
-            out.numeric_range_approximation = true;
-            let scaled = (row.realized * 0.25 - last.realized * 0.25)
-                + (row.unrealized * 0.25 - last.unrealized * 0.25);
-            bounded(scaled * 4.0, &mut out.numeric_range_approximation)
-        };
-        deltas.push(delta);
-        out.equity.push(bounded(
-            budget + delta,
-            &mut out.numeric_range_approximation,
-        ));
-    }
-    // Exact endpoint identity, including after range-limited history estimation.
-    if rows
-        .last()
-        .is_some_and(|r| r.realized == anchor.realized && r.unrealized == anchor.unrealized)
-    {
-        *out.equity.last_mut().unwrap() = budget;
-    }
-    let mut peak = entry_reference.unwrap_or(out.equity[0]);
-    // An explicit absolute reference already has the caller's float precision.
-    // Otherwise retain the relative currency peak, so adding a large budget
-    // cannot erase an independently representable peak-to-current loss.
-    let mut peak_delta = entry_reference
-        .is_none()
-        .then_some(entry_reference_delta.map_or(deltas[0], |reference| reference.max(deltas[0])));
+            *approximate = true;
+            let scaled = (row.realized * 0.25 - anchor.realized * 0.25) + row.unrealized * 0.25;
+            bounded(scaled * 4.0, approximate)
+        }
+    };
+    let first_delta = delta(&row_at(0), &mut approximate);
+    let mut peak = entry_reference.unwrap_or(bounded(budget + first_delta, &mut approximate));
+    let mut peak_delta = entry_reference.is_none().then_some(
+        entry_reference_delta.map_or(first_delta, |reference| reference.max(first_delta)),
+    );
     if let Some(relative_peak) = peak_delta {
-        peak = bounded(budget + relative_peak, &mut out.numeric_range_approximation);
+        peak = bounded(budget + relative_peak, &mut approximate);
     }
     let alpha = 2.0 / (span + 1.0);
     let mut previous_minute = None;
     let mut baseline: Option<f64> = None;
-    for (index, (row, equity)) in rows.iter().zip(out.equity.iter().copied()).enumerate() {
+    let mut previous_ema = None;
+    for index in 0..count {
+        let row = row_at(index);
+        let current_delta = delta(&row, &mut approximate);
+        let equity = if index + 1 == count
+            && row.realized == anchor.realized
+            && row.unrealized == anchor.unrealized
+        {
+            bounded(budget + anchor.unrealized * scale, &mut approximate)
+        } else {
+            bounded(budget + current_delta, &mut approximate)
+        };
         peak = peak.max(equity);
         if let Some(relative_peak) = &mut peak_delta {
-            *relative_peak = relative_peak.max(deltas[index]);
-            if let Some(reference) = point_references.get(index).copied().flatten() {
-                *relative_peak = relative_peak.max(reference);
-                peak = bounded(
-                    budget + *relative_peak,
-                    &mut out.numeric_range_approximation,
-                );
+            *relative_peak = relative_peak.max(current_delta);
+            if let Some(reference) = reference_at(index) {
+                *relative_peak = relative_peak.max(reference * scale);
+                peak = bounded(budget + *relative_peak, &mut approximate);
             }
         }
         let drawdown = if peak > 0.0 && peak_delta.is_some() {
             let relative_peak = peak_delta.unwrap();
-            let loss = relative_peak - deltas[index];
+            let loss = relative_peak - current_delta;
             let denominator = budget + relative_peak;
             bounded(
                 if loss.is_finite() && denominator.is_finite() {
@@ -225,10 +287,10 @@ pub(crate) fn signal_with_references(
                 } else {
                     // Power-of-two scaling avoids overflow in either positive
                     // denominator or opposite-sign loss subtraction.
-                    (relative_peak * 0.25 - deltas[index] * 0.25)
+                    (relative_peak * 0.25 - current_delta * 0.25)
                         / (budget * 0.25 + relative_peak * 0.25)
                 },
-                &mut out.numeric_range_approximation,
+                &mut approximate,
             )
         } else if peak > 0.0 {
             // Division first avoids overflow when peak and negative equity have
@@ -239,7 +301,7 @@ pub(crate) fn signal_with_references(
                 } else {
                     1.0 - equity / peak
                 },
-                &mut out.numeric_range_approximation,
+                &mut approximate,
             )
         } else {
             // Explicit reference rule for a nonpositive historical peak.
@@ -247,21 +309,40 @@ pub(crate) fn signal_with_references(
         };
         let minute = row.timestamp_ms.div_euclid(60_000);
         if previous_minute != Some(minute) {
-            baseline = out.ema.last().copied();
+            baseline = previous_ema;
         }
         let ema = baseline.map_or(drawdown, |prior| {
-            bounded(
-                alpha * drawdown + (1.0 - alpha) * prior,
-                &mut out.numeric_range_approximation,
-            )
+            bounded(alpha * drawdown + (1.0 - alpha) * prior, &mut approximate)
         });
-        out.peaks.push(peak);
-        out.raw.push(drawdown);
-        out.ema.push(ema);
-        out.panic.push(drawdown.min(ema) > threshold);
+        previous_ema = Some(ema);
+        let displayed_equity = if scale == 1.0 {
+            equity
+        } else {
+            bounded(equity / scale, &mut approximate)
+        };
+        let displayed_peak = if scale == 1.0 {
+            peak
+        } else {
+            bounded(peak / scale, &mut approximate)
+        };
+        visit(
+            index,
+            displayed_equity,
+            displayed_peak,
+            drawdown,
+            ema,
+            drawdown.min(ema) > threshold,
+        );
         previous_minute = Some(minute);
     }
-    Ok(out)
+    Ok(SignalSummary {
+        numeric_range_approximation: approximate,
+        last_peak_delta: if scale == 1.0 && !approximate {
+            peak_delta
+        } else {
+            None
+        },
+    })
 }
 
 #[pyfunction(name = "hsl_revised_signal", signature = (rows, budget, span, threshold, entry_reference=None))]
@@ -297,7 +378,7 @@ mod tests {
             realized: 0.0,
             unrealized: -1.0,
         };
-        let risk = signal_with_references(&[row], 1e16, 10_000.5, 0.0, None, Some(1.0), &[], &row)
+        let risk = signal_with_references(&[row], 1e16, 10_000.5, 0.0, None, Some(0.0), &[], &row)
             .unwrap();
         assert_eq!(risk.raw[0], 1e-16);
         assert_eq!(risk.ema[0], risk.raw[0]);
@@ -351,7 +432,7 @@ mod tests {
 
     #[test]
     fn known_equity_drawdown_and_threshold() {
-        let r = signal(&rows(&[0.0, -100.0, -200.0]), 800.0, 3.0, 0.125, None).unwrap();
+        let r = signal(&rows(&[0.0, -100.0, -200.0]), 1000.0, 3.0, 0.125, None).unwrap();
         assert_eq!(r.equity, [1000.0, 900.0, 800.0]);
         assert_eq!(r.ema, [0.0, 0.05, 0.125]);
         assert_eq!(r.panic, [false, false, false]);
@@ -361,14 +442,14 @@ mod tests {
     fn within_minute_replaces_ema_and_retains_boundary_peak() {
         let mut input = rows(&[0.0, -100.0, -200.0]);
         input[2].timestamp_ms = 60_001;
-        let r = signal(&input, 800.0, 3.0, 0.075, None).unwrap();
+        let r = signal(&input, 1000.0, 3.0, 0.075, None).unwrap();
         assert_eq!(r.ema, [0.0, 0.05, 0.1]);
         assert_eq!(r.panic, [false, false, true]);
     }
 
     #[test]
     fn singleton_reference_has_no_implicit_warmup() {
-        let r = signal(&rows(&[-100.0]), 1000.0, 1e6, 0.09, Some(1100.0)).unwrap();
+        let r = signal(&rows(&[-100.0]), 1000.0, 1e6, 0.09, Some(1000.0)).unwrap();
         assert_eq!(r.raw, r.ema);
         assert!(r.panic[0]);
     }
@@ -380,7 +461,7 @@ mod tests {
             r.realized = 1e100;
         }
         let r = signal(&input, 100.0, 1.0, 0.05, None).unwrap();
-        assert_eq!(r.equity, [110.0, 100.0]);
+        assert_eq!(r.equity, [100.0, 90.0]);
         assert!(r.panic[1]);
     }
 
@@ -402,7 +483,7 @@ mod tests {
             .chain(&r.raw)
             .chain(&r.ema)
             .all(|v| v.is_finite()));
-        assert_eq!(r.equity[2], 1.0);
+        assert_eq!(r.equity[2], 1.0 - f64::MAX / 2.0);
         assert!(r.panic[2]);
     }
 

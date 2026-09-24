@@ -684,6 +684,9 @@ async def test_okx_already_gone_cancel_does_not_log_raw_exception(caplog, capsys
 
     bot = OKXBot.__new__(OKXBot)
     bot.cca = SimpleNamespace(cancel_order=cancel_order)
+    bot.recent_order_cancellations = []
+    bot.log_order_action = lambda *args, **kwargs: None
+    bot._log_order_action_summary = lambda *args, **kwargs: None
     bot._emit_execution_connector_call_started_event = lambda **kwargs: markers.append(
         ("event", kwargs)
     )

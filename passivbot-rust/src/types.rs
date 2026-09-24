@@ -320,6 +320,7 @@ pub struct BacktestParams {
     pub btc_collateral_cap: f64,
     pub btc_collateral_ltv_cap: Option<f64>,
     pub metrics_only: bool,
+    pub hsl_detailed_report: bool,
     pub skip_btc_analysis: bool,
     pub filter_by_min_effective_cost: bool,
     pub dynamic_wel_by_tradability: bool,
@@ -331,6 +332,7 @@ pub struct BacktestParams {
     pub market_orders_allowed: bool,
     pub market_order_near_touch_threshold: f64,
     pub market_order_slippage_pct: f64,
+    pub limit_order_fill_buffer_pct: f64,
     pub forager_score_hysteresis_pct: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }

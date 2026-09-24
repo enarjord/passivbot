@@ -142,11 +142,13 @@ def get_template_config():
                 ],
                 "filter_by_min_effective_cost": False,
                 "gap_tolerance_ohlcvs_minutes": 120,
+                "hsl_detailed_report": False,
                 "hlcvs_data_dir": None,
                 "hlcvs_data_override_mode": "intersection",
                 "liquidation_threshold": 0.05,
                 "maker_fee_override": 0.0004,
                 "market_order_slippage_pct": 0.0005,
+                "limit_order_fill_buffer_pct": 0.0,
                 "market_settings": {
                     "overrides": {},
                     "overrides_by_exchange": {}

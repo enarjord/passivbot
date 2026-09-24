@@ -1858,7 +1858,7 @@ fn run_backtest_core<'py>(
         } else {
             struct_to_py_dict(py, &analysis_btc)?
         };
-        let revised_hsl_report = backtest.revised_hsl_report_value().map_err(PyValueError::new_err)?;
+        let revised_hsl_report = revised_hsl_report_to_py(py, &backtest)?;
         if revised_hsl_report.is_some() {
             // Removed trading tiers are absent, never constant zero objectives.
             for analysis in [&py_analysis_usd, &py_analysis_btc] {
@@ -1883,7 +1883,7 @@ fn run_backtest_core<'py>(
                     py_extra.set_item(RUST_PROFILE_KEY, profile_to_py_dict(py, &rust_profile, profile_total_start)?)?;
                 }
                 if let Some(report) = &revised_hsl_report {
-                    py_extra.set_item("revised", json_value_to_py(py, report)?)?;
+                    py_extra.set_item("revised", report)?;
                 }
                 py_extra.into_py(py)
             } else {
@@ -1929,7 +1929,7 @@ fn run_backtest_core<'py>(
         }
         let py_hard_stop_plot = PyDict::new_bound(py);
         if let Some(report) = revised_hsl_report {
-            py_hard_stop_plot.set_item("revised", json_value_to_py(py, &report)?)?;
+            py_hard_stop_plot.set_item("revised", report)?;
         }
         py_hard_stop_plot.set_item("timestamps_ms", hard_stop_plot_data.timestamps_ms)?;
         py_hard_stop_plot.set_item("drawdown_raw", hard_stop_plot_data.drawdown_raw)?;
@@ -2014,6 +2014,43 @@ fn run_backtest_core<'py>(
     })
 }
 
+/// Preserve the public report schema while avoiding a huge intermediate JSON tree.
+/// Static field names and enum strings are shared; each row/list remains independent.
+pub(crate) fn revised_hsl_report_to_py(py: Python<'_>, backtest: &Backtest<'_>) -> PyResult<Option<PyObject>> {
+    let Some(metadata) = backtest.revised_hsl_report_metadata().map_err(PyValueError::new_err)? else {
+        return Ok(None);
+    };
+    let report = json_value_to_py(py, &metadata)?;
+    let report_dict = report.bind(py).downcast::<PyDict>()?;
+    macro_rules! fields {
+        ($dict:ident, $row:ident, $($field:ident),+ $(,)?) => {
+            $($dict.set_item(pyo3::intern!(py, stringify!($field)), &$row.$field)?;)+
+        };
+    }
+    let samples = PyList::empty_bound(py);
+    for row in backtest.revised_hsl_samples() {
+        let dict = PyDict::new_bound(py);
+        fields!(dict, row, sequence, timestamp, side, coin, raw, ema, red_at, flat_at, reasons);
+        dict.set_item(pyo3::intern!(py, "phase"), pyo3::types::PyString::intern_bound(py, row.phase))?;
+        let action = row.action.map(|action| match action {
+            crate::hsl_revised_controller::Action::Normal => pyo3::intern!(py, "normal"),
+            crate::hsl_revised_controller::Action::Panic => pyo3::intern!(py, "panic"),
+            crate::hsl_revised_controller::Action::Halted => pyo3::intern!(py, "halted"),
+        });
+        dict.set_item(pyo3::intern!(py, "action"), action)?;
+        samples.append(dict)?;
+    }
+    let events = PyList::empty_bound(py);
+    for row in backtest.revised_hsl_events() {
+        let dict = PyDict::new_bound(py);
+        fields!(dict, row, sequence, observed_at, side, coin, kind, reconstructed_at, reason);
+        events.append(dict)?;
+    }
+    report_dict.set_item(pyo3::intern!(py, "samples"), samples)?;
+    report_dict.set_item(pyo3::intern!(py, "events"), events)?;
+    Ok(Some(report))
+}
+
 fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {
     let json_value = serde_json::to_value(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
@@ -2095,7 +2132,7 @@ fn revised_hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::revised_run
         }
         Ok([policy(items[0])?, policy(items[1])?])
     }
-    keys(dict, &["engine", "mode", "intervention", "sides", "portfolio", "coins"])?;
+    keys(dict, &["engine", "mode", "sides", "portfolio", "coins"])?;
     let portfolio: Option<&PyDict> = extract_value(dict, "portfolio")?;
     let coins: &PyDict = extract_value(dict, "coins")?;
     let mut coin_policies = std::collections::BTreeMap::new();
@@ -2104,7 +2141,6 @@ fn revised_hsl_from_dict(dict: &PyDict) -> PyResult<crate::backtest::revised_run
     }
     Ok(Config {
         mode: extract_value(dict, "mode")?,
-        intervention: extract_value(dict, "intervention")?,
         sides: pair(extract_value::<&PyAny>(dict, "sides")?)?,
         portfolio: portfolio.map(policy).transpose()?,
         coins: coin_policies,
@@ -2206,6 +2242,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),
+        hsl_detailed_report: dict
+            .get_item("hsl_detailed_report")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
         skip_btc_analysis: dict
             .get_item("skip_btc_analysis")?
             .map(|item| item.extract::<bool>())
@@ -2244,6 +2285,13 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.001),
+        // Legacy native payloads predate this optional simulation setting.
+        // Default only absence; explicit malformed values still fail below.
+        limit_order_fill_buffer_pct: dict
+            .get_item("limit_order_fill_buffer_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.0),
         market_order_slippage_pct: dict
             .get_item("market_order_slippage_pct")?
             .map(|item| item.extract::<f64>())
@@ -2260,6 +2308,8 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .transpose()?
             .unwrap_or(1), // default to 1m candles
     };
+    crate::limit_fills::validate_buffer(params.limit_order_fill_buffer_pct)
+        .map_err(PyValueError::new_err)?;
     if let Some(revised) = &params.equity_hard_stop_loss.revised {
         revised.validate(&params.coins, params.pnls_max_lookback_days, params.candle_interval_minutes)
             .map_err(PyValueError::new_err)?;

@@ -94,6 +94,7 @@ def _singleton_or_mapping(data: Any, *, endpoint: str) -> dict:
 class BitunixClient:
     """Minimal async Bitunix futures client with a CCXT-compatible live boundary."""
 
+    _position_fill_transport_guard = True
     id = "bitunix"
     name = "Bitunix"
     precisionMode = 4  # ccxt.TICK_SIZE
@@ -449,6 +450,8 @@ class BitunixClient:
         url = f"{self.rest_url}{path}" + (f"?{query}" if query else "")
         await self._throttle(cancel=cancel)
         session = await self._get_session()
+        from live.position_fill_sync import check_transport_admission
+        check_transport_admission(is_write=method.upper() != "GET")
         try:
             async with session.request(
                 method,
@@ -1655,6 +1658,7 @@ class BitunixClient:
 class BitunixOrderStream:
     """Native private-order and multiplexed public-candle WebSocket boundary."""
 
+    _position_fill_transport_guard = True
     id = "bitunix"
     has = {"watchOrders": True, "watchOHLCV": True}
     PING_INTERVAL_SECONDS = 15.0

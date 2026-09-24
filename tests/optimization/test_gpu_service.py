@@ -1397,6 +1397,7 @@ def test_single_coin_proxy_preserves_entry_interval_outputs_for_reduction():
 def test_multicoin_proxy_preserves_directional_hsl_outputs_for_reduction():
     torch = pytest.importorskip("torch")
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.batch_size = 1
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -1453,6 +1454,7 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
 ):
     torch = pytest.importorskip("torch")
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.batch_size = 2
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -2309,6 +2311,7 @@ def test_single_coin_static_overrides_shadow_candidate_values_exact_last():
 @pytest.mark.parametrize(("side", "base"), [("long", 1.0), ("short", 2.0)])
 def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.sides = [side]
     proxy.base_params = {
         side: {key: base for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS}
@@ -2339,6 +2342,7 @@ def test_multicoin_parameter_matrix_uses_only_enabled_side(side, base):
 
 def test_multicoin_parameter_matrix_keeps_dual_side_values_separate():
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.sides = ["long", "short"]
     proxy.base_params = {
         "long": {key: 1.0 for key in EMA_ANCHOR_MULTICOIN_PARAM_KEYS},
@@ -2357,6 +2361,7 @@ def test_multicoin_parameter_matrix_keeps_dual_side_values_separate():
 @pytest.mark.parametrize("side", ["long", "short"])
 def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.sides = [side]
     proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     proxy.base_params = {
@@ -2403,6 +2408,7 @@ def test_multicoin_tm_parameter_matrix_keeps_forager_and_strategy_values(side):
 
 def test_multicoin_tm_parameter_matrix_keeps_dual_side_values_separate():
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.sides = ["long", "short"]
     proxy.param_keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
     proxy.base_params = {
@@ -3495,6 +3501,7 @@ def test_parameter_columns_preserve_fixed_override_then_ema_coupling(coupled):
 
 def test_parameter_columns_keep_candidate_fallback_and_missing_key_failure():
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.param_keys = ("offset",)
     proxy.sides = ["short"]
     proxy.base_params = {"short": {}}
@@ -3511,6 +3518,7 @@ def test_multicoin_window_cache_shares_data_but_never_candidate_state(monkeypatc
     from optimization.gpu import service
 
     proxy = object.__new__(service.MpsMulticoinProxy)
+    proxy.hsl_engine = "legacy"
     proxy.strategy_kind = 'trailing_martingale'
     proxy.data = dict(n=1000, ts0=0, n_coins=2)
     run = ProxyRun(1000, 5, 10, 600000, 600000, 0, 60000, .05, 0, 999)
@@ -3548,6 +3556,7 @@ def test_multicoin_window_cache_shares_data_but_never_candidate_state(monkeypatc
 @pytest.mark.parametrize('fraction', [0, -1, 1.1, float('nan'), float('inf')])
 def test_multicoin_window_rejects_invalid_fractions(fraction):
     proxy = object.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     with pytest.raises(ValueError, match='history fraction'):
         proxy.recent_window_for_history_fraction(fraction)
 
@@ -3555,12 +3564,14 @@ def test_multicoin_window_rejects_invalid_fractions(fraction):
 @pytest.mark.parametrize("kwargs", [dict(history_start_step=0), dict(trade_start_step=10)])
 def test_multicoin_window_requires_both_bounds(kwargs):
     proxy = object.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     with pytest.raises(ValueError, match="provided together"):
         proxy.evaluate([{}], **kwargs)
 
 
 def _suite_batch_proxy():
     proxy = object.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy._torch = object()
     proxy.strategy_kind = 'trailing_martingale'
     proxy.sides = ['long']

@@ -16,11 +16,11 @@ M = cases.M
 
 
 def evaluate(snapshot, mode="unified", *, slots=1, span=1, threshold=.05,
-             cooldown_ms=2*M, restart="always", intervention="panic", **selectors):
+             cooldown_ms=2*M, restart="always", **selectors):
     import passivbot_rust as pbr
     request = dict(snapshot=payload(snapshot, mode, quantity_step=.1, **selectors),
                    slots=slots, span=span, threshold=threshold, cooldown_ms=cooldown_ms,
-                   restart=restart, intervention=intervention)
+                   restart=restart)
     return json.loads(pbr.hsl_revised_evaluate(json.dumps(request, allow_nan=False)))
 
 
@@ -50,9 +50,9 @@ def test_candle_free_known_flat_resets_realized_peak_and_retains_cooldown():
     snapshot = cases.frame(p, balance=1000)
     panic = evaluate(snapshot, restart="never")
     assert panic["episodes"] == 2
-    assert panic["decision"]["action"] == "panic"
-    assert panic["decision"]["red_at"] == 3*M  # in-cooldown intervention time
-    normal = evaluate(snapshot, restart="never", intervention="normal")
+    assert panic["decision"]["action"] == "normal"
+    assert panic["decision"]["red_at"] is None
+    normal = evaluate(snapshot, restart="never")
     assert normal["decision"]["action"] == "normal"
     assert normal["decision"]["raw"] == 0  # prior episode loss not retained
 
@@ -78,7 +78,7 @@ def test_cross_pair_cashflow_cohort_does_not_invent_global_profit_peak():
 @pytest.mark.parametrize("missing", [True, False])
 def test_mixed_price_grid_keeps_other_pair_history_and_matches_oracle(missing):
     a = cases.pair("A", size=10, basis=100, mark=100,
-                   prices={0:100, M:120, 2*M:80, 3*M:100})
+                   fills=[Fill("entry", 0, 10, 100, 0)], prices={0:100, M:120, 2*M:80, 3*M:100})
     b = cases.pair("B", size=1, basis=100, mark=90,
                    prices={} if missing else {2*M:90})
     snapshot = cases.frame(a,b, balance=1000)
@@ -102,7 +102,7 @@ def test_missing_all_fills_and_candles_is_one_sample_for_any_span():
     for span in [1,1e6]:
         result = evaluate(snapshot,span=span)
         assert result["observations"] == 1
-        assert result["decision"]["raw"] == pytest.approx(100/1100)
+        assert result["decision"]["raw"] == pytest.approx(100/1000)
         assert result["decision"]["ema"] == result["decision"]["raw"]
         assert result == evaluate(deepcopy(snapshot),span=span)
 
@@ -140,10 +140,10 @@ def test_expired_candle_free_stop_is_not_retained_locally():
 def test_coin_budget_uses_slots_but_aggregate_uses_raw_balance():
     snapshot=cases.frame(cases.pair(size=10,basis=100,mark=90),balance=1000)
     coin=evaluate(snapshot,"coin",pside="long",symbol="A",slots=10)
-    assert coin["decision"]["raw"] == .5
+    assert coin["decision"]["raw"] == 1.0
     for mode,args in [("unified",{}),("pside",{"pside":"long"})]:
         result=evaluate(snapshot,mode,slots=10,**args)
-        assert result["decision"]["raw"] == pytest.approx(100/1100)
+        assert result["decision"]["raw"] == pytest.approx(100/1000)
 
 
 def test_global_sequence_cashflow_peak_requires_explicit_producer_contract():
@@ -151,7 +151,7 @@ def test_global_sequence_cashflow_peak_requires_explicit_producer_contract():
     a=cases.pair("A",size=1,basis=100,mark=100,fills=[Fill("gain",M,-1,100,100,sequence=1)])
     b=cases.pair("B",size=1,basis=100,mark=100,fills=[Fill("loss",M,-1,100,-100,sequence=2)])
     request=dict(snapshot=payload(cases.frame(a,b,balance=1000)),slots=1,span=10000,
-                 threshold=.05,cooldown_ms=0,restart="always",intervention="panic")
+                 threshold=.05,cooldown_ms=0,restart="always")
     assert json.loads(pbr.hsl_revised_evaluate(json.dumps(request)))["decision"]["raw"] == 0
     request["snapshot"]["global_fill_sequence"]=True
     result=json.loads(pbr.hsl_revised_evaluate(json.dumps(request)))
@@ -225,13 +225,11 @@ def test_diagnostic_events_keep_zero_cooldown_flat_stop_and_expire_with_window(m
     assert expired["decision"]["action"] == "normal"
 
 
-@pytest.mark.parametrize("policy,kind,reason", [("normal", "restart", "normal_intervention"),
-                                                ("panic", "red", "panic_intervention")])
-def test_intervention_diagnostic_uses_actual_open_time_without_inventing_a_risk_sample(policy, kind, reason):
+def test_reopening_diagnostic_uses_actual_open_time_without_inventing_a_risk_sample():
     pair = cases.pair(size=1, basis=100, mark=100, fills=[
         Fill("open", M, 2, 100, 0), Fill("flat", 2*M, -2, 50, -100),
         Fill("reopen", 3*M, 1, 100, 0)])
-    result = evaluate(cases.frame(pair, balance=1000), restart="never", intervention=policy)
+    result = evaluate(cases.frame(pair, balance=1000), restart="never")
     event = result["events"][-1]
-    assert (event["timestamp"], event["kind"], event["reason"]) == (3*M, kind, reason)
+    assert (event["timestamp"], event["kind"], event["reason"]) == (3*M, "restart", "exposure_resumed")
     assert event["raw"] is None and event["ema"] is None

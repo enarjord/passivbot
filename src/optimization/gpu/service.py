@@ -350,15 +350,15 @@ def _add_gpu_runner_profile(
     batch_size = int(runner_profile.get("batch_size", 0))
     dispatch_count = int(runner_profile.get("dispatch_count", 1))
     cold = bool(runner_profile.get("cold", False))
-    profile["actual_dispatch_batch_sizes"].append(batch_size)
+    profile["actual_dispatch_batch_sizes"].extend(
+        runner_profile.get("candidate_batch_sizes", [batch_size]))
     dispatch_specialization = runner_profile.get("dispatch_specialization")
     if dispatch_specialization is not None:
         profile["dispatch_specializations"].append(dict(dispatch_specialization))
     profile["dispatch_count"] += dispatch_count
-    cold_dispatches = (
+    cold_dispatches = int(runner_profile.get("cold_dispatch_count",
         int(cold) if "temporal_chunk_bars" in runner_profile
-        else dispatch_count if cold else 0
-    )
+        else dispatch_count if cold else 0))
     profile["cold_dispatch_count"] += cold_dispatches
     profile["warm_dispatch_count"] += dispatch_count - cold_dispatches
     runner_steps = int(getattr(runner, "n", 0))
@@ -658,6 +658,8 @@ def _gpu_proxy_execution_checkpoint_contract(
             for side, params in sorted((base_params or {}).items())
         },
     }
+    if backtest_params.get("equity_hard_stop_loss", {}).get("engine") == "revised":
+        contract["backtest"]["equity_hard_stop_loss"] = copy.deepcopy(backtest_params["equity_hard_stop_loss"])
     if directional_hsl_rolling_capacity is not None:
         contract["directional_hsl_rolling_capacity"] = int(
             directional_hsl_rolling_capacity
@@ -968,6 +970,19 @@ def _mps_strategy_eq_recovery_distribution(output: dict, needed_metrics):
     )
 
 
+def _revised_hsl_lookback_bars(backtest_params, *, hsl_enabled):
+    if not hsl_enabled:
+        # Inactive revised policies consume no history. Keep 0/all inert.
+        return 0
+    days = float(backtest_params["pnls_max_lookback_days"])
+    if not np.isfinite(days) or not 1 <= days <= 90:
+        raise ValueError("Enabled revised GPU HSL requires 1..90d lookback")
+    # Revised Rust clips at now - round(days * 86_400_000), unlike the
+    # legacy rolling-PNL bar count. Observations are aligned to whole minutes.
+    milliseconds = int(np.floor(days * 86_400_000.0 + 0.5))
+    return milliseconds // 60_000
+
+
 def _directional_coin_hsl_lookback_bars(
     backtest_params: dict,
     *,
@@ -1161,6 +1176,9 @@ def _unstuck_params(bot: dict) -> dict[str, float]:
 
 
 def _hsl_params(bot: dict, *, signal_mode: str) -> dict[str, float]:
+    if bot.get("_hsl_engine") == "revised":
+        from optimization.gpu.revised_hsl import pack_params
+        return pack_params(bot, signal_mode)
     restart_policy_ids = {"always": 0.0, "threshold": 1.0, "never": 2.0}
     signal_mode = str(signal_mode).strip().lower()
     validate_single_coin_hsl_signal_topology(signal_mode, enabled_side_count=1)
@@ -1976,11 +1994,20 @@ class MpsSingleCoinProxy:
                 f"prepared {len(payload.bot_params_list)}"
             )
         backtest_params = payload.backtest_params
+        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+            raise ValueError(
+                "GPU optimization does not support nonzero "
+                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+            )
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
-        long_bot = payload.bot_params_list[0]["long"]
-        short_bot = payload.bot_params_list[0]["short"]
+        from optimization.gpu.revised_hsl import project_bot
+        long_bot = project_bot(payload, 0, "long", config)
+        short_bot = project_bot(payload, 0, "short", config)
+        hsl_config = backtest_params.get("equity_hard_stop_loss", {})
+        self.hsl_engine = hsl_config.get("engine", "legacy")
+        self.hsl_signal_mode = hsl_config["mode"] if self.hsl_engine == "revised" else hsl_config.get("signal_mode", "unified")
         self.enabled = {
             side: _prepared_single_coin_side_enabled(config, side, bot)
             for side, bot in (("long", long_bot), ("short", short_bot))
@@ -2008,10 +2035,7 @@ class MpsSingleCoinProxy:
             for side, bot in (("long", long_bot), ("short", short_bot))
             if self.enabled[side] and bool(bot.get("hsl_enabled"))
         ]
-        signal_mode = (
-            backtest_params.get("equity_hard_stop_loss", {})
-            .get("signal_mode", "unified")
-        )
+        signal_mode = self.hsl_signal_mode
         if hsl_enabled_sides:
             validate_single_coin_hsl_signal_topology(
                 signal_mode, enabled_side_count=sum(self.enabled.values())
@@ -2111,6 +2135,11 @@ class MpsSingleCoinProxy:
             signal_mode=signal_mode,
             hsl_enabled=bool(hsl_enabled_sides),
         )
+        if self.hsl_engine == "revised":
+            if candle_interval_minutes != 1:
+                raise ValueError("Revised GPU HSL requires 1m candles")
+            pnl_lookback_bars = _revised_hsl_lookback_bars(
+                backtest_params, hsl_enabled=bool(hsl_enabled_sides))
 
         self.checkpoint_contract = _gpu_proxy_execution_checkpoint_contract(
             strategy_kind=self.strategy_kind,
@@ -2269,6 +2298,7 @@ class MpsSingleCoinProxy:
             runner_kwargs["max_dispatch_candidate_bars"] = self.max_dispatch_candidate_bars
             runner_kwargs["interrupt_check"] = self.interrupt_check
         runner_kwargs["hsl_enabled"] = bool(hsl_enabled_sides)
+        runner_kwargs["hsl_engine"] = self.hsl_engine
         self.runner = runner_cls(
             self.market,
             self.run,
@@ -2284,6 +2314,13 @@ class MpsSingleCoinProxy:
             )
 
     def _parameter_matrix(self, candidates: list[dict]) -> np.ndarray:
+        if getattr(self, "hsl_engine", "legacy") == "revised" and self.hsl_signal_mode == "unified":
+            candidates = [dict(c) for c in candidates]
+            for candidate in candidates:
+                for key in ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_minutes_after_red"):
+                    if key in candidate:
+                        for side in ("long", "short"):
+                            candidate[f"{side}_{key}"] = candidate[key]
         return _candidate_parameter_matrix(
             candidates,
             self.param_keys,
@@ -2618,7 +2655,8 @@ def _build_multicoin_ema_coin_overrides(
         side_patch = patch.get("bot", {}).get(side, {})
         strategy_patch = side_patch.get("strategy", {}).get("ema_anchor", {}) or {}
         effective_strategy = payload.strategy_params_list[coin_index][side]
-        effective_bot = payload.bot_params_list[coin_index][side]
+        from optimization.gpu.revised_hsl import project_bot
+        effective_bot = project_bot(payload, coin_index, side, config)
         for column, key in enumerate(EMA_ANCHOR_COIN_OVERRIDE_STRATEGY_KEYS):
             if key in strategy_patch:
                 matrix[coin_index, column] = float(effective_strategy[key])
@@ -2726,7 +2764,8 @@ def _build_multicoin_tm_coin_overrides(
             payload.strategy_params_list[coin_index][side],
             payload.bot_params_list[coin_index][side],
         )
-        effective_bot = payload.bot_params_list[coin_index][side]
+        from optimization.gpu.revised_hsl import project_bot
+        effective_bot = project_bot(payload, coin_index, side, config)
         for column, (key, path) in enumerate(
             TRAILING_MARTINGALE_COIN_OVERRIDE_PATHS
         ):
@@ -3150,6 +3189,19 @@ class MpsMulticoinProxy:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
+        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+            raise ValueError(
+                "GPU optimization does not support nonzero "
+                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+            )
+        from optimization.gpu.revised_hsl import project_bot
+        hsl_config = backtest_params.get("equity_hard_stop_loss", {})
+        self.hsl_engine = hsl_config.get("engine", "legacy")
+        self.hsl_signal_mode = (hsl_config["mode"] if self.hsl_engine == "revised"
+                                else hsl_config.get("signal_mode", "unified"))
+        projected = [{side: project_bot(payload, c, side, config)
+                      for side in ("long", "short")} for c in range(coin_count)]
+
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
@@ -3184,16 +3236,13 @@ class MpsMulticoinProxy:
             "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
         )
-        signal_mode = (
-            backtest_params.get("equity_hard_stop_loss", {})
-            .get("signal_mode", "unified")
-        )
+        signal_mode = self.hsl_signal_mode
         hsl_enabled_sides = [
             side
             for side in self.sides
             if any(
                 bool(item[side].get("hsl_enabled"))
-                for item in payload.bot_params_list
+                for item in projected
             )
         ]
         if hsl_enabled_sides:
@@ -3210,7 +3259,7 @@ class MpsMulticoinProxy:
                         bool(item[side].get("hsl_enabled"))
                         for side in hsl_enabled_sides
                     )
-                    for item in payload.bot_params_list
+                    for item in projected
                 ],
                 first_valid_indices=backtest_params["first_valid_indices"],
                 last_valid_indices=backtest_params["last_valid_indices"],
@@ -3228,7 +3277,7 @@ class MpsMulticoinProxy:
         self.couple_unstuck_emas = unstuck_ema_spans_coupled(config)
         self.base_params = {}
         for side in self.sides:
-            first_bot = payload.bot_params_list[0][side]
+            first_bot = projected[0][side]
             first_strategy = dict(payload.strategy_params_list[0][side])
             if self.strategy_kind == "trailing_martingale":
                 first_strategy = flatten_trailing_martingale_params(
@@ -3283,7 +3332,9 @@ class MpsMulticoinProxy:
                 )
             base_bot = flatten_shared_bot_side(config["bot"][side])
             first_strategy.update(_unstuck_params(base_bot))
-            first_strategy.update(_hsl_params(base_bot, signal_mode=signal_mode))
+            hsl_bot = (project_bot(payload, 0, side, config, base=True)
+                       if self.hsl_engine == "revised" else base_bot)
+            first_strategy.update(_hsl_params(hsl_bot, signal_mode=signal_mode))
             missing = [
                 key for key in self.param_keys if key not in first_strategy
             ]
@@ -3524,6 +3575,9 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
+        if self.hsl_engine == "revised":
+            common_runner_kwargs.update(hsl_engine="revised",
+                pnl_lookback_bars=_revised_hsl_lookback_bars(backtest_params, hsl_enabled=bool(hsl_enabled_sides)))
         if self.shared_account_fused:
             fused_runner_cls = (
                 MpsTrailingMartingaleMulticoinFusedRunner
@@ -3534,13 +3588,17 @@ class MpsMulticoinProxy:
                 long_coin_overrides=per_side_coin_overrides["long"],
                 short_coin_overrides=per_side_coin_overrides["short"],
                 hsl_panic_market_long=str(
-                    flatten_shared_bot_side(config["bot"]["long"]).get(
+                    (project_bot(payload, 0, "long", config, base=True)
+                     if self.hsl_engine == "revised"
+                     else flatten_shared_bot_side(config["bot"]["long"])).get(
                         "hsl_panic_close_order_type", "limit"
                     )
                 ).strip().lower()
                 == "market",
                 hsl_panic_market_short=str(
-                    flatten_shared_bot_side(config["bot"]["short"]).get(
+                    (project_bot(payload, 0, "short", config, base=True)
+                     if self.hsl_engine == "revised"
+                     else flatten_shared_bot_side(config["bot"]["short"])).get(
                         "hsl_panic_close_order_type", "limit"
                     )
                 ).strip().lower()
@@ -3560,7 +3618,9 @@ class MpsMulticoinProxy:
                 runner_kwargs = {
                     "side": side,
                     "hsl_panic_market": str(
-                        flatten_shared_bot_side(config["bot"][side]).get(
+                        (project_bot(payload, 0, side, config, base=True)
+                         if self.hsl_engine == "revised"
+                         else flatten_shared_bot_side(config["bot"][side])).get(
                             "hsl_panic_close_order_type", "limit"
                         )
                     ).strip().lower()
@@ -3585,6 +3645,12 @@ class MpsMulticoinProxy:
             if len(self.sides) != 1:
                 raise ValueError("side is required for dual-side multicoin parameters")
             side = self.sides[0]
+        if self.hsl_engine == "revised" and self.hsl_signal_mode == "unified":
+            candidates = [dict(c) for c in candidates]
+            for candidate in candidates:
+                for key in ("hsl_red_threshold", "hsl_ema_span_minutes", "hsl_cooldown_minutes_after_red"):
+                    if key in candidate:
+                        candidate[f"{side}_{key}"] = candidate[key]
         param_keys = getattr(self, "param_keys", EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
         return _candidate_parameter_matrix(
             candidates,

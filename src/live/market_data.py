@@ -147,6 +147,10 @@ def market_snapshot_ticker_strategy(bot) -> str:
         return "symbols"
     if str(getattr(bot, "exchange", "") or "").lower() == "kucoin":
         return "symbols"
+    if str(getattr(bot, "exchange", "") or "").lower() == "bitunix":
+        # Its bulk websocket reader waits for every active market, including
+        # unrelated quiet markets. Refresh only the quotes this action needs.
+        return "symbols"
     return "bulk"
 
 

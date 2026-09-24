@@ -283,52 +283,63 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     let direction = p.pside.direction();
     let mut reasons = BTreeSet::new();
     let fills = canonical_fills(&input.fills, input.start, input.end, p.pside, &mut reasons);
-    // Minimum feasible inventory at the window's opening. Known quantities are
-    // preserved, rather than clamping a reverse walk into impossible transitions.
-    // An unexplained larger endpoint is carried from the beginning; we do not
-    // assert a recent missing add or erase earlier losses without evidence.
-    let mut prefix = CurrencySum::new();
-    let mut minimum: f64 = 0.0;
-    let mut scale = p.size.abs();
-    for f in &fills {
+    // Only a reduction at the left edge establishes missing opening inventory.
+    // The current endpoint is reconciled at the endpoint, never projected back
+    // through completed episodes. Interior deficits are local adjustments before
+    // the affected reduction; they cannot rewrite a consistent earlier prefix.
+    let mut reductions = vec![0.0; fills.len()];
+    let mut run = CurrencySum::new();
+    for (i, f) in fills.iter().enumerate().rev() {
         let delta = usable(f.delta).unwrap_or(0.0) * direction;
-        prefix.add(delta);
-        let value = prefix.value(&mut reasons);
-        scale = scale.max(delta.abs()).max(value.abs());
-        minimum = minimum.min(value);
+        if delta > 0.0 {
+            run = CurrencySum::new();
+        } else {
+            run.add(-delta);
+        }
+        reductions[i] = run.value(&mut reasons);
     }
-    let mut opening_difference = CurrencySum::new();
-    opening_difference.add(p.size.abs());
-    opening_difference.subtract(&prefix);
-    let mut after = (-minimum)
-        .max(opening_difference.value(&mut reasons))
-        .max(0.0);
-    // Without a quantity quantum, a huge later lot must not round away a real
-    // small opening residual. Use the first transition's scale for this estimate.
-    let opening_scale = if p.quantity_step.is_some() {
-        scale
-    } else {
-        fills
-            .first()
-            .and_then(|f| usable(f.delta))
-            .map_or(after, f64::abs)
-            .max(after)
-    };
-    after = round_quantity(after, opening_scale, p.quantity_step, &mut reasons);
+    let mut opening_quantity = reductions.first().copied().unwrap_or(0.0);
+    // A left-censored, reduction-only tape has no observed opening or reopen.
+    // Its remaining current quantity belongs to that same estimated episode.
+    // This anchoring is restricted to that prefix, never a completed entry/exit.
+    if !fills.is_empty()
+        && fills
+            .iter()
+            .all(|f| usable(f.delta).unwrap_or(0.0) * direction <= 0.0)
+    {
+        let mut opening = CurrencySum::new();
+        opening.add(opening_quantity);
+        opening.add(p.size.abs());
+        opening_quantity = opening.value(&mut reasons);
+    }
+    let mut after = opening_quantity;
     if after > 0.0 {
         reasons.insert("estimated_opening_quantity".into());
     }
-    let opening_quantity = after;
     let mut inventory = CurrencySum::new();
     inventory.add(after);
     let mut steps = Vec::with_capacity(fills.len());
     let mut episode_scale = after;
-    for f in &fills {
-        let before = after;
+    for (i, f) in fills.iter().enumerate() {
+        let mut before = after;
         let delta = usable(f.delta).unwrap_or(0.0) * direction;
-        inventory.add(delta);
-        episode_scale = episode_scale.max(before).max(delta.abs());
         let mut event_reasons = BTreeSet::new();
+        episode_scale = episode_scale.max(before).max(delta.abs());
+        let residual = round_quantity(
+            before - reductions[i],
+            episode_scale,
+            p.quantity_step,
+            &mut event_reasons,
+        );
+        if residual < 0.0 {
+            // Preserve the reported reduction and cashflow, disclosing the
+            // missing inventory instead of clamping or shifting older fills.
+            before = reductions[i];
+            inventory = CurrencySum::new();
+            inventory.add(before);
+            event_reasons.insert("local_quantity_reconciliation".into());
+        }
+        inventory.add(delta);
         after = round_quantity(
             inventory.value(&mut event_reasons),
             episode_scale,
@@ -359,7 +370,6 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
     let mut cumulative = CurrencySum::new();
     let mut events = Vec::with_capacity(steps.len());
     for (f, before, after, delta, quantity_estimated, mut event_reasons) in steps {
-        let basis_before = basis;
         let price = positive(f.price).unwrap_or_else(|| {
             event_reasons.insert("estimated_fill_price".into());
             if basis > 0.0 {
@@ -370,6 +380,11 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
                 p.mark
             }
         });
+        if before > 0.0 && basis == 0.0 {
+            basis = price;
+            event_reasons.insert("local_basis_reconciliation".into());
+        }
+        let basis_before = basis;
         if delta > 0.0 {
             // Weighted forms avoid overflowing quantity*price intermediates.
             let total = before + delta;
@@ -426,6 +441,9 @@ pub fn reconstruct(input: &Input) -> Result<History, String> {
         reasons.insert("current_basis_reconciliation".into());
     }
     let tail = events.last().map_or(opening_quantity, |e| e.after);
+    if tail == 0.0 && p.size != 0.0 {
+        reasons.insert("estimated_current_opening".into());
+    }
     let delta = round_quantity(
         p.size.abs() - tail,
         episode_scale,
@@ -533,6 +551,30 @@ pub fn hsl_revised_history(input_json: &str) -> PyResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn current_inventory_cannot_rewrite_completed_prefix() {
+        for (side, sign) in [("long", 1.0), ("short", -1.0)] {
+            let input: Input = serde_json::from_value(serde_json::json!({
+                "start": 0, "end": 180000,
+                "position": {"size": sign * 3.0, "basis": 100.0, "mark": 100.0,
+                    "multiplier": 1.0, "inverse": false, "pside": side},
+                "fills": [
+                    {"identity": "entry", "revision": 0, "timestamp": 60000, "delta": sign * 10.0,
+                     "price": 100.0, "realized": 0.0, "fee": 0.0},
+                    {"identity": "close", "revision": 0, "timestamp": 120000, "delta": -sign * 10.0,
+                     "price": 100.0, "realized": -20.0, "fee": 0.0}],
+                "prices": {}
+            }))
+            .unwrap();
+            let h = reconstruct(&input).unwrap();
+            assert_eq!(h.opening_size, 0.0);
+            assert_eq!(h.events[1].after, 0.0);
+            assert_eq!(h.events[1].realized_cumsum, -20.0);
+            assert!(h.reasons.contains("estimated_current_opening"));
+            assert_eq!(h.samples.last().unwrap().size, sign * 3.0);
+        }
+    }
 
     #[test]
     fn empty_history_keeps_current_position_and_mark() {

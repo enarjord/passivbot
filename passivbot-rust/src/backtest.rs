@@ -2,6 +2,8 @@
 mod revised_inputs;
 #[path = "backtest_hsl_runtime.rs"]
 pub(crate) mod revised_runtime;
+#[path = "backtest_hsl_cache.rs"]
+mod revised_cache;
 #[path = "backtest_hsl_report.rs"]
 mod revised_report;
 #[path = "backtest_revised_analysis.rs"]
@@ -667,6 +669,8 @@ pub struct Backtest<'a> {
     orch_profile: Option<OrchProfile>,
     max_tradable_coins_seen: EffectiveNPositions,
     revised_hsl_scopes: Vec<revised_runtime::Scope>,
+    revised_hsl_cutoffs: revised_cache::Cutoffs,
+    revised_hsl_traces: revised_cache::Traces,
     revised_hsl_report: revised_report::Report,
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_coin: [Vec<HardStopPsideRuntime>; 2],
@@ -1389,6 +1393,7 @@ impl<'a> Backtest<'a> {
                         (0.0, 0.0)
                     };
                     Some(orchestrator::NextCandle {
+                        limit_order_fill_buffer_pct: self.backtest_params.limit_order_fill_buffer_pct,
                         low,
                         high,
                         tradable: tradable_next,
@@ -1683,6 +1688,7 @@ impl<'a> Backtest<'a> {
                     (0.0, 0.0)
                 };
                 Some(orchestrator::NextCandle {
+                    limit_order_fill_buffer_pct: self.backtest_params.limit_order_fill_buffer_pct,
                     low,
                     high,
                     tradable: tradable_next,
@@ -1866,6 +1872,8 @@ impl<'a> Backtest<'a> {
             backtest_params.taker_fee.is_finite(),
             "backtest taker_fee must be finite"
         );
+        crate::limit_fills::validate_buffer(backtest_params.limit_order_fill_buffer_pct)
+            .expect("invalid backtest fill buffer");
         let mut balance = Balance::default();
         balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
         balance.btc_collateral_ltv_cap = backtest_params.btc_collateral_ltv_cap;
@@ -2263,7 +2271,12 @@ impl<'a> Backtest<'a> {
                 }),
             max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
             revised_hsl_scopes: Vec::new(),
-            revised_hsl_report: revised_report::Report::new(!backtest_params.metrics_only),
+            revised_hsl_cutoffs: std::collections::BTreeMap::new(),
+            revised_hsl_traces: std::collections::BTreeMap::new(),
+            revised_hsl_report: revised_report::Report::new(
+                backtest_params.hsl_detailed_report && !backtest_params.metrics_only,
+                !backtest_params.metrics_only,
+            ),
             hard_stop_pside: [
                 HardStopPsideRuntime::default(),
                 HardStopPsideRuntime::default(),
@@ -4980,13 +4993,13 @@ impl<'a> Backtest<'a> {
             return false;
         }
         // check if filled in current candle (pass k+1 to check if will fill in next candle)
-        if order.qty > 0.0 {
-            self.hlcvs_value(k, idx, LOW) < order.price
-        } else if order.qty < 0.0 {
-            self.hlcvs_value(k, idx, HIGH) > order.price
-        } else {
-            false
-        }
+        crate::limit_fills::crosses_limit(
+            self.hlcvs_value(k, idx, LOW),
+            self.hlcvs_value(k, idx, HIGH),
+            order.qty,
+            order.price,
+            self.backtest_params.limit_order_fill_buffer_pct,
+        )
     }
 
     fn force_close_delisted_positions(&mut self, k: usize) -> Result<(), String> {
@@ -6036,13 +6049,14 @@ impl<'a> Backtest<'a> {
             let subset_timestamps = &timestamps[start_idx..];
             let subset_daily_metric_timestamps = &daily_metric_timestamps[start_idx..];
             let subset_drawdowns = &drawdowns[start_idx..];
-            let subset_drawdown_emas = drawdown_emas.map(|values| &values[start_idx..]);
             let mut subset_metric = compute_metrics(
                 subset_series,
                 subset_timestamps,
                 subset_daily_metric_timestamps,
                 subset_drawdowns,
-                subset_drawdown_emas,
+                // Only the full-window EMA metrics are returned; weighted metrics
+                // below consume no EMA fields. Avoid sorting unused suffix samples.
+                None,
             );
             subset_metric.peak_recovery_days_strategy_eq =
                 calc_strategy_eq_recovery_days(subset_series, subset_timestamps).max;
@@ -6286,7 +6300,7 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
         return 0.0;
     }
     let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| {
+    let by_magnitude = |a: &f64, b: &f64| {
         a.abs().partial_cmp(&b.abs()).unwrap_or_else(|| {
             if a.is_nan() && b.is_nan() {
                 Ordering::Equal
@@ -6296,10 +6310,20 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
                 Ordering::Greater
             }
         })
-    });
+    };
     let cutoff_index = std::cmp::max(1, (sorted.len() as f64 * 0.01) as usize);
     let worst_n = std::cmp::min(cutoff_index, sorted.len());
-    sorted[sorted.len() - worst_n..]
+    let split = sorted.len() - worst_n;
+    if sorted.iter().all(|x| x.is_finite()) {
+        // Select in linear time, then sort only the tail to preserve the exact
+        // ascending summation order of the full-sort reference (including ties).
+        sorted.select_nth_unstable_by(split, by_magnitude);
+        sorted[split..].sort_by(by_magnitude);
+    } else {
+        // Preserve the existing ordering/NaN contract for exceptional inputs.
+        sorted.sort_by(by_magnitude);
+    }
+    sorted[split..]
         .iter()
         .map(|x| x.abs())
         .sum::<f64>()
@@ -6682,6 +6706,7 @@ mod tests {
             btc_collateral_cap: 0.9,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -6694,6 +6719,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6756,6 +6782,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -6768,6 +6795,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6818,6 +6846,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -6830,6 +6859,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
         let mut bt = Backtest::new(
@@ -6918,6 +6948,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -6930,6 +6961,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
         let mut bt = Backtest::new(
@@ -7103,6 +7135,7 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
                 dynamic_wel_by_tradability: false,
@@ -7115,6 +7148,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 candle_interval_minutes: 1,
             };
             let mut bt = Backtest::new(
@@ -7260,6 +7294,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7272,6 +7307,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7328,6 +7364,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7340,6 +7377,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7402,6 +7440,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7414,6 +7453,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7471,6 +7511,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7483,6 +7524,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7565,6 +7607,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7576,6 +7619,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.5,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7647,6 +7691,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7658,6 +7703,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7728,6 +7774,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7739,6 +7786,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7818,6 +7866,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7829,6 +7878,7 @@ mod tests {
             market_orders_allowed: true,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7896,6 +7946,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -7907,6 +7958,7 @@ mod tests {
             market_orders_allowed: true,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -7938,6 +7990,102 @@ mod tests {
         assert_eq!(bt.fills[0].liquidity, "maker");
         assert_eq!(bt.fills[0].fill_price, 100.0);
         assert!((bt.fills[0].fee_paid + 100.0 * 0.0002).abs() < 1e-12);
+    }
+
+    #[test]
+    fn limit_fill_buffer_covers_entries_closes_market_bypass_and_peek_cache() {
+        let hlcvs = Array3::from_shape_vec(
+            (3, 1, 4),
+            vec![
+                100.005, 99.995, 100.0, 1.0,
+                100.0 * (1.0 + 0.0001), 100.0 * (1.0 - 0.0001), 100.0, 1.0,
+                100.02, 99.98, 100.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 3]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        bp_pair.long.hsl_panic_close_order_type = "limit".to_string();
+        bp_pair.short.hsl_panic_close_order_type = "limit".to_string();
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.00099,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![2],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            hsl_detailed_report: false,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: true,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0001,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams {
+                maker_fee: 0.0002,
+                ..Default::default()
+            }],
+            &backtest_params,
+        );
+        for (qty, order_type) in [
+            (1.0, OrderType::EntryGridNormalLong),
+            (-1.0, OrderType::EntryGridNormalShort),
+            (-1.0, OrderType::CloseGridLong),
+            (1.0, OrderType::CloseGridShort),
+            (-1.0, OrderType::ClosePanicLong),
+            (1.0, OrderType::ClosePanicShort),
+        ] {
+            let order = BacktestOrder {
+                order: Order { qty, price: 100.0, order_type },
+                execution_type: orchestrator::ExecutionType::Limit,
+            };
+            assert!(bt.order_fill_execution(0, 0, &order).is_none());
+            assert!(bt.order_fill_execution(1, 0, &order).is_none());
+            let fill = bt.order_fill_execution(2, 0, &order).unwrap();
+            assert_eq!(fill.price, 100.0);
+            assert_eq!(fill.fee_rate, 0.0002);
+            assert_eq!(fill.liquidity, "maker");
+            if !matches!(order_type, OrderType::ClosePanicLong | OrderType::ClosePanicShort) {
+                let market = BacktestOrder { execution_type: orchestrator::ExecutionType::Market, ..order };
+                let fill = bt.order_fill_execution(0, 0, &market).unwrap();
+                assert_eq!(fill.liquidity, "taker");
+            }
+        }
+        // The initial and cached next-candle hints must carry the same buffer.
+        let input = bt.get_orchestrator_input_cached(0, None, None);
+        assert_eq!(input.symbols[0].next_candle.as_ref().unwrap().limit_order_fill_buffer_pct, 0.0001);
+        bt.orchestrator_input_cache = Some(input);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(input.symbols[0].next_candle.as_ref().unwrap().limit_order_fill_buffer_pct, 0.0001);
     }
 
     #[test]
@@ -7997,6 +8145,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -8008,6 +8157,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8122,6 +8272,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -8133,6 +8284,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8230,6 +8382,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -8241,6 +8394,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8306,6 +8460,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -8317,6 +8472,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8374,6 +8530,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -8385,6 +8542,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8443,6 +8601,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -8454,6 +8613,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8522,6 +8682,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -8533,6 +8694,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8628,6 +8790,7 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
                 dynamic_wel_by_tradability: true,
@@ -8639,6 +8802,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
@@ -8718,6 +8882,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -8729,6 +8894,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8834,6 +9000,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -8845,6 +9012,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -8945,6 +9113,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -8956,6 +9125,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9041,6 +9211,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9052,6 +9223,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9119,6 +9291,7 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
                 dynamic_wel_by_tradability: true,
@@ -9130,6 +9303,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
@@ -9200,6 +9374,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9211,6 +9386,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9284,6 +9460,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9295,6 +9472,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9374,6 +9552,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -9385,6 +9564,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9452,6 +9632,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9463,6 +9644,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9547,6 +9729,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9558,6 +9741,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9644,6 +9828,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9655,6 +9840,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -9739,6 +9925,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9749,6 +9936,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -9811,6 +9999,55 @@ mod tests {
         assert_eq!(bt.hard_stop_flat_confirmations, 0);
         assert!(bt.hard_stop_pending_stop.is_none());
         assert!(!bt.hard_stop_halted);
+    }
+
+    #[test]
+    fn worst_percentile_selection_matches_full_sort_bit_for_bit() {
+        fn reference(values: &[f64]) -> f64 {
+            if values.is_empty() {
+                return 0.0;
+            }
+            let mut sorted = values.to_vec();
+            sorted.sort_by(|a, b| {
+                a.abs().partial_cmp(&b.abs()).unwrap_or_else(|| {
+                    if a.is_nan() && b.is_nan() {
+                        Ordering::Equal
+                    } else if a.is_nan() {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    }
+                })
+            });
+            let cutoff_index = std::cmp::max(1, (sorted.len() as f64 * 0.01) as usize);
+            let worst_n = std::cmp::min(cutoff_index, sorted.len());
+            sorted[sorted.len() - worst_n..]
+                .iter()
+                .map(|x| x.abs())
+                .sum::<f64>()
+                / worst_n as f64
+        }
+
+        let mut seed = 0x123456789abcdef_u64;
+        for n in [0, 1, 2, 99, 100, 101, 199, 200, 201, 10001] {
+            let values: Vec<f64> = (0..n).map(|i| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+                let magnitude = ((seed >> 32) % 1000) as f64 / 37.0;
+                if i % 2 == 0 { magnitude } else { -magnitude }
+            }).collect();
+            for data in [values.clone(), vec![0.0; n], vec![-1.0; n],
+                         values.iter().map(|v| v * 1e200).collect(),
+                         values.iter().map(|v| v * 1e-200).collect()] {
+                assert_eq!(mean_worst_1pct_abs(&data).to_bits(), reference(&data).to_bits(), "n={n}");
+                let mut reversed = data.clone();
+                reversed.reverse();
+                assert_eq!(mean_worst_1pct_abs(&reversed).to_bits(), reference(&reversed).to_bits());
+            }
+        }
+        for data in [vec![f64::NAN], vec![0.0, f64::NAN, -1.0],
+                     vec![f64::INFINITY, -f64::INFINITY, f64::NAN]] {
+            assert_eq!(mean_worst_1pct_abs(&data).to_bits(), reference(&data).to_bits());
+        }
     }
 
     #[test]
@@ -9918,6 +10155,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -9928,6 +10166,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10072,6 +10311,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10082,6 +10322,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10164,6 +10405,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10174,6 +10416,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             candle_interval_minutes: 1,
@@ -10266,6 +10509,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10276,6 +10520,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10399,6 +10644,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10409,6 +10655,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
@@ -10490,6 +10737,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10501,6 +10749,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10547,6 +10796,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10558,6 +10808,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10605,6 +10856,7 @@ mod tests {
                 btc_collateral_cap: 0.0,
                 btc_collateral_ltv_cap: None,
                 metrics_only: true,
+                hsl_detailed_report: false,
                 skip_btc_analysis: false,
                 filter_by_min_effective_cost: false,
                 dynamic_wel_by_tradability: true,
@@ -10616,6 +10868,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                limit_order_fill_buffer_pct: 0.0,
                 forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
@@ -10679,6 +10932,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10690,6 +10944,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10750,6 +11005,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10761,6 +11017,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10826,6 +11083,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10837,6 +11095,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10896,6 +11155,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10907,6 +11167,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -10974,6 +11235,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -10985,6 +11247,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11067,6 +11330,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11078,6 +11342,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11165,6 +11430,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11176,6 +11442,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11240,6 +11507,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11251,6 +11519,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11349,6 +11618,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11360,6 +11630,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11428,6 +11699,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11439,6 +11711,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11509,6 +11782,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11520,6 +11794,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
@@ -11595,6 +11870,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11606,6 +11882,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11692,6 +11969,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11704,6 +11982,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -11765,6 +12044,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: false,
@@ -11776,6 +12056,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
@@ -11841,6 +12122,7 @@ mod tests {
             btc_collateral_cap: 0.0,
             btc_collateral_ltv_cap: None,
             metrics_only: true,
+            hsl_detailed_report: false,
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
@@ -11852,6 +12134,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            limit_order_fill_buffer_pct: 0.0,
             forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };

@@ -151,9 +151,6 @@ pub(crate) fn compose_prepared(
     {
         let mut reference = CurrencySum::new();
         reference.subtract(&anchor);
-        for pair in &prepared.pairs {
-            reference.add(-pair.history.samples.last().unwrap().upnl);
-        }
         reasons.insert("estimated_entry_peak".into());
         Some(reference.value(&mut reasons))
     } else {
@@ -161,10 +158,7 @@ pub(crate) fn compose_prepared(
     };
     let mut cashflows = CurrencySum::new();
     let mut peak = CurrencySum::new();
-    let mut endpoint = anchor.clone();
-    for pair in &prepared.pairs {
-        endpoint.add(pair.history.samples.last().unwrap().upnl);
-    }
+    let endpoint = anchor.clone();
     let mut counts = vec![0; prepared.pairs.len()];
     let mut realized = 0.0;
     let mut realized_valid = false;
@@ -281,6 +275,28 @@ pub(crate) fn compose_prepared(
             }
             (upnl.value(&mut reasons), exposed)
         };
+        // A current unexplained opening after a flat reconstructed tail has no
+        // evidenced historical duration. Seed its entry value but not an EMA of
+        // idle flat minutes or an invented position across old candles.
+        if timestamp == input.now
+            && exposed
+            && prepared.pairs.iter().all(|p| {
+                p.history
+                    .events
+                    .last()
+                    .map_or(p.history.opening_size.abs(), |e| e.after)
+                    == 0.0
+            })
+            && prepared
+                .pairs
+                .iter()
+                .any(|p| p.history.reasons.contains("estimated_current_opening"))
+        {
+            points.clear();
+            opened_at = None;
+            entry_reference_delta = Some(realized);
+            reasons.insert("estimated_entry_peak".into());
+        }
         points.push(Point {
             timestamp,
             pnl: realized,

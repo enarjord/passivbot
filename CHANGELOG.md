@@ -12,6 +12,64 @@ since the latest release tag; these features may already be available when insta
   while retaining forced-delist diagnostics and optional per-coin fill metrics.
   Per-coin fill counting remains disabled unless required by scoring or limits.
 
+- Add `backtest.limit_order_fill_buffer_pct` (default `0.0`) to require a strict additional price
+  crossing before limit fills. The buffer uses a fraction of the order price, leaves market
+  execution unchanged, and is supported by CPU backtests and optimization. GPU optimization
+  rejects nonzero values.
+
+- Default Bitunix live quote refreshes to the requested symbols so unrelated quiet markets cannot
+  delay protective or ordinary order planning. Explicit bulk overrides remain supported.
+
+- Reconcile incomplete revised-HSL fill history locally, preserving completed episodes when a
+  new position arrives before its entry fill and retaining losses from partial-close histories.
+- Share a coin-side position/fill settling gate across trading actions: start qualifying fill
+  reads at least five seconds after a noticed position change, with a 15-second hard cap per
+  unresolved burst so failed requests or repeated changes cannot indefinitely block this gate.
+
+- Make revised-HSL per-minute backtest diagnostics opt-in with `backtest.hsl_detailed_report=true`. Default backtests retain summaries and RED/flat/restart events with lower runtime and memory use; enable the option for full traces and HSL drawdown plots. Trading results and analysis metrics are unchanged.
+
+- Speed up revised HSL backtests by converting diagnostic samples directly to Python, without an intermediate JSON tree; preserve complete reports and skip unused sample construction during optimizer evaluations. Compute worst-percentile statistics by selecting and sorting only the required tail, and avoid unused EMA suffix statistics.
+
+- Make offline revised-HSL replay comparisons insensitive to async scheduler pass counts,
+  while retaining raw diagnostics and strict trading/readiness comparisons. Settle pending
+  history reads within the existing bounded fake-cycle loop before advancing scenario time.
+
+- Reduce revised-HSL CPU allocations by streaming the shared numerical signal into
+  its controller and reusing validated simulator buffers and policy references.
+  Diagnostic output, current decisions, and reconstruction fallbacks are preserved.
+- Reduce revised-HSL Trailing Martingale Metal optimizer overhead by sizing private arrays to
+  the prepared coin count, preserving full-capacity results and temporal replay.
+
+- Support revised HSL in multi-coin Metal/CUDA optimization for both strategy families,
+  all signal modes and one or both position sides, with bounded independent history,
+  static coin-policy overrides, exact Rust validation and checkpoint resume.
+
+- Further reduce revised-HSL replay allocations by reading bounded episode samples
+  directly, preserving duplicate-minute observations and the numerical reference.
+
+- Reduce revised-HSL GPU history memory by storing compact minute samples and
+  summaries of completed blocks, preserving same-minute peak/EMA updates and
+  bounded-lookback behavior while allowing larger candidate batches.
+
+- Support revised-HSL single-coin GPU optimization on Metal and CUDA in coin, pside
+  and unified modes, including canonical policy bounds, exact Rust validation and resume.
+  GPU history scratch is bounded
+  and current-equity signal arithmetic has parity coverage.
+
+
+- Further accelerate revised-HSL backtests and CPU optimization by retaining factual
+  PNL/UPNL traces between ordinary fills and balance changes, while reevaluating the shared
+  controller against the current inputs. Episode/window changes still rebuild history.
+
+- Accelerate revised-HSL backtests and CPU optimization by replaying only the latest
+  relevant episode and incrementally evaluating unchanged observations. Fills, budget/slot
+  changes, lookback clipping and sensitive numeric comparisons rebuild the shared reference.
+
+- Anchor revised HSL to scoped current equity and revoke panic as soon as the current
+  raw/EMA signal recovers. Only terminal RED in the latest episode starts cooldown;
+  renewed exposure clears it. Remove the revised cooldown-intervention option and retire
+  recovered panic orders without waiting for ordinary strategy inputs. Legacy is unchanged.
+
 - Report bounded optimizer population and starting-config progress every five minutes while CPU
   evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
 
@@ -131,8 +189,8 @@ since the latest release tag; these features may already be available when insta
   controllers or disabled policies, including portfolio metrics when every controller is disabled.
   Coin mode resolves overrides for actual dataset
   members, including combined-dataset market identities; scenario selection remains respected.
-  General side-performance metrics remain available. GPU optimization rejects revised HSL rather
-  than using legacy proxy behavior.
+  General side-performance metrics remain available. GPU screening selects the revised shader
+  explicitly rather than using legacy proxy behavior.
 
 - Populate staged revised-HSL backtest analysis from observed lifecycle events, including unfinished
   halts and partial exits. Restore strategy-only equity statistics/artifacts independently of HSL

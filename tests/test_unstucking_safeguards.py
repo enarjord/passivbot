@@ -2901,6 +2901,10 @@ async def test_matching_trailing_fill_confirms_while_unrelated_pnl_is_pending():
     bot.get_exchange_time = lambda: 361_000
     bot._emit_fills_refresh_summary_event = lambda **kwargs: None
 
+    from live.position_fill_sync import state as sync_state
+    clock = [0.0]
+    sync_state(bot).clock = lambda: clock[0]
+
     bot._apply_positions_snapshot(
         [
             {
@@ -2933,6 +2937,11 @@ async def test_matching_trailing_fill_confirms_while_unrelated_pnl_is_pending():
     bot._pnls_manager._events.append(unrelated_pending)
 
     assert await bot.update_pnls() is False
+    assert bot._last_fill_refresh_block_reason == "position_fill_settling"
+    bot._pnls_manager.refresh.assert_not_awaited()
+    bot._pnls_manager.refresh_latest.assert_not_awaited()
+    clock[0] = 5.0
+    assert await bot.update_pnls() is False  # Unrelated PnL remains pending.
     assert bot._trailing_fill_fetch_generation == 1
     assert getattr(bot, "_trailing_fill_refresh_generation", 0) == 0
 

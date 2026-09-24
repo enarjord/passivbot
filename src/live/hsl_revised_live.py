@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from config.hsl_revised import engine
 from live import hsl_revised_runtime as runtime
+from live import position_fill_sync
 from live.market_snapshot import MarketSnapshotUnavailable
 
 
@@ -40,27 +41,36 @@ def connector_write(action):
 
     A write may change aggregate risk before its REST result is reflected locally.
     The next write needs a newer complete account read, even after an ambiguous
-    failure. Legacy batching and admission remain unchanged.
+    failure. Both engines also share bounded position/fill settling before writes.
     """
     def decorate(operation):
         @wraps(operation)
         async def submit(bot, order):
-            if not selected(bot):
-                return await operation(bot, order)
             from live import executor
-            instance = owner(bot)
-            async with instance._write_lock:
-                if not instance.admit(order):
-                    return (executor.DeferredOrderCreation() if action == "create"
-                            else executor.DeferredOrderCancellation())
-                if action == "cancel":
-                    executor.record_cancel_connector_admission(bot, order)
-                try:
-                    return await operation(bot, order)
-                finally:
-                    # Reads completed while the call was pending cannot confirm
-                    # its final outcome. Mark all current account inputs pending.
-                    bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+            deferred = (executor.DeferredOrderCreation if action == "create"
+                        else executor.DeferredOrderCancellation)
+            if not position_fill_sync.permits(bot, order):
+                return deferred()
+            try:
+                with position_fill_sync.connector_context(bot, order):
+                    if not selected(bot):
+                        if action == "cancel":
+                            executor.record_cancel_connector_admission(bot, order)
+                        return await operation(bot, order)
+                    instance = owner(bot)
+                    async with instance._write_lock:
+                        if not instance.admit(order):
+                            return deferred()
+                        if action == "cancel":
+                            executor.record_cancel_connector_admission(bot, order)
+                        try:
+                            return await operation(bot, order)
+                        finally:
+                            # Reads completed while the call was pending cannot
+                            # confirm its final outcome.
+                            bot._request_authoritative_confirmation({"balance", "positions", "open_orders"})
+            except position_fill_sync.WriteDeferred:
+                return deferred()
         return submit
     return decorate
 
@@ -177,11 +187,16 @@ class Owner:
 
     def admit(self, order):
         from utils import utc_ms
+        if not position_fill_sync.permits(self.bot, order):
+            return False
         wave = self._waves.get(order.get("_hsl_revised_wave"))
         if not isinstance(wave, Wave) or not self._account_matches(wave, int(utc_ms())):
             return False
         # Capture is side-effect free with respect to diagnostic sinks. Reporting
         # happens after the protective wave, outside the write freshness budget.
+        if (order.get("_hsl_revised_retired_panic")
+                and self.bot.get_forced_PB_mode(order["position_side"], order["symbol"]) in {"panic", "manual"}):
+            return False
         current = self.capture(target=(order["symbol"], order["position_side"]))
         now = int(utc_ms())
         # A long synchronous reconstruction can consume the remaining freshness
@@ -242,12 +257,25 @@ class Owner:
                     if action in {"panic", "halted"}:
                         targets.setdefault(symbol, set()).add(side)
                         execution_types[symbol, side] = execution_type
-            if not targets:
+            from live import reconciler
+            green_symbols = [symbol for symbol, orders in bot.open_orders.items()
+                             if orders and any(wave.permission(symbol, side)[0] == "normal"
+                                               for side in ("long", "short"))]
+            actual = reconciler.snapshot_actual_orders(bot, green_symbols) if green_symbols else {}
+            retired = [dict(order, _hsl_revised_retired_panic=True) for symbol, orders in actual.items()
+                       for order in orders
+                       if wave.permission(symbol, order["position_side"])[0] == "normal"
+                       and order["pb_order_type"].rsplit("_", 1)[0] == "close_panic"
+                       and bot.get_forced_PB_mode(order["position_side"], symbol) not in {"panic", "manual"}]
+            if not targets and not retired:
                 return False
             bot._record_market_snapshot_surface(sorted(quotes), quotes)
-            cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
-                target_psides_by_symbol=targets, market_snapshots=quotes,
-                execution_types=execution_types)
+            cancels, creates = [], []
+            if targets:
+                cancels, creates = await bot.calc_protective_panic_orders_to_cancel_and_create(
+                    target_psides_by_symbol=targets, market_snapshots=quotes,
+                    execution_types=execution_types)
+            cancels.extend(retired)
             if self._shutdown_requested():
                 return False
             self.bind(wave, cancels, creates)
@@ -331,6 +359,8 @@ class Owner:
     def schedule_history(self):
         import asyncio
         task = getattr(self, '_fill_task', None)
+        if not position_fill_sync.fetch_ready(self.bot):
+            return
         if task is not None:
             if not task.done():
                 return

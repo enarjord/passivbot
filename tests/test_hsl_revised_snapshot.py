@@ -296,7 +296,7 @@ def test_small_scope_loss_still_panics_after_large_finite_cancellation(values, c
     request = dict(snapshot=snapshot, slots=1, span=10000, threshold=.0005)
     result = json.loads(pbr.hsl_revised_candle_free(json.dumps(request)))
     assert result[component] == -1
-    assert result["signal"]["raw"] == pytest.approx([1 / 1001])
+    assert result["signal"]["raw"] == pytest.approx([1 / (1000 if component == "upnl" else 1001)])
     assert result["signal"]["panic"] == [True]
 
 
@@ -312,14 +312,14 @@ def test_quantity_roundoff_scale_resets_after_later_episode_opening():
 
 @pytest.mark.parametrize("step", [None, .0001220703125])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_scale_only_rounding_does_not_certify_a_real_residual_flat(step, side):
+def test_left_censored_close_keeps_current_endpoint_exact(step, side):
     d = 1 if side == "long" else -1
     residual = .0001220703125
     fills = [Fill("old_close", 1, -residual*d, 100, -1),
              Fill("later_add", 2, 1e12*d, 100, 0)]
     p = cases.pair(size=(1e12+residual)*d, basis=100, pside=side, fills=fills)
     result = rust(payload(cases.frame(p), quantity_step=step))
-    assert not result["boundaries"]
+    assert [b["timestamp"] for b in result["boundaries"]] == [1]
     assert result["pairs"][0]["history"]["opening_size"] != 0
     assert result["pairs"][0]["history"]["samples"][-1]["size"] == float(p.position.size)
 
@@ -391,8 +391,10 @@ def test_small_loss_survives_large_realized_peak_or_offsetting_current_upnl(offs
                              Fill("fee", 3, -1, 100, 0, -1)])
     request = payload(cases.frame(p, balance=1000))
     result = json.loads(pbr.hsl_revised_candle_free(json.dumps(dict(snapshot=request, slots=1, span=10000, threshold=.0005))))
-    assert result["signal"]["raw"] == pytest.approx([1/1001])
-    assert result["signal"]["panic"] == [True]
+    # With positive current UPNL, current equity (and the peak) includes it.
+    expected = 1 / (1e16 + 1001) if offset_upnl else 1 / 1001
+    assert result["signal"]["raw"] == pytest.approx([expected], rel=1e-14, abs=0)
+    assert result["signal"]["panic"] == [not offset_upnl]
 
 
 @pytest.mark.parametrize("field,value", [("span", 0), ("span", .5), ("threshold", -1),

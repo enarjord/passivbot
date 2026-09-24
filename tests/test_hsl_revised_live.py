@@ -15,7 +15,7 @@ import tools.run_fake_live as runner
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('side', ['long', 'short'])
-@pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write', 'slow_projection', 'slow_sink'])
+@pytest.mark.parametrize('path', ['wave', 'loop', 'cancel_first', 'recovered_before_write', 'malformed_before_write', 'slow_projection', 'slow_sink', 'scoped_quotes'])
 @pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
 async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_path, monkeypatch, mode, path, side):
     import passivbot_rust as pbr
@@ -86,9 +86,17 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                 monkeypatch.setattr(market_data, 'filter_fresh_market_snapshot_creations', original_filter)
             assert boundary_reached
             assert not any(c['method'] == 'create_order' for c in bot.cca.export_request_log())
-        elif path in {'wave', 'slow_projection', 'slow_sink'}:
+        elif path in {'wave', 'slow_projection', 'slow_sink', 'scoped_quotes'}:
             report_calls = []
             clock_offset = [0]
+            if path == 'scoped_quotes':
+                from types import SimpleNamespace
+                from unittest.mock import AsyncMock
+                from live.market_data import market_snapshot_ticker_strategy
+                provider = bot.market_snapshot_provider
+                provider._ticker_strategy = market_snapshot_ticker_strategy(
+                    SimpleNamespace(exchange='bitunix', config={'live': {}}))
+                provider._fetch_tickers = AsyncMock(side_effect=AssertionError('unrelated bulk wait'))
             if path.startswith('slow_'):
                 import utils
                 from live import hsl_revised_diagnostics as reporting
@@ -108,6 +116,8 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
                     bot._emit_live_event = slow_report
                 bot._hsl_revised_diagnostic_event = None
             assert await instance.protect()
+            if path == 'scoped_quotes':
+                provider._fetch_tickers.assert_not_awaited()
             if path.startswith('slow_'):
                 assert report_calls and all(report_calls)
                 clock_offset[0] = 0
@@ -560,6 +570,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
         for _ in range(2):
             await bot.refresh_protective_authoritative_state(require_balance=True)
             instance.remember_position()
+            bot.cca.now_ms += 5_000  # shared post-position settling before fetch
             await asyncio.sleep(.002)
             await bot.update_pnls(source='hsl_revised')
         await bot.refresh_protective_authoritative_state(require_balance=True)
@@ -1522,3 +1533,98 @@ async def test_revised_run_exits_on_each_canonical_shutdown_flag(flag):
     bot.live_value = lambda key: .05
     await instance.run()
     assert calls == ['cycle'] and not instance._running
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('mode', ['coin', 'pside', 'unified'])
+@pytest.mark.parametrize('fresh_owner', [False, True])
+async def test_partial_panic_recovery_retires_resting_close_without_ordinary_planning(tmp_path, monkeypatch, mode, fresh_owner):
+    import asyncio
+    symbol = 'BTC/USDT:USDT'
+    user = f'fake_revised_recovery_{tmp_path.name}'
+    _cleanup_fake_user_state(user)
+    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+                            target='canonical', runtime=None, verbose=False)
+    cfg = generated_template(legacy, mode)
+    cfg['live']['pnls_max_lookback_days'] = 1.
+    block = cfg['bot']['hsl'] if mode == 'unified' else cfg['bot']['long']['hsl']
+    block.update(enabled=True, red_threshold=.06, ema_span_minutes=1.,
+                 panic_close_order_type='market', restart_after_red_policy='always')
+    config_path = tmp_path / 'config.json'
+    config_path.write_text(json.dumps({k:v for k,v in cfg.items() if not k.startswith('_')}))
+    scenario = hjson.loads((REPO_ROOT / 'scenarios/fake_live/hsl_long_red_restart.hjson').read_text())
+    scenario.pop('assertions', None)
+    scenario['account']['fills'] = [dict(id='1', order='1', timestamp='2026-01-01T00:00:00Z',
+        symbol=symbol, position_side='long', side='buy', amount=5., price=100., pnl=0.)]
+    scenario['run_initial_cycle'] = True
+    scenario_path = tmp_path / 'scenario.hjson'
+    scenario_path.write_text(hjson.dumps(scenario))
+    completed = []
+
+    async def observe(bot):
+        bot.cca.now_ms += 1000
+        bot.market_snapshot_provider._cache.clear()
+        instance = hsl_revised_live.owner(bot)
+        for _ in range(2):
+            await bot.refresh_protective_authoritative_state(require_balance=True)
+            instance.remember_position()
+            bot.cca.now_ms += 5_000  # shared post-position settling before fetch
+            await asyncio.sleep(.002)
+            await bot.update_pnls(source='hsl_revised')
+        await bot.refresh_protective_authoritative_state(require_balance=True)
+        instance.poll_inputs()
+        return instance.capture(await instance.acquire_quotes({symbol}))
+
+    async def exercise(bot):
+        bot.cca.now_ms += 60000
+        bot.cca.get_current_step()['prices'][symbol] = 90.
+        wave = await observe(bot)
+        assert wave.permission(symbol, 'long')[0] == 'panic'
+        fill = bot.cca._fill_order
+        def half_close(order, *, fill_price, liquidity):
+            requested = order['amount']
+            order['amount'] = requested / 2
+            fill(order, fill_price=fill_price, liquidity=liquidity)
+            order.update(amount=requested, remaining=requested/2, status='canceled')
+        bot.cca._fill_order = half_close
+        try:
+            assert await hsl_revised_live.owner(bot).protect()
+        finally:
+            bot.cca._fill_order = fill
+        wave = await observe(bot)
+        assert bot.positions[symbol]['long']['size'] == 2.5
+        assert wave.permission(symbol, 'long')[0] == 'panic'
+        # Resting remainder is exchange evidence, not a saved HSL permission.
+        from passivbot_rust import order_type_snake_to_id
+        bot.cca._load_boot_order(dict(id='resting-panic', symbol=symbol, position_side='long',
+            side='sell', amount=2.5, price=120., reduce_only=True,
+            custom_id=bot.format_custom_id_single(order_type_snake_to_id('close_panic_long'))))
+        bot.cca.get_current_step()['prices'][symbol] = 110.
+        if fresh_owner:
+            del bot._hsl_revised_live
+        wave = await observe(bot)
+        assert wave.permission(symbol, 'long')[0] == 'normal'
+        creates_before = sum(r['method'] == 'create_order' for r in bot.cca.export_request_log())
+        # No ordinary planning call is needed to retire the now-unwanted panic.
+        assert any(o['id'] == 'resting-panic' and bot._resolve_pb_order_type(o) == 'close_panic_long'
+                   for o in bot.open_orders[symbol]), bot.open_orders
+        for mode_override in ('panic', 'manual'):
+            bot.config['live']['forced_mode_long'] = mode_override
+            assert not await hsl_revised_live.owner(bot).protect()
+            assert 'resting-panic' in bot.cca.open_orders
+        bot.config['live']['forced_mode_long'] = ''
+        assert await hsl_revised_live.owner(bot).protect()
+        assert 'resting-panic' not in bot.cca.open_orders
+        assert sum(r['method'] == 'create_order' for r in bot.cca.export_request_log()) == creates_before
+        assert bot.cca.positions[(symbol, 'long')]['size'] == 2.5
+        completed.append(True)
+        return {'recovered': True}
+
+    monkeypatch.setattr(runner, '_run_fake_cycle', exercise)
+    try:
+        args = argparse.Namespace(config=str(config_path), scenario=str(scenario_path), user=user,
+            max_steps=1, output_dir=str(tmp_path / 'run'), log_level=1, snapshot_each_step=False)
+        assert await runner._async_main(args) == 0
+        assert completed
+    finally:
+        _cleanup_fake_user_state(user)

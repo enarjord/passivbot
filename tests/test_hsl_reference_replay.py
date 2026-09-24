@@ -59,12 +59,12 @@ def test_flatten_signal_drives_real_cooldown_anchor_before_reopening():
     risk_rows = (Observation(0, dec(0), dec(0)), boundary.observation)
     risk = signal(risk_rows, 100, 1, ".2")
     assert risk.panic[-1]
-    evidence = LifecycleEvidence(risk_rows[-1].timestamp, boundary.timestamp)
-    assert permission(4 * M, 10 * M, 2 * M, "always", "panic", evidence,
-                      exposed=True, red_now=False) == "panic"
-    assert permission(4 * M, 10 * M, 2 * M, "always", "normal", evidence,
+    evidence = LifecycleEvidence(risk.panic[-1], boundary.timestamp)
+    assert permission(4 * M, 10 * M, 2 * M, "always", evidence,
+                      exposed=False, red_now=False) == "halted"
+    assert permission(4 * M, 10 * M, 2 * M, "always", evidence,
                       exposed=True, red_now=False) == "normal"
-    assert permission(5 * M, 10 * M, 2 * M, "always", "panic", evidence,
+    assert permission(5 * M, 10 * M, 2 * M, "always", evidence,
                       exposed=False, red_now=False) == "normal"
 
 
@@ -126,7 +126,7 @@ def test_old_missing_opening_does_not_poison_later_flat():
     trace = scope_boundaries(frame(pair(fills=tape)), "unified")
     assert [b.timestamp for b in trace.boundaries] == [2 * M, 4 * M]
     assert [b.observation.pnl for b in trace.boundaries] == [-70, -110]
-    assert "estimated_opening_basis" in trace.reasons
+    assert "local_quantity_reconciliation" in trace.reasons
 
 
 def test_missing_reduction_preserves_quantities_and_reconciles_current_flat():
