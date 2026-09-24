@@ -70,6 +70,7 @@ _HSL_RAW_TAIL_DEFINE = "#define PASSIVBOT_HSL_RAW_TAIL_ENABLED 1\n"
 _HSL_DIAGNOSTICS_DISABLE_DEFINE = (
     "#define PASSIVBOT_HSL_DIAGNOSTICS_ENABLED 0\n"
 )
+_HSL_DISABLED_DEFINE = "#define PASSIVBOT_HSL_DISABLED 1\n"
 _RECOVERY_DISTRIBUTION_DEFINE = (
     "#define PASSIVBOT_STRATEGY_EQ_RECOVERY_DISTRIBUTION_ENABLED 1\n"
 )
@@ -154,6 +155,16 @@ def _with_hsl_features(
             raise RuntimeError("MPS source is missing the HSL raw-tail feature guard")
         source = _HSL_RAW_TAIL_DEFINE + source
     return source
+
+
+def _with_hsl_disabled(source: str, disabled: bool) -> str:
+    """Compile away per-coin HSL state for a proven disabled dispatch."""
+
+    if not disabled:
+        return source
+    if "#if PASSIVBOT_HSL_DISABLED" not in source:
+        raise RuntimeError("MPS source is missing the disabled-HSL feature guard")
+    return _HSL_DISABLED_DEFINE + source
 
 
 def _with_recovery_distribution(source: str, enabled: bool) -> str:
@@ -969,6 +980,7 @@ def _ema_anchor_multicoin_shader_library(
     dynamic_wel_by_tradability: bool = True,
     btc_risk_enabled: bool = False,
     equity_balance_diff_enabled: bool = False,
+    hsl_disabled: bool = False,
     cuda_coin_capacity: int | None = None,
     revised_capacity: int = 0,
     revised_lookback: int = 0,
@@ -983,6 +995,9 @@ def _ema_anchor_multicoin_shader_library(
         raw_drawdown_enabled=hsl_raw_drawdown_enabled,
         raw_tail_enabled=hsl_raw_tail_enabled,
     )
+    # Keep diagnostics for forced delist panic-loss parity even when the HSL
+    # controllers and their per-candle scans are compiled away.
+    source = _with_hsl_disabled(source, hsl_disabled)
     source = _with_recovery_distribution(source, recovery_distribution_enabled)
     source = _with_dynamic_wel_by_tradability(
         source, dynamic_wel_by_tradability
@@ -2130,6 +2145,14 @@ class MpsEmaAnchorMulticoinRunner:
                 f"({self.n_coins}, {self.coin_override_cols}), "
                 f"got {coin_overrides.shape}"
             )
+        self.coin_hsl_may_enable = True
+        if self.coin_override_label == "EMA":
+            hsl_overrides = coin_overrides[
+                :, EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
+            ]
+            self.coin_hsl_may_enable = bool(
+                np.any(np.isfinite(hsl_overrides) & (hsl_overrides > 0.5))
+            )
         self.coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(coin_overrides), device=gpu_device()
         )
@@ -2340,6 +2363,7 @@ class MpsEmaAnchorMulticoinRunner:
             self.dynamic_wel_by_tradability,
             self.btc_risk_enabled,
             self.equity_balance_diff_enabled,
+            getattr(self, "dispatch_hsl_disabled", False),
         )
         if self.revised_capacity:
             args += (self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars,
@@ -2474,6 +2498,22 @@ class MpsEmaAnchorMulticoinRunner:
             MpsEmaAnchorRunner._validate_revised_hsl_params(self, policy_matrix, keys)
         started = time.perf_counter() if profile else 0.0
         matrix = self._pack_params(params)
+        self.dispatch_hsl_disabled = False
+        if (
+            getattr(self, "hsl_disabled_specialization", True)
+            and self.coin_override_label == "EMA"
+            # Revised HSL binds and validates every per-coin controller even
+            # when its policy is disabled, so it requires the full layout.
+            and self.hsl_engine == "legacy"
+            and not self.coin_hsl_may_enable
+        ):
+            side_width = len(EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
+            enabled_column = EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_enabled")
+            if matrix.shape[0] > 0 and matrix.shape[1] % side_width == 0:
+                self.dispatch_hsl_disabled = all(
+                    np.all(matrix[:, offset + enabled_column] <= 0.5)
+                    for offset in range(0, matrix.shape[1], side_width)
+                )
         packed = time.perf_counter() if profile else 0.0
         params_mps = torch.as_tensor(matrix, device=gpu_device())
         batch_size = int(matrix.shape[0])
@@ -2576,6 +2616,10 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
     """Persistent dual-side shared-account EMA Anchor runner on Apple MPS."""
 
     scalar_cols = MPS_MULTICOIN_FUSED_SCALAR_COLS
+    # The compact disabled-HSL layout specializes the one-side kernel. Keep
+    # the fused dual-side kernel on its full state layout until every fused
+    # HSL access has its own compile-time specialization.
+    hsl_disabled_specialization = False
 
     def __init__(
         self,
@@ -2644,6 +2688,15 @@ class MpsEmaAnchorMulticoinFusedRunner(MpsEmaAnchorMulticoinRunner):
                 "expected fused multicoin EMA short override matrix shaped "
                 f"{expected_shape}, got {short_coin_overrides.shape}"
             )
+        short_hsl_overrides = short_coin_overrides[
+            :, EMA_ANCHOR_COIN_OVERRIDE_HSL_START_COLUMN
+        ]
+        self.coin_hsl_may_enable = bool(
+            self.coin_hsl_may_enable
+            or np.any(
+                np.isfinite(short_hsl_overrides) & (short_hsl_overrides > 0.5)
+            )
+        )
         self.short_coin_overrides = torch.as_tensor(
             self._prepare_coin_overrides(short_coin_overrides), device=gpu_device()
         )

@@ -5697,6 +5697,65 @@ def _multicoin_exposure_fixture(
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("forced_delist", [False, True])
+@pytest.mark.parametrize("collect_counts", [False, True])
+def test_ema_disabled_hsl_preserves_optional_fill_counts(
+    side, forced_delist, collect_counts
+):
+    from optimization.gpu.metrics import _fill_activity_metrics
+
+    count = 1509 if forced_delist else 313
+    steps = np.arange(count)
+    closes = np.column_stack([
+        base * (1.0 + 0.09 * np.sin(steps / 17.0 + coin))
+        for coin, base in enumerate((100.0, 120.0))
+    ])
+    runner, row, run, _ = _multicoin_exposure_fixture(
+        "ema_anchor", side, count=count, closes=closes,
+        last_valid_indices=(89, 97) if forced_delist else None,
+        markets=[ProxyMarket(0.001, 0.01, 0.001, 0.0, 1.0, 0.001, 0.02)] * 2,
+        collect_coin_fill_counts=collect_counts,
+        return_context=True,
+    )
+    params = np.asarray([row] * 3, dtype=np.float64)
+    params[:, EMA_ANCHOR_MULTICOIN_PARAM_KEYS.index("hsl_signal_mode")] = [0, 1, 2]
+
+    def evaluate(compact):
+        runner.hsl_disabled_specialization = compact
+        output = runner.run(params)
+        synchronize()
+        assert runner.dispatch_hsl_disabled is compact
+        # The runner reuses buffers; keep the baseline independent of the next run.
+        return {key: value.cpu().clone() for key, value in output.items()}
+
+    full = evaluate(False)
+    compact = evaluate(True)
+    assert full.keys() == compact.keys()
+    for key in full:
+        np.testing.assert_array_equal(
+            full[key].numpy(), compact[key].numpy(), err_msg=key
+        )
+    assert torch.all(compact["fill_count_entry"] > 0)
+    assert torch.all(compact["fill_count"] > compact["fill_count_entry"])
+    if forced_delist:
+        assert torch.all(compact["hsl_panic_close_loss_sum"] > 0)
+    assert ("coin_fill_counts" in compact) is collect_counts
+    if collect_counts:
+        torch.testing.assert_close(
+            compact["coin_fill_counts"].sum(dim=1), compact["fill_count"],
+            rtol=0, atol=0,
+        )
+        requested = {"fills_top_symbol_share", "fills_active_symbols_count"}
+        expected_metrics = _fill_activity_metrics(full, run, requested)
+        actual_metrics = _fill_activity_metrics(compact, run, requested)
+        for name in requested:
+            torch.testing.assert_close(
+                actual_metrics[name], expected_metrics[name], rtol=0, atol=0
+            )
+
+
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("features", [False, True])
 @pytest.mark.parametrize("batch_size", [3, 35])
 def test_tm_multicoin_temporal_replay_preserves_every_output(side, features, batch_size):
