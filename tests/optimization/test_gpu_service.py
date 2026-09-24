@@ -1565,6 +1565,8 @@ def test_multicoin_proxy_routes_dual_side_batch_through_fused_runner(
         ({"drawdown_worst_mean_1pct_strategy_eq_long"}, False, True, True, False),
         ({"strategy_eq_recovery_days_p99"}, False, False, False, True),
         ({"entry_interval_hours_p95"}, False, False, False, False),
+        ({"fills_top_symbol_share"}, False, False, False, False),
+        ({"fills_active_symbols_count"}, False, False, False, False),
     ],
 )
 @pytest.mark.parametrize("dynamic_wel_by_tradability", [True, False])
@@ -1791,6 +1793,9 @@ def test_multicoin_proxy_constructs_fused_shared_account_runner(
     assert short_overrides[0, wallet_exposure_column] == 0.0
     assert np.isnan(short_overrides[1, wallet_exposure_column])
     assert constructed["kwargs"]["hsl_ema_tail_enabled"] is tail_enabled
+    assert constructed["kwargs"]["collect_coin_fill_counts"] is bool(
+        needed_metrics & {"fills_top_symbol_share", "fills_active_symbols_count"}
+    )
     assert (
         constructed["kwargs"]["hsl_raw_drawdown_enabled"]
         is raw_drawdown_enabled

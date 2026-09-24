@@ -312,6 +312,9 @@ inline void record_ema_multicoin_close_fill(
         fills.pnl_recovery_peak, fills.pnl_recovery_peak_k,
         fills.pnl_recovery_max_min, float(k), false, !short_side
     );
+    if (collect_coin_fill_counts) {
+        coin_fill_counts[candidate_index * coin_count + coin] += 1.0f;
+    }
 #if !PASSIVBOT_HSL_DISABLED
     side.coin_realized_pnl[coin] += net_pnl;
     if (coin_hsl_mode) {
@@ -324,10 +327,6 @@ inline void record_ema_multicoin_close_fill(
             c_mult, short_side
         );
     }
-    if (collect_coin_fill_counts) {
-        coin_fill_counts[candidate_index * coin_count + coin] += 1.0f;
-    }
-
     // The caller applies the position reduction immediately after accounting.
     // Test the pre-fill size so a complete close ends the episode before reentry.
     if (qty >= side.psize[coin]) {

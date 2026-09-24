@@ -9,7 +9,8 @@ since the latest release tag; these features may already be available when insta
 - Reduce private-state pressure for single-side multi-coin EMA Anchor GPU
   optimization when every candidate and coin override disables legacy HSL. The
   specialized kernel removes unreachable per-coin controller state and HSL scans
-  while retaining forced-delist diagnostics and the existing output contract.
+  while retaining forced-delist diagnostics and optional per-coin fill metrics.
+  Per-coin fill counting remains disabled unless required by scoring or limits.
 
 - Report bounded optimizer population and starting-config progress every five minutes while CPU
   evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
