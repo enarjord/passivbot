@@ -148,6 +148,7 @@ def get_template_config():
                 "liquidation_threshold": 0.05,
                 "maker_fee_override": 0.0004,
                 "market_order_slippage_pct": 0.0005,
+                "limit_order_fill_buffer_pct": 0.0,
                 "market_settings": {
                     "overrides": {},
                     "overrides_by_exchange": {}

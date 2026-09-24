@@ -397,6 +397,11 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
 def _validate_gpu_static_scope(config: dict) -> str:
     """Reject immutable GPU limitations without touching data or optional runtime state."""
 
+    if config.get("backtest", {}).get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+        raise ValueError(
+            "GPU optimization does not support nonzero "
+            "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+        )
     strategy_kind = (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     )

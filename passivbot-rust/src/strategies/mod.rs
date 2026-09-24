@@ -191,6 +191,7 @@ pub struct PeekBehavior {
 
 #[derive(Debug, Clone, Copy)]
 pub struct NextStepHint {
+    pub limit_order_fill_buffer_pct: f64,
     pub low: f64,
     pub high: f64,
     pub tradable: bool,

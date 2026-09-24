@@ -768,6 +768,9 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if any(alias in section for alias in REDUCER_ALIASES):
             canonicalize_reducer_mapping(section, path=path)
 
+    # Released configurations without this setting used strict crossing at zero.
+    old_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
+    new_bt.setdefault("limit_order_fill_buffer_pct", 0.0)
     old_opt = _canonicalize_resume_optimize(entry.get("optimize") or {})
     new_opt = _canonicalize_resume_optimize(config.get("optimize") or {})
     old_bot = entry.get("bot", entry) or {}
@@ -792,6 +795,7 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         "liquidation_threshold",
         "maker_fee_override",
         "market_order_slippage_pct",
+        "limit_order_fill_buffer_pct",
         "market_settings",
         "market_settings_sources",
         "ohlcv_source_dir",

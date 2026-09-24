@@ -407,6 +407,9 @@ mod core {
     #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct NextCandle {
+        /// Simulation-only distance beyond the limit required for a fill.
+        #[serde(default)]
+        pub limit_order_fill_buffer_pct: f64,
         pub low: f64,
         pub high: f64,
         pub tradable: bool,
@@ -2823,6 +2826,7 @@ mod core {
                 position: &side.position,
                 trailing: &side.trailing,
                 next_candle: symbol.next_candle.as_ref().map(|candle| NextStepHint {
+                    limit_order_fill_buffer_pct: candle.limit_order_fill_buffer_pct,
                     low: candle.low,
                     high: candle.high,
                     tradable: candle.tradable,
@@ -5771,6 +5775,7 @@ mod core {
                 price: 100.0,
             };
             sym.next_candle = Some(NextCandle {
+                limit_order_fill_buffer_pct: 0.0,
                 low: 1e9,
                 high: 1e9,
                 tradable: true,
@@ -5817,6 +5822,7 @@ mod core {
 
             let mut sym_fill = sym;
             sym_fill.next_candle = Some(NextCandle {
+                limit_order_fill_buffer_pct: 0.0,
                 low: 0.0,
                 high: 0.0,
                 tradable: true,
