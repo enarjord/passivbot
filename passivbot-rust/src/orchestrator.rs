@@ -250,6 +250,10 @@ mod core {
             symbol_idx: usize,
             details: String,
         },
+        InvalidNextCandle {
+            symbol_idx: usize,
+            details: String,
+        },
         InvalidStrategyParams {
             symbol_idx: usize,
             details: String,
@@ -3285,6 +3289,14 @@ mod core {
         // - symbols must be indexed by `symbol_idx` for O(1) access in hot loops
         let n_symbols = input.symbols.len();
         for (pos, s) in input.symbols.iter().enumerate() {
+            if let Some(candle) = &s.next_candle {
+                crate::limit_fills::validate_buffer(candle.limit_order_fill_buffer_pct).map_err(
+                    |details| OrchestratorError::InvalidNextCandle {
+                        symbol_idx: s.symbol_idx,
+                        details: details.to_string(),
+                    },
+                )?;
+            }
             if !(s.order_book.bid.is_finite()
                 && s.order_book.ask.is_finite()
                 && s.order_book.bid > 0.0
@@ -5811,6 +5823,17 @@ mod core {
                 peek_hints: None,
                 forager_hysteresis: None,
             };
+
+            // Typed Rust callers must reject invalid hints too, including non-finite
+            // values that JSON cannot represent.
+            for buffer in [-0.001, 1.0, 2.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                let mut invalid = input.clone();
+                invalid.symbols[0].next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = buffer;
+                assert!(matches!(
+                    compute_ideal_orders_for_test(&invalid),
+                    Err(OrchestratorError::InvalidNextCandle { symbol_idx: 0, .. })
+                ));
+            }
 
             let out = compute_ideal_orders_for_test(&input).unwrap();
             let n_entries_no_fill = out

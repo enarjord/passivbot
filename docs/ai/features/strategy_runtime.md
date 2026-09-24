@@ -198,6 +198,10 @@ The actual fill and next-candle ladder-expansion hint share the same Rust predic
 used for indicators, trailing extrema, equity, and risk remain unchanged. Live inputs do not
 forward this setting. CPU optimization treats it as fixed evaluation policy; GPU screening
 rejects nonzero values until it implements the same contract.
+The native backtest payload loader accepts an absent buffer as `0.0` for payloads from before
+this setting existed; explicit invalid values still fail. Canonical Python loading always supplies
+the field. Orchestrator next-candle hints likewise default absence to zero and reject non-finite
+values or ratios outside `[0, 1)` before order construction.
 
 ## Live/Backtest Market Slippage Boundary
 

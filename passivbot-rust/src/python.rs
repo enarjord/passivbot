@@ -2285,7 +2285,13 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.001),
-        limit_order_fill_buffer_pct: extract_value(dict, "limit_order_fill_buffer_pct")?,
+        // Legacy native payloads predate this optional simulation setting.
+        // Default only absence; explicit malformed values still fail below.
+        limit_order_fill_buffer_pct: dict
+            .get_item("limit_order_fill_buffer_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.0),
         market_order_slippage_pct: dict
             .get_item("market_order_slippage_pct")?
             .map(|item| item.extract::<f64>())

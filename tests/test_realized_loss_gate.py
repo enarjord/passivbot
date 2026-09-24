@@ -1089,6 +1089,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "filter_by_min_effective_cost": False,
                 "hsl_detailed_report": False,
                 "dynamic_wel_by_tradability": True,
+                "limit_order_fill_buffer_pct": 0.0,
             },
             "bot": {
                 "long": {
@@ -1172,6 +1173,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "filter_by_min_effective_cost": False,
                 "hsl_detailed_report": False,
                 "dynamic_wel_by_tradability": True,
+                "limit_order_fill_buffer_pct": 0.0,
             },
             "bot": {
                 "long": {

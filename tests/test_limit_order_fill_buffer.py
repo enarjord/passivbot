@@ -131,3 +131,26 @@ def test_suite_can_vary_buffer_without_mutating_base_config():
     )
     assert get_backtest_execution_settings(changed).limit_order_fill_buffer_pct == 0.0001
     assert cfg['backtest']['limit_order_fill_buffer_pct'] == 0.0
+
+
+@pytest.mark.parametrize("use_bundle", [False, True])
+def test_legacy_native_payload_matches_explicit_zero_buffer(use_bundle):
+    import numpy as np
+    import passivbot_rust as pbr
+    from test_hlcvs_bundle import _base_meta
+
+    args = _native_args()
+    if use_bundle:
+        timestamps = np.arange(len(args[0]), dtype=np.int64) * 60000 + args[-1]["first_timestamp_ms"]
+        meta = _base_meta()
+        meta["coins"][0].update(last_valid_index=len(args[0]) - 1,
+                                 warmup_minutes=1, trade_start_index=1)
+        bundle = pbr.HlcvsBundle(args[0], args[1], timestamps, meta)
+        call = lambda: pbr.run_backtest_bundle(bundle, *args[2:])
+    else:
+        call = lambda: pbr.run_backtest(*args)
+    expected = call()
+    del args[-1]["limit_order_fill_buffer_pct"]
+    actual = call()
+    assert len(actual[0]) > 0
+    np.testing.assert_equal(actual, expected)
