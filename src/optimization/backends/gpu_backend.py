@@ -17,6 +17,7 @@ from typing import Any
 
 import numpy as np
 
+from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
 from config.metrics import resolve_metric_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from limit_utils import compute_limit_violation
@@ -74,13 +75,7 @@ GPU_DEFAULTS = {
         "mode": "auto",
         "max_exact": 128,
     },
-    "successive_halving": {
-        "enabled": False,
-        "screening_scenarios": [],
-        "history_fractions": [0.25, 0.5, 1.0],
-        "survival_fraction": 0.5,
-        "min_survivors": 64,
-    },
+    "screening": GPU_SCREENING_DEFAULTS,
 }
 
 GPU_SEED_BOOTSTRAP_MODES = frozenset({"auto", "exact", "screened", "legacy"})
@@ -581,22 +576,16 @@ def validate_gpu_preparation_scope(
             allow_suite=suite_enabled,
         )
     )
-    halving_config = (
-        config.get("optimize", {}).get("gpu", {}).get("successive_halving", {})
-        or {}
-    )
-    if not isinstance(halving_config, dict):
-        raise TypeError("optimize.gpu.successive_halving must be an object")
-    if bool(halving_config.get("enabled")) and strategy_kind != "trailing_martingale":
-        raise ValueError(
-            "optimize.gpu.successive_halving requires trailing_martingale"
-        )
-    if (
-        bool(halving_config.get("enabled"))
-        and halving_config.get("screening_scenarios")
-        and not suite_enabled
-    ):
-        raise ValueError("GPU screening_scenarios requires backtest.suite_enabled")
+    screening = _resolve_options(config)["screening"]
+    if screening["scenarios"] and not suite_enabled:
+        raise ValueError("GPU screening.scenarios requires backtest.suite_enabled")
+    available_labels = {
+        str(item.get("label") or f"scenario_{index + 1:02d}")
+        for index, item in enumerate(suite_cfg.get("scenarios") or [])
+    }
+    unknown = set(screening["scenarios"]) - available_labels
+    if unknown:
+        raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
     if bool(suite_cfg.get("enabled")):
         from optimization.warmup import _apply_config_overrides
 
@@ -990,23 +979,11 @@ _GPU_SUITE_VIOLATION_KEY = "__gpu_suite_constraint_violation__"
 _GPU_SUITE_METRICS_KEY = "__gpu_suite_metrics__"
 
 
-def _evaluate_gpu_proxy_history(proxy, candidates, history_fraction):
-    fraction = float(history_fraction)
-    if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
-        raise ValueError("GPU history fraction must be finite and in (0, 1]")
-    if fraction < 1.0:
-        history_start, trade_start = proxy.recent_window_for_history_fraction(fraction)
-        return proxy.evaluate(
-            candidates, history_start_step=history_start, trade_start_step=trade_start
-        )
-    return proxy.evaluate(candidates)
-
-
 def _validate_gpu_screening_scenarios(labels, available_labels, suite_evaluator):
     """A partial suite must retain explicitly selected scoring/limit scenarios."""
     unknown = set(labels) - set(available_labels)
     if unknown:
-        raise ValueError(f"GPU screening_scenarios contains unknown labels: {sorted(unknown)}")
+        raise ValueError(f"GPU screening.scenarios contains unknown labels: {sorted(unknown)}")
     required = {
         basis.scenario
         for basis in suite_evaluator.objective_bases
@@ -1019,14 +996,14 @@ def _validate_gpu_screening_scenarios(labels, available_labels, suite_evaluator)
     missing = required - set(labels)
     if missing:
         raise ValueError(
-            "GPU screening_scenarios must include scenarios explicitly selected by "
+            "GPU screening.scenarios must include scenarios explicitly selected by "
             f"objectives or limits: {sorted(missing)}"
         )
 
 
 def _evaluate_gpu_suite_proxies(
-    suite_evaluator, scenario_proxies, candidates, *, history_fraction=1.0,
-    batch_compatible_scenarios=False, screening_scenarios=(),
+    suite_evaluator, scenario_proxies, candidates, *,
+    batch_compatible_scenarios=False, screening_scenarios=(), evaluation_stage="full",
 ) -> list[dict]:
     """Screen one candidate batch across suite scenarios with canonical reducers."""
 
@@ -1043,7 +1020,7 @@ def _evaluate_gpu_suite_proxies(
         for _, proxy in exchange_proxies:
             if hasattr(proxy, "last_profile"):
                 proxy.last_profile = {}
-    if screening_scenarios and float(history_fraction) < 1.0:
+    if screening_scenarios:
         selected = set(screening_scenarios)
         scenario_proxies = [item for item in scenario_proxies if item[0].label in selected]
     scenario_rows = []
@@ -1083,9 +1060,9 @@ def _evaluate_gpu_suite_proxies(
         with suite_replay_context(
             pass_index=pass_index, pass_count=len(groups),
             labels=[task[0].label for task in tasks],
-            exchanges=[task[1] for task in tasks], history_fraction=history_fraction,
+            exchanges=[task[1] for task in tasks], evaluation_stage=evaluation_stage,
         ):
-            rows = _evaluate_gpu_proxy_history(proxy, stage_candidates, history_fraction)
+            rows = proxy.evaluate(stage_candidates)
         if len(rows) != len(stage_candidates):
             raise RuntimeError(
                 f"GPU suite scenario {ctx.label!r} exchange {exchange!r} "
@@ -1155,11 +1132,17 @@ def _resolve_max_pending_exact(options: dict, workers: int) -> int:
 
 
 def _resolve_options(config: dict) -> dict:
+    from config.migrations.gpu_screening import migrate_gpu_screening
+
+    legacy_gpu = config.get("optimize", {}).get("gpu")
+    if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
+        config = deepcopy(config)
+        migrate_gpu_screening(config)
     options = dict(GPU_DEFAULTS)
     configured = config.get("optimize", {}).get("gpu", {})
     if configured is not None and not isinstance(configured, dict):
         raise TypeError("optimize.gpu must be an object")
-    nested_options = {"seed_bootstrap", "successive_halving"}
+    nested_options = {"seed_bootstrap", "screening"}
     for key, default in GPU_DEFAULTS.items():
         if key in nested_options:
             continue
@@ -1195,68 +1178,9 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.seed_bootstrap.max_exact must be greater than zero"
         )
     options["seed_bootstrap"] = seed_bootstrap
-    halving = dict(GPU_DEFAULTS["successive_halving"])
-    configured_halving = (configured or {}).get("successive_halving")
-    if configured_halving is not None and not isinstance(configured_halving, dict):
-        raise TypeError("optimize.gpu.successive_halving must be an object")
-    halving.update(configured_halving or {})
-    unknown_halving = sorted(
-        set(halving) - set(GPU_DEFAULTS["successive_halving"])
-    )
-    if unknown_halving:
-        raise ValueError(
-            "unknown optimize.gpu.successive_halving settings: "
-            + ", ".join(unknown_halving)
-        )
-    halving["enabled"] = bool(halving["enabled"])
-    screening_scenarios = halving["screening_scenarios"]
-    if (
-        not isinstance(screening_scenarios, list)
-        or any(not isinstance(label, str) or not label.strip() for label in screening_scenarios)
-        or len(set(screening_scenarios)) != len(screening_scenarios)
-    ):
-        raise ValueError(
-            "optimize.gpu.successive_halving.screening_scenarios must be an array "
-            "of unique non-empty scenario labels"
-        )
-    try:
-        fractions = [float(value) for value in halving["history_fractions"]]
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "optimize.gpu.successive_halving.history_fractions must be an array "
-            "of finite fractions"
-        ) from exc
-    if (
-        not fractions
-        or any(
-            not math.isfinite(value) or value <= 0.0 or value > 1.0
-            for value in fractions
-        )
-        or any(right <= left for left, right in zip(fractions, fractions[1:]))
-        or not math.isclose(fractions[-1], 1.0, rel_tol=0.0, abs_tol=1.0e-12)
-    ):
-        raise ValueError(
-            "optimize.gpu.successive_halving.history_fractions must be strictly "
-            "increasing finite values in (0, 1] ending at 1.0"
-        )
-    fractions[-1] = 1.0
-    survival_fraction = float(halving["survival_fraction"])
-    if not math.isfinite(survival_fraction) or not 0.0 < survival_fraction <= 1.0:
-        raise ValueError(
-            "optimize.gpu.successive_halving.survival_fraction must be greater "
-            "than zero and at most one"
-        )
-    min_survivors = int(halving["min_survivors"])
-    if min_survivors <= 0:
-        raise ValueError(
-            "optimize.gpu.successive_halving.min_survivors must be greater than zero"
-        )
-    halving.update(
-        history_fractions=fractions,
-        survival_fraction=survival_fraction,
-        min_survivors=min_survivors,
-    )
-    options["successive_halving"] = halving
+    screening = resolve_gpu_screening((configured or {}).get("screening"))
+    min_survivors = screening["min_survivors"]
+    options["screening"] = screening
     for key in (
         "population_size",
         "batch_size",
@@ -1301,11 +1225,11 @@ def _resolve_options(config: dict) -> dict:
             "optimize.gpu.validate_per_generation so proxy-front safety evidence "
             "is always collected"
         )
-    if halving["enabled"] and min(
+    if screening["scenarios"] and min(
         min_survivors, int(options["population_size"])
     ) < validations:
         raise ValueError(
-            "optimize.gpu.successive_halving.min_survivors must be at least "
+            "optimize.gpu.screening.min_survivors must be at least "
             "optimize.gpu.validate_per_generation"
         )
     exact_workers = int(options["exact_workers"]) or int(
@@ -2685,20 +2609,20 @@ def _normalized_farthest_indices(values: np.ndarray, count: int) -> list[int]:
     return chosen
 
 
-def _successive_halving_survivor_indices(
+def _screening_survivor_indices(
     objectives: np.ndarray,
     violations: np.ndarray,
     *,
     count: int,
 ) -> np.ndarray:
-    """Select a deterministic constraint-aware, Pareto-diverse rung subset."""
+    """Select a deterministic constraint-aware, Pareto-diverse screening subset."""
 
     from pymoo.util.nds.non_dominated_sorting import NonDominatedSorting
 
     objectives = np.asarray(objectives, dtype=np.float64)
     violations = np.asarray(violations, dtype=np.float64)
     if objectives.ndim != 2 or len(objectives) != len(violations):
-        raise ValueError("successive-halving objectives and violations must align")
+        raise ValueError("screening objectives and violations must align")
     count = min(max(0, int(count)), len(objectives))
     if count == 0:
         return np.empty(0, dtype=np.int64)
@@ -2739,7 +2663,7 @@ def _successive_halving_survivor_indices(
     return np.asarray(selected, dtype=np.int64)
 
 
-def _evaluate_successive_halving(
+def _evaluate_scenario_screening(
     candidates: list[dict],
     *,
     policy: dict,
@@ -2748,77 +2672,38 @@ def _evaluate_successive_halving(
     interrupt_check: InterruptCheck,
     stage_callback=None,
 ) -> tuple[list[dict], np.ndarray, np.ndarray, np.ndarray, list[dict]]:
-    """Evaluate progressively longer history windows and return full-rung eligibility."""
-
-    active = np.arange(len(candidates), dtype=np.int64)
-    metric_rows: list[dict | None] = [None] * len(candidates)
-    objectives = None
-    violations = np.full(len(candidates), np.inf, dtype=np.float64)
-    trace: list[dict] = []
-    fractions = list(policy["history_fractions"])
-    for rung, fraction in enumerate(fractions):
-        interrupt_check()
-        stage_candidates = [candidates[int(index)] for index in active]
-        stage_metrics = evaluate_proxy(
-            stage_candidates,
-            history_fraction=float(fraction),
-        )
-        stage_objectives, stage_violations = proxy_fitness(stage_metrics)
-        if stage_callback is not None:
-            stage_callback(rung + 1, float(fraction), len(active))
-        if objectives is None:
-            objectives = np.full(
-                (len(candidates), stage_objectives.shape[1]),
-                np.nan,
-                dtype=np.float64,
-            )
-        objectives[active] = stage_objectives
-        violations[active] = stage_violations
-        for local_index, source_index in enumerate(active):
-            metric_rows[int(source_index)] = dict(stage_metrics[local_index])
-
-        final_rung = rung == len(fractions) - 1
-        survivor_count = len(active)
-        if not final_rung:
-            survivor_count = min(
-                len(active),
-                max(
-                    int(policy["min_survivors"]),
-                    int(math.ceil(len(active) * float(policy["survival_fraction"]))),
-                ),
-            )
-        trace.append(
-            {
-                "rung": rung + 1,
-                "history_fraction": float(fraction),
-                "candidate_count": int(len(active)),
-                "survivor_count": int(survivor_count),
-            }
-        )
-        if final_rung:
-            break
-        local_survivors = _successive_halving_survivor_indices(
-            stage_objectives,
-            stage_violations,
-            count=survivor_count,
-        )
-        active = active[local_survivors]
-
-    if objectives is None or any(row is None for row in metric_rows):
-        raise RuntimeError("successive-halving proxy evaluation produced incomplete rows")
-    full_rung_indices = active.copy()
-    rejected = np.ones(len(candidates), dtype=bool)
-    rejected[full_rung_indices] = False
-    # Partial-history rows remain useful as weak proposal evidence, but must
-    # never outrank or masquerade as full-history proxy evidence.
-    violations[rejected] = np.inf
-    return (
-        [dict(row) for row in metric_rows if row is not None],
-        objectives,
-        violations,
-        full_rung_indices,
-        trace,
-    )
+    """Screen a scenario subset, then rescore survivors against the complete suite."""
+    interrupt_check()
+    metric_rows = evaluate_proxy(candidates, screening=True)
+    if len(metric_rows) != len(candidates):
+        raise RuntimeError("scenario screening proxy evaluation produced incomplete rows")
+    objectives, violations = proxy_fitness(metric_rows)
+    objectives = np.array(objectives, dtype=np.float64, copy=True)
+    violations = np.array(violations, dtype=np.float64, copy=True)
+    survivor_count = min(len(candidates), max(
+        int(policy["min_survivors"]),
+        int(math.ceil(len(candidates) * float(policy["survival_fraction"]))),
+    ))
+    survivors = _screening_survivor_indices(objectives, violations, count=survivor_count)
+    if stage_callback is not None:
+        stage_callback("screening", len(candidates))
+    interrupt_check()
+    full_rows = evaluate_proxy([candidates[int(i)] for i in survivors])
+    if len(full_rows) != len(survivors):
+        raise RuntimeError("scenario screening proxy evaluation produced incomplete rows")
+    full_objectives, full_violations = proxy_fitness(full_rows)
+    objectives[survivors] = full_objectives
+    # Subset scores must never outrank or masquerade as full-suite evidence.
+    violations[:] = np.inf
+    violations[survivors] = full_violations
+    for index, metrics in zip(survivors, full_rows):
+        metric_rows[int(index)] = dict(metrics)
+    if stage_callback is not None:
+        stage_callback("full", len(survivors))
+    return metric_rows, objectives, violations, survivors, [
+        {"stage": "screening", "candidate_count": len(candidates), "survivor_count": len(survivors)},
+        {"stage": "full", "candidate_count": len(survivors), "survivor_count": len(survivors)},
+    ]
 
 
 def _select_validation_indices(
@@ -3099,7 +2984,7 @@ def _select_seed_population_indices(
     return list(
         map(
             int,
-            _successive_halving_survivor_indices(
+            _screening_survivor_indices(
                 objectives,
                 violations,
                 count=count,
@@ -4559,23 +4444,17 @@ def run_backend(
             evaluator.shared_hlcvs_np[exchange].shape[1]
         )
         suite_multicoin_sides = None
-    halving_policy = options["successive_halving"]
-    if halving_policy["enabled"] and strategy_kind != "trailing_martingale":
-        raise ValueError(
-            "optimize.gpu.successive_halving requires trailing_martingale"
-        )
-    screening_scenarios = (
-        halving_policy["screening_scenarios"] if halving_policy["enabled"] else []
-    )
+    screening_policy = options["screening"]
+    screening_scenarios = screening_policy["scenarios"]
     if screening_scenarios:
         if not suite_enabled:
-            raise ValueError("GPU screening_scenarios requires backtest.suite_enabled")
+            raise ValueError("GPU screening.scenarios requires backtest.suite_enabled")
         _validate_gpu_screening_scenarios(
             screening_scenarios, [item["ctx"].label for item in suite_inputs],
             evaluator_for_pool,
         )
         logging.info(
-            "GPU partial-suite screening | early_scenarios=%s full_scenarios=%d",
+            "GPU partial-suite screening | screening_scenarios=%s full_scenarios=%d",
             screening_scenarios, scenario_count,
         )
     if max_coin_count > 1:
@@ -4970,14 +4849,14 @@ def run_backend(
             for _exchange, proxy in exchange_proxies
         ]
 
-        def evaluate_proxy(candidates, *, history_fraction=1.0):
+        def evaluate_proxy(candidates, *, screening=False):
             return _evaluate_gpu_suite_proxies(
                 evaluator_for_pool,
                 scenario_proxies,
                 candidates,
-                history_fraction=history_fraction,
-                batch_compatible_scenarios=bool(halving_policy["enabled"]),
-                screening_scenarios=screening_scenarios,
+                batch_compatible_scenarios=bool(screening_scenarios),
+                screening_scenarios=screening_scenarios if screening else (),
+                evaluation_stage="screening" if screening else "full",
             )
 
     else:
@@ -4998,8 +4877,8 @@ def run_backend(
         )
         profile_proxies = [proxy]
 
-        def evaluate_proxy(candidates, *, history_fraction=1.0):
-            return _evaluate_gpu_proxy_history(proxy, candidates, history_fraction)
+        def evaluate_proxy(candidates, *, screening=False):
+            return proxy.evaluate(candidates)
 
     def proxy_fitness(metric_rows: list[dict]) -> tuple[np.ndarray, np.ndarray]:
         objectives = np.empty((len(metric_rows), len(specs)), dtype=np.float64)
@@ -5307,14 +5186,8 @@ def run_backend(
             sig_digits=sig_digits,
             algorithm_contract=algorithm_contract,
             proxy_evaluation_policy=(
-                {
-                    **halving_policy,
-                    "history_window": (
-                        "recent_suffix_v2" if max_coin_count > 1 else "recent_suffix_v1"
-                    ),
-                }
-                if halving_policy["enabled"]
-                else None
+                {"kind": "scenario_screening_v1", **screening_policy}
+                if screening_scenarios else None
             ),
             seed_bootstrap_contract=seed_bootstrap_contract,
         ),
@@ -5602,7 +5475,7 @@ def run_backend(
         )
         seed_candidates = parameter_dicts(seed_rows)
         base_candidate = (
-            parameter_dicts(sampling[:1])[0] if not halving_policy["enabled"] else None
+            parameter_dicts(sampling[:1])[0] if not screening_scenarios else None
         )
         proxy_metric_rows, base_proxy_row, extra_base = _screen_seed_proxy_candidates(
             seed_candidates, base_candidate, evaluate_proxy
@@ -5636,7 +5509,7 @@ def run_backend(
             seed_proxy_violations,
             count=min(len(starting_vectors), population_size - 1),
         )
-        if not halving_policy["enabled"]:
+        if not screening_scenarios:
             # Exact preference can reorder the initial population, so retain
             # the union of both bounded selection sets, never the whole archive.
             reuse_indices = set(seed_population_indices) | set(seed_proxy_metrics)
@@ -6035,7 +5908,7 @@ def run_backend(
             proxy_started = time.perf_counter() if profile_enabled else 0.0
             proxy_profile_records = []
 
-            def capture_halving_profile(rung, history_fraction, candidate_count):
+            def capture_screening_profile(stage, candidate_count):
                 if not profile_enabled:
                     return
                 for item in profile_proxies:
@@ -6043,27 +5916,26 @@ def run_backend(
                     if not record:
                         continue
                     record.update(
-                        successive_halving_rung=int(rung),
-                        history_fraction=float(history_fraction),
-                        rung_candidate_count=int(candidate_count),
+                        evaluation_stage=stage,
+                        stage_candidate_count=int(candidate_count),
                     )
                     proxy_profile_records.append(record)
 
             seed_proxy_reused = 0
-            if halving_policy["enabled"]:
+            if screening_scenarios:
                 (
                     metric_rows,
                     proxy_objectives,
                     proxy_violations,
-                    full_rung_indices,
-                    halving_trace,
-                ) = _evaluate_successive_halving(
+                    full_suite_indices,
+                    screening_trace,
+                ) = _evaluate_scenario_screening(
                     proxy_candidates,
-                    policy=halving_policy,
+                    policy=screening_policy,
                     evaluate_proxy=evaluate_proxy,
                     proxy_fitness=proxy_fitness,
                     interrupt_check=interrupt_check,
-                    stage_callback=capture_halving_profile,
+                    stage_callback=capture_screening_profile,
                 )
             else:
                 if initial_seed_proxy_rows:
@@ -6077,31 +5949,31 @@ def run_backend(
                 else:
                     metric_rows = evaluate_proxy(proxy_candidates)
                 proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
-                full_rung_indices = np.arange(len(rows), dtype=np.int64)
-                halving_trace = []
+                full_suite_indices = np.arange(len(rows), dtype=np.int64)
+                screening_trace = []
             proxy_seconds = (
                 time.perf_counter() - proxy_started if profile_enabled else 0.0
             )
             proxy_evaluations += (
-                sum(int(item["candidate_count"]) for item in halving_trace)
-                if halving_trace
+                sum(int(item["candidate_count"]) for item in screening_trace)
+                if screening_trace
                 else len(rows) - seed_proxy_reused
             )
-            if halving_trace:
+            if screening_trace:
                 logging.info(
-                    "GPU successive halving | gen=%d rungs=%s full_history=%d/%d",
+                    "GPU scenario screening | gen=%d stages=%s full_suite=%d/%d",
                     generation + 1,
                     ",".join(
-                        f"{item['history_fraction']:.0%}:{item['candidate_count']}"
-                        for item in halving_trace
+                        f"{item['stage']}:{item['candidate_count']}"
+                        for item in screening_trace
                     ),
-                    len(full_rung_indices),
+                    len(full_suite_indices),
                     len(rows),
                 )
             if objective_scale.median is None:
                 objective_scale.fit(
                     _proxy_drift_objectives(
-                        [metric_rows[i] for i in full_rung_indices], specs
+                        [metric_rows[i] for i in full_suite_indices], specs
                     )
                 )
             proxy_scores = objective_scale.score(
@@ -6135,16 +6007,16 @@ def run_backend(
                 int(options["validate_per_generation"]),
                 int(options["drift_probes"]),
             )
-            full_rung_selections = _select_validation_indices(
-                proxy_objectives[full_rung_indices],
-                proxy_scores[full_rung_indices],
-                proxy_violations[full_rung_indices],
+            full_suite_selections = _select_validation_indices(
+                proxy_objectives[full_suite_indices],
+                proxy_scores[full_suite_indices],
+                proxy_violations[full_suite_indices],
                 total=validation_count,
                 probes=probe_count,
             )
             selections = [
-                (int(full_rung_indices[index]), is_probe, is_proxy_front)
-                for index, is_probe, is_proxy_front in full_rung_selections
+                (int(full_suite_indices[index]), is_probe, is_proxy_front)
+                for index, is_probe, is_proxy_front in full_suite_selections
             ]
             while True:
                 try:
@@ -6203,7 +6075,7 @@ def run_backend(
                 generation_wall_seconds = (
                     time.perf_counter() - generation_profile_started
                 )
-                if not halving_policy["enabled"] and seed_proxy_reused < len(rows):
+                if not screening_scenarios and seed_proxy_reused < len(rows):
                     proxy_profile_records = [
                         deepcopy(getattr(item, "last_profile", {}))
                         for item in profile_proxies
@@ -6223,8 +6095,8 @@ def run_backend(
                     generation=generation,
                     population_size=len(rows),
                     seed_proxy_reused=seed_proxy_reused,
-                    successive_halving=halving_trace,
-                    full_history_candidate_count=len(full_rung_indices),
+                    screening=screening_trace,
+                    full_suite_candidate_count=len(full_suite_indices),
                     proxy_profiles=proxy_profile_records,
                     timings_seconds={
                         "nsga_ask": ask_seconds,

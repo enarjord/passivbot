@@ -13,6 +13,7 @@ from pathlib import Path
 
 from cli_utils import help_requested
 from passivbot_version import __version__
+from passivbot_exceptions import GPUScreeningMigrationError
 
 
 @dataclass(frozen=True)
@@ -508,6 +509,9 @@ def _run_module(module_name: str, prog_name: str, argv: list[str], requires_full
             print(_full_install_message(prog_name, exc.name), file=sys.stderr)
             return 2
         raise
+    except GPUScreeningMigrationError as exc:
+        print(f"Configuration migration required: {exc}", file=sys.stderr)
+        return 2
     except SystemExit as exc:
         if exc.code is None:
             return 0

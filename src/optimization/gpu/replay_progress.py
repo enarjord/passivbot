@@ -18,13 +18,13 @@ def _label(value):
 
 
 @contextmanager
-def suite_replay_context(*, pass_index, pass_count, labels, exchanges, history_fraction):
+def suite_replay_context(*, pass_index, pass_count, labels, exchanges, evaluation_stage):
     names = ",".join(_label(label) for label in labels[:3])
     if len(labels) > 3:
         names += f",+{len(labels) - 3}"
     token = _replay_context.set(
         f"suite_pass={pass_index}/{pass_count} scenarios={names} "
-        f"exchange={_label(','.join(dict.fromkeys(exchanges)))} history={history_fraction:.1%} "
+        f"exchange={_label(','.join(dict.fromkeys(exchanges)))} stage={_label(evaluation_stage)} "
     )
     try:
         yield

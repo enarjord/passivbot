@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Replace GPU successive halving with one scenario-based screening pass: select
+  `optimize.gpu.screening.scenarios`, promote a Pareto-diverse subset, then evaluate survivors
+  across the full suite before exact Rust validation. Remove implicit history fractions;
+  disabled legacy configs migrate with a warning, while enabled legacy configs fail early
+  with explicit migration instructions. Active halving checkpoints require a fresh run.
+
 - Add `backtest.limit_order_fill_buffer_pct` (default `0.0`) to require a strict additional price
   crossing before limit fills. The buffer uses a fraction of the order price, leaves market
   execution unchanged, and is supported by CPU backtests and optimization. GPU optimization

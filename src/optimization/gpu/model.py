@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -988,83 +988,6 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         "times_relative": True,
         "n": n,
     }
-
-
-def slice_mps_multicoin_data(data, values, runs, markets, history_start, trade_start):
-    """Create a recent replay view without duplicating the dense GPU inputs.
-
-    The origin must be the first candle in a UTC hour. This preserves the
-    already packed closed-hour ranges after the first boundary. Off-grid
-    timelines may need that first range corrected; only then is the range
-    tensor copied. Per-coin seeds retain original input precision.
-    """
-    import torch
-
-    n = int(data["n"])
-    interval = runs[0].interval_ms
-    origin = int(data["ts0"]) + history_start * interval
-    if not 0 <= history_start < trade_start <= n - 2:
-        raise ValueError("invalid multicoin recent-history window")
-    if history_start and origin // 3_600_000 == (origin - interval) // 3_600_000:
-        raise ValueError("multicoin history must start at a UTC hour boundary")
-    scoring_ts = int(data["ts0"]) + trade_start * interval
-    window_runs = [replace(
-        run,
-        first_ts_ms=origin,
-        requested_start_ts_ms=scoring_ts,
-        guard_ts_ms=scoring_ts,
-        first_valid_idx=max(0, run.first_valid_idx - history_start),
-        last_valid_idx=run.last_valid_idx - history_start,
-        trade_start_idx=max(trade_start, run.trade_start_idx) - history_start,
-    ) for run in runs]
-    settings = data["coin_settings"].detach().cpu().numpy().copy()
-    for coin, (run, market) in enumerate(zip(window_runs, markets)):
-        settings[coin, 6:9] = (run.first_valid_idx, run.last_valid_idx, run.trade_start_idx)
-        seed_index = min(history_start + run.first_valid_idx, n - 1)
-        high, low, close, volume = map(float, values[seed_index, coin, :4])
-        typical = (high + low + close) / 3.0 if min(high, low, close) > 0 else max(close, 1.0)
-        settings[coin, 9] = close if np.isfinite(close) and close > 0 else 0.0
-        settings[coin, 10] = max(volume, 0.0) * typical
-        settings[coin, 12] = _maximum_effective_min_cost(values[history_start:, coin, 2], market)
-    sliced = dict(data)
-    for key in (
-        "bars", "fill_ticks", "touch_ticks", "touch_nearest_ticks",
-        "touch_min_qty_bits", "touch_min_qty_relation", "hour_log_ranges",
-    ):
-        sliced[key] = data[key][history_start:]
-    # A timeline offset from the UTC hour grid can make the source packer's
-    # first closed-hour window include one candle before our new origin.
-    # Repack that boundary only; later boundaries have identical geometry.
-    first_boundary = ((origin // 3_600_000 + 1) * 3_600_000 - origin + interval - 1) // interval
-    ranges = sliced["hour_log_ranges"]
-    corrected = None
-    for coin, run in enumerate(window_runs):
-        if run.last_valid_idx < 0:
-            if corrected is None:
-                corrected = ranges.clone()
-            corrected[:, coin] = -1.0
-        elif first_boundary < n - history_start:
-            count = first_boundary + 1
-            timestamps = origin + np.arange(count, dtype=np.int64) * interval
-            high = values[history_start:history_start + count, coin, 0]
-            low = values[history_start:history_start + count, coin, 1]
-            first_ranges, valid = _build_hourly_log_range(high, low, timestamps, run)
-            value = float(first_ranges[-1]) if valid[-1] else -1.0
-            if float(ranges[first_boundary, coin].item()) != value:
-                if corrected is None:
-                    corrected = ranges.clone()
-                corrected[first_boundary, coin] = value
-    if corrected is not None:
-        sliced["hour_log_ranges"] = corrected
-    sliced.update(
-        coin_settings=torch.as_tensor(settings, device=data["coin_settings"].device),
-        n=n - history_start,
-        ts0=origin,
-        n_days=(int(data["ts0"]) + (n - 1) * interval) // 86_400_000 - origin // 86_400_000 + 1,
-        start_minute_of_day=(origin // 60_000) % 1440,
-        start_minute_of_hour=(origin // 60_000) % 60,
-    )
-    return sliced, window_runs
 
 
 def build_mps_multicoin_data(

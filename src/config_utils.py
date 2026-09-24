@@ -31,6 +31,7 @@ from config.coerce import (
     normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
+from config.gpu import parse_screening_scenarios
 from config.hydrate import (
     PARTIALLY_OPEN_CONFIG_PATHS,
     apply_non_live_adjustments as staged_apply_non_live_adjustments,
@@ -832,8 +833,14 @@ def clean_config(config: dict) -> dict:
     with dictionaries sorted recursively.
     """
     from config.hsl_revised import FIELDS, engine, normalization_template
+    from config.migrations.gpu_screening import migrate_gpu_screening
 
     source = config or {}
+    optimize_section = source.get("optimize")
+    legacy_gpu = optimize_section.get("gpu") if isinstance(optimize_section, dict) else None
+    if isinstance(legacy_gpu, dict) and "successive_halving" in legacy_gpu:
+        source = deepcopy(source)
+        migrate_gpu_screening(source)
     template = normalization_template(get_template_config(), source)
     if engine(source) == "revised" and "hsl" in source.get("bot", {}):
         portfolio = source["bot"]["hsl"]
@@ -2234,6 +2241,9 @@ def add_arguments_recursively(
             elif "scoring" in full_name:
                 type_ = comma_separated_values
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+            elif full_name == "optimize.gpu.screening.scenarios":
+                type_ = parse_screening_scenarios
+                appendix = "Comma-separated labels or JSON array; [] disables screening."
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
             elif value is None:

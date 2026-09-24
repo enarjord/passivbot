@@ -19,8 +19,7 @@ from tools.gpu_proxy_benchmark import _synthetic_hlcvs
     reason="Apple MPS and NVIDIA CUDA unavailable",
 )
 @pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("fraction", [0.5, 1.0])
-def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side, fraction):
+def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side):
     count = 9001
     values, timestamps = _synthetic_hlcvs(count, 3, 7)
     coins = ["BTC", "ETH", "SOL"]
@@ -83,11 +82,11 @@ def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side, fract
             )
 
     separate = _evaluate_gpu_suite_proxies(
-        Suite(), scenarios, candidates, history_fraction=fraction,
+        Suite(), scenarios, candidates,
         batch_compatible_scenarios=False,
     )
     batched = _evaluate_gpu_suite_proxies(
-        Suite(), scenarios, candidates, history_fraction=fraction,
+        Suite(), scenarios, candidates,
         batch_compatible_scenarios=True,
     )
     np.testing.assert_equal(batched, separate)
@@ -95,5 +94,4 @@ def test_suite_batches_preserve_metrics_defaults_and_dispatch_bounds(side, fract
     profiles = [item[1][0][1].last_profile for item in scenarios]
     assert profiles[0]["actual_dispatch_batch_sizes"] == [64, 41]
     assert all(not profile for profile in profiles[1:])
-    if fraction == 1.0:
-        assert profiles[0]["dispatch_count"] > 2  # temporal chunks remain bounded
+    assert profiles[0]["dispatch_count"] > 2  # temporal chunks remain bounded
