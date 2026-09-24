@@ -6,11 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Reduce private-state pressure for single-side multi-coin EMA Anchor GPU
-  optimization when every candidate and coin override disables legacy HSL. The
-  specialized kernel removes unreachable per-coin controller state and HSL scans
-  while retaining forced-delist diagnostics and optional per-coin fill metrics.
-  Per-coin fill counting remains disabled unless required by scoring or limits.
+- Replace GPU successive halving with one scenario-based screening pass: select
+  `optimize.gpu.screening.scenarios`, promote a Pareto-diverse subset, then evaluate survivors
+  across the full suite before exact Rust validation. Remove implicit history fractions;
+  disabled legacy configs migrate with a warning, while enabled legacy configs fail early
+  with explicit migration instructions. Active halving checkpoints require a fresh run.
 
 - Add `backtest.limit_order_fill_buffer_pct` (default `0.0`) to require a strict additional price
   crossing before limit fills. The buffer uses a fraction of the order price, leaves market
@@ -72,6 +72,12 @@ since the latest release tag; these features may already be available when insta
 
 - Report bounded optimizer population and starting-config progress every five minutes while CPU
   evaluations are still pending, including completed, pending, elapsed, rate and estimated time.
+
+- Reduce private-state pressure for single-side multi-coin EMA Anchor GPU
+  optimization when every candidate and coin override disables legacy HSL. The
+  specialized kernel removes unreachable per-coin controller state and HSL scans
+  while retaining forced-delist diagnostics and optional per-coin fill metrics.
+  Per-coin fill counting remains disabled unless required by scoring or limits.
 
 - Reduce revised HSL replay allocations and repeated exact-cashflow summation without
   changing reconstructed signals, lifecycle decisions, or diagnostics.

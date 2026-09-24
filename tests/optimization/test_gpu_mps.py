@@ -22129,62 +22129,6 @@ def test_tm_directional_chunking_uses_actual_batch_work_and_switches_safely():
         assert ("temporal_chunk_bars" in runner.last_profile) == (count == 3)
 
 
-@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
-@pytest.mark.parametrize("side", ["long", "short"])
-@pytest.mark.parametrize("interval", [1, 5])
-@pytest.mark.parametrize("coverage", ["late", "delisted", "missing"])
-def test_tm_multicoin_recent_view_matches_repacked_suffix(side, interval, coverage):
-    from dataclasses import replace
-    from optimization.gpu.model import slice_mps_multicoin_data
-    from optimization.gpu.mps_kernel import MpsTrailingMartingaleMulticoinRunner
-    from optimization.gpu.service import MpsMulticoinProxy
-
-    n = 2101
-    steps = np.arange(n)
-    close = np.column_stack([100 * (1 + 0.12 * np.sin(steps / 31 + c)) for c in range(2)])
-    values = np.stack([close * 1.01, close * 0.99, close, np.ones_like(close) * 100], axis=2)
-    ts = 1_700_000_000_000 + steps * interval * 60_000
-    runs = [ProxyRun(1000, 100, 101, int(ts[101]), int(ts[101]), int(ts[0]),
-                     interval * 60_000, 0.05, first, n - 1) for first in (0, 1700)]
-    if coverage == "late":
-        values[:1700, 1] = np.nan
-    elif coverage == "delisted":
-        runs[1] = replace(runs[1], first_valid_idx=0, last_valid_idx=500)
-        values[501:, 1] = np.nan
-    else:
-        runs[1] = replace(runs[1], first_valid_idx=n, last_valid_idx=n - 1)
-        values[:, 1] = np.nan
-    markets = [ProxyMarket(.001, .01, .001, 1, 1, .0002)] * 2
-    packed = build_mps_multicoin_data(values, ts, runs, markets)
-    proxy = object.__new__(MpsMulticoinProxy)
-    proxy.data, proxy.run, proxy.history_warmup_bars = packed, runs[0], 100
-    start, trade = proxy.recent_window_for_history_fraction(.25)
-    view, window_runs = slice_mps_multicoin_data(packed, values, runs, markets, start, trade)
-    rebuilt = build_mps_multicoin_data(values[start:], ts[start:], window_runs, markets)
-    for key in ("bars", "fill_ticks", "touch_ticks", "touch_nearest_ticks", "touch_min_qty_bits", "touch_min_qty_relation", "hour_log_ranges"):
-        if key != "hour_log_ranges":
-            assert view[key].untyped_storage().data_ptr() == packed[key].untyped_storage().data_ptr()
-        # Candle zero contains an unused preceding closed-hour range in the view.
-        torch.testing.assert_close(view[key][1:], rebuilt[key][1:], rtol=0, atol=0, equal_nan=True)
-    torch.testing.assert_close(view["coin_settings"], rebuilt["coin_settings"], rtol=0, atol=0, equal_nan=True)
-    assert packed["n"] == n and packed["ts0"] == ts[0]
-    _, row = _multicoin_exposure_fixture("trailing_martingale", side)
-    kwargs = dict(side=side, btc_prices=30_000 + steps[start:], btc_risk_enabled=True,
-                  equity_balance_diff_enabled=True, recovery_distribution_enabled=True,
-                  entry_interval_enabled=True, collect_coin_fill_counts=True)
-    params = np.array([row, row], dtype=np.float64)
-    expected = MpsTrailingMartingaleMulticoinRunner(window_runs[0], rebuilt, **kwargs).run(params)
-    expected = {k: v.cpu().clone() if isinstance(v, torch.Tensor) else v for k, v in expected.items()}
-    runner = MpsTrailingMartingaleMulticoinRunner(window_runs[0], view, max_dispatch_candidate_bars=2 * 2 * 43, **kwargs)
-    for _ in range(2):
-        actual = runner.run(params)
-        for key, value in actual.items():
-            if isinstance(value, torch.Tensor):
-                torch.testing.assert_close(value.cpu(), expected[key], rtol=0, atol=0, equal_nan=True)
-            else:
-                assert value == expected[key]
-    assert actual["fill_count"].sum().item() > 0
-    assert torch.nan_to_num(actual["first_eq_ts"], nan=float("inf")).min().item() >= (trade - start) * interval * 60_000
 
 
 @pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
