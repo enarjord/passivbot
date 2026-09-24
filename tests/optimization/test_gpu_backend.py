@@ -35,7 +35,7 @@ from optimization.backends.gpu_backend import (
     _disable_gpu_exact_duplicate_guard,
     _ema_multicoin_bound_map,
     _evaluate_gpu_suite_proxies,
-    _evaluate_successive_halving,
+    _evaluate_scenario_screening,
     _effective_seed_bootstrap_mode,
     _format_constraint_diagnostics,
     _gpu_fixed_bound_context,
@@ -74,7 +74,7 @@ from optimization.backends.gpu_backend import (
     _restore_gpu_result_run_contract,
     _gpu_unstuck_search_sides,
     _single_scenario_metric_surface,
-    _successive_halving_survivor_indices,
+    _screening_survivor_indices,
     _suite_limit_metric_value,
     _trailing_martingale_multicoin_bound_map,
     _ProxyFrontValidationPending,
@@ -864,49 +864,26 @@ def test_gpu_lean_tm_metric_feature_detection_is_torch_free(monkeypatch):
     ) == {"entry_interval"}
 
 
-def test_gpu_successive_halving_options_are_opt_in_and_fail_closed():
+def test_gpu_screening_options_are_opt_in_and_fail_closed():
     config = _long_only_ema_config()
-    options = _resolve_options(config)
-    assert options["successive_halving"] == {
-        "enabled": False,
-        "screening_scenarios": [],
-        "history_fractions": [0.25, 0.5, 1.0],
-        "survival_fraction": 0.5,
-        "min_survivors": 64,
+    assert _resolve_options(config)["screening"] == {
+        "scenarios": [], "survival_fraction": 0.1, "min_survivors": 64,
     }
-
-    config["optimize"]["gpu"]["successive_halving"] = {
-        "enabled": True,
-        "history_fractions": [0.5, 0.25, 1.0],
-    }
-    with pytest.raises(ValueError, match="strictly increasing"):
-        _resolve_options(config)
-
-    config = _long_only_ema_config()
-    config["optimize"]["gpu"]["successive_halving"] = {
-        "enabled": True,
-        "history_fractions": [0.25, 0.5, 0.999_999_999_999_5],
-    }
-    assert _resolve_options(config)["successive_halving"][
-        "history_fractions"
-    ] == [0.25, 0.5, 1.0]
-
-    config = _long_only_ema_config()
-    config["optimize"]["gpu"]["successive_halving"] = {
-        "enabled": True,
-        "min_survivors": 7,
-    }
+    config["optimize"]["gpu"]["screening"] = {"scenarios": ["recent"], "min_survivors": 7}
     with pytest.raises(ValueError, match="validate_per_generation"):
         _resolve_options(config)
+    config["optimize"]["gpu"]["screening"] = {"history_fractions": [0.1, 1.0]}
+    with pytest.raises(ValueError, match="unknown optimize.gpu.screening settings"):
+        _resolve_options(config)
 
 
-def test_successive_halving_keeps_pareto_diversity_and_full_rung_evidence_only():
+def test_screening_keeps_pareto_diversity_and_full_suite_evidence_only():
     candidates = [{"id": index} for index in range(8)]
     calls = []
 
-    def evaluate_proxy(stage_candidates, *, history_fraction):
+    def evaluate_proxy(stage_candidates, *, screening=False):
         ids = [candidate["id"] for candidate in stage_candidates]
-        calls.append((history_fraction, ids))
+        calls.append((screening, ids))
         return [
             {
                 "left": float(index),
@@ -923,10 +900,9 @@ def test_successive_halving_keeps_pareto_diversity_and_full_rung_evidence_only()
         )
 
     metric_rows, objectives, violations, full_indices, trace = (
-        _evaluate_successive_halving(
+        _evaluate_scenario_screening(
             candidates,
             policy={
-                "history_fractions": [0.25, 0.5, 1.0],
                 "survival_fraction": 0.5,
                 "min_survivors": 2,
             },
@@ -936,40 +912,25 @@ def test_successive_halving_keeps_pareto_diversity_and_full_rung_evidence_only()
         )
     )
 
-    assert [len(ids) for _fraction, ids in calls] == [8, 4, 2]
+    assert [len(ids) for _screening, ids in calls] == [8, 4]
+    assert [screening for screening, ids in calls] == [True, False]
     assert trace == [
-        {
-            "rung": 1,
-            "history_fraction": 0.25,
-            "candidate_count": 8,
-            "survivor_count": 4,
-        },
-        {
-            "rung": 2,
-            "history_fraction": 0.5,
-            "candidate_count": 4,
-            "survivor_count": 2,
-        },
-        {
-            "rung": 3,
-            "history_fraction": 1.0,
-            "candidate_count": 2,
-            "survivor_count": 2,
-        },
+        {"stage": "screening", "candidate_count": 8, "survivor_count": 4},
+        {"stage": "full", "candidate_count": 4, "survivor_count": 4},
     ]
     assert len(metric_rows) == len(objectives) == len(violations) == 8
-    assert len(full_indices) == 2
-    assert len(np.unique(full_indices)) == 2
+    assert len(full_indices) == 4
+    assert len(np.unique(full_indices)) == 4
     assert np.all(np.isfinite(violations[full_indices]))
     assert np.all(np.isinf(np.delete(violations, full_indices)))
-    assert sum(item["candidate_count"] for item in trace) == 14
+    assert sum(item["candidate_count"] for item in trace) == 12
 
 
-def test_successive_halving_survivors_prioritize_feasibility_then_violation():
+def test_screening_survivors_prioritize_feasibility_then_violation():
     objectives = np.asarray([[0.0], [1.0], [2.0], [3.0]])
     violations = np.asarray([0.0, 0.0, 0.2, 0.1])
 
-    survivors = _successive_halving_survivor_indices(
+    survivors = _screening_survivor_indices(
         objectives, violations, count=3
     )
 
@@ -977,8 +938,8 @@ def test_successive_halving_survivors_prioritize_feasibility_then_violation():
     assert survivors[2] == 3
 
 
-def test_successive_halving_survivors_remain_unique_when_objectives_tie():
-    survivors = _successive_halving_survivor_indices(
+def test_screening_survivors_remain_unique_when_objectives_tie():
+    survivors = _screening_survivor_indices(
         np.zeros((8, 2), dtype=np.float64),
         np.zeros(8, dtype=np.float64),
         count=6,
@@ -2679,26 +2640,15 @@ def test_gpu_preparation_preflight_explains_trailing_grid_cpu_fallback():
         )
 
 
-def test_gpu_preparation_preflight_halving_requires_tm_but_allows_suite():
+def test_gpu_preparation_preflight_screening_requires_suite_and_allows_ema():
     config = _long_only_ema_config()
-    config["optimize"]["gpu"]["successive_halving"]["enabled"] = True
-
-    with pytest.raises(ValueError, match="requires trailing_martingale"):
-        validate_gpu_preparation_scope(
-            config,
-            torch_module=_fake_torch_with_mps(),
-        )
-
-    config = _directional_tm_config(long_enabled=True, short_enabled=False)
-    config["optimize"]["gpu"]["successive_halving"]["enabled"] = True
-    validate_gpu_preparation_scope(
-        config,
-        {"enabled": True, "scenarios": []},
-        torch_module=_fake_torch_with_mps(),
-    )
-    config["optimize"]["gpu"]["successive_halving"]["screening_scenarios"] = ["small"]
+    config["optimize"]["gpu"]["screening"]["scenarios"] = ["recent"]
     with pytest.raises(ValueError, match="requires backtest.suite_enabled"):
         validate_gpu_preparation_scope(config, torch_module=_fake_torch_with_mps())
+    validate_gpu_preparation_scope(
+        config, {"enabled": True, "scenarios": [{"label": "recent"}]},
+        torch_module=_fake_torch_with_mps(),
+    )
 
 
 def test_gpu_preparation_preflight_rejects_unmodeled_suite_override_early():
@@ -7005,16 +6955,15 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
             "mutation": {"prob": 0.5},
         },
         proxy_evaluation_policy={
-            "enabled": False,
-            "screening_scenarios": ["small", "large"],
-            "history_fractions": [0.25, 0.5, 1.0],
-            "history_window": "recent_suffix_v1",
+            "survival_fraction": 0.1,
+            "scenarios": ["small", "large"],
+            "kind": "scenario_screening_v1",
         },
     )
     assert contract["version"] == 2
-    assert contract["proxy_evaluation"]["enabled"] is False
-    assert contract["proxy_evaluation"]["history_window"] == "recent_suffix_v1"
-    assert contract["proxy_evaluation"]["screening_scenarios"] == ["small", "large"]
+    assert contract["proxy_evaluation"]["survival_fraction"] == 0.1
+    assert contract["proxy_evaluation"]["kind"] == "scenario_screening_v1"
+    assert contract["proxy_evaluation"]["scenarios"] == ["small", "large"]
     ordinary_contract = _gpu_search_checkpoint_contract(
         key_paths=key_paths,
         bounds=bounds,
@@ -7053,16 +7002,16 @@ def test_gpu_checkpoint_signature_tracks_full_fixed_search_contract():
     changed_mutation["algorithm"]["mutation"]["prob"] = 0.25
     mutations.append(changed_mutation)
     changed_proxy_policy = copy.deepcopy(contract)
-    changed_proxy_policy["proxy_evaluation"]["enabled"] = True
+    changed_proxy_policy["proxy_evaluation"]["survival_fraction"] = 0.2
     mutations.append(changed_proxy_policy)
     changed_screening_scenarios = copy.deepcopy(contract)
-    changed_screening_scenarios["proxy_evaluation"]["screening_scenarios"] = ["small"]
+    changed_screening_scenarios["proxy_evaluation"]["scenarios"] = ["small"]
     mutations.append(changed_screening_scenarios)
-    changed_history_window = copy.deepcopy(contract)
-    changed_history_window["proxy_evaluation"]["history_window"] = (
-        "historical_prefix_v1"
+    changed_policy_kind = copy.deepcopy(contract)
+    changed_policy_kind["proxy_evaluation"]["kind"] = (
+        "legacy_halving"
     )
-    mutations.append(changed_history_window)
+    mutations.append(changed_policy_kind)
     changed_seed_bootstrap = _gpu_search_checkpoint_contract(
         key_paths=key_paths,
         bounds=bounds,
@@ -7914,15 +7863,11 @@ def test_gpu_suite_full_selection_reuses_input_across_scenarios(indices):
         assert np.shares_memory(item["hlcvs"], master) == (selected == [0, 1, 2])
 
 
-@pytest.mark.parametrize("fraction", [0.1, 0.2, 0.33, 0.5])
-def test_suite_halving_routes_every_scenario_window_and_preserves_overrides(fraction):
+def test_suite_full_pass_routes_every_scenario_and_preserves_overrides():
     seen = []
     class Proxy:
         def __init__(self, size):
             self.size = size
-        def recent_window_for_history_fraction(self, value):
-            assert value == fraction
-            return self.size // 2, self.size * 3 // 4
         def evaluate(self, candidates, **kwargs):
             seen.append((self.size, copy.deepcopy(candidates), kwargs))
             return [{"adg_strategy_eq": candidate["value"]} for candidate in candidates]
@@ -7936,37 +7881,35 @@ def test_suite_halving_routes_every_scenario_window_and_preserves_overrides(frac
     rows = _evaluate_gpu_suite_proxies(Suite(), [
         (SimpleNamespace(label="small"), [("a", Proxy(100))], {"value": 3}),
         (SimpleNamespace(label="large"), [("a", Proxy(200))], {}),
-    ], candidates, history_fraction=fraction)
+    ], candidates)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-1,), (-2,)]
     assert seen == [
-        (100, [{"value": 3}, {"value": 3}], dict(history_start_step=50, trade_start_step=75)),
-        (200, candidates, dict(history_start_step=100, trade_start_step=150)),
+        (100, [{"value": 3}, {"value": 3}], {}),
+        (200, candidates, {}),
     ]
     assert candidates == [{"value": 1}, {"value": 2}]
 
 
-@pytest.mark.parametrize("fractions,survival,counts", [
-    ([0.25, 0.5, 1.0], 0.1, [1024, 103, 11]),
-    ([0.1, 0.33, 1.0], 0.2, [1024, 205, 41]),
-    ([0.1, 0.2, 0.4, 1.0], 0.2, [1024, 205, 41, 9]),
-    ([0.1, 0.33, 1.0], 0.05, [1024, 52, 8]),
-])
-def test_halving_flexible_ladders_keep_only_full_history_eligible(fractions, survival, counts):
+@pytest.mark.parametrize("survival,minimum,count", [(0.1, 8, 103), (0.2, 8, 205), (0.01, 64, 64), (1.0, 8, 1024), (0.1, 2048, 1024)])
+def test_screening_rounds_up_caps_minimum_and_keeps_only_full_suite_eligible(survival, minimum, count):
     calls = []
-    def evaluate(candidates, *, history_fraction):
-        calls.append((len(candidates), history_fraction))
-        return [dict(value=c["value"]) for c in candidates]
+    def evaluate(candidates, *, screening=False):
+        calls.append((len(candidates), screening))
+        # Full-suite scores deliberately differ; they must replace subset scores.
+        return [dict(value=c["value"] + (0 if screening else 2000)) for c in candidates]
     def fitness(rows):
         return np.array([[r["value"]] for r in rows]), np.zeros(len(rows))
-    rows, objectives, violations, eligible, trace = _evaluate_successive_halving(
+    rows, objectives, violations, eligible, trace = _evaluate_scenario_screening(
         [dict(value=i) for i in range(1024)],
-        policy=dict(history_fractions=fractions, survival_fraction=survival, min_survivors=8),
+        policy=dict(survival_fraction=survival, min_survivors=minimum),
         evaluate_proxy=evaluate, proxy_fitness=fitness, interrupt_check=lambda: None,
     )
-    assert calls == list(zip(counts, fractions))
-    np.testing.assert_array_equal(eligible, np.arange(counts[-1]))
-    assert np.isinf(violations[counts[-1]:]).all()
+    assert calls == [(1024, True), (count, False)]
+    np.testing.assert_array_equal(eligible, np.arange(count))
+    assert np.isinf(violations[count:]).all()
     assert (violations[eligible] == 0).all()
+    np.testing.assert_array_equal(objectives[eligible, 0], np.arange(count) + 2000)
+    assert all(rows[i]["value"] == i + 2000 for i in eligible)
 
 
 @pytest.mark.parametrize('batching,compatible,expected_batches', [
@@ -8004,10 +7947,10 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching,
     assert calls == expected_batches
     messages = [record.getMessage() for record in caplog.records]
     if len(expected_batches) == 1:
-        assert any("suite_pass=1/1 scenarios=first,second exchange=x history=100.0%" in m for m in messages)
+        assert any("suite_pass=1/1 scenarios=first,second exchange=x stage=full" in m for m in messages)
     else:
-        assert any("suite_pass=1/2 scenarios=first exchange=x history=100.0%" in m for m in messages)
-        assert any("suite_pass=2/2 scenarios=second exchange=x history=100.0%" in m for m in messages)
+        assert any("suite_pass=1/2 scenarios=first exchange=x stage=full" in m for m in messages)
+        assert any("suite_pass=2/2 scenarios=second exchange=x stage=full" in m for m in messages)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-2,), (-5,)]
     assert candidates == [{}, {'value': 5}]
     assert sum(p.last_profile.get('count', 0) for p in [first, second]) == 4
@@ -8015,17 +7958,17 @@ def test_suite_batches_only_compatible_scenarios_and_resolves_defaults(batching,
 
 
 @pytest.mark.parametrize('labels', ['a', None, [None], [['a']], [''], [' '], ['a', 'a']])
-def test_gpu_halving_screening_labels_reject_invalid_shapes(labels):
+def test_gpu_screening_labels_reject_invalid_shapes(labels):
     config = _long_only_ema_config()
-    config['optimize']['gpu']['successive_halving'] = {'screening_scenarios': labels}
+    config['optimize']['gpu']['screening'] = {'scenarios': labels}
     with pytest.raises(ValueError, match='unique non-empty scenario labels'):
         _resolve_options(config)
 
 
-@pytest.mark.parametrize('fraction,expected_labels', [
-    (0.1, ['first', 'last']), (1.0, ['first', 'middle', 'last']),
+@pytest.mark.parametrize('screening,expected_labels', [
+    (True, ['first', 'last']), (False, ['first', 'middle', 'last']),
 ])
-def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(fraction, expected_labels, caplog):
+def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(screening, expected_labels, caplog):
     from optimization.gpu.replay_progress import TemporalReplayProgress
     caplog.set_level("INFO")
     calls = []
@@ -8033,8 +7976,6 @@ def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(frac
         def __init__(self, label):
             self.label = label
             self.last_profile = {'stale': 99}
-        def recent_window_for_history_fraction(self, value):
-            return 10, 20
         def evaluate(self, candidates, **kwargs):
             calls.append((self.label, kwargs, [c['x'] for c in candidates]))
             TemporalReplayProgress(len(candidates), 10)
@@ -8054,18 +7995,19 @@ def test_partial_scenario_screening_restores_full_suite_and_clears_profiles(frac
     rows = _evaluate_gpu_suite_proxies(
         Suite(), [(SimpleNamespace(label=p.label), [('x', p)], {'x': 3} if i == 2 else {})
                   for i, p in enumerate(proxies)], candidates,
-        history_fraction=fraction, screening_scenarios=['last', 'first'],
+        screening_scenarios=['last', 'first'] if screening else (),
+        evaluation_stage='screening' if screening else 'full',
     )
     assert [c[0] for c in calls] == expected_labels
     messages = [record.getMessage() for record in caplog.records]
     for index, label in enumerate(expected_labels, start=1):
         assert any(f"suite_pass={index}/{len(expected_labels)} scenarios={label} "
-                   f"exchange=x history={fraction:.1%}" in m for m in messages)
+                   f"exchange=x stage={'screening' if screening else 'full'}" in m for m in messages)
     assert calls[-1][2] == [3, 3]
-    assert all(c[1] == (dict(history_start_step=10, trade_start_step=20) if fraction < 1 else {}) for c in calls)
+    assert all(c[1] == {} for c in calls)
     assert [r[_GPU_SUITE_OBJECTIVES_KEY] for r in rows] == [(-1,), (-2,)]
     assert all('stale' not in p.last_profile for p in proxies)
-    if fraction < 1:
+    if screening:
         assert proxies[1].last_profile == {}
     assert candidates == [{'x': 1}, {'x': 2}]
 
@@ -8082,12 +8024,12 @@ def test_partial_scenario_screening_rejects_missing_required_scenarios_before_di
         _evaluate_gpu_suite_proxies(suite, [
             (SimpleNamespace(label='first'), [('x', object())], {}),
             (SimpleNamespace(label='second'), [('x', object())], {}),
-        ], [{}], history_fraction=.1, screening_scenarios=labels)
+        ], [{}], screening_scenarios=labels)
 
 
-def test_halving_scenario_labels_survive_canonical_config_roundtrip():
+def test_screening_scenario_labels_survive_canonical_config_roundtrip():
     from config_utils import format_config
     config = _long_only_ema_config()
-    config['optimize']['gpu']['successive_halving']['screening_scenarios'] = ['a', 'b']
+    config['optimize']['gpu']['screening']['scenarios'] = ['a', 'b']
     normalized = format_config(config, verbose=False)
-    assert _resolve_options(normalized)['successive_halving']['screening_scenarios'] == ['a', 'b']
+    assert _resolve_options(normalized)['screening']['scenarios'] == ['a', 'b']

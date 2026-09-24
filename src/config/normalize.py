@@ -16,6 +16,7 @@ from .hydrate import (
     sync_with_template,
 )
 from .coerce import normalize_validation_fields
+from .gpu import resolve_gpu_screening
 from .migrations import (
     apply_backward_compatibility_renames,
     apply_migrations,
@@ -80,6 +81,9 @@ def normalize_config(
         require_config_dict(result, path)
     reject_legacy_flat_strategy_fields(result)
     apply_migrations(result, verbose=verbose, tracker=tracker)
+    gpu = result["optimize"].get("gpu")
+    if isinstance(gpu, dict) and "screening" in gpu:
+        gpu["screening"] = resolve_gpu_screening(gpu["screening"])
     for key in ("approved_coins", "ignored_coins"):
         if isinstance(result.get("live"), dict) and key in result["live"]:
             live_coin_sources_input[key] = deepcopy(result["live"][key])

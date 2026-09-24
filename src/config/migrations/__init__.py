@@ -1,3 +1,4 @@
+from .gpu_screening import migrate_gpu_screening
 from .detect import build_base_config_from_flavor, detect_flavor
 from .churn_gate import migrate_initial_entry_distance_gate
 from .legacy_v7 import (
@@ -11,6 +12,7 @@ from .renames import apply_backward_compatibility_renames, rename_config_keys
 
 
 def apply_migrations(result: dict, *, verbose: bool = True, tracker=None) -> None:
+    migrate_gpu_screening(result, tracker=tracker)
     migrate_config_version(result, verbose=verbose, tracker=tracker)
     migrate_initial_entry_distance_gate(result, verbose=verbose, tracker=tracker)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)

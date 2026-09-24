@@ -520,79 +520,6 @@ def test_single_coin_proxy_preserves_order_across_bounded_dispatches():
     assert calls == [[0.0, 1.0], [2.0, 3.0], [4.0]]
 
 
-def test_single_coin_proxy_recent_history_expands_safe_dispatch_and_routes_window():
-    proxy, calls = _minimal_single_coin_proxy()
-    proxy.batch_size = 4096
-    proxy.dispatch_batch_size = 258
-    proxy.strategy_kind = "trailing_martingale"
-    proxy.runner.n = 1_931_815
-    proxy.run = ProxyRun(
-        1_000.0,
-        100,
-        10,
-        0,
-        0,
-        0,
-        60_000,
-        0.05,
-        0,
-        1_931_814,
-    )
-    proxy.history_warmup_bars = 100
-    original_run = proxy.runner.run
-    routed_windows = []
-    metric_runs = []
-
-    def routed_run(parameters, **kwargs):
-        routed_windows.append(dict(kwargs))
-        return original_run(parameters, **kwargs)
-
-    proxy.runner.run = routed_run
-    original_compute = proxy._compute_objectives
-
-    def capture_compute(output, run, *args, **kwargs):
-        metric_runs.append(run)
-        return original_compute(output, run, *args, **kwargs)
-
-    proxy._compute_objectives = capture_compute
-
-    history_start, trade_start = proxy.recent_window_for_history_fraction(0.25)
-    results = proxy.evaluate(
-        [{"value": float(index)} for index in range(1024)],
-        history_start_step=history_start,
-        trade_start_step=trade_start,
-    )
-
-    assert (history_start, trade_start) == (1_448_762, 1_448_863)
-    assert len(results) == 1024
-    assert [len(call) for call in calls] == [1024]
-    assert routed_windows == [
-        {
-            "profile": False,
-            "end_step": 1_931_815,
-            "history_start_step": 1_448_762,
-            "trade_start_step": 1_448_863,
-        }
-    ]
-    assert len(metric_runs) == 1
-    assert metric_runs[0].trade_start_idx == 1_448_863
-    assert metric_runs[0].requested_start_ts_ms == 1_448_863 * 60_000
-
-    proxy.runner.n = 1_250
-    proxy.run = ProxyRun(
-        1_000.0,
-        100,
-        1_000,
-        0,
-        0,
-        0,
-        60_000,
-        0.05,
-        900,
-        1_249,
-    )
-    assert proxy.recent_window_for_history_fraction(1.0) == (900, 1_000)
-    assert proxy.recent_window_for_history_fraction(0.25) == (1_086, 1_187)
 
 
 def test_single_coin_proxy_profile_records_dispatch_shape_and_timings(monkeypatch):
@@ -3507,61 +3434,10 @@ def test_parameter_columns_keep_candidate_fallback_and_missing_key_failure():
         proxy._parameter_matrix([{"short_offset": None}])
 
 
-@pytest.mark.parametrize("fused", [False, True])
-def test_multicoin_window_cache_shares_data_but_never_candidate_state(monkeypatch, fused):
-    from dataclasses import replace
-    from optimization.gpu import service
-
-    proxy = object.__new__(service.MpsMulticoinProxy)
-    proxy.hsl_engine = "legacy"
-    proxy.strategy_kind = 'trailing_martingale'
-    proxy.data = dict(n=1000, ts0=0, n_coins=2)
-    run = ProxyRun(1000, 5, 10, 600000, 600000, 0, 60000, .05, 0, 999)
-    proxy._history_source = (object(), [run, run], object(), np.ones(1000), np.arange(1000))
-    proxy._history_data_cache = {}
-    proxy.btc_analysis_enabled = False
-    proxy.sides = ['long', 'short'] if fused else ['long']
-    proxy._torch = object()
-    proxy.batch_size = 16
-    proxy.max_dispatch_candidate_bars = 500000000
-    btc = np.arange(1000)
-    runner_key = 'fused' if fused else 'long'
-    proxy._runner_specs = {runner_key: (lambda run, data, **kwargs: SimpleNamespace(run=run, data=data, **kwargs), dict(btc_prices=btc))}
-    builds = []
-    def sliced(data, values, runs, markets, start, trade):
-        builds.append((start, trade))
-        return dict(n=1000-start, ts0=start*60000, n_coins=2), [replace(run, guard_ts_ms=trade*60000)]*2
-    monkeypatch.setattr(service, 'slice_mps_multicoin_data', sliced)
-    monkeypatch.setattr(service, 'gpu_device', lambda torch: 'cuda')
-    monkeypatch.setattr(service, '_mps_multicoin_dispatch_plan', lambda *a, **k: (True, 16, 100))
-    first = proxy._recent_history_proxy(600, 700)
-    second = proxy._recent_history_proxy(600, 700)
-    assert first.data is second.data
-    first_runner = first.fused_runner if fused else first.runners['long']
-    second_runner = second.fused_runner if fused else second.runners['long']
-    assert first_runner is not second_runner
-    np.testing.assert_array_equal(first_runner.btc_prices, btc[600:])
-    proxy._recent_history_proxy(300, 400)
-    assert builds == [(600, 700), (300, 400)]
-    assert len(proxy._history_data_cache) == 1
-    assert proxy.data['n'] == 1000
-    assert proxy._runner_specs[runner_key][1]['btc_prices'] is btc
 
 
-@pytest.mark.parametrize('fraction', [0, -1, 1.1, float('nan'), float('inf')])
-def test_multicoin_window_rejects_invalid_fractions(fraction):
-    proxy = object.__new__(MpsMulticoinEmaProxy)
-    proxy.hsl_engine = "legacy"
-    with pytest.raises(ValueError, match='history fraction'):
-        proxy.recent_window_for_history_fraction(fraction)
 
 
-@pytest.mark.parametrize("kwargs", [dict(history_start_step=0), dict(trade_start_step=10)])
-def test_multicoin_window_requires_both_bounds(kwargs):
-    proxy = object.__new__(MpsMulticoinEmaProxy)
-    proxy.hsl_engine = "legacy"
-    with pytest.raises(ValueError, match="provided together"):
-        proxy.evaluate([{}], **kwargs)
 
 
 def _suite_batch_proxy():
@@ -3572,7 +3448,6 @@ def _suite_batch_proxy():
     proxy.sides = ['long']
     proxy.data = object()
     proxy.run = ProxyRun(1000, 5, 10, 600000, 600000, 0, 60000, .05, 0, 999)
-    proxy.history_warmup_bars = 5
     proxy._runner_specs = {'long': (SimpleNamespace, dict(side='long', coin_overrides=np.array([[np.nan, 1.0]]), btc_prices=np.array([1., 2.])))}
     proxy.checkpoint_contract = dict(base_params={'long': {'n_positions': 4}}, backtest={'max_realized_loss_pct': 1})
     proxy.coin_override_contract = {'coins': ['A', 'B']}
@@ -3583,7 +3458,7 @@ def _suite_batch_proxy():
     return proxy
 
 
-@pytest.mark.parametrize('changed', ['data', 'run', 'warmup', 'runtime', 'overrides', 'btc', 'metrics', 'coupling', 'batch', 'work_limit', 'interrupt'])
+@pytest.mark.parametrize('changed', ['data', 'run', 'runtime', 'overrides', 'btc', 'metrics', 'coupling', 'batch', 'work_limit', 'interrupt'])
 @pytest.mark.parametrize('device', ['cuda', 'mps'])
 def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed, device):
     import copy
@@ -3599,7 +3474,6 @@ def test_suite_batch_key_rejects_changed_execution_inputs(monkeypatch, changed, 
     assert second.suite_batch_key() == original
     if changed == 'data': second.data = object()
     elif changed == 'run': second.run = replace(first.run, starting_balance=2000)
-    elif changed == 'warmup': second.history_warmup_bars = 10
     elif changed == 'runtime': second.checkpoint_contract['backtest']['max_realized_loss_pct'] = .5
     elif changed in ('overrides', 'btc'):
         second._runner_specs = copy.deepcopy(first._runner_specs)

@@ -12,3 +12,7 @@ class FatalBotException(Exception):
 
 class FillEventDataError(ValueError):
     """Fetched fill values cannot be decoded; unrelated parser bugs are not covered."""
+
+
+class GPUScreeningMigrationError(ValueError):
+    """An enabled legacy GPU search policy requires explicit scenario migration."""
