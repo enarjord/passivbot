@@ -312,7 +312,9 @@
     no-trade fragments may share the proof window, but terminal and uncovered fragments cannot.
     Ordinary historical repair recognizes the union of deferred records without merging their
     independent retry clocks or refetching the surrounding cached history. Coverage uses one sorted
-    metadata snapshot per check. Contextual proof is scheduled only when both real bounds and the
+    metadata snapshot per check. Live present and historical scans index overlapping
+    records without merging their retry clocks, and rebuild the read index when canonical
+    metadata changes locally or through a shared-cache writer. Contextual proof is scheduled only when both real bounds and the
     overlap fit one request page; wider gaps remain unavailable under ordinary retry policy. Ordinary
     missing-range retries retain their existing independent schedule.
 15. Urgent active-candle refresh records and reports incomplete symbol coverage but does not itself
