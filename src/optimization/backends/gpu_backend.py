@@ -3607,7 +3607,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 6,  # Exact weight canonicalization and TM entry/selection parity.
+        "version": 6,  # Exact weight canonicalization and TM entry/selection/PnL parity.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {

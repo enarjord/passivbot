@@ -298,13 +298,17 @@ The supported slice is intentionally narrow:
   multi-coin runs and compatible suites also support auto-unstuck, including static per-coin
   overrides. Metal
   models the enable and EMA-gating toggles, tunable close percentage, EMA distance, loss allowance,
-  and exposure threshold. It derives the allowance from a conservative all-history realized
-  net-PnL peak, admits at most one least-stuck eligible position per portfolio, scales a
+  and exposure threshold. Trailing Martingale multi-coin runs derive the allowance from
+  the configured rolling realized net-PnL window, including fees and a shared long/short
+  history. The history retains at most one event per candle, preserves intrabar peaks,
+  and uses bounded candidate batches when its buffers would exceed the scratch budget.
+  Other topologies use a conservative all-history realized net-PnL peak. Metal admits
+  at most one least-stuck eligible position per portfolio, scales a
   losing close to its own allowance subject to exchange minimums, and lets that close compete with
   the position's WEL/TWEL reducer before ordinary closes consume the remaining realized-loss
   budget. The fused dual-side multi-coin kernel chooses globally across both directional surfaces
   using exact Rust's price-difference, symbol-index, and long-before-short tie ordering. Exact Rust
-  remains authoritative for the configured rolling PnL lookback
+  remains authoritative for final validation
 - single- and multi-coin EMA Anchor and Trailing Martingale runs support bounded and legacy-raw
   `risk.we_excess_allowance_pct`, `risk.total_exposure_entry_gate_enabled`, and
   `risk.total_exposure_enforcer_threshold` across long-only, short-only, dual-side, and compatible

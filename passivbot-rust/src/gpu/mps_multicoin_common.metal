@@ -4,6 +4,10 @@
 // and the future joint-side portfolio kernel compose this module so rounding,
 // fill accounting, override lookup, and exposure allowance cannot drift apart.
 
+#ifndef PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS
+#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS 0
+#endif
+
 inline float round_step(float value, float step) {
     return floor(value / step + 0.5f) * step;
 }
@@ -137,6 +141,14 @@ struct JointPortfolioAccount {
     float realized_pnl_peak;
     float realized_pnl_long;
     float realized_pnl_short;
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    HslRollingPnlWindow unstuck_pnl;
+    device float2* unstuck_pnl_values;
+    device int2* unstuck_pnl_indices;
+    int unstuck_pnl_base;
+    int unstuck_pnl_k;
+    float unstuck_pnl_drawdown;
+#endif
 };
 
 inline JointPortfolioAccount init_joint_portfolio_account(
@@ -148,6 +160,14 @@ inline JointPortfolioAccount init_joint_portfolio_account(
     account.realized_pnl_peak = 0.0f;
     account.realized_pnl_long = 0.0f;
     account.realized_pnl_short = 0.0f;
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    account.unstuck_pnl = init_hsl_rolling_pnl_window();
+    account.unstuck_pnl_values = nullptr;
+    account.unstuck_pnl_indices = nullptr;
+    account.unstuck_pnl_base = 0;
+    account.unstuck_pnl_k = 0;
+    account.unstuck_pnl_drawdown = 0.0f;
+#endif
     return account;
 }
 
@@ -156,6 +176,14 @@ inline void record_joint_portfolio_fill(
     float net_pnl,
     bool is_long
 ) {
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    record_hsl_rolling_pnl(
+        account.unstuck_pnl, account.unstuck_pnl_values,
+        account.unstuck_pnl_indices, account.unstuck_pnl_base,
+        PASSIVBOT_UNSTUCK_PNL_CAPACITY, account.unstuck_pnl_k,
+        PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS, true, net_pnl
+    );
+#endif
     account.balance += net_pnl;
     account.realized_pnl_total += net_pnl;
     account.realized_pnl_peak = fmax(
@@ -164,6 +192,40 @@ inline void record_joint_portfolio_fill(
     if (is_long) account.realized_pnl_long += net_pnl;
     else account.realized_pnl_short += net_pnl;
 }
+
+// Auto-unstuck uses the configured fill-PnL window; HSL and the conservative
+// realized-loss gate retain their independent accounting contracts.
+inline float unstuck_pnl_drawdown(thread const JointPortfolioAccount& account) {
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+    return account.unstuck_pnl_drawdown;
+#else
+    return account.realized_pnl_peak - account.realized_pnl_total;
+#endif
+}
+
+#if PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS > 0
+inline void bind_unstuck_pnl_window(
+    thread JointPortfolioAccount& account,
+    device float2* values,
+    device int2* indices,
+    int candidate
+) {
+    account.unstuck_pnl_values = values;
+    account.unstuck_pnl_indices = indices;
+    account.unstuck_pnl_base = candidate * PASSIVBOT_UNSTUCK_PNL_CAPACITY;
+}
+
+inline bool refresh_unstuck_pnl_window(thread JointPortfolioAccount& account) {
+    HslRollingPnlSignal signal = effective_hsl_rolling_pnl(
+        account.unstuck_pnl, account.unstuck_pnl_values,
+        account.unstuck_pnl_indices, account.unstuck_pnl_base,
+        PASSIVBOT_UNSTUCK_PNL_CAPACITY, account.unstuck_pnl_k,
+        PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS
+    );
+    account.unstuck_pnl_drawdown = fmax(signal.peak - signal.current, 0.0f);
+    return !account.unstuck_pnl.overflowed;
+}
+#endif
 
 inline void record_realized_net(
     float net_pnl,
