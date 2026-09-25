@@ -1365,7 +1365,17 @@ def _monitor_wallet_exposure_limit_with_allowance(self, pside: str, symbol: str)
     return wel * (1.0 + effective_allowance_pct)
 
 
-def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
+def _monitor_strategy_params(self, pside, symbol, strategy_cache=None):
+    key = (pside, symbol)
+    if strategy_cache is not None and key in strategy_cache:
+        return strategy_cache[key]
+    params = self._strategy_params_to_rust_dict(pside, symbol)
+    if strategy_cache is not None:
+        strategy_cache[key] = params
+    return params
+
+
+def _monitor_strategy_value(self, pside: str, key: str, symbol: str, *, strategy_cache=None) -> float:
     legacy_map = {
         "entry_grid_double_down_factor": "entry.double_down_factor",
         "entry_trailing_double_down_factor": "entry.double_down_factor",
@@ -1388,7 +1398,7 @@ def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
     }
     strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
     if callable(strategy_getter):
-        strategy_cfg = strategy_getter(pside, symbol)
+        strategy_cfg = _monitor_strategy_params(self, pside, symbol, strategy_cache)
         if key in strategy_cfg:
             return float(strategy_cfg[key])
         mapped_key = legacy_map.get(key, key)
@@ -1443,20 +1453,20 @@ def _monitor_m1_logrange_for_span(self, symbol: str, span: float) -> float:
         return 0.0
 
 
-def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
+def _monitor_h1_entry_logrange(self, pside: str, symbol: str, *, strategy_cache=None) -> float:
     try:
-        span = _monitor_strategy_value(self, pside, "offset_volatility_ema_span_1h", symbol)
+        span = _monitor_strategy_value(self, pside, "offset_volatility_ema_span_1h", symbol, strategy_cache=strategy_cache)
     except Exception:
         try:
-            span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol)
+            span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol, strategy_cache=strategy_cache)
         except Exception:
             return 0.0
     return _monitor_h1_logrange_for_span(self, symbol, span)
 
 
-def _monitor_m1_entry_logrange(self, pside: str, symbol: str) -> float:
+def _monitor_m1_entry_logrange(self, pside: str, symbol: str, *, strategy_cache=None) -> float:
     try:
-        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1m", symbol)
+        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1m", symbol, strategy_cache=strategy_cache)
     except Exception:
         return 0.0
     return _monitor_m1_logrange_for_span(self, symbol, span)
@@ -1492,6 +1502,7 @@ def _build_monitor_trailing_entry_payload(
     position_price: float,
     trailing_bundle: dict[str, float],
     market_entry: dict[str, Any],
+    strategy_cache=None,
 ) -> Optional[dict[str, Any]]:
     ema_bands = market_entry.get("ema_bands", {}) if isinstance(market_entry, dict) else {}
     side_ema_bands = ema_bands.get(pside, {}) if isinstance(ema_bands, dict) else {}
@@ -1516,8 +1527,8 @@ def _build_monitor_trailing_entry_payload(
         "c_mult": float(self.c_mults[symbol]),
         "ema_lower": float(side_ema_bands.get("lower", 0.0) or 0.0),
         "ema_upper": float(side_ema_bands.get("upper", 0.0) or 0.0),
-        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol)),
-        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol)),
+        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
+        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
         **dict(trailing_bundle),
     }
     for key in (
@@ -1532,7 +1543,7 @@ def _build_monitor_trailing_entry_payload(
         "entry_weight_volatility_1m",
         "entry_we_weight",
     ):
-        inputs[key] = _monitor_strategy_value(self, pside, key, symbol)
+        inputs[key] = _monitor_strategy_value(self, pside, key, symbol, strategy_cache=strategy_cache)
     for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
@@ -1561,13 +1572,14 @@ def _build_monitor_trailing_close_payload(
     position_size: float,
     position_price: float,
     trailing_bundle: dict[str, float],
+    strategy_cache=None,
 ) -> Optional[dict[str, Any]]:
     strategy_kind = str(
         (getattr(self, "config", {}).get("live", {}) or {}).get("strategy_kind")
         or ""
     ).strip().lower()
     if strategy_kind == "trailing_martingale":
-        strategy_params = self._strategy_params_to_rust_dict(pside, symbol)
+        strategy_params = _monitor_strategy_params(self, pside, symbol, strategy_cache)
         volatility_ema_span_1m = float(strategy_params["volatility_ema_span_1m"])
         volatility_ema_span_1h = float(strategy_params["volatility_ema_span_1h"])
         inputs = {
@@ -1625,8 +1637,8 @@ def _build_monitor_trailing_close_payload(
             )
         ),
         "c_mult": float(self.c_mults[symbol]),
-        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol)),
-        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol)),
+        "h1_log_range_ema": float(_monitor_h1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
+        "m1_log_range_ema": float(_monitor_m1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)),
         **dict(trailing_bundle),
     }
     for key in (
@@ -1637,7 +1649,7 @@ def _build_monitor_trailing_close_payload(
         "close_weight_volatility_1h",
         "close_weight_volatility_1m",
     ):
-        inputs[key] = _monitor_strategy_value(self, pside, key, symbol)
+        inputs[key] = _monitor_strategy_value(self, pside, key, symbol, strategy_cache=strategy_cache)
     for key in (
         "wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
@@ -1757,6 +1769,9 @@ def _build_monitor_trailing_section(
                 "reason": reason,
             }
         }
+    # The whole section is synchronous. Discard resolved settings afterward so
+    # the next snapshot observes current config and symbol overrides.
+    strategy_cache = {}
     out: dict[str, dict[str, Any]] = {}
     for symbol, market_entry in sorted(market.items()):
         if not isinstance(market_entry, dict):
@@ -1803,6 +1818,7 @@ def _build_monitor_trailing_section(
                     position_price=position_price,
                     trailing_bundle=trailing_bundle,
                     market_entry=market_entry,
+                    strategy_cache=strategy_cache,
                 )
                 if entry_payload is not None:
                     side_payload["entry"] = entry_payload
@@ -1816,6 +1832,7 @@ def _build_monitor_trailing_section(
                     position_size=position_size,
                     position_price=position_price,
                     trailing_bundle=trailing_bundle,
+                    strategy_cache=strategy_cache,
                 )
                 if close_payload is not None:
                     side_payload["close"] = close_payload
