@@ -669,6 +669,19 @@ def _ensure_dtype(a: np.ndarray) -> np.ndarray:
     return a
 
 
+def _sorted_candle_copy(candles: np.ndarray) -> np.ndarray:
+    """Match structured timestamp sorting without sorting an already ordered range.
+
+    Strict order is intentional: duplicate timestamps still use NumPy's other
+    field tie-breakers. Every path returns detached storage, as np.sort does.
+    """
+    candles = _ensure_dtype(candles)
+    timestamps = candles["ts"]
+    if candles.size < 2 or np.all(timestamps[1:] > timestamps[:-1]):
+        return candles.copy()
+    return np.sort(candles, order="ts")
+
+
 def _ts_index(a: np.ndarray) -> np.ndarray:
     """Return sorted ts column as plain int64 array."""
     if a.size == 0:
@@ -2637,7 +2650,7 @@ class CandlestickManager:
             arrays = [a for a in arrays if a.size]
             if not arrays:
                 return
-            merged_disk = np.sort(np.concatenate(arrays), order="ts")
+            merged_disk = _sorted_candle_copy(np.concatenate(arrays))
 
             # If legacy data revealed earlier candles than our stored inception_ts,
             # update inception_ts now so archive prefetch logic doesn't skip.
@@ -2814,17 +2827,14 @@ class CandlestickManager:
         """
         if batch.size == 0:
             return
-        arr = np.sort(_ensure_dtype(batch), order="ts")
+        arr = _sorted_candle_copy(batch)
         tf_norm = self._normalize_timeframe_arg(timeframe, tf)
         source_norm = str(source or "").lower()
         persist_before_cache = tf_norm == "1m" and source_norm == "ws"
         candle_content_changed = True
         replaces_synthetic = False
         if tf_norm == "1m":
-            cached_before = np.sort(
-                _ensure_dtype(self._ensure_symbol_cache(symbol)),
-                order="ts",
-            )
+            cached_before = _sorted_candle_copy(self._ensure_symbol_cache(symbol))
             incoming_unique = self._merge_overwrite(
                 np.empty((0,), dtype=CANDLE_DTYPE),
                 arr,
@@ -3073,9 +3083,9 @@ class CandlestickManager:
     def _merge_overwrite(self, existing: np.ndarray, new: np.ndarray) -> np.ndarray:
         """Merge two candle arrays by ts, preferring values from `new` on conflict."""
         if existing.size == 0:
-            return np.sort(_ensure_dtype(new), order="ts")
+            return _sorted_candle_copy(new)
         if new.size == 0:
-            return np.sort(_ensure_dtype(existing), order="ts")
+            return _sorted_candle_copy(existing)
         a = _ensure_dtype(existing)
         b = _ensure_dtype(new)
         # Put existing first, then new; then keep last seen per ts to prefer new.
@@ -3727,7 +3737,7 @@ class CandlestickManager:
         if cached is None or cached.size == 0:
             cached = np.empty((0,), dtype=CANDLE_DTYPE)
         else:
-            cached = np.sort(_ensure_dtype(cached), order="ts")
+            cached = _sorted_candle_copy(cached)
             provisional_ts = self._synthetic_timestamps.get(symbol, set())
             if provisional_ts:
                 cached = cached[
