@@ -17,6 +17,7 @@ import weakref
 from typing import Any, Iterable, Mapping, Protocol
 
 from live.balance_composition import format_balance_composition_sample
+from live.console_admission import ConsoleAdmission
 from live.diagnostic_safety import bounded_exception_type
 
 
@@ -3235,7 +3236,40 @@ def format_forager_eligibility_console(data: Mapping[str, Any]) -> str:
     return message[:_FORAGER_ELIGIBILITY_CONSOLE_RECORD_LIMIT]
 
 
+def _format_revised_hsl_console(event: LiveEvent) -> str:
+    data = event.data
+    # Explicit input quality rather than an ambiguous generic "degraded" label.
+    # Cycle correlation and individual estimation reasons remain in the event.
+    def token(value: Any, limit: int) -> str:
+        return re.sub(r"[^a-zA-Z0-9_./:-]", "_", str(value or "-"))[:limit]
+    counts = data.get("counts")
+    counts = counts if isinstance(counts, Mapping) else {}
+    def count(key: str) -> str:
+        value = _data_int(counts, key)
+        return "?" if value is None or value < 0 else str(min(value, 999_999))
+    parts = [
+        "[risk] HSL", token(data.get("observation_status"), 22),
+        "mode=" + token(data.get("signal_mode"), 8),
+        *(f"{key}={count(key)}" for key in ("green", "red", "inactive", "unavailable", "estimated")),
+    ]
+    missing = data.get("account_unavailable")
+    if isinstance(missing, list) and missing:
+        parts.append("account=" + ",".join(token(value, 12) for value in missing[:3]))
+    scopes = data.get("scopes")
+    if isinstance(scopes, list) and scopes and isinstance(scopes[0], Mapping):
+        row = scopes[0]
+        parts.append("scope=" + token(row.get("symbol"), 24) + "/" + token(row.get("pside"), 5))
+        reasons = row.get("estimates")
+        reason = row.get("unavailable_reason") or (reasons[0] if isinstance(reasons, list) and reasons else None)
+        if reason:
+            parts.append("cause=" + token(reason, 28))
+    message = " ".join(parts)
+    return message if len(message) <= 195 else message[:192] + "..."
+
+
 def format_console_event(event: LiveEvent) -> str:
+    if event.event_type == EventTypes.HSL_STATUS and event.data.get("engine") == "revised":
+        return _format_revised_hsl_console(event)
     if (
         event.event_type == EventTypes.HEALTH_SUMMARY
         and event.reason_code == ReasonCodes.PERIODIC_HEALTH_SUMMARY
@@ -3296,13 +3330,41 @@ def format_console_event(event: LiveEvent) -> str:
     return base
 
 
-class ConsoleSummarySink:
-    def __init__(self, logger: logging.Logger | None = None):
-        self.logger = logger or logging.getLogger(__name__)
+def _revised_hsl_console_state(event: LiveEvent) -> tuple | None:
+    """Opt in only complete producer-owned state; old/unknown payloads stay visible."""
+    if event.event_type != EventTypes.HSL_STATUS or event.data.get("engine") != "revised":
+        return None
+    data = event.data
+    token = data.get("console_state")
+    observation = data.get("observation_status")
+    missing = data.get("account_unavailable")
+    if (not isinstance(token, str) or re.fullmatch(r"[a-f0-9]{64}", token) is None
+            or not isinstance(observation, str)
+            or observation not in {"current", "stale", "diagnostic_unavailable"}
+            or not isinstance(missing, list)
+            or any(not isinstance(value, str) or value not in {"balance", "positions", "open_orders"}
+                   for value in missing)):
+        return None
+    return (token, observation, tuple(sorted(missing)), event.level, event.status)
 
-    def write(self, event: LiveEvent) -> str:
+
+class ConsoleSummarySink:
+    def __init__(self, logger: logging.Logger | None = None, *,
+                 admission: ConsoleAdmission | None = None):
+        self.logger = logger or logging.getLogger(__name__)
+        self.admission = admission if admission is not None else ConsoleAdmission()
+
+    def write(self, event: LiveEvent) -> str | None:
         message = format_console_event(event)
-        self.logger.log(_logging_level(event.level), message)
+        state = _revised_hsl_console_state(event)
+        emit = lambda text: self.logger.log(_logging_level(event.level), text)
+        if state is not None:
+            key = (event.exchange, event.user, event.bot_id, event.event_type)
+            return self.admission.write(
+                key, state, message, emit,
+                reminder_seconds=300.0 if event.status == "degraded" else None,
+            )
+        emit(message)
         return message
 
 

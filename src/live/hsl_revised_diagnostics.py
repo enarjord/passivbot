@@ -70,6 +70,13 @@ def record(bot, wave):
             tier=('red' if counts['red'] else 'unavailable' if counts['unavailable']
                   else 'green' if counts['green'] else 'inactive'),
             scopes=rows[:SCOPE_LIMIT], omitted_scopes=max(0, len(rows)-SCOPE_LIMIT))
+        # Human materiality ignores estimator-reason churn, numeric movement and
+        # cycle timestamps. Include every scope before either payload sample cap:
+        # equal aggregate counts must not hide a different affected position.
+        observation['console_state'] = hashlib.sha256(json.dumps(sorted([
+            (r['signal_mode'], r['symbol'] or '', r['pside'] or '', r['action'] or '',
+             r['tier'] or '', r['availability'], r['unavailable_reason'] or '', r['estimated'])
+            for r in rows]), sort_keys=True).encode()).hexdigest()
         scope_signature = hashlib.sha256(json.dumps([
             (r['signal_mode'], r['symbol'], r['pside'], r['action'], r['availability'],
              r['unavailable_reason'], r['estimates']) for r in rows], sort_keys=True).encode()).hexdigest()
@@ -105,7 +112,7 @@ def _emit_status(bot, data, scope_signature):
     console_errors_before = _console_sink_error_count(bot)
     emitted = _safe_emit(bot, EventTypes.HSL_STATUS, component='risk.hsl', tags=(EventTags.RISK, EventTags.SUMMARY),
         level='warning' if unavailable else 'info',
-        status='degraded' if unavailable or counts['estimated'] else 'ok',
+        status='degraded' if unavailable or counts['estimated'] else 'succeeded',
         cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
     console_errors_after = _console_sink_error_count(bot)
     console_failed = (console_errors_before is not None and console_errors_after is not None

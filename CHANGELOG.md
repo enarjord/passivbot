@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
+  retaining immediate scope/risk/availability changes and full structured events. Console summaries
+  identify estimated inputs explicitly and aggregate equivalent updates at most every five minutes;
+  estimate-free recovery events now use a valid registered status.
+
 - Batch compatible GPU optimization suite scenarios even when scenario screening is disabled,
   preserving scenario scoring, exact validation, and existing dispatch limits.
 

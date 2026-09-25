@@ -69,6 +69,11 @@ belong in canonical loading/formatting; runtime consumers must not reapply them.
 - Use `error_contract.md` for the precise meanings of propagate, unavailable, defer, fail closed,
   degraded, and fatal.
 
+## Console Readability
+
+Keep console logs easy on human eyes and useful to both humans and agents: show meaningful
+changes, actions and concise summaries; suppress repetitive noise. Follow `logging_policy.md`.
+
 ## Scope, Testing, And Compatibility
 
 - Keep changes aligned with the requested task; avoid speculative abstractions and unrelated cleanup.
