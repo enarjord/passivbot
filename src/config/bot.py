@@ -1084,7 +1084,9 @@ def format_bot_config(
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     from .migrations.entry_ema import migrate_entry_ema_spans
     from .migrations.unstuck_ema import migrate_unstuck_ema_spans
+    from .migrations.entry_cooldown import migrate_entry_cooldown
 
+    migrate_entry_cooldown(result, tracker=tracker)
     migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(result, verbose=verbose, tracker=tracker)

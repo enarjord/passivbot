@@ -36,7 +36,7 @@ async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkey
         block['red_threshold'] = .5
         for pside in ('long', 'short'):
             cfg['bot'][pside]['unstuck']['enabled'] = False
-            cfg['bot'][pside]['risk']['entry_cooldown_minutes'] = 0.
+            cfg['bot'][pside]['entry_cooldown']['base_duration_minutes'] = 0.
             cfg['live']['approved_coins'][pside] = ['BTC'] if pside == side else []
         cfg['live']['max_realized_loss_pct'] = 1.
     config_path = tmp_path / 'config.json'

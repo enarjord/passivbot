@@ -2064,10 +2064,12 @@ class MpsSingleCoinProxy:
             strategy = dict(payload.strategy_params_list[0][side])
             risk = config["bot"][side]["risk"]
             if self.strategy_kind == "trailing_martingale":
-                strategy = flatten_trailing_martingale_params(strategy, risk)
+                strategy = flatten_trailing_martingale_params(
+                    strategy, flatten_shared_bot_side(config["bot"][side])
+                )
             else:
                 strategy["entry_cooldown_minutes"] = float(
-                    risk.get("entry_cooldown_minutes", 0.0) or 0.0
+                    config["bot"][side]["entry_cooldown"]["base_duration_minutes"] or 0.0
                 )
                 strategy["total_wallet_exposure_limit"] = float(
                     risk["total_wallet_exposure_limit"]
@@ -2581,7 +2583,7 @@ def _build_multicoin_ema_coin_overrides(
             if key in strategy_patch:
                 matrix[coin_index, column] = float(effective_strategy[key])
         risk_patch = side_patch.get("risk", {}) or {}
-        if "entry_cooldown_minutes" in risk_patch:
+        if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
             matrix[coin_index, EMA_ANCHOR_COIN_OVERRIDE_COOLDOWN_COLUMN] = float(
                 effective_bot.get("risk_entry_cooldown_minutes", 0.0) or 0.0
             )
@@ -2718,7 +2720,7 @@ def _build_multicoin_tm_coin_overrides(
                 TRAILING_MARTINGALE_COIN_OVERRIDE_GATE_REENTRY_COLUMN,
             ] = float(effective_strategy["gate_reentry"])
         risk_patch = side_patch.get("risk", {}) or {}
-        if "entry_cooldown_minutes" in risk_patch:
+        if "base_duration_minutes" in (side_patch.get("entry_cooldown", {}) or {}):
             matrix[
                 coin_index,
                 TRAILING_MARTINGALE_COIN_OVERRIDE_COOLDOWN_COLUMN,

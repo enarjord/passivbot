@@ -640,12 +640,10 @@ def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> 
         source_side = bot.get(pside, {}) if isinstance(bot, dict) else {}
         if not isinstance(source_side, dict):
             source_side = {}
-        target_risk = target["bot"][pside].setdefault("risk", {})
-        target_bounds_risk = target["optimize"]["bounds"][pside].setdefault("risk", {})
         for flat_key, default_value in V7_ABSENT_RISK_DEFAULTS.items():
             group_name, local_key = FLAT_BOT_KEY_TO_GROUP_PATH[flat_key]
-            if group_name != "risk":
-                continue
+            target_risk = target["bot"][pside].setdefault(group_name, {})
+            target_bounds_risk = target["optimize"]["bounds"][pside].setdefault(group_name, {})
             if _source_side_has_shared_value(source_side, flat_key):
                 value = target_risk.get(local_key)
             else:
@@ -655,7 +653,7 @@ def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> 
                 if old_value != value:
                     _append_warning(
                         report,
-                        f"bot.{pside}.risk.{local_key} was not a v7 parameter; "
+                        f"bot.{pside}.{group_name}.{local_key} was not a v7 parameter; "
                         f"using {value!r} for v7 behavior instead of the v8 template value "
                         f"{old_value!r}.",
                         behavior_change=True,

@@ -1839,7 +1839,7 @@ def _validate_gpu_coin_overrides(
         allowed.update(
             {
                 ("live", f"forced_mode_{enabled_side}"),
-                ("bot", enabled_side, "risk", "entry_cooldown_minutes"),
+                ("bot", enabled_side, "entry_cooldown", "base_duration_minutes"),
                 ("bot", enabled_side, "risk", "we_excess_allowance_pct"),
                 ("bot", enabled_side, "wallet_exposure_limit"),
             }
@@ -1943,7 +1943,7 @@ def _validate_gpu_coin_overrides(
                     )
     if unsupported:
         supported_risk = (
-            "risk.entry_cooldown_minutes, risk.we_excess_allowance_pct"
+            "entry_cooldown.base_duration_minutes, risk.we_excess_allowance_pct"
         )
         if strategy_kind == "trailing_martingale":
             supported_risk += (

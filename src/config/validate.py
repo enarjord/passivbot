@@ -122,7 +122,7 @@ def validate_config(
             get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
         )
         if entry_cooldown_minutes < 0.0:
-            raise ValueError(f"bot.{pside}.risk.entry_cooldown_minutes must be >= 0.0")
+            raise ValueError(f"bot.{pside}.entry_cooldown.base_duration_minutes must be >= 0.0")
         normalize_we_excess_allowance_mode(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
             path=f"bot.{pside}.risk.we_excess_allowance_mode",

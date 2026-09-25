@@ -129,7 +129,7 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
     if raw_parts[0] in BOT_POSITION_SIDES or (
         raw_parts[0] == "*"
         and len(raw_parts) >= 2
-        and raw_parts[1] in ("strategy", "risk", "forager", "hsl", "unstuck")
+        and raw_parts[1] in ("strategy", "entry_cooldown", "risk", "forager", "hsl", "unstuck")
     ):
         parts = ("bot", *raw_parts)
     else:
@@ -160,6 +160,10 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
         and parts[-1] in ("ema_span_0", "ema_span_1")
     ):
         parts = (*parts[:-1], "entry", parts[-1])
+    if parts[-2:] == ("risk", "entry_cooldown_minutes"):
+        parts = (*parts[:-2], "entry_cooldown", "base_duration_minutes")
+    elif parts == ("entry_cooldown_minutes",):
+        parts = ("entry_cooldown", "base_duration_minutes")
     return tuple(parts)
 
 
@@ -212,6 +216,11 @@ def path_suffix_matches_selector(path: tuple[str, ...], selector_path: tuple[str
 
 
 def bound_path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+    if selector_path and selector_path[-1] == "risk" and path[-2:] == (
+        "entry_cooldown", "base_duration_minutes"
+    ):
+        # Preserve historical risk-group selectors after moving the public leaf.
+        path = (*path[:-2], "risk", "entry_cooldown_minutes")
     return path_matches_selector(path, selector_path) or path_suffix_matches_selector(
         path, selector_path
     )

@@ -28,7 +28,7 @@ def _parse(overrides, *, loaded=None):
 @pytest.mark.parametrize(
     ("group", "key", "value"),
     [
-        ("risk", "entry_cooldown_minutes", 2.5),
+        ("entry_cooldown", "base_duration_minutes", 2.5),
         ("unstuck", "ema_gating_enabled", False),
         ("unstuck", "loss_allowance_pct", 0.027),
     ],
@@ -42,7 +42,7 @@ def test_added_and_retained_canonical_policy_paths_are_allowed(
 
 
 def test_policy_registry_and_legacy_aliases_are_derived_consistently():
-    assert "risk.entry_cooldown_minutes" in OVERRIDABLE_SHARED_BOT_PATHS
+    assert "entry_cooldown.base_duration_minutes" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "unstuck.ema_gating_enabled" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "unstuck.loss_allowance_pct" in OVERRIDABLE_SHARED_BOT_PATHS
     assert "risk.we_excess_allowance_mode" not in OVERRIDABLE_SHARED_BOT_PATHS
@@ -89,8 +89,8 @@ def test_removed_allowance_mode_in_full_file_is_warned_and_ignored(caplog):
         },
     )
 
-    risk = parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"]
-    assert risk == {"entry_cooldown_minutes": 1.5}
+    cooldown = parsed["coin_overrides"]["BTC"]["bot"]["long"]["entry_cooldown"]
+    assert cooldown == {"base_duration_minutes": 1.5}
     assert "is no longer overridable" in caplog.text
     assert "the file value is ignored" in caplog.text
 
@@ -129,9 +129,9 @@ def test_file_then_inline_precedence_and_long_short_independence():
     )
 
     bot = parsed["coin_overrides"]["BTC"]["bot"]
-    assert bot["long"]["risk"]["entry_cooldown_minutes"] == 0.05
+    assert bot["long"]["entry_cooldown"]["base_duration_minutes"] == 0.05
     assert bot["long"]["unstuck"]["ema_gating_enabled"] is False
-    assert bot["short"]["risk"]["entry_cooldown_minutes"] == 7.0
+    assert bot["short"]["entry_cooldown"]["base_duration_minutes"] == 7.0
     assert bot["short"]["unstuck"]["ema_gating_enabled"] is True
     assert bot["short"]["unstuck"]["loss_allowance_pct"] == 0.031
 
@@ -139,7 +139,7 @@ def test_file_then_inline_precedence_and_long_short_independence():
 def test_new_policy_fields_use_effective_config_and_type_validation():
     with pytest.raises(
         ValueError,
-        match=r"coin_overrides\.BTC produces an invalid config.*entry_cooldown_minutes",
+        match=r"coin_overrides\.BTC produces an invalid config.*base_duration_minutes",
     ):
         _parse({"BTC": {"bot": {"long": {"risk": {"entry_cooldown_minutes": -0.1}}}}})
 

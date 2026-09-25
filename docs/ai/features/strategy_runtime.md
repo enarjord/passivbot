@@ -19,7 +19,7 @@ internal compatibility surfaces: ignore them when adding current config fields, 
 production or live support from their presence. The only supported pre-V8 strategy migration path
 is the explicit `passivbot tool migrate-config-v7` workflow for normalized V7 trailing-grid input.
 
-With `entry_cooldown_minutes = 0.0`, `trailing_grid_v7` preserves v7's simultaneous grid-entry
+With `entry_cooldown.base_duration_minutes = 0.0`, `trailing_grid_v7` preserves v7's simultaneous grid-entry
 ladder even when a later trailing leg uses retracement. Its recursive generator stops expansion
 before stacking retracement-dependent trailing orders. Positive entry cooldowns still stage at
 most one position-adding order and apply their configured post-fill delay.

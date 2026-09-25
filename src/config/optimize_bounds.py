@@ -20,6 +20,7 @@ def _flatten_strategy_bound_items(bounds: dict, prefix: tuple[str, ...] = ()):
 
 
 SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
+    "entry_cooldown": {"base_duration_minutes": "risk_entry_cooldown_minutes"},
     "forager": {
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
         "score_weights_volatility": "forager_score_weights_volatility",
@@ -34,7 +35,6 @@ SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
         "red_threshold": "hsl_red_threshold",
     },
     "risk": {
-        "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
@@ -75,8 +75,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_minutes": [720, 720, 1],
             "red_threshold": [0.15, 0.15, 0.001]
         },
+        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
-            "entry_cooldown_minutes": [0, 60, 0.1],
             "n_positions": [7, 7, 1],
             "position_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_exposure_enforcer_threshold": [1, 1, 0.001],
@@ -106,8 +106,8 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "ema_span_minutes": [1, 720, 1],
             "red_threshold": [0.01, 0.15, 0.001]
         },
+        "entry_cooldown": {"base_duration_minutes": [0, 60, 0.1]},
         "risk": {
-            "entry_cooldown_minutes": [0, 60, 0.1],
             "n_positions": [5, 5, 1],
             "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
             "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],

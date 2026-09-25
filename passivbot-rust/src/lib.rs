@@ -6,6 +6,7 @@ mod coin_selection;
 mod constants;
 mod dynamic;
 mod entries;
+mod entry_cooldown;
 mod equity_hard_stop_loss;
 mod gpu;
 mod hsl_revised;

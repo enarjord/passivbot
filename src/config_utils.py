@@ -2282,6 +2282,14 @@ def add_arguments_recursively(
                 old_acronym = create_acronym(old_name, acronyms)
                 hidden_names.append(f"-{old_acronym}")
                 acronyms.add(old_acronym)
+            if full_name.endswith("entry_cooldown.base_duration_minutes"):
+                old_name = full_name.replace(
+                    "entry_cooldown.base_duration_minutes", "risk.entry_cooldown_minutes"
+                )
+                hidden_names.extend([f"--{old_name}", f"--{old_name.replace('.', '_')}"])
+                old_acronym = create_acronym(old_name, acronyms)
+                hidden_names.append(f"-{old_acronym}")
+                acronyms.add(old_acronym)
             if command is None or len(acronym) > 1:
                 hidden_names.append(f"-{acronym}")
             _register_argument(

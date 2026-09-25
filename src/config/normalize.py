@@ -101,13 +101,17 @@ def normalize_config(
         }
         apply_backward_compatibility_renames(raw_optimize_compat, verbose=False, tracker=None)
         from .migrations.entry_ema import migrate_entry_ema_tree
+        from .migrations.entry_cooldown import migrate_entry_cooldown_tree
 
+        migrate_entry_cooldown_tree(raw_optimize_compat)
         migrate_entry_ema_tree(raw_optimize_compat)
         raw_optimize_snapshot = raw_optimize_compat["optimize"]
 
     from .migrations.entry_ema import migrate_entry_ema_spans
     from .migrations.unstuck_ema import migrate_unstuck_ema_spans
+    from .migrations.entry_cooldown import migrate_entry_cooldown
 
+    migrate_entry_cooldown(result, tracker=tracker)
     migrate_entry_ema_spans(result, tracker=tracker)
 
     migrate_unstuck_ema_spans(

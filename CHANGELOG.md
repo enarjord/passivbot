@@ -6,6 +6,10 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Move entry cooldown to `bot.<side>.entry_cooldown.base_duration_minutes` and matching optimizer
+  bounds (config schema v8.5.0), retaining legacy config/CLI/selector aliases and all numeric defaults.
+  Isolate Rust cooldown timing policy without changing fill timing or staged entry behavior.
+
 - Add Lighter USDC perpetual trading through CCXT, including existing API-key authentication,
   one-way and reduce-only orders, cross/isolated margin, leverage, live and historical market data, and
   paginated fill/PnL history with restart reconstruction. See the Lighter setup guide.

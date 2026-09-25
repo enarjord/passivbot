@@ -1758,7 +1758,7 @@ def test_gpu_suite_inputs_accept_scenario_local_modeled_coin_overrides():
                 "bot": {
                     "long": {
                         "strategy": {"ema_anchor": {"offset": 0.012}},
-                        "risk": {"entry_cooldown_minutes": 15.0},
+                        "entry_cooldown": {"base_duration_minutes": 15.0},
                     }
                 }
             }
@@ -3608,8 +3608,8 @@ def test_gpu_multicoin_accepts_static_ema_coin_overrides(side):
             "bot": {
                 side: {
                     "strategy": {"ema_anchor": {"offset": 0.02, "ema_span_0": 90}},
+                    "entry_cooldown": {"base_duration_minutes": 15},
                     "risk": {
-                        "entry_cooldown_minutes": 15,
                         "we_excess_allowance_pct": 0.25,
                     },
                     "wallet_exposure_limit": 0.4,
@@ -4083,8 +4083,8 @@ def test_gpu_multicoin_accepts_static_tm_coin_overrides(side):
                             "close": {"qty_pct": 0.25},
                         }
                     },
+                    "entry_cooldown": {"base_duration_minutes": 15},
                     "risk": {
-                        "entry_cooldown_minutes": 15,
                         "we_excess_allowance_pct": 0.25,
                         "position_exposure_enforcer_enabled": True,
                         "position_exposure_enforcer_threshold": 0.8,
@@ -4489,7 +4489,7 @@ def test_gpu_multicoin_foundation_accepts_dual_side_coin_overrides():
                 },
                 "short": {
                     "strategy": {"ema_anchor": {"offset": 0.03}},
-                    "risk": {"entry_cooldown_minutes": 15},
+                    "entry_cooldown": {"base_duration_minutes": 15},
                 },
             }
         }
@@ -6022,7 +6022,7 @@ def test_gpu_fixed_bound_context_maps_effective_candidate_shadows():
     }
     effective = copy.deepcopy(config)
     effective["bot"]["long"]["strategy"]["ema_anchor"]["offset"] = 0.123
-    effective["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 17.0
+    effective["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 17.0
 
     bound_values, parameters = _gpu_fixed_bound_context(
         config,

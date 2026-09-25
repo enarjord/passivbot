@@ -354,7 +354,7 @@ def test_prep_backtest_args_uses_canonical_strategy_params_for_runtime_payload()
 def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     config = _base_config()
     config["live"]["strategy_kind"] = "ema_anchor"
-    config["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 3.0
+    config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 3.0
     config["bot"]["long"]["strategy"]["ema_anchor"] = {
             "base_qty_pct": 0.02,
             "ema_span_0": 55.0,

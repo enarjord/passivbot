@@ -321,10 +321,10 @@ def test_extract_side_context_includes_global_and_risk_paths():
         "live": {"forced_mode_long": "p", "max_realized_loss_pct": 0.05},
         "bot": {
             "long": {
+                "entry_cooldown": {"base_duration_minutes": 2.0},
                 "risk": {
                     "total_wallet_exposure_limit": 1.0,
                     "n_positions": 1,
-                    "entry_cooldown_minutes": 2.0,
                     "position_exposure_enforcer_enabled": True,
                     "position_exposure_enforcer_threshold": 0.8,
                     "total_exposure_entry_gate_enabled": True,
@@ -393,7 +393,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
                 "bot": {
                     "long": {
                         "hsl": {"enabled": True},
-                        "risk": {"entry_cooldown_minutes": 9.0},
+                        "entry_cooldown": {"base_duration_minutes": 9.0},
                         "strategy": {
                             "trailing_martingale": {
                                 "entry": {"threshold_base_pct": 0.2}
@@ -415,7 +415,7 @@ def test_extract_side_context_reports_hsl_and_omitted_coin_strategy_overrides():
     assert context["coin_strategy_override_symbols"] == ["XRP"]
     assert context["coin_context_override_descriptions"] == [
         "DOGE (bot.long.hsl)",
-        "XRP (bot.long.hsl, bot.long.risk, live.forced_mode_long)",
+        "XRP (bot.long.entry_cooldown, bot.long.hsl, live.forced_mode_long)",
     ]
 
 

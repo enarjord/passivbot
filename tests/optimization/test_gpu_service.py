@@ -2630,8 +2630,8 @@ def test_multicoin_coin_overrides_pack_only_explicit_exact_values():
                         "strategy": {
                             "ema_anchor": {"offset": 0.25, "ema_span_0": 90.0}
                         },
+                        "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
-                            "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
                         },
                         "wallet_exposure_limit": 0.4,
@@ -2879,7 +2879,7 @@ def test_multicoin_coin_overrides_pack_dual_sides_independently():
                     },
                     "short": {
                         "strategy": {"ema_anchor": {"offset": 0.5}},
-                        "risk": {"entry_cooldown_minutes": 30.0},
+                        "entry_cooldown": {"base_duration_minutes": 30.0},
                     },
                 }
             }
@@ -3167,8 +3167,8 @@ def test_multicoin_tm_coin_overrides_pack_only_explicit_exact_values():
                                 },
                             }
                         },
+                        "entry_cooldown": {"base_duration_minutes": 15.0},
                         "risk": {
-                            "entry_cooldown_minutes": 15.0,
                             "we_excess_allowance_pct": 0.25,
                             "position_exposure_enforcer_enabled": True,
                             "position_exposure_enforcer_threshold": 0.8,

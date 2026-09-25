@@ -11,7 +11,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 ## Config version
 
 `config_version` is a top-level schema field, not a backtest setting or package version.
-Current configs use `v8.4.0`; supported v8.0.0–v8.3.0 inputs migrate on load. Review migration
+Current configs use `v8.5.0`; supported v8.0.0–v8.4.0 inputs migrate on load. Review migration
 warnings and normalized settings. For v7 trailing-grid configs, use the explicit
 [migration helper](v7_to_v8_migration.md). See [release status](releases.md) for the distinction
 between schemas, package versions, and tags.
@@ -342,7 +342,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
       [
         risk.position_exposure_enforcer_enabled,
         risk.position_exposure_enforcer_threshold,
-        risk.entry_cooldown_minutes,
+        entry_cooldown.base_duration_minutes,
         risk.we_excess_allowance_pct,
         hsl.cooldown_minutes_after_red,
         hsl.ema_span_minutes,
@@ -485,9 +485,15 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `"all"`: full available history.
   - Live and backtest use the same contract for realized-PnL risk windows: filter realized fill events to the active lookback window, then recompute cumulative PnL, current value, and peak from only that filtered sequence.
 - **position_exposure_enforcer_threshold**: Per-position multiplier that triggers the position exposure enforcer. When a bot-managed position’s exposure exceeds `wallet_exposure_limit * (1 + effective_we_excess_allowance_pct) * position_exposure_enforcer_threshold`, the bot emits a reduce-only order to bring it back under control. Set <1.0 for continual trimming or `1.0` for a hard cap; use `position_exposure_enforcer_enabled = false` to disable.
-- **entry_cooldown_minutes**: Time-based cooldown after the last position-increasing fill for that coin+pside. Full simultaneous entry ladders are emitted only when `entry_cooldown_minutes = 0.0` and entry retracement is disabled. The deprecated `trailing_grid_v7` compatibility strategy is the exception: at zero cooldown it preserves v7's internally bounded simultaneous grid leg, whose generator stops before stacking retracement-dependent trailing orders. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
+- **entry_cooldown.base_duration_minutes**: Time-based cooldown after the last position-increasing fill for that coin+pside. Full simultaneous entry ladders are emitted only when `entry_cooldown.base_duration_minutes = 0.0` and entry retracement is disabled. The deprecated `trailing_grid_v7` compatibility strategy is the exception: at zero cooldown it preserves v7's internally bounded simultaneous grid leg, whose generator stops before stacking retracement-dependent trailing orders. Any positive value enforces a cooldown of that many minutes and limits staged position-adding entries to one order, including fractional values such as `0.05` for roughly three seconds. Backtests evaluate entries on one-minute steps, so any positive sub-minute cooldown prevents a same-minute replacement/add and effectively waits until the next backtest decision minute; live trading enforces the actual millisecond duration between intra-minute checks.
   This field may be overridden per coin+side as
-  `coin_overrides.<coin>.bot.<side>.risk.entry_cooldown_minutes`.
+  `coin_overrides.<coin>.bot.<side>.entry_cooldown.base_duration_minutes`.
+  Schema v8.5.0 moves this field out of `risk` without changing numeric defaults or timing.
+  Legacy `risk.entry_cooldown_minutes` configs, dotted/underscore CLI flags, and short CLI aliases
+  remain supported. Conflicting new and old grouped values in the same input produce a warning;
+  the new grouped value wins. Optimizer bounds use `optimize.bounds.<side>.entry_cooldown.base_duration_minutes`;
+  the internal optimizer key `long/short_risk_entry_cooldown_minutes` remains stable. Legacy `risk`
+  group selectors still include cooldown for compatibility; `entry_cooldown` selects only cooldown.
 - **total_exposure_entry_gate_enabled**: Enables the TWEL entry cap for bot-generated entries. When enabled, entries are blocked or cropped before projected snapped-balance TWE, including existing same-side exchange positions, can exceed `min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`. When disabled, excess allowance may let entries push same-side TWE above raw TWEL.
 - **total_exposure_enforcer_enabled**: Enables TWEL auto-reduce repair for already-over-target same-side exchange exposure. Manual and panic exposure counts toward the trigger, but only managed positions can receive TWEL auto-reduce orders. Disable this independently from the TWEL entry gate when you want entry capping without repair closes, or repair closes without entry capping.
 - **total_exposure_enforcer_policy**: TWEL auto-reduce candidate policy. `reduce_overweight` trims managed positions whose WE is above `total_wallet_exposure_limit * total_exposure_enforcer_threshold / effective_n_positions`, where live `effective_n_positions` follows the current dynamic tradable-slot count and falls back to the current held-position count when no symbols are entry-eligible. `reduce_portfolio` can trim any managed open position on that side. Both policies prefer profitable/breakeven reductions before shallow adverse-loss reductions and stop once projected TWE reaches the repair target. Default: `reduce_overweight`.
