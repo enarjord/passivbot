@@ -478,9 +478,6 @@ struct TrailingMartingaleMulticoinSideState {
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     HslDrawdownEmaTailStats hsl_ema_tail;
 #endif
-    ulong coin_hsl_entry_blocked_mask;
-    ulong one_way_initial_blocked_mask;
-    ulong candle_eligibility_mask;
     float ema0[MAX_COINS];
     float ema1[MAX_COINS];
     float ema2[MAX_COINS];
@@ -521,7 +518,7 @@ struct TrailingMartingaleMulticoinSideState {
     float max_since_open[MAX_COINS];
     float min_since_max[MAX_COINS];
     int entry_tick[MAX_COINS];
-    int entry_gen_initial_tick[MAX_COINS];
+    float entry_gen_initial_price[MAX_COINS];
     int entry_gen_touch_tick[MAX_COINS];
     int entry_order_type[MAX_COINS];
     int entry_gate_suffix_keep_count[MAX_COINS];
@@ -547,9 +544,7 @@ struct TrailingMartingaleMulticoinSideState {
     bool close_is_unstuck_reducer[MAX_COINS];
     bool close_is_hsl_panic[MAX_COINS];
     bool entry_deferred_twel_gate;
-    bool selection_initialized;
     int max_tradable_seen;
-    int previous_effective_n_positions;
     float alpha0_coin[MAX_COINS];
     float alpha1_coin[MAX_COINS];
     float alpha2_coin[MAX_COINS];
@@ -640,7 +635,7 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
     float sim_pprice,
     float generation_balance,
     float allowed_wel,
-    int generation_initial_tick,
+    float generation_initial_price,
     int generation_touch_tick,
     float generation_market_price,
     float qty_step,
@@ -690,8 +685,7 @@ inline RecursiveEntryCandidate next_recursive_grid_entry(
         : int(floor(
             band * (1.0f - initial_ema_dist) / price_step + 1.0e-6f
         ));
-    int initial_tick = generation_initial_tick;
-    float initial_price = float(initial_tick) * price_step;
+    float initial_price = generation_initial_price;
     float min_iq = min_entry_qty(
         initial_price, qty_step, min_qty, min_cost, c_mult
     );
@@ -912,7 +906,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
         suffix[c] = next_recursive_grid_entry(
             side, config, coin_overrides, c, short_side,
             sim_psize[c], sim_pprice[c], side.entry_gen_balance[c],
-            side.entry_gen_allowed_wel[c], side.entry_gen_initial_tick[c],
+            side.entry_gen_allowed_wel[c], side.entry_gen_initial_price[c],
             sim_touch_tick[c], side.entry_gen_market_price[c],
             coin_settings[coin_offset + 0],
             coin_settings[coin_offset + 1],
@@ -1045,7 +1039,7 @@ inline void apply_tm_multicoin_recursive_entry_twel_gate(
             sim_psize[best_coin], sim_pprice[best_coin],
             side.entry_gen_balance[best_coin],
             side.entry_gen_allowed_wel[best_coin],
-            side.entry_gen_initial_tick[best_coin],
+            side.entry_gen_initial_price[best_coin],
             sim_touch_tick[best_coin],
             side.entry_gen_market_price[best_coin],
             qty_step, coin_settings[coin_offset + 1], min_qty, min_cost,
@@ -1337,7 +1331,7 @@ inline void clear_tm_multicoin_coin_orders(
     side.entry_gate_suffix_keep_count[coin] = 0;
     side.entry_gate_suffix_partial_rank[coin] = -1;
     side.entry_tick[coin] = 0;
-    side.entry_gen_initial_tick[coin] = 0;
+    side.entry_gen_initial_price[coin] = 0;
     side.entry_gen_touch_tick[coin] = 0;
     side.entry_order_type[coin] = 0;
     side.entry_recursive_market_mode[coin] = false;
@@ -1568,7 +1562,7 @@ inline bool process_tm_multicoin_side_fills(
     thread float* close_grid_gen_psize = side.close_grid_gen_psize;
     thread float* close_grid_prefix_qty = side.close_grid_prefix_qty;
     thread int* entry_tick = side.entry_tick;
-    thread int* entry_gen_initial_tick = side.entry_gen_initial_tick;
+    thread float* entry_gen_initial_price = side.entry_gen_initial_price;
     thread int* entry_gen_touch_tick = side.entry_gen_touch_tick;
     thread int* close_tick = side.close_tick;
     thread int* secondary_close_tick = side.secondary_close_tick;
@@ -2113,7 +2107,7 @@ inline bool process_tm_multicoin_side_fills(
                     candidate = next_recursive_grid_entry(
                         side, config, coin_overrides, c, short_side,
                         sim_psize, sim_pprice, entry_gen_balance[c],
-                        entry_gen_allowed_wel[c], entry_gen_initial_tick[c],
+                        entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
                         true, market_order_near_touch_threshold
@@ -2203,7 +2197,7 @@ inline bool process_tm_multicoin_side_fills(
                     candidate = next_recursive_grid_entry(
                         side, config, coin_overrides, c, short_side,
                         sim_psize, sim_pprice, entry_gen_balance[c],
-                        entry_gen_allowed_wel[c], entry_gen_initial_tick[c],
+                        entry_gen_allowed_wel[c], entry_gen_initial_price[c],
                         sim_touch_tick, entry_gen_market_price[c],
                         qty_step, price_step, min_qty, min_cost, c_mult,
                         true, market_order_near_touch_threshold
@@ -2400,13 +2394,8 @@ inline void init_trailing_martingale_multicoin_side_state(
 #if PASSIVBOT_HSL_EMA_TAIL_ENABLED
     side.hsl_ema_tail = init_hsl_drawdown_ema_tail_stats();
 #endif
-    side.coin_hsl_entry_blocked_mask = 0ul;
-    side.one_way_initial_blocked_mask = 0ul;
-    side.candle_eligibility_mask = 0ul;
     side.entry_deferred_twel_gate = false;
-    side.selection_initialized = false;
     side.max_tradable_seen = 0;
-    side.previous_effective_n_positions = 0;
     for (int c = 0; c < MAX_COINS; ++c) {
         float seed_close = c < coin_count
             ? coin_settings[c * COIN_COLS + 9] : 0.0f;
@@ -2457,7 +2446,7 @@ inline void init_trailing_martingale_multicoin_side_state(
         side.max_since_open[c] = 0.0f;
         side.min_since_max[c] = INFINITY;
         side.entry_tick[c] = 0;
-        side.entry_gen_initial_tick[c] = 0;
+        side.entry_gen_initial_price[c] = 0;
         side.entry_gen_touch_tick[c] = 0;
         side.entry_order_type[c] = 0;
         side.entry_gate_suffix_keep_count[c] = 0;
@@ -2992,8 +2981,7 @@ inline void update_tm_multicoin_side_selection(
     float guaranteed_balance_lower
 ) {
     thread HslState* coin_hsl = side.coin_hsl;
-    thread ulong& coin_hsl_entry_blocked_mask =
-        side.coin_hsl_entry_blocked_mask;
+    ulong coin_hsl_entry_blocked_mask = 0ul;
     thread float* ema0 = side.ema0;
     thread float* ema1 = side.ema1;
     thread float* ema2 = side.ema2;
@@ -3005,52 +2993,27 @@ inline void update_tm_multicoin_side_selection(
     thread bool* incumbent = side.incumbent;
     thread bool* survivor = side.survivor;
 
-    // Exact Rust ranks flat candidates every minute. Re-ranking only after
-    // state changes keeps the proxy inexpensive; independent exact
-    // validations and drift gates police this approximation.
-    bool coin_hsl_eligibility_changed = false;
+    // Rankings and incumbent hysteresis evolve every minute, even without a
+    // fill. Refresh flat candidates just as exact Rust does; held positions
+    // remain selected below.
     if (config.coin_hsl_mode) {
-        ulong blocked_mask = 0ul;
         for (int c = 0; c < coin_count; ++c) {
             if (hsl_mode(coin_hsl[c], false) != 0) {
-                blocked_mask |= 1ul << ulong(c);
+                coin_hsl_entry_blocked_mask |= 1ul << ulong(c);
             }
         }
-        coin_hsl_eligibility_changed =
-            blocked_mask != coin_hsl_entry_blocked_mask;
-        coin_hsl_entry_blocked_mask = blocked_mask;
     }
-    bool one_way_eligibility_changed = one_way_initial_blocked_mask
-        != side.one_way_initial_blocked_mask;
-    side.one_way_initial_blocked_mask = one_way_initial_blocked_mask;
-    ulong candle_eligibility_mask = 0ul;
     int current_tradable_count = 0;
-    bool flat_selected_became_ineligible = false;
     for (int c = 0; c < coin_count; ++c) {
         int coin_offset = c * COIN_COLS;
         int bar_offset = (k * coin_count + c) * 4;
-        bool eligible_now = k >= int(coin_settings[coin_offset + 8])
+        if (k >= int(coin_settings[coin_offset + 8])
             && k <= int(coin_settings[coin_offset + 7])
-            && finite_positive(bars[bar_offset + 2]);
-        if (eligible_now) {
-            candle_eligibility_mask |= 1ul << ulong(c);
-            if (coin_override_or(coin_overrides, c, 24, -1.0f) != 0.0f) {
-                current_tradable_count += 1;
-            }
-        } else if (selected[c] && psize[c] <= 0.0f) {
-            flat_selected_became_ineligible = true;
+            && finite_positive(bars[bar_offset + 2])
+            && coin_override_or(coin_overrides, c, 24, -1.0f) != 0.0f) {
+            current_tradable_count += 1;
         }
     }
-    bool candle_eligibility_changed = side.selection_initialized
-        && candle_eligibility_mask != side.candle_eligibility_mask;
-    side.candle_eligibility_mask = candle_eligibility_mask;
-    bool reselect = !side.selection_initialized || any_fill
-        || coin_hsl_eligibility_changed
-        || one_way_eligibility_changed
-        || candle_eligibility_changed
-        || flat_selected_became_ineligible
-        || effective_n_positions != side.previous_effective_n_positions;
-    if (!reselect) return;
 
     int active_count = 0;
     for (int c = 0; c < coin_count; ++c) {
@@ -3244,8 +3207,6 @@ inline void update_tm_multicoin_side_selection(
             }
         }
     }
-    side.selection_initialized = true;
-    side.previous_effective_n_positions = effective_n_positions;
 }
 
 // Preselect one side's best eligible candidate without creating an order.
@@ -3620,7 +3581,7 @@ inline void generate_tm_multicoin_side_orders(
     thread float* max_since_open = side.max_since_open;
     thread float* min_since_max = side.min_since_max;
     thread int* entry_tick = side.entry_tick;
-    thread int* entry_gen_initial_tick = side.entry_gen_initial_tick;
+    thread float* entry_gen_initial_price = side.entry_gen_initial_price;
     thread int* entry_gen_touch_tick = side.entry_gen_touch_tick;
     thread int* entry_order_type = side.entry_order_type;
     thread int* close_tick = side.close_tick;
@@ -3931,7 +3892,7 @@ inline void generate_tm_multicoin_side_orders(
         entry_gen_market_price[c] = 0.0f;
         entry_gen_psize[c] = 0.0f;
         entry_gen_pprice[c] = 0.0f;
-        entry_gen_initial_tick[c] = 0;
+        entry_gen_initial_price[c] = 0;
         entry_gen_touch_tick[c] = 0;
         entry_order_type[c] = 0;
         side.entry_gate_suffix_keep_count[c] = 0;
@@ -4067,12 +4028,14 @@ inline void generate_tm_multicoin_side_orders(
             ? touch_down >= band_tick : touch_up <= band_tick);
         int initial_tick = initial_touch_controls ? entry_touch : band_tick;
         float initial_price = float(initial_tick) * price_step;
-        float min_iq = min_entry_qty(
-            initial_price, qty_step, min_qty, min_cost, c_mult
-        );
+        // Rust sizes at the selected raw touch, then finalizes the entry tick.
+        float initial_sizing_price = initial_touch_controls ? price_now : initial_price;
+        float min_iq = initial_touch_controls
+            ? as_type<float>(touch_min_qty_bits[k * C + c])
+            : min_entry_qty(initial_price, qty_step, min_qty, min_cost, c_mult);
         float iq = fmax(min_iq, round_step(
             balance * allowed_coin_wel * coin_initial_qty_pct
-                / fmax(initial_price * c_mult, 1.0e-12f),
+                / fmax(initial_sizing_price * c_mult, 1.0e-12f),
             qty_step
         ));
         bool flat = psize[c] <= 0.0f;
@@ -4136,25 +4099,30 @@ inline void generate_tm_multicoin_side_orders(
             : touch_up <= raw_reentry_tick);
         int reentry_tick = reentry_touch_controls
             ? entry_touch : raw_reentry_tick;
+        float reentry_sizing_price = reentry_touch_controls
+            ? price_now : float(reentry_tick) * price_step;
         if (coin_gate_reentry) {
             bool band_controls = short_side
                 ? band_tick >= reentry_tick : band_tick <= reentry_tick;
-            if (band_controls) reentry_tick = band_tick;
+            if (band_controls) {
+                reentry_tick = band_tick;
+                reentry_sizing_price = float(band_tick) * price_step;
+                reentry_touch_controls = false;
+            }
         }
-        float reentry_price = float(reentry_tick) * price_step;
-        float min_rq = min_entry_qty(
-            reentry_price, qty_step, min_qty, min_cost, c_mult
-        );
+        float min_rq = reentry_touch_controls
+            ? as_type<float>(touch_min_qty_bits[k * C + c])
+            : min_entry_qty(reentry_sizing_price, qty_step, min_qty, min_cost, c_mult);
         float rq = fmax(iq_effective, fmax(min_rq, round_step(
             fmax(
                 psize[c] * coin_ddf,
                 balance * allowed_coin_wel * coin_initial_qty_pct
-                    / fmax(reentry_price * c_mult, 1.0e-12f)
+                    / fmax(reentry_sizing_price * c_mult, 1.0e-12f)
             ),
             qty_step
         )));
         float uncropped_rq = rq;
-        float we_if = (psize[c] * pprice[c] + rq * reentry_price)
+        float we_if = (psize[c] * pprice[c] + rq * reentry_sizing_price)
             * c_mult / fmax(balance, 1.0e-9f);
         float crop_fraction = (allowed_coin_wel - we)
             / fmax(we_if - we, 1.0e-12f);
@@ -4183,19 +4151,20 @@ inline void generate_tm_multicoin_side_orders(
             || coin_initial_qty_pct <= 0.0f || candidate_entry_tick <= 1) {
             quantity = 0.0f;
         }
-        float headroom = (
-            allowed_coin_wel * balance - psize[c] * pprice[c] * c_mult
-        ) / fmax(entry_price * c_mult, 1.0e-12f);
-        if ((psize[c] * pprice[c] + quantity * entry_price) * c_mult
-            / fmax(balance, 1.0e-9f) > allowed_coin_wel * 1.01f) {
-            quantity = fmin(
-                quantity, fmax(floor_step(headroom, qty_step), 0.0f)
+        // finalize_next_entry crops and enforces the minimum again at the
+        // executable price, after strategy sizing at the raw touch.
+        if (quantity > 0.0f) {
+            float final_min = min_entry_qty(
+                entry_price, qty_step, min_qty, min_cost, c_mult
             );
-        }
-        if (quantity + 1.0e-6f < min_entry_qty(
-            entry_price, qty_step, min_qty, min_cost, c_mult
-        )) {
-            quantity = 0.0f;
+            if ((psize[c] * pprice[c] + quantity * entry_price) * c_mult
+                / fmax(balance, 1.0e-9f) > allowed_coin_wel * 1.01f) {
+                float headroom = (
+                    allowed_coin_wel * balance - psize[c] * pprice[c] * c_mult
+                ) / fmax(entry_price * c_mult, 1.0e-12f);
+                quantity = round_step(headroom, qty_step);
+            }
+            quantity = fmax(quantity, final_min);
         }
         float strategy_quantity = quantity;
         bool reentry_cropped = strategy_quantity < uncropped_rq;
@@ -4238,7 +4207,7 @@ inline void generate_tm_multicoin_side_orders(
             entry_gen_market_price[c] = price_now;
             entry_gen_psize[c] = psize[c];
             entry_gen_pprice[c] = pprice[c];
-            entry_gen_initial_tick[c] = initial_tick;
+            entry_gen_initial_price[c] = initial_sizing_price;
             entry_gen_touch_tick[c] = entry_touch;
         }
         if (coin_entry_retracement_base <= 0.0f && quantity > 0.0f

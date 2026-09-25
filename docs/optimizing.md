@@ -690,6 +690,8 @@ available in normal Rust backtests, exact optimizer validation output, and CPU o
 The backend is hybrid rather than a replacement backtester:
 
 1. pymoo NSGA-II proposes large normalized candidate batches.
+   GPU parameter preparation mirrors exact validation's forager-weight normalization
+   and subsequent optimizer bound/step quantization before screening each candidate.
 2. A Rust-owned Metal screening program evaluates every candidate against candle data resident on
    MPS; Python only prepares buffers and dispatches the program. EMA-anchor and
    trailing-martingale use separate single-coin and multi-coin kernels. Directional runs keep
@@ -700,8 +702,12 @@ The backend is hybrid rather than a replacement backtester:
    from the original float64 data. EMA uses Rust-compatible directional ticks. Trailing-martingale
    uses those ticks to choose the controlling raw/target value before float32 can collapse nearby
    prices, then mirrors Rust's directional entry finalization and nearest-tick close finalization.
+   Entry quantities are sized at the controlling raw/target price, with exposure cropping
+   and exchange minimums checked again after finalizing the executable price.
    The multi-coin trailing-martingale screening kernel retains per-coin EMA, volatility, trailing,
-   position, cooldown, and pending-order state plus shared portfolio allocation. It stages one
+   position, cooldown, and pending-order state plus shared portfolio allocation. Flat candidates
+   are reranked each candle with incumbent score hysteresis, while held positions remain selected.
+   It stages one
    entry and close per coin per candle; exact Rust validation remains responsible for authoritative
    recursive same-candle ladders, and the normal constraint/rank/drift gates halt if that screening
    approximation stops ordering candidates reliably.

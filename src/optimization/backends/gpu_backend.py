@@ -3601,7 +3601,7 @@ def _checkpoint_signature(
             for name, index, bound in active
         ],
         "scoring": scoring,
-        "version": 5,  # Independent adjusted unstuck EMA state in GPU screening.
+        "version": 6,  # Exact weight canonicalization and TM entry/selection parity.
     }
     if anchor_plan is not None:
         payload["anchor_plan"] = {
@@ -3783,6 +3783,7 @@ def _build_proxy_parameter_dicts(
     anchor_parameter_overrides: list[dict[str, float]] | None = None,
     fixed_parameter_overrides: dict[str, float] | None = None,
     optimizer_overrides: set[str] | None = None,
+    sig_digits: int | None = None,
 ) -> list[dict]:
     """Include canonical pinned and active strategy values in each proxy candidate."""
 
@@ -3819,10 +3820,37 @@ def _build_proxy_parameter_dicts(
             }
         )
         parameters.update(fixed_parameter_overrides or {})
+        _apply_gpu_optimizer_overrides(parameters, optimizer_overrides or set())
+        _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits)
+        # Exact config reconstruction reapplies fixed and mirrored values after
+        # snapping the normalized vector back to its optimizer bounds.
+        parameters.update(fixed_parameter_overrides or {})
         result.append(
             _apply_gpu_optimizer_overrides(parameters, optimizer_overrides or set())
         )
     return result
+
+
+def _canonicalize_proxy_forager_weights(parameters, mapped, sig_digits):
+    """Mirror the exact evaluator's normalize -> bound/step -> rebuild pass."""
+    from config.bot import normalize_forager_score_weights
+
+    for side in ("long", "short"):
+        names = {
+            key: f"{side}_forager_score_weights_{key}"
+            for key in ("volume", "ema_readiness", "volatility")
+        }
+        if not all(name in parameters for name in names.values()):
+            continue
+        normalized = normalize_forager_score_weights(
+            {key: parameters[name] for key, name in names.items()},
+            path=f"bot.{side}.forager.score_weights",
+        )
+        for key, name in names.items():
+            if name in mapped:
+                parameters[name] = enforce_bounds(
+                    [normalized[key]], [mapped[name][1]], sig_digits
+                )[0]
 
 
 def _build_anchor_parameter_context(
@@ -4933,6 +4961,7 @@ def run_backend(
             anchor_parameter_overrides=anchor_parameter_overrides,
             fixed_parameter_overrides=fixed_parameter_overrides,
             optimizer_overrides=gpu_optimizer_overrides,
+            sig_digits=sig_digits,
         )
 
     def full_vector(row: np.ndarray) -> list[float]:

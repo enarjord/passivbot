@@ -2448,14 +2448,6 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     short_config.initial_ema_dist = 0.0f;
     long_config.n_positions = 1;
     short_config.n_positions = 1;
-    long_side.selection_initialized = false;
-    short_side.selection_initialized = false;
-    long_side.previous_effective_n_positions = 0;
-    short_side.previous_effective_n_positions = 0;
-    long_side.coin_hsl_entry_blocked_mask = 0ul;
-    short_side.coin_hsl_entry_blocked_mask = 0ul;
-    long_side.one_way_initial_blocked_mask = 0ul;
-    short_side.one_way_initial_blocked_mask = 0ul;
     for (int c = 0; c < 3; ++c) {
         long_side.psize[c] = 0.0f;
         short_side.psize[c] = 0.0f;
@@ -2508,12 +2500,6 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         output[c] = long_side.selected[c] ? 1.0f : 0.0f;
         output[3 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
-    output[6] = long_side.selection_initialized ? 1.0f : 0.0f;
-    output[7] = short_side.selection_initialized ? 1.0f : 0.0f;
-    output[8] = float(long_side.previous_effective_n_positions);
-    output[9] = float(short_side.previous_effective_n_positions);
-    output[10] = float(long_side.coin_hsl_entry_blocked_mask);
-    output[11] = float(short_side.coin_hsl_entry_blocked_mask);
     // Mimic a new opposite-held block on short's highest-ranked coin.
     // The changed mask must force reselection onto the next candidate.
     update_tm_multicoin_side_selection(
@@ -2521,13 +2507,12 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         1, 3, true, false, 1, 0.0f, 4ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
-        output[12 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+        output[6 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
-    output[15] = float(short_side.one_way_initial_blocked_mask);
-    output[16] = float(long_selection_blocked_mask);
-    output[17] = float(short_selection_blocked_mask);
-    output[18] = float(long_order_blocked_mask);
-    output[19] = float(short_order_blocked_mask);
+    output[9] = float(long_selection_blocked_mask);
+    output[10] = float(short_selection_blocked_mask);
+    output[11] = float(long_order_blocked_mask);
+    output[12] = float(short_order_blocked_mask);
     // Coin one is the current flat incumbent, but its validity window ended
     // at k=1. With no fill or mask change, k=2 must still evict it and select
     // the only surviving unblocked candidate.
@@ -2536,7 +2521,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
         2, 3, true, false, 1, 0.0f, 4ul, false, 0.0f
     );
     for (int c = 0; c < 3; ++c) {
-        output[20 + c] = short_side.selected[c] ? 1.0f : 0.0f;
+        output[13 + c] = short_side.selected[c] ? 1.0f : 0.0f;
     }
 }
 """
@@ -2556,7 +2541,7 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     coin_overrides = torch.full(
         (3, TRAILING_MARTINGALE_COIN_OVERRIDE_COLS), float("nan"), dtype=torch.float32, device=gpu_device()
     )
-    output = torch.zeros(23, dtype=torch.float32, device=gpu_device())
+    output = torch.zeros(16, dtype=torch.float32, device=gpu_device())
 
     library = compile_shader(
         passivbot_rust.mps_trailing_martingale_multicoin_source_py()
@@ -2568,29 +2553,11 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     synchronize()
 
     assert output.cpu().tolist() == [
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        1.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        4.0,
-        0.0,
-        0.0,
-        0.0,
-        7.0,
-        1.0,
-        0.0,
-        0.0,
+        0.0, 1.0, 0.0,  # Long excludes its HSL-blocked top-ranked coin.
+        0.0, 0.0, 1.0,  # Short ranks independently.
+        0.0, 1.0, 0.0,  # Opposite-held block changes short selection.
+        0.0, 0.0, 0.0, 7.0,  # Selection and order one-way masks.
+        1.0, 0.0, 0.0,  # Expired flat incumbent is evicted without a fill.
     ]
 
 
@@ -6608,10 +6575,14 @@ def test_mps_multicoin_fused_hsl_restarts_during_all_coins_ended_tail(
 @pytest.mark.skipif(
     not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable"
 )
-@pytest.mark.parametrize("strategy_kind", ["ema_anchor", "trailing_martingale"])
+@pytest.mark.parametrize("strategy_kind, change", [
+    ("ema_anchor", "candle"),
+    ("trailing_martingale", "candle"),
+    ("trailing_martingale", "ranking"),
+])
 @pytest.mark.parametrize("side", ["long", "short"])
-def test_mps_multicoin_reselects_recovered_flat_candidate(
-    strategy_kind, side
+def test_mps_multicoin_reselects_flat_candidate(
+    strategy_kind, change, side
 ):
     import passivbot_rust
 
@@ -6628,7 +6599,8 @@ def test_mps_multicoin_reselects_recovered_flat_candidate(
         return_context=True,
     )
     # Inject only into the isolated selection probe; public builders reject internal gaps.
-    data["bars"][2, 0, :3] = 0.0
+    if change == "candle":
+        data["bars"][2, 0, :3] = 0.0
     if strategy_kind == "ema_anchor":
         state_type = "EmaMulticoinSideState"
         config_type = "EmaMulticoinSideConfig"
@@ -6672,12 +6644,14 @@ kernel void passivbot_multicoin_candidate_recovery_probe(
     );
     output[0] = candidate_side.selected[0] ? 1.0f : 0.0f;
     output[1] = candidate_side.selected[1] ? 1.0f : 0.0f;
+    {"candidate_side.forager_volume[1] = 300.0f;" if change == "ranking" else ""}
     {update_selection}(
         candidate_side, config, bars, coin_settings, coin_overrides,
         2, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
     );
     output[2] = candidate_side.selected[0] ? 1.0f : 0.0f;
     output[3] = candidate_side.selected[1] ? 1.0f : 0.0f;
+    {"candidate_side.forager_volume[1] = 100.0f;" if change == "ranking" else ""}
     {update_selection}(
         candidate_side, config, bars, coin_settings, coin_overrides,
         3, C, short_side, false, 1, 0.0f, 0ul, false, 0.0f
@@ -6788,7 +6762,7 @@ kernel void passivbot_tm_multicoin_tail_recursive_gate_probe(
     side.entry_gen_market_price[0] = 100.0f;
     side.entry_gen_psize[0] = 1.0f;
     side.entry_gen_pprice[0] = 100.0f;
-    side.entry_gen_initial_tick[0] = int(rint(100.0f / price_step));
+    side.entry_gen_initial_price[0] = 100.0f;
     side.entry_gen_touch_tick[0] = short_side ? 0 : 100000000;
     side.entry_recursive_market_mode[0] = true;
     apply_tm_multicoin_recursive_entry_twel_gate(

@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Improve GPU optimizer parity with exact Rust: apply the same forager-weight
+  normalization and bound quantization, refresh Trailing Martingale flat-coin rankings
+  each candle, and size raw-touch entries before executable-price finalization.
+  Start a fresh GPU run after this update; older GPU checkpoints contain incompatible
+  screening scores. Existing result configs remain usable as starting configs.
+
 - Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
   retaining immediate scope/risk/availability changes and full structured events. Console summaries
   identify estimated inputs explicitly and aggregate equivalent updates at most every five minutes;
