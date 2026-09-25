@@ -86,10 +86,12 @@ def compare(a,b):
 
 
 @pytest.mark.parametrize('strategy',['ema_anchor','trailing_martingale'])
+@pytest.mark.parametrize('mode',['coin','pside','unified'])
 @pytest.mark.parametrize('sides',[('long',),('short',),('long','short')])
-def test_disabled_revised_multicoin_preserves_legacy_results(strategy,sides):
-    _,legacy=raw(make_proxy('coin',strategy,sides,enabled=False,engine='legacy'),[{}])
-    _,revised=raw(make_proxy('coin',strategy,sides,enabled=False),[{}])
+def test_disabled_revised_multicoin_preserves_legacy_results(strategy,mode,sides):
+    _,legacy=raw(make_proxy(mode,strategy,sides,enabled=False,engine='legacy'),[{}])
+    runner,revised=raw(make_proxy(mode,strategy,sides,enabled=False),[{}])
+    assert runner.dispatch_hsl_disabled is False
     compare(legacy,revised)
 
 

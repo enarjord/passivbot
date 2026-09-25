@@ -59,7 +59,6 @@ from optimization.gpu.model import (
     UNSTUCK_PARAM_KEYS,
     build_mps_data,
     build_mps_multicoin_data,
-    slice_mps_multicoin_data,
     encode_hsl_panic_order_type,
     encode_tm_retracement_base_pct,
     flatten_trailing_martingale_params,
@@ -1994,6 +1993,11 @@ class MpsSingleCoinProxy:
                 f"prepared {len(payload.bot_params_list)}"
             )
         backtest_params = payload.backtest_params
+        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+            raise ValueError(
+                "GPU optimization does not support nonzero "
+                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+            )
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
@@ -2195,14 +2199,6 @@ class MpsSingleCoinProxy:
             first_valid_idx=int(backtest_params["first_valid_indices"][0]),
             last_valid_idx=int(backtest_params["last_valid_indices"][0]),
         )
-        coin_warmup_minutes = int(
-            (backtest_params.get("warmup_minutes") or [0])[0]
-        )
-        self.history_warmup_bars = max(
-            int(self.run.warmup_bars),
-            int(np.ceil(coin_warmup_minutes / candle_interval_minutes)),
-        )
-
         high = hlcvs[:, 0, 0].astype(np.float64)
         low = hlcvs[:, 0, 1].astype(np.float64)
         close = hlcvs[:, 0, 2].astype(np.float64)
@@ -2324,44 +2320,11 @@ class MpsSingleCoinProxy:
             couple_unstuck_emas=getattr(self, "couple_unstuck_emas", False),
         )
 
-    def recent_window_for_history_fraction(
-        self, history_fraction: float
-    ) -> tuple[int, int]:
-        """Map a history fraction to warmup and trade starts for a recent suffix."""
-
-        fraction = float(history_fraction)
-        if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
-            raise ValueError("GPU history fraction must be finite and in (0, 1]")
-        candle_count = int(self.runner.n)
-        warmup_readiness_bars = max(
-            1,
-            int(
-                getattr(self, "history_warmup_bars", self.run.warmup_bars)
-            ),
-        )
-        full_trade_start = min(
-            candle_count - 3,
-            max(2, int(self.run.trade_start_idx), int(self.run.first_valid_idx) + 1),
-        )
-        suffix_candles = max(
-            2,
-            int(np.ceil((candle_count - full_trade_start) * fraction)),
-        )
-        trade_start = max(full_trade_start, candle_count - suffix_candles)
-        history_start = max(
-            int(self.run.first_valid_idx),
-            trade_start - warmup_readiness_bars - 1,
-        )
-        history_start = min(history_start, trade_start - 1)
-        return history_start, trade_start
-
     def evaluate(
         self,
         candidates: list[dict],
         *,
         end_step: int | None = None,
-        history_start_step: int | None = None,
-        trade_start_step: int | None = None,
     ) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
@@ -2383,34 +2346,13 @@ class MpsSingleCoinProxy:
                 "GPU single-coin end_step must be between 3 and the full candle "
                 f"count {full_candle_count}, got {effective_end_step}"
             )
-        bounded_history = (
-            history_start_step is not None or trade_start_step is not None
-        )
-        if bounded_history and (
-            history_start_step is None or trade_start_step is None
-        ):
-            raise ValueError(
-                "GPU recent-history evaluation requires both history and trade starts"
-            )
-        if bounded_history and self.strategy_kind != "trailing_martingale":
-            raise ValueError(
-                "GPU recent-history evaluation currently requires trailing_martingale"
-            )
-        effective_history_start = (
-            0 if history_start_step is None else int(history_start_step)
-        )
-        effective_trade_start = (
-            int(trade_start_step) if bounded_history else 0
-        )
-        effective_candle_count = effective_end_step - effective_history_start
-        if effective_candle_count < 3:
-            raise ValueError("GPU recent-history evaluation requires at least 3 candles")
+        effective_candle_count = effective_end_step
         side_count = int(bool(getattr(self.runner, "long_enabled", True))) + int(
             bool(getattr(self.runner, "short_enabled", False))
         )
         dispatch_batch_size = (
             int(getattr(self, "dispatch_batch_size", self.batch_size))
-            if (end_step is None and not bounded_history)
+            if end_step is None
             or getattr(self, "temporal_chunking", False)
             else _mps_dispatch_batch_size(
                 self.batch_size,
@@ -2456,11 +2398,6 @@ class MpsSingleCoinProxy:
                 "profile": self.profile_enabled,
                 "end_step": effective_end_step,
             }
-            if bounded_history:
-                runner_kwargs.update(
-                    history_start_step=effective_history_start,
-                    trade_start_step=effective_trade_start,
-                )
             output = self.runner.run(parameter_matrix, **runner_kwargs)
             if profile is not None:
                 _add_gpu_runner_profile(
@@ -2505,7 +2442,7 @@ class MpsSingleCoinProxy:
                     profile,
                     output,
                     interval_ms=int(self.run.interval_ms),
-                    effective_start_step=effective_history_start,
+                    effective_start_step=0,
                     effective_end_step=effective_end_step,
                 )
             timestamp_origin = float(self.metrics_data["ts0"])
@@ -2537,21 +2474,9 @@ class MpsSingleCoinProxy:
                         torch=torch,
                     )
                 )
-            metrics_run = self.run
-            if bounded_history:
-                requested_start_ts_ms = int(
-                    self.metrics_data["ts0"]
-                    + effective_trade_start * self.run.interval_ms
-                )
-                metrics_run = replace(
-                    self.run,
-                    trade_start_idx=effective_trade_start,
-                    requested_start_ts_ms=requested_start_ts_ms,
-                    guard_ts_ms=requested_start_ts_ms,
-                )
             objectives = self._compute_objectives(
                 output,
-                metrics_run,
+                self.run,
                 {**self.metrics_data, "n": effective_end_step},
                 needed=self.needed_metrics,
             )
@@ -3184,6 +3109,11 @@ class MpsMulticoinProxy:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
+        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
+            raise ValueError(
+                "GPU optimization does not support nonzero "
+                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
+            )
         from optimization.gpu.revised_hsl import project_bot
         hsl_config = backtest_params.get("equity_hard_stop_loss", {})
         self.hsl_engine = hsl_config.get("engine", "legacy")
@@ -3489,19 +3419,6 @@ class MpsMulticoinProxy:
             values, timestamps, runs=runs, markets=markets,
             checkpoint_contract=self.checkpoint_contract, cache=prepared_data_cache,
         )
-        # References only: suffixes share the packed tensors and the original
-        # host arrays. Cache scope is one optimization, as for prepared data.
-        self._history_source = (values, runs, markets, btc_values, timestamps)
-        self._history_data_cache = (
-            prepared_data_cache if prepared_data_cache is not None else {}
-        )
-        self.history_warmup_bars = max(
-            self.run.warmup_bars,
-            int(np.ceil(
-                max(backtest_params.get("warmup_minutes") or [0])
-                / candle_interval_minutes
-            )),
-        )
         self.metrics_data = {
             "ts0": self.data["ts0"],
             "n": self.data["n"],
@@ -3688,7 +3605,7 @@ class MpsMulticoinProxy:
             "max_dispatch_candidate_bars": self.max_dispatch_candidate_bars,
         }
         return (
-            id(self.data), self.run, self.history_warmup_bars,
+            id(self.data), self.run,
             json.dumps(contract, sort_keys=True),
         )
 
@@ -3713,92 +3630,7 @@ class MpsMulticoinProxy:
             result.append(expanded)
         return result
 
-    def recent_window_for_history_fraction(self, history_fraction: float) -> tuple[int, int]:
-        fraction = float(history_fraction)
-        if not np.isfinite(fraction) or not 0.0 < fraction <= 1.0:
-            raise ValueError("GPU history fraction must be finite and in (0, 1]")
-        n = int(self.data["n"])
-        interval = self.run.interval_ms
-        origin = int(self.data["ts0"])
-        guard = (self.run.guard_ts_ms - origin + interval - 1) // interval
-        full_start = min(
-            n - 3, max(2, guard, self.run.trade_start_idx, self.run.warmup_bars + 1)
-        )
-        suffix_candles = max(2, int(np.ceil((n - full_start) * fraction)))
-        trade_start = max(full_start, n - suffix_candles)
-        start = max(0, trade_start - self.history_warmup_bars - 1)
-        # Start at the first candle in a UTC hour to restrict any packed
-        # range correction to the first closed-hour boundary.
-        hour = ((origin + start * interval) // 3_600_000) * 3_600_000
-        start = max(0, (hour - origin + interval - 1) // interval)
-        return start, trade_start
-
-    def _recent_history_proxy(self, history_start: int, trade_start: int):
-        if self.strategy_kind != "trailing_martingale":
-            raise ValueError("GPU recent history requires trailing_martingale")
-        values, runs, markets, btc, timestamps = self._history_source
-        key = ("recent_suffix_v2", id(self.data))
-        bounds = (history_start, trade_start)
-        cached = self._history_data_cache.get(key)
-        if cached is None or cached[0] != bounds:
-            data, window_runs = slice_mps_multicoin_data(
-                self.data, values, runs, markets, history_start, trade_start
-            )
-            # Retain one window per dataset, shared by all suite scenarios.
-            # Even an arbitrarily long ladder cannot accumulate range copies.
-            cached = (bounds, data, window_runs)
-            self._history_data_cache[key] = cached
-        _, data, window_runs = cached
-        window = copy.copy(self)
-        window.data = data
-        window.run = replace(
-            window_runs[0],
-            first_valid_idx=min(run.first_valid_idx for run in window_runs),
-            last_valid_idx=max(run.last_valid_idx for run in window_runs),
-            trade_start_idx=min(run.trade_start_idx for run in window_runs),
-        )
-        window.metrics_data = {
-            "ts0": data["ts0"], "n": data["n"], "strategy_kind": self.strategy_kind,
-        }
-        if self.btc_analysis_enabled:
-            window.metrics_data.update(_btc_daily_price_context(
-                btc[history_start:], timestamps[history_start:],
-                expected_count=data["n"], expected_days=data["n_days"],
-            ))
-            window.metrics_data["btc_prices"] = btc[history_start:]
-        window.runners = {}
-        window.fused_runner = None
-        for side, (runner_cls, original_kwargs) in self._runner_specs.items():
-            kwargs = dict(original_kwargs)
-            if kwargs.get("btc_prices") is not None:
-                kwargs["btc_prices"] = kwargs["btc_prices"][history_start:]
-            runner = runner_cls(window.run, data, **kwargs)
-            if side == "fused":
-                window.fused_runner = runner
-            else:
-                window.runners[side] = runner
-        window.temporal_chunking, window.dispatch_batch_size, _ = _mps_multicoin_dispatch_plan(
-            self.strategy_kind, self.batch_size, n_bars=data["n"],
-            n_coins=data["n_coins"], n_sides=len(self.sides),
-            max_candidate_bars=self.max_dispatch_candidate_bars, device=gpu_device(self._torch),
-        )
-        return window
-
-    def evaluate(
-        self, candidates: list[dict], *, history_start_step: int | None = None,
-        trade_start_step: int | None = None,
-    ) -> list[dict]:
-        if history_start_step is not None or trade_start_step is not None:
-            if history_start_step is None or trade_start_step is None:
-                raise ValueError(
-                    "history_start_step and trade_start_step must be provided together"
-                )
-            window = self._recent_history_proxy(
-                int(history_start_step), int(trade_start_step)
-            )
-            result = window.evaluate(candidates)
-            self.last_profile = window.last_profile
-            return result
+    def evaluate(self, candidates: list[dict]) -> list[dict]:
         results: list[dict] = []
         torch = self._torch
         fused_runner = getattr(self, "fused_runner", None)

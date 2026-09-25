@@ -20,21 +20,15 @@ fn extend_nonzero(out: &mut Vec<Order>, orders: Vec<Order>) {
 }
 
 #[inline]
-fn would_fill_next_candle(low: f64, high: f64, qty: f64, price: f64) -> bool {
-    if qty > 0.0 {
-        low < price
-    } else if qty < 0.0 {
-        high > price
-    } else {
-        false
-    }
+fn would_fill_next_candle(low: f64, high: f64, qty: f64, price: f64, buffer: f64) -> bool {
+    crate::limit_fills::crosses_limit(low, high, qty, price, buffer)
 }
 
 #[inline]
-fn any_order_would_fill_next_candle(low: f64, high: f64, orders: &[Order]) -> bool {
+fn any_order_would_fill_next_candle(low: f64, high: f64, orders: &[Order], buffer: f64) -> bool {
     orders
         .iter()
-        .any(|order| would_fill_next_candle(low, high, order.qty, order.price))
+        .any(|order| would_fill_next_candle(low, high, order.qty, order.price, buffer))
 }
 
 pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> GeneratedOrders {
@@ -96,6 +90,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             next.high,
                             next_entry.qty,
                             next_entry.price,
+                            next.limit_order_fill_buffer_pct,
                         );
                     if expand_entries {
                         extend_nonzero(
@@ -178,7 +173,9 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             request.position,
                             request.trailing,
                         );
-                        if any_order_would_fill_next_candle(next.low, next.high, &closes) {
+                        if any_order_would_fill_next_candle(
+                            next.low, next.high, &closes, next.limit_order_fill_buffer_pct,
+                        ) {
                             extend_nonzero(&mut generated.closes, closes);
                         } else {
                             push_if_nonzero(&mut generated.closes, next_close);
@@ -248,6 +245,7 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             next.high,
                             next_entry.qty,
                             next_entry.price,
+                            next.limit_order_fill_buffer_pct,
                         );
                     if expand_entries {
                         extend_nonzero(
@@ -330,7 +328,9 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                             request.position,
                             request.trailing,
                         );
-                        if any_order_would_fill_next_candle(next.low, next.high, &closes) {
+                        if any_order_would_fill_next_candle(
+                            next.low, next.high, &closes, next.limit_order_fill_buffer_pct,
+                        ) {
                             extend_nonzero(&mut generated.closes, closes);
                         } else {
                             push_if_nonzero(&mut generated.closes, next_close);
@@ -395,6 +395,7 @@ mod tests {
             position,
             trailing,
             next_candle: Some(NextStepHint {
+                limit_order_fill_buffer_pct: 0.0,
                 low: next_low,
                 high: next_high,
                 tradable: true,
@@ -454,6 +455,12 @@ mod tests {
         assert_eq!(generated.closes.len(), 10);
         assert_eq!(generated.closes[0].price, 101.1);
         assert_eq!(generated.closes[9].price, 102.0);
+        let mut buffered_request = recursive_close_request(
+            &exchange, &state, &bot, &params, &position, &trailing, 0.0, 101.55,
+        );
+        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = 0.01;
+        let buffered = generate_orders(StrategySide::Long, buffered_request);
+        assert_eq!(buffered.closes.len(), 1);
     }
 
     #[test]
@@ -507,6 +514,12 @@ mod tests {
         assert_eq!(generated.closes.len(), 10);
         assert_eq!(generated.closes[0].price, 98.9);
         assert_eq!(generated.closes[9].price, 98.0);
+        let mut buffered_request = recursive_close_request(
+            &exchange, &state, &bot, &params, &position, &trailing, 98.05, 200.0,
+        );
+        buffered_request.next_candle.as_mut().unwrap().limit_order_fill_buffer_pct = 0.01;
+        let buffered = generate_orders(StrategySide::Short, buffered_request);
+        assert_eq!(buffered.closes.len(), 1);
     }
 
     #[test]
@@ -563,7 +576,7 @@ mod tests {
                 assert_eq!(orders.closes.len(), 1, "mode {mode}");
                 let order = &orders.closes[0];
                 assert_eq!(order.price, tick, "side {side:?}, mode {mode}");
-                assert!(!would_fill_next_candle(next_low, next_high, order.qty, order.price));
+                assert!(!would_fill_next_candle(next_low, next_high, order.qty, order.price, 0.0));
                 prices.push(order.price);
             }
             assert!(prices.iter().all(|price| *price == prices[0]));

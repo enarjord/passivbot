@@ -11,6 +11,8 @@ Passivbot's trading interface.
 Create a dedicated Lighter API key with an index from 4 to 254. Use its **L2 API private key**,
 not the Ethereum wallet's private key. Give each concurrent trading process its own API key.
 Do not share a key with another order writer.
+Do not enable Lighter's maker-only restriction on this key: Passivbot must also be able to
+submit immediate-or-cancel market closes, including protective exits.
 
 CCXT requires the official native signer. Download the binary for your operating system from
 [lighter-python revision 8bac9f56](https://github.com/elliottech/lighter-python/tree/8bac9f56b9d0dd0eedaeb53a00ccb4fc9d77082e/lighter/signers).
