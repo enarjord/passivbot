@@ -299,6 +299,9 @@ Experimental or narrower-coverage sources:
 
 - **kucoin** - KuCoin Futures archive/CCXT data path. Use `kucoin` in configs and cache paths; Passivbot converts to CCXT's `kucoinfutures` ID internally. Treat KuCoin backtest data as experimental until your intended coins/date windows pass a real data smoke.
 - **hyperliquid** - Supported for live and metadata paths; broader historical backtest coverage depends on the available candle source for the requested market universe.
+- **lighter** - Lighter USDC perpetuals through bounded CCXT candle requests, with one-way positions
+  and base-asset quantities. Use `backtest.exchanges = ["lighter"]`; coverage depends on the
+  exchange history available for each market and date range. See the [Lighter guide](exchanges/lighter.md).
 
 The canonical default template currently uses `binance` and `bybit`. Add `bitget` and/or `gateio`
 explicitly in `backtest.exchanges` when you want them included.

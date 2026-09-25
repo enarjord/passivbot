@@ -1,5 +1,8 @@
 # Running the bot live
 
+For Lighter, follow the [exchange setup guide](exchanges/lighter.md) to install the compatible
+signer and configure an existing L2 API key before starting the bot.
+
 ## Logging
 
 `passivbot live` now writes its console log stream to a timestamped file under `logs/` by default.
