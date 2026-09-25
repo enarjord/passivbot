@@ -706,7 +706,8 @@ The backend is hybrid rather than a replacement backtester:
    and exchange minimums checked again after finalizing the executable price.
    The multi-coin trailing-martingale screening kernel retains per-coin EMA, volatility, trailing,
    position, cooldown, and pending-order state plus shared portfolio allocation. Flat candidates
-   are reranked each candle with incumbent score hysteresis, while held positions remain selected.
+   are reranked each candle; score hysteresis applies only to coins with outstanding entry
+   orders, while held positions remain selected, matching exact Rust.
    It stages one
    entry and close per coin per candle; exact Rust validation remains responsible for authoritative
    recursive same-candle ladders, and the normal constraint/rank/drift gates halt if that screening

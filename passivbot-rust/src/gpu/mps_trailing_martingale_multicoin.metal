@@ -3017,7 +3017,9 @@ inline void update_tm_multicoin_side_selection(
 
     int active_count = 0;
     for (int c = 0; c < coin_count; ++c) {
-        incumbent[c] = selected[c] && psize[c] <= 0.0f;
+        // Rust grants hysteresis to flat coins with an existing entry order,
+        // not every previously selected coin (including just-closed positions).
+        incumbent[c] = side.entry_qty[c] > 0.0f && psize[c] <= 0.0f;
         selected[c] = psize[c] > 0.0f;
         if (selected[c]) active_count += 1;
         survivor[c] = false;

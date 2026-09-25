@@ -5897,8 +5897,11 @@ def test_proxy_forager_roundtrip_reapplies_fixed_and_mirrored_weights(fixed_volu
         config["optimize"]["fixed_runtime_overrides"] = {
             "bot.long.forager.score_weights.volume": 0.4,
         }
-        fixed["long_forager_score_weights_volume"] = 0.4
     overrides = ["mirror_short_from_long"]
+    _, fixed = _gpu_fixed_bound_context(
+        config, _materialize_gpu_override_template(config, overrides),
+        paths, {name: name for name, _ in paths},
+    )
     exact = _canonicalize_optimizer_individual(
         list(weights), config, bounds, 6, paths, overrides
     )

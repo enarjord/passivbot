@@ -1719,14 +1719,14 @@ kernel void passivbot_tm_multicoin_side_state_isolation_probe(
     short_side.hsl.enabled = false;
     long_side.coin_hsl[0].triggers = 7.0f;
     short_side.coin_hsl[0].triggers = 8.0f;
-    long_side.coin_hsl_entry_blocked_mask = 9ul;
-    short_side.coin_hsl_entry_blocked_mask = 10ul;
-    long_side.selection_initialized = true;
-    short_side.selection_initialized = false;
+    long_side.entry_qty[0] = 9.0f;
+    short_side.entry_qty[0] = 10.0f;
+    long_side.incumbent[0] = true;
+    short_side.incumbent[0] = false;
     long_side.max_tradable_seen = 11;
     short_side.max_tradable_seen = 12;
-    long_side.previous_effective_n_positions = 13;
-    short_side.previous_effective_n_positions = 14;
+    long_side.score[0] = 13;
+    short_side.score[0] = 14;
     output[0] = long_side.psize[0];
     output[1] = short_side.psize[0];
     output[2] = float(long_side.entry_tick[0]);
@@ -1738,15 +1738,15 @@ kernel void passivbot_tm_multicoin_side_state_isolation_probe(
     output[7] = long_side.coin_hsl[0].triggers
         + short_side.coin_hsl[0].triggers;
     output[8] = float(
-        long_side.coin_hsl_entry_blocked_mask
-            + short_side.coin_hsl_entry_blocked_mask
+        long_side.entry_qty[0]
+            + short_side.entry_qty[0]
     );
-    output[9] = long_side.selection_initialized
-        && !short_side.selection_initialized ? 1.0f : 0.0f;
+    output[9] = long_side.incumbent[0]
+        && !short_side.incumbent[0] ? 1.0f : 0.0f;
     output[10] = float(long_side.max_tradable_seen);
     output[11] = float(short_side.max_tradable_seen);
-    output[12] = float(long_side.previous_effective_n_positions);
-    output[13] = float(short_side.previous_effective_n_positions);
+    output[12] = float(long_side.score[0]);
+    output[13] = float(short_side.score[0]);
 }
 """
 
@@ -2451,6 +2451,8 @@ kernel void passivbot_tm_multicoin_selection_phase_probe(
     for (int c = 0; c < 3; ++c) {
         long_side.psize[c] = 0.0f;
         short_side.psize[c] = 0.0f;
+        long_side.entry_qty[c] = 0.0f;
+        short_side.entry_qty[c] = 0.0f;
         long_side.selected[c] = false;
         short_side.selected[c] = false;
         long_side.incumbent[c] = false;
@@ -6677,6 +6679,72 @@ kernel void passivbot_multicoin_candidate_recovery_probe(
     assert output.cpu().tolist() == [1.0, 0.0, 0.0, 1.0, 1.0, 0.0]
 
 
+@pytest.mark.skipif(not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable")
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("prior_entry", [False, True])
+def test_mps_tm_hysteresis_requires_prior_entry_order(side, prior_entry):
+    import passivbot_rust
+
+    runner, row, _, data = _multicoin_exposure_fixture(
+        "trailing_martingale", side, count=4, return_context=True,
+    )
+    keys = TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
+    row[keys.index("n_positions")] = 1.0
+    probe = r"""
+kernel void passivbot_tm_incumbent_probe(
+    constant float* bars,
+    constant float* coin_settings,
+    constant float* coin_overrides,
+    constant float* params,
+    device float* output,
+    constant int& short_side_raw,
+    constant int& prior_entry,
+    uint b [[thread_position_in_grid]]
+) {
+    if (b > 0) return;
+    TrailingMartingaleMulticoinSideConfig config =
+        load_trailing_martingale_multicoin_side_config(params, 0);
+    config.w_volume = 0.01f;
+    config.w_ready = 0.0f;
+    config.w_volatility = 0.99f;
+    config.volume_drop = 0.0f;
+    TrailingMartingaleMulticoinSideState state;
+    init_trailing_martingale_multicoin_side_state(
+        state, config, coin_settings, coin_overrides, 2
+    );
+    state.forager_volume[0] = 100.0f;
+    state.forager_volume[1] = 200.0f;
+    // A held coin stays selected regardless of its score.
+    state.psize[0] = 1.0f;
+    update_tm_multicoin_side_selection(
+        state, config, bars, coin_settings, coin_overrides,
+        1, 2, short_side_raw != 0, false, 1, 0.02f, 0ul, false, 0.0f
+    );
+    output[0] = state.selected[0];
+    output[1] = state.selected[1];
+    // Closing the position grants no incumbent priority on its own. An
+    // outstanding entry does grant priority within the score hysteresis.
+    state.psize[0] = 0.0f;
+    state.entry_qty[0] = prior_entry ? 1.0f : 0.0f;
+    update_tm_multicoin_side_selection(
+        state, config, bars, coin_settings, coin_overrides,
+        2, 2, short_side_raw != 0, true, 1, 0.02f, 0ul, false, 0.0f
+    );
+    output[2] = state.selected[0];
+    output[3] = state.selected[1];
+}
+"""
+    output = torch.zeros(4, dtype=torch.float32, device=gpu_device())
+    library = compile_shader(passivbot_rust.mps_trailing_martingale_multicoin_source_py() + probe)
+    library.passivbot_tm_incumbent_probe(
+        data["bars"], data["coin_settings"], runner.coin_overrides,
+        torch.tensor(row, dtype=torch.float32, device=gpu_device()), output,
+        int(side == "short"), int(prior_entry), threads=(1, 1, 1),
+    )
+    synchronize()
+    assert output.cpu().tolist() == [1.0, 0.0, float(prior_entry), float(not prior_entry)]
+
+
 @pytest.mark.skipif(
     not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable"
 )
@@ -6916,7 +6984,6 @@ kernel void passivbot_tm_multicoin_tail_twel_probe(
     output[5] = accumulate_tm_multicoin_side_unrealized_pnl(
         side, bars, coin_settings, 1, 2, short_side, 0.0f
     );
-    side.selection_initialized = false;
     side.psize[1] = 0.0f;
     side.selected[0] = false;
     side.selected[1] = false;
@@ -11822,6 +11889,7 @@ def test_mps_trailing_martingale_multicoin_fused_kernel_smoke_all_hsl_modes():
         metric_rows.append(row)
 
     proxy = MpsMulticoinEmaProxy.__new__(MpsMulticoinEmaProxy)
+    proxy.hsl_engine = "legacy"
     proxy.batch_size = 3
     proxy._torch = torch
     proxy.profile_enabled = False
@@ -21369,6 +21437,9 @@ def test_mps_trailing_preserves_just_above_aligned_raw_touch_minimum():
     )
     data = build_mps_data(high, low, close, timestamps, run, market)
     row = _tm_single_row(gate_initial=0.0, gate_reentry=0.0)
+    # Open 250 units when entry sizing uses the raw 0.088 touch. The close
+    # below then leaves exactly the nominal 125-unit minimum in the control.
+    row[6] = 0.11
     row[15] = 0.05
     row[16] = 0.299
     row[17] = -3.0  # keep a possible second grid close above the high

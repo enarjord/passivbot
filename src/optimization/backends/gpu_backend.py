@@ -718,6 +718,12 @@ def _gpu_fixed_bound_context(
         target = effective_config
         for part in resolved:
             target = target[part]
+        if bound_key.startswith(
+            ("long_forager_score_weights_", "short_forager_score_weights_")
+        ):
+            # A fixed raw weight is normalized with each candidate's other
+            # weights. The template's normalized value is not a fixed input.
+            target = fixed_overrides[dotted_path]
         try:
             value = float(target)
         except (TypeError, ValueError) as exc:
