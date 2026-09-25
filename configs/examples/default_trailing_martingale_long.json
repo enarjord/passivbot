@@ -178,8 +178,10 @@
                 "restart_after_red_policy": "threshold",
                 "tier_ratios": {"orange": 0.75, "yellow": 0.5}
             },
+            "entry_cooldown": {
+                "base_duration_minutes": 24.1
+            },
             "risk": {
-                "entry_cooldown_minutes": 24.1,
                 "n_positions": 7.0,
                 "position_exposure_enforcer_enabled": false,
                 "position_exposure_enforcer_threshold": 1.0,
@@ -252,8 +254,10 @@
                 "restart_after_red_policy": "threshold",
                 "tier_ratios": {"orange": 0.75, "yellow": 0.5}
             },
+            "entry_cooldown": {
+                "base_duration_minutes": 0.0
+            },
             "risk": {
-                "entry_cooldown_minutes": 0.0,
                 "n_positions": 1.0,
                 "position_exposure_enforcer_enabled": true,
                 "position_exposure_enforcer_threshold": 0.8,
@@ -310,7 +314,7 @@
         }
     },
     "coin_overrides": {},
-    "config_version": "v8.4.0",
+    "config_version": "v8.5.0",
     "live": {
         "approved_coins": {
             "long": [
@@ -504,8 +508,10 @@
                     "ema_span_minutes": [720, 720, 1],
                     "red_threshold": [0.15, 0.15, 0.001]
                 },
+                "entry_cooldown": {
+                    "base_duration_minutes": [0, 60, 0.1]
+                },
                 "risk": {
-                    "entry_cooldown_minutes": [0, 60, 0.1],
                     "n_positions": [7, 7, 1],
                     "position_exposure_enforcer_threshold": [1, 1, 0.001],
                     "total_exposure_enforcer_threshold": [1, 1, 0.001],
@@ -566,8 +572,10 @@
                     "ema_span_minutes": [1, 720, 1],
                     "red_threshold": [0.01, 0.15, 0.001]
                 },
+                "entry_cooldown": {
+                    "base_duration_minutes": [0, 60, 0.1]
+                },
                 "risk": {
-                    "entry_cooldown_minutes": [0, 60, 0.1],
                     "n_positions": [5, 5, 1],
                     "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
                     "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],

@@ -3,11 +3,11 @@ from typing import Optional
 
 
 BOT_POSITION_SIDES = ("long", "short")
-BOT_SHARED_GROUPS = ("risk", "forager", "hsl", "unstuck")
+BOT_SHARED_GROUPS = ("entry_cooldown", "risk", "forager", "hsl", "unstuck")
 
 BOT_GROUP_FIELD_MAP = {
+    "entry_cooldown": {"base_duration_minutes": "risk_entry_cooldown_minutes"},
     "risk": {
-        "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
         "total_exposure_entry_gate_enabled": "risk_twel_entry_gate_enabled",

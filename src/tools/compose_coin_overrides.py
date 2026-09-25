@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SELECTORS",
         help=(
             "Comma-separated groups or leaves to pin, e.g. "
-            "long.strategy,long.risk.entry_cooldown_minutes. Uses fine-tune path syntax. "
+            "long.strategy,long.entry_cooldown.base_duration_minutes. Uses fine-tune path syntax. "
             "Takes precedence over --override-mode: selected values are retained even "
             "when equal to the master; all unselected fields inherit the master."
         ),

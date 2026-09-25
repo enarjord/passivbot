@@ -374,10 +374,8 @@ def test_complete_current_active_strategy_and_shared_allowlist_is_accepted(pside
                                 side["strategy"]["trailing_martingale"]
                             )
                         },
+                        "entry_cooldown": deepcopy(side["entry_cooldown"]),
                         "risk": {
-                            "entry_cooldown_minutes": side["risk"][
-                                "entry_cooldown_minutes"
-                            ],
                             "position_exposure_enforcer_enabled": side["risk"][
                                 "position_exposure_enforcer_enabled"
                             ],

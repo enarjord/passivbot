@@ -332,7 +332,7 @@ class TestApplyConfigOverrides:
                 "long": {
                     "hsl": {"no_restart_drawdown_threshold": 0.3},
                     "hsl_no_restart_drawdown_threshold": 0.3,
-                    "risk": {"entry_cooldown_minutes": 0.0},
+                    "entry_cooldown": {"base_duration_minutes": 0.0},
                     "risk_entry_cooldown_minutes": 9.0,
                 }
             }
@@ -348,7 +348,7 @@ class TestApplyConfigOverrides:
 
         assert config["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert config["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
-        assert config["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+        assert config["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
         assert config["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(2.5)
 
     def test_strategy_flat_override_uses_active_strategy_optimizer_key_path(self):
@@ -3768,16 +3768,16 @@ class TestConfigsToIndividuals:
         shape = build_optimization_shape(config)
 
         stale_seed = deepcopy(config)
-        stale_seed["optimize"]["bounds"]["long"]["risk"].pop("entry_cooldown_minutes")
-        stale_seed["optimize"]["bounds"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["optimize"]["bounds"]["long"]["entry_cooldown"].pop("base_duration_minutes")
+        stale_seed["optimize"]["bounds"]["short"]["entry_cooldown"].pop("base_duration_minutes")
         stale_seed["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"].pop(
             "entry_double_down_factor"
         )
         stale_seed["optimize"]["bounds"]["short"]["strategy"]["ema_anchor"].pop(
             "entry_double_down_factor"
         )
-        stale_seed["bot"]["long"]["risk"].pop("entry_cooldown_minutes")
-        stale_seed["bot"]["short"]["risk"].pop("entry_cooldown_minutes")
+        stale_seed["bot"]["long"]["entry_cooldown"].pop("base_duration_minutes")
+        stale_seed["bot"]["short"]["entry_cooldown"].pop("base_duration_minutes")
         stale_seed["bot"]["long"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
         stale_seed["bot"]["short"]["strategy"]["ema_anchor"].pop("entry_double_down_factor")
 

@@ -1173,7 +1173,7 @@ async def test_coin_overrides_resolve_in_offline_restart_harness(tmp_path, monke
 
         bot = captured["bot"]
         override = bot.coin_overrides["BTC/USDT:USDT"]
-        assert override["bot"]["long"]["risk"]["entry_cooldown_minutes"] == 0.05
+        assert override["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == 0.05
         assert override["bot"]["long"]["risk_entry_cooldown_minutes"] == 0.05
         assert override["bot"]["long"]["unstuck"]["ema_gating_enabled"] is False
         assert override["bot"]["long"]["unstuck_ema_gating_enabled"] is False
@@ -2399,7 +2399,7 @@ async def test_reconstruction_scope_recovery_with_fake_exchange(tmp_path, monkey
     cfg = load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False)
     cfg['live']['hsl_signal_mode'] = mode
     cfg['live']['pnls_max_lookback_days'] = 0.01
-    cfg['bot']['long']['risk']['entry_cooldown_minutes'] = 0.0
+    cfg['bot']['long']['entry_cooldown']['base_duration_minutes'] = 0.0
     cfg['bot']['long']['hsl_restart_after_red_policy'] = 'always'
     cfg['bot']['long']['hsl_red_threshold'] = 0.5
     cfg['live']['approved_coins']['long'] = ['BTC', 'ETH']

@@ -207,7 +207,7 @@ The supported slice is intentionally narrow:
   an effective assignment for one of its prepared coins selects another exchange
 - static `coin_overrides` for each enabled side of single- and multi-coin EMA-anchor and
   trailing-martingale runs: `live.forced_mode_<side>: normal`, active-strategy parameters,
-  `risk.entry_cooldown_minutes`, and explicit
+  `entry_cooldown.base_duration_minutes`, and explicit
   `wallet_exposure_limit`, `risk.we_excess_allowance_pct`, and all six `unstuck` leaves are
   supported. Static single-coin values are applied after each optimizer candidate, preserving
   exact Rust's override precedence. Checkpoint identity records the resolved exact override values

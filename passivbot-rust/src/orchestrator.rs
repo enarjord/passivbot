@@ -536,41 +536,11 @@ mod core {
         Ok(())
     }
 
-    fn cooldown_delay_ms(cooldown_minutes: f64) -> u64 {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            0
-        } else {
-            (cooldown_minutes * 60_000.0).ceil() as u64
-        }
-    }
-
     fn order_increases_position(pside: PositionSide, qty: f64) -> bool {
         match pside {
             PositionSide::Long => qty > 0.0,
             PositionSide::Short => qty < 0.0,
         }
-    }
-
-    fn add_order_cooldown_active(
-        now_timestamp_ms: u64,
-        last_increase_fill_timestamp_ms: Option<u64>,
-        cooldown_minutes: f64,
-    ) -> bool {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            return false;
-        }
-        let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
-            return false;
-        };
-        let until_ms = last_fill_ts.saturating_add(cooldown_delay_ms(cooldown_minutes));
-        now_timestamp_ms < until_ms
-    }
-
-    fn allow_full_entry_ladder_simultaneously(
-        cooldown_minutes: f64,
-        entry_retracement_enabled: bool,
-    ) -> bool {
-        !entry_retracement_enabled && cooldown_minutes.is_finite() && cooldown_minutes == 0.0
     }
 
     fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
@@ -596,15 +566,12 @@ mod core {
         cooldown_minutes: f64,
         entry_retracement_enabled: bool,
     ) {
-        if add_order_cooldown_active(
-            now_timestamp_ms,
-            last_increase_fill_timestamp_ms,
-            cooldown_minutes,
-        ) {
+        let cooldown = crate::entry_cooldown::EntryCooldown::new(cooldown_minutes);
+        if cooldown.is_active(now_timestamp_ms, last_increase_fill_timestamp_ms) {
             orders.retain(|order| !order_increases_position(pside, order.qty));
             return;
         }
-        if !allow_full_entry_ladder_simultaneously(cooldown_minutes, entry_retracement_enabled) {
+        if !cooldown.allows_full_entry_ladder(entry_retracement_enabled) {
             keep_only_first_add_order(orders, pside);
         }
     }

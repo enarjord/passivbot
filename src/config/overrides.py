@@ -81,7 +81,7 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
 )
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
     {
-        "risk.entry_cooldown_minutes",
+        "entry_cooldown.base_duration_minutes",
         "risk.position_exposure_enforcer_enabled",
         "risk.position_exposure_enforcer_threshold",
         "risk.we_excess_allowance_pct",
@@ -282,7 +282,9 @@ def _extract_allowed_patch(
 
     source_doc = deepcopy(_unwrap_override_document(document, source=source))
     from .migrations.entry_ema import migrate_entry_ema_tree
+    from .migrations.entry_cooldown import migrate_entry_cooldown_tree
 
+    migrate_entry_cooldown_tree(source_doc, path=source)
     migrate_entry_ema_tree(source_doc, path=source)
     _reject_flat_strategy_coin_overrides(source_doc, coin=coin)
     source_live = source_doc.get("live")

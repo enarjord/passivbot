@@ -261,8 +261,8 @@ def _extract_side_context(config: Mapping[str, Any], pside: str) -> dict[str, An
             unstuck.get("threshold", 0.0), f"bot.{pside}.unstuck.threshold"
         ),
         "entry_cooldown_minutes": _finite_float(
-            risk.get("entry_cooldown_minutes", 0.0),
-            f"bot.{pside}.risk.entry_cooldown_minutes",
+            side.get("entry_cooldown", {}).get("base_duration_minutes", 0.0),
+            f"bot.{pside}.entry_cooldown.base_duration_minutes",
         ),
         "entry_ema_gate_mode": str(entry.get("ema_gate_mode", "unknown")),
         "entry_initial_ema_dist": _finite_float(

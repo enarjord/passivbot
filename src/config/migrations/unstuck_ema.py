@@ -114,6 +114,9 @@ def migrate_unstuck_ema_spans(
             effective_patch = deepcopy(
                 _unwrap_override_document(source, source=f"coin_overrides.{coin}")
             )
+        from .entry_cooldown import migrate_entry_cooldown_tree
+
+        migrate_entry_cooldown_tree(effective_patch)
         migrate_entry_ema_tree(effective_patch)
         nested_update(effective_patch, deepcopy(override))
         for side, keys in migrated.items():

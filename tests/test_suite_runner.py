@@ -688,7 +688,7 @@ def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
     )
 
     assert cfg["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
-    assert cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+    assert cfg["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
     assert "hsl_no_restart_drawdown_threshold" not in cfg["bot"]["long"]
     assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
 

@@ -326,11 +326,11 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert long_strategy["close"]["grid_markup_end"] == pytest.approx(0.00241)
     assert migrated["backtest"]["candle_interval_minutes"] == 1
     assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
-    assert migrated["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(0.0)
+    assert migrated["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(0.0)
     assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
     assert migrated["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 120
     assert migrated["bot"]["long"]["forager"]["volume_ema_span_1m"] == 760
-    assert migrated["optimize"]["bounds"]["long"]["risk"]["entry_cooldown_minutes"] == [
+    assert migrated["optimize"]["bounds"]["long"]["entry_cooldown"]["base_duration_minutes"] == [
         0.0,
         0.0,
         0.1,
@@ -359,7 +359,7 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert report["canonical_validation"] == {"status": "ok"}
     assert any("entry_trailing_grid_ratio" in item for item in report["moved_fields"])
     assert any(
-        "entry_cooldown_minutes was not a v7 parameter" in item
+        "base_duration_minutes was not a v7 parameter" in item
         for item in report["warnings"]
     )
 
@@ -1688,7 +1688,7 @@ def test_prepare_config_preserves_nested_strategy_namespace():
 def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     source = get_template_config()
     source["live"]["strategy_kind"] = "ema_anchor"
-    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = 2.5
+    source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = 2.5
     source["bot"]["long"]["strategy"]["ema_anchor"] = {
             "base_qty_pct": 0.02,
             "ema_span_0": 55.0,
@@ -1710,7 +1710,7 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     compiled = compile_runtime_config(prepared, runtime="backtest")
 
     assert prepared["live"]["strategy_kind"] == "ema_anchor"
-    assert prepared["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+    assert prepared["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] == pytest.approx(2.5)
     assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.02)
     assert _strategy_side(prepared, "long")["entry_double_down_factor"] == pytest.approx(0.8)
     assert _strategy_side(prepared, "short")["offset"] == pytest.approx(0.004)
@@ -1738,9 +1738,9 @@ def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missi
 
 def test_prepare_config_rejects_negative_entry_cooldown_minutes():
     source = get_template_config()
-    source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = -0.1
+    source["bot"]["long"]["entry_cooldown"]["base_duration_minutes"] = -0.1
 
-    with pytest.raises(ValueError, match="bot.long.risk.entry_cooldown_minutes"):
+    with pytest.raises(ValueError, match="bot.long.entry_cooldown.base_duration_minutes"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
