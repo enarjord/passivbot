@@ -335,3 +335,18 @@ async def test_fresh_cache_capture_may_observe_updates_after_remote_deadline():
         start=0,end=22*M,candles=result.payload()))))
     assert before['rows'] == []
     assert after['rows'][-1]['close'] == 102
+
+
+def test_immutable_sources_reuse_native_transport_but_replacements_do_not():
+    from dataclasses import replace
+    from live.hsl_revised_candles import Sources
+    from live.hsl_revised_inputs import Candle, CandleTape
+    candle = Candle(0, 1, 100., 100., 100., 100., 60000)
+    original = Sources((CandleTape((candle,), ()),), (), 0)
+    source = original.native_source
+    assert original.native_source is source
+    later = replace(original, tapes=(CandleTape((replace(candle, close=101.),), ()),))
+    assert later.native_source is not source
+    assert source.project(0, 60000)[0].values()['60000'] == 100.
+    assert later.native_source.project(0, 60000)[0].values()['60000'] == 101.
+    assert source.project(0, 60000, 1)[0].values() == {}  # future observation remains unusable

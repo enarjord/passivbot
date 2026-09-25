@@ -5,6 +5,7 @@ separate; the caller owns background scheduling and current-state revalidation.
 """
 import asyncio
 from dataclasses import dataclass
+from functools import cached_property
 import math
 
 from ccxt.base.errors import BaseError as ExchangeError
@@ -28,6 +29,17 @@ class Sources:
 
     def payload(self):
         return [row for tape in self.tapes for row in tape.payload()]
+
+    @cached_property
+    def native_source(self):
+        # Sources, tapes and candles are immutable. Replacing any factual batch
+        # creates a new Sources object and therefore a new native copy. Clock
+        # offsets and observation windows are applied only at each projection.
+        import passivbot_rust as pbr
+        return pbr.RevisedHslCandleSource([
+            (c.start, c.minutes, c.open, c.high, c.low, c.close, c.available_at + 0)
+            for tape in self.tapes for c in tape.candles
+        ])
 
 
 _IO_ERRORS = (TimeoutError, OSError, OhlcvFetchError, ExchangeError)

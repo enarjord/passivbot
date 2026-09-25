@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce live monitor CPU use by resolving strategy settings once per symbol and side within each snapshot.
+
 - Reduce live candle-gap scan CPU use by reusing indexed metadata within each read cohort while preserving retry and shared-cache freshness behavior.
 
 - Avoid repeated sorting of already ordered live candle arrays while preserving duplicate ordering and detached read results.
@@ -13,6 +15,8 @@ since the latest release tag; these features may already be available when insta
 - Add Lighter USDC perpetual trading through CCXT, including existing API-key authentication,
   one-way and reduce-only orders, cross/isolated margin, leverage, live and historical market data, and
   paginated fill/PnL history with restart reconstruction. See the Lighter setup guide.
+
+- Reduce revised live HSL candle-processing CPU use by retaining immutable native source rows and avoiding per-minute temporary allocations; every projection and risk decision still uses the current observation window and account inputs.
 
 - Replace GPU successive halving with one scenario-based screening pass: select
   `optimize.gpu.screening.scenarios`, promote a Pareto-diverse subset, then evaluate survivors

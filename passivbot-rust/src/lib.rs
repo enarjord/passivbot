@@ -117,6 +117,7 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hsl_revised_evaluator::hsl_revised_evaluate, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_evaluator::hsl_revised_evaluate_grids, m)?)?;
     m.add_class::<hsl_revised_prices::RevisedHslPriceGrid>()?;
+    m.add_class::<hsl_revised_prices::RevisedHslCandleSource>()?;
     m.add_function(wrap_pyfunction!(hsl_revised_prices::hsl_revised_native_price_grid, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_history::hsl_revised_history, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_prices::hsl_revised_prices, m)?)?;
