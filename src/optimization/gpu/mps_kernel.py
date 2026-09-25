@@ -1028,6 +1028,8 @@ def _trailing_martingale_multicoin_shader_library(
     revised_capacity: int = 0,
     revised_lookback: int = 0,
     mps_coin_capacity: int | None = None,
+    unstuck_pnl_lookback_bars: int = 0,
+    unstuck_pnl_capacity: int = 0,
 ):
     gpu_device(torch)
     import passivbot_rust
@@ -1052,6 +1054,12 @@ def _trailing_martingale_multicoin_shader_library(
     if revised_capacity:
         source = (f"#define PASSIVBOT_HSL_REVISED_LOOKBACK {revised_lookback}\n"
                   + _with_revised_hsl(source, revised_capacity))
+    if unstuck_pnl_lookback_bars:
+        source = (
+            f"#define PASSIVBOT_UNSTUCK_PNL_LOOKBACK_BARS {unstuck_pnl_lookback_bars}\n"
+            f"#define PASSIVBOT_UNSTUCK_PNL_CAPACITY {unstuck_pnl_capacity}\n"
+            + source
+        )
     if mps_coin_capacity is not None:
         return compile_shader(source, cuda_coin_capacity=cuda_coin_capacity,
                               mps_coin_capacity=mps_coin_capacity)
@@ -1134,6 +1142,8 @@ def strategy_eq_recovery_distribution_from_samples(
 def _require_available_held_valuation(scalars):
     # Scalar 9 normally holds -1 (not liquidated) or a liquidation day >= 0.
     # Metal writes -2 and returns immediately if a held coin has no price.
+    if bool((scalars[:, 9] == -3.0).any()):
+        raise RuntimeError("GPU auto-unstuck PnL history overflow")
     invalid = scalars[:, 9] == -2.0
     if bool(invalid.any()):
         rows = invalid.nonzero().flatten().cpu().tolist()
@@ -2372,14 +2382,16 @@ class MpsEmaAnchorMulticoinRunner:
             args += (self.cuda_coin_capacity,)
         return _ema_anchor_multicoin_shader_library, args
 
-    def _revised_bytes_per_candidate(self):
+    def _history_bytes_per_candidate(self):
+        if not self.revised_capacity:
+            return 0
         _, nodes = _revised_hsl_layout(self.revised_capacity)
         return self.revised_scopes * (nodes * 32 + self.revised_capacity * 8)
 
     def _revised_hsl_buffers(self, batch_size):
         _, nodes = _revised_hsl_layout(self.revised_capacity)
-        if batch_size * self._revised_bytes_per_candidate() > self.revised_scratch_budget_bytes:
-            raise ValueError("Revised HSL GPU batch exceeds its scratch budget")
+        if batch_size * self._history_bytes_per_candidate() > self.revised_scratch_budget_bytes:
+            raise ValueError("GPU history batch exceeds its scratch budget")
         if batch_size not in self._revised_buffers:
             self._revised_buffers = {batch_size: (
                 torch.empty((batch_size, self.revised_scopes, nodes, 32),
@@ -2389,10 +2401,10 @@ class MpsEmaAnchorMulticoinRunner:
             )}
         return self._revised_buffers[batch_size]
 
-    def _run_revised_batches(self, params, *, profile, end_steps):
-        limit = self.revised_scratch_budget_bytes // self._revised_bytes_per_candidate()
+    def _run_history_batches(self, params, *, profile, end_steps):
+        limit = self.revised_scratch_budget_bytes // self._history_bytes_per_candidate()
         if limit < 1:
-            raise ValueError("Revised HSL history exceeds the GPU scratch budget")
+            raise ValueError("GPU history exceeds the scratch budget")
         if len(params) <= limit:
             return None
         outputs, profiles = [], []
@@ -2485,10 +2497,11 @@ class MpsEmaAnchorMulticoinRunner:
         profile: bool = False,
         end_steps: np.ndarray | None = None,
     ) -> dict:
-        if self.revised_capacity:
-            split = self._run_revised_batches(params, profile=profile, end_steps=end_steps)
+        if self._history_bytes_per_candidate():
+            split = self._run_history_batches(params, profile=profile, end_steps=end_steps)
             if split is not None:
                 return split
+        if self.revised_capacity:
             keys = (TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS
                     if self.coin_override_label == "Trailing Martingale"
                     else EMA_ANCHOR_MULTICOIN_PARAM_KEYS)
@@ -2889,6 +2902,7 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
         entry_interval_enabled: bool = False,
         hsl_engine: str = "legacy",
         pnl_lookback_bars: int = 0,
+        unstuck_pnl_lookback_bars: int = 0,
         max_dispatch_candidate_bars: int | None = None,
         interrupt_check=None,
     ):
@@ -2924,6 +2938,16 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             hsl_engine=hsl_engine,
             pnl_lookback_bars=pnl_lookback_bars,
         )
+        if unstuck_pnl_lookback_bars < 0:
+            raise ValueError("unstuck_pnl_lookback_bars must be nonnegative")
+        self.unstuck_pnl_lookback_bars = int(unstuck_pnl_lookback_bars)
+        # At most one event per candle, including both lookback endpoints.
+        # Coalescing preserves every intrabar peak; no fill-count cap is needed.
+        self.unstuck_pnl_capacity = (
+            min(self.n, self.unstuck_pnl_lookback_bars + 1)
+            if self.unstuck_pnl_lookback_bars else 0
+        )
+        self._unstuck_pnl_buffers = {}
 
     def _pack_params(self, params: np.ndarray) -> np.ndarray:
         expected = len(TRAILING_MARTINGALE_MULTICOIN_PARAM_KEYS)
@@ -2964,7 +2988,27 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
                      self.mps_coin_capacity)
         elif self.cuda_coin_capacity is not None:
             args += (self.cuda_coin_capacity,)
+        if self.unstuck_pnl_capacity:
+            args = args[:9] + (
+                self.cuda_coin_capacity, self.revised_capacity, self.pnl_lookback_bars,
+                self.mps_coin_capacity, self.unstuck_pnl_lookback_bars,
+                self.unstuck_pnl_capacity,
+            )
         return _trailing_martingale_multicoin_shader_library, args
+
+    def _history_bytes_per_candidate(self):
+        return super()._history_bytes_per_candidate() + self.unstuck_pnl_capacity * 16
+
+    def _unstuck_history_buffers(self, batch_size):
+        if batch_size * self._history_bytes_per_candidate() > self.revised_scratch_budget_bytes:
+            raise ValueError("GPU history batch exceeds its scratch budget")
+        if batch_size not in self._unstuck_pnl_buffers:
+            shape = (batch_size, self.unstuck_pnl_capacity, 2)
+            self._unstuck_pnl_buffers = {batch_size: (
+                torch.empty(shape, dtype=torch.float32, device=gpu_device()),
+                torch.empty(shape, dtype=torch.int32, device=gpu_device()),
+            )}
+        return self._unstuck_pnl_buffers[batch_size]
 
     def _dispatch(
         self,
@@ -3014,6 +3058,8 @@ class MpsTrailingMartingaleMulticoinRunner(MpsEmaAnchorMulticoinRunner):
             kernel_args += (recovery_samples,)
         if self.revised_capacity:
             kernel_args += self._revised_hsl_buffers(batch_size)
+        if self.unstuck_pnl_capacity:
+            kernel_args += self._unstuck_history_buffers(batch_size)
         if self.max_dispatch_candidate_bars is None:
             dispatch_options = {"threads": (batch_size, 1, 1)}
             if gpu_device(torch) == "cuda":
@@ -3133,6 +3179,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
         entry_interval_enabled: bool = False,
         hsl_engine: str = "legacy",
         pnl_lookback_bars: int = 0,
+        unstuck_pnl_lookback_bars: int = 0,
     ):
         super().__init__(
             run,
@@ -3158,6 +3205,7 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             entry_interval_enabled=entry_interval_enabled,
             hsl_engine=hsl_engine,
             pnl_lookback_bars=pnl_lookback_bars,
+            unstuck_pnl_lookback_bars=unstuck_pnl_lookback_bars,
         )
         if short_coin_overrides is None:
             short_coin_overrides = np.full(
@@ -3269,6 +3317,8 @@ class MpsTrailingMartingaleMulticoinFusedRunner(
             kernel_args += (recovery_samples,)
         if self.revised_capacity:
             kernel_args += self._revised_hsl_buffers(batch_size)
+        if self.unstuck_pnl_capacity:
+            kernel_args += self._unstuck_history_buffers(batch_size)
         library.passivbot_trailing_martingale_multicoin_fused(
             *kernel_args,
             threads=(batch_size, 1, 1),

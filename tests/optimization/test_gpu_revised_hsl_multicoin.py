@@ -106,7 +106,7 @@ def test_multicoin_temporal_replay_and_scratch_batches(mode):
     runner,actual=raw(chunks,candidates)
     compare(expected,actual)
     assert float(actual['fill_count'].sum())>0
-    runner.revised_scratch_budget_bytes=runner._revised_bytes_per_candidate()*2
+    runner.revised_scratch_budget_bytes=runner._history_bytes_per_candidate()*2
     _,split=raw(chunks,candidates,profile=True)
     compare(actual,split)
     assert runner.last_profile['candidate_batch_count']==2
@@ -123,7 +123,7 @@ def test_multicoin_candidates_do_not_share_history(strategy,mode):
     runner,first=raw(p,candidates)
     _,reordered=raw(p,candidates[::-1])
     compare({k:v.flip(0) if isinstance(v,torch.Tensor) else v for k,v in first.items()},reordered)
-    runner.revised_scratch_budget_bytes=runner._revised_bytes_per_candidate()
+    runner.revised_scratch_budget_bytes=runner._history_bytes_per_candidate()
     _,split=raw(p,candidates)
     compare(first,split)
 
@@ -170,7 +170,7 @@ def test_scratch_profiles_count_each_candidate_once(strategy,chunk,sides):
     p=make_proxy('coin',strategy,sides=sides,chunk=chunk)
     candidates=[{}, {}, {}]
     runner,_=raw(p,candidates)
-    runner.revised_scratch_budget_bytes=runner._revised_bytes_per_candidate()*2
+    runner.revised_scratch_budget_bytes=runner._history_bytes_per_candidate()*2
     ends=np.array([3000,1700,500],dtype=np.int32)
     runner,_=raw(p,candidates,end_steps=ends,profile=True)
     steps=int((np.clip(ends,1,runner.n-1)-1).sum())

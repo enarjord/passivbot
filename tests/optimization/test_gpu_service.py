@@ -3517,3 +3517,15 @@ def test_suite_materialization_preserves_parameter_and_metric_defaults():
                            long_ema_span_0=64., short_n_positions=0, short_total_wallet_exposure_limit=0)]
     np.testing.assert_array_equal(proxy._parameter_matrix(result), proxy._parameter_matrix(original))
     assert original == [{'long_ema_span_0': 64}]
+
+
+@pytest.mark.parametrize("days,interval,expected", [
+    (-1.0, 1, 0), (0.0, 1, 1), (30.0, 1, 43200),
+    (0.001, 1, 2), (0.001, 5, 1), (1.0, 7, 206),
+])
+def test_legacy_fill_pnl_lookback_matches_rust_bar_contract(days, interval, expected):
+    from optimization.gpu.service import _legacy_pnl_lookback_bars
+
+    assert _legacy_pnl_lookback_bars({
+        "pnls_max_lookback_days": days, "candle_interval_minutes": interval,
+    }) == expected
