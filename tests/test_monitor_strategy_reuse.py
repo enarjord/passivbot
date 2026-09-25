@@ -2,11 +2,23 @@ from collections import Counter
 from copy import deepcopy
 from types import SimpleNamespace
 
+import pytest
+
 import passivbot_monitor as monitor
 from config.strategy_spec import get_strategy_defaults
 
 
-def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(monkeypatch):
+@pytest.fixture
+def require_real_passivbot_rust_module():
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("strategy defaults require the compiled Rust strategy registry")
+
+
+def test_trailing_snapshot_reuses_settings_and_observes_next_snapshot_changes(
+    monkeypatch, require_real_passivbot_rust_module
+):
     # Inspect the complete diagnostic inputs; native result parity is covered by
     # the real-extension trailing diagnostic and monitor tests.
     monkeypatch.setattr(monitor, 'build_trailing_entry_diagnostic', lambda inputs: deepcopy(inputs))
@@ -56,7 +68,6 @@ def test_failed_strategy_resolution_is_not_cached():
         if len(calls) == 1:
             raise ValueError('invalid strategy')
         return {'entry': {'initial_qty_pct': .02}}
-    import pytest
     bot = SimpleNamespace(_strategy_params_to_rust_dict=getter)
     cache = {}
     with pytest.raises(ValueError):
