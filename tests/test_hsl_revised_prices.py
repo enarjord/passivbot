@@ -29,6 +29,12 @@ def run(pbr, candles, start, end):
         (c["start"], c["minutes"], c["open"], c["high"], c["low"], c["close"], c["available_at"])
         for c in values])
     assert (native[0].values(), native[1], native[2]) == compact
+    prepared = pbr.RevisedHslCandleSource([
+        (c["start"], c["minutes"], c["open"], c["high"], c["low"], c["close"], c["available_at"])
+        for c in values])
+    for _ in range(2):
+        reused = prepared.project(start, end)
+        assert (reused[0].values(), reused[1], reused[2]) == compact
     result = json.loads(pbr.hsl_revised_prices(json.dumps(
         {"candles": values, "start": start, "end": end})))
     assert compact[0] == {str(row["timestamp"]): row["close"] for row in result["rows"]}
@@ -153,3 +159,19 @@ def test_mixed_resolution_projection_matches_independent_reference_after_shuffle
     rng.shuffle(candles)
     shuffled = compare(require_real_passivbot_rust_module, candles, start, end)
     assert shuffled == original  # Includes selected source times and all diagnostics.
+
+
+def test_native_source_rechecks_clock_and_window_and_detaches_input(require_real_passivbot_rust_module):
+    pbr = require_real_passivbot_rust_module
+    rows = [(0, 5, 100., 120., 80., 110., 5*M), (5*M, 1, None, None, None, 123., 6*M)]
+    source = pbr.RevisedHslCandleSource(rows)
+    saved = list(rows)
+    rows.clear()
+    for start, end, offset in [(0, 6*M, 0), (0, 6*M, M), (1, 6*M, -M), (0, 5*M-1, 0), (M, 7*M, 0)]:
+        expected = pbr.hsl_revised_native_price_grid(start, end, [(*r[:-1], r[-1]+offset) for r in saved])
+        result = source.project(start, end, offset)
+        assert (result[0].values(), result[1:]) == (expected[0].values(), expected[1:])
+    with pytest.raises(ValueError, match='overflow'):
+        source.project(0, 6*M, 2**63-1)
+    with pytest.raises(ValueError, match='interval'):
+        source.project(2*M, M)

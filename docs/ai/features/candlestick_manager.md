@@ -411,3 +411,9 @@ unexpected late programming failures are raised on the next acquisition instead 
 silently hidden. No source projection is written into factual caches. The caller owns
 background scheduling and coherent current-state capture; this staged reader alone
 does not activate revised trading.
+
+Revised-HSL source batches may retain a native copy of their immutable scalar candle
+rows for repeated evaluations. Replacing a source batch replaces that native copy.
+The copy contains no projected window or trading permission: every projection
+reapplies its exact lookback bounds and current exchange/UTC observation offset,
+and every risk evaluation still consumes current account and mark facts.

@@ -53,16 +53,33 @@ fn positive(value: Option<f64>) -> Option<f64> {
 }
 
 pub fn minute_prices(input: &Input) -> Result<Prices, String> {
-    let window = input
-        .end
-        .checked_sub(input.start)
+    minute_prices_from_candles(input.start, input.end, &input.candles, 0)
+}
+
+fn minute_prices_from_candles(
+    start: i64,
+    end: i64,
+    candles: &[Candle],
+    observation_offset: i64,
+) -> Result<Prices, String> {
+    let window = end
+        .checked_sub(start)
         .filter(|v| (0..=MAX_WINDOW).contains(v))
         .ok_or("invalid revised HSL price interval (maximum 90 days)")?;
     let mut reasons = BTreeSet::new();
     // Collect contiguous scalar rows rather than allocating a tree for every
     // timestamp/resolution. Sorting below preserves finest-source arbitration.
-    let mut candidates = Vec::with_capacity(input.candles.len());
-    for candle in &input.candles {
+    let mut candidates = Vec::with_capacity(candles.len());
+    for candle in candles {
+        // Match scalar transport validation even for a row later excluded by
+        // the window or resolution policy; never wrap an observation clock.
+        let available_at = candle
+            .available_at
+            .map(|at| {
+                at.checked_add(observation_offset)
+                    .ok_or("candle observation timestamp overflow")
+            })
+            .transpose()?;
         if ![1, 5, 15, 60].contains(&candle.minutes) {
             reasons.insert("unsupported_candle_resolution".into());
             continue;
@@ -70,10 +87,10 @@ pub fn minute_prices(input: &Input) -> Result<Prices, String> {
         let Some(finish) = candle.start.checked_add(candle.minutes * MINUTE) else {
             continue;
         };
-        if finish > input.end
-            || finish < input.start
-            || candle.available_at.is_some_and(|at| at > input.end)
-            || (candle.minutes > 1 && candle.start < input.start)
+        if finish > end
+            || finish < start
+            || available_at.is_some_and(|at| at > end)
+            || (candle.minutes > 1 && candle.start < start)
         {
             continue;
         }
@@ -81,9 +98,17 @@ pub fn minute_prices(input: &Input) -> Result<Prices, String> {
             reasons.insert("unusable_historical_candle".into());
             continue;
         };
-        let path = if candle.minutes == 1 {
-            vec![close]
-        } else {
+        if candle.minutes == 1 {
+            candidates.push(Price {
+                timestamp: finish,
+                close,
+                resolution_minutes: 1,
+                source_end: finish,
+                carried: false,
+            });
+            continue;
+        }
+        let path: Vec<f64> = {
             let (Some(open), Some(high), Some(low)) = (
                 positive(candle.open),
                 positive(candle.high),
@@ -156,9 +181,9 @@ pub fn minute_prices(input: &Input) -> Result<Prices, String> {
         let first_time = first.timestamp;
         let mut previous = first;
         let mut next = 0;
-        let offset = (MINUTE - input.start.rem_euclid(MINUTE)) % MINUTE;
-        let mut timestamp = input.start.checked_add(offset);
-        while let Some(t) = timestamp.filter(|t| *t <= input.end) {
+        let offset = (MINUTE - start.rem_euclid(MINUTE)) % MINUTE;
+        let mut timestamp = start.checked_add(offset);
+        while let Some(t) = timestamp.filter(|t| *t <= end) {
             while next < selected.len() && selected[next].timestamp < t {
                 next += 1;
             }
@@ -244,50 +269,100 @@ pub fn hsl_revised_price_grid(
     Ok((grid.values(), last, reasons))
 }
 
+/// Immutable source rows, not a projected history or a trading permission.
+/// Projection rechecks the exact window and observation clock on every call.
+#[pyclass(module = "passivbot_rust", frozen)]
+pub struct RevisedHslCandleSource {
+    candles: Vec<Candle>,
+}
+
+#[pymethods]
+impl RevisedHslCandleSource {
+    #[new]
+    fn new(candles: Vec<CandleRow>) -> Self {
+        Self {
+            candles: candles
+                .into_iter()
+                .map(
+                    |(start, minutes, open, high, low, close, available_at)| Candle {
+                        start,
+                        minutes,
+                        open,
+                        high,
+                        low,
+                        close,
+                        available_at,
+                    },
+                )
+                .collect(),
+        }
+    }
+
+    #[pyo3(signature = (start, end, observation_offset=0))]
+    fn project(&self, start: i64, end: i64, observation_offset: i64) -> PyResult<NativeProjection> {
+        let result = minute_prices_from_candles(start, end, &self.candles, observation_offset)
+            .map_err(PyValueError::new_err)?;
+        let last = result.rows.last().map(|row| (row.close, row.source_end));
+        Ok((
+            RevisedHslPriceGrid {
+                start,
+                end,
+                prices: result
+                    .rows
+                    .into_iter()
+                    .map(|row| (row.timestamp, row.close))
+                    .collect(),
+            },
+            last,
+            result.reasons.into_iter().collect(),
+        ))
+    }
+}
+
 #[pyfunction]
 pub fn hsl_revised_native_price_grid(
     start: i64,
     end: i64,
     candles: Vec<CandleRow>,
 ) -> PyResult<NativeProjection> {
-    let input = Input {
-        start,
-        end,
-        candles: candles
-            .into_iter()
-            .map(
-                |(start, minutes, open, high, low, close, available_at)| Candle {
-                    start,
-                    minutes,
-                    open,
-                    high,
-                    low,
-                    close,
-                    available_at,
-                },
-            )
-            .collect(),
-    };
-    let result = minute_prices(&input).map_err(PyValueError::new_err)?;
-    let last = result.rows.last().map(|row| (row.close, row.source_end));
-    Ok((
-        RevisedHslPriceGrid {
-            start,
-            end,
-            prices: result
-                .rows
-                .into_iter()
-                .map(|row| (row.timestamp, row.close))
-                .collect(),
-        },
-        last,
-        result.reasons.into_iter().collect(),
-    ))
+    RevisedHslCandleSource::new(candles).project(start, end, 0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_source_rechecks_observation_clock_and_interval() {
+        let candles = vec![Candle {
+            start: 0,
+            minutes: 1,
+            open: None,
+            high: None,
+            low: None,
+            close: Some(100.0),
+            available_at: Some(MINUTE),
+        }];
+        let visible = minute_prices_from_candles(0, MINUTE, &candles, 0).unwrap();
+        assert_eq!(visible.rows.len(), 2);
+        assert_eq!(visible.rows[0].close, 100.0);
+        assert!(minute_prices_from_candles(0, MINUTE, &candles, 1)
+            .unwrap()
+            .rows
+            .is_empty());
+        assert!(minute_prices_from_candles(0, MINUTE - 1, &candles, 0)
+            .unwrap()
+            .rows
+            .is_empty());
+        assert!(minute_prices_from_candles(0, MINUTE, &candles, i64::MAX).is_err());
+        assert_eq!(
+            minute_prices_from_candles(0, MINUTE, &candles, 0)
+                .unwrap()
+                .rows
+                .len(),
+            2
+        );
+    }
 
     #[test]
     fn empty_prices_are_an_explicit_minimal_history_input() {
