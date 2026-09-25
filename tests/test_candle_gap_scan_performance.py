@@ -48,6 +48,9 @@ async def test_present_and_historical_sparse_scan_normalizes_metadata_once(tmp_p
         async def fetch_ohlcv(self, *args, **kwargs):
             pytest.fail('verified no-trade gaps must not cause network calls')
     cm = CandlestickManager(exchange=Exchange(), exchange_name='kucoin', cache_dir=str(tmp_path))
+    # The synthetic multi-day window exercises gap scanning, not archive I/O.
+    # KuCoin supports archives independently of Exchange.fetch_ohlcv.
+    monkeypatch.setattr(cm, '_archive_supported', lambda: False)
     n = 3000
     now = (2*n+1)*ONE_MIN_MS+1000
     monkeypatch.setattr(cm, '_now_ms', lambda: now)
