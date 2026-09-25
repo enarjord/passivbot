@@ -4854,7 +4854,7 @@ def run_backend(
                 evaluator_for_pool,
                 scenario_proxies,
                 candidates,
-                batch_compatible_scenarios=bool(screening_scenarios),
+                batch_compatible_scenarios=True,
                 screening_scenarios=screening_scenarios if screening else (),
                 evaluation_stage="screening" if screening else "full",
             )
