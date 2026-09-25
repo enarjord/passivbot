@@ -30,6 +30,10 @@ from typing import Any, Dict
 
 import ccxt
 
+# Direct script execution adds src/tools, rather than src, to the import path.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 
 def load_api_keys(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -54,6 +58,12 @@ def build_exchange(user_info: Dict[str, Any]) -> ccxt.Exchange:
     )
     if not exchange_id:
         raise KeyError("missing 'exchange' in user info")
+
+    if exchange_id.lower() == "lighter":
+        from exchanges.lighter_balance import SyncLighterBalance
+        from exchanges.lighter_credentials import client_config
+
+        return SyncLighterBalance(client_config(user_info))
 
     # ccxt exposes exchanges as attributes on the ccxt module
     exchange_cls = getattr(ccxt, exchange_id, None) or getattr(ccxt, exchange_id.lower(), None)

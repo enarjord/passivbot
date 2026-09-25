@@ -22329,6 +22329,10 @@ def setup_bot(config):
         from exchanges.kucoin import KucoinBot
 
         bot = KucoinBot(config)
+    elif user_info["exchange"] == "lighter":
+        from exchanges.lighter import LighterBot
+
+        bot = LighterBot(config)
     elif user_info["exchange"] == "weex":
         from exchanges.weex import WeexBot
 

@@ -733,6 +733,9 @@ class HLCVManager:
         mss["maker_fee"] = mss.get("maker")
         mss["taker_fee"] = mss.get("taker")
         mss["c_mult"] = mss.get("contractSize")
+        if self.exchange == "lighter":
+            mss["hedge_mode"] = False
+            mss["c_mult"] = 1.0
         mss["min_cost"] = (
             mc if (mc := mss.get("limits", {}).get("cost", {}).get("min")) is not None else 0.01
         )
@@ -790,6 +793,11 @@ class HLCVManager:
         if not self.markets:
             await self.load_markets()
         self.load_cc()
+        if self.exchange == "lighter":
+            candle = await self.cc.fetch_first_candle(self.get_symbol(coin))
+            fts = float(candle[0]) if candle else 0.0
+            self.dump_first_timestamp(coin, fts)
+            return fts
         try:
             ohlcvs = await self.cc.fetch_ohlcv(
                 self.get_symbol(coin),

@@ -23,6 +23,7 @@
 	// Keep these explicit so typos in exchange names fail loudly.
 	hyperliquid: null
 	bitunix: null
+	lighter: null
 	weex: "WEEX111164"
 	defx: null
 	paradex: null

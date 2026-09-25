@@ -1,6 +1,6 @@
 ![Passivbot](docs/images/pbot_logo_full.svg)
 
-# Trading bot running on Bybit, OKX, Bitget, Bitunix, GateIO, Binance, Kucoin, Hyperliquid and WEEX
+# Trading bot running on Bybit, OKX, Bitget, Bitunix, GateIO, Binance, Kucoin, Hyperliquid, WEEX and Lighter
 
 :warning: **Used at one's own risk** :warning:
 
@@ -23,6 +23,8 @@ Passivbot is a cryptocurrency trading bot written in Python and Rust, intended t
 It operates on perpetual futures derivatives markets, automatically creating and cancelling limit buy and sell orders on behalf of the user. It does not try to predict future price movements or follow trends. Rather, it is a contrarian market maker, using price bands, EMA-derived context, and risk controls to provide resistance to price changes in both directions, thereby "serving the market" as a price stabilizer.
 
 Order planning is computed by a shared Rust orchestrator used by both live trading and backtesting for speed and consistency. Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates, converging on the optimal ones with an evolutionary algorithm.  
+
+Lighter users: see [signer setup and exchange-specific behavior](docs/exchanges/lighter.md).
 
 ## Strategy
 

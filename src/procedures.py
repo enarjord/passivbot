@@ -360,6 +360,10 @@ async def get_first_timestamps_unified(
             first_candle = await get_first_ohlcv_iteratively(cc, symbol)
             return [first_candle] if first_candle else []
 
+        elif exchange_name == "lighter":
+            first_candle = await cc.fetch_first_candle(symbol)
+            return [first_candle] if first_candle else []
+
         elif exchange_name == "hyperliquid":
             # Weekly timeframe; data since 2021
             return await cc.fetch_ohlcv(symbol, since=int(date_to_ts("2021-01-01")), timeframe="1w")

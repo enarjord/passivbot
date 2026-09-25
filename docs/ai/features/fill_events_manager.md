@@ -140,6 +140,7 @@ logs, runtime windows, and immutable manifests.
 | OKX | `fetch_my_trades` | positions history |
 | KuCoin | trades + positions history | positions history |
 | Gate.io | `fetch_my_trades` | embedded |
+| Lighter | account-wide perpetual trades with cursor pagination | account-side PnL and raw pre-fill position evidence |
 | WEEX | `fetch_my_trades` in seven-day windows | embedded `realizedPnl` |
 
 ## Non-Obvious Details

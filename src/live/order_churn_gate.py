@@ -16,6 +16,7 @@ ORDER_CHURN_GATE_SUPPORTED_EXCHANGES = frozenset(
         "gateio",
         "hyperliquid",
         "kucoin",
+        "lighter",
         "okx",
         "weex",
     }
