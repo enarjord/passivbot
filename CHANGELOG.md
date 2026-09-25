@@ -8,6 +8,8 @@ since the latest release tag; these features may already be available when insta
 
 - Reduce live candle-gap scan CPU use by reusing indexed metadata within each read cohort while preserving retry and shared-cache freshness behavior.
 
+- Avoid repeated sorting of already ordered live candle arrays while preserving duplicate ordering and detached read results.
+
 - Add Lighter USDC perpetual trading through CCXT, including existing API-key authentication,
   one-way and reduce-only orders, cross/isolated margin, leverage, live and historical market data, and
   paginated fill/PnL history with restart reconstruction. See the Lighter setup guide.
