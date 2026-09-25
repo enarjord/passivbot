@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce live monitor CPU use by resolving strategy settings once per symbol and side within each snapshot.
+
 - Reduce live candle-gap scan CPU use by reusing indexed metadata within each read cohort while preserving retry and shared-cache freshness behavior.
 
 - Avoid repeated sorting of already ordered live candle arrays while preserving duplicate ordering and detached read results.
