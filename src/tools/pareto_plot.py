@@ -118,8 +118,15 @@ def build_figure(candidates: Sequence[ParetoCandidate], specs: Sequence[Objectiv
             camera=dict(eye=dict(x=1.65, y=1.65, z=1.2)),
         ))
     else:
-        fig.update_xaxes(title=dict(text=_axis_title(specs[0]), standoff=18), automargin=True, **axis_style)
-        fig.update_yaxes(title=dict(text=_axis_title(specs[1]), standoff=18), automargin=True, **axis_style)
+        # Orient both axes toward the ideal lower-left corner without changing values.
+        fig.update_xaxes(
+            title=dict(text=_axis_title(specs[0]), standoff=18), automargin=True,
+            autorange="reversed" if specs[0].goal == "max" else True, **axis_style,
+        )
+        fig.update_yaxes(
+            title=dict(text=_axis_title(specs[1]), standoff=18), automargin=True,
+            autorange="reversed" if specs[1].goal == "max" else True, **axis_style,
+        )
     return fig
 
 

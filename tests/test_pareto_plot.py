@@ -55,6 +55,8 @@ def test_figure_preserves_coordinates_members_and_goals(front, dimensions):
     if dimensions == 3:
         assert list(trace.z) == [2.0] * 3
         assert fig.layout.scene.dragmode == "orbit"
+        for axis in (fig.layout.scene.xaxis, fig.layout.scene.yaxis, fig.layout.scene.zaxis):
+            assert axis.autorange is None
         assert "lower is better" in fig.layout.scene.yaxis.title.text
     else:
         assert "higher is better" in fig.layout.xaxis.title.text
@@ -155,3 +157,20 @@ def test_browser_open_is_opt_in(front, tmp_path, monkeypatch):
     assert not calls
     assert pareto_plot.main(args + ["--force", "--open"]) == 0
     assert calls == [(tmp_path / "pareto-plot-2d.html").as_uri()]
+
+
+@pytest.mark.parametrize("x_goal", ["min", "max"])
+@pytest.mark.parametrize("y_goal", ["min", "max"])
+def test_2d_axes_place_ideal_at_lower_left(front, x_goal, y_goal):
+    _, candidates, _ = load_candidates(front)
+    specs = [ObjectiveSpec(metric=metric, goal=goal)
+             for metric, goal in zip(METRICS, [x_goal, y_goal])]
+    fig = pareto_plot.build_figure(candidates, specs)
+    for axis, goal in zip((fig.layout.xaxis, fig.layout.yaxis), (x_goal, y_goal)):
+        assert axis.autorange == ("reversed" if goal == "max" else True)
+    # Orientation changes only the view, never raw values, hover values, or colors.
+    assert list(fig.data[0].x) == [0.02, 0.01, 0.02]
+    assert list(fig.data[0].y) == [0.1, 0.2, 0.1]
+    assert list(fig.data[0].marker.color) == [0.1, 0.2, 0.1]
+    assert "%{x:.8g}" in fig.data[0].hovertemplate
+    assert "%{y:.8g}" in fig.data[0].hovertemplate
