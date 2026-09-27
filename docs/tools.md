@@ -90,6 +90,39 @@ staged before installation. Concurrent destination mutation is outside the tool'
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
 
+## Pareto trade-off plots
+
+`passivbot tool pareto-plot PATH X Y [Z]` plots every saved Pareto member using two
+objectives as X/Y, or three as X/Y/Z. It writes a standalone HTML file with Plotly
+embedded, so viewing needs no server or internet connection. Use the full install
+profile (`python3 -m pip install -e ".[full]"`).
+
+```bash
+passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
+passivbot tool pareto-plot optimize_results/.../pareto \
+  adg_strategy_eq strategy_eq_underwater_pct_mean --open
+passivbot tool pareto-plot optimize_results/... \
+  adg_strategy_eq strategy_eq_underwater_pct_mean sortino_ratio_strategy_eq \
+  --output plots/tradeoffs.html --open
+```
+
+A run directory or individual candidate JSON is also accepted. Choose distinct objectives
+from the saved `optimize.scoring`; known metric aliases are accepted. Axis order matches
+argument order, with each goal labeled as higher/lower is better. Coordinates use saved
+objective values, including penalties where present, with the shared Pareto loader's
+legacy engine-value conversion and suite/statistics fallback. They are not normalized or
+recomputed from scenario means. All saved members remain visible, even when dominated in
+the selected projection; the plot does not recompute a lower-dimensional Pareto front.
+Invalid or unavailable objective values fail with an error instead of dropping candidates.
+Non-candidate JSON sidecars without scoring metadata are ignored by the shared loader.
+
+Hover to see a candidate filename and its metric values. In 2D, drag to zoom and double-click
+to reset. In 3D, drag to rotate and scroll to zoom; the toolbar also offers pan, camera reset,
+and PNG download. Color follows Y in 2D and Z in 3D. The default output is `pareto-plot-2d.html`
+or `pareto-plot-3d.html` in the current directory. Existing output requires `--force` to replace;
+`--open` is optional. HTML contains filenames and the selected values, so treat plots made from
+private results as private too.
+
 ## Pareto transformations / static plots
 
 `src/tools/pareto_transform.py` converts `all_results.bin` or individual Pareto JSON entries into CSV/JSON summaries for external analysis. The legacy `src/pareto_store.py` still produces quick matplotlib scatter plots if you prefer static images.

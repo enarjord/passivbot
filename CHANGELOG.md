@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Add `passivbot tool pareto-plot` for offline interactive 2D and rotatable 3D objective
+  scatter plots, with candidate hover details, metric discovery, and PNG export.
+
 - Make live console health easier to interpret: report trailing-input recovery, current close
   coverage and account age, label summary delay and reconnect totals explicitly, and keep routine
   timing and order-refresh mechanics in DEBUG. Summarize replaced HSL observations without hiding
