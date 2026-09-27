@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
 from copy import deepcopy
 import functools
 import hashlib
@@ -12,6 +13,7 @@ import os
 import pickle
 import platform
 import subprocess
+import threading
 import time
 from typing import Any
 
@@ -160,6 +162,36 @@ def _log_gpu_profile(event: str, **payload) -> None:
             separators=(",", ":"),
         ),
     )
+
+
+@contextmanager
+def _collect_exact_during_proxy(consume_ready, *, enabled: bool = True):
+    """Drain ready CPU validations while the main thread evaluates a GPU proxy."""
+
+    if not enabled:
+        yield
+        return
+
+    stop = threading.Event()
+    errors = []
+
+    def collect():
+        while not stop.wait(0.1):
+            try:
+                consume_ready()
+            except BaseException as exc:
+                errors.append(exc)
+                break
+
+    worker = threading.Thread(target=collect, name="gpu-exact-collector", daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join()
+    if errors:
+        raise errors[0]
 
 
 def _gpu_profile_elapsed(started: float) -> float:
@@ -5750,7 +5782,7 @@ def run_backend(
         )
         maybe_save_checkpoint(force=True)
 
-    def consume_ready(*, wait_for_one: bool = False) -> None:
+    def consume_ready(*, wait_for_one: bool = False, checkpoint: bool = True) -> None:
         nonlocal exact_done, last_warning, persisted_halt_reason
         while True:
             interrupt_check()
@@ -5860,12 +5892,21 @@ def run_backend(
                 last_warning = status["warn_reason"]
             if status["halt_reason"]:
                 persisted_halt_reason = status["halt_reason"]
-                maybe_save_checkpoint(force=True)
+                if checkpoint:
+                    maybe_save_checkpoint(force=True)
                 raise RuntimeError(status["halt_reason"])
-        # ResultRecorder durably flushes each exact result. Keep the companion
-        # optimizer state close behind so an interruption cannot substantially
-        # overrun the requested exact-evaluation budget when resumed.
-        maybe_save_checkpoint(force=True)
+        # ResultRecorder durably flushes each exact result. During a GPU pass,
+        # defer the companion checkpoint until its ask/tell state is complete;
+        # resume recovers any durable results ahead of that safe checkpoint.
+        if checkpoint:
+            maybe_save_checkpoint(force=True)
+        else:
+            _log_gpu_profile(
+                "exact_progress",
+                generation=generation,
+                exact_completed=exact_done,
+                exact_inflight=len(pending),
+            )
 
     try:
         run_seed_bootstrap()
@@ -5921,36 +5962,39 @@ def run_backend(
                     )
                     proxy_profile_records.append(record)
 
-            seed_proxy_reused = 0
-            if screening_scenarios:
-                (
-                    metric_rows,
-                    proxy_objectives,
-                    proxy_violations,
-                    full_suite_indices,
-                    screening_trace,
-                ) = _evaluate_scenario_screening(
-                    proxy_candidates,
-                    policy=screening_policy,
-                    evaluate_proxy=evaluate_proxy,
-                    proxy_fitness=proxy_fitness,
-                    interrupt_check=interrupt_check,
-                    stage_callback=capture_screening_profile,
-                )
-            else:
-                if initial_seed_proxy_rows:
-                    metric_rows, seed_proxy_reused = _evaluate_with_seed_proxy_reuse(
-                        proxy_candidates, initial_seed_proxy_rows, evaluate_proxy
-                    )
-                    logging.info(
-                        "GPU initial population seed reuse | reused=%d evaluated=%d",
-                        seed_proxy_reused, len(proxy_candidates) - seed_proxy_reused,
+            with _collect_exact_during_proxy(
+                lambda: consume_ready(checkpoint=False), enabled=bool(pending)
+            ):
+                seed_proxy_reused = 0
+                if screening_scenarios:
+                    (
+                        metric_rows,
+                        proxy_objectives,
+                        proxy_violations,
+                        full_suite_indices,
+                        screening_trace,
+                    ) = _evaluate_scenario_screening(
+                        proxy_candidates,
+                        policy=screening_policy,
+                        evaluate_proxy=evaluate_proxy,
+                        proxy_fitness=proxy_fitness,
+                        interrupt_check=interrupt_check,
+                        stage_callback=capture_screening_profile,
                     )
                 else:
-                    metric_rows = evaluate_proxy(proxy_candidates)
-                proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
-                full_suite_indices = np.arange(len(rows), dtype=np.int64)
-                screening_trace = []
+                    if initial_seed_proxy_rows:
+                        metric_rows, seed_proxy_reused = _evaluate_with_seed_proxy_reuse(
+                            proxy_candidates, initial_seed_proxy_rows, evaluate_proxy
+                        )
+                        logging.info(
+                            "GPU initial population seed reuse | reused=%d evaluated=%d",
+                            seed_proxy_reused, len(proxy_candidates) - seed_proxy_reused,
+                        )
+                    else:
+                        metric_rows = evaluate_proxy(proxy_candidates)
+                    proxy_objectives, proxy_violations = proxy_fitness(metric_rows)
+                    full_suite_indices = np.arange(len(rows), dtype=np.int64)
+                    screening_trace = []
             proxy_seconds = (
                 time.perf_counter() - proxy_started if profile_enabled else 0.0
             )
@@ -6128,7 +6172,7 @@ def run_backend(
                     exact_done,
                     len(pending),
                 )
-            maybe_save_checkpoint()
+            maybe_save_checkpoint(force=True)
 
         while pending and exact_done < budget:
             consume_ready(wait_for_one=True)

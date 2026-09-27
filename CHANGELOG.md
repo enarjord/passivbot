@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Record completed GPU optimizer CPU validations during the following GPU proxy pass and report exact progress immediately, while keeping resumable checkpoints at completed generation boundaries.
+
 - Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
   retaining immediate scope/risk/availability changes and full structured events. Console summaries
   identify estimated inputs explicitly and aggregate equivalent updates at most every five minutes;
