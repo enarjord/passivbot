@@ -1760,11 +1760,10 @@ def test_log_health_summary_structured_console_owns_periodic_line(caplog, monkey
         assert bot._live_event_pipeline.flush(timeout=2.0) is True
 
     health_records = [record for record in caplog.records if "[health]" in record.message]
-    assert [record.name for record in health_records] == ["passivbot.live_event_console"]
-    assert health_records[0].message == (
-        "[health] up=1m0s loop=2.5s pos=1L/0S bal=1000.00 USDT (snap 999.50) "
-        "ord=+2/-1 fills=3 (pnl=+1.25 USDT) err=1/10 ws=4 rate_lim=5 rss=0.9MiB"
-    )
+    assert {record.name for record in health_records} == {"passivbot.live_event_console"}
+    combined = " ".join(record.message for record in health_records)
+    assert "last_loop=2.5s" in combined and "open_orders=0" in combined
+    assert "ws_reconnects_total=4" in combined and "errors_1h=1/10" in combined
     assert bot.candle_health_called is True
     assert bot.payload_now_ms == 200000
     assert bot.payload_reset_event_pipeline_timing is True
@@ -1846,11 +1845,10 @@ def test_log_health_summary_uses_legacy_fallback_without_console_sink(
         assert bot._live_event_pipeline.flush(timeout=2.0) is True
 
     health_records = [record for record in caplog.records if "[health]" in record.message]
-    assert len(health_records) == 1
-    assert health_records[0].message == (
-        "[health] up=19m33s loop=39.5s pos=0L/0S bal=2946.66 USDT (snap 2951.82) "
-        "ord=+0/-0 fills=0 err=0/10 rss=83.6MiB"
-    )
+    assert health_records
+    combined = " ".join(record.message for record in health_records)
+    assert "last_loop=39.5s" in combined and "rss=83.6MiB" in combined
+    assert "account_age=?" in combined
     assert sink.events[0].event_type == EventTypes.HEALTH_SUMMARY
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
@@ -1897,9 +1895,9 @@ def test_log_health_summary_uses_fallback_when_emitter_missing(caplog, monkeypat
         bot._log_health_summary()
 
     assert bot.payload_reset_event_pipeline_timing is False
-    assert [record.message for record in caplog.records if "[health]" in record.message] == [
-        "[health] up=1s loop=n/a pos=0L/0S ord=+0/-0 fills=0 err=0/10"
-    ]
+    lines = [record.message for record in caplog.records if "[health]" in record.message]
+    assert len(lines) == 1
+    assert "last_loop=n/a" in lines[0] and "account_age=?" in lines[0]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

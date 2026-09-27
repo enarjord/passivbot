@@ -997,7 +997,7 @@ class TestEntryCooldownDeltaGuardEvents:
         finally:
             assert bot._live_event_pipeline.close(timeout=2.0) is True
 
-        assert "entry cooldown position-delta guard anchored" in caplog.text
+        assert "add-entry cooldown anchored" in caplog.text
         events = [
             event
             for event in sink.events
@@ -1047,7 +1047,7 @@ class TestEntryCooldownDeltaGuardEvents:
         finally:
             assert bot._live_event_pipeline.close(timeout=2.0) is True
 
-        assert "entry cooldown position-delta guard anchored" not in caplog.text
+        assert "add-entry cooldown anchored" not in caplog.text
         events = [
             event
             for event in sink.events

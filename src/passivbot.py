@@ -83,6 +83,7 @@ from live.diagnostic_safety import (
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
+from live.console_health import readiness_payload, log_trailing_recovery, ws_presentation_self_echo
 from live.event_bus import (
     ConsoleSummarySink,
     EventTypes,
@@ -90,6 +91,7 @@ from live.event_bus import (
     format_market_snapshot_diagnostic_console,
     format_memory_snapshot_console,
     format_periodic_health_summary,
+    split_health_console,
     LIVE_EVENT_CONSOLE_ENV,
     LIVE_EVENT_DEBUG_PROFILE_ENV,
     LiveEventContext,
@@ -2704,13 +2706,19 @@ class Passivbot:
             else:
                 health_payload = payload_result
                 timing_snapshot_token = None
+            try:
+                health_payload.update(readiness_payload(self, now_ms))
+            except Exception as exc:
+                health_payload['console_readiness'] = 'unavailable'
+                logging.debug('[health] readiness projection failed | error_type=%s', type(exc).__name__)
             health_console_available = bool(
                 can_emit
                 and Passivbot._live_event_console_available(self)
                 and getattr(pipeline, "console_sink", None) is not None
             )
             if not health_console_available:
-                logging.info(format_periodic_health_summary(health_payload))
+                for line in split_health_console(format_periodic_health_summary(health_payload)):
+                    logging.info(line)
             if can_emit:
                 emitted = emit_health_summary(health_payload)
                 if emitted is None:
@@ -10083,13 +10091,17 @@ class Passivbot:
                         confirmation_detail = " confirmation_details=" + ";".join(
                             samples
                         )
+                if confirmation_detail:
+                    logging.debug('[trailing] confirmation evidence%s', confirmation_detail)
                 logging.warning(
-                    "[trailing] trailing state unavailable reason=%s symbols=%s "
-                    "action=mark_trailing_branches_unavailable_until_fresh%s",
-                    reason,
-                    Passivbot._log_symbols(sorted(reason_symbols), limit=12),
-                    confirmation_detail,
+                    "[trailing] inputs unavailable reason=%s symbols=%s action=defer_trailing",
+                    str(reason)[:56],
+                    ",".join(
+                        f"{Passivbot._log_symbol(symbol)[:16]}:{'/'.join(sorted(unavailable_psides.get(symbol) or ['both']))}"
+                        for symbol in sorted(reason_symbols)[:3]
+                    ) + (f",+{len(reason_symbols)-3}" if len(reason_symbols) > 3 else ""),
                 )
+        log_trailing_recovery(self, unavailable_by_symbol, now_ms)
         self._trailing_unavailable_warning_signature = warning_signature
         if operator_warning_due:
             self._trailing_unavailable_warning_last_ms = now_ms
@@ -12361,8 +12373,7 @@ class Passivbot:
             cause,
         )
         msg = (
-            "[ws] order update detected | cause=%s | events=%d | symbols=%s | statuses=%s | "
-            "scheduling refresh"
+            "[ws] account refresh requested cause=%s events=%d symbols=%s statuses=%s"
         ) % (cause, len(upd_list), symbol_preview, status_preview)
         return key, msg, cause
 
@@ -12413,7 +12424,8 @@ class Passivbot:
                     getattr(self, "_ws_order_update_last_log_ts", 0.0) or 0.0
                 )
                 if _log_key != last_log_key or now - last_log_ts >= 5.0:
-                    logging.info(_log_msg)
+                    presentation_echo = ws_presentation_self_echo(self, upd_list)
+                    (logging.debug if presentation_echo else logging.info)(_log_msg)
                     self._ws_order_update_last_log_key = _log_key
                     self._ws_order_update_last_log_ts = now
                 self._mark_account_critical_state_dirty(
@@ -14044,17 +14056,12 @@ class Passivbot:
             return
         self._entry_cooldown_delta_guard_last_log_ms[key] = int(now_ms)
         logging.warning(
-            "[risk] entry cooldown position-delta guard anchored add cooldown | "
-            "symbol=%s pside=%s previous_abs_size=%.12g current_abs_size=%.12g "
-            "qty_step=%.12g epsilon=%.12g anchor_ts_ms=%d reason=position_size_increase "
-            "fallback_source=exchange_position_delta",
+            "[risk] add-entry cooldown anchored symbol=%s pside=%s size=%.8g->%.8g "
+            "reason=position_size_increase source=exchange_position_delta",
             Passivbot._log_symbol(symbol),
             pside,
             previous_abs_size,
             current_abs_size,
-            qty_step,
-            epsilon,
-            int(now_ms),
         )
 
     def _update_entry_cooldown_position_delta_guard(
@@ -14325,7 +14332,7 @@ class Passivbot:
         if len(eligible_blocks) > detail_limit:
             examples = ",".join(
                 f"{Passivbot._log_symbol(symbol)}:{pside}"
-                for symbol, pside, _ in eligible_blocks[:12]
+                for symbol, pside, _ in eligible_blocks[:3]
             )
             summary_interval = int(self._min_effective_cost_summary_log_interval_ms)
             if (
@@ -14334,9 +14341,7 @@ class Passivbot:
             ):
                 self._min_effective_cost_summary_last_log_ms = now_ms
                 logging.info(
-                    "[entry] initial entries blocked by min effective cost summary | blocked=%d detailed=%d suppressed=%d examples=%s | "
-                    "increase balance, reduce n_positions, increase per-slot sizing, or set "
-                    "live.filter_by_min_effective_cost=false",
+                    "[entry] min-cost gate blocked=%d detailed=%d suppressed=%d examples=%s",
                     len(eligible_blocks),
                     min(detail_limit, len(visible_blocks)),
                     len(suppressed_blocks),
@@ -14663,8 +14668,8 @@ class Passivbot:
             if (
                 first_info
                 or replacement_changed
-                or periodic_info
-                or (info_changed and not quiet_selection_change)
+                or (periodic_info and bool(selected_symbols or incumbent_symbols))
+                or (info_changed and (not quiet_selection_change or not selected_symbols))
             ):
                 reason = (
                     "hysteresis_replacement"

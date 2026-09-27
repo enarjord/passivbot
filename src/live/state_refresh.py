@@ -608,7 +608,7 @@ def record_staged_refresh_timing_summary(
     if _state_refresh_structured_console_available(bot):
         summaries.pop(plan_key, None)
         return
-    logging.info(
+    logging.debug(
         "[state] staged refresh timing summary | plan=%s | count=%d since=%s | wall=%s | surface_sum=%s | surface_max=%s | residual=%s | %s",
         plan_key,
         count,

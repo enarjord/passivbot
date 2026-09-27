@@ -38,8 +38,8 @@ class ConsoleAdmission:
                     self._states.move_to_end(key)
                     return None
                 # Reserve room for the usual timestamp/level/exchange prefix.
-                message = ((message if len(message) <= 130 else message[:127] + "...") + f" repeats={repeats} over="
-                           f"{min(int(max(0, now - previous.last_written)), 999_999_999)}s")
+                message += (f" repeats={repeats} over="
+                            f"{min(int(max(0, now - previous.last_written)), 999_999_999)}s")
             # Failed delivery must not consume the first occurrence or reminder.
             emit(message)
             self._states[key] = _State(fingerprint, now)
