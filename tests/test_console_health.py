@@ -14,7 +14,7 @@ def test_health_does_not_infer_waiting_from_absent_orders():
     bot = SimpleNamespace(user='example', freshness_ledger=ledger,
         positions={symbol: {'long': {'size': 1}, 'short': {'size': 0}}
                    for symbol in ('REST', 'WAIT', 'BLOCK', 'UNKNOWN')},
-        open_orders={'REST': [dict(symbol='REST', position_side='long', reduce_only=True)]},
+        open_orders={'REST': [dict(symbol='REST', position_side='long', side='sell')]},
         _orchestrator_trailing_unavailable_reasons={'BLOCK': ['missing_candles']},
         _build_trailing_status_items=lambda: [dict(symbol='WAIT', pside='long', kind='close',
             payload=dict(status='waiting_threshold'))])
@@ -87,3 +87,10 @@ def test_ws_console_echo_classification_never_hides_fill_progress_or_mutates_bat
     assert ws_presentation_self_echo(bot, [{**order, 'filled': 'invalid'}]) is False
     assert ws_presentation_self_echo(bot, [{**order, 'price': 101}]) is False
     assert ws_presentation_self_echo(bot, [{**order, 'id': 'external'}]) is False
+
+
+def test_normalized_short_close_is_resting_without_reduce_only_flag():
+    bot = SimpleNamespace(positions={'BTC': {'short': {'size': -1}}},
+        open_orders={'BTC': [dict(symbol='BTC', position_side='short', side='buy')]})
+    assert readiness_payload(bot, 1000)['close_coverage'] == dict(
+        resting=1, waiting=0, blocked=0, unknown=0)

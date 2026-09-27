@@ -13,7 +13,9 @@ def readiness_payload(bot, now_ms):
             for side in ('long', 'short') if sides.get(side, {}).get('size', 0)}
     orders = [order for rows in getattr(bot, 'open_orders', {}).values() for order in rows]
     resting = {(order.get('symbol'), order.get('position_side')) for order in orders
-               if order.get('reduce_only') is True}
+               if (order.get('reduce_only') is True
+                   or (order.get('position_side'), order.get('side'))
+                   in (('long', 'sell'), ('short', 'buy')))}
     reasons = getattr(bot, '_orchestrator_trailing_unavailable_reasons', {}) or {}
     unavailable_sides = getattr(bot, '_orchestrator_trailing_unavailable_psides', {}) or {}
     blocked = {(symbol, side) for symbol, side in held if reasons.get(symbol)

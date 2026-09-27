@@ -14669,7 +14669,7 @@ class Passivbot:
                 first_info
                 or replacement_changed
                 or (periodic_info and bool(selected_symbols or incumbent_symbols))
-                or (info_changed and not quiet_selection_change)
+                or (info_changed and (not quiet_selection_change or not selected_symbols))
             ):
                 reason = (
                     "hysteresis_replacement"

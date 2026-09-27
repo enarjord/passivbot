@@ -13885,3 +13885,24 @@ def test_self_echo_console_demotion_preserves_required_refresh(monkeypatch, capl
     assert set(bot._authoritative_pending_confirmations) == {'balance', 'positions', 'open_orders', 'fills'}
     assert bot.execution_scheduled is True
     assert bot.recent_order_executions is recent
+
+
+def test_forager_selection_becoming_empty_is_visible_once(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._forager_selection_info_interval_ms = 1000
+    bot._forager_selection_debug_interval_ms = 1000
+    now = [1000]
+    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: now[0])
+    selection = dict(pside='long', slots_to_fill=1, selected_symbol_indices=[0],
+                     incumbent_symbol_indices=[], top_scores=[], hysteresis_events=[])
+    result = {'diagnostics': {'forager_selections': [selection]}}
+    with caplog.at_level(logging.INFO):
+        bot._log_forager_selection_diagnostics(result, {0: 'BTC/USDT:USDT'})
+        selection['selected_symbol_indices'] = []
+        now[0] += 1
+        bot._log_forager_selection_diagnostics(result, {})
+        now[0] += 1001
+        bot._log_forager_selection_diagnostics(result, {})
+    lines = [r.message for r in caplog.records if '[forager] long selection' in r.message]
+    assert len(lines) == 2
+    assert 'selected=-' in lines[1] and 'reason=selection_changed' in lines[1]
