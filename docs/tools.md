@@ -108,7 +108,10 @@ passivbot tool pareto-plot optimize_results/... \
 
 A run directory or individual candidate JSON is also accepted. Choose distinct objectives
 from the saved `optimize.scoring`; known metric aliases are accepted. Axis order matches
-argument order, with each goal labeled as higher/lower is better. Coordinates use saved
+argument order, with each goal labeled as higher/lower is better. In 2D, better values
+always lie toward the lower-left: maximization axes run high-to-low from left to right
+or bottom to top, while minimization axes run low-to-high. 3D axes retain their normal
+orientation. Coordinates use saved
 objective values, including penalties where present, with the shared Pareto loader's
 legacy engine-value conversion and suite/statistics fallback. They are not normalized or
 recomputed from scenario means. All saved members remain visible, even when dominated in
