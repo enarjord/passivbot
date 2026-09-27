@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Use BTC price history from a configured exchange for multi-exchange backtests and optimizations before falling back to Binance, so offline runs do not require unrelated Binance candles.
+
 - Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
   retaining immediate scope/risk/availability changes and full structured events. Console summaries
   identify estimated inputs explicitly and aggregate equivalent updates at most every five minutes;

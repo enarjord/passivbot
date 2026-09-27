@@ -390,6 +390,69 @@ async def test_btc_candidates_try_all_local_sources(monkeypatch, use_v2, all_mis
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_v2", [False, True])
+@pytest.mark.parametrize("venues,missing,expected_source,expected_attempts", [
+    (["hyperliquid", "bybit"], set(), "hyperliquid", ["hyperliquid"]),
+    (["bybit", "hyperliquid"], {"bybit"}, "hyperliquid", ["bybit", "hyperliquid"]),
+    (["bybit", "hyperliquid"], {"bybit", "hyperliquid"}, "binanceusdm",
+     ["bybit", "hyperliquid", "binanceusdm"]),
+    (["bybit", "binanceusdm"], set(), "binanceusdm", ["binanceusdm"]),
+])
+async def test_multi_venue_btc_prefers_configured_local_sources(
+    monkeypatch, use_v2, venues, missing, expected_source, expected_attempts
+):
+    """Offline multi-venue runs use local selected BTC before Binance fallback."""
+    import pandas as pd
+
+    attempts = []
+    ts = START + np.arange(2, dtype=np.int64) * 60000
+
+    class Manager:
+        cc = None
+
+        def __init__(self, exchange, *args, **kwargs):
+            self.exchange = exchange
+
+        def update_date_range(self, *args):
+            pass
+
+        async def load_markets(self):
+            pass
+
+        def has_coin(self, coin):
+            return coin == "BTC"
+
+        def get_symbol(self, coin):
+            return SYMBOL
+
+        async def get_ohlcvs(self, *args, **kwargs):
+            attempts.append(self.exchange)
+            if self.exchange in missing:
+                raise OfflineDataError("missing local BTC fixture")
+            return pd.DataFrame({"timestamp": ts, "close": [100.0, 101.0]})
+
+        async def aclose(self):
+            pass
+
+    async def resolve(**kwargs):
+        frame = await kwargs["om"].get_ohlcvs("BTC")
+        return SimpleNamespace(timestamps=ts, values=np.column_stack([frame.close] * 4))
+
+    monkeypatch.setattr(hp, "HLCVManager", Manager)
+    monkeypatch.setattr(hp, "_resolve_v2_store_range", resolve)
+    with simulation_data_policy(OFFLINE):
+        frame, source_exchange = await hp._load_combined_btc_prices(
+            exchanges_to_consider=venues, timestamps=ts,
+            effective_start_date="2024-01-01", end_date="2024-01-02",
+            gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
+            catalog=None, store=None, legacy_root=None, use_v2_local=use_v2,
+        )
+    assert source_exchange == expected_source
+    assert len(frame) == 2
+    assert attempts == expected_attempts
+
+
+@pytest.mark.asyncio
 async def test_single_venue_uses_cached_binance_btc_fallback(tmp_path, monkeypatch):
     from backtest import prepare_hlcvs_mss
     from utils import ts_to_date

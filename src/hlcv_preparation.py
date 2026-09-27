@@ -5600,9 +5600,11 @@ async def _load_combined_btc_prices(
     ohlcv_source_dir: str | None = None,
     use_v2_local: bool = True,
 ) -> tuple[pd.DataFrame, Optional[str]]:
-    btc_candidates = [
-        exchanges_to_consider[0] if len(exchanges_to_consider) == 1 else "binanceusdm"
-    ]
+    # Preserve Binance priority when selected, but use other configured venues
+    # before the fallback when an offline multi-venue bundle has no Binance data.
+    configured = list(dict.fromkeys(exchanges_to_consider))
+    btc_candidates = (["binanceusdm"] if "binanceusdm" in configured else [])
+    btc_candidates.extend(exchange for exchange in configured if exchange != "binanceusdm")
     if "binanceusdm" not in btc_candidates:
         btc_candidates.append("binanceusdm")
 
