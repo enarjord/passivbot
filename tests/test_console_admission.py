@@ -152,3 +152,51 @@ def test_repeat_is_admitted_exactly_at_boundary():
     assert sink.write(event()) is None
     clock.now = 300
     assert 'repeats=2 over=300s' in sink.write(event())
+
+
+def test_replaced_observation_is_durable_and_does_not_fake_current_outage():
+    clock, logger, durable = Clock(), Logger(), ListEventSink()
+    sink = ConsoleSummarySink(logger, admission=ConsoleAdmission(clock=clock))
+    pipeline = LiveEventPipeline(console_sink=sink, structured_sinks=[durable])
+    try:
+        pipeline.emit(event())
+        for n in range(1, 101):
+            clock.now = n * 3
+            pipeline.emit(event(level='warning', data=dict(observation_status='stale',
+                console_replaced_observation=True, age_ms=12000)))
+            pipeline.emit(event())
+            assert pipeline.flush()
+        visible = [line for level, line in logger.lines if level >= 20]
+        assert len(durable.events) == 201
+        assert not any('HSL stale' in line for line in visible)
+        assert any('count=100 max_sample_age=12.0s' in line for line in visible)
+        # Current staleness and recovery are still immediate, irrespective of the reminder.
+        pipeline.emit(event(level='warning', data=dict(observation_status='stale')))
+        pipeline.emit(event())
+        assert pipeline.flush()
+        visible = [line for level, line in logger.lines if level >= 20]
+        assert any('HSL stale' in line for line in visible)
+        assert 'HSL current' in visible[-1]
+    finally:
+        pipeline.close()
+
+
+@pytest.mark.parametrize('counts', [dict(red=1, unavailable=0), dict(red=0, unavailable=1)])
+def test_replacement_marker_cannot_hide_red_or_unavailable(counts):
+    logger = Logger()
+    ConsoleSummarySink(logger).write(event(level='warning', data=dict(
+        observation_status='stale', console_replaced_observation=True, counts=counts)))
+    assert logger.lines[0][0] == 30
+
+
+def test_routine_refresh_summary_moves_only_console_to_debug():
+    logger, durable = Logger(), ListEventSink()
+    pipeline = LiveEventPipeline(console_sink=ConsoleSummarySink(logger), structured_sinks=[durable])
+    try:
+        pipeline.emit(LiveEvent(EventTypes.STATE_REFRESH_TIMING, level='info',
+            status='succeeded', data=dict(summary=True)))
+        assert pipeline.flush()
+        assert durable.events[0].level == 'info'
+        assert logger.lines[0][0] == 10
+    finally:
+        pipeline.close()

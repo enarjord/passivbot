@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Make live console health easier to interpret: report trailing-input recovery, current close
+  coverage and account age, label summary delay and reconnect totals explicitly, and keep routine
+  timing and order-refresh mechanics in DEBUG. Summarize replaced HSL observations without hiding
+  current outages or RED transitions; retain detailed structured events and concise warnings.
+
 - Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
   retaining immediate scope/risk/availability changes and full structured events. Console summaries
   identify estimated inputs explicitly and aggregate equivalent updates at most every five minutes;
