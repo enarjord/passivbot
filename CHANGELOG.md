@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
+  proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.
+
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
   does not exist yet. Reject unavailable existing shards, preserve finality and verified
   persistence, and distinguish receive
