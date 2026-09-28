@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce repeated strategy resolution during live warmup and market diagnostics, keeping reuse
+  local to each synchronous calculation so subsequent calculations observe current settings.
+
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
   does not exist yet. Reject unavailable existing shards, preserve finality and verified
   persistence, and distinguish receive
