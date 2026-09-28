@@ -82,6 +82,10 @@ CONDITIONAL_HSL_OVERRIDE_PATHS = frozenset(
 OVERRIDABLE_SHARED_BOT_PATHS = frozenset(
     {
         "entry_cooldown.base_duration_minutes",
+        "entry_cooldown.min_duration_minutes",
+        "entry_cooldown.max_duration_minutes",
+        "entry_cooldown.weights_minutes.exposure_ratio",
+        "entry_cooldown.weights_minutes.adverse_directionality",
         "risk.position_exposure_enforcer_enabled",
         "risk.position_exposure_enforcer_threshold",
         "risk.we_excess_allowance_pct",
@@ -433,6 +437,8 @@ def _validate_patch_leaf_types(
         reference = _get_nested_value(config, path)
         if reference is None:
             reference = _get_nested_value(template, path)
+        if value is None and path[-2:] == ("entry_cooldown", "max_duration_minutes"):
+            continue
         if isinstance(value, bool):
             if not isinstance(reference, bool):
                 raise TypeError(f"{display_path} must be numeric, not a boolean")

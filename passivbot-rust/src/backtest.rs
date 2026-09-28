@@ -1506,6 +1506,7 @@ impl<'a> Backtest<'a> {
                     idx
                 );
 
+                m1.signed_unilateralness = self.unilateralness_at(idx, k);
                 m1.volume.push((vol_span_long, self.emas[idx].vol_long));
                 m1.volume.push((vol_span_short, self.emas[idx].vol_short));
                 m1.log_range
@@ -1764,6 +1765,7 @@ impl<'a> Backtest<'a> {
                 sym.short.bot_params.hsl_panic_close_order_type = short.hsl_panic_close_order_type;
             }
 
+            sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
             // Update EMA values (spans are stable; we overwrite only values).
             // m1.close: 3 long then 3 short.
             if sym.emas.m1.close.len() >= 6 {
@@ -1971,7 +1973,25 @@ impl<'a> Backtest<'a> {
                 .saturating_add(warm_bars)
                 .min(last)
                 .max(provided_trade_idx);
-            trade_start_idx[i] = trade_idx;
+            // Never activate an RMS consumer before it has a complete replay window,
+            // including young coins whose available history ends during warmup.
+            let rms_warmup = [&bot_params[i].long, &bot_params[i].short]
+                .iter()
+                .filter(|bp| {
+                    bp.forager_score_weights.unilateralness > 0.0
+                        || bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                })
+                .map(|bp| {
+                    crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
+                        .expect("validated unilateralness span")
+                })
+                .max()
+                .unwrap_or(0);
+            trade_start_idx[i] = if rms_warmup > 0 {
+                trade_idx.max(first.saturating_add(rms_warmup))
+            } else {
+                trade_idx
+            };
 
             let expected_trade_idx = first.saturating_add(warm_bars).min(last);
             debug_assert!(
@@ -5674,6 +5694,34 @@ impl<'a> Backtest<'a> {
     }
 
     #[inline]
+    fn unilateralness_at(&self, idx: usize, k: usize) -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
+        for bp in [&self.bot_params[idx].long, &self.bot_params[idx].short] {
+            if bp.forager_score_weights.unilateralness == 0.0
+                && bp.entry_cooldown_weights_minutes.adverse_directionality == 0.0
+            {
+                continue;
+            }
+            let span = bp.unilateralness_ema_span_1m;
+            if out.iter().any(|(s, _)| *s == span) {
+                continue;
+            }
+            let n =
+                crate::unilateralness::warmup_returns(span).expect("validated unilateralness span");
+            let (start, end) = self.coin_valid_range(idx).unwrap_or((0, 0));
+            if k < start.saturating_add(n) || k > end {
+                continue;
+            }
+            let closes: Vec<f64> = (k - n..=k)
+                .map(|j| self.hlcvs_value(j, idx, CLOSE))
+                .collect();
+            let score = crate::unilateralness::signed_rms(&closes, span)
+                .expect("validated unilateralness candle window");
+            out.push((span, score));
+        }
+        out
+    }
+
     fn update_emas(&mut self, k: usize) {
         // Compute/refresh latest 1h bucket on whole-hour boundaries
         let current_ts = self.first_timestamp_ms + (k as u64) * self.interval_ms;

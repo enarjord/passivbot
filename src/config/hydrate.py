@@ -122,6 +122,9 @@ def sync_with_template(
             elif existing_base != base_config_path:
                 tracker.update(["live", "base_config_path"], existing_base, base_config_path)
     template_with_extras = deepcopy(template)
+    from .optimize_bounds import preserve_optional_adaptive_bounds
+
+    preserve_optional_adaptive_bounds(template_with_extras, result)
     # Keep only explicitly supplied revised portfolio authority and its search bounds.
     if result["live"].get("hsl_engine") == "revised":
         for section in (("bot",), ("optimize", "bounds")):

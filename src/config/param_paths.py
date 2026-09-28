@@ -53,6 +53,24 @@ OPTIMIZABLE_BOT_KEY_PATHS = {
     "short_filter_volatility_ema_span_1m": ("bot", "short", "forager", "volatility_ema_span_1m"),
 }
 
+for _side in BOT_POSITION_SIDES:
+    for _key, _path in {
+        "forager_score_weights_unilateralness": ("forager", "score_weights", "unilateralness"),
+        "unilateralness_ema_span_1m": ("forager", "unilateralness_ema_span_1m"),
+        "entry_cooldown_weights_minutes_exposure_ratio": (
+            "entry_cooldown",
+            "weights_minutes",
+            "exposure_ratio",
+        ),
+        "entry_cooldown_weights_minutes_adverse_directionality": (
+            "entry_cooldown",
+            "weights_minutes",
+            "adverse_directionality",
+        ),
+    }.items():
+        OPTIMIZABLE_BOT_KEY_PATHS[f"{_side}_{_key}"] = ("bot", _side, *_path)
+
+
 DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
     "long_filter_volume_ema_span_1m": "long_forager_volume_ema_span_1m",
     "long_filter_volatility_ema_span_1m": "long_forager_volatility_ema_span_1m",

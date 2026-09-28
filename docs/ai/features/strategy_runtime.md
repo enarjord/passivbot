@@ -19,7 +19,7 @@ internal compatibility surfaces: ignore them when adding current config fields, 
 production or live support from their presence. The only supported pre-V8 strategy migration path
 is the explicit `passivbot tool migrate-config-v7` workflow for normalized V7 trailing-grid input.
 
-With `entry_cooldown.base_duration_minutes = 0.0`, `trailing_grid_v7` preserves v7's simultaneous grid-entry
+With an effective entry cooldown of zero, `trailing_grid_v7` preserves v7's simultaneous grid-entry
 ladder even when a later trailing leg uses retracement. Its recursive generator stops expansion
 before stacking retracement-dependent trailing orders. Positive entry cooldowns still stage at
 most one position-adding order and apply their configured post-fill delay.
@@ -269,3 +269,28 @@ behavior patches.
 - `tests/test_orchestrator_json_api.py`
 - `tests/test_orchestrator_integration.py`
 - `tests/test_auto_unstuck_allowance.py`
+
+## Adaptive entry timing and unilateralness
+
+Rust owns signed RMS directionality, its use as a lower-is-better Forager component,
+and additive cooldown minutes. The shared side-level float span lives under
+`forager.unilateralness_ema_span_1m`. Both runtimes replay the same last
+`ceil(20 * span) + 1` completed one-minute closes; EMA accumulators start at zero.
+No RAM-only indicator state is needed for restart. Missing history is absent,
+never a neutral score. CPU candle intervals other than one minute are rejected
+when an RMS consumer is enabled.
+
+Forager may carry a complete cached observation only within the existing candidate
+age budget, without feeding invented flat returns. Cooldown requires a current
+completed window. Their values remain separate in the input envelope. Missing
+RMS is scoped to the consuming entry or ranking branch; closes remain independent.
+The Python output validator evaluates the submitted cooldown inputs through the
+same pure Rust policy, rather than trusting a producer-echoed duration.
+
+Cooldown uses nonnegative additive weights for existing exposure ratio (without a
+unit cap) and adverse signed RMS. Apply floor/ceiling once after composition.
+Enabled weights require a finite ceiling; structural fill coverage, pair activation
+and restart anchors use that horizon even at base zero. Current effective duration,
+not base alone, governs elapsed-time gating and entry-ladder staging. At effective
+zero retain existing strategy rules. Partial fills remain ordinary increasing fills.
+All new weights default to zero; GPU rejects enabled unsupported settings.

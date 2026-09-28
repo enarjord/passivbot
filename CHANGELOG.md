@@ -8,7 +8,10 @@ since the latest release tag; these features may already be available when insta
 
 - Move entry cooldown to `bot.<side>.entry_cooldown.base_duration_minutes` and matching optimizer
   bounds (config schema v8.5.0), retaining legacy config/CLI/selector aliases and all numeric defaults.
-  Isolate Rust cooldown timing policy without changing fill timing or staged entry behavior.
+  Add opt-in CPU/live additive exposure and adverse-directionality cooldown weights with a floor
+  and ceiling, plus a Forager RMS unilateralness score that fades during inactivity. Share one
+  float EMA span, reconstruct inputs from completed candles, and preserve defaults with zero new
+  weights. Adaptive fill-history coverage works with a zero base; GPU rejects unsupported settings.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

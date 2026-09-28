@@ -20,8 +20,16 @@ def _flatten_strategy_bound_items(bounds: dict, prefix: tuple[str, ...] = ()):
 
 
 SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY = {
-    "entry_cooldown": {"base_duration_minutes": "risk_entry_cooldown_minutes"},
+    "entry_cooldown": {
+        "base_duration_minutes": "risk_entry_cooldown_minutes",
+        "weights_minutes_exposure_ratio": "entry_cooldown_weights_minutes_exposure_ratio",
+        "weights_minutes_adverse_directionality": "entry_cooldown_weights_minutes_adverse_directionality",
+        "min_duration_minutes": "entry_cooldown_min_duration_minutes",
+        "max_duration_minutes": "entry_cooldown_max_duration_minutes",
+    },
     "forager": {
+        "score_weights_unilateralness": "forager_score_weights_unilateralness",
+        "unilateralness_ema_span_1m": "unilateralness_ema_span_1m",
         "score_weights_ema_readiness": "forager_score_weights_ema_readiness",
         "score_weights_volatility": "forager_score_weights_volatility",
         "score_weights_volume": "forager_score_weights_volume",
@@ -166,10 +174,51 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
                 continue
             if not isinstance(group_bounds, dict):
                 continue
+            shared_items = []
             for key, value in group_bounds.items():
+                if (group_name, key) in {
+                    ("entry_cooldown", "weights_minutes"),
+                    ("forager", "score_weights"),
+                } and isinstance(value, dict):
+                    shared_items.extend((f"{key}_{child}", bound) for child, bound in value.items())
+                else:
+                    shared_items.append((key, value))
+            for key, value in shared_items:
                 flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name, {}).get(key, key)
                 flat[f"{pside}_{flat_key}"] = deepcopy(value)
     return flat
+
+
+
+def preserve_optional_adaptive_bounds(template: dict, source: dict) -> None:
+    """Keep explicit search dimensions without adding them to default searches."""
+    kind = source.get("live", {}).get("strategy_kind", "trailing_martingale")
+    flat = flatten_optimize_bounds(source.get("optimize", {}).get("bounds"), strategy_kind=kind)
+    optional = {
+        "entry_cooldown_weights_minutes_exposure_ratio",
+        "entry_cooldown_weights_minutes_adverse_directionality",
+        "entry_cooldown_min_duration_minutes",
+        "entry_cooldown_max_duration_minutes",
+        "forager_score_weights_unilateralness",
+        "unilateralness_ema_span_1m",
+    }
+    target = template["optimize"]["bounds"]
+    for key, value in flat.items():
+        if key.split("_", 1)[-1] in optional:
+            set_flat_optimize_bound(target, kind, key, value)
+    # Input also accepts nested score_weights before canonical bound sorting.
+    for side in BOT_POSITION_SIDES:
+        scoring = (
+            source.get("optimize", {})
+            .get("bounds", {})
+            .get(side, {})
+            .get("forager", {})
+            .get("score_weights", {})
+        )
+        if isinstance(scoring, dict) and "unilateralness" in scoring:
+            target[side]["forager"].setdefault("score_weights", {})["unilateralness"] = deepcopy(
+                scoring["unilateralness"]
+            )
 
 
 def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, value) -> None:
@@ -199,7 +248,13 @@ def set_flat_optimize_bound(bounds: dict, strategy_kind: str, flat_key: str, val
             current[key] = deepcopy(value)
     else:
         local_key = SHARED_OPTIMIZE_FLAT_TO_LOCAL_KEY[group].get(key, key)
-        side_bounds.setdefault(group, {})[local_key] = deepcopy(value)
+        target = side_bounds.setdefault(group, {})
+        if group == "entry_cooldown" and local_key.startswith("weights_minutes_"):
+            target.setdefault("weights_minutes", {})[local_key.removeprefix("weights_minutes_")] = (
+                deepcopy(value)
+            )
+        else:
+            target[local_key] = deepcopy(value)
 
 
 def sort_optimize_bounds_in_place(bounds: dict, *, strategy_kind: str, portfolio_hsl: bool = False) -> None:

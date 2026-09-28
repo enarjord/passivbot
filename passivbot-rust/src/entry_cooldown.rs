@@ -63,3 +63,76 @@ mod tests {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CooldownWeights {
+    pub exposure_ratio: f64,
+    pub adverse_directionality: f64,
+}
+
+pub(crate) fn validate(params: &crate::types::BotParams) -> Result<(), String> {
+    let w = params.entry_cooldown_weights_minutes;
+    for value in [
+        params.risk_entry_cooldown_minutes,
+        params.entry_cooldown_min_duration_minutes,
+        w.exposure_ratio,
+        w.adverse_directionality,
+    ] {
+        if !value.is_finite() || value < 0.0 {
+            return Err("entry cooldown values must be finite and nonnegative".into());
+        }
+    }
+    match params.entry_cooldown_max_duration_minutes {
+        Some(max) if !max.is_finite() || max < params.entry_cooldown_min_duration_minutes => {
+            return Err("entry cooldown ceiling must be finite and >= floor".into())
+        }
+        None if w.exposure_ratio > 0.0 || w.adverse_directionality > 0.0 => {
+            return Err("adaptive entry cooldown requires a finite ceiling".into())
+        }
+        _ => {}
+    }
+    if !params.unilateralness_ema_span_1m.is_finite() || params.unilateralness_ema_span_1m < 1.0 {
+        return Err("unilateralness EMA span must be finite and >= 1".into());
+    }
+    Ok(())
+}
+
+/// Optional inputs are read only for enabled weights. Exposure is not capped at one.
+pub(crate) fn effective_duration(
+    params: &crate::types::BotParams,
+    exposure_ratio: Option<f64>,
+    adverse_score: Option<f64>,
+) -> Result<f64, String> {
+    validate(params)?;
+    let mut minutes = params.risk_entry_cooldown_minutes;
+    for (weight, input) in [
+        (
+            params.entry_cooldown_weights_minutes.exposure_ratio,
+            exposure_ratio,
+        ),
+        (
+            params.entry_cooldown_weights_minutes.adverse_directionality,
+            adverse_score,
+        ),
+    ] {
+        if weight > 0.0 {
+            let value = input.ok_or("missing enabled entry cooldown input")?;
+            if !value.is_finite() || value < 0.0 {
+                return Err("invalid entry cooldown input".into());
+            }
+            minutes += weight * value;
+        }
+    }
+    minutes = minutes.max(params.entry_cooldown_min_duration_minutes);
+    if let Some(max) = params.entry_cooldown_max_duration_minutes {
+        minutes = minutes.min(max);
+    }
+    Ok(minutes)
+}
+
+#[pyo3::prelude::pyfunction]
+pub fn entry_cooldown_durations_json(raw: &str) -> pyo3::PyResult<String> {
+    crate::orchestrator::entry_cooldown_durations_json(raw)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}

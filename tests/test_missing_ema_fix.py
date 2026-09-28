@@ -520,6 +520,8 @@ class _BundleReproBot:
         return bool(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0))
 
     def bp(self, pside, key, symbol=None):
+        if key == "entry_cooldown_weights_minutes":
+            return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
         if key == "ema_span_0":
             return 10.0
         if key == "ema_span_1":
@@ -545,6 +547,8 @@ class _BundleReproBot:
         return params[key]
 
     def bot_value(self, pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
         if key in (
             "filter_volume_ema_span",
             "filter_volume_ema_span_1m",
@@ -3099,11 +3103,15 @@ class _PacingProbeBot:
         return False
 
     def bp(self, pside, key, symbol=None):
+        if key == "entry_cooldown_weights_minutes":
+            return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
         if key == "ema_span_0":
             return 10.0
         return 0.0
 
     def bot_value(self, pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
         return 0.0
 
 

@@ -40,7 +40,10 @@ def test_migration_preserves_runtime_optimizer_and_saved_roundtrip(duration):
     ]
     prepared = prepare_config(old, verbose=False)
     assert prepared["bot"]["long"]["entry_cooldown"] == {
-        "base_duration_minutes": duration
+        "base_duration_minutes": duration,
+        "min_duration_minutes": 0.0,
+        "max_duration_minutes": None,
+        "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
     }
     assert "entry_cooldown_minutes" not in prepared["bot"]["long"]["risk"]
     runtime = compile_runtime_config(prepared)

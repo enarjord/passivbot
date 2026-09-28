@@ -858,6 +858,9 @@ def clean_config(config: dict) -> dict:
         template["optimize"]["bounds"]["hsl"] = {
             key: None for key in SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY["hsl"] if key in bounds
         }
+    from config.optimize_bounds import preserve_optional_adaptive_bounds
+
+    preserve_optional_adaptive_bounds(template, source)
     cleaned = _clean_with_template(template, source)
     prune_inactive_strategy_subtrees(cleaned)
     prune_inactive_optimize_strategy_bounds(cleaned)
@@ -2247,7 +2250,9 @@ def add_arguments_recursively(
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
             elif value is None:
-                if full_name == "backtest.btc_collateral_ltv_cap":
+                if full_name == "backtest.btc_collateral_ltv_cap" or full_name.endswith(
+                    ".entry_cooldown.max_duration_minutes"
+                ):
                     type_ = optional_float
                 else:
                     type_ = str

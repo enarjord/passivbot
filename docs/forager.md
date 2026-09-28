@@ -190,3 +190,11 @@ invent local substitute values.
 - Canonical shortlist scoring and selection live in Rust.
 - Python is responsible for gathering market data, building payloads, and calling Rust.
 - The canonical config names are `forager_volume_ema_span_1m` and `forager_volatility_ema_span_1m`.
+
+## RMS unilateralness
+
+`bot.<side>.forager.score_weights.unilateralness` optionally penalizes sustained
+one-way movement, equally up or down. Its default is zero. The shared floating-point
+`unilateralness_ema_span_1m` defaults to 60. See
+[adaptive entry cooldown and RMS](adaptive_entry_cooldown.md) for the formula,
+normalization, completed-candle readiness and automatic decay through flat prices.

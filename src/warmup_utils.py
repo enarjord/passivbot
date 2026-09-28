@@ -79,6 +79,18 @@ def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
         short_params = dict(base_short)
         long_params.update(flatten_shared_bot_side(bot_overrides.get("long", {}) or {}))
         short_params.update(flatten_shared_bot_side(bot_overrides.get("short", {}) or {}))
+        for params, base, side in (
+            (long_params, base_long, "long"),
+            (short_params, base_short, "short"),
+        ):
+            patch = flatten_shared_bot_side(bot_overrides.get(side, {}) or {}).get(
+                "entry_cooldown_weights_minutes", {}
+            )
+            if "entry_cooldown_weights_minutes" in base:
+                params["entry_cooldown_weights_minutes"] = {
+                    **base["entry_cooldown_weights_minutes"],
+                    **patch,
+                }
         yield (
             coin,
             long_params,
@@ -234,6 +246,19 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
     if limit > 0:
         warmup_minutes = min(warmup_minutes, limit)
+    warmup_minutes = max(
+        warmup_minutes,
+        max(
+            (
+                math.ceil(p["unilateralness_ema_span_1m"] * 20.0) + 1
+                for _, long, short, *_ in _iter_param_sets(config)
+                for p in (long, short)
+                if p.get("forager_score_weights", {}).get("unilateralness", 0) > 0
+                or p.get("entry_cooldown_weights_minutes", {}).get("adverse_directionality", 0) > 0
+            ),
+            default=0,
+        ),
+    )
     return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
 
 
@@ -284,6 +309,17 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
+        for params in (long_params, short_params):
+            if (
+                params.get("forager_score_weights", {}).get("unilateralness", 0.0) > 0
+                or params.get("entry_cooldown_weights_minutes", {}).get(
+                    "adverse_directionality", 0.0
+                )
+                > 0
+            ):
+                warmup_minutes = max(
+                    warmup_minutes, math.ceil(params["unilateralness_ema_span_1m"] * 20.0) + 1
+                )
         per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
     return per_coin
 

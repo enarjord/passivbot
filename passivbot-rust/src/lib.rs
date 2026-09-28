@@ -25,6 +25,7 @@ mod risk;
 mod strategies;
 mod trailing;
 mod types;
+mod unilateralness;
 mod utils;
 
 use coin_selection::{select_coin_indices_py, select_forager_candidates_py};
@@ -111,6 +112,14 @@ fn passivbot_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HlcvsBundlePy>()?;
     m.add_class::<EquityHardStopRollingPeakPy>()?;
     m.add_class::<EquityHardStopRuntimePy>()?;
+    m.add_function(wrap_pyfunction!(
+        unilateralness::calc_signed_unilateralness,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        entry_cooldown::entry_cooldown_durations_json,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(runtime_build_info, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised::signal_py, m)?)?;
     m.add_function(wrap_pyfunction!(hsl_revised_controller::hsl_revised_controller, m)?)?;

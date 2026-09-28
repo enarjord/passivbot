@@ -21,10 +21,12 @@ def _get_shared_bot_defaults():
         "long": {
             "forager": {
                 "score_weights": {
+                    "unilateralness": 0.0,
                     "ema_readiness": 0.21,
                     "volatility": 0.61,
                     "volume": 0.18
                 },
+                "unilateralness_ema_span_1m": 60.0,
                 "volatility_ema_span_1m": 2274.0,
                 "volume_drop_pct": 0.04,
                 "volume_ema_span_1m": 310.0
@@ -43,7 +45,12 @@ def _get_shared_bot_defaults():
                     "yellow": 0.5
                 }
             },
-            "entry_cooldown": {"base_duration_minutes": 24.1},
+            "entry_cooldown": {
+                "base_duration_minutes": 24.1,
+                "min_duration_minutes": 0.0,
+                "max_duration_minutes": None,
+                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+            },
             "risk": {
                 "n_positions": 7.0,
                 "position_exposure_enforcer_enabled": False,
@@ -70,10 +77,12 @@ def _get_shared_bot_defaults():
         "short": {
             "forager": {
                 "score_weights": {
+                    "unilateralness": 0.0,
                     "ema_readiness": 0.0,
                     "volatility": 0.0,
                     "volume": 0.0
                 },
+                "unilateralness_ema_span_1m": 60.0,
                 "volatility_ema_span_1m": 10.0,
                 "volume_drop_pct": 0.02,
                 "volume_ema_span_1m": 60.0
@@ -92,7 +101,12 @@ def _get_shared_bot_defaults():
                     "yellow": 0.5
                 }
             },
-            "entry_cooldown": {"base_duration_minutes": 0.0},
+            "entry_cooldown": {
+                "base_duration_minutes": 0.0,
+                "min_duration_minutes": 0.0,
+                "max_duration_minutes": None,
+                "weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+            },
             "risk": {
                 "n_positions": 1.0,
                 "position_exposure_enforcer_enabled": True,

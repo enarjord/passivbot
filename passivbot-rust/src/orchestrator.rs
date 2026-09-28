@@ -203,6 +203,7 @@ mod core {
         pub volume_component: f64,
         pub ema_readiness_component: f64,
         pub volatility_component: f64,
+        pub unilateralness_component: f64,
         pub selected: bool,
         pub incumbent: bool,
     }
@@ -315,6 +316,8 @@ mod core {
         pub close: EmaBySpan,
         pub log_range: EmaBySpan,
         pub volume: EmaBySpan,
+        #[serde(default)]
+        pub signed_unilateralness: EmaBySpan,
     }
 
     #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1052,6 +1055,7 @@ mod core {
                         volume_component: item.volume_component,
                         ema_readiness_component: item.ema_readiness_component,
                         volatility_component: item.volatility_component,
+                        unilateralness_component: item.unilateralness_component,
                         selected: item.selected,
                         incumbent: item.incumbent,
                     })
@@ -2209,6 +2213,7 @@ mod core {
             enabled: false,
             volume_score: 0.0,
             volatility_score: 0.0,
+            unilateralness_score: 0.0,
             bid: 0.0,
             ask: 0.0,
             ema_lower: 0.0,
@@ -2372,6 +2377,25 @@ mod core {
             } else {
                 0.0
             };
+            let unilateralness_score =
+                if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
+                    match signed_unilateralness(s, &side.bot_params, true) {
+                        Ok(value) => value.abs(),
+                        Err(err) => {
+                            handle_strategy_input_error(
+                                err,
+                                s,
+                                pside,
+                                StrategyInputScope::ForagerSelection,
+                                diagnostics,
+                            )?;
+                            out.push(unavailable_forager_candidate(s.symbol_idx));
+                            continue;
+                        }
+                    }
+                } else {
+                    0.0
+                };
             let (bid, ask, ema_lower, ema_upper, entry_initial_ema_dist) = if ema_readiness_required
             {
                 let ema_bands = match cached_ema_bands(
@@ -2417,6 +2441,7 @@ mod core {
                 enabled: true,
                 volume_score,
                 volatility_score,
+                unilateralness_score,
                 bid,
                 ask,
                 ema_lower,
@@ -2715,6 +2740,114 @@ mod core {
         })
     }
 
+    fn signed_unilateralness(
+        symbol: &SymbolInput,
+        bp: &BotParams,
+        forager: bool,
+    ) -> Result<f64, OrchestratorError> {
+        let bundle = if forager {
+            symbol.forager_m1.as_ref().unwrap_or(&symbol.emas.m1)
+        } else {
+            &symbol.emas.m1
+        };
+        let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_1m)
+            .ok_or(OrchestratorError::MissingEma {
+                symbol_idx: symbol.symbol_idx,
+            })?;
+        if !value.is_finite() || value.abs() > 1.0 {
+            return Err(OrchestratorError::NonFiniteInput {
+                symbol_idx: Some(symbol.symbol_idx),
+                field: "signed_unilateralness",
+            });
+        }
+        Ok(value)
+    }
+
+    fn effective_cooldown(
+        symbol: &SymbolInput,
+        pside: PositionSide,
+        balance: f64,
+        runtime_budget: RuntimeBudgetState,
+    ) -> Result<f64, OrchestratorError> {
+        let side = symbol_side_input(symbol, pside);
+        let bp = &side.bot_params;
+        crate::entry_cooldown::validate(bp).map_err(|_| OrchestratorError::NonFiniteInput {
+            symbol_idx: Some(symbol.symbol_idx),
+            field: "entry_cooldown",
+        })?;
+        // A held position with no remaining allocation is beyond any finite ratio.
+        // Saturate the bounded duration without dividing by zero.
+        if bp.entry_cooldown_weights_minutes.exposure_ratio > 0.0
+            && side.position.size != 0.0
+            && runtime_budget.effective_wallet_exposure_limit == 0.0
+        {
+            return Ok(bp
+                .entry_cooldown_max_duration_minutes
+                .expect("validated modifier ceiling"));
+        }
+        let exposure = if bp.entry_cooldown_weights_minutes.exposure_ratio > 0.0 {
+            let limit = runtime_budget.effective_wallet_exposure_limit;
+            Some(if side.position.size == 0.0 {
+                0.0
+            } else if limit > 0.0 {
+                calc_wallet_exposure(
+                    symbol.exchange.c_mult,
+                    balance,
+                    side.position.size.abs(),
+                    side.position.price,
+                ) / limit
+            } else {
+                return Err(OrchestratorError::NonFiniteInput {
+                    symbol_idx: Some(symbol.symbol_idx),
+                    field: "entry_cooldown_exposure_limit",
+                });
+            })
+        } else {
+            None
+        };
+        let adverse = if bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0 {
+            let signed = signed_unilateralness(symbol, bp, false)?;
+            Some(
+                (if pside == PositionSide::Long {
+                    -signed
+                } else {
+                    signed
+                })
+                .max(0.0),
+            )
+        } else {
+            None
+        };
+        crate::entry_cooldown::effective_duration(bp, exposure, adverse).map_err(|_| {
+            OrchestratorError::NonFiniteInput {
+                symbol_idx: Some(symbol.symbol_idx),
+                field: "entry_cooldown",
+            }
+        })
+    }
+
+    pub fn entry_cooldown_durations_json(raw: &str) -> Result<String, String> {
+        let input: OrchestratorInput = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+        let mut result = std::collections::BTreeMap::new();
+        for symbol in &input.symbols {
+            for (name, pside) in [("long", PositionSide::Long), ("short", PositionSide::Short)] {
+                let side = symbol_side_input(symbol, pside);
+                let value = match effective_cooldown(
+                    symbol,
+                    pside,
+                    input.balance,
+                    resolve_runtime_budget(side, side.bot_params.n_positions),
+                ) {
+                    Ok(value) => Some(value),
+                    Err(OrchestratorError::MissingEma { .. }) => None,
+                    Err(err) => return Err(format!("{err:?}")),
+                };
+                result.insert(format!("{}:{name}", symbol.symbol_idx), value);
+            }
+        }
+        serde_json::to_string(&result).map_err(|e| e.to_string())
+    }
+
     fn generate_strategy_ideal_orders(
         input: &OrchestratorInput,
         symbol: &SymbolInput,
@@ -2783,6 +2916,11 @@ mod core {
             volatility_ema_1m,
             volatility_ema_1h,
         };
+        let cooldown_minutes = if wants_entries {
+            effective_cooldown(symbol, pside, input.balance, runtime_budget)?
+        } else {
+            0.0
+        };
         let generated = generate_strategy_orders(
             strategy_kind_for_symbol_side(&input.global),
             strategy_side,
@@ -2823,7 +2961,7 @@ mod core {
             pside,
             input.timestamp_ms,
             side.last_increase_fill_timestamp_ms,
-            side.bot_params.risk_entry_cooldown_minutes,
+            cooldown_minutes,
             strategy_requires_sequential_entry_staging(&strategy_params),
         );
         let mut closes = Vec::new();
@@ -5346,6 +5484,7 @@ mod core {
             global.global_bot_params.long.forager_volume_drop_pct = 0.5;
             global.global_bot_params.long.forager_score_weights =
                 crate::types::ForagerScoreWeights {
+                    unilateralness: 0.0,
                     volume: 1.0,
                     ema_readiness: 1.0,
                     volatility: 1.0,

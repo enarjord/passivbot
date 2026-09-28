@@ -118,6 +118,33 @@ def validate_config(
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
+        span = bot_side["forager"]["unilateralness_ema_span_1m"]
+        if (
+            isinstance(span, bool)
+            or not isinstance(span, (int, float))
+            or not math.isfinite(span)
+            or not 1 <= span <= 100_000
+        ):
+            raise ValueError(
+                f"bot.{pside}.forager.unilateralness_ema_span_1m must be between 1 and 100000"
+            )
+        from .entry_cooldown import validate_entry_cooldown
+
+        validate_entry_cooldown(bot_side["entry_cooldown"], path=f"bot.{pside}.entry_cooldown")
+        from .optimize_bounds import flatten_optimize_bounds
+        from optimization.bounds import Bound
+
+        flat_bounds = flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
+        for modifier in ("exposure_ratio", "adverse_directionality"):
+            key = f"{pside}_entry_cooldown_weights_minutes_{modifier}"
+            if (
+                key in flat_bounds
+                and Bound.from_config(key, flat_bounds[key]).high > 0
+                and bot_side["entry_cooldown"]["max_duration_minutes"] is None
+            ):
+                raise ValueError(
+                    f"bot.{pside}.entry_cooldown.max_duration_minutes must be finite when searching modifier weights"
+                )
         entry_cooldown_minutes = float(
             get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
         )

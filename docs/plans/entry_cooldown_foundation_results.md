@@ -1,5 +1,9 @@
 # Entry cooldown foundation and formula experiments
 
+The adopted next stage uses RMS unilateralness and additive minutes. See
+[the implemented contract](../adaptive_entry_cooldown.md). The comparisons below
+record the foundation experiments; they do not imply a profitability result.
+
 ## Delivered foundation
 
 Public config now uses `bot.<side>.entry_cooldown.base_duration_minutes` with the
@@ -15,8 +19,8 @@ elapsed-time enforcement, and the cooldown part of ladder staging. Orchestration
 still owns filtering orders. The internal `risk_entry_cooldown_minutes` key and
 optimizer gene names remain stable, including the GPU adapters.
 
-This stage adds no adaptive behavior, score weights, duration bounds, or new
-market-data requirements. It is independently usable before choosing modifiers.
+The initial foundation added no adaptive behavior. The subsequent opt-in stage
+adds RMS directionality, score weights and bounded adaptive cooldowns.
 
 ## Additive versus multiplicative
 
@@ -46,7 +50,7 @@ all modifiers; that is a configuration convenience, not a distinct policy family
 under the formulas above. A product of individual factors is a different model
 with interactions; it is outside this recommendation.
 
-Proposed next-stage shape (not implemented or defaulted in this foundation):
+Adopted next-stage shape (illustrative non-default values):
 
 ```json
 {
@@ -105,7 +109,7 @@ Synthetic results at span 60, zero-seeded return accumulators following flat pri
 | Shock, then 60 flat bars | 1.000 | 0.0666 | 0.00444 | 0 |
 | Shock, then 300 flat bars | 1.000 | 0.00122 | approximately 0 | 0 |
 
-**Recommendation:** EW efficiency best matches directional purity and treats a
+**Formula tradeoff:** EW efficiency best matches directional purity and treats a
 large one-way shock as unilateral. EW RMS is preferable if fading the score through
 flat periods is part of the intended definition. Neither is universally better;
 the flat-tail behavior needs an explicit choice. Do not conceal that choice behind

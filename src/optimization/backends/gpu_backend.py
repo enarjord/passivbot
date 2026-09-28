@@ -434,6 +434,9 @@ def _validate_gpu_data_independent_scope(
 ) -> tuple[str, list[str], list[str]]:
     """Validate GPU behavior which does not depend on prepared candles or coin count."""
 
+    from config.entry_cooldown import reject_gpu_adaptive
+
+    reject_gpu_adaptive(config)
     strategy_kind = _validate_gpu_static_scope(config)
     if bool(config.get("backtest", {}).get("suite_enabled")) and not allow_suite:
         raise ValueError("Apple MPS GPU scope validation requires allow_suite=True")
@@ -1904,7 +1907,24 @@ def _validate_gpu_coin_overrides(
                 backtest_inert.append(rendered)
             if len(path) >= 3 and path[0] == "bot" and path[2] == "hsl":
                 hsl_override_paths.append(rendered)
-            if path not in allowed and not inert_forced_mode:
+            inert_cooldown = (
+                len(path) >= 4
+                and path[0] == "bot"
+                and path[2] == "entry_cooldown"
+                and (
+                    (path[3:] == ("max_duration_minutes",) and value_at(patch, path) is None)
+                    or (
+                        path[3:]
+                        in {
+                            ("min_duration_minutes",),
+                            ("weights_minutes", "exposure_ratio"),
+                            ("weights_minutes", "adverse_directionality"),
+                        }
+                        and value_at(patch, path) == 0.0
+                    )
+                )
+            )
+            if path not in allowed and not inert_forced_mode and not inert_cooldown:
                 unsupported.append(rendered)
     if hsl_override_paths:
         signal_mode = str(
