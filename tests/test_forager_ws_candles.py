@@ -109,6 +109,64 @@ async def test_ws_requires_canonical_basis_then_persists_only_finalized_rows(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fail_first_write", [False, True])
+async def test_ws_finalizes_first_candle_of_new_utc_day(
+    tmp_path, monkeypatch, fail_first_write
+):
+    midnight = 24 * 60 * ONE_MIN_MS
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=midnight + ONE_MIN_MS + 1_000)
+    cm._persist_batch(
+        symbol,
+        _candles((midnight - 2 * ONE_MIN_MS, 100, 101, 99, 100, 2)),
+        timeframe="1m",
+        merge_cache=True,
+    )
+    for ts, expected in [(midnight - ONE_MIN_MS, 0), (midnight, 1)]:
+        assert await cm.ingest_live_ws_ohlcv(
+            symbol, [[ts, 100, 101, 99, 100, 2]], now_ms=ts + 1_000
+        ) == expected
+
+    # Yesterday's canonical basis exists, but today's shard does not yet exist.
+    assert cm._load_from_disk(symbol, midnight, midnight, timeframe="1m") is None
+    assert cm.get_last_final_ts(symbol) == midnight - ONE_MIN_MS
+    successor = [[midnight + ONE_MIN_MS, 100, 102, 99, 101, 3]]
+    previous_frame = cm._live_ws_ohlcv_observations[symbol].copy()
+    if fail_first_write:
+        with monkeypatch.context() as patch:
+            def fail_save(*_args, **_kwargs):
+                raise OSError("disk unavailable")
+
+            patch.setattr(cm, "_save_range_incremental", fail_save)
+            with pytest.raises(OSError, match="disk unavailable"):
+                await cm.ingest_live_ws_ohlcv(symbol, successor)
+        assert cm.get_last_final_ts(symbol) == midnight - ONE_MIN_MS
+        assert cm.get_last_live_ws_ohlcv_ts(symbol) == midnight - ONE_MIN_MS
+        assert cm._live_ws_ohlcv_observations[symbol] == previous_frame
+        assert not np.any(cm._ensure_symbol_cache(symbol)["ts"] >= midnight)
+        assert cm._load_from_disk(symbol, midnight, midnight, timeframe="1m") is None
+
+    assert await cm.ingest_live_ws_ohlcv(symbol, successor) == 1
+    expected = _candles((midnight, 100, 101, 99, 100, 2))
+    disk = cm._load_from_disk(
+        symbol, midnight, midnight, timeframe="1m", merge_memory_cache=False
+    )
+    np.testing.assert_array_equal(disk, expected)
+    assert cm.get_last_final_ts(symbol) == midnight
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == midnight
+    assert not np.any(cm._ensure_symbol_cache(symbol)["ts"] > midnight)
+
+    # A fresh manager reconstructs the same candle from disk after restart.
+    restarted = _manager(tmp_path, now_ms=midnight + ONE_MIN_MS + 1_000)
+    np.testing.assert_array_equal(
+        restarted._load_from_disk(
+            symbol, midnight, midnight, timeframe="1m", merge_memory_cache=False
+        ),
+        expected,
+    )
+
+
+@pytest.mark.asyncio
 async def test_cached_forager_ema_uses_contiguous_ws_tail(tmp_path):
     now_ms = 5 * ONE_MIN_MS + 10_000
     cm = _manager(tmp_path, now_ms=now_ms)
@@ -521,6 +579,24 @@ async def test_ws_persistence_failure_does_not_expose_ram_only_candle(
 
 
 @pytest.mark.asyncio
+async def test_ws_unavailable_disk_reads_cannot_publish_unverified_rows(tmp_path, monkeypatch):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    basis = _candles((ONE_MIN_MS, 100, 100, 100, 100, 1))
+    cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
+
+    # The optional disk loader reports unavailable reads as None. That must
+    # not become proof of persistence, even if the shard write itself succeeds.
+    monkeypatch.setattr(cm, "_load_from_disk", lambda *_args, **_kwargs: None)
+    with pytest.raises(OSError, match="persistence verification failed"):
+        await _prime_and_finalize_ws_row(
+            cm, symbol, [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+        )
+    np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+
+
+@pytest.mark.asyncio
 async def test_delayed_ws_correction_overwrites_persisted_row(tmp_path):
     symbol = "BTC/USDT:USDT"
     cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
@@ -763,18 +839,23 @@ def test_repeated_ws_failures_enter_rest_fallback_cooldown():
 
 
 @pytest.mark.asyncio
-async def test_ingestion_failures_advance_to_rest_fallback_cooldown():
+@pytest.mark.parametrize("failure_stage", ["receive", "ingest"])
+async def test_ws_failures_identify_stage_and_preserve_rest_fallback_cooldown(
+    failure_stage, caplog
+):
     delays = []
 
     class _SuccessfulWatcher:
         has = {"watchOHLCV": True}
 
         async def watch_ohlcv(self, _symbol, _timeframe):
+            if failure_stage == "receive":
+                raise OSError("sensitive transport details")
             return [[ONE_MIN_MS, 1, 1, 1, 1, 1]]
 
     class _FailingManager:
         async def ingest_live_ws_ohlcv(self, _symbol, _rows):
-            raise OSError("persistence unavailable")
+            raise OSError("sensitive persistence details")
 
         def clear_live_ws_ohlcv_state(self, _symbol):
             return None
@@ -797,6 +878,13 @@ async def test_ingestion_failures_advance_to_rest_fallback_cooldown():
     await candle_ws.watch_forager_ws_symbol(bot, "BTC/USDT:USDT")
 
     assert delays == [1.0, 2.0, 4.0, 8.0, 300.0]
+    warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    assert "forager websocket candle update failed" in warnings[0].message
+    assert f"stage={failure_stage}" in warnings[0].message
+    assert "error_type=OSError" in warnings[0].message
+    assert "action=rest_fallback" in warnings[0].message
+    assert "sensitive" not in caplog.text
 
 
 @pytest.mark.asyncio

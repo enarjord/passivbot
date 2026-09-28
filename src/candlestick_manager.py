@@ -5485,7 +5485,11 @@ class CandlestickManager:
                 int(candidates[0]["ts"]),
                 int(candidates[-1]["ts"]),
             )
-            canonical = self._merge_overwrite(disk, cached)
+            # A new UTC day may have no disk shard yet. Missing disk rows
+            # add no canonical timestamps; only existing cache rows may be
+            # compared, and new timestamps still require successor proof and
+            # read-verified persistence below.
+            canonical = cached if disk is None else self._merge_overwrite(disk, cached)
             canonical_by_ts = {int(row["ts"]): row for row in canonical}
             # Value changes alone can correct a timestamp already admitted by
             # REST or WS. Extending canonical history requires independent
