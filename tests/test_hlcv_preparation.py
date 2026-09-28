@@ -3165,7 +3165,7 @@ async def test_combined_force_refetch_uses_v2_resolver_for_large_internal_gap(
 
 
 @pytest.mark.asyncio
-async def test_combined_force_refetch_btc_prices_use_v2_resolver(monkeypatch, tmp_path):
+async def test_combined_force_refetch_btc_prices_rejects_truncated_v2_range(monkeypatch, tmp_path):
     start_ts = month_start_ts(2026, 4)
     end_ts = start_ts + 10 * 60_000
     symbol = "BTC/USDT:USDT"
@@ -3228,12 +3228,10 @@ async def test_combined_force_refetch_btc_prices_use_v2_resolver(monkeypatch, tm
         legacy_root=None,
     )
 
-    assert source_exchange == "binanceusdm"
-    np.testing.assert_array_equal(
-        btc_df["timestamp"].to_numpy(dtype=np.int64, copy=False),
-        np.array([start_ts], dtype=np.int64),
-    )
-    np.testing.assert_allclose(btc_df["close"].to_numpy(dtype=np.float64), [50000.0])
+    # The resolver truncates at the unsupported internal gap. A partial BTC
+    # range cannot serve as the benchmark for the complete requested timeline.
+    assert source_exchange is None
+    assert btc_df.empty
 
 
 @pytest.mark.asyncio

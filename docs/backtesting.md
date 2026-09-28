@@ -36,6 +36,25 @@ the run, but they do not mirror those raw daily files into `caches/ohlcvs/`.
 
 For `.npz` files, the archive must contain a `candles` key with a structured NumPy array having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), `bv` (base volume). Timestamps should be in milliseconds. For `.npy` files, the array should have columns `[timestamp, open, high, low, close, volume]`.
 
+## BTC benchmark source
+
+Combined backtests and optimizations try BTC price history from the configured
+`backtest.exchanges` in order, except that Binance futures (`binance` /
+`binanceusdm`) keeps first priority when configured. Duplicate venues are tried
+once. When Binance is not configured, it is the final fallback after the configured
+venues. The selected venue is logged and retained as `btc_source_exchange` in
+preparation metadata. Candidates must cover both boundaries of the requested BTC
+range; shorter histories are skipped instead of extending their first or last price
+across unavailable history. Prepared caches from the previous source policy are
+rebuilt automatically.
+
+This priority applies in both online and offline modes, including explicit
+`backtest.ohlcv_source_dir` inputs. Online preparation may fetch missing data for
+the current candidate before trying the next venue; it does not search every
+venue's cache before downloading. Offline preparation uses local inputs only and
+fails if no candidate supplies the required benchmark. Changing the selected BTC
+source can change BTC-denominated metrics and simulations using BTC collateral.
+
 ## Offline preparation
 
 Set `backtest.offline: true`, or pass `--offline y`, for backtests and optimization
