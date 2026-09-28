@@ -148,8 +148,10 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     return True
 
 
-def compute_backtest_warmup_minutes(config: dict) -> int:
-    """Mirror Rust warmup span calculation (see calc_warmup_bars)."""
+def compute_backtest_warmup_minutes(
+    config: dict, *, include_forager_unilateralness: bool = True
+) -> int:
+    """History budget; score-only RMS may be excluded for trade activation."""
 
     def _extract_bound_max(bounds: dict, key: str) -> tuple[float, bool]:
         if key not in bounds:
@@ -253,7 +255,10 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
                 math.ceil(p["unilateralness_ema_span_1m"] * 20.0) + 1
                 for _, long, short, *_ in _iter_param_sets(config)
                 for p in (long, short)
-                if p.get("forager_score_weights", {}).get("unilateralness", 0) > 0
+                if (
+                    include_forager_unilateralness
+                    and p.get("forager_score_weights", {}).get("unilateralness", 0) > 0
+                )
                 or p.get("entry_cooldown_weights_minutes", {}).get("adverse_directionality", 0) > 0
             ),
             default=0,
@@ -262,7 +267,9 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
 
 
-def compute_per_coin_warmup_minutes(config: dict) -> dict:
+def compute_per_coin_warmup_minutes(
+    config: dict, *, include_forager_unilateralness: bool = True
+) -> dict:
     warmup_ratio = _to_float(
         require_config_value(config, "live.warmup_ratio"),
         context="live.warmup_ratio",
@@ -311,7 +318,10 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
             warmup_minutes = min(warmup_minutes, limit)
         for params in (long_params, short_params):
             if (
-                params.get("forager_score_weights", {}).get("unilateralness", 0.0) > 0
+                (
+                    include_forager_unilateralness
+                    and params.get("forager_score_weights", {}).get("unilateralness", 0.0) > 0
+                )
                 or params.get("entry_cooldown_weights_minutes", {}).get(
                     "adverse_directionality", 0.0
                 )

@@ -13,7 +13,8 @@ since the latest release tag; these features may already be available when insta
   float EMA span, reconstruct inputs from completed candles, and preserve defaults with zero new
   weights. Adaptive fill-history coverage works with a zero base; GPU rejects unsupported settings.
   Validate adaptive optimizer ranges before evaluation and allow per-coin fixed cooldowns to clear
-  inherited ceilings.
+  inherited ceilings. Scope score-only RMS warmup to required ranking and describe effective
+  cooldowns, including bounds and modifiers, in the trailing inspection overview.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

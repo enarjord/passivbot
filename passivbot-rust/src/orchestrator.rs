@@ -434,6 +434,11 @@ mod core {
         /// callers that do not explicitly establish live data unavailability.
         #[serde(default)]
         pub allow_missing_strategy_inputs: bool,
+        /// CPU backtest RMS replay windows still warming from known listing
+        /// history. Only missing forager scores at these spans may be deferred;
+        /// unrelated inputs and non-finite scores remain strict.
+        #[serde(default)]
+        pub forager_unilateralness_warmup_spans: Vec<f64>,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -2381,6 +2386,18 @@ mod core {
                 if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
                     match signed_unilateralness(s, &side.bot_params, true) {
                         Ok(value) => value.abs(),
+                        Err(OrchestratorError::MissingEma { .. })
+                            if s.forager_unilateralness_warmup_spans
+                                .contains(&side.bot_params.unilateralness_ema_span_1m) =>
+                        {
+                            diagnostics.warnings.push(OrchestratorWarning::StrategyInputUnavailable {
+                                symbol_idx: s.symbol_idx,
+                                pside,
+                                scope: StrategyInputScope::ForagerSelection,
+                            });
+                            out.push(unavailable_forager_candidate(s.symbol_idx));
+                            continue;
+                        }
                         Err(err) => {
                             handle_strategy_input_error(
                                 err,
@@ -4813,6 +4830,7 @@ mod core {
                 },
                 tradable: true,
                 allow_missing_strategy_inputs: false,
+                forager_unilateralness_warmup_spans: Vec::new(),
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,

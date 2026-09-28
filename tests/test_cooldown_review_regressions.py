@@ -140,3 +140,27 @@ def test_only_the_nullable_ceiling_accepts_null(leaf):
     cfg["coin_overrides"] = {"BTC": {"bot": {"long": {"entry_cooldown": {leaf: None}}}}}
     with pytest.raises(TypeError, match="may not be null"):
         parse_overrides(prepare_config(cfg, verbose=False), verbose=False)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "floor,ceiling,bounds,valid",
+    [
+        (0, 30, {"min_duration_minutes": [0, 20], "max_duration_minutes": [10, 30]}, False),
+        (0, 30, {"min_duration_minutes": [0, 10], "max_duration_minutes": [10, 30]}, True),
+        (0, 10, {"min_duration_minutes": [0, 20]}, False),
+        (20, 30, {"max_duration_minutes": [10, 30]}, False),
+        (0, None, {"min_duration_minutes": [0, 20]}, True),
+    ],
+)
+def test_cooldown_search_floor_cannot_exceed_any_reachable_ceiling(side, floor, ceiling, bounds, valid):
+    cfg = get_template_config()
+    cfg["bot"][side]["entry_cooldown"].update(
+        min_duration_minutes=floor, max_duration_minutes=ceiling
+    )
+    cfg["optimize"]["bounds"][side]["entry_cooldown"].update(bounds)
+    if valid:
+        prepare_config(cfg, verbose=False)
+    else:
+        with pytest.raises(ValueError, match="highest min_duration_minutes.*lowest max_duration_minutes"):
+            prepare_config(cfg, verbose=False)

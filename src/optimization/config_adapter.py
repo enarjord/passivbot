@@ -81,6 +81,7 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
     bot_config = config.get("bot") or get_template_config()["bot"]
     optimize_bounds = _flatten_bounds_for_config(config, optimize_bounds)
     strategy_path_map = _strategy_path_map(config)
+    cooldown_ranges = {}
     for bound_key in optimize_bounds:
         if not isinstance(bound_key, str):
             continue
@@ -120,6 +121,11 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                     f"optimize.bounds.{bound_key} endpoints must be finite and in "
                     f"[{minimum}, {maximum}]"
                 )
+        if resolved[2:] in (
+            ("entry_cooldown", "min_duration_minutes"),
+            ("entry_cooldown", "max_duration_minutes"),
+        ):
+            cooldown_ranges[resolved[1], resolved[-1]] = bound
         if resolved[:2] == ("bot", "hsl"):
             value = bot_config["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -167,6 +173,22 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 bound.high,
                 path="optimize.bounds.short_unstuck_ema_dist upper bound",
                 pside="short",
+            )
+
+    # Independently sampled dimensions must be valid at every corner, not just
+    # the all-low/all-high configurations used to estimate warmup.
+    for pside in ("long", "short"):
+        floor_bound = cooldown_ranges.get((pside, "min_duration_minutes"))
+        ceiling_bound = cooldown_ranges.get((pside, "max_duration_minutes"))
+        if floor_bound is None and ceiling_bound is None:
+            continue
+        cooldown = bot_config[pside]["entry_cooldown"]
+        highest_floor = floor_bound.high if floor_bound else cooldown["min_duration_minutes"]
+        lowest_ceiling = ceiling_bound.low if ceiling_bound else cooldown["max_duration_minutes"]
+        if lowest_ceiling is not None and highest_floor > lowest_ceiling:
+            raise ValueError(
+                f"optimize.bounds.{pside}.entry_cooldown: highest min_duration_minutes "
+                f"({highest_floor}) must not exceed lowest max_duration_minutes ({lowest_ceiling})"
             )
 
 

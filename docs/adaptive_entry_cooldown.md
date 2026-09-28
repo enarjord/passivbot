@@ -35,7 +35,9 @@ leaves the replay history. At span 60 its flat-tail half-life is about 42 minute
 cross-candidate lower-is-better normalization converts U into a higher-is-better
 component, then combines it with the other relative weights. An absolute `1-U`
 score is not substituted for that existing normalization. With insufficient
-competition to require ranking, this input is not required for selection.
+competition to require ranking, this input is not required for selection. CPU backtests
+request its history without postponing unrelated trading. An incomplete scoring window
+excludes the coin only while ranking actually requires it; no partial score is substituted.
 
 Live ranking may carry the latest complete, contiguous RMS observation within the
 same per-symbol age allowance used by other Forager ranking metrics. Debug logs
@@ -103,7 +105,11 @@ for example `optimize.bounds.long.entry_cooldown.weights_minutes.exposure_ratio`
 or `optimize.bounds.long.forager.score_weights.unilateralness`. The existing
 Forager bound shorthand also supports `score_weights_unilateralness`. Keep a
 finite ceiling in the base config when a searched modifier can become positive.
-RMS requires one-minute backtest candles and its full replay warmup. Compare one
+Search ranges for floor and ceiling must satisfy `highest floor <= lowest ceiling`,
+including a fixed bound when only the other is optimized. This prevents invalid sampled
+combinations. RMS requires one-minute backtest candles and its full replay window for
+each consuming decision. Adverse cooldown waits for that window before CPU trade
+activation; score-only RMS warmup is scoped to required ranking. Compare one
 modifier at a time before combinations across distinct periods and markets.
 
 Lower fill counts alone do not establish an improvement. Assess drawdown, exposure,

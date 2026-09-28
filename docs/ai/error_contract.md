@@ -72,6 +72,8 @@ backtests, and may scope only that explicit live absence to forager selection, o
 strategy, or unstuck consumers that need it. A structurally required trailing bundle paired with
 `trailing_available=false` is inert transport data and must be rejected before any consuming
 strategy branch can read it.
+CPU backtests may explicitly mark only known, incomplete RMS Forager replay windows
+as described in `features/strategy_runtime.md`; this does not relax other backtest inputs.
 Missing ordinary strategy input produces no ideal orders for the entry or close branch that
 consumes it, so normal Rust-authoritative reconciliation removes any now-stale resting orders from
 that branch. The other strategy branch, independent Rust risk reducers, and panic actions continue

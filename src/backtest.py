@@ -1124,9 +1124,13 @@ def build_backtest_payload(
             )
         requested_start_idx = max(0, min(total_steps, requested_start_idx))
 
-    warmup_map = compute_per_coin_warmup_minutes(config)
+    history_warmup_map = compute_per_coin_warmup_minutes(config)
+    history_global_warmup = compute_backtest_warmup_minutes(config)
+    warmup_map = compute_per_coin_warmup_minutes(config, include_forager_unilateralness=False)
     default_warm = int(warmup_map.get("__default__", 0))
-    global_warmup_minutes = compute_backtest_warmup_minutes(config)
+    global_warmup_minutes = compute_backtest_warmup_minutes(
+        config, include_forager_unilateralness=False
+    )
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []
@@ -1166,6 +1170,15 @@ def build_backtest_payload(
             int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm))),
             int(global_warmup_minutes),
         )
+        activation_warm = max(int(warmup_map.get(coin, default_warm)), global_warmup_minutes)
+        history_warm = max(
+            int(history_warmup_map.get(coin, history_warmup_map.get("__default__", 0))),
+            history_global_warmup,
+        )
+        if history_warm > activation_warm:
+            # Cache metadata records requested history, not a requirement to
+            # postpone orders that do not consume the score-only RMS window.
+            warm = min(warm, activation_warm)
         warmup_minutes.append(warm)
         # trade_start_idx is in candle units, adjust warm from minutes to candle periods
         warm_bars = (

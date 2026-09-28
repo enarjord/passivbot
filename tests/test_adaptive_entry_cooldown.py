@@ -337,14 +337,46 @@ def test_forager_can_rank_carried_score_while_current_cooldown_is_unavailable():
     assert json.loads(pbr.entry_cooldown_durations_json(json.dumps(inp)))["0:long"] is None
 
 
-def test_cpu_young_coin_waits_for_full_rms_history():
+@pytest.mark.parametrize("ranking_required", [False, True])
+@pytest.mark.parametrize("metadata_history", [3, 1201])
+@pytest.mark.parametrize("span", [1.0, 60.0])
+def test_cpu_score_only_rms_warmup_blocks_only_required_ranking(ranking_required, metadata_history, span):
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    if ranking_required:
+        cfg["live"]["approved_coins"] = {
+            side: ["LONGCOIN", "SHORTCOIN"] for side in ("long", "short")
+        }
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    baseline, _, _ = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert len(baseline) > 0
+    for side in ("long", "short"):
+        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+        cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = span
+    for coin in ("LONGCOIN", "SHORTCOIN"):
+        markets[coin]["warmup_minutes"] = metadata_history
+    fills, _, _ = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    if ranking_required and span == 60.0:
+        assert len(fills) == 0
+    elif ranking_required:
+        assert len(fills) > 0
+        assert min(int(row[0]) for row in fills) >= math.ceil(20 * span)
+    else:
+        assert fills.tolist() == baseline.tolist()
+
+
+def test_cpu_adverse_cooldown_still_waits_for_full_rms_history():
     from backtest import run_backtest
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
     cfg = _ema_anchor_config(True)
     for side in ("long", "short"):
-        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
-        cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 60.0
+        cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 1.0
+        cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
@@ -386,3 +418,43 @@ def test_invalid_submitted_adaptive_inputs_are_fatal():
     inp["symbols"][0]["long"]["bot_params"]["entry_cooldown_max_duration_minutes"] = None
     with pytest.raises(FatalBotException, match="entry cooldown inputs"):
         reconciler.validate_rust_orchestrator_output(out, {0: "BTC"}, inp)
+
+
+@pytest.mark.parametrize("pending_span,score,raises", [(60.0, None, False), (30.0, None, True), (60.0, 1.5, True)])
+def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pending_span, score, raises):
+    import passivbot_rust as pbr
+
+    bp = {"n_positions": 1, "forager_score_weights": {
+        "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0,
+    }}
+    symbols = [make_symbol(i, bid=100.0, ask=100.0, long_bp=bp) for i in range(2)]
+    for symbol in symbols:
+        symbol["long"]["mode"] = None
+        symbol["forager_unilateralness_warmup_spans"] = [pending_span]
+        symbol["emas"]["m1"]["signed_unilateralness"] = [] if score is None else [[60.0, score]]
+    inp = make_input(balance=1000.0, global_bp=bot_params_pair(long_overrides=bp), symbols=symbols)
+    if raises:
+        with pytest.raises(ValueError):
+            compute(pbr, inp)
+    else:
+        result = compute(pbr, inp)
+        selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
+        assert selection["ranking_required"]
+        assert selection["selected_symbol_indices"] == []
+        assert result["diagnostics"]["warnings"]
+        # Once only one eligible candidate remains, no score is consumed.
+        inp["symbols"].pop()
+        result = compute(pbr, inp)
+        selection = next(s for s in result["diagnostics"]["forager_selections"] if s["pside"] == "long")
+        assert not selection["ranking_required"]
+        assert selection["selected_symbol_indices"] == [0]
+
+
+def test_forager_warmup_marker_does_not_relax_adverse_cooldown_inputs():
+    import passivbot_rust as pbr
+
+    inp = adaptive_input()
+    inp["symbols"][0]["emas"]["m1"]["signed_unilateralness"] = []
+    inp["symbols"][0]["forager_unilateralness_warmup_spans"] = [60.0]
+    with pytest.raises(ValueError):
+        compute(pbr, inp)

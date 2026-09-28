@@ -1558,6 +1558,7 @@ impl<'a> Backtest<'a> {
                     exchange,
                     tradable,
                     allow_missing_strategy_inputs: false,
+                    forager_unilateralness_warmup_spans: self.unilateralness_warmup_spans(idx, k),
                     next_candle,
                     effective_min_cost,
                     emas,
@@ -1766,6 +1767,7 @@ impl<'a> Backtest<'a> {
             }
 
             sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
+            sym.forager_unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);
             // Update EMA values (spans are stable; we overwrite only values).
             // m1.close: 3 long then 3 short.
             if sym.emas.m1.close.len() >= 6 {
@@ -1973,13 +1975,12 @@ impl<'a> Backtest<'a> {
                 .saturating_add(warm_bars)
                 .min(last)
                 .max(provided_trade_idx);
-            // Never activate an RMS consumer before it has a complete replay window,
-            // including young coins whose available history ends during warmup.
+            // Adverse cooldown needs RMS for entry decisions. Score-only RMS
+            // readiness is scoped to ranking instead of delaying all trading.
             let rms_warmup = [&bot_params[i].long, &bot_params[i].short]
                 .iter()
                 .filter(|bp| {
-                    bp.forager_score_weights.unilateralness > 0.0
-                        || bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                    bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
                 })
                 .map(|bp| {
                     crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
@@ -5691,6 +5692,24 @@ impl<'a> Backtest<'a> {
         for s in &snapshots {
             writer.write_snapshot(s);
         }
+    }
+
+    fn unilateralness_warmup_spans(&self, idx: usize, k: usize) -> Vec<f64> {
+        let Some((start, end)) = self.coin_valid_range(idx) else {
+            return Vec::new();
+        };
+        [&self.bot_params[idx].long, &self.bot_params[idx].short]
+            .iter()
+            .filter(|bp| {
+                bp.forager_score_weights.unilateralness > 0.0
+                    && k <= end
+                    && k < start.saturating_add(
+                        crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
+                            .expect("validated unilateralness span"),
+                    )
+            })
+            .map(|bp| bp.unilateralness_ema_span_1m)
+            .collect()
     }
 
     #[inline]
