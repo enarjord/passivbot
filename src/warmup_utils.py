@@ -183,7 +183,9 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
         span = upper("unilateralness_ema_span_1m", span)
     if adverse <= 0.0 and (for_trade_activation or scoring <= 0.0):
         return 0
-    return math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_1m") * 20.0) + 1
+    n_returns = math.ceil(_to_float(span, context=f"{pside}.unilateralness_ema_span_1m") * 20.0)
+    # N returns need N+1 closes, available at offset N from the first valid close.
+    return n_returns if for_trade_activation else n_returns + 1
 
 
 def compute_backtest_warmup_minutes(

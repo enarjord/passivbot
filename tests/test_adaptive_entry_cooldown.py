@@ -629,3 +629,44 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
     expected = (14 if override else 7) * 24 * 60
     assert bot._max_configured_entry_cooldown_minutes() == expected
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - (expected + 1) * 60000)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("span", [1.0, 1.01, 2.25])
+def test_adverse_rms_activates_at_first_complete_return_window(side, span):
+    import passivbot_rust as pbr
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+    from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+
+    cfg = _ema_anchor_config(True)
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = span
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=0.0, max_duration_minutes=60.0,
+        weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+    )
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    n_returns = math.ceil(20 * span)
+    # History is a close count; activation is the elapsed offset from the first close.
+    assert compute_backtest_warmup_minutes(cfg) == n_returns + 1
+    assert compute_per_coin_warmup_minutes(cfg)["__default__"] == n_returns + 1
+    assert compute_backtest_warmup_minutes(cfg, for_trade_activation=True) == n_returns
+    assert compute_per_coin_warmup_minutes(cfg, for_trade_activation=True)["__default__"] == n_returns
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    first = 3
+    for coin in ("LONGCOIN", "SHORTCOIN"):
+        markets[coin]["first_valid_index"] = first
+        markets[coin]["warmup_minutes"] = n_returns + 1
+    coin_index, coin = (0, "LONGCOIN") if side == "long" else (1, "SHORTCOIN")
+    closes = hlcvs[first:first + n_returns + 1, coin_index, 2].tolist()
+    with pytest.raises(ValueError, match="incomplete unilateralness warmup"):
+        pbr.calc_signed_unilateralness(closes[:-1], span)
+    assert pbr.calc_signed_unilateralness(closes, span) == 0.0
+    fills, _, _, payload = run_backtest(
+        hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True,
+    )
+    assert payload.backtest_params["trade_start_indices"][coin_index] == first + n_returns
+    entries = [row for row in fills if str(row[2]) == coin and str(row[13]).startswith("entry_")]
+    # Orders planned with the first complete window fill on the next candle.
+    assert min(int(row[0]) for row in entries) == first + n_returns + 1

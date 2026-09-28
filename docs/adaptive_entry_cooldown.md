@@ -120,7 +120,7 @@ The CPU engine also excludes per-coin entry-ineligible sides from RMS activation
 Live cooldown fill-history coverage includes only globally enabled sides.
 RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. Adverse cooldown waits for that window before CPU trade
-activation; score-only RMS warmup is scoped to required ranking. Compare one
+activation: N returns require N+1 closes and are ready at index first_valid + N; score-only RMS warmup is scoped to required ranking. Compare one
 modifier at a time before combinations across distinct periods and markets.
 
 Lower fill counts alone do not establish an improvement. Assess drawdown, exposure,
