@@ -4656,7 +4656,16 @@ class Passivbot:
         """
         return self.config_get(["bot", pside, key], symbol)
 
-    def _live_strategy_warmup_value(self, pside: str, key: str, symbol: str) -> float:
+    def _live_strategy_warmup_lookup(self):
+        """Resolve each strategy once within one synchronous warmup calculation."""
+        strategy_cache = {}
+        return lambda pside, key, symbol: Passivbot._live_strategy_warmup_value(
+            self, pside, key, symbol, strategy_cache=strategy_cache
+        )
+
+    def _live_strategy_warmup_value(
+        self, pside: str, key: str, symbol: str, *, strategy_cache=None
+    ) -> float:
         """Return strategy-scoped indicator spans for live candle warmup."""
         strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
         if not callable(strategy_getter):
@@ -4673,13 +4682,19 @@ class Passivbot:
                 symbol=symbol,
             )
 
-        strategy_cfg = strategy_getter(pside, symbol)
+        cache_key = (pside, symbol)
+        if strategy_cache is not None and cache_key in strategy_cache:
+            strategy_cfg = strategy_cache[cache_key]
+        else:
+            strategy_cfg = strategy_getter(pside, symbol)
         if not isinstance(strategy_cfg, dict):
             raise TypeError(
                 f"live strategy warmup expected dict for {pside}.{key} "
                 f"{symbol or ''}; got {type(strategy_cfg).__name__}"
             )
 
+        if strategy_cache is not None:
+            strategy_cache[cache_key] = strategy_cfg
         return strategy_warmup_value(
             strategy_cfg,
             key,
@@ -4984,9 +4999,7 @@ class Passivbot:
                     (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
                 ),
                 forager_enabled=forager_needed,
-                strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
-                    self, pside, key, sym
-                ),
+                strategy_lookup=Passivbot._live_strategy_warmup_lookup(self),
                 forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                     self, pside, key, sym
                 ),
@@ -5547,9 +5560,7 @@ class Passivbot:
                 (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
             ),
             forager_enabled=forager_enabled,
-            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
-                self, pside, key, sym
-            ),
+            strategy_lookup=Passivbot._live_strategy_warmup_lookup(self),
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
@@ -5712,9 +5723,7 @@ class Passivbot:
                 (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
             ),
             forager_enabled=forager_enabled,
-            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
-                self, pside, key, sym
-            ),
+            strategy_lookup=Passivbot._live_strategy_warmup_lookup(self),
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
@@ -20906,9 +20915,7 @@ class Passivbot:
                 (getattr(self, "PB_modes", {}).get(pside, {}) or {}).get(sym),
             ),
             forager_enabled={pside: True for pside in refreshable_by_side},
-            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
-                self, pside, key, sym
-            ),
+            strategy_lookup=Passivbot._live_strategy_warmup_lookup(self),
             forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
                 self, pside, key, sym
             ),
