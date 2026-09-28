@@ -835,3 +835,9 @@ The archive helper also supports symmetric `pull` and local `extract` modes, inc
 ```shell
 passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/approved_coins_top80.json
 ```
+
+## Revised HSL configuration migration
+
+`passivbot tool migrate-hsl input.json output.json` prepares a separate revised-HSL
+configuration without exchange access or deployment. See the [migration contract](plans/hsl_sole_engine_migration.md#offline-configuration-preparation)
+for explicit restart choices, unified portfolio policy, and compatibility limits.

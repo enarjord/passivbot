@@ -19,6 +19,10 @@ since the latest release tag; these features may already be available when insta
 - Reduce live candle ingestion CPU use for ordered appends and open-candle replacements, and
   avoid searching historical gaps outside incoming rows while preserving overwrite and retry rules.
 
+- Add an offline `passivbot tool migrate-hsl` helper that validates a separately saved revised-HSL
+  configuration, requires explicit replacement of unsupported enabled restart policies, and
+  refuses input/output overwrite. Engine defaults and running bots are unchanged.
+
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
   does not exist yet. Reject unavailable existing shards, preserve finality and verified
   persistence, and distinguish receive
