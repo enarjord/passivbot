@@ -488,6 +488,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "filter_volume_ema_span_1m": 1.0,
                 "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
+                    "unilateralness": 0.0,
                     "volume": 1.0,
                     "ema_readiness": 0.0,
                     "volatility": 0.0,
@@ -507,6 +508,10 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "total_wallet_exposure_limit": 5.0,
                 "wallet_exposure_limit": 5.0,
                 "risk_entry_cooldown_minutes": 0.0,
+                "entry_cooldown_min_duration_minutes": 0.0,
+                "entry_cooldown_max_duration_minutes": None,
+                "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                "unilateralness_ema_span_1m": 60.0,
                 "risk_wel_enforcer_threshold": 1.0,
                 "risk_twel_enforcer_policy": "REDUCE_PORTFOLIO",
                 "risk_twel_enforcer_threshold": 1.0,
@@ -540,6 +545,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["risk_we_excess_allowance_mode"] == "legacy_raw"
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
+        "unilateralness": pytest.approx(0.0),
         "volume": pytest.approx(1.0),
         "ema_readiness": pytest.approx(0.0),
         "volatility": pytest.approx(0.0),
@@ -581,6 +587,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "forager_volume_ema_span_1m": 1.0,
                         "forager_volume_drop_pct": 0.0,
                         "forager_score_weights": {
+                            "unilateralness": 0.0,
                             "volume": 1.0,
                             "ema_readiness": 0.0,
                             "volatility": 0.0,
@@ -600,6 +607,10 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "total_wallet_exposure_limit": 5.0,
                         "wallet_exposure_limit": 5.0,
                         "risk_entry_cooldown_minutes": 0.0,
+                        "entry_cooldown_min_duration_minutes": 0.0,
+                        "entry_cooldown_max_duration_minutes": None,
+                        "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+                        "unilateralness_ema_span_1m": 60.0,
                         "risk_wel_enforcer_enabled": True,
                         "risk_wel_enforcer_threshold": 1.0,
                         "risk_twel_enforcer_enabled": True,

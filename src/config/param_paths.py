@@ -234,14 +234,23 @@ def path_suffix_matches_selector(path: tuple[str, ...], selector_path: tuple[str
 
 
 def bound_path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
-    if selector_path and selector_path[-1] == "risk" and path[-2:] == (
-        "entry_cooldown", "base_duration_minutes"
-    ):
-        # Preserve historical risk-group selectors after moving the public leaf.
-        path = (*path[:-2], "risk", "entry_cooldown_minutes")
-    return path_matches_selector(path, selector_path) or path_suffix_matches_selector(
+    if path_matches_selector(path, selector_path) or path_suffix_matches_selector(
         path, selector_path
-    )
+    ):
+        return True
+    if path[-2:] == ("entry_cooldown", "base_duration_minutes"):
+        # Match the old leaf as well, including risk.* and side-qualified wildcards.
+        # Only the migrated base duration belonged to the historical risk group.
+        legacy_path = (*path[:-2], "risk", "entry_cooldown_minutes")
+        return (
+            path_matches_selector(legacy_path, selector_path)
+            or path_suffix_matches_selector(legacy_path, selector_path)
+            or (
+                selector_path[-1:] == ("risk",)
+                and path_suffix_matches_selector(legacy_path[:-1], selector_path)
+            )
+        )
+    return False
 
 
 def resolve_bound_selectors(

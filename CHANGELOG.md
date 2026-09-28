@@ -12,6 +12,8 @@ since the latest release tag; these features may already be available when insta
   and ceiling, plus a Forager RMS unilateralness score that fades during inactivity. Share one
   float EMA span, reconstruct inputs from completed candles, and preserve defaults with zero new
   weights. Adaptive fill-history coverage works with a zero base; GPU rejects unsupported settings.
+  Validate adaptive optimizer ranges before evaluation and allow per-coin fixed cooldowns to clear
+  inherited ceilings.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

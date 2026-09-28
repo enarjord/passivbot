@@ -584,8 +584,8 @@ async def test_scenario_file_override_is_frozen_in_candidates_and_resume_contrac
     evaluator = object.__new__(SuiteEvaluator)
     candidate = evaluator.build_scenario_candidate_config(previous, old_ctx)
     assert (
-        candidate["coin_overrides"]["HYPE"]["bot"]["long"]["risk"][
-            "entry_cooldown_minutes"
+        candidate["coin_overrides"]["HYPE"]["bot"]["long"]["entry_cooldown"][
+            "base_duration_minutes"
         ]
         == 37.0
     )

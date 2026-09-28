@@ -866,6 +866,8 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":
@@ -989,6 +991,8 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":
@@ -1102,6 +1106,8 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
             }
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "unstuck_enabled":
                 return False
             raise KeyError(key)
@@ -1247,6 +1253,8 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
             }
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "unstuck_enabled":
                 return False
             raise KeyError(key)
@@ -1450,6 +1458,8 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
             }
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "unstuck_enabled":
                 return False
             raise KeyError(key)
@@ -1618,6 +1628,8 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":
@@ -1798,6 +1810,8 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":
@@ -1910,6 +1924,8 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":
@@ -2023,6 +2039,8 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":
@@ -2127,6 +2145,8 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
             return 0.0
 
         def bp(self, pside, key, symbol):
+            if key == "entry_cooldown_weights_minutes":
+                return {"exposure_ratio": 0.0, "adverse_directionality": 0.0}
             if key == "ema_span_0":
                 return 10.0
             if key == "ema_span_1":

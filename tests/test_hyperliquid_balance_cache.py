@@ -1804,8 +1804,13 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
     bot.config = {
         "live": {},
         "bot": {
-            "long": {"risk_entry_cooldown_minutes": 0.0},
-            "short": {"risk_entry_cooldown_minutes": 0.0},
+            side: {
+                "risk_entry_cooldown_minutes": 0.0,
+                "entry_cooldown_min_duration_minutes": 0.0,
+                "entry_cooldown_max_duration_minutes": None,
+                "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 0.0},
+            }
+            for side in ("long", "short")
         },
     }
     bot.exchange = "hyperliquid"

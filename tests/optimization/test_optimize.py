@@ -1583,6 +1583,7 @@ class TestIndividualToConfig:
                         "volatility_ema_span_1m": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
+                            "unilateralness": 0.0,
                             "volume": 0.0,
                             "ema_readiness": 0.0,
                             "volatility": 1.0,
@@ -1623,6 +1624,7 @@ class TestIndividualToConfig:
                         "volatility_ema_span_1m": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
+                            "unilateralness": 0.0,
                             "volume": 0.2,
                             "ema_readiness": 0.3,
                             "volatility": 0.5,

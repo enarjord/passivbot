@@ -373,13 +373,13 @@ def _extract_allowed_patch(
 
     def visit(value, policy, path: tuple[str, ...]):
         if policy is True:
-            if value is None:
+            if value is None and path[-2:] != ("entry_cooldown", "max_duration_minutes"):
                 raise TypeError(f"{_format_override_path(coin, path)} may not be null")
             return deepcopy(value)
         if not isinstance(policy, dict):
             if strict:
                 raise ValueError(f"{_format_override_path(coin, path)} is not overridable")
-            return None
+            return _MISSING
         if not isinstance(value, dict):
             raise TypeError(f"{_format_override_path(coin, path)} must be a dict")
         result = {}
@@ -391,7 +391,7 @@ def _extract_allowed_patch(
                     )
                 continue
             child_value = visit(child, policy[key], path + (key,))
-            if child_value is not None and (not isinstance(child_value, dict) or child_value):
+            if child_value is not _MISSING and (not isinstance(child_value, dict) or child_value):
                 result[key] = child_value
         return result
 
@@ -419,11 +419,14 @@ def _iter_patch_leaves(value, path=()):
     yield path, value
 
 
-def _get_nested_value(config: dict, path: tuple[str, ...]):
+_MISSING = object()
+
+
+def _get_nested_value(config: dict, path: tuple[str, ...], *, default=None):
     current = config
     for key in path:
         if not isinstance(current, dict) or key not in current:
-            return None
+            return default
         current = current[key]
     return current
 
@@ -533,8 +536,8 @@ def _validate_effective_coin_config(
         ) from exc
     normalized_patch = {}
     for path, original_value in _iter_patch_leaves(patch):
-        normalized_value = _get_nested_value(prepared, path)
-        if normalized_value is None:
+        normalized_value = _get_nested_value(prepared, path, default=_MISSING)
+        if normalized_value is _MISSING:
             # wallet_exposure_limit is a per-coin runtime value calculated after
             # canonical config preparation, so it has no canonical global leaf.
             if len(path) == 3 and path[0] == "bot" and path[2] == "wallet_exposure_limit":

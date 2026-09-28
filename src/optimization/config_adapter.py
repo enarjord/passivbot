@@ -100,6 +100,26 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
                 for endpoint in (bound.low, bound.high):
                     _number(endpoint, f"optimize.bounds.{bound_key}", **constraints[name])
+        adaptive_domain = {
+            ("forager", "unilateralness_ema_span_1m"): (1.0, 100_000.0),
+            ("forager", "score_weights", "unilateralness"): (0.0, math.inf),
+            ("entry_cooldown", "weights_minutes", "exposure_ratio"): (0.0, math.inf),
+            ("entry_cooldown", "weights_minutes", "adverse_directionality"): (0.0, math.inf),
+            ("entry_cooldown", "base_duration_minutes"): (0.0, math.inf),
+            ("entry_cooldown", "min_duration_minutes"): (0.0, math.inf),
+            ("entry_cooldown", "max_duration_minutes"): (0.0, math.inf),
+        }.get(resolved[2:])
+        if adaptive_domain is not None:
+            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+            minimum, maximum = adaptive_domain
+            if any(
+                not math.isfinite(value) or not minimum <= value <= maximum
+                for value in (bound.low, bound.high)
+            ):
+                raise ValueError(
+                    f"optimize.bounds.{bound_key} endpoints must be finite and in "
+                    f"[{minimum}, {maximum}]"
+                )
         if resolved[:2] == ("bot", "hsl"):
             value = bot_config["hsl"].get(resolved[-1])
             if isinstance(value, bool) or not isinstance(value, (int, float)):

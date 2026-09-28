@@ -134,8 +134,9 @@ can amplify tiny differences between otherwise similar candidates.
 
 Run `python src/tools/research_entry_timing.py --span 60`. The script contains
 seeded synthetic cases, composition checks, and an isolated two-EMA arithmetic
-benchmark. One run took about 0.057 seconds for one million Python updates. This
-is an arithmetic microbenchmark, not an end-to-end bot benchmark or a Rust timing.
+benchmark. Its elapsed time depends on the interpreter, hardware and system load;
+measure repeated runs on the target environment. This is an arithmetic
+microbenchmark, not an end-to-end bot benchmark or a Rust timing.
 EW efficiency needs two accumulator values per symbol/span and constant work per
 bar. Data preparation, readiness, replay, and integration dominate the design cost.
 
