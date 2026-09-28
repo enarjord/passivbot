@@ -338,15 +338,25 @@ def build_optimizer_data_config(config: dict) -> dict:
     return data_config
 
 
-def compute_optimizer_per_coin_warmup_minutes(config: dict) -> dict:
-    boundary_configs = _build_optimizer_boundary_configs(config)
-    if len(boundary_configs) > 1:
-        merged: dict[str, int] = {}
-        for boundary_config in boundary_configs:
-            for key, value in compute_per_coin_warmup_minutes(boundary_config).items():
-                merged[key] = max(int(value), int(merged.get(key, 0)))
-        return merged
-    return compute_per_coin_warmup_minutes(boundary_configs[0])
+def compute_optimizer_per_coin_warmup_minutes(
+    config: dict, *, for_trade_activation: bool = False
+) -> dict:
+    """Separate loaded history from the activation budget shared by candidates.
+
+    RMS history covers the search space. RMS activation belongs to each final
+    candidate's Rust entry/ranking consumer, not the shared dataset metadata.
+    Other indicators retain their existing worst-case activation budget.
+    """
+    merged: dict[str, int] = {}
+    for boundary_config in _build_optimizer_boundary_configs(config):
+        warmup_map = compute_per_coin_warmup_minutes(
+            boundary_config,
+            for_trade_activation=for_trade_activation,
+            include_rms=not for_trade_activation,
+        )
+        for key, value in warmup_map.items():
+            merged[key] = max(int(value), int(merged.get(key, 0)))
+    return merged
 
 
 def compute_optimizer_backtest_warmup_minutes(config: dict) -> int:
@@ -355,6 +365,7 @@ def compute_optimizer_backtest_warmup_minutes(config: dict) -> int:
 
 
 def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> Counter:
+    """Stamp the shared trade-activation map, never the RMS history map."""
     default_warmup = int(warmup_map.get("__default__", 0))
     stamped: Counter = Counter()
     for coin in coins:

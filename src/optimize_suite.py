@@ -212,7 +212,9 @@ async def prepare_suite_contexts(
             coin: deepcopy(dataset.mss.get(coin, {})) for coin in selected_coins
         }
         # Adjust per-coin indices relative to the time slice to avoid full hlcvs copies.
-        warmup_map = compute_optimizer_per_coin_warmup_minutes(scenario_config)
+        warmup_map = compute_optimizer_per_coin_warmup_minutes(
+            scenario_config, for_trade_activation=True
+        )
         for coin, meta in mss_slice.items():
             first_idx = int(meta.get("first_valid_index", 0))
             last_idx = int(meta.get("last_valid_index", total_steps_1m - 1))

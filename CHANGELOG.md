@@ -21,7 +21,8 @@ since the latest release tag; these features may already be available when insta
   aggregates for linear CPU backtest work. Validate search corners against effective coin
   overrides and omit RMS requirements on disabled or entry-ineligible sides. Disabled live
   sides do not extend cooldown fill-history coverage. Activate adverse cooldown at the first
-  complete RMS return window, without an extra candle of delay.
+  complete RMS return window, without an extra candle of delay. Keep optimizer/suite RMS
+  history budgets separate from shared candidate activation metadata.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

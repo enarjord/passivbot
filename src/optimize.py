@@ -341,10 +341,13 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
     individual, running it through ``individual_to_config``, and recomputing
     warmup from the resulting config.
 
+    RMS history is loaded separately. Its activation delay is candidate-specific
+    and enforced by Rust, so it must not enter this shared metadata.
+
     Must be called *after* ``prepare_hlcvs_mss`` and *before* the Evaluator
     reads ``mss``.
     """
-    warmup_map = compute_optimizer_per_coin_warmup_minutes(config)
+    warmup_map = compute_optimizer_per_coin_warmup_minutes(config, for_trade_activation=True)
     stamped = stamp_warmup_metadata(mss, coins, warmup_map)
     if stamped:
         summary = ", ".join(

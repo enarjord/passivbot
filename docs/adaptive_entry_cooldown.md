@@ -111,6 +111,8 @@ an unbounded starting-config ceiling
 projects to the upper search bound. History loading covers positive consumer weights and
 maximum float spans reachable through optimizer bounds, even when fixed weights are zero.
 This history budget does not impose a delay on candidates that do not consume RMS.
+Optimizer and suite dataset metadata stamp only the shared non-RMS activation budget;
+each candidate retains its own Rust RMS entry/ranking readiness.
 Search ranges for floor and ceiling must satisfy `highest floor <= lowest ceiling`,
 including a fixed bound when only the other is optimized and every effective coin override.
 A coin-pinned limit supersedes its global search dimension. This prevents invalid sampled

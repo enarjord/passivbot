@@ -200,3 +200,56 @@ def test_prepare_suite_contexts_uses_shared_optimizer_warmup_helper():
     source = Path("src/optimize_suite.py").read_text(encoding="utf-8")
     assert "compute_optimizer_per_coin_warmup_minutes(" in source
     assert "stamp_warmup_metadata(" in source
+
+
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
+    from copy import deepcopy
+    import numpy as np
+    from backtest import run_backtest
+    from config import prepare_config
+    from optimize import _stamp_optimizer_warmup
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["live"]["max_warmup_minutes"] = 3
+    cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    bounds = cfg["optimize"]["bounds"]["long"]
+    bounds["forager"]["unilateralness_ema_span_1m"] = [1.0, 60.0]
+    if consumer == "forager":
+        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+    else:
+        bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 10.0]}
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    assert compute_optimizer_per_coin_warmup_minutes(cfg)["__default__"] == 1201
+    activation = compute_optimizer_per_coin_warmup_minutes(cfg, for_trade_activation=True)
+    assert activation["__default__"] == 3
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    unstamped_markets = deepcopy(markets)
+    baseline = run_backtest(hlcvs, unstamped_markets, cfg, "binance", btc, timestamps)
+    _stamp_optimizer_warmup(cfg, markets, ["LONGCOIN", "SHORTCOIN"])
+    assert markets["LONGCOIN"]["trade_start_index"] == 3
+    result = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert len(result[0]) > 0
+    np.testing.assert_array_equal(result[0], baseline[0])
+    np.testing.assert_array_equal(result[1], baseline[1])
+    assert result[2] == baseline[2]
+    if consumer == "forager":
+        # This candidate fits available slots and does not consume a ranking score.
+        cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+        result = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+        np.testing.assert_array_equal(result[0], baseline[0])
+        np.testing.assert_array_equal(result[1], baseline[1])
+        assert result[2] == baseline[2]
+    else:
+        # The enabled candidate uses its own short window, not the search maximum.
+        cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 1.0
+        cfg["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 1.0
+        fills, _, _, payload = run_backtest(
+            hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True
+        )
+        assert payload.backtest_params["trade_start_indices"][0] == 20
+        standalone = run_backtest(hlcvs, unstamped_markets, cfg, "binance", btc, timestamps)
+        np.testing.assert_array_equal(fills, standalone[0])
+        assert len(fills) > 0

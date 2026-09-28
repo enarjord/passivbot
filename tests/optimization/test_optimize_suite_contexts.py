@@ -72,8 +72,9 @@ def _make_lazy_dataset(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rms_search", [False, True])
 async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_short_disabled(
-    monkeypatch,
+    monkeypatch, rms_search,
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
@@ -91,6 +92,12 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     # Schema defaults keep shorts disabled. Optimizer candidates may enable
     # shorts later, so context preparation must not dedupe base vs long_only.
     config["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    if rms_search:
+        config["live"]["max_warmup_minutes"] = 3
+        config["optimize"]["bounds"]["long"]["forager"].update(
+            unilateralness_ema_span_1m=[1.0, 60.0],
+            score_weights={"unilateralness": [0.0, 1.0]},
+        )
 
     async def fake_load_markets(_exchange, verbose=False):
         return {}
@@ -130,6 +137,11 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
 
     assert [ctx.label for ctx in contexts] == ["base", "long_only", "short_only"]
     assert captured["allow_internal_nan_gaps"] is True
+    if rms_search:
+        for mss in contexts[0].msss.values():
+            assert mss["HYPE"]["warmup_minutes"] == 3
+            assert mss["HYPE"]["trade_start_index"] == 3
+            assert mss["__meta__"]["warmup_minutes_requested"] == 1201
 
 
 def test_suite_evaluator_close_releases_context_and_master_attachments():

@@ -305,7 +305,7 @@ def compute_backtest_warmup_minutes(
 
 
 def compute_per_coin_warmup_minutes(
-    config: dict, *, for_trade_activation: bool = False
+    config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> dict:
     warmup_ratio = _to_float(
         require_config_value(config, "live.warmup_ratio"),
@@ -353,11 +353,12 @@ def compute_per_coin_warmup_minutes(
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
-        for side, params in (("long", long_params), ("short", short_params)):
-            warmup_minutes = max(
-                warmup_minutes,
-                _rms_warmup_minutes(params, side, for_trade_activation=for_trade_activation),
-            )
+        if include_rms:
+            for side, params in (("long", long_params), ("short", short_params)):
+                warmup_minutes = max(
+                    warmup_minutes,
+                    _rms_warmup_minutes(params, side, for_trade_activation=for_trade_activation),
+                )
         per_coin[coin] = int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
     return per_coin
 
