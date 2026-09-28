@@ -238,6 +238,8 @@ def test_zero_base_adaptive_fill_horizon_uses_ceiling():
     ec.update(base_duration_minutes=0.0, max_duration_minutes=45.0)
     ec["weights_minutes"]["adverse_directionality"] = 20.0
     bot = SimpleNamespace(config=cfg, coin_overrides={})
+    bot.bot_value = lambda side, key: Passivbot.bot_value(bot, side, key)
+    bot.is_pside_enabled = lambda side: Passivbot.is_pside_enabled(bot, side)
     bot.bp = lambda side, key, symbol=None: Passivbot.bot_value(bot, side, key)
     assert Passivbot._max_configured_entry_cooldown_minutes(bot) == 45.0
     assert Passivbot._entry_cooldown_enabled_pairs(bot, ["BTC"]) == {("BTC", "long")}
@@ -481,11 +483,12 @@ def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close,
     cfg = prepare_config(cfg, verbose=False)
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
-    hlcvs[bad_row, 0, 2] = bad_close
-    with pytest.raises(ValueError, match=f"RMS requires positive closes: coin LONGCOIN index 0 candle {bad_row}"):
+    coin_index, coin = (0, "LONGCOIN") if side == "long" else (1, "SHORTCOIN")
+    hlcvs[bad_row, coin_index, 2] = bad_close
+    with pytest.raises(ValueError, match=f"RMS requires positive closes: coin {coin} index {coin_index} candle {bad_row}"):
         run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
     # Unavailable history outside the declared listing range is not consumed.
-    markets["LONGCOIN"]["first_valid_index"] = bad_row + 1
+    markets[coin]["first_valid_index"] = bad_row + 1
     run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
 
 
@@ -553,3 +556,76 @@ def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer)
     np.testing.assert_array_equal(result[0], baseline[0])
     np.testing.assert_array_equal(result[1], baseline[1])
     assert result[2] == baseline[2]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("interval", [1, 5])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+def test_cpu_entry_ineligible_rms_policy_is_inert(side, interval, consumer):
+    from backtest import build_backtest_payload, execute_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["backtest"]["candle_interval_minutes"] = interval
+    # Keep the side globally enabled, but exclude every loaded coin on that side.
+    cfg["live"]["approved_coins"][side] = ["UNLOADEDCOIN"]
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert all(not pair[side]["entry_eligible"] for pair in payload.bot_params_list)
+    baseline = execute_backtest(payload, cfg)
+    # Exercise the Rust boundary with already-finalized side eligibility.
+    for pair in payload.bot_params_list:
+        bp = pair[side]
+        bp["unilateralness_ema_span_1m"] = 100000.0
+        if consumer == "forager":
+            bp["forager_score_weights"]["unilateralness"] = 1.0
+        else:
+            bp["entry_cooldown_max_duration_minutes"] = 60.0
+            bp["entry_cooldown_weights_minutes"]["adverse_directionality"] = 10.0
+    result = execute_backtest(payload, cfg)
+    assert len(result[0]) > 0
+    np.testing.assert_array_equal(result[0], baseline[0])
+    np.testing.assert_array_equal(result[1], baseline[1])
+    assert result[2] == baseline[2]
+    if interval == 5:
+        payload.bot_params_list[0][side]["entry_eligible"] = True
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            execute_backtest(payload, cfg)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("override", [False, True])
+def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
+    from passivbot import Passivbot
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = prepare_config(get_template_config(), verbose=False)
+    other = "short" if side == "long" else "long"
+    for pside in (side, other):
+        bot.config["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 0.0
+        bot.config["bot"][pside]["risk"].update(n_positions=1, total_wallet_exposure_limit=0.0)
+    bot.config["bot"][other]["risk"]["total_wallet_exposure_limit"] = 1.0
+    bot.config["bot"][other]["entry_cooldown"]["base_duration_minutes"] = 5.0
+    dormant = bot.config["bot"][side]["entry_cooldown"]
+    dormant["max_duration_minutes"] = 7 * 24 * 60
+    dormant["weights_minutes"]["exposure_ratio"] = 10.0
+    bot.coin_overrides = {}
+    if override:
+        bot.coin_overrides = {
+            "BTC": {"bot": {side: {"entry_cooldown": {"max_duration_minutes": 14 * 24 * 60}}}}
+        }
+    from config.runtime_compile import compile_runtime_config
+    bot.config = compile_runtime_config(bot.config, runtime="live")
+    bot._equity_hard_stop_enabled = lambda: False
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    now = 30 * 24 * 60 * 60000
+    assert bot._max_configured_entry_cooldown_minutes() == 5.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 6 * 60000)
+    # With both sides disabled there is no cooldown-only history requirement.
+    bot.config["bot"][other]["risk"]["total_wallet_exposure_limit"] = 0.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (False, None)
+    # Reactivation restores the configured side/coin horizon.
+    bot.config["bot"][side]["risk"]["total_wallet_exposure_limit"] = 1.0
+    expected = (14 if override else 7) * 24 * 60
+    assert bot._max_configured_entry_cooldown_minutes() == expected
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - (expected + 1) * 60000)

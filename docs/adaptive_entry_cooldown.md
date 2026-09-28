@@ -116,6 +116,8 @@ including a fixed bound when only the other is optimized and every effective coi
 A coin-pinned limit supersedes its global search dimension. This prevents invalid sampled
 combinations. Dormant RMS weights on a statically disabled side do not require history
 or one-minute candles; a side that optimizer bounds can enable still requires both.
+The CPU engine also excludes per-coin entry-ineligible sides from RMS activation.
+Live cooldown fill-history coverage includes only globally enabled sides.
 RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. Adverse cooldown waits for that window before CPU trade
 activation; score-only RMS warmup is scoped to required ranking. Compare one

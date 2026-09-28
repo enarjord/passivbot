@@ -1971,9 +1971,13 @@ class Passivbot:
         symbols: list[Optional[str]] = [None]
         symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
         return max(
-            Passivbot._entry_cooldown_horizon(self, pside, symbol)
-            for symbol in symbols
-            for pside in ("long", "short")
+            (
+                Passivbot._entry_cooldown_horizon(self, pside, symbol)
+                for symbol in symbols
+                for pside in ("long", "short")
+                if self.is_pside_enabled(pside)
+            ),
+            default=0.0,
         )
 
     def _required_pnl_history_start_ms(

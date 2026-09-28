@@ -3,7 +3,8 @@
 //! Weights are exponential; this is not a simple moving average.
 /// Backtests start flat, so a side with no entry budget cannot consume RMS.
 pub fn backtest_enabled(params: &crate::types::BotParams) -> bool {
-    params.total_wallet_exposure_limit > 0.0
+    params.entry_eligible
+        && params.total_wallet_exposure_limit > 0.0
         && params.n_positions > 0
         && (params.forager_score_weights.unilateralness > 0.0
             || params.entry_cooldown_weights_minutes.adverse_directionality > 0.0)
