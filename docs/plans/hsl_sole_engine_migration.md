@@ -97,6 +97,16 @@ without an override. An enabled legacy `threshold` choice must be replaced delib
 For unified mode, supply a complete portfolio policy as JSON through `--portfolio-policy`,
 or author `bot.hsl` in the input. The helper never copies side policy into it. Retired
 optimizer search dimensions/objectives must be edited explicitly before conversion succeeds.
+Each `optimize.fixed_params` selector must match active bounds; retired or unmatched selectors
+are rejected. Explicit restart choices also update matching `optimize.fixed_runtime_overrides`
+(including accepted path aliases), with a warning, so optimization cannot undo the choice.
+Other fixed overrides and explicit per-coin policies are preserved.
+
+File-backed coin overrides are resolved relative to the input configuration through the canonical
+loader, validated, and saved inline. Inline patches retain precedence over file patches. Invalid
+or missing override files prevent output creation. The resulting coin policies no longer depend
+on those files or on the output directory; later edits to an original override file do not update
+the converted configuration.
 Run the resulting config through backtests and review the changed risk semantics before use.
 
 ## Acceptance matrix

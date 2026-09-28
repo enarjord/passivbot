@@ -2,15 +2,20 @@
 from argparse import ArgumentParser
 from copy import deepcopy
 import json
+import logging
 from pathlib import Path
 import sys
 
 from config import prepare_config
+from config.hsl_revised import _mode, validate_parameter_path
 from config.load import load_input_config
+from config.optimize_bounds import flatten_optimize_bounds
+from config.overrides import parse_overrides
+from config.param_paths import require_existing_config_path, resolve_bound_selectors
 from config_utils import strip_config_metadata
 
 
-def migrate(source, *, restart_policies=None, portfolio=None):
+def migrate(source, *, restart_policies=None, portfolio=None, base_config_path=""):
     """Use the canonical loader after applying only explicit operator choices.
 
     The loader owns retired-field diagnostics, optimizer-path rejection, lookback
@@ -27,9 +32,11 @@ def migrate(source, *, restart_policies=None, portfolio=None):
     if not isinstance(live, dict):
         raise ValueError("live must be a mapping")
     live["hsl_engine"] = "revised"
+    mode = live["hsl_signal_mode"] = _mode(result)
     bot = result["bot"]
+    chosen_paths = {}
     if portfolio is not None:
-        if live.get("hsl_signal_mode", "coin") != "unified":
+        if mode != "unified":
             raise ValueError("--portfolio-policy applies only to unified signal mode")
         if "hsl" in bot:
             raise ValueError("bot.hsl already exists; edit it explicitly instead of replacing it")
@@ -38,15 +45,35 @@ def migrate(source, *, restart_policies=None, portfolio=None):
         if scope not in {"long", "short", "portfolio"} or policy not in {"always", "never"}:
             raise ValueError("restart choices must be long|short|portfolio=always|never")
         if scope == "portfolio":
-            if live.get("hsl_signal_mode") != "unified" or "hsl" not in bot:
+            if mode != "unified" or "hsl" not in bot:
                 raise ValueError("portfolio restart choice requires an explicit unified bot.hsl block")
             block = bot["hsl"]
         else:
-            if live.get("hsl_signal_mode") == "unified":
+            if mode == "unified":
                 raise ValueError("side restart choices are inactive in unified mode; choose portfolio")
             block = bot.setdefault(scope, {}).setdefault("hsl", {})
         block["restart_after_red_policy"] = policy
-    prepared = prepare_config(result, verbose=True, target="canonical", runtime=None)
+        path = ("bot", "hsl") if scope == "portfolio" else ("bot", scope, "hsl")
+        chosen_paths[(*path, "restart_after_red_policy")] = policy
+    prepared = prepare_config(result, verbose=True, target="canonical", runtime=None,
+                              base_config_path=base_config_path)
+    # An explicit migration choice must also survive optimizer policy application.
+    fixed = prepared.get("optimize", {}).get("fixed_runtime_overrides", {})
+    for selector in fixed:
+        path = require_existing_config_path(prepared, selector)
+        if path in chosen_paths and fixed[selector] != chosen_paths[path]:
+            logging.warning("Updating optimize.fixed_runtime_overrides[%s] to explicit choice %s",
+                            selector, chosen_paths[path])
+            fixed[selector] = chosen_paths[path]
+    bounds = flatten_optimize_bounds(prepared["optimize"]["bounds"],
+                                     strategy_kind=prepared["live"]["strategy_kind"])
+    for selector in prepared["optimize"].get("fixed_params", []):
+        validate_parameter_path(selector, mode)
+        if not resolve_bound_selectors(prepared, [selector], bounds):
+            raise ValueError(f"optimize.fixed_params selector {selector!r} matches no active bounds")
+    # Runtime's canonical override stage validates files as well as inline patches.
+    # Materializing its result preserves file-then-inline precedence when output moves.
+    prepared = parse_overrides(prepared, verbose=True)
     return strip_config_metadata(prepared)
 
 
@@ -74,7 +101,8 @@ def main(argv=None):
         source, _, _ = load_input_config(str(args.input_config), log_info=False)
         portfolio = (json.loads(args.portfolio_policy.read_text())
                      if args.portfolio_policy is not None else None)
-        output = migrate(source, restart_policies=choices, portfolio=portfolio)
+        output = migrate(source, restart_policies=choices, portfolio=portfolio,
+                         base_config_path=str(args.input_config.resolve()))
         serialized = json.dumps(output, indent=4, allow_nan=False) + "\n"
         # Exclusive creation also closes the race after the existence check.
         with args.output_config.open("x") as stream:
