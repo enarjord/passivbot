@@ -237,7 +237,7 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     ),
     "pareto-plot": CommandSpec(
         "tools.pareto_plot",
-        "plot two or three Pareto objectives (requires full install)",
+        "explore Pareto metrics and limits in offline HTML (requires full install)",
         requires_full=True,
     ),
     "pareto-dash": CommandSpec(

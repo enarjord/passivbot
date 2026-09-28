@@ -41,50 +41,43 @@ def front(tmp_path):
     return path
 
 
-@pytest.mark.parametrize("dimensions", [2, 3])
-def test_figure_preserves_coordinates_members_and_goals(front, dimensions):
+def test_dataset_includes_objectives_and_preserves_members(front):
     _, candidates, specs = load_candidates(front)
-    selected = pareto_plot.select_metrics(METRICS[:dimensions], specs)
-    fig = pareto_plot.build_figure(candidates, selected)
-    trace = fig.data[0]
-    assert trace.type == ("scatter" if dimensions == 2 else "scatter3d")
-    assert list(trace.x) == [0.02, 0.01, 0.02]
-    assert list(trace.y) == [0.1, 0.2, 0.1]
-    assert list(trace.text) == ["a.json", "b.json", "c.json"]
-    assert METRICS[0] in trace.hovertemplate
-    if dimensions == 3:
-        assert list(trace.z) == [2.0] * 3
-        assert fig.layout.scene.dragmode == "orbit"
-        for axis in (fig.layout.scene.xaxis, fig.layout.scene.yaxis, fig.layout.scene.zaxis):
-            assert axis.autorange is None
-        assert "lower is better" in fig.layout.scene.yaxis.title.text
-    else:
-        assert "higher is better" in fig.layout.xaxis.title.text
-        assert "lower is better" in fig.layout.yaxis.title.text
+    data = pareto_plot.build_dataset(candidates, specs)
+    assert data["names"] == ["a.json", "b.json", "c.json"]
+    metrics = {metric["key"]: metric for metric in data["metrics"]}
+    assert metrics[METRICS[0]]["values"] == [0.02, 0.01, 0.02]
+    assert metrics[METRICS[1]]["values"] == [0.1, 0.2, 0.1]
+    assert metrics[METRICS[0]]["goal"] == "max"
+    assert metrics[METRICS[1]]["goal"] == "min"
+    assert pareto_plot.select_metrics([], data) == METRICS[:2]
 
 
 @pytest.mark.parametrize("layout", ["named", "legacy", "suite"])
-def test_formats_plot_native_values_not_engine_sign_or_scenario_mean(tmp_path, layout):
+def test_formats_preserve_native_values_not_engine_sign_or_scenario_mean(tmp_path, layout):
     path = tmp_path / "candidate.json"
     write_candidate(path, layout=layout)
     _, candidates, specs = load_candidates(path)
-    fig = pareto_plot.build_figure(candidates, specs)
-    assert list(fig.data[0].x) == [0.02]
-    assert list(fig.data[0].y) == [0.1]
-    assert list(fig.data[0].z) == [2.0]
+    data = pareto_plot.build_dataset(candidates, specs)
+    metrics = {metric["key"]: metric for metric in data["metrics"]}
+    for name, value in zip(METRICS, [0.02, 0.1, 2.0]):
+        assert metrics[name]["values"] == [value]
+    if layout == "suite":
+        assert metrics["stats.adg_strategy_eq.mean"]["values"] == [10.02]
+        assert metrics["stats.adg_strategy_eq.std"]["goal"] is None
 
 
 def test_requested_axis_order_and_aliases():
-    specs = [ObjectiveSpec(metric="adg_usd", goal="max"), SPECS[1]]
-    assert pareto_plot.select_metrics([METRICS[1], "adg"], specs) == specs[::-1]
+    data = {"metrics": [{"key": name, "count": 1} for name in ["adg_usd", METRICS[1]]]}
+    assert pareto_plot.select_metrics([METRICS[1], "adg"], data) == [METRICS[1], "adg_usd"]
     with pytest.raises(ValueError, match="distinct"):
-        pareto_plot.select_metrics(["adg", "adg_usd"], specs)
+        pareto_plot.select_metrics(["adg", "adg_usd"], data)
 
 
-@pytest.mark.parametrize("metrics", [[], [METRICS[0]], METRICS + ["other"], [METRICS[0]] * 2, ["unknown", METRICS[0]]])
+@pytest.mark.parametrize("metrics", [[METRICS[0]], METRICS + ["other"], [METRICS[0]] * 2, ["unknown", METRICS[0]]])
 def test_invalid_selection(metrics):
     with pytest.raises(ValueError):
-        pareto_plot.select_metrics(metrics, SPECS)
+        pareto_plot.select_metrics(metrics, {"metrics": [{"key": spec.metric, "count": 1} for spec in SPECS]})
 
 
 @pytest.mark.parametrize("bad", [None, float("nan"), float("inf"), "bad"])
@@ -105,20 +98,20 @@ def test_cli_dispatch_offline_html_and_source_preservation(front, tmp_path):
         assert cli_main(["tool", "pareto-plot", str(front.parent), *METRICS[:dimensions],
                          "--output", str(output)]) == 0
         page = output.read_text()
-        assert "Plotly.newPlot" in page
+        assert "Plotly.react" in page
         assert "plotly.js v" in page
         assert '<script src=' not in page
         assert "a.json" in page
-        assert "optimize" not in page.split('Plotly.newPlot')[-1]  # no full config in figure
+        assert "optimize" not in json.dumps(read_payload(page))  # no full config in export
     assert {p.name: p.read_bytes() for p in front.iterdir()} == before
 
 
 def test_list_metrics_without_plot(front, monkeypatch, capsys):
     def no_plot(*args):
         pytest.fail("Listing metrics must not render a figure")
-    monkeypatch.setattr(pareto_plot, "build_figure", no_plot)
+    monkeypatch.setattr(pareto_plot, "render_html", no_plot)
     assert pareto_plot.main([str(front), "--list-metrics"]) == 0
-    assert f"{METRICS[1]} (min)" in capsys.readouterr().out
+    assert f"{METRICS[1]} (min;" in capsys.readouterr().out
 
 
 def test_output_overwrite_and_extension_guards(front, tmp_path):
@@ -159,18 +152,58 @@ def test_browser_open_is_opt_in(front, tmp_path, monkeypatch):
     assert calls == [(tmp_path / "pareto-plot-2d.html").as_uri()]
 
 
-@pytest.mark.parametrize("x_goal", ["min", "max"])
-@pytest.mark.parametrize("y_goal", ["min", "max"])
-def test_2d_axes_place_ideal_at_lower_left(front, x_goal, y_goal):
-    _, candidates, _ = load_candidates(front)
-    specs = [ObjectiveSpec(metric=metric, goal=goal)
-             for metric, goal in zip(METRICS, [x_goal, y_goal])]
-    fig = pareto_plot.build_figure(candidates, specs)
-    for axis, goal in zip((fig.layout.xaxis, fig.layout.yaxis), (x_goal, y_goal)):
-        assert axis.autorange == ("reversed" if goal == "max" else True)
-    # Orientation changes only the view, never raw values, hover values, or colors.
-    assert list(fig.data[0].x) == [0.02, 0.01, 0.02]
-    assert list(fig.data[0].y) == [0.1, 0.2, 0.1]
-    assert list(fig.data[0].marker.color) == [0.1, 0.2, 0.1]
-    assert "%{x:.8g}" in fig.data[0].hovertemplate
-    assert "%{y:.8g}" in fig.data[0].hovertemplate
+def read_payload(page):
+    start = page.index('<script id="pareto-data" type="application/json">')
+    return json.loads(page[start:].split(">", 1)[1].split("</script>", 1)[0])
+
+
+def test_export_without_cli_axes_contains_all_metrics(front, tmp_path):
+    output = tmp_path / "all.html"
+    assert pareto_plot.main([str(front), "-o", str(output)]) == 0
+    data = read_payload(output.read_text())
+    assert data["selected"] == METRICS[:2]
+    assert {metric["key"] for metric in data["metrics"]} == set(METRICS)
+
+
+def test_non_objective_metrics_missing_values_and_explicit_statistics(front):
+    from dataclasses import replace
+    _, candidates, specs = load_candidates(front)
+    candidates[0] = replace(candidates[0], aggregated_values={"extra": 9.0},
+                            stats_flat={"extra_mean": 2.0, "extra_std": 3.0,
+                                        "position_held_hours_mean_mean": 7.0,
+                                        "unavailable_mean": float("nan")})
+    data = pareto_plot.build_dataset(candidates, specs)
+    metrics = {metric["key"]: metric for metric in data["metrics"]}
+    assert metrics["extra"]["values"] == [9.0, None, None]
+    assert metrics["extra"]["goal"] is None
+    assert metrics["extra"]["count"] == 1
+    assert metrics["stats.extra.mean"]["values"] == [2.0, None, None]
+    assert metrics["stats.extra.std"]["goal"] is None
+    assert metrics["position_held_hours_mean"]["values"] == [7.0, None, None]
+    assert metrics["unavailable"]["count"] == 0
+    assert metrics["unavailable"]["min"] is None
+    assert pareto_plot.select_metrics([METRICS[0], "extra"], data) == [METRICS[0], "extra"]
+    with pytest.raises(ValueError, match="unavailable"):
+        pareto_plot.select_metrics([METRICS[0], "unavailable"], data)
+    json.dumps(data, allow_nan=False)
+
+
+def test_html_escapes_data_without_changing_values():
+    hostile = '</script><script>alert("x")</script>'
+    data = {"names": [hostile], "metrics": [{"key": hostile, "values": [1.0]}]}
+    page = pareto_plot.render_html(data, [hostile, "safe"])
+    assert hostile not in page
+    assert read_payload(page)["names"] == [hostile]
+
+
+def test_browser_logic(tmp_path):
+    import shutil
+    import subprocess
+    from tools.pareto_plot_page import SCRIPT
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is needed only to test the embedded browser logic")
+    script = tmp_path / "pareto-plot.cjs"
+    script.write_text(SCRIPT)
+    subprocess.run([node, str(Path(__file__).with_name("pareto_plot_browser_logic.cjs")), str(script)],
+                   check=True, capture_output=True, text=True)
