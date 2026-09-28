@@ -876,6 +876,8 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
                 return 2.0
             return 0.0
 
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
+
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
                 return 5.0
@@ -1001,6 +1003,8 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
                 return 2.0
             return 0.0
 
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
+
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
                 return 5.0
@@ -1111,6 +1115,8 @@ async def test_orchestrator_ema_bundle_tracks_missing_required_forager_ema_by_si
             if key == "unstuck_enabled":
                 return False
             raise KeyError(key)
+
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
@@ -1258,6 +1264,8 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
             if key == "unstuck_enabled":
                 return False
             raise KeyError(key)
+
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
             if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
@@ -1464,6 +1472,8 @@ async def test_orchestrator_ema_bundle_projection_context_summary_is_debug(
                 return False
             raise KeyError(key)
 
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
+
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
                 return 5.0
@@ -1637,6 +1647,8 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
             return 0.0
+
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
@@ -1820,6 +1832,8 @@ async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
                 return 2.0
             return 0.0
 
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
+
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
                 return 5.0
@@ -1933,6 +1947,8 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
             return 0.0
+
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
@@ -2049,6 +2065,8 @@ async def test_orchestrator_ema_bundle_disables_remote_fetch_for_cache_only_seco
                 return 2.0
             return 0.0
 
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
+
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":
                 return 5.0
@@ -2154,6 +2172,8 @@ async def test_orchestrator_ema_bundle_scopes_incomplete_cache_only_ranking_by_s
             if key == "entry_volatility_ema_span_hours":
                 return 2.0
             return 0.0
+
+        is_pside_enabled = pb_mod.Passivbot.is_pside_enabled
 
         def bot_value(self, pside, key):
             if key == "forager_volume_ema_span_1m":

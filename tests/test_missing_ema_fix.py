@@ -546,6 +546,11 @@ class _BundleReproBot:
             return params["volatility_ema_span_1h"]
         return params[key]
 
+    def is_pside_enabled(self, pside):
+        from passivbot import Passivbot
+
+        return Passivbot.is_pside_enabled(self, pside)
+
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
             return {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0, "unilateralness": 0.0}
@@ -3108,6 +3113,11 @@ class _PacingProbeBot:
         if key == "ema_span_0":
             return 10.0
         return 0.0
+
+    def is_pside_enabled(self, pside):
+        from passivbot import Passivbot
+
+        return Passivbot.is_pside_enabled(self, pside)
 
     def bot_value(self, pside, key):
         if key == "forager_score_weights":
