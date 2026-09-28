@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -31,6 +32,7 @@ from optimization.backends.gpu_backend import (
     _checkpoint_gpu_interrupt,
     _constraint_classification_mismatch,
     _constraint_diagnostics,
+    _collect_exact_during_proxy,
     _deduplicate_canonical_seed_vectors,
     _disable_gpu_exact_duplicate_guard,
     _ema_multicoin_bound_map,
@@ -199,6 +201,38 @@ def test_gpu_profile_log_is_structured_json(caplog):
         "generation": 3,
         "timings_seconds": {"wall": 1.25},
     }
+
+
+def test_exact_collector_records_before_proxy_finishes():
+    """Ready exact results are consumed while GPU proxy work remains active."""
+
+    ready = threading.Event()
+    recorded = threading.Event()
+
+    def consume_ready():
+        if ready.is_set():
+            recorded.set()
+
+    with _collect_exact_during_proxy(consume_ready):
+        ready.set()
+        assert recorded.wait(2.0)
+
+
+def test_exact_collector_propagates_errors_and_stops():
+    """A failed exact validation stops collection and reaches the main thread."""
+
+    called = threading.Event()
+
+    def consume_ready():
+        called.set()
+        raise RuntimeError("exact validation failed")
+
+    with pytest.raises(RuntimeError, match="exact validation failed"):
+        with _collect_exact_during_proxy(consume_ready):
+            assert called.wait(2.0)
+    assert not any(
+        thread.name == "gpu-exact-collector" for thread in threading.enumerate()
+    )
 
 
 def test_gpu_profile_elapsed_uses_monotonic_clock(monkeypatch):
