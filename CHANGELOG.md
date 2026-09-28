@@ -17,6 +17,10 @@ since the latest release tag; these features may already be available when insta
 - Orient 2D Pareto plot axes so the ideal point is always toward the lower-left,
   reversing maximization axes while preserving metric values and 3D orientation.
 
+- Expand the Pareto plot HTML into an offline explorer with all saved metrics, 2D/3D
+  axis selectors, persistent floor/ceiling sliders, and a highlighted theoretical ideal
+  that updates from the filtered candidates.
+
 - Add `passivbot tool pareto-plot` for offline interactive 2D and rotatable 3D objective
   scatter plots, with candidate hover details, metric discovery, and PNG export.
 
