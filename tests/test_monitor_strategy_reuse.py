@@ -74,3 +74,29 @@ def test_failed_strategy_resolution_is_not_cached():
         monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_pct', 'A', strategy_cache=cache)
     assert cache == {}
     assert monitor._monitor_strategy_value(bot, 'long', 'entry_initial_qty_pct', 'A', strategy_cache=cache) == .02
+
+
+def test_market_snapshot_reuses_h1_resolution_and_observes_changes():
+    calls = Counter()
+    span = 24.5
+
+    def params(side, symbol):
+        calls[side, symbol] += 1
+        return {'volatility_ema_span_1h': span}
+
+    def bp(*args):
+        raise KeyError(args)
+
+    bot = SimpleNamespace(
+        active_symbols=['A'], positions={}, open_orders={}, has_position=lambda **kwargs: False,
+        _strategy_params_to_rust_dict=params, bp=bp,
+        _monitor_runtime_h1_log_range_emas={'A': {24.5: .02, 48.5: .03}},
+    )
+    first = monitor._build_monitor_market_section(bot)
+    assert calls == Counter({('long', 'A'): 1, ('short', 'A'): 1})
+    span = 48.5
+    calls.clear()
+    second = monitor._build_monitor_market_section(bot)
+    assert calls == Counter({('long', 'A'): 1, ('short', 'A'): 1})
+    assert first['A']['entry_volatility_logrange_ema'] == {'long': .02, 'short': .02}
+    assert second['A']['entry_volatility_logrange_ema'] == {'long': .03, 'short': .03}
