@@ -694,3 +694,27 @@ prove console delivery. Healthy console delivery produces one attempt record.
 Readiness polls inside the retry deadline neither increment the count nor repeat the warning.
 Recovery is immediate after the owning operation succeeds. See `equity_hard_stop_loss.md` for
 retry, terminal-stop, and protection policy.
+
+## EMA Preparation Timings
+
+`ema.bundle.completed` includes an optional `timings` object, without changing its DEBUG,
+structured/monitor-only routing. `elapsed_ms` measures bundle wall time since the start event;
+`symbol_elapsed_ms` sums symbol preparation durations, and `symbol_count` counts attempted symbols.
+`slowest_symbols` retains at most eight rows in descending elapsed time (symbol breaks ties), with
+`symbols_omitted` reporting the remainder. `stage_totals` includes all attempted symbols, not just
+that sample. Older producers omit `timings`; consumers must not interpret its absence as zero.
+
+Rows and totals use `<stage>_ms` and `<stage>_calls` for candle loading (`candles`), disk loading
+(`disk_load`), fetch-lock acquisition (`fetch_lock_wait`, excluding held work and release), projected
+open-tail metrics (`projection`), EMA arithmetic (`ema_compute`), and remote page-fetch
+operations including internal retries (`remote_fetch`). `remote_spacing_sleep` also records `_requested_ms`, separately from
+observed elapsed sleep. Stages absent from a completed symbol were not attempted; failed attempts
+contribute elapsed time and counts if the bundle subsequently completes. A failed/cancelled bundle
+does not emit a completion event.
+
+These are inclusive, potentially nested measurements, not an additive partition. Concurrent symbol
+work can exceed bundle wall time; candle loading includes nested disk, lock, and remote work, and
+remote fetch time includes spacing and other retry/rate-limit waits inside that call. Timers do not
+profile every operation or explain unmeasured time. Timing state is scoped to the current bundle's
+symbol tasks, bounded independently of span/candle counts, and never controls scheduling, readiness,
+EMA values, or order construction.

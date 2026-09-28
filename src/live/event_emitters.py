@@ -3508,6 +3508,7 @@ def _emit_ema_bundle_completed_event_unchecked(
     h1_log_range_emas: dict[str, dict[float, float]],
     cache_only_symbols: set[str] | None = None,
     projection_contexts: dict[str, dict] | None = None,
+    timings: dict | None = None,
 ) -> None:
     _safe_emit(
         bot,
@@ -3518,6 +3519,7 @@ def _emit_ema_bundle_completed_event_unchecked(
         cycle_id=current_live_event_cycle_id(bot),
         status="succeeded",
         data={
+            **({"timings": timings} if timings is not None else {}),
             "symbol_count": len(symbols or []),
             "cache_only": _symbol_sample(cache_only_symbols or set()),
             "projection_contexts": _symbol_sample((projection_contexts or {}).keys()),

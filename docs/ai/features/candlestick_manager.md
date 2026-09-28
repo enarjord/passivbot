@@ -417,3 +417,11 @@ rows for repeated evaluations. Replacing a source batch replaces that native cop
 The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,
 and every risk evaluation still consumes current account and mark facts.
+
+### Live EMA preparation pacing
+
+Live EMA preparation keeps serial symbol loading when candle fetch pacing is positive and parallel
+loading when it is zero. Position symbols remain first in the ordered list. It does not add a sleep
+after preparing each symbol, but yields to other tasks without delay. The candle manager enforces the configured process-local spacing at
+actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
+See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.

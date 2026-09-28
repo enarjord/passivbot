@@ -2042,6 +2042,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         h1_log_range_emas={},
         cache_only_symbols={"ETH/USDT:USDT"},
         projection_contexts={"ETH/USDT:USDT": {"tail_gap_age_ms": 120_000}},
+        timings={"elapsed_ms": 12.5, "symbol_count": 2, "slowest_symbols": []},
     )
     bot._emit_ema_fallback_used_event(
         close_ema_recoveries={"BTC/USDT:USDT": [(100.0, 1)]},
@@ -2156,6 +2157,9 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert {event.cycle_id for event in events} == {"cy_11"}
     assert events[0].data["unavailable"]["count"] == 2
     assert events[1].data["selected_symbols"] == ["BTC/USDT:USDT"]
+    assert events[3].data["timings"] == {
+        "elapsed_ms": 12.5, "symbol_count": 2, "slowest_symbols": []
+    }
     assert events[2].status == "started"
     assert events[2].data["symbol_count"] == 2
     assert events[2].data["symbols"]["sample"] == [
