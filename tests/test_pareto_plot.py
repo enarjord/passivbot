@@ -218,3 +218,28 @@ def test_statistics_inherit_explicit_scoring_direction(tmp_path):
     metrics = {metric["key"]: metric for metric in data["metrics"]}
     assert metrics["stats.adg_strategy_eq.mean"]["goal"] == "min"
     assert metrics["stats.adg_strategy_eq.std"]["goal"] is None
+
+
+@pytest.mark.parametrize("alias,canonical", [
+    ("stats.adg.mean", "stats.adg_usd.mean"),
+    ("stats.adg_strategy_pnl_rebased.mean", "stats.adg_strategy_eq.mean"),
+])
+def test_statistic_selectors_accept_metric_aliases(alias, canonical):
+    data = {"metrics": [{"key": name, "count": 1} for name in [canonical, METRICS[1]]]}
+    assert pareto_plot.select_metrics([alias, METRICS[1]], data) == [canonical, METRICS[1]]
+
+
+def test_statistic_selector_alias_duplicates_are_rejected():
+    data = {"metrics": [{"key": "stats.adg_usd.mean", "count": 1}]}
+    with pytest.raises(ValueError, match="distinct"):
+        pareto_plot.select_metrics(["stats.adg.mean", "stats.adg_usd.mean"], data)
+
+
+def test_cli_statistic_alias_selects_exported_column(tmp_path):
+    source, output = tmp_path / "candidate.json", tmp_path / "plot.html"
+    write_candidate(source, layout="suite")
+    assert pareto_plot.main([str(source), "stats.adg_strategy_pnl_rebased.mean", METRICS[1],
+                            "-o", str(output)]) == 0
+    data = read_payload(output.read_text())
+    assert data["selected"] == ["stats.adg_strategy_eq.mean", METRICS[1]]
+    assert next(metric for metric in data["metrics"] if metric["key"] == data["selected"][0])["values"] == [10.02]

@@ -73,9 +73,17 @@ def build_dataset(candidates: Sequence[ParetoCandidate], specs: Sequence[Objecti
     return dict(names=[candidate.path.name for candidate in candidates], metrics=metrics)
 
 
+def _canonical_selector(name: str) -> str:
+    name = name.strip()
+    if name.startswith("stats.") and name.count(".") >= 2:
+        metric, stat = name[len("stats."):].rsplit(".", 1)
+        return f"stats.{canonicalize_metric_name(metric)}.{stat}"
+    return canonicalize_metric_name(name)
+
+
 def select_metrics(requested: Sequence[str], dataset: dict) -> list[str]:
     available = {metric["key"]: metric for metric in dataset["metrics"] if metric["count"]}
-    names = [canonicalize_metric_name(name.strip()) for name in requested] if requested else list(available)[:2]
+    names = [_canonical_selector(name) for name in requested] if requested else list(available)[:2]
     if len(names) not in (2, 3):
         raise ValueError("Choose two or three initial metrics, or omit metrics to select them in the HTML.")
     if len(set(names)) != len(names):
