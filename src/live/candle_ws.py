@@ -309,10 +309,12 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
             # after its subscription has already been removed.
             if _watcher_is_retiring(bot, symbol, watcher_task):
                 break
+            stage = "receive"
             try:
                 rows = await bot.ccp.watch_ohlcv(symbol, "1m")
                 if _watcher_is_retiring(bot, symbol, watcher_task):
                     break
+                stage = "ingest"
                 ingest = getattr(bot.cm, "ingest_live_ws_ohlcv", None)
                 if callable(ingest):
                     # Some venues return hundreds of cached rows on every
@@ -345,9 +347,10 @@ async def watch_forager_ws_symbol(bot: Any, symbol: str) -> None:
                 last_warning_ms = int(warning_state.get(symbol, 0) or 0)
                 if now_ms <= 0 or now_ms - last_warning_ms >= 300_000:
                     logging.warning(
-                        "[candle] forager websocket unavailable | symbol=%s "
-                        "error_type=%s retry=%.1fs action=rest_fallback",
+                        "[candle] forager websocket candle update failed | symbol=%s "
+                        "stage=%s error_type=%s retry=%.1fs action=rest_fallback",
                         symbol,
+                        stage,
                         bounded_exception_type(exc),
                         delay_s,
                     )

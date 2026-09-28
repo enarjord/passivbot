@@ -3656,6 +3656,9 @@ class FillEventsManager:
         self._fee_conversion_cache: Dict[Tuple[str, str], Tuple[Optional[float], int, int]] = {}
         self._fee_warning_reported_ids: set[str] = set()
         self._events: List[FillEvent] = []
+        # A disposable proof that replay left this exact history unchanged.
+        # Own nested data too: frozen FillEvents still contain mutable raw/fee data.
+        self._empty_refresh_proof: Optional[Tuple[Tuple[float, float], List[FillEvent]]] = None
         self._loaded = False
         self._lock = asyncio.Lock()
         self._degraded_pnl_repair_attempted_keys: set[str] = set()
@@ -5195,8 +5198,25 @@ class FillEventsManager:
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
 
-        # Annotate psize/pprice for all events
-        if self._events:
+        # Empty successful fetches need not replay history once a full replay
+        # has demonstrated a fixed point. New rows (including duplicate fetches),
+        # PnL observations, policy changes and nested-data changes use the full path.
+        empty_refresh = not fetched_batches and not fetched_events and not pnl_observations
+        fee_policy = (self.fee_pct_fallback, self.fee_pct_sanity_abs_max)
+        proof = self._empty_refresh_proof
+        self._empty_refresh_proof = None
+        unchanged = bool(
+            empty_refresh
+            and proof is not None
+            and fee_policy == proof[0]
+            and self._events == proof[1]
+        )
+        before_replay = (
+            deepcopy(self._events) if empty_refresh and self._events and not unchanged else None
+        )
+
+        # Annotate psize/pprice for all events unless replay is proven redundant.
+        if self._events and not unchanged:
             payload = [ev.to_dict() for ev in self._events]
             for raw in payload:
                 self._apply_fee_policy(raw)
@@ -5231,6 +5251,13 @@ class FillEventsManager:
             # A successful bounded fetch proves the retried range even when the
             # exchange returns no new fills or only duplicates.
             self.cache.clear_gap(start_ms, end_ms)
+
+        # Retain proof only after all ordinary persistence/checkpoint work succeeds.
+        # Losing this cache (including restart) merely performs another full replay.
+        if unchanged:
+            self._empty_refresh_proof = proof
+        elif before_replay is not None and self._events == before_replay and not all_days_persisted:
+            self._empty_refresh_proof = (fee_policy, before_replay)
 
         # Consolidated refresh summary log
         # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG

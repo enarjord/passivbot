@@ -746,7 +746,7 @@ async def execute_order_plan(
         if order_wave is not None:
             order_wave["deferred_create"] += len(barrier_deferred)
         if barrier_deferred:
-            logging.info(
+            logging.debug(
                 "[order] cancel-first barrier deferred %d same-position creates until confirmation and replanning",
                 len(barrier_deferred),
             )

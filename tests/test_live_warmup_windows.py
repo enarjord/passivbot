@@ -259,3 +259,73 @@ def test_unstuck_warmup_requires_held_statically_eligible_side(pside, inactive):
     )
     assert windows["FLAT"] == 20
     assert windows["HELD"] == (500_000 if inactive is None else 20)
+
+
+@pytest.mark.parametrize('kind', ['trailing_martingale', 'trailing_grid_v7', 'ema_anchor'])
+def test_warmup_reuses_strategy_only_within_calculation(kind):
+    from collections import Counter
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from config.strategy_spec import get_strategy_defaults
+    from passivbot import Passivbot
+
+    defaults = get_strategy_defaults(kind)
+    calls = Counter()
+    spans = {('long', 'A'): 101.25, ('short', 'A'): 303.5, ('long', 'B'): 507.75}
+
+    def getter(side, symbol):
+        calls[side, symbol] += 1
+        params = deepcopy(defaults[side])
+        params['ema_span_0'] = spans[side, symbol]
+        return params
+
+    bot = SimpleNamespace(_strategy_params_to_rust_dict=getter)
+    symbols = {'long': {'A', 'B'}, 'short': {'A'}}
+
+    def calculate(lookup):
+        return compute_live_warmup_windows(symbols, lambda *args: 0.0, strategy_lookup=lookup)
+
+    uncached = calculate(lambda side, key, symbol: Passivbot._live_strategy_warmup_value(bot, side, key, symbol))
+    assert min(calls.values()) > 1
+    calls.clear()
+    assert calculate(Passivbot._live_strategy_warmup_lookup(bot)) == uncached
+    assert calls == Counter({pair: 1 for pair in spans})
+    spans['long', 'B'] = 100_000.125
+    calls.clear()
+    changed = calculate(Passivbot._live_strategy_warmup_lookup(bot))
+    assert changed[0]['B'] == 100_001
+    assert changed[0]['A'] == uncached[0]['A']
+    assert calls == Counter({pair: 1 for pair in spans})
+
+
+@pytest.mark.parametrize('bad', [None, [], 'invalid'])
+def test_warmup_cache_does_not_hide_invalid_resolution(bad):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+
+    bot = SimpleNamespace(_strategy_params_to_rust_dict=lambda *args: bad)
+    lookup = Passivbot._live_strategy_warmup_lookup(bot)
+    with pytest.raises(TypeError, match='expected dict'):
+        lookup('long', 'ema_span_0', 'A')
+    bot._strategy_params_to_rust_dict = lambda *args: {'ema_span_0': 123.5}
+    assert lookup('long', 'ema_span_0', 'A') == 123.5
+
+
+@pytest.mark.parametrize('bad', ['invalid', float('nan'), float('inf')])
+def test_warmup_cached_span_validation_matches_uncached(bad):
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+
+    bot = SimpleNamespace(_strategy_params_to_rust_dict=lambda *args: {'ema_span_0': bad})
+    lookup = Passivbot._live_strategy_warmup_lookup(bot)
+    for read in (lookup, lambda side, key, symbol: Passivbot._live_strategy_warmup_value(bot, side, key, symbol)):
+        with pytest.raises(ValueError):
+            read('long', 'ema_span_0', 'A')
+
+
+def test_warmup_nonpositive_span_keeps_existing_zero_semantics():
+    from types import SimpleNamespace
+    from passivbot import Passivbot
+
+    bot = SimpleNamespace(_strategy_params_to_rust_dict=lambda *args: {'ema_span_0': -1.0})
+    assert Passivbot._live_strategy_warmup_lookup(bot)('long', 'ema_span_0', 'A') == 0.0

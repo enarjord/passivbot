@@ -148,8 +148,12 @@
    processing time is not post-boundary transport provenance. The current in-progress minute is
    rejected, an existing canonical basis is required, and WebSocket silence and reconnect gaps remain
    missing. A later changed row for the same timestamp overwrites the candle and invalidates affected
-   EMA state. WebSocket shard persistence must be read-verified before the row is exposed to cache
-   and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
+   EMA state. WebSocket canonical reads, merge-before-write reads, and persistence verification
+   propagate shard read failures, including failures masked by another legacy or primary source.
+   Missing shards are distinct from unreadable history. Strict canonical reads refresh source
+   discovery; strict merges read the actual write target under the fetch lock rather than trusting
+   a cached directory listing. WebSocket shard persistence must be read-verified before the row is
+   exposed to cache and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
    the complete fallback for startup basis, historical and internal gaps,
    prolonged silence, reconnect recovery, and a configured periodic integrity audit. Audits force a
    bounded REST overlap even while the persisted WebSocket tail is current; a successful REST
@@ -417,3 +421,11 @@ rows for repeated evaluations. Replacing a source batch replaces that native cop
 The copy contains no projected window or trading permission: every projection
 reapplies its exact lookback bounds and current exchange/UTC observation offset,
 and every risk evaluation still consumes current account and mark facts.
+
+### Live EMA preparation pacing
+
+Live EMA preparation keeps serial symbol loading when candle fetch pacing is positive and parallel
+loading when it is zero. Position symbols remain first in the ordered list. It does not add a sleep
+after preparing each symbol, but yields to other tasks without delay. The candle manager enforces the configured process-local spacing at
+actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
+See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.
