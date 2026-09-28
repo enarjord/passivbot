@@ -48,7 +48,7 @@ def build_dataset(candidates: Sequence[ParetoCandidate], specs: Sequence[Objecti
             metric = canonicalize_metric_name(metric)
             key = f"stats.{metric}.{stat}"
             values[key] = value
-            metadata[key] = (f"{metric} [{stat}]", None if stat == "std" else default_objective_goal(metric), "Statistics")
+            metadata[key] = (f"{metric} [{stat}]", None if stat == "std" else goals.get(metric, default_objective_goal(metric)), "Statistics")
             if stat == "mean":
                 values[metric] = value
         values.update({canonicalize_metric_name(k): v for k, v in candidate.aggregated_values.items()})

@@ -207,3 +207,14 @@ def test_browser_logic(tmp_path):
     script.write_text(SCRIPT)
     subprocess.run([node, str(Path(__file__).with_name("pareto_plot_browser_logic.cjs")), str(script)],
                    check=True, capture_output=True, text=True)
+
+
+def test_statistics_inherit_explicit_scoring_direction(tmp_path):
+    path = tmp_path / "candidate.json"
+    write_candidate(path, layout="suite")
+    _, candidates, specs = load_candidates(path)
+    specs[0] = ObjectiveSpec(metric=METRICS[0], goal="min")
+    data = pareto_plot.build_dataset(candidates, specs)
+    metrics = {metric["key"]: metric for metric in data["metrics"]}
+    assert metrics["stats.adg_strategy_eq.mean"]["goal"] == "min"
+    assert metrics["stats.adg_strategy_eq.std"]["goal"] is None
