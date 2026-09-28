@@ -89,6 +89,7 @@ from legacy_data_migrator import (
     merge_duplicate_symbol_directories,
     normalize_ccxt_volume_to_base,
 )
+import live.ema_timing as ema_timing
 from live.diagnostic_safety import bounded_exception_type
 from utils import (
     FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
@@ -2157,6 +2158,7 @@ class CandlestickManager:
         os.makedirs(lock_dir, exist_ok=True)
         return os.path.join(lock_dir, f"{timeframe}.lock")
 
+    @ema_timing.timed_async_entry("fetch_lock_wait")
     @asynccontextmanager
     async def _acquire_fetch_lock(self, symbol: str, timeframe: Optional[str]) -> AsyncIterator[None]:
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
@@ -2514,6 +2516,7 @@ class CandlestickManager:
         self._legacy_day_quality_cache[cache_key] = bool(ok)
         return bool(ok)
 
+    @ema_timing.timed("disk_load")
     def _load_from_disk(
         self,
         symbol: str,
@@ -4996,7 +4999,8 @@ class CandlestickManager:
                     wait_ms=wait_ms,
                     interval_ms=int(interval_ms),
                 )
-                await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+                with ema_timing.measure("remote_spacing_sleep", requested_ms=wait_ms):
+                    await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
                 now_ms = _utc_now_ms()
             self._remote_fetch_last_started_ms = int(now_ms)
 
@@ -5015,6 +5019,7 @@ class CandlestickManager:
                     total_count=self._rate_limit_count,
                 )
 
+    @ema_timing.timed_async("remote_fetch")
     async def _ccxt_fetch_ohlcv_once(
         self,
         symbol: str,
@@ -7449,6 +7454,7 @@ class CandlestickManager:
             supported_timeframes=supported_timeframes,
         )
 
+    @ema_timing.timed_async("candles")
     async def get_candles(
         self,
         symbol: str,
@@ -8949,6 +8955,7 @@ class CandlestickManager:
 
     # ----- EMA helpers -----
 
+    @ema_timing.timed("ema_compute")
     def _ema(self, values: np.ndarray, span: float) -> float:
         """Return the final bias-corrected EMA without allocating a full series."""
         if _RUST_EMA_LAST is not None:
@@ -9119,6 +9126,7 @@ class CandlestickManager:
 
         return (tuple(shard_state), tuple(sorted(gap_state)))
 
+    @ema_timing.timed_async("projection")
     async def get_projected_open_tail_ema_metrics(
         self,
         symbol: str,
