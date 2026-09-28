@@ -11,6 +11,9 @@ since the latest release tag; these features may already be available when insta
   persistence, and distinguish receive
   failures from local ingestion failures in fallback warnings.
 
+- Remove redundant per-symbol sleeps during live EMA preparation while preserving remote candle
+  request pacing. Add bounded per-symbol and stage timings to structured EMA completion events.
+
 - Orient 2D Pareto plot axes so the ideal point is always toward the lower-left,
   reversing maximization axes while preserving metric values and 3D orientation.
 

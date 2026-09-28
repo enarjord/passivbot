@@ -103,6 +103,7 @@ from live.event_bus import (
     resolve_live_event_console_enabled,
 )
 import live.event_emitters as live_event_emitters
+from live.ema_timing import EmaBundleTimings
 from monitor_publisher import MonitorPublisher
 from runtime_identity import build_runtime_identity, write_runtime_manifest
 from live.market_snapshot import (MarketSnapshot, MarketSnapshotProvider, MarketSnapshotUnavailable,
@@ -17387,6 +17388,7 @@ class Passivbot:
         self._orchestrator_ema_entry_cancellation_order_keys = (
             retained_ema_entry_cancellation_order_keys
         )
+        ema_timings = EmaBundleTimings()
         Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_unstuck_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
@@ -19286,22 +19288,23 @@ class Passivbot:
         else:
             fetch_delay_s = 0.0
         if fetch_delay_s > 0:
-            # Strict exchanges benefit from pacing expensive 1h refreshes when
-            # all symbol TTLs expire at the same hour boundary.
+            # Preserve serial preparation on paced exchanges. The candle manager
+            # spaces actual remote requests; cached symbols need no extra pause.
             symbol_results = []
             for sym in ordered_symbols:
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 try:
-                    res = await load_symbol_bundle(sym)
+                    res = await ema_timings.run_symbol(sym, load_symbol_bundle)
                 except Exception as e:
                     res = e
                 symbol_results.append(res)
-                await Passivbot._sleep_unless_shutdown(
-                    self, fetch_delay_s, stage="orchestrator_ema_bundle"
-                )
+                # Cached async calls may never suspend; let data maintainers run.
+                await asyncio.sleep(0)
+                Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
         else:
             symbol_tasks = [
-                asyncio.create_task(load_symbol_bundle(sym)) for sym in ordered_symbols
+                asyncio.create_task(ema_timings.run_symbol(sym, load_symbol_bundle))
+                for sym in ordered_symbols
             ]
             symbol_results = await asyncio.gather(*symbol_tasks, return_exceptions=True)
 
@@ -19697,6 +19700,7 @@ class Passivbot:
             h1_log_range_emas=h1_log_range_emas,
             cache_only_symbols=cache_only_symbols,
             projection_contexts=projection_contexts,
+            timings=ema_timings.summary(),
         )
 
         return (
