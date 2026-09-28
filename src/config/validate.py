@@ -141,10 +141,27 @@ def validate_config(
                 key in flat_bounds
                 and Bound.from_config(key, flat_bounds[key]).high > 0
                 and bot_side["entry_cooldown"]["max_duration_minutes"] is None
+                and f"{pside}_entry_cooldown_max_duration_minutes" not in flat_bounds
             ):
                 raise ValueError(
                     f"bot.{pside}.entry_cooldown.max_duration_minutes must be finite when searching modifier weights"
                 )
+        rms_weights = {
+            f"{pside}_forager_score_weights_unilateralness": (
+                bot_side["forager"]["score_weights"]["unilateralness"]
+            ),
+            f"{pside}_entry_cooldown_weights_minutes_adverse_directionality": (
+                bot_side["entry_cooldown"]["weights_minutes"]["adverse_directionality"]
+            ),
+        }
+        if config["backtest"]["candle_interval_minutes"] != 1 and any(
+            fixed > 0.0
+            or (key in flat_bounds and Bound.from_config(key, flat_bounds[key]).high > 0.0)
+            for key, fixed in rms_weights.items()
+        ):
+            raise ValueError(
+                "RMS unilateralness requires completed one-minute candles for the entire optimizer search"
+            )
         entry_cooldown_minutes = float(
             get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
         )

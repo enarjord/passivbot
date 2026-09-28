@@ -24,9 +24,10 @@ consistent trends. This is directionality, not absolute price-move magnitude.
 
 `bot.<side>.forager.unilateralness_ema_span_1m` is the shared floating-point span,
 default 60. Both consumers on that side use it. The supported range is 1–100000.
-For deterministic restart reconstruction, both runtimes replay exactly
+For deterministic restart reconstruction, both runtimes use exactly
 `ceil(20 * span)` returns, requiring one more completed close, with exponential
-weights throughout. Older information is discarded only after twenty spans;
+weights throughout. Live reconstructs the window; CPU backtests maintain its
+weighted moments incrementally. Their scores agree within floating-point roundoff. Older information is discarded only after twenty spans;
 this bounded initialization is separate from a simple moving average. A flat
 tail makes RMS decay approximately by `(1-a)^(minutes/2)` until the prior movement
 leaves the replay history. At span 60 its flat-tail half-life is about 42 minutes.
@@ -122,8 +123,20 @@ underwater time, missed recoveries, fees and returns. Changing the span or weigh
 can change all of these. The implementation's regression tests establish semantics
 and disabled-feature parity, not profitability.
 
-The initial implementation replays the bounded window at each decision. Enabled
-RMS work therefore grows with span and symbol count; disabled RMS adds no candle
-requirement. CPU evaluation is suitable for initial experiments, but measure this
-cost before large optimizer runs. Incremental acceleration must preserve the same
-restart and replay contract.
+CPU backtests maintain a rolling window with two aggregate stacks. Each return is
+processed on arrival and transferred at most once, giving amortized constant work
+per candle and memory proportional to the window, per enabled coin/span. Both sides
+share a tracker when their spans match. This preserves finite-window expiry and
+exact zero for an entirely flat window without subtracting nearly equal moments.
+The live reconstruction remains a full replay; CPU cache state is not restart state.
+
+A reproducible synthetic comparison against the replay reference is available:
+
+```sh
+cargo test --release --no-default-features --manifest-path passivbot-rust/Cargo.toml \
+  unilateralness::tests::benchmark_rolling_against_replay -- --ignored --nocapture
+```
+
+The test reports both timings and maximum score error for the same fixed input.
+Record CPU, compiler, OS, system load and repeated runs when comparing performance;
+this indicator benchmark does not establish whole-optimizer throughput or profitability.

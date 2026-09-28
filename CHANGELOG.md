@@ -16,7 +16,9 @@ since the latest release tag; these features may already be available when insta
   inherited ceilings. Scope score-only RMS warmup to required ranking and describe effective
   cooldowns, including bounds and modifiers, in the trailing inspection overview. Size RMS history
   for searched weights/spans, permit numeric ceiling searches from a null default, and reject
-  non-positive RMS closes with an actionable backtest error.
+  non-positive RMS closes with an actionable backtest error. Support joint ceiling/modifier
+  searches, reject aggregated-candle RMS searches up front, and use bounded rolling RMS
+  aggregates for linear CPU backtest work.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

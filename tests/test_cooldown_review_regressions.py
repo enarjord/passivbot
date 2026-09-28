@@ -248,3 +248,40 @@ def test_unbounded_seed_ceiling_projects_to_finite_search_upper_bound():
     candidate = build_optimizer_vector_config(vector, cfg, key_paths=shape.key_paths)
     assert candidate["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] == 30.0
     assert cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] is None
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("modifier", ["exposure_ratio", "adverse_directionality"])
+def test_joint_ceiling_and_modifier_search_from_null_default(side, modifier):
+    from optimization.warmup import validate_optimizer_effective_configs
+
+    cfg = get_template_config()
+    bounds = cfg["optimize"]["bounds"][side]["entry_cooldown"]
+    bounds["max_duration_minutes"] = [30.0, 90.0]
+    bounds["weights_minutes"] = {modifier: [0.0, 20.0]}
+    assert cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] is None
+    cfg = prepare_config(cfg, verbose=False)
+    validate_optimizer_effective_configs(cfg)
+    del cfg["optimize"]["bounds"][side]["entry_cooldown"]["max_duration_minutes"]
+    with pytest.raises(ValueError, match="finite when searching modifier weights"):
+        prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+@pytest.mark.parametrize("positive_bound", [False, True])
+def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side, consumer, positive_bound):
+    cfg = get_template_config()
+    cfg["backtest"]["candle_interval_minutes"] = 5
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
+    bounds = cfg["optimize"]["bounds"][side]
+    weight_bound = [0.0, 1.0 if positive_bound else 0.0]
+    if consumer == "forager":
+        bounds["forager"]["score_weights"] = {"unilateralness": weight_bound}
+    else:
+        bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": weight_bound}
+    if positive_bound:
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            prepare_config(cfg, verbose=False)
+    else:
+        prepare_config(cfg, verbose=False)

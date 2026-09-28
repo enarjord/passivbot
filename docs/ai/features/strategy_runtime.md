@@ -274,9 +274,11 @@ behavior patches.
 
 Rust owns signed RMS directionality, its use as a lower-is-better Forager component,
 and additive cooldown minutes. The shared side-level float span lives under
-`forager.unilateralness_ema_span_1m`. Both runtimes replay the same last
-`ceil(20 * span) + 1` completed one-minute closes; EMA accumulators start at zero.
-No RAM-only indicator state is needed for restart. Missing history is absent,
+`forager.unilateralness_ema_span_1m`. Both runtimes use the same last
+`ceil(20 * span) + 1` completed one-minute closes with zero-seeded exponential weights.
+Live replays the window. CPU uses rolling aggregate stacks with amortized constant
+work per candle, agreeing with replay within floating-point roundoff; all-flat windows
+are exactly zero. No RAM-only indicator state is needed for restart. Missing history is absent,
 never a neutral score. CPU candle intervals other than one minute are rejected
 when an RMS consumer is enabled.
 

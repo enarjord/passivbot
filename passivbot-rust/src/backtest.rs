@@ -610,6 +610,8 @@ pub struct Backtest<'a> {
     n_coins: usize,
     ema_alphas: Vec<EmaAlphas>,
     emas: Vec<EMAs>,
+    unilateralness: Vec<Vec<(f64, crate::unilateralness::RollingRms)>>,
+    unilateralness_step: Option<usize>,
     orchestrator_ema_slots: Vec<OrchestratorEmaSlots>,
     needs_volume_ema_long: bool,
     needs_volume_ema_short: bool,
@@ -2194,6 +2196,26 @@ impl<'a> Backtest<'a> {
             n_coins,
             ema_alphas,
             emas: initial_emas,
+            unilateralness: bot_params
+                .iter()
+                .map(|pair| {
+                    let mut trackers = Vec::new();
+                    for bp in [&pair.long, &pair.short] {
+                        if (bp.forager_score_weights.unilateralness > 0.0
+                            || bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0)
+                            && !trackers.iter().any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
+                        {
+                            trackers.push((
+                                bp.unilateralness_ema_span_1m,
+                                crate::unilateralness::RollingRms::new(bp.unilateralness_ema_span_1m)
+                                    .expect("validated unilateralness span"),
+                            ));
+                        }
+                    }
+                    trackers
+                })
+                .collect(),
+            unilateralness_step: None,
             orchestrator_ema_slots,
             needs_volume_ema_long: bot_params.iter().any(|bp| {
                 bp.long.forager_volume_drop_pct != 0.0
@@ -2426,6 +2448,7 @@ impl<'a> Backtest<'a> {
 
     pub fn run(&mut self) -> Result<(Vec<Fill>, Equities), String> {
         self.validate_candle_coverage()?;
+        self.update_unilateralness(0)?;
         let n_timesteps = self.hlcvs.shape()[0];
 
         // --- register first & last valid candle for every coin ---
@@ -2446,6 +2469,7 @@ impl<'a> Backtest<'a> {
         for k in 1..(n_timesteps - 1) {
             self.current_step = k;
             self.validate_held_position_valuation(k)?;
+            self.update_unilateralness(k)?;
             for idx in 0..self.n_coins {
                 if !self.trade_activation_logged[idx] && self.coin_is_tradeable_at(idx, k) {
                     self.trade_activation_logged[idx] = true;
@@ -5724,8 +5748,33 @@ impl<'a> Backtest<'a> {
             .collect()
     }
 
+    fn update_unilateralness(&mut self, k: usize) -> Result<(), String> {
+        for idx in 0..self.n_coins {
+            if self.unilateralness[idx].is_empty() || !self.coin_is_valid_at(idx, k) {
+                continue;
+            }
+            let close = self.hlcvs_value(k, idx, CLOSE);
+            for (_, tracker) in &mut self.unilateralness[idx] {
+                tracker.push_close(close)?;
+            }
+        }
+        self.unilateralness_step = Some(k);
+        Ok(())
+    }
+
     #[inline]
     fn unilateralness_at(&self, idx: usize, k: usize) -> Vec<(f64, f64)> {
+        if self.unilateralness_step == Some(k) {
+            if !self.coin_is_valid_at(idx, k) {
+                return Vec::new();
+            }
+            return self.unilateralness[idx]
+                .iter()
+                .filter_map(|(span, tracker)| tracker.score().map(|value| (*span, value)))
+                .collect();
+        }
+        // Standalone snapshots may request another index. Replay that window
+        // rather than use a cached score from a different candle.
         let mut out = Vec::new();
         for bp in [&self.bot_params[idx].long, &self.bot_params[idx].short] {
             if bp.forager_score_weights.unilateralness == 0.0
