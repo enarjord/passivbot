@@ -21,9 +21,12 @@ since the latest release tag; these features may already be available when insta
   aggregates for linear CPU backtest work. Validate search corners against effective coin
   overrides and omit RMS requirements on disabled or entry-ineligible sides. Disabled live
   sides do not extend cooldown fill-history coverage. Activate adverse cooldown at the first
-  complete RMS return window, without an extra candle of delay. Keep optimizer/suite RMS
-  history budgets separate from shared candidate activation metadata. Preserve mixed flat/nested
+  complete RMS return window, without an extra candle of delay. Scope RMS readiness to
+  consuming entry/ranking branches, leaving closes and unrelated sides/coins independent.
+  Keep RMS history budgets separate from shared backtest/optimizer activation metadata. Preserve mixed flat/nested
   adaptive bounds, honor zero modifier pins, and allow explicit null ceiling CLI overrides.
+
+- Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 
 - Record completed GPU optimizer CPU validations during the following GPU proxy pass and report exact progress immediately, while keeping resumable checkpoints at completed generation boundaries.
 

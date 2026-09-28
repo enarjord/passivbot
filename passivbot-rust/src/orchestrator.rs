@@ -259,6 +259,9 @@ mod core {
             symbol_idx: usize,
             details: String,
         },
+        UnilateralnessWarming {
+            symbol_idx: usize,
+        },
         MissingEma {
             symbol_idx: usize,
         },
@@ -435,10 +438,10 @@ mod core {
         #[serde(default)]
         pub allow_missing_strategy_inputs: bool,
         /// CPU backtest RMS replay windows still warming from known listing
-        /// history. Only missing forager scores at these spans may be deferred;
+        /// history. Only missing RMS inputs at these spans may be deferred;
         /// unrelated inputs and non-finite scores remain strict.
         #[serde(default)]
-        pub forager_unilateralness_warmup_spans: Vec<f64>,
+        pub unilateralness_warmup_spans: Vec<f64>,
         /// Backtest-only hint: next candle range for "peek fill" decisions.
         /// `None` => unknown (live mode), default to full-grid expansion.
         pub next_candle: Option<NextCandle>,
@@ -2387,7 +2390,7 @@ mod core {
                     match signed_unilateralness(s, &side.bot_params, true) {
                         Ok(value) => value.abs(),
                         Err(OrchestratorError::MissingEma { .. })
-                            if s.forager_unilateralness_warmup_spans
+                            if s.unilateralness_warmup_spans
                                 .contains(&side.bot_params.unilateralness_ema_span_1m) =>
                         {
                             diagnostics.warnings.push(OrchestratorWarning::StrategyInputUnavailable {
@@ -2592,6 +2595,7 @@ mod core {
     ) -> Result<(), OrchestratorError> {
         let explicitly_unavailable = match &err {
             OrchestratorError::MissingEma { .. } => symbol.allow_missing_strategy_inputs,
+            OrchestratorError::UnilateralnessWarming { .. } => true,
             OrchestratorError::MissingTrailing { .. } => {
                 !symbol_side_input(symbol, pside).trailing_available
             }
@@ -2768,8 +2772,14 @@ mod core {
             &symbol.emas.m1
         };
         let value = ema_lookup(&bundle.signed_unilateralness, bp.unilateralness_ema_span_1m)
-            .ok_or(OrchestratorError::MissingEma {
-                symbol_idx: symbol.symbol_idx,
+            .ok_or_else(|| {
+                if !forager && symbol.unilateralness_warmup_spans
+                    .contains(&bp.unilateralness_ema_span_1m)
+                {
+                    OrchestratorError::UnilateralnessWarming { symbol_idx: symbol.symbol_idx }
+                } else {
+                    OrchestratorError::MissingEma { symbol_idx: symbol.symbol_idx }
+                }
             })?;
         if !value.is_finite() || value.abs() > 1.0 {
             return Err(OrchestratorError::NonFiniteInput {
@@ -2856,7 +2866,8 @@ mod core {
                     resolve_runtime_budget(side, side.bot_params.n_positions),
                 ) {
                     Ok(value) => Some(value),
-                    Err(OrchestratorError::MissingEma { .. }) => None,
+                    Err(OrchestratorError::MissingEma { .. }
+                        | OrchestratorError::UnilateralnessWarming { .. }) => None,
                     Err(err) => return Err(format!("{err:?}")),
                 };
                 result.insert(format!("{}:{name}", symbol.symbol_idx), value);
@@ -2997,7 +3008,9 @@ mod core {
         diagnostics: &mut OrchestratorDiagnostics,
     ) -> Result<(Vec<IdealOrder>, Vec<IdealOrder>, bool), OrchestratorError> {
         let side = symbol_side_input(symbol, pside);
-        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available)
+        let rms_warming = side.bot_params.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+            && symbol.unilateralness_warmup_spans.contains(&side.bot_params.unilateralness_ema_span_1m);
+        let requests = if (symbol.allow_missing_strategy_inputs || !side.trailing_available || rms_warming)
             && wants_entries
             && wants_closes
         {
@@ -4830,7 +4843,7 @@ mod core {
                 },
                 tradable: true,
                 allow_missing_strategy_inputs: false,
-                forager_unilateralness_warmup_spans: Vec::new(),
+                unilateralness_warmup_spans: Vec::new(),
                 next_candle: None,
                 effective_min_cost: 0.0,
                 emas,

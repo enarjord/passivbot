@@ -433,7 +433,7 @@ def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pe
     symbols = [make_symbol(i, bid=100.0, ask=100.0, long_bp=bp) for i in range(2)]
     for symbol in symbols:
         symbol["long"]["mode"] = None
-        symbol["forager_unilateralness_warmup_spans"] = [pending_span]
+        symbol["unilateralness_warmup_spans"] = [pending_span]
         symbol["emas"]["m1"]["signed_unilateralness"] = [] if score is None else [[60.0, score]]
     inp = make_input(balance=1000.0, global_bp=bot_params_pair(long_overrides=bp), symbols=symbols)
     if raises:
@@ -453,14 +453,32 @@ def test_cpu_rms_warmup_defer_is_span_specific_and_never_masks_invalid_scores(pe
         assert selection["selected_symbol_indices"] == [0]
 
 
-def test_forager_warmup_marker_does_not_relax_adverse_cooldown_inputs():
+@pytest.mark.parametrize("pending_span,score,raises", [(60.0, None, False), (30.0, None, True), (60.0, 1.5, True)])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_adverse_warmup_marker_is_scoped_and_keeps_closes(side, pending_span, score, raises):
     import passivbot_rust as pbr
 
     inp = adaptive_input()
-    inp["symbols"][0]["emas"]["m1"]["signed_unilateralness"] = []
-    inp["symbols"][0]["forager_unilateralness_warmup_spans"] = [60.0]
-    with pytest.raises(ValueError):
-        compute(pbr, inp)
+    symbol = inp["symbols"][0]
+    if side == "short":
+        inp["global"]["global_bot_params"]["short"] = copy.deepcopy(inp["global"]["global_bot_params"]["long"])
+        symbol["short"]["bot_params"] = copy.deepcopy(symbol["long"]["bot_params"])
+        symbol["long"]["bot_params"]["entry_cooldown_weights_minutes"]["adverse_directionality"] = 0.0
+    symbol[side]["position"] = {"size": 1.0 if side == "long" else -1.0, "price": 100.0}
+    symbol["emas"]["m1"]["signed_unilateralness"] = [] if score is None else [[60.0, score]]
+    symbol["unilateralness_warmup_spans"] = [pending_span]
+    if raises:
+        with pytest.raises(ValueError):
+            compute(pbr, inp)
+    else:
+        result = compute(pbr, inp)
+        assert not any(o["pside"] == side and o["order_type"].startswith("entry_") for o in result["orders"])
+        assert any(o["pside"] == side and o["order_type"].startswith("close_") for o in result["orders"])
+        assert result["diagnostics"]["warnings"]
+        # The marker expires; missing required inputs are strict again.
+        symbol["unilateralness_warmup_spans"] = []
+        with pytest.raises(ValueError):
+            compute(pbr, inp)
 
 
 @pytest.mark.parametrize("bad_close", [0.0, -1.0])
@@ -669,7 +687,117 @@ def test_adverse_rms_activates_at_first_complete_return_window(side, span):
     fills, _, _, payload = run_backtest(
         hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True,
     )
-    assert payload.backtest_params["trade_start_indices"][coin_index] == first + n_returns
+    assert payload.backtest_params["trade_start_indices"][coin_index] < first + n_returns
     entries = [row for row in fills if str(row[2]) == coin and str(row[13]).startswith("entry_")]
     # Orders planned with the first complete window fill on the next candle.
     assert min(int(row[0]) for row in entries) == first + n_returns + 1
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("span", [1.0, 60.0])
+@pytest.mark.parametrize("target", ["LONGCOIN", "SHORTCOIN"])
+def test_adverse_rms_warmup_does_not_delay_other_sides_or_coins(side, span, target):
+    from backtest import run_backtest
+    from config.overrides import parse_overrides
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    coins = ["LONGCOIN", "SHORTCOIN"]
+    cfg = _ema_anchor_config(True)
+    cfg["live"]["approved_coins"] = {s: coins[:] for s in ("long", "short")}
+    cfg["backtest"]["dynamic_wel_by_tradability"] = False
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"]["n_positions"] = 2
+        cfg["bot"][s]["forager"]["unilateralness_ema_span_1m"] = span
+        cfg["bot"][s]["entry_cooldown"]["base_duration_minutes"] = 0.0
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": coins}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    baseline, _, _ = run_backtest(hlcvs, copy.deepcopy(markets), cfg, "binance", btc, timestamps)
+    cfg["coin_overrides"] = {target: {"bot": {side: {"entry_cooldown": {
+        "max_duration_minutes": 60.0,
+        "weights_minutes": {"adverse_directionality": 1.0},
+    }}}}}
+    cfg = parse_overrides(cfg, verbose=False)
+    # Cached history represents the long RMS window, not universal trade readiness.
+    for coin in coins:
+        markets[coin]["warmup_minutes"] = math.ceil(20 * span) + 1
+    fills, _, _, payload = run_backtest(
+        hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True,
+    )
+    assert payload.backtest_params["global_warmup_bars"] == 10
+    assert payload.backtest_params["trade_start_indices"] == [10, 10]
+
+    def entry_times(rows, coin, pside):
+        return [int(row[0]) for row in rows
+                if str(row[2]) == coin and str(row[13]).startswith("entry_") and pside in str(row[13])]
+
+    for coin in coins:
+        for s in ("long", "short"):
+            times = entry_times(fills, coin, s)
+            if (coin, s) == (target, side):
+                if span == 60.0:
+                    assert not times
+                else:
+                    assert min(times) == 21  # First full window plans a next-candle fill.
+            else:
+                assert times and min(times) == min(entry_times(baseline, coin, s))
+                assert min(times) < math.ceil(20 * span)
+
+
+def test_adverse_warmup_marker_does_not_hide_other_missing_emas():
+    import passivbot_rust as pbr
+
+    inp = adaptive_input()
+    symbol = inp["symbols"][0]
+    symbol["unilateralness_warmup_spans"] = [60.0]
+    symbol["emas"]["m1"]["signed_unilateralness"] = []
+    symbol["emas"]["m1"]["close"] = []
+    with pytest.raises(ValueError, match="MissingEma"):
+        compute(pbr, inp)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["live"]["warmup_ratio"] = 0.0
+    # This legacy span would impose a shared delay beyond the entire test.
+    cfg["bot"][side]["forager"]["volume_ema_span_1m"] = 5000.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=0.0, max_duration_minutes=60.0,
+        weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+    )
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    for coin in ("LONGCOIN", "SHORTCOIN"):
+        markets[coin]["warmup_minutes"] = 21
+    fills, _, _, payload = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True)
+    assert payload.backtest_params["global_warmup_bars"] == 0
+    first_entries = {
+        s: min(int(row[0]) for row in fills if str(row[13]).startswith("entry_") and s in str(row[13]))
+        for s in ("long", "short")
+    }
+    assert first_entries[side] == 21
+    assert first_entries["short" if side == "long" else "long"] < 20
+
+
+def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["bot"]["long"]["forager"]["volume_ema_span_1m"] = 5000.0
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    baseline = run_backtest(hlcvs, copy.deepcopy(markets), cfg, "binance", btc, timestamps)
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+    actual = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    np.testing.assert_array_equal(actual[0], baseline[0])
+    np.testing.assert_array_equal(actual[1], baseline[1])
+    assert actual[2] == baseline[2]

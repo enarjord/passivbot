@@ -289,12 +289,12 @@ Forager may carry a complete cached observation only within the existing candida
 age budget, without feeding invented flat returns. Cooldown requires a current
 completed window. Their values remain separate in the input envelope. Missing
 RMS is scoped to the consuming entry or ranking branch; closes remain independent.
-CPU history requests include score-only RMS, but trade activation does not wait for
-it. The backtest marks the exact RMS spans still warming from known listing history
-in `forager_unilateralness_warmup_spans`. Only when ranking is required may a missing
-score at a marked span defer that candidate. Once enough closes exist the marker
-is removed. Unmarked missing inputs and invalid scores remain fatal. Adverse cooldown
-still requires its replay window before CPU trade activation.
+CPU history requests include RMS, but shared trade activation does not wait for it.
+The backtest marks exact spans still warming from known listing history in
+`unilateralness_warmup_spans`. A missing score at a marked span defers only required
+ranking or the side/order branch consuming adverse cooldown. Closes and unrelated
+entries remain independent. Once enough closes exist the marker is removed.
+Unmarked missing inputs, unrelated required inputs and invalid scores remain fatal.
 The Python output validator evaluates the submitted cooldown inputs through the
 same pure Rust policy, rather than trusting a producer-echoed duration.
 

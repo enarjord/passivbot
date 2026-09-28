@@ -111,7 +111,7 @@ an unbounded starting-config ceiling
 projects to the upper search bound. History loading covers positive consumer weights and
 maximum float spans reachable through optimizer bounds, even when fixed weights are zero.
 This history budget does not impose a delay on candidates that do not consume RMS.
-Optimizer and suite dataset metadata stamp only the shared non-RMS activation budget;
+Ordinary backtest, optimizer and suite metadata stamp only the shared non-RMS activation budget;
 each candidate retains its own Rust RMS entry/ranking readiness.
 Search ranges for floor and ceiling must satisfy `highest floor <= lowest ceiling`,
 including a fixed bound when only the other is optimized and every effective coin override.
@@ -124,9 +124,11 @@ against finalized per-coin eligibility and overrides. Entry-ineligible sides nei
 restrict the candle interval nor extend RMS trade activation.
 Live cooldown fill-history coverage includes only globally enabled sides.
 RMS requires one-minute backtest candles and its full replay window for
-each consuming decision. Adverse cooldown waits for that window before CPU trade
-activation: N returns require N+1 closes and are ready at index first_valid + N; score-only RMS warmup is scoped to required ranking. Compare one
-modifier at a time before combinations across distinct periods and markets.
+each consuming decision. An incomplete window defers only the entry side that uses
+adverse cooldown, leaving closes and unrelated sides/coins available. N returns need
+N+1 closes and become ready at index first_valid + N. Score-only RMS warmup is scoped
+to required ranking. Compare one modifier at a time before combinations across distinct
+periods and markets.
 
 Lower fill counts alone do not establish an improvement. Assess drawdown, exposure,
 underwater time, missed recoveries, fees and returns. Changing the span or weights

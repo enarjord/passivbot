@@ -1560,7 +1560,7 @@ impl<'a> Backtest<'a> {
                     exchange,
                     tradable,
                     allow_missing_strategy_inputs: false,
-                    forager_unilateralness_warmup_spans: self.unilateralness_warmup_spans(idx, k),
+                    unilateralness_warmup_spans: self.unilateralness_warmup_spans(idx, k),
                     next_candle,
                     effective_min_cost,
                     emas,
@@ -1769,7 +1769,7 @@ impl<'a> Backtest<'a> {
             }
 
             sym.emas.m1.signed_unilateralness = self.unilateralness_at(idx, k);
-            sym.forager_unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);
+            sym.unilateralness_warmup_spans = self.unilateralness_warmup_spans(idx, k);
             // Update EMA values (spans are stable; we overwrite only values).
             // m1.close: 3 long then 3 short.
             if sym.emas.m1.close.len() >= 6 {
@@ -1977,25 +1977,8 @@ impl<'a> Backtest<'a> {
                 .saturating_add(warm_bars)
                 .min(last)
                 .max(provided_trade_idx);
-            // Adverse cooldown needs RMS for entry decisions. Score-only RMS
-            // readiness is scoped to ranking instead of delaying all trading.
-            let rms_warmup = [&bot_params[i].long, &bot_params[i].short]
-                .iter()
-                .filter(|bp| {
-                    crate::unilateralness::backtest_enabled(bp)
-                        && bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
-                })
-                .map(|bp| {
-                    crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
-                        .expect("validated unilateralness span")
-                })
-                .max()
-                .unwrap_or(0);
-            trade_start_idx[i] = if rms_warmup > 0 {
-                trade_idx.max(first.saturating_add(rms_warmup))
-            } else {
-                trade_idx
-            };
+            // RMS readiness is scoped to its consuming side/order branch.
+            trade_start_idx[i] = trade_idx;
 
             let expected_trade_idx = first.saturating_add(warm_bars).min(last);
             debug_assert!(
@@ -2140,7 +2123,19 @@ impl<'a> Backtest<'a> {
             .collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
-            warmup_bars = calc_warmup_bars(&bot_params, &strategy_params_parsed);
+            // Zero historically requests automatic shared warmup. With scoped
+            // adverse RMS readiness, Python's non-RMS budget can be zero;
+            // do not restore an unrelated shared delay. Keep the legacy path
+            // unchanged when no eligible side consumes adverse RMS.
+            let scoped_rms = bot_params.iter().any(|pair| {
+                [&pair.long, &pair.short].iter().any(|bp| {
+                    crate::unilateralness::backtest_enabled(bp)
+                        && bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                })
+            });
+            warmup_bars = if scoped_rms { 1 } else {
+                calc_warmup_bars(&bot_params, &strategy_params_parsed)
+            };
         }
 
         let trailing_enabled: Vec<TrailingEnabled> = strategy_params_parsed
@@ -5737,7 +5732,6 @@ impl<'a> Backtest<'a> {
             .iter()
             .filter(|bp| {
                 crate::unilateralness::backtest_enabled(bp)
-                    && bp.forager_score_weights.unilateralness > 0.0
                     && k <= end
                     && k < start.saturating_add(
                         crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)

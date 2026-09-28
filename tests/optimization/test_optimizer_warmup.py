@@ -249,7 +249,9 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
         fills, _, _, payload = run_backtest(
             hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True
         )
-        assert payload.backtest_params["trade_start_indices"][0] == 20
+        assert payload.backtest_params["trade_start_indices"][0] == 3
+        long_entries = [row for row in fills if str(row[13]).startswith("entry_") and "long" in str(row[13])]
+        assert min(int(row[0]) for row in long_entries) == 21
         standalone = run_backtest(hlcvs, unstamped_markets, cfg, "binance", btc, timestamps)
         np.testing.assert_array_equal(fills, standalone[0])
         assert len(fills) > 0

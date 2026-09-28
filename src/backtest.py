@@ -1133,18 +1133,8 @@ def build_backtest_payload(
     global_warmup_minutes = compute_backtest_warmup_minutes(
         config, for_trade_activation=True, include_rms=False
     )
-    # History can cover unloaded/ineligible sides. Activation may only depend
-    # on RMS consumers in the finalized parameters for this dataset.
-    from warmup_utils import _rms_warmup_minutes
-
-    for coin, pair in zip(coins_order, bot_params_list):
-        rms_warm = max(
-            (_rms_warmup_minutes(params, side, for_trade_activation=True)
-             for side, params in pair.items() if params["entry_eligible"]),
-            default=0,
-        )
-        warmup_map[coin] = max(warmup_map.get(coin, default_warm), rms_warm)
-        global_warmup_minutes = max(global_warmup_minutes, rms_warm)
+    # RMS readiness belongs to each consuming Rust side/order branch; it must
+    # not delay other sides or coins through shared activation metadata.
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []
@@ -1191,7 +1181,7 @@ def build_backtest_payload(
         )
         if history_warm > activation_warm:
             # Cache metadata records requested history, not a requirement to
-            # postpone orders that do not consume the score-only RMS window.
+            # postpone orders that do not consume the RMS window.
             warm = min(warm, activation_warm)
         warmup_minutes.append(warm)
         # trade_start_idx is in candle units, adjust warm from minutes to candle periods
