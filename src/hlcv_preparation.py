@@ -114,7 +114,7 @@ from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmu
 from backtest_universe import effective_backtest_data_coins
 
 
-HLCV_PREPARATION_ALGORITHM_VERSION = 7
+HLCV_PREPARATION_ALGORITHM_VERSION = 8
 VOLUME_NORMALIZATION_LOOKBACK_DAYS = 60
 VOLUME_NORMALIZATION_MIN_COMMON_FRACTION = 0.95
 VOLUME_NORMALIZATION_MIN_ELIGIBLE_DAYS_FRACTION = 0.80
@@ -5631,39 +5631,49 @@ async def _load_combined_btc_prices(
                 continue
             if not use_v2_local:
                 btc_df = await btc_om.get_ohlcvs("BTC", source_dir_only=True)
-                if not btc_df.empty:
-                    btc_source_exchange = btc_exchange
-                    logging.info("using BTC/USD benchmark direct source dir from %s", btc_exchange)
-                    return btc_df.loc[:, ["timestamp", "close"]], btc_source_exchange
-                continue
-            btc_symbol = btc_om.get_symbol("BTC")
-            btc_rng = await _resolve_v2_store_range(
-                om=btc_om,
-                catalog=catalog,
-                store=store,
-                legacy_root=legacy_root,
-                exchange=to_standard_exchange_name(btc_exchange),
-                coin="BTC",
-                symbol=btc_symbol,
-                start_ts=int(timestamps[0]),
-                end_ts=int(timestamps[-1]),
-                allow_remote_fetch=not is_offline(),
-                local_hit_log_label="combined BTC v2 local hit",
-                remote_fetch_log_label="combined BTC fetching missing range",
-            )
-            btc_df = (
-                pd.DataFrame(
-                    {
-                        "timestamp": btc_rng.timestamps,
-                        "close": btc_rng.values[:, 2].astype(np.float64, copy=False),
-                    }
+                if btc_df.empty:
+                    continue
+            else:
+                btc_symbol = btc_om.get_symbol("BTC")
+                btc_rng = await _resolve_v2_store_range(
+                    om=btc_om,
+                    catalog=catalog,
+                    store=store,
+                    legacy_root=legacy_root,
+                    exchange=to_standard_exchange_name(btc_exchange),
+                    coin="BTC",
+                    symbol=btc_symbol,
+                    start_ts=int(timestamps[0]),
+                    end_ts=int(timestamps[-1]),
+                    allow_remote_fetch=not is_offline(),
+                    local_hit_log_label="combined BTC v2 local hit",
+                    remote_fetch_log_label="combined BTC fetching missing range",
                 )
-                if btc_rng is not None
-                else pd.DataFrame()
-            )
+                btc_df = (
+                    pd.DataFrame(
+                        {
+                            "timestamp": btc_rng.timestamps,
+                            "close": btc_rng.values[:, 2].astype(np.float64, copy=False),
+                        }
+                    )
+                    if btc_rng is not None
+                    else pd.DataFrame()
+                )
             if not btc_df.empty:
+                if (
+                    int(btc_df["timestamp"].iloc[0]) > int(timestamps[0])
+                    or int(btc_df["timestamp"].iloc[-1]) < int(timestamps[-1])
+                ):
+                    logging.warning(
+                        "BTC/USD candidate %s does not cover requested range %s to %s; "
+                        "trying next source",
+                        btc_exchange,
+                        ts_to_date(int(timestamps[0])),
+                        ts_to_date(int(timestamps[-1])),
+                    )
+                    continue
                 btc_source_exchange = btc_exchange
-                return btc_df, btc_source_exchange
+                return btc_df.loc[:, ["timestamp", "close"]], btc_source_exchange
             logging.warning(
                 "BTC/USD fetch returned empty for %s (start=%s end=%s)",
                 btc_exchange,

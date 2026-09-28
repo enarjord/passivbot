@@ -575,3 +575,120 @@ async def test_offline_listing_filter_does_not_hide_ambiguous_identity(tmp_path,
     monkeypatch.setattr(procedures, "coin_to_symbol", ambiguous)
     with simulation_data_policy(OFFLINE), pytest.raises(utils.AmbiguousMarketIdentifier):
         await procedures.get_first_timestamps_unified(["BTC"], exchange="binance")
+
+
+@pytest.mark.asyncio
+async def test_combined_btc_policy_rebuilds_old_prepared_cache(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from unittest.mock import AsyncMock
+    import backtest
+    from utils import ts_to_date
+
+    monkeypatch.chdir(tmp_path)
+    config = get_template_config()
+    config["backtest"].update(
+        exchanges=["bybit", "hyperliquid"], start_date=ts_to_date(START),
+        end_date=ts_to_date(START + 9 * 60000), compress_cache=False,
+    )
+    config["live"].update(
+        approved_coins={"long": ["BTC"], "short": []},
+        ignored_coins={"long": [], "short": []}, minimum_coin_age_days=0,
+        max_warmup_minutes=1,
+    )
+    monkeypatch.setattr(backtest, "coin_to_symbol", lambda *args, **kwargs: SYMBOL)
+    ts = START + np.arange(10, dtype=np.int64) * 60000
+    hlcvs = np.tile([101.0, 99.0, 100.0, 10.0], (10, 1, 1))
+    mss = {
+        "BTC": {"first_valid_index": 0, "last_valid_index": 9, "warmup_minutes": 1},
+        "__meta__": {"btc_source_exchange": "binanceusdm"},
+    }
+    # Version 7 predates configured BTC source priority. Its valid payload must
+    # not bypass the new selection policy just because its arrays verify.
+    with monkeypatch.context() as old_policy:
+        old_policy.setattr(backtest, "HLCV_PREPARATION_ALGORITHM_VERSION", 7)
+        old_dir = backtest.save_coins_hlcvs_to_cache(
+            config, ["BTC"], hlcvs, "combined", mss, np.full(10, 50000.0),
+            ts, warmup_minutes=1,
+        )
+        assert backtest.load_coins_hlcvs_from_cache(config, "combined", 1) is not None
+
+    current_mss = deepcopy(mss)
+    current_mss["__meta__"]["btc_source_exchange"] = "bybit"
+    prepare = AsyncMock(return_value=(current_mss, ts, hlcvs, np.full(10, 40000.0)))
+    monkeypatch.setattr(backtest, "_load_and_reconcile_combined_sources", AsyncMock(return_value=({}, {})))
+    monkeypatch.setattr(backtest, "prepare_hlcvs_combined", prepare)
+    result = await backtest.prepare_hlcvs_mss(config, "combined")
+    prepare.assert_awaited_once()
+    assert result[2]["__meta__"]["btc_source_exchange"] == "bybit"
+    np.testing.assert_array_equal(result[5], np.full(10, 40000.0))
+    assert result[4] != old_dir
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_v2", [False, True])
+@pytest.mark.parametrize("missing_boundary", ["prefix", "tail"])
+@pytest.mark.parametrize("fallback_available", [False, True])
+async def test_combined_btc_rejects_partial_history(
+    tmp_path, monkeypatch, caplog, use_v2, missing_boundary, fallback_available,
+):
+    import pandas as pd
+
+    ts = START + np.arange(10, dtype=np.int64) * 60000
+    partial_ts = ts[5:] if missing_boundary == "prefix" else ts[:5]
+    attempts, closed = [], []
+
+    class Manager:
+        cc = None
+        start_date = "2024-01-01"
+        end_date = "2024-01-02"
+
+        def __init__(self, exchange, *args, **kwargs):
+            self.exchange = exchange
+            attempts.append(exchange)
+
+        def update_date_range(self, *args):
+            pass
+
+        async def load_markets(self):
+            pass
+
+        def has_coin(self, coin):
+            return True
+
+        def get_symbol(self, coin):
+            return SYMBOL
+
+        async def get_ohlcvs(self, coin, **kwargs):
+            full = self.exchange == "bybit" and fallback_available
+            return pd.DataFrame({"timestamp": ts if full else partial_ts,
+                                 "close": 40000.0 if full else 50000.0})
+
+        async def aclose(self):
+            closed.append(self.exchange)
+
+    async def resolve(**kwargs):
+        frame = await kwargs["om"].get_ohlcvs("BTC")
+        return SimpleNamespace(timestamps=frame.timestamp.to_numpy(),
+                               values=np.column_stack([frame.close] * 4))
+
+    monkeypatch.setattr(hp, "HLCVManager", Manager)
+    monkeypatch.setattr(hp, "_resolve_v2_store_range", resolve)
+    kwargs = dict(
+        exchanges_to_consider=["hyperliquid", "bybit"], timestamps=ts,
+        effective_start_date="2024-01-01", end_date="2024-01-02",
+        gap_tolerance_ohlcvs_minutes=0, force_refetch_gaps=False,
+        catalog=None, store=None, legacy_root=None, use_v2_local=use_v2,
+    )
+    with simulation_data_policy(OFFLINE):
+        if fallback_available:
+            frame, source = await hp._load_combined_btc_prices(**kwargs)
+            assert source == "bybit"
+            np.testing.assert_array_equal(frame.timestamp, ts)
+            np.testing.assert_array_equal(frame.close, np.full(10, 40000.0))
+        else:
+            with pytest.raises(OfflineDataError, match="BTC benchmark"):
+                await hp._load_combined_btc_prices(**kwargs)
+    assert attempts == (["hyperliquid", "bybit"] if fallback_available
+                        else ["hyperliquid", "bybit", "binanceusdm"])
+    assert closed == attempts
+    assert "does not cover requested range" in caplog.text

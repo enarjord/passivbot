@@ -43,7 +43,10 @@ Combined backtests and optimizations try BTC price history from the configured
 `binanceusdm`) keeps first priority when configured. Duplicate venues are tried
 once. When Binance is not configured, it is the final fallback after the configured
 venues. The selected venue is logged and retained as `btc_source_exchange` in
-preparation metadata.
+preparation metadata. Candidates must cover both boundaries of the requested BTC
+range; shorter histories are skipped instead of extending their first or last price
+across unavailable history. Prepared caches from the previous source policy are
+rebuilt automatically.
 
 This priority applies in both online and offline modes, including explicit
 `backtest.ohlcv_source_dir` inputs. Online preparation may fetch missing data for
