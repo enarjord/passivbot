@@ -34,6 +34,27 @@ def _finite(value: object) -> float | None:
     return None
 
 
+def _canonical_stat_key(key: str) -> str:
+    metric, stat = key.rsplit("_", 1)
+    return f"{canonicalize_metric_name(metric)}_{stat}"
+
+
+def _canonical_values(values: dict, key_func=canonicalize_metric_name) -> dict:
+    groups = {}
+    for key in values:
+        groups.setdefault(key_func(key), []).append(key)
+    result = {}
+    for canonical, aliases in groups.items():
+        if canonical in values:
+            result[canonical] = values[canonical]
+            continue
+        value = values[aliases[0]]
+        if any(_finite(values[alias]) != _finite(value) for alias in aliases[1:]):
+            raise ValueError(f"Conflicting aliases for metric {canonical!r}: {aliases}")
+        result[canonical] = value
+    return result
+
+
 def build_dataset(candidates: Sequence[ParetoCandidate], specs: Sequence[ObjectiveSpec]) -> dict:
     """Keep objective > aggregate > mean precedence; expose each statistic separately."""
     if not candidates:
@@ -43,15 +64,14 @@ def build_dataset(candidates: Sequence[ParetoCandidate], specs: Sequence[Objecti
     metadata = {}
     for row, candidate in enumerate(candidates):
         values = {}
-        for flat_key, value in candidate.stats_flat.items():
+        for flat_key, value in _canonical_values(candidate.stats_flat, _canonical_stat_key).items():
             metric, stat = flat_key.rsplit("_", 1)
-            metric = canonicalize_metric_name(metric)
             key = f"stats.{metric}.{stat}"
             values[key] = value
             metadata[key] = (f"{metric} [{stat}]", None if stat == "std" else goals.get(metric, default_objective_goal(metric)), "Statistics")
             if stat == "mean":
                 values[metric] = value
-        values.update({canonicalize_metric_name(k): v for k, v in candidate.aggregated_values.items()})
+        values.update(_canonical_values(candidate.aggregated_values))
         # Named objectives are authoritative, including any saved penalties.
         values.update(candidate.objectives)
         for key, value in values.items():

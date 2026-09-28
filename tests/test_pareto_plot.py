@@ -243,3 +243,27 @@ def test_cli_statistic_alias_selects_exported_column(tmp_path):
     data = read_payload(output.read_text())
     assert data["selected"] == ["stats.adg_strategy_eq.mean", METRICS[1]]
     assert next(metric for metric in data["metrics"] if metric["key"] == data["selected"][0])["values"] == [10.02]
+
+
+@pytest.mark.parametrize("canonical_first", [True, False])
+@pytest.mark.parametrize("source", ["stats_flat", "aggregated_values"])
+def test_canonical_values_win_over_aliases_in_either_order(front, canonical_first, source):
+    from dataclasses import replace
+    _, candidates, specs = load_candidates(front)
+    suffix = "_mean" if source == "stats_flat" else ""
+    entries = [("sharpe_ratio_strategy_eq" + suffix, 0.25),
+               ("sharpe_ratio_strategy_pnl_rebased" + suffix, 99.0)]
+    if not canonical_first:
+        entries.reverse()
+    candidates[0] = replace(candidates[0], **{source: dict(entries)})
+    data = pareto_plot.build_dataset(candidates, specs)
+    metrics = {metric["key"]: metric for metric in data["metrics"]}
+    assert metrics["sharpe_ratio_strategy_eq"]["values"] == [0.25, None, None]
+    if source == "stats_flat":
+        assert metrics["stats.sharpe_ratio_strategy_eq.mean"]["values"] == [0.25, None, None]
+
+
+def test_conflicting_aliases_without_canonical_value_fail():
+    with pytest.raises(ValueError, match="Conflicting aliases"):
+        pareto_plot._canonical_values({"adg": 0.1, "usd_adg": 0.2})
+    assert pareto_plot._canonical_values({"adg": 0.1, "usd_adg": 0.1}) == {"adg_usd": 0.1}

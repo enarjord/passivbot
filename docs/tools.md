@@ -111,6 +111,8 @@ the first two available metrics (scoring objectives first) are selected. Known m
 are accepted. Metric selectors group objectives, other metrics, and named statistics;
 `stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_strategy_eq.mean`.
 Saved objective values take precedence over aggregates, which take precedence over means.
+Canonical names take precedence over legacy aliases regardless of file ordering; conflicting
+aliases without a canonical value are rejected.
 Objectives can include penalties and legacy engine values are converted by the shared loader.
 Per-scenario values are not exported as separate metrics. No full configs are embedded.
 
