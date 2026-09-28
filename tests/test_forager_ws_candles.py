@@ -603,7 +603,7 @@ async def test_ws_unavailable_disk_reads_cannot_publish_unverified_rows(tmp_path
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("storage", ["primary", "legacy"])
+@pytest.mark.parametrize("storage", ["primary", "legacy", "mixed_primary", "mixed_legacy"])
 @pytest.mark.parametrize("failure", ["corrupt", "unreadable"])
 async def test_ws_failed_existing_shard_read_preserves_history(
     tmp_path, monkeypatch, storage, failure
@@ -618,11 +618,16 @@ async def test_ws_failed_existing_shard_read_preserves_history(
     cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
     primary = Path(cm._shard_path(symbol, "1970-01-02", timeframe="1m"))
     shard = primary
-    if storage == "legacy":
+    legacy = None
+    if storage != "primary":
         legacy_dir = tmp_path / "legacy"
         legacy_dir.mkdir()
-        shard = legacy_dir / primary.name
-        primary.rename(shard)
+        legacy = legacy_dir / primary.name
+        if storage == "legacy":
+            primary.rename(legacy)
+        else:
+            np.save(legacy, _candles((midnight, 99, 100, 98, 99, 1)))
+        shard = primary if storage == "mixed_primary" else legacy
         monkeypatch.setattr(cm, "_legacy_shard_dirs", lambda *_args: [str(legacy_dir)])
         cm._legacy_shard_paths_cache.clear()
         cm._invalidate_shard_paths_cache(symbol, tf="1m")
@@ -637,16 +642,45 @@ async def test_ws_failed_existing_shard_read_preserves_history(
             return load(file, *args, **kwargs)
 
         monkeypatch.setattr(np, "load", unreadable)
-    original_bytes = shard.read_bytes()
-
-    with pytest.raises(OSError, match="canonical shard unavailable"):
+    original_bytes = {path: path.read_bytes() for path in [primary, legacy] if path and path.exists()}
+    expected_error = ValueError if failure == "corrupt" else PermissionError
+    with pytest.raises(expected_error):
         await _prime_and_finalize_ws_row(
             cm, symbol, [midnight + 2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
         )
 
-    assert shard.read_bytes() == original_bytes
+    assert {path: path.read_bytes() for path in original_bytes} == original_bytes
     if storage == "legacy":
         assert not primary.exists()
+    np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+
+
+@pytest.mark.asyncio
+async def test_ws_merge_read_failure_after_successful_canonical_read(tmp_path, monkeypatch):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    basis = _candles((ONE_MIN_MS, 100, 100, 100, 100, 1))
+    cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
+    shard = Path(cm._shard_path(symbol, "1970-01-01", timeframe="1m"))
+    original_bytes = shard.read_bytes()
+    load = np.load
+    reads = 0
+
+    def fail_second_read(file, *args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            raise PermissionError("merge read unavailable")
+        return load(file, *args, **kwargs)
+
+    monkeypatch.setattr(np, "load", fail_second_read)
+    with pytest.raises(PermissionError):
+        await _prime_and_finalize_ws_row(
+            cm, symbol, [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+        )
+    assert reads == 2
+    assert shard.read_bytes() == original_bytes
     np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
     assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
 

@@ -148,8 +148,11 @@
    processing time is not post-boundary transport provenance. The current in-progress minute is
    rejected, an existing canonical basis is required, and WebSocket silence and reconnect gaps remain
    missing. A later changed row for the same timestamp overwrites the candle and invalidates affected
-   EMA state. WebSocket shard persistence must be read-verified before the row is exposed to cache
-   and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
+   EMA state. WebSocket canonical reads, merge-before-write reads, and persistence verification
+   propagate shard read failures, including failures masked by another legacy or primary source.
+   Missing shards are distinct from unreadable history. WebSocket shard persistence must be
+   read-verified before the row is exposed to cache and EMA readers, including where an immutable
+   legacy shard shadows primary storage. REST remains
    the complete fallback for startup basis, historical and internal gaps,
    prolonged silence, reconnect recovery, and a configured periodic integrity audit. Audits force a
    bounded REST overlap even while the persisted WebSocket tail is current; a successful REST
