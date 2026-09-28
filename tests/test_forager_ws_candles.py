@@ -585,13 +585,68 @@ async def test_ws_unavailable_disk_reads_cannot_publish_unverified_rows(tmp_path
     basis = _candles((ONE_MIN_MS, 100, 100, 100, 100, 1))
     cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
 
-    # The optional disk loader reports unavailable reads as None. That must
-    # not become proof of persistence, even if the shard write itself succeeds.
-    monkeypatch.setattr(cm, "_load_from_disk", lambda *_args, **_kwargs: None)
+    # A failed readback cannot prove persistence even when the write succeeds.
+    load_from_disk = cm._load_from_disk
+
+    def unavailable_readback(*args, **kwargs):
+        if not kwargs.get("merge_memory_cache", True):
+            return None
+        return load_from_disk(*args, **kwargs)
+
+    monkeypatch.setattr(cm, "_load_from_disk", unavailable_readback)
     with pytest.raises(OSError, match="persistence verification failed"):
         await _prime_and_finalize_ws_row(
             cm, symbol, [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
         )
+    np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("storage", ["primary", "legacy"])
+@pytest.mark.parametrize("failure", ["corrupt", "unreadable"])
+async def test_ws_failed_existing_shard_read_preserves_history(
+    tmp_path, monkeypatch, storage, failure
+):
+    symbol = "BTC/USDT:USDT"
+    midnight = 24 * 60 * ONE_MIN_MS
+    cm = _manager(tmp_path, now_ms=midnight + 4 * ONE_MIN_MS)
+    basis = _candles(
+        (ONE_MIN_MS, 100, 100, 100, 100, 1),
+        (midnight + ONE_MIN_MS, 100, 100, 100, 100, 1),
+    )
+    cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
+    primary = Path(cm._shard_path(symbol, "1970-01-02", timeframe="1m"))
+    shard = primary
+    if storage == "legacy":
+        legacy_dir = tmp_path / "legacy"
+        legacy_dir.mkdir()
+        shard = legacy_dir / primary.name
+        primary.rename(shard)
+        monkeypatch.setattr(cm, "_legacy_shard_dirs", lambda *_args: [str(legacy_dir)])
+        cm._legacy_shard_paths_cache.clear()
+        cm._invalidate_shard_paths_cache(symbol, tf="1m")
+    if failure == "corrupt":
+        shard.write_bytes(b"invalid numpy shard")
+    else:
+        load = np.load
+
+        def unreadable(file, *args, **kwargs):
+            if Path(file.name) == shard:
+                raise PermissionError("unreadable fixture")
+            return load(file, *args, **kwargs)
+
+        monkeypatch.setattr(np, "load", unreadable)
+    original_bytes = shard.read_bytes()
+
+    with pytest.raises(OSError, match="canonical shard unavailable"):
+        await _prime_and_finalize_ws_row(
+            cm, symbol, [midnight + 2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+        )
+
+    assert shard.read_bytes() == original_bytes
+    if storage == "legacy":
+        assert not primary.exists()
     np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
     assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
 

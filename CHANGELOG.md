@@ -7,7 +7,8 @@ since the latest release tag; these features may already be available when insta
 ## Unreleased
 
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
-  does not exist yet. Preserve finality and verified persistence, and distinguish receive
+  does not exist yet. Reject unavailable existing shards, preserve finality and verified
+  persistence, and distinguish receive
   failures from local ingestion failures in fallback warnings.
 
 - Orient 2D Pareto plot axes so the ideal point is always toward the lower-left,

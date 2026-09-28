@@ -5485,10 +5485,27 @@ class CandlestickManager:
                 int(candidates[0]["ts"]),
                 int(candidates[-1]["ts"]),
             )
-            # A new UTC day may have no disk shard yet. Missing disk rows
-            # add no canonical timestamps; only existing cache rows may be
-            # compared, and new timestamps still require successor proof and
-            # read-verified persistence below.
+            if disk is None:
+                # None also covers failed reads. Only a genuinely absent shard
+                # may contribute no canonical timestamps: otherwise a later
+                # save could overwrite unreadable history with this WS tail.
+                # Check paths directly, independently of cached directory scans.
+                for day in self._date_keys_between(
+                    int(candidates[0]["ts"]), int(candidates[-1]["ts"])
+                ):
+                    paths = [self._shard_path(symbol, day, timeframe="1m")]
+                    paths.extend(
+                        os.path.join(directory, f"{day}.npy")
+                        for directory in self._legacy_shard_dirs(symbol, "1m")
+                    )
+                    for path in paths:
+                        try:
+                            os.lstat(path)
+                        except FileNotFoundError:
+                            continue
+                        raise OSError("WebSocket canonical shard unavailable")
+            # New timestamps still require successor proof and read-verified
+            # persistence; absent shards never supply invented candle rows.
             canonical = cached if disk is None else self._merge_overwrite(disk, cached)
             canonical_by_ts = {int(row["ts"]): row for row in canonical}
             # Value changes alone can correct a timestamp already admitted by
