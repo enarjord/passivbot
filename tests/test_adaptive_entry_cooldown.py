@@ -458,3 +458,31 @@ def test_forager_warmup_marker_does_not_relax_adverse_cooldown_inputs():
     inp["symbols"][0]["forager_unilateralness_warmup_spans"] = [60.0]
     with pytest.raises(ValueError):
         compute(pbr, inp)
+
+
+@pytest.mark.parametrize("bad_close", [0.0, -1.0])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("bad_row", [0, 25])
+def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close, consumer, side, bad_row):
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
+    if consumer == "forager":
+        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+    else:
+        cfg["bot"][side]["entry_cooldown"].update(
+            max_duration_minutes=60.0,
+            weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 10.0},
+        )
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    hlcvs[bad_row, 0, 2] = bad_close
+    with pytest.raises(ValueError, match=f"RMS requires positive closes: coin LONGCOIN index 0 candle {bad_row}"):
+        run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    # Unavailable history outside the declared listing range is not consumed.
+    markets["LONGCOIN"]["first_valid_index"] = bad_row + 1
+    run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)

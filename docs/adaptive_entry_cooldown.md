@@ -104,7 +104,12 @@ New dimensions are opt-in: add bounds under the matching nested config paths,
 for example `optimize.bounds.long.entry_cooldown.weights_minutes.exposure_ratio`
 or `optimize.bounds.long.forager.score_weights.unilateralness`. The existing
 Forager bound shorthand also supports `score_weights_unilateralness`. Keep a
-finite ceiling in the base config when a searched modifier can become positive.
+finite ceiling in the base config, or supply numeric ceiling bounds, when a searched
+modifier can become positive. A ceiling search can start from the default null ceiling;
+an unbounded starting-config ceiling
+projects to the upper search bound. History loading covers positive consumer weights and
+maximum float spans reachable through optimizer bounds, even when fixed weights are zero.
+This history budget does not impose a delay on candidates that do not consume RMS.
 Search ranges for floor and ceiling must satisfy `highest floor <= lowest ceiling`,
 including a fixed bound when only the other is optimized. This prevents invalid sampled
 combinations. RMS requires one-minute backtest candles and its full replay window for

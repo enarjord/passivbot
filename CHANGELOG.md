@@ -14,7 +14,9 @@ since the latest release tag; these features may already be available when insta
   weights. Adaptive fill-history coverage works with a zero base; GPU rejects unsupported settings.
   Validate adaptive optimizer ranges before evaluation and allow per-coin fixed cooldowns to clear
   inherited ceilings. Scope score-only RMS warmup to required ranking and describe effective
-  cooldowns, including bounds and modifiers, in the trailing inspection overview.
+  cooldowns, including bounds and modifiers, in the trailing inspection overview. Size RMS history
+  for searched weights/spans, permit numeric ceiling searches from a null default, and reject
+  non-positive RMS closes with an actionable backtest error.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

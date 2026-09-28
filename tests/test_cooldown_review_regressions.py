@@ -164,3 +164,87 @@ def test_cooldown_search_floor_cannot_exceed_any_reachable_ceiling(side, floor, 
     else:
         with pytest.raises(ValueError, match="highest min_duration_minutes.*lowest max_duration_minutes"):
             prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+@pytest.mark.parametrize("bound_span", [None, 240.5])
+def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, bound_span):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["max_warmup_minutes"] = 1
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
+    bounds = cfg["optimize"]["bounds"][side]
+    if consumer == "forager":
+        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+    else:
+        bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
+    if bound_span is not None:
+        bounds["forager"]["unilateralness_ema_span_1m"] = [60.0, bound_span]
+    cfg = prepare_config(cfg, verbose=False)
+    import math
+    assert compute_backtest_warmup_minutes(cfg) == math.ceil(20 * (bound_span or 60.0)) + 1
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_optimizer_can_sample_ceiling_from_default_null(side):
+    from optimization.config_adapter import get_optimization_key_paths
+    from optimization.warmup import build_optimizer_max_config
+
+    cfg = get_template_config()
+    assert cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] is None
+    cfg["optimize"]["bounds"][side]["entry_cooldown"]["max_duration_minutes"] = [10.0, 30.0]
+    cfg = prepare_config(cfg, verbose=False)
+    paths = dict(get_optimization_key_paths(cfg))
+    assert paths[f"{side}_entry_cooldown_max_duration_minutes"] == (
+        "bot", side, "entry_cooldown", "max_duration_minutes"
+    )
+    candidate = build_optimizer_max_config(cfg)
+    # The short side may be disabled by template bounds, in which case its lower bound is used.
+    assert candidate["bot"][side]["entry_cooldown"]["max_duration_minutes"] in (10.0, 30.0)
+
+
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+def test_optimizer_rms_history_does_not_delay_disabled_candidate(consumer):
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["max_warmup_minutes"] = 1
+    cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] = 90.0
+    bounds = cfg["optimize"]["bounds"]["long"]
+    bounds["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
+    if consumer == "forager":
+        bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+    else:
+        bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": [0.0, 30.0]}
+    cfg = prepare_config(cfg, verbose=False)
+    assert compute_backtest_warmup_minutes(cfg) == 4811
+    assert compute_backtest_warmup_minutes(cfg, for_trade_activation=True) == 1
+
+
+def test_active_rms_consumer_uses_larger_span_bound_and_zero_consumers_need_no_rms_history():
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["max_warmup_minutes"] = 1
+    cfg["optimize"]["bounds"]["long"]["forager"]["unilateralness_ema_span_1m"] = [60.0, 240.5]
+    cfg = prepare_config(cfg, verbose=False)
+    assert compute_backtest_warmup_minutes(cfg) == 1
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+    assert compute_backtest_warmup_minutes(cfg) == 4811
+
+
+def test_unbounded_seed_ceiling_projects_to_finite_search_upper_bound():
+    from optimization.shape import build_optimization_shape
+    from optimization.warmup import build_optimizer_vector_config
+    from optimize import config_to_individual
+
+    cfg = get_template_config()
+    cfg["optimize"]["bounds"]["long"]["entry_cooldown"]["max_duration_minutes"] = [10.0, 30.0]
+    cfg = prepare_config(cfg, verbose=False)
+    shape = build_optimization_shape(cfg)
+    vector = config_to_individual(cfg, shape.bounds, optimization_shape=shape, clamp_context="seed")
+    candidate = build_optimizer_vector_config(vector, cfg, key_paths=shape.key_paths)
+    assert candidate["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] == 30.0
+    assert cfg["bot"]["long"]["entry_cooldown"]["max_duration_minutes"] is None

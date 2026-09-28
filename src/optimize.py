@@ -1462,7 +1462,14 @@ def config_to_individual(
             target = target[part]
         values.append(target)
     enforced = enforce_bounds(
-        values,
+        [
+            # An unbounded fixed ceiling projects to the highest allowed search
+            # ceiling when importing a seed into a finite optimizer dimension.
+            bound.high
+            if value is None and tuple(path[-2:]) == ("entry_cooldown", "max_duration_minutes")
+            else value
+            for value, bound, (_, path) in zip(values, bounds, key_paths, strict=True)
+        ],
         bounds,
         sig_digits,
     )

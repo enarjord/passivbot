@@ -1126,10 +1126,10 @@ def build_backtest_payload(
 
     history_warmup_map = compute_per_coin_warmup_minutes(config)
     history_global_warmup = compute_backtest_warmup_minutes(config)
-    warmup_map = compute_per_coin_warmup_minutes(config, include_forager_unilateralness=False)
+    warmup_map = compute_per_coin_warmup_minutes(config, for_trade_activation=True)
     default_warm = int(warmup_map.get("__default__", 0))
     global_warmup_minutes = compute_backtest_warmup_minutes(
-        config, include_forager_unilateralness=False
+        config, for_trade_activation=True
     )
     first_valid_indices = []
     last_valid_indices = []

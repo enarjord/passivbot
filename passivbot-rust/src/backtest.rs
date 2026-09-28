@@ -2382,7 +2382,19 @@ impl<'a> Backtest<'a> {
                 }
             }
             if let Some((first, last)) = self.coin_valid_range(idx) {
+                let requires_rms = [&self.bot_params[idx].long, &self.bot_params[idx].short]
+                    .iter()
+                    .any(|bp| {
+                        bp.forager_score_weights.unilateralness > 0.0
+                            || bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                    });
                 for k in first..=last {
+                    if requires_rms && self.hlcvs_value(k, idx, CLOSE) <= 0.0 {
+                        return Err(format!(
+                            "backtest RMS requires positive closes: coin {} index {} candle {}",
+                            self.backtest_params.coins[idx], idx, k,
+                        ));
+                    }
                     for field in [HIGH, LOW, CLOSE] {
                         if !self.hlcvs_value(k, idx, field).is_finite() {
                             return Err(format!(
