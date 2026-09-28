@@ -100,13 +100,18 @@ optimizer search dimensions/objectives must be edited explicitly before conversi
 Each `optimize.fixed_params` selector must match active bounds; retired or unmatched selectors
 are rejected. Explicit restart choices also update matching `optimize.fixed_runtime_overrides`
 (including accepted path aliases), with a warning, so optimization cannot undo the choice.
-Other fixed overrides and explicit per-coin policies are preserved.
+Other fixed overrides and explicit per-coin policies are preserved. Validation also applies
+optimizer finalization to a copy and checks its effective policy, including enablement overrides
+and coin patches; a policy valid only while disabled must not silently become active.
+Scenario policies are checked both against the base configuration and after optimizer finalization.
 
-File-backed coin overrides are resolved relative to the input configuration through the canonical
+File-backed coin overrides, including scenario-local mappings and dotted patches, are resolved
+relative to the input configuration through the canonical
 loader, validated, and saved inline. Inline patches retain precedence over file patches. Invalid
 or missing override files prevent output creation. The resulting coin policies no longer depend
 on those files or on the output directory; later edits to an original override file do not update
-the converted configuration.
+the converted configuration. Scenario coin mappings retain atomic replacement semantics, including
+an explicitly empty mapping; they are not merged with the base coin mapping.
 Run the resulting config through backtests and review the changed risk semantics before use.
 
 ## Acceptance matrix

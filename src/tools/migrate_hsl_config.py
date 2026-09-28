@@ -13,6 +13,8 @@ from config.optimize_bounds import flatten_optimize_bounds
 from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path, resolve_bound_selectors
 from config_utils import strip_config_metadata
+from optimization.warmup import _finalize_optimizer_vector_config
+from suite_runner import apply_scenario_overrides, build_scenarios
 
 
 def migrate(source, *, restart_policies=None, portfolio=None, base_config_path=""):
@@ -73,7 +75,36 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
             raise ValueError(f"optimize.fixed_params selector {selector!r} matches no active bounds")
     # Runtime's canonical override stage validates files as well as inline patches.
     # Materializing its result preserves file-then-inline precedence when output moves.
+    scenario_base = deepcopy(prepared)
     prepared = parse_overrides(prepared, verbose=True)
+    # Validate the actual optimizer policy on a copy. Fixed enablement can activate
+    # a restart policy that was valid only while the base scope was disabled.
+    optimized = _finalize_optimizer_vector_config(deepcopy(prepared))
+    optimized = prepare_config(optimized, verbose=False, target="canonical", runtime=None)
+    optimized = parse_overrides(optimized, verbose=False)
+    if prepared["backtest"].get("scenarios"):
+        scenarios, _ = build_scenarios(prepared["backtest"])
+        for raw, scenario in zip(prepared["backtest"]["scenarios"], scenarios):
+            try:
+                effective = deepcopy(scenario_base)
+                apply_scenario_overrides(effective, scenario.overrides)
+                effective = parse_overrides(effective, verbose=False)
+                # Atomic coin mappings replace the base mapping, including {}.
+                # Persist only the patch, not unrelated scenario-effective fields.
+                overrides = deepcopy(scenario.overrides or {})
+                coin_keys = [key for key in overrides
+                             if key == "coin_overrides" or key.startswith("coin_overrides.")]
+                if coin_keys:
+                    for key in coin_keys:
+                        del overrides[key]
+                    overrides["coin_overrides"] = effective["coin_overrides"]
+                optimized_scenario = deepcopy(optimized)
+                apply_scenario_overrides(optimized_scenario, overrides)
+                parse_overrides(optimized_scenario, verbose=False)
+                if scenario.overrides is not None:
+                    raw["overrides"] = overrides
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                raise ValueError(f"backtest scenario {scenario.label!r}: {exc}") from exc
     return strip_config_metadata(prepared)
 
 

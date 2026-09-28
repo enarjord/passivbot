@@ -22,7 +22,8 @@ since the latest release tag; these features may already be available when insta
 - Add an offline `passivbot tool migrate-hsl` helper that validates a separately saved revised-HSL
   configuration, requires explicit replacement of unsupported enabled restart policies, and
   refuses input/output overwrite. Resolve and validate file-backed coin policies into inline
-  overrides, preserve explicit restart choices through optimization, and reject inactive fixed
+  overrides including scenario-local patches, validate effective optimizer/scenario policies,
+  preserve explicit restart choices through optimization, and reject inactive fixed
   parameter selectors. Engine defaults and running bots are unchanged.
 
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard

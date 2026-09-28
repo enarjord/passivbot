@@ -232,3 +232,107 @@ def test_valid_selector_cannot_mask_unmatched_selector():
     cfg["optimize"]["fixed_params"] = ["long.hsl", "short.hsl.missing"]
     with pytest.raises(ValueError, match="short.hsl.missing.*matches no active bounds"):
         migrate(cfg, restart_policies={"long": "always"})
+
+
+@pytest.mark.parametrize('policy', ['threshold', None])
+def test_effective_optimizer_enablement_requires_explicit_policy(policy):
+    cfg = legacy()
+    cfg['bot']['long']['hsl'].update(enabled=False, restart_after_red_policy=policy)
+    cfg['optimize']['fixed_runtime_overrides'] = {'bot.long.hsl.enabled': True}
+    with pytest.raises(ValueError, match='explicit choice'):
+        migrate(cfg)
+    result = migrate(cfg, restart_policies={'long': 'never'})
+    assert result['bot']['long']['hsl']['enabled'] is False
+    from optimization.warmup import _finalize_optimizer_vector_config
+    effective = _finalize_optimizer_vector_config(deepcopy(result))
+    assert effective['bot']['long']['hsl']['enabled'] is True
+    assert effective['bot']['long']['hsl']['restart_after_red_policy'] == 'never'
+
+
+@pytest.mark.parametrize('patch', [
+    {'restart_after_red_policy': 'threshold'}, {'red_threshold': 0.0},
+])
+def test_scenario_file_invalid_policy_creates_no_output(tmp_path, patch):
+    cfg = legacy()
+    override = tmp_path/'coin.json'
+    override.write_text(json.dumps({'bot': {'long': {'hsl': patch}}}))
+    cfg['backtest']['scenarios'] = [{'label': 'invalid', 'overrides': {
+        'coin_overrides': {'BTC': {'override_config_path': 'coin.json'}}}}]
+    src, dst = tmp_path/'source.json', tmp_path/'converted.json'
+    src.write_text(json.dumps(cfg))
+    with pytest.raises(SystemExit):
+        main([str(src), str(dst), '--restart-policy', 'long=always'])
+    assert not dst.exists()
+
+
+def test_scenario_file_materializes_and_preserves_atomic_replacement(tmp_path):
+    from config.load import load_prepared_config
+    from config.overrides import parse_overrides
+    from suite_runner import build_scenarios, apply_scenario
+    source_dir, output_dir = tmp_path/'source', tmp_path/'output'
+    source_dir.mkdir()
+    output_dir.mkdir()
+    override = source_dir/'coin.json'
+    override.write_text(json.dumps({'bot': {'long': {'hsl': {
+        'restart_after_red_policy': 'never', 'red_threshold': .13}}}}))
+    cfg = legacy()
+    cfg['coin_overrides'] = {'ETH': {'bot': {'long': {'hsl': {'red_threshold': .2}}}}}
+    cfg['backtest']['scenarios'] = [{'label': 'file', 'overrides': {
+        'coin_overrides': {'BTC': {'override_config_path': 'coin.json',
+            'bot': {'long': {'hsl': {'red_threshold': .17}}}}}}}]
+    src, dst = source_dir/'source.json', output_dir/'converted.json'
+    src.write_text(json.dumps(cfg))
+    assert main([str(src), str(dst), '--restart-policy', 'long=always']) == 0
+    result = json.loads(dst.read_text())
+    assert 'override_config_path' not in result['backtest']['scenarios'][0]['overrides']['coin_overrides']['BTC']
+    override.unlink()
+    loaded = load_prepared_config(str(dst), verbose=False)
+    scenarios, _ = build_scenarios(loaded['backtest'])
+    effective, _ = apply_scenario(loaded, scenarios[0], ['BTC'], [], ['binance'], {'BTC'}, quiet=True)
+    resolved = parse_overrides(effective, verbose=False)
+    assert set(resolved['coin_overrides']) == {'BTC'}
+    assert resolved['coin_overrides']['BTC']['bot']['long']['hsl'] == {
+        'red_threshold': .17, 'restart_after_red_policy': 'never'}
+    assert migrate(result) == result
+
+
+def test_scenario_and_optimizer_enablement_validate_in_combination():
+    cfg = legacy()
+    cfg['bot']['long']['hsl'].update(enabled=False, restart_after_red_policy='always')
+    cfg['optimize']['fixed_runtime_overrides'] = {'bot.long.hsl.enabled': True}
+    cfg['backtest']['scenarios'] = [{'label': 'combined', 'overrides': {
+        'bot.long.hsl.restart_after_red_policy': 'threshold'}}]
+    with pytest.raises(ValueError, match='explicit choice'):
+        migrate(cfg)
+
+
+@pytest.mark.parametrize("dotted", [False, True])
+def test_scenario_coin_patch_forms_are_materialized(tmp_path, dotted):
+    cfg = legacy()
+    for filename, threshold in [("base.json", .2), ("scenario.json", .3)]:
+        (tmp_path/filename).write_text(json.dumps({"bot": {"long": {"hsl": {"red_threshold": threshold}}}}))
+    cfg["coin_overrides"] = {"BTC": {"override_config_path": "base.json"}}
+    patch = {"override_config_path": "scenario.json"}
+    overrides = {"coin_overrides.BTC.override_config_path": "scenario.json"} if dotted else {"coin_overrides": {"BTC": patch}}
+    cfg["backtest"]["scenarios"] = [{"label": "patch", "overrides": overrides}]
+    result = migrate(cfg, restart_policies={"long": "always"}, base_config_path=str(tmp_path/"input.json"))
+    assert result["coin_overrides"]["BTC"]["bot"]["long"]["hsl"]["red_threshold"] == .2
+    assert result["backtest"]["scenarios"][0]["overrides"] == {"coin_overrides": {
+        "BTC": {"bot": {"long": {"hsl": {"red_threshold": .3}}}}}}
+
+
+def test_scenario_empty_coin_mapping_remains_replacement():
+    cfg = legacy()
+    cfg["coin_overrides"] = {"BTC": {"bot": {"long": {"hsl": {"red_threshold": .2}}}}}
+    cfg["backtest"]["scenarios"] = [{"label": "clear", "overrides": {"coin_overrides": {}}}]
+    result = migrate(cfg, restart_policies={"long": "always"})
+    assert result["backtest"]["scenarios"][0]["overrides"]["coin_overrides"] == {}
+
+
+def test_effective_optimizer_policy_checks_coin_patches():
+    cfg = legacy()
+    cfg["bot"]["long"]["hsl"].update(enabled=False, restart_after_red_policy="always")
+    cfg["coin_overrides"] = {"BTC": {"bot": {"long": {"hsl": {"restart_after_red_policy": "threshold"}}}}}
+    cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": True}
+    with pytest.raises(ValueError, match="explicit choice"):
+        migrate(cfg)
