@@ -492,7 +492,7 @@ def test_ws_legacy_shard_noop_cannot_expose_ram_only_correction(
     monkeypatch.setattr(
         cm,
         "_get_legacy_shard_paths",
-        lambda _symbol, _tf: {day_key: str(legacy_path)},
+        lambda _symbol, _tf, **_kwargs: {day_key: str(legacy_path)},
     )
     monkeypatch.setattr(
         cm,
@@ -681,6 +681,115 @@ async def test_ws_merge_read_failure_after_successful_canonical_read(tmp_path, m
         )
     assert reads == 2
     assert shard.read_bytes() == original_bytes
+    np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unreadable", [False, True])
+async def test_ws_merge_reads_actual_shard_after_another_manager_publishes_day(
+    tmp_path, monkeypatch, unreadable
+):
+    midnight = 24 * 60 * ONE_MIN_MS
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=midnight + 3 * ONE_MIN_MS)
+    basis = _candles((midnight - ONE_MIN_MS, 100, 101, 99, 100, 1))
+    cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
+    # This manager caches discovery before the new day exists.
+    assert "1970-01-02" not in cm._iter_shard_paths(symbol, tf="1m")
+    other = _manager(tmp_path, now_ms=midnight + 3 * ONE_MIN_MS)
+    first_row = _candles((midnight, 100, 102, 99, 101, 2))
+    other._persist_batch(symbol, first_row, timeframe="1m", merge_cache=True)
+    assert "1970-01-02" not in cm._iter_shard_paths(symbol, tf="1m")
+    shard = Path(cm._shard_path(symbol, "1970-01-02", timeframe="1m"))
+    original_bytes = shard.read_bytes()
+    row = [midnight + ONE_MIN_MS, 101, 103, 100, 102, 3]
+    if unreadable:
+        load = np.load
+
+        def fail_read(file, *args, **kwargs):
+            if Path(file.name) == shard:
+                raise PermissionError("newly discovered target unavailable")
+            return load(file, *args, **kwargs)
+
+        monkeypatch.setattr(np, "load", fail_read)
+        with pytest.raises(PermissionError):
+            await _prime_and_finalize_ws_row(cm, symbol, row)
+        assert shard.read_bytes() == original_bytes
+        assert not np.any(cm._ensure_symbol_cache(symbol)["ts"] > midnight)
+        assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+    else:
+        assert await _prime_and_finalize_ws_row(cm, symbol, row) == 1
+        expected = np.concatenate([first_row, _candles(tuple(row))])
+        np.testing.assert_array_equal(np.load(shard, allow_pickle=False), expected)
+        restarted = _manager(tmp_path, now_ms=midnight + 3 * ONE_MIN_MS)
+        disk = restarted._load_from_disk(
+            symbol, midnight, midnight + ONE_MIN_MS,
+            timeframe="1m", merge_memory_cache=False,
+        )
+        np.testing.assert_array_equal(disk, expected)
+
+
+@pytest.mark.asyncio
+async def test_ws_refreshes_missing_legacy_discovery_before_verifying_correction(
+    tmp_path, monkeypatch
+):
+    midnight = 24 * 60 * ONE_MIN_MS
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=midnight + 2 * ONE_MIN_MS)
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    monkeypatch.setattr(cm, "_legacy_shard_dirs", lambda *_args: [str(legacy_dir)])
+    cm._persist_batch(
+        symbol, _candles((midnight - ONE_MIN_MS, 100, 101, 99, 100, 1)),
+        timeframe="1m", merge_cache=True,
+    )
+    assert cm._get_legacy_shard_paths(symbol, "1m") == {}
+    canonical = _candles((midnight, 90, 91, 89, 90, 2))
+    legacy = legacy_dir / "1970-01-02.npy"
+    np.save(legacy, canonical)
+    original_bytes = legacy.read_bytes()
+
+    # A conflicting correction cannot become canonical in the running manager
+    # while a newly published legacy source wins on a fresh manager's read.
+    with pytest.raises(OSError, match="persistence verification failed"):
+        await _prime_and_finalize_ws_row(
+            cm, symbol, [midnight, 100, 101, 99, 100, 2]
+        )
+    assert legacy.read_bytes() == original_bytes
+    np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol)[-1:], canonical)
+    assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
+    restarted = _manager(tmp_path, now_ms=midnight + 2 * ONE_MIN_MS)
+    monkeypatch.setattr(restarted, "_legacy_shard_dirs", lambda *_args: [str(legacy_dir)])
+    np.testing.assert_array_equal(
+        restarted._load_from_disk(
+            symbol, midnight, midnight, timeframe="1m", merge_memory_cache=False
+        ),
+        canonical,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ws_legacy_discovery_failure_propagates(tmp_path, monkeypatch):
+    symbol = "BTC/USDT:USDT"
+    cm = _manager(tmp_path, now_ms=4 * ONE_MIN_MS)
+    basis = _candles((ONE_MIN_MS, 100, 100, 100, 100, 1))
+    cm._persist_batch(symbol, basis, timeframe="1m", merge_cache=True)
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    monkeypatch.setattr(cm, "_legacy_shard_dirs", lambda *_args: [str(legacy_dir)])
+    iterdir = Path.iterdir
+
+    def fail_legacy_scan(path):
+        if path == legacy_dir:
+            raise PermissionError("legacy discovery unavailable")
+        return iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_legacy_scan)
+    with pytest.raises(PermissionError):
+        await _prime_and_finalize_ws_row(
+            cm, symbol, [2 * ONE_MIN_MS, 100, 101, 99, 100.5, 2]
+        )
     np.testing.assert_array_equal(cm._ensure_symbol_cache(symbol), basis)
     assert cm.get_last_live_ws_ohlcv_ts(symbol) == 0
 

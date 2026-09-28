@@ -150,9 +150,10 @@
    missing. A later changed row for the same timestamp overwrites the candle and invalidates affected
    EMA state. WebSocket canonical reads, merge-before-write reads, and persistence verification
    propagate shard read failures, including failures masked by another legacy or primary source.
-   Missing shards are distinct from unreadable history. WebSocket shard persistence must be
-   read-verified before the row is exposed to cache and EMA readers, including where an immutable
-   legacy shard shadows primary storage. REST remains
+   Missing shards are distinct from unreadable history. Strict canonical reads refresh source
+   discovery; strict merges read the actual write target under the fetch lock rather than trusting
+   a cached directory listing. WebSocket shard persistence must be read-verified before the row is
+   exposed to cache and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
    the complete fallback for startup basis, historical and internal gaps,
    prolonged silence, reconnect recovery, and a configured periodic integrity audit. Audits force a
    bounded REST overlap even while the persisted WebSocket tail is current; a successful REST

@@ -2402,27 +2402,39 @@ class CandlestickManager:
             out.append(os.path.join("historical_data", "ohlcvs_bybit", sym_code))
         return out
 
-    def _get_legacy_shard_paths(self, symbol: str, tf: str) -> Dict[str, str]:
-        """Return mapping date_key -> legacy shard path for a symbol+tf (cached)."""
+    def _get_legacy_shard_paths(
+        self, symbol: str, tf: str, *, strict: bool = False
+    ) -> Dict[str, str]:
+        """Discover legacy shards; strict reads refresh and propagate scan failures."""
         ex = str(self.exchange_name or "").lower()
         key = (ex, str(symbol), str(tf))
         cached = self._legacy_shard_paths_cache.get(key)
-        if cached is not None:
+        if cached is not None and not strict:
             return cached
         mapping: Dict[str, str] = {}
         scanned_dirs: List[str] = []
         for d in self._legacy_shard_dirs(symbol, tf):
             try:
                 dp = Path(d)
-                if not dp.exists():
+                if strict:
+                    try:
+                        dp.stat()
+                    except FileNotFoundError:
+                        continue
+                elif not dp.exists():
                     continue
                 scanned_dirs.append(str(dp))
-                for p in dp.glob("*.npy"):
+                paths = dp.iterdir() if strict else dp.glob("*.npy")
+                for p in paths:
+                    if p.suffix != ".npy":
+                        continue
                     name = p.stem
                     if len(name) == 10 and name[4] == "-" and name[7] == "-":
                         # Prefer earlier directories in the list if duplicates exist.
                         mapping.setdefault(name, str(p))
             except Exception:
+                if strict:
+                    raise
                 continue
         self._legacy_shard_paths_cache[key] = mapping
         if mapping:
@@ -2542,9 +2554,13 @@ class CandlestickManager:
         """
         try:
             tf_norm = self._normalize_timeframe_arg(timeframe, tf)
-            shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
-            legacy_paths = self._get_legacy_shard_paths(symbol, tf_norm)
             days = self._date_keys_between(start_ts, end_ts)
+            if strict:
+                self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
+                for day in days:
+                    self._legacy_day_quality_cache.pop((symbol, tf_norm, day), None)
+            shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+            legacy_paths = self._get_legacy_shard_paths(symbol, tf_norm, strict=strict)
             load_keys: List[Tuple[str, str]] = []
             day_ctx: Dict[str, Dict[str, Any]] = {}
             legacy_hits = 0
@@ -2777,9 +2793,19 @@ class CandlestickManager:
                 return
             chunk = np.array(bucket, dtype=CANDLE_DTYPE)
             existing = np.empty((0,), dtype=CANDLE_DTYPE)
-            path = shard_paths.get(key)
-            if path and (strict or os.path.exists(path)):
-                existing = self._load_shard(path, strict=strict)
+            if strict:
+                # Another manager may have published this day since our last
+                # directory scan. Read the actual write target under the fetch
+                # lock; cached discovery cannot prove that history is absent.
+                path = self._shard_path(symbol, key, tf=tf_norm)
+                try:
+                    existing = self._load_shard(path, strict=True)
+                except FileNotFoundError:
+                    existing = np.empty((0,), dtype=CANDLE_DTYPE)
+            else:
+                path = shard_paths.get(key)
+                if path and os.path.exists(path):
+                    existing = self._load_shard(path)
             merged = self._merge_overwrite(existing, chunk)
             # Defer index write for all but the last shard (or all if defer_index=True)
             should_defer = defer_index or not is_last
