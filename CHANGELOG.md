@@ -6,6 +6,11 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
+  does not exist yet. Reject unavailable existing shards, preserve finality and verified
+  persistence, and distinguish receive
+  failures from local ingestion failures in fallback warnings.
+
 - Remove redundant per-symbol sleeps during live EMA preparation while preserving remote candle
   request pacing. Add bounded per-symbol and stage timings to structured EMA completion events.
 
