@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter, deque
+from collections import Counter, OrderedDict, deque
 from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import datetime, timezone
 import hashlib
@@ -2320,7 +2320,7 @@ def _console_health_summary(event: LiveEvent) -> list[str]:
         parts.append(f"errors={errors}/h")
     ws = _data_int(data, "ws_reconnects")
     if ws:
-        parts.append(f"ws={ws}")
+        parts.append(f"ws_reconnects_total={ws}")
     rate_limits = _data_int(data, "rate_limits")
     if rate_limits:
         parts.append(f"rate_limits={rate_limits}")
@@ -2359,6 +2359,18 @@ def _format_console_duration_ms(duration_ms: int) -> str:
     return f"{seconds}s"
 
 
+def split_health_console(message: str, prefix: str = '[health]') -> list[str]:
+    parts, line = [], prefix
+    for word in message.removeprefix(prefix + ' ').split():
+        word = word[:170]
+        if len(line) + len(word) + 1 > 190:
+            parts.append(line)
+            line = prefix
+        line += ' ' + word
+    parts.append(line)
+    return parts
+
+
 def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     """Render the bounded operator projection for a periodic health summary."""
     uptime_ms = _data_int(data, "uptime_ms")
@@ -2367,50 +2379,46 @@ def format_periodic_health_summary(data: Mapping[str, Any]) -> str:
     short_count = _data_int(data, "positions_short")
     parts = [
         f"up={_format_console_duration_ms(uptime_ms or 0)}",
-        f"loop={loop_ms / 1000.0:.1f}s" if loop_ms and loop_ms > 0 else "loop=n/a",
+        f"last_loop={loop_ms / 1000.0:.1f}s" if loop_ms and loop_ms > 0 else "last_loop=n/a",
         f"pos={long_count or 0}L/{short_count or 0}S",
     ]
 
-    balance = _data_number(data, "balance_raw")
-    quote = _data_str(data, "quote")
-    if balance is not None:
-        suffix = f" {quote}" if quote else ""
-        balance_part = f"bal={balance:.2f}{suffix}"
-        snapped = _data_number(data, "balance_snapped")
-        if snapped is not None and abs(balance - snapped) > 1e-9:
-            balance_part += f" (snap {snapped:.2f})"
-        parts.append(balance_part)
-
-    placed = _data_int(data, "orders_placed")
-    cancelled = _data_int(data, "orders_cancelled")
-    parts.append(f"ord=+{placed or 0}/-{cancelled or 0}")
-
-    fills = _data_int(data, "fills")
-    fills = fills if fills is not None else 0
-    fills_part = f"fills={fills}"
-    if fills > 0:
-        pnl = _data_number(data, "pnl")
-        if pnl is not None:
-            pnl_suffix = f" {quote}" if quote else ""
-            fills_part += f" (pnl={pnl:+.2f}{pnl_suffix})"
-    parts.append(fills_part)
+    label = _data_str(data, "bot_label")
+    if label:
+        parts.insert(0, "bot=" + re.sub(r"[^a-zA-Z0-9_.-]", "_", label)[:32])
+    open_count = _data_int(data, "open_order_count")
+    parts.append(f"open_orders={open_count}" if open_count is not None else "open_orders=?")
+    if data.get('console_readiness') == 'unavailable':
+        parts.append('readiness=unavailable')
+    coverage = data.get("close_coverage")
+    if isinstance(coverage, Mapping):
+        parts.append("close=" + "/".join(f"{key}:{_data_int(coverage, key) or 0}"
+                     for key in ("resting", "waiting", "blocked", "unknown")))
+    age = _data_number(data, "account_age_ms")
+    parts.append(f"account_age={age / 1000.:.1f}s" if age is not None else "account_age=?")
+    pending = data.get("account_pending")
+    if isinstance(pending, list) and pending:
+        parts.append("account_pending=" + ",".join(str(x) for x in pending[:3]))
+    cpu = _data_number(data, "cpu_percent")
+    if cpu is not None:
+        parts.append(f"cpu={cpu:.0f}%")
 
     errors = _data_int(data, "errors_last_hour")
     error_budget_max = _data_int(data, "error_budget_max")
-    parts.append(f"err={errors or 0}/{error_budget_max or 10}")
+    parts.append(f"errors_1h={errors or 0}/{error_budget_max or 10}")
 
     ws = _data_int(data, "ws_reconnects")
     if ws:
-        parts.append(f"ws={ws}")
+        parts.append(f"ws_reconnects_total={ws}")
     rate_limits = _data_int(data, "rate_limits")
     if rate_limits:
-        parts.append(f"rate_lim={rate_limits}")
+        parts.append(f"rate_limits_total={rate_limits}")
     rss_bytes = _data_int(data, "rss_bytes")
     if rss_bytes is not None:
         parts.append(f"rss={rss_bytes / 1024.0 / 1024.0:.1f}MiB")
     summary_lag_ms = _data_int(data, "health_summary_lag_ms")
     if summary_lag_ms:
-        parts.append(f"lag={summary_lag_ms / 1000.0:.1f}s")
+        parts.append(f"summary_late={summary_lag_ms / 1000.0:.1f}s")
 
     slow_phases = data.get("slow_phases")
     if isinstance(slow_phases, list):
@@ -3262,7 +3270,11 @@ def _format_revised_hsl_console(event: LiveEvent) -> str:
         reasons = row.get("estimates")
         reason = row.get("unavailable_reason") or (reasons[0] if isinstance(reasons, list) and reasons else None)
         if reason:
-            parts.append("cause=" + token(reason, 28))
+            parts.append(("unavailable_reason=" if row.get('unavailable_reason') else "estimate=")
+                         + token(reason, 28))
+    stale_reasons = data.get('stale_reasons')
+    if isinstance(stale_reasons, list) and stale_reasons:
+        parts.insert(3, "stale_reason=" + token(stale_reasons[0], 28))
     message = " ".join(parts)
     return message if len(message) <= 195 else message[:192] + "..."
 
@@ -3315,7 +3327,7 @@ def format_console_event(event: LiveEvent) -> str:
     base = f"[{_console_tag(event)}]"
     if event.status:
         base += f" {event.status}"
-    if event.cycle_id:
+    if event.cycle_id and event.event_type != EventTypes.ORDER_WAVE_COMPLETED:
         base += f" cycle={event.cycle_id}"
     for part in _console_data_summary(event):
         base += f" {part}"
@@ -3353,18 +3365,55 @@ class ConsoleSummarySink:
                  admission: ConsoleAdmission | None = None):
         self.logger = logger or logging.getLogger(__name__)
         self.admission = admission if admission is not None else ConsoleAdmission()
+        self._replaced_hsl: OrderedDict[tuple, tuple[int, int]] = OrderedDict()
 
     def write(self, event: LiveEvent) -> str | None:
-        message = format_console_event(event)
+        key = (event.exchange, event.user, event.bot_id, event.event_type)
         state = _revised_hsl_console_state(event)
-        emit = lambda text: self.logger.log(_logging_level(event.level), text)
+        if state is not None and event.data.get('console_replaced_observation') is True:
+            counts = event.data.get('counts', {})
+            if (event.data.get('observation_status') == 'stale'
+                    and counts.get('red') == 0 and counts.get('unavailable') == 0):
+                count, age = self._replaced_hsl.get(key, (0, 0))
+                self._replaced_hsl[key] = (min(count + 1, 999999),
+                                         max(age, _data_int(event.data, 'age_ms') or 0))
+                self._replaced_hsl.move_to_end(key)
+                while len(self._replaced_hsl) > 256:
+                    self._replaced_hsl.popitem(last=False)
+                self.logger.log(logging.DEBUG, format_console_event(event))
+                return None
+        message = format_console_event(event)
+        if state is not None and key in self._replaced_hsl:
+            count, age = self._replaced_hsl[key]
+            message += f" replaced_samples={count} max_sample_age={age / 1000.:.1f}s"
+
+        def emit(text):
+            if state is not None:
+                # Separate replacement statistics from the state line.
+                main, separator, detail = text.partition(' replaced_samples=')
+                for line in split_health_console(main, '[risk]'):
+                    self.logger.log(_logging_level(event.level), line)
+                if separator:
+                    self.logger.log(logging.INFO, '[risk] prior observations replaced; count=' + detail)
+            else:
+                self.logger.log(_logging_level(event.level), text)
         if state is not None:
             key = (event.exchange, event.user, event.bot_id, event.event_type)
-            return self.admission.write(
+            written = self.admission.write(
                 key, state, message, emit,
-                reminder_seconds=300.0 if event.status == "degraded" else None,
+                reminder_seconds=300.0 if event.status == "degraded" or key in self._replaced_hsl else None,
             )
-        emit(message)
+            if written is not None:
+                self._replaced_hsl.pop(key, None)
+            return written
+        if event.event_type == EventTypes.STATE_REFRESH_TIMING and event.data.get('summary') is True:
+            self.logger.log(logging.DEBUG, message)
+        elif (event.event_type == EventTypes.HEALTH_SUMMARY
+              and event.reason_code == ReasonCodes.PERIODIC_HEALTH_SUMMARY):
+            for line in split_health_console(message):
+                emit(line)
+        else:
+            emit(message)
         return message
 
 

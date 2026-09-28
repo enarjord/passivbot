@@ -659,6 +659,7 @@ def _monitor_recent_orders_payload(
 
 
 def _build_monitor_market_section(self) -> dict[str, dict]:
+    strategy_cache = {}
     symbols = (
         set(getattr(self, "active_symbols", []) or [])
         | set(getattr(self, "positions", {}).keys())
@@ -895,7 +896,9 @@ def _build_monitor_market_section(self) -> dict[str, dict]:
                 entry["ema_bands"] = deepcopy(ema_bands)
         entry_volatility_logrange_ema: dict[str, float] = {}
         for pside in ("long", "short"):
-            entry_volatility_logrange_ema[pside] = float(_monitor_h1_entry_logrange(self, pside, symbol))
+            entry_volatility_logrange_ema[pside] = float(
+                _monitor_h1_entry_logrange(self, pside, symbol, strategy_cache=strategy_cache)
+            )
         entry["entry_volatility_logrange_ema"] = entry_volatility_logrange_ema
         out[symbol] = entry
     return out

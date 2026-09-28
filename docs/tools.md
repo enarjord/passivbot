@@ -90,6 +90,68 @@ staged before installation. Concurrent destination mutation is outside the tool'
 other stored metrics such as `sharpe_ratio_strategy_eq` as long as the Pareto JSON
 members contain that metric and Passivbot knows whether higher or lower is better.
 
+## Pareto trade-off explorer
+
+`passivbot tool pareto-plot PATH` exports a standalone HTML explorer with all saved
+objective, aggregate/mean, and statistic metrics. Choose X/Y metrics or switch to X/Y/Z
+inside the page; no rerun, server, or internet connection is needed. Use the full install
+profile (`python3 -m pip install -e ".[full]"`).
+
+```bash
+passivbot tool pareto-plot optimize_results/.../pareto --open
+passivbot tool pareto-plot optimize_results/.../pareto --list-metrics
+# Optional positional metrics set the initial axes; the HTML still includes all metrics.
+passivbot tool pareto-plot optimize_results/... \
+  adg_strategy_eq strategy_eq_underwater_pct_mean sortino_ratio_strategy_eq \
+  --output plots/tradeoffs.html --open
+```
+
+A run directory or individual candidate JSON is also accepted. Without positional metrics,
+the first two available metrics (scoring objectives first) are selected. Known metric aliases
+are accepted. Metric selectors group objectives, other metrics, and named statistics;
+`stats.<metric>.<stat>` identifies an explicit statistic, such as `stats.adg_strategy_eq.mean`.
+Saved objective values take precedence over aggregates, which take precedence over means.
+Canonical names take precedence over legacy aliases regardless of file ordering; conflicting
+aliases without a canonical value are rejected.
+Objectives can include penalties and legacy engine values are converted by the shared loader.
+Per-scenario values are not exported as separate metrics. No full configs are embedded.
+
+The highlighted **star is the chosen Pareto member closest to the theoretical ideal** on
+those selected axes. Distance is Euclidean with equal weights after normalizing each axis
+to the surviving, plottable candidates' range, matching the Pareto selector's unweighted
+`ideal` method. Constant axes (range at most `1e-15`) contribute zero distance; exact ties
+choose the first member in saved loading order. The chosen filename and values appear below
+the plot and on hover.
+
+An **open blue diamond shows the theoretical ideal**: the best visible value on each selected
+axis, using its higher/lower-is-better direction. Different candidates may provide each
+coordinate, so the diamond need not represent a real candidate. Both markers update when
+axes, directions, or limits change, and remain distinct when they coincide. Direction selectors use saved
+scoring goals or known metric goals; unknown directions, including standard deviations,
+require a choice before either marker appears. In 2D, maximization axes are reversed so better
+values always lie toward the lower-left. 3D axes use normal orientation.
+
+Limit cards offer inclusive floors and ceilings, a slider over the saved range, and an exact
+numeric input that also permits thresholds outside that range. Moving a slider or entering a
+number enables the limit; uncheck its box to disable it. **Add** creates a limit on any metric,
+including one not plotted. Enabled limits remain active when axes change. **Reset all limits**
+restores the unfiltered data. The ideal is recomputed from candidates surviving every enabled
+limit and having finite values on every selected axis. Counts report exclusions from limits
+and missing axis values separately. No survivors means neither marker is shown. Axis and color ranges
+stay fixed to the saved data during filtering, so changes remain visually comparable; zoom
+and the 3D camera are retained when only limits change.
+
+Hover for candidate filenames and raw values. Drag to zoom in 2D or rotate in 3D; the toolbar
+supports reset and PNG export. Color follows Y in 2D and Z in 3D. This shows saved members
+without recomputing a lower-dimensional Pareto front. Missing optional metrics are recorded
+as unavailable, never zero; missing required scoring objectives still fail through the shared
+loader. JSON sidecars without scoring metadata are ignored.
+
+The default output is `pareto-plot-2d.html` or `pareto-plot-3d.html` according to the initial
+view. Use `--force` to replace existing output and `--open` to launch a browser. Regenerate
+older HTML files to obtain the new controls. Exports contain filenames and all saved metric
+values, so keep plots made from private results private. Large fronts produce larger HTML files.
+
 ## Pareto transformations / static plots
 
 `src/tools/pareto_transform.py` converts `all_results.bin` or individual Pareto JSON entries into CSV/JSON summaries for external analysis. The legacy `src/pareto_store.py` still produces quick matplotlib scatter plots if you prefer static images.

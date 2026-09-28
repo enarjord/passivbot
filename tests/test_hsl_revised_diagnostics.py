@@ -424,6 +424,7 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(observed,
     bot.refresh_protective_authoritative_state = refresh
     bot._sleep_unless_shutdown = sleep
     bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_trailing_status = lambda: None
     bot.live_value = lambda key: .05
     owner.schedule_history = owner.schedule_sources = lambda: None
     owner._ordinary_plan = ordinary
@@ -431,6 +432,8 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(observed,
     assert len(calls) == 2
     assert [e[1]['data']['observation_status'] for e in events] == ['current', 'stale', 'current']
     assert events[1][1]['status'] == 'degraded'
+    assert events[1][1]['data']['console_replaced_observation'] is True
+    assert 'input_expired' in events[1][1]['data']['stale_reasons']
     assert all(e[1]['data']['counts']['green'] == 1 for e in events)
     capture_report(owner)
     assert len(events) == 3
@@ -483,6 +486,7 @@ async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(observed, m
     bot.refresh_protective_authoritative_state = refresh
     bot._sleep_unless_shutdown = sleep
     bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_trailing_status = lambda: None
     bot.live_value = lambda key: .05
     bot.execute_order_plan_to_exchange = execute
     owner.schedule_history = owner.schedule_sources = lambda: None

@@ -6,7 +6,42 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
-- Use BTC price history from a configured exchange for multi-exchange backtests and optimizations before falling back to Binance, so offline runs do not require unrelated Binance candles.
+- Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles.
+
+- Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
+  proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.
+
+- Reduce repeated strategy resolution during live warmup and market diagnostics, keeping reuse
+  local to each synchronous calculation so subsequent calculations observe current settings.
+
+- Reduce live candle ingestion CPU use for ordered appends and open-candle replacements, and
+  avoid searching historical gaps outside incoming rows while preserving overwrite and retry rules.
+
+- Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
+  does not exist yet. Reject unavailable existing shards, preserve finality and verified
+  persistence, and distinguish receive
+  failures from local ingestion failures in fallback warnings.
+
+- Remove redundant per-symbol sleeps during live EMA preparation while preserving remote candle
+  request pacing. Add bounded per-symbol and stage timings to structured EMA completion events.
+
+- Orient 2D Pareto plot axes so the ideal point is always toward the lower-left,
+  reversing maximization axes while preserving metric values and 3D orientation.
+
+- Highlight the Pareto member closest to the normalized ideal with a star in the plot
+  explorer, while retaining the theoretical ideal as an open diamond. Both update with limits.
+
+- Expand the Pareto plot HTML into an offline explorer with all saved metrics, 2D/3D
+  axis selectors, persistent floor/ceiling sliders, and a highlighted theoretical ideal
+  that updates from the filtered candidates.
+
+- Add `passivbot tool pareto-plot` for offline interactive 2D and rotatable 3D objective
+  scatter plots, with candidate hover details, metric discovery, and PNG export.
+
+- Make live console health easier to interpret: report trailing-input recovery, current close
+  coverage and account age, label summary delay and reconnect totals explicitly, and keep routine
+  timing and order-refresh mechanics in DEBUG. Summarize replaced HSL observations without hiding
+  current outages or RED transitions; retain detailed structured events and concise warnings.
 
 - Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
   retaining immediate scope/risk/availability changes and full structured events. Console summaries

@@ -89,6 +89,7 @@ from legacy_data_migrator import (
     merge_duplicate_symbol_directories,
     normalize_ccxt_volume_to_base,
 )
+import live.ema_timing as ema_timing
 from live.diagnostic_safety import bounded_exception_type
 from utils import (
     FIRST_OHLCV_TIMESTAMPS_CACHE_VERSION,
@@ -2157,6 +2158,7 @@ class CandlestickManager:
         os.makedirs(lock_dir, exist_ok=True)
         return os.path.join(lock_dir, f"{timeframe}.lock")
 
+    @ema_timing.timed_async_entry("fetch_lock_wait")
     @asynccontextmanager
     async def _acquire_fetch_lock(self, symbol: str, timeframe: Optional[str]) -> AsyncIterator[None]:
         tf_norm = self._normalize_timeframe_arg(timeframe, None)
@@ -2402,27 +2404,39 @@ class CandlestickManager:
             out.append(os.path.join("historical_data", "ohlcvs_bybit", sym_code))
         return out
 
-    def _get_legacy_shard_paths(self, symbol: str, tf: str) -> Dict[str, str]:
-        """Return mapping date_key -> legacy shard path for a symbol+tf (cached)."""
+    def _get_legacy_shard_paths(
+        self, symbol: str, tf: str, *, strict: bool = False
+    ) -> Dict[str, str]:
+        """Discover legacy shards; strict reads refresh and propagate scan failures."""
         ex = str(self.exchange_name or "").lower()
         key = (ex, str(symbol), str(tf))
         cached = self._legacy_shard_paths_cache.get(key)
-        if cached is not None:
+        if cached is not None and not strict:
             return cached
         mapping: Dict[str, str] = {}
         scanned_dirs: List[str] = []
         for d in self._legacy_shard_dirs(symbol, tf):
             try:
                 dp = Path(d)
-                if not dp.exists():
+                if strict:
+                    try:
+                        dp.stat()
+                    except FileNotFoundError:
+                        continue
+                elif not dp.exists():
                     continue
                 scanned_dirs.append(str(dp))
-                for p in dp.glob("*.npy"):
+                paths = dp.iterdir() if strict else dp.glob("*.npy")
+                for p in paths:
+                    if p.suffix != ".npy":
+                        continue
                     name = p.stem
                     if len(name) == 10 and name[4] == "-" and name[7] == "-":
                         # Prefer earlier directories in the list if duplicates exist.
                         mapping.setdefault(name, str(p))
             except Exception:
+                if strict:
+                    raise
                 continue
         self._legacy_shard_paths_cache[key] = mapping
         if mapping:
@@ -2436,8 +2450,8 @@ class CandlestickManager:
             )
         return mapping
 
-    def _load_shard(self, path: str) -> np.ndarray:
-        if not os.path.exists(path):
+    def _load_shard(self, path: str, *, strict: bool = False) -> np.ndarray:
+        if not strict and not os.path.exists(path):
             # Missing file is expected for pre-inception dates - log at debug level
             self.log.debug(f"Shard not found (expected for pre-inception): {path}")
             return np.empty((0,), dtype=CANDLE_DTYPE)
@@ -2460,6 +2474,8 @@ class CandlestickManager:
                 return out
             return _ensure_dtype(arr)
         except Exception as e:  # pragma: no cover - best effort
+            if strict:
+                raise
             self.log.warning(
                 "Failed loading shard %s error_type=%s",
                 path,
@@ -2514,6 +2530,7 @@ class CandlestickManager:
         self._legacy_day_quality_cache[cache_key] = bool(ok)
         return bool(ok)
 
+    @ema_timing.timed("disk_load")
     def _load_from_disk(
         self,
         symbol: str,
@@ -2523,6 +2540,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         merge_memory_cache: bool = True,
+        strict: bool = False,
     ) -> Optional[np.ndarray]:
         """Load any shards intersecting [start_ts, end_ts] and merge into cache.
 
@@ -2533,13 +2551,19 @@ class CandlestickManager:
         remains as a safety net for any data that wasn't migrated.
 
         Set ``merge_memory_cache=False`` to inspect canonical disk contents
-        without merging their rows into the in-memory candle cache.
+        without merging their rows into the in-memory candle cache. ``strict``
+        propagates shard read failures instead of treating unreadable history
+        as absent; WebSocket ingestion requires this before writing a tail.
         """
         try:
             tf_norm = self._normalize_timeframe_arg(timeframe, tf)
-            shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
-            legacy_paths = self._get_legacy_shard_paths(symbol, tf_norm)
             days = self._date_keys_between(start_ts, end_ts)
+            if strict:
+                self._invalidate_shard_paths_cache(symbol, tf=tf_norm)
+                for day in days:
+                    self._legacy_day_quality_cache.pop((symbol, tf_norm, day), None)
+            shard_paths = self._iter_shard_paths(symbol, tf=tf_norm)
+            legacy_paths = self._get_legacy_shard_paths(symbol, tf_norm, strict=strict)
             load_keys: List[Tuple[str, str]] = []
             day_ctx: Dict[str, Dict[str, Any]] = {}
             legacy_hits = 0
@@ -2618,18 +2642,20 @@ class CandlestickManager:
                 ctx = day_ctx.get(day_key, {})
                 src = str(ctx.get("source") or "")
                 if tf_norm == "1m" and src == "merge":
-                    legacy_arr = self._load_shard(path)
+                    legacy_arr = self._load_shard(path, strict=strict)
                     primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
                     try:
                         pp = ctx.get("primary_path")
                         if pp:
-                            primary_arr = self._load_shard(str(pp))
+                            primary_arr = self._load_shard(str(pp), strict=strict)
                     except Exception:
+                        if strict:
+                            raise
                         primary_arr = np.empty((0,), dtype=CANDLE_DTYPE)
                     # Keep legacy canonical: primary should only fill legacy gaps.
                     a = self._merge_overwrite(primary_arr, legacy_arr)
                 else:
-                    a = self._load_shard(path)
+                    a = self._load_shard(path, strict=strict)
 
                 # NOTE: We intentionally do NOT write legacy data into primary shards.
                 # Primary is only used to fill gaps where legacy is missing/incomplete.
@@ -2731,6 +2757,8 @@ class CandlestickManager:
                 # Do not touch 1m cache for higher TF; let caller handle
                 return merged_disk
         except Exception as e:  # pragma: no cover - noncritical
+            if strict:
+                raise
             self._log(
                 "warning",
                 "disk_load_error",
@@ -2748,11 +2776,13 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         defer_index: bool = False,
+        strict: bool = False,
     ) -> None:
         """Persist candles by merging with existing shards on disk.
 
         Args:
             defer_index: If True, defer index.json write until flush_deferred_index is called.
+            strict: Propagate existing-shard read failures before overwriting any shard.
         """
         if arr.size == 0:
             return
@@ -2766,9 +2796,19 @@ class CandlestickManager:
                 return
             chunk = np.array(bucket, dtype=CANDLE_DTYPE)
             existing = np.empty((0,), dtype=CANDLE_DTYPE)
-            path = shard_paths.get(key)
-            if path and os.path.exists(path):
-                existing = self._load_shard(path)
+            if strict:
+                # Another manager may have published this day since our last
+                # directory scan. Read the actual write target under the fetch
+                # lock; cached discovery cannot prove that history is absent.
+                path = self._shard_path(symbol, key, tf=tf_norm)
+                try:
+                    existing = self._load_shard(path, strict=True)
+                except FileNotFoundError:
+                    existing = np.empty((0,), dtype=CANDLE_DTYPE)
+            else:
+                path = shard_paths.get(key)
+                if path and os.path.exists(path):
+                    existing = self._load_shard(path)
             merged = self._merge_overwrite(existing, chunk)
             # Defer index write for all but the last shard (or all if defer_index=True)
             should_defer = defer_index or not is_last
@@ -2867,6 +2907,7 @@ class CandlestickManager:
                 arr,
                 timeframe=tf_norm,
                 defer_index=defer_index,
+                strict=True,
             )
             durable = self._load_from_disk(
                 symbol,
@@ -2874,6 +2915,7 @@ class CandlestickManager:
                 int(arr[-1]["ts"]),
                 timeframe=tf_norm,
                 merge_memory_cache=False,
+                strict=True,
             )
             durable_by_ts = (
                 {int(row["ts"]): row for row in durable}
@@ -3088,6 +3130,16 @@ class CandlestickManager:
             return _sorted_candle_copy(existing)
         a = _ensure_dtype(existing)
         b = _ensure_dtype(new)
+        # Common live updates append candles or replace the last open candle.
+        # Require unique, increasing inputs; duplicate and historical overlaps
+        # retain the stable last-write-wins path below. Always detach the result.
+        if (
+            b["ts"][0] >= a["ts"][-1]
+            and np.all(a["ts"][1:] > a["ts"][:-1])
+            and np.all(b["ts"][1:] > b["ts"][:-1])
+        ):
+            prefix = a[:-1] if b["ts"][0] == a["ts"][-1] else a
+            return np.concatenate([prefix, b])
         # Put existing first, then new; then keep last seen per ts to prefer new.
         # Sort the scalar timestamp vector rather than structured rows: NumPy
         # may use unspecified structured fields as tie-breakers even when
@@ -3354,11 +3406,15 @@ class CandlestickManager:
         timestamps = np.unique(np.asarray(rows["ts"], dtype=np.int64))
         if timestamps.size == 0:
             return False
+        first_ts, last_ts = int(timestamps[0]), int(timestamps[-1])
         retained: List[GapEntry] = []
         changed = False
         for gap in gaps:
             start_ts = int(gap["start_ts"])
             end_ts = int(gap["end_ts"])
+            if end_ts < first_ts or start_ts > last_ts:
+                retained.append(gap)
+                continue
             left = int(np.searchsorted(timestamps, start_ts, side="left"))
             right = int(np.searchsorted(timestamps, end_ts, side="right"))
             covered = timestamps[left:right]
@@ -4996,7 +5052,8 @@ class CandlestickManager:
                     wait_ms=wait_ms,
                     interval_ms=int(interval_ms),
                 )
-                await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
+                with ema_timing.measure("remote_spacing_sleep", requested_ms=wait_ms):
+                    await self._sleep_interruptible(wait_ms / 1000.0, stage="remote_fetch_spacing")
                 now_ms = _utc_now_ms()
             self._remote_fetch_last_started_ms = int(now_ms)
 
@@ -5015,6 +5072,7 @@ class CandlestickManager:
                     total_count=self._rate_limit_count,
                 )
 
+    @ema_timing.timed_async("remote_fetch")
     async def _ccxt_fetch_ohlcv_once(
         self,
         symbol: str,
@@ -5479,13 +5537,16 @@ class CandlestickManager:
                 int(candidates[0]["ts"]),
                 int(candidates[-1]["ts"]),
                 timeframe="1m",
+                strict=True,
             )
             cached = self._slice_ts_range(
                 self._ensure_symbol_cache(symbol),
                 int(candidates[0]["ts"]),
                 int(candidates[-1]["ts"]),
             )
-            canonical = self._merge_overwrite(disk, cached)
+            # Missing shards contribute no canonical timestamps. Strict reads
+            # above distinguish this from unavailable or corrupt history.
+            canonical = cached if disk is None else self._merge_overwrite(disk, cached)
             canonical_by_ts = {int(row["ts"]): row for row in canonical}
             # Value changes alone can correct a timestamp already admitted by
             # REST or WS. Extending canonical history requires independent
@@ -7449,6 +7510,7 @@ class CandlestickManager:
             supported_timeframes=supported_timeframes,
         )
 
+    @ema_timing.timed_async("candles")
     async def get_candles(
         self,
         symbol: str,
@@ -8949,6 +9011,7 @@ class CandlestickManager:
 
     # ----- EMA helpers -----
 
+    @ema_timing.timed("ema_compute")
     def _ema(self, values: np.ndarray, span: float) -> float:
         """Return the final bias-corrected EMA without allocating a full series."""
         if _RUST_EMA_LAST is not None:
@@ -9119,6 +9182,7 @@ class CandlestickManager:
 
         return (tuple(shard_state), tuple(sorted(gap_state)))
 
+    @ema_timing.timed_async("projection")
     async def get_projected_open_tail_ema_metrics(
         self,
         symbol: str,

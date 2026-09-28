@@ -5601,7 +5601,7 @@ async def _load_combined_btc_prices(
     use_v2_local: bool = True,
 ) -> tuple[pd.DataFrame, Optional[str]]:
     # Preserve Binance priority when selected, but use other configured venues
-    # before the fallback when an offline multi-venue bundle has no Binance data.
+    # before the fallback in both online and offline preparation.
     configured = list(dict.fromkeys(exchanges_to_consider))
     btc_candidates = (["binanceusdm"] if "binanceusdm" in configured else [])
     btc_candidates.extend(exchange for exchange in configured if exchange != "binanceusdm")

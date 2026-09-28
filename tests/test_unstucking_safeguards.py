@@ -1095,7 +1095,7 @@ def test_entry_cooldown_delta_guard_records_long_position_increase(caplog):
     assert out[symbol]["long"] == 121_000
     assert bot._entry_cooldown_pos_increase_detected_ts[symbol]["long"] == 121_000
     assert any(
-        "[risk] entry cooldown position-delta guard anchored add cooldown"
+        "[risk] add-entry cooldown anchored"
         in record.message
         for record in caplog.records
     )
@@ -3026,10 +3026,11 @@ async def test_restart_accepts_matching_fill_before_bybit_position_update_time_a
     warnings = [
         record
         for record in caplog.records
-        if "trailing state unavailable" in record.getMessage()
+        if "[trailing] inputs unavailable" in record.getMessage()
     ]
     assert len(warnings) == 1
-    assert "post_snapshot_fill_refresh_pending" in warnings[0].getMessage()
+    assert "position_fill_confirmation_pending" in warnings[0].getMessage()
+    assert "position_update_ts=" not in warnings[0].getMessage()
 
     # A successful fill refresh after the position snapshot proves the cache is
     # current. The matching fill after-state is authoritative even though

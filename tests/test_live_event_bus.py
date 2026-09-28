@@ -2785,7 +2785,7 @@ def test_console_format_summarizes_order_wave_payload():
     )
 
     assert format_console_event(event) == (
-        "[execute] deferred cycle=cy_9 wave=ow_7 cancel=1/1 create=2/3 "
+        "[execute] deferred wave=ow_7 cancel=1/1 create=2/3 "
         "deferred_create=1 elapsed=642ms "
         "symbols=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
         "reason=create_deferred"
@@ -3500,13 +3500,13 @@ def test_console_format_summarizes_periodic_health():
     )
 
     assert format_console_event(event) == (
-        "[health] up=2m3s loop=1.2s pos=2L/1S bal=1005.25 USDT (snap 1004.75) "
-        "ord=+3/-1 fills=2 (pnl=-1.50 USDT) err=1/10 ws=2 rate_lim=3 "
+        "[health] up=2m3s last_loop=1.2s pos=2L/1S open_orders=? account_age=? "
+        "errors_1h=1/10 ws_reconnects_total=2 rate_limits_total=3 "
         "rss=150.0MiB event_q=4/1000 event_drop=2 sink_err=1"
     )
 
 
-def test_console_format_periodic_health_keeps_zero_balance_and_known_zero_pnl():
+def test_console_health_keeps_cumulative_activity_in_durable_event():
     event = LiveEvent(
         EventTypes.HEALTH_SUMMARY,
         reason_code=ReasonCodes.PERIODIC_HEALTH_SUMMARY,
@@ -3536,8 +3536,8 @@ def test_console_format_periodic_health_keeps_zero_balance_and_known_zero_pnl():
     )
 
     assert format_console_event(event) == (
-        "[health] up=19m33s loop=39.5s pos=0L/0S bal=0.00 USDT ord=+0/-0 "
-        "fills=1 (pnl=+0.00 USDT) err=0/10 rss=83.6MiB"
+        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? "
+        "errors_1h=0/10 rss=83.6MiB"
     )
 
 
@@ -3573,13 +3573,13 @@ def test_console_format_periodic_health_compacts_representative_longest_payload(
     rendered = format_console_event(event)
 
     assert rendered == (
-        "[health] up=19m33s loop=39.5s pos=0L/0S bal=2946.66 USDT "
-        "(snap 2951.82) ord=+0/-0 fills=0 err=0/10 ws=4 rate_lim=5 rss=83.6MiB "
-        "lag=2.3s slow=maintenance:5.0s,account:3.0s,market:1.0s"
+        "[health] up=19m33s last_loop=39.5s pos=0L/0S open_orders=? account_age=? "
+        "errors_1h=0/10 ws_reconnects_total=4 rate_limits_total=5 rss=83.6MiB "
+        "summary_late=2.3s slow=maintenance:5.0s,account:3.0s,market:1.0s"
     )
-    assert len(rendered) == 182
-    assert len("2026-07-15 12:34:56,789 INFO binance " + rendered) == 219
-    assert len("2026-07-15 12:34:56,789 INFO binance " + rendered) <= 240
+    from live.event_bus import split_health_console
+    assert all(len("2026-07-15T12:34:56Z INFO [hyperliquid] " + line) <= 240
+               for line in split_health_console(rendered))
 
 
 def test_console_format_summarizes_health_error_burst_without_raw_error():
