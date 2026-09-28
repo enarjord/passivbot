@@ -86,6 +86,9 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         scenarios, _ = build_scenarios(prepared["backtest"])
         for raw, scenario in zip(prepared["backtest"]["scenarios"], scenarios):
             try:
+                for path in scenario.overrides or {}:
+                    if require_existing_config_path(scenario_base, path)[0] == "optimize":
+                        raise ValueError("scenario optimizer controls are not applied; move them to top-level optimize")
                 effective = deepcopy(scenario_base)
                 apply_scenario_overrides(effective, scenario.overrides)
                 effective = parse_overrides(effective, verbose=False)
@@ -133,7 +136,7 @@ def main(argv=None):
         portfolio = (json.loads(args.portfolio_policy.read_text())
                      if args.portfolio_policy is not None else None)
         output = migrate(source, restart_policies=choices, portfolio=portfolio,
-                         base_config_path=str(args.input_config.resolve()))
+                         base_config_path=str(args.input_config))
         serialized = json.dumps(output, indent=4, allow_nan=False) + "\n"
         # Exclusive creation also closes the race after the existence check.
         with args.output_config.open("x") as stream:

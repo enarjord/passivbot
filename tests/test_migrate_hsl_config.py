@@ -336,3 +336,55 @@ def test_effective_optimizer_policy_checks_coin_patches():
     cfg["optimize"]["fixed_runtime_overrides"] = {"bot.long.hsl.enabled": True}
     with pytest.raises(ValueError, match="explicit choice"):
         migrate(cfg)
+
+
+@pytest.mark.parametrize('overrides', [{'coin_overrides': {}}, {'live.hedge_mode': True}])
+def test_legacy_flags_respect_scenario_replacement_and_inheritance(overrides):
+    cfg = legacy()
+    # A genuine pre-independent-unstuck config invokes canonical flag migration.
+    for root in (cfg['bot'], cfg['optimize']['bounds']):
+        for side in ('long', 'short'):
+            strategy = root[side]['strategy']['trailing_martingale']
+            for key in ('ema_span_0', 'ema_span_1'):
+                strategy[key] = strategy['entry'].pop(key)
+                root[side]['unstuck'].pop(key)
+    cfg['live']['coin_flags'] = {'BTC': '-lm gs'}
+    cfg['backtest']['scenarios'] = [{'label': 'flags', 'overrides': overrides}]
+    result = migrate(cfg, restart_policies={'long': 'always'})
+    assert result['coin_overrides']['BTC']['live']['forced_mode_long'] == 'graceful_stop'
+    assert result['live']['coin_flags'] == {}
+    if 'coin_overrides' in overrides:
+        assert result['backtest']['scenarios'][0]['overrides']['coin_overrides'] == {}
+    else:
+        assert 'coin_overrides' not in result['backtest']['scenarios'][0]['overrides']
+
+
+def test_symlink_input_uses_callers_directory_for_relative_overrides(tmp_path):
+    from config.load import load_prepared_config
+    from config.overrides import parse_overrides
+    real, links = tmp_path/'real', tmp_path/'links'
+    real.mkdir()
+    links.mkdir()
+    cfg = legacy()
+    cfg['bot']['long']['hsl']['restart_after_red_policy'] = 'always'
+    cfg['coin_overrides'] = {'BTC': {'override_config_path': 'coin.json'}}
+    target = real/'config.json'
+    target.write_text(json.dumps(cfg))
+    link = links/'config.json'
+    link.symlink_to(target)
+    for folder, threshold in [(real, .2), (links, .3)]:
+        (folder/'coin.json').write_text(json.dumps({'bot': {'long': {'hsl': {'red_threshold': threshold}}}}))
+    original = parse_overrides(load_prepared_config(str(link), verbose=False), verbose=False)
+    out = tmp_path/'output.json'
+    assert main([str(link), str(out)]) == 0
+    assert json.loads(out.read_text())['coin_overrides'] == original['coin_overrides']
+
+
+@pytest.mark.parametrize('selector', ['long.hsl.no_restart_drawdown_threshold',
+                                     'long.hsl.misspelled_threshold', 'long.hsl.red_threshold'])
+def test_scenario_optimizer_controls_rejected_even_if_selector_is_valid(selector):
+    cfg = legacy()
+    cfg['backtest']['scenarios'] = [{'label': 'ignored-control', 'overrides': {
+        'optimize.fixed_params': [selector]}}]
+    with pytest.raises(ValueError, match='optimizer controls.*top-level'):
+        migrate(cfg, restart_policies={'long': 'always'})

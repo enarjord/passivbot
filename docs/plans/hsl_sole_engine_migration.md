@@ -104,9 +104,11 @@ Other fixed overrides and explicit per-coin policies are preserved. Validation a
 optimizer finalization to a copy and checks its effective policy, including enablement overrides
 and coin patches; a policy valid only while disabled must not silently become active.
 Scenario policies are checked both against the base configuration and after optimizer finalization.
+Scenario-local `optimize` controls are rejected: parameter shape and fixed selectors are selected
+before scenarios run, so these controls must live in the top-level optimizer configuration.
 
 File-backed coin overrides, including scenario-local mappings and dotted patches, are resolved
-relative to the input configuration through the canonical
+relative to the caller-supplied input path (including a symlink directory) through the canonical
 loader, validated, and saved inline. Inline patches retain precedence over file patches. Invalid
 or missing override files prevent output creation. The resulting coin policies no longer depend
 on those files or on the output directory; later edits to an original override file do not update
