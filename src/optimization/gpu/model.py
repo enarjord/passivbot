@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from config.validate import validate_limit_order_fill_buffer_pct
 from optimization.gpu.runtime import gpu_device
 
 
@@ -665,7 +666,7 @@ def _build_hourly_log_range(high, low, timestamps, run: ProxyRun):
 
 
 def _strict_fill_tick_boundaries(
-    high, low, price_step: float
+    high, low, price_step: float, limit_order_fill_buffer_pct: float = 0.0
 ) -> tuple[np.ndarray, np.ndarray]:
     """Encode Rust's strict candle/order comparisons as integer tick boundaries."""
 
@@ -678,8 +679,19 @@ def _strict_fill_tick_boundaries(
     finite = np.isfinite(high) & np.isfinite(low)
     safe_high = np.where(finite, high, 0.0)
     safe_low = np.where(finite, low, 0.0)
-    high_fill_max = np.floor(safe_high / price_step).astype(np.int64)
-    low_nonfill_max = np.floor(safe_low / price_step).astype(np.int64)
+    buffer = validate_limit_order_fill_buffer_pct(limit_order_fill_buffer_pct)
+    sell_factor, buy_factor = 1.0 + buffer, 1.0 - buffer
+    # Solve the strict Rust price comparisons once, before uploading immutable
+    # ticks. Kernels, raw candles, and market-order touch prices stay unchanged.
+    with np.errstate(over="ignore", invalid="ignore"):
+        sell_ticks = np.floor((safe_high / sell_factor) / price_step)
+        buy_ticks = np.floor((safe_low / buy_factor) / price_step)
+    i32 = np.iinfo(np.int32)
+    for ticks in (sell_ticks, buy_ticks):
+        if not np.all(np.isfinite(ticks) & (ticks >= i32.min) & (ticks <= i32.max)):
+            raise ValueError("MPS proxy candle price ticks exceed signed 32-bit range")
+    high_fill_max = sell_ticks.astype(np.int64)
+    low_nonfill_max = buy_ticks.astype(np.int64)
 
     decimal_multiplier = None
     multiplier = 1.0
@@ -706,17 +718,17 @@ def _strict_fill_tick_boundaries(
     # Division can land one tick to either side near an exact boundary. Repair
     # against Rust's step-decimal-preserving order-price rounding contract.
     for _ in range(2):
-        high_fill_max -= (rust_tick_prices(high_fill_max) >= safe_high).astype(
+        high_fill_max -= (rust_tick_prices(high_fill_max) * sell_factor >= safe_high).astype(
             np.int64
         )
-        high_fill_max += (rust_tick_prices(high_fill_max + 1) < safe_high).astype(
+        high_fill_max += (rust_tick_prices(high_fill_max + 1) * sell_factor < safe_high).astype(
             np.int64
         )
-        low_nonfill_max -= (rust_tick_prices(low_nonfill_max) > safe_low).astype(
+        low_nonfill_max -= (rust_tick_prices(low_nonfill_max) * buy_factor > safe_low).astype(
             np.int64
         )
         low_nonfill_max += (
-            rust_tick_prices(low_nonfill_max + 1) <= safe_low
+            rust_tick_prices(low_nonfill_max + 1) * buy_factor <= safe_low
         ).astype(np.int64)
 
     high_fill_max[~finite] = 0
@@ -892,7 +904,10 @@ def _require_contiguous_mps_hlc(high, low, close, run: ProxyRun, *, coin: int = 
         )
 
 
-def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket):
+def build_mps_data(
+    high, low, close, timestamps_ms, run: ProxyRun, market: ProxyMarket,
+    *, limit_order_fill_buffer_pct: float = 0.0,
+):
     """Prepare immutable minute data and keep it resident on Apple MPS.
 
     Torch is imported here, rather than at module import time, so normal CPU
@@ -952,7 +967,7 @@ def build_mps_data(high, low, close, timestamps_ms, run: ProxyRun, market: Proxy
         & valid
     )
     high_fill_max_tick, low_nonfill_max_tick = _strict_fill_tick_boundaries(
-        high, low, market.price_step
+        high, low, market.price_step, limit_order_fill_buffer_pct
     )
     touch_down_tick, touch_up_tick, touch_nearest_tick = _directional_touch_ticks(
         close, market.price_step
@@ -997,6 +1012,7 @@ def build_mps_multicoin_data(
     markets: list[ProxyMarket],
     *,
     include_hourly_ranges: bool = True,
+    limit_order_fill_buffer_pct: float = 0.0,
 ):
     """Pack compact multicoin inputs for the persistent Apple MPS kernel.
 
@@ -1086,7 +1102,7 @@ def build_mps_multicoin_data(
                 coin_hour_valid
             ]
         high_fill, low_nonfill = _strict_fill_tick_boundaries(
-            high, low, market.price_step
+            high, low, market.price_step, limit_order_fill_buffer_pct
         )
         touch_down, touch_up, touch_nearest = _directional_touch_ticks(
             close, market.price_step
