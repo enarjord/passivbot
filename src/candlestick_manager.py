@@ -3130,6 +3130,16 @@ class CandlestickManager:
             return _sorted_candle_copy(existing)
         a = _ensure_dtype(existing)
         b = _ensure_dtype(new)
+        # Common live updates append candles or replace the last open candle.
+        # Require unique, increasing inputs; duplicate and historical overlaps
+        # retain the stable last-write-wins path below. Always detach the result.
+        if (
+            b["ts"][0] >= a["ts"][-1]
+            and np.all(a["ts"][1:] > a["ts"][:-1])
+            and np.all(b["ts"][1:] > b["ts"][:-1])
+        ):
+            prefix = a[:-1] if b["ts"][0] == a["ts"][-1] else a
+            return np.concatenate([prefix, b])
         # Put existing first, then new; then keep last seen per ts to prefer new.
         # Sort the scalar timestamp vector rather than structured rows: NumPy
         # may use unspecified structured fields as tie-breakers even when
@@ -3396,11 +3406,15 @@ class CandlestickManager:
         timestamps = np.unique(np.asarray(rows["ts"], dtype=np.int64))
         if timestamps.size == 0:
             return False
+        first_ts, last_ts = int(timestamps[0]), int(timestamps[-1])
         retained: List[GapEntry] = []
         changed = False
         for gap in gaps:
             start_ts = int(gap["start_ts"])
             end_ts = int(gap["end_ts"])
+            if end_ts < first_ts or start_ts > last_ts:
+                retained.append(gap)
+                continue
             left = int(np.searchsorted(timestamps, start_ts, side="left"))
             right = int(np.searchsorted(timestamps, end_ts, side="right"))
             covered = timestamps[left:right]

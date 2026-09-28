@@ -6,6 +6,9 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reduce live candle ingestion CPU use for ordered appends and open-candle replacements, and
+  avoid searching historical gaps outside incoming rows while preserving overwrite and retry rules.
+
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
   does not exist yet. Reject unavailable existing shards, preserve finality and verified
   persistence, and distinguish receive
