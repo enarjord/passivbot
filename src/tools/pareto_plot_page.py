@@ -10,7 +10,7 @@ p{line-height:1.5;margin:7px 0;color:#5b6c81}main{padding:0 24px 24px}.toolbar{d
 label{display:block;font-size:12px;font-weight:600;margin-bottom:5px}select,input[type=number],button{font:inherit;border:1px solid #cbd5e1;border-radius:6px;padding:7px;background:white;color:#243449}
 select{max-width:100%;width:100%}.axis{flex:1;min-width:220px}.axis .goal{margin-top:7px;font-size:12px}.mode{width:85px}button{cursor:pointer}button:hover{background:#eef4fa}
 .workspace{display:grid;grid-template-columns:minmax(0,1fr) 310px;gap:16px;margin-top:16px}.chart{background:white;border:1px solid #dce3ed;border-radius:12px;overflow:hidden;min-width:0}
-#plot{width:100%;height:650px}.summary{padding:14px 20px 0;min-height:42px;font-weight:600}#ideal{padding:0 20px 12px;color:#805b12;font-size:12px;overflow-wrap:anywhere}
+#plot{width:100%;height:650px}.summary{padding:14px 20px 0;min-height:42px;font-weight:600}#ideal{padding:0 20px 12px;color:#805b12;font-size:12px;overflow-wrap:anywhere;white-space:pre-line}
 .note{padding:0 20px 16px;font-size:12px}aside{background:#fff;border:1px solid #dce3ed;border-radius:12px;padding:16px;align-self:start}h2{font-size:17px;margin:0 0 10px}.limit{border-top:1px solid #e2e8f0;padding:14px 0}.limit-title{overflow-wrap:anywhere;font-size:12px;margin-bottom:9px}.limit-title input{margin-right:7px}.limit-controls{display:grid;grid-template-columns:95px 1fr;gap:8px}.limit input[type=range]{width:100%;accent-color:#287b91;margin:12px 0 0}.limit input[type=number]{width:100%;min-width:0}.muted{font-size:12px;color:#66788c}.add-filter{display:flex;gap:6px;margin:12px 0}.add-filter select{min-width:0}.hidden{display:none!important}#error{color:#b42318;padding:16px}details{margin-top:12px}summary{cursor:pointer;font-size:12px}
 @media(max-width:950px){.workspace{grid-template-columns:1fr}#plot{height:550px}header{padding:20px}main{padding:0 12px 12px}aside{max-height:none}}
 </style><script>__PLOTLY_JS__</script></head>
@@ -22,7 +22,7 @@ select{max-width:100%;width:100%}.axis{flex:1;min-width:220px}.axis .goal{margin
 <div class="axis"><label for="axis-y">Y metric</label><select id="axis-y"></select><select class="goal" id="goal-y" aria-label="Y ideal direction"></select></div>
 <div class="axis" id="z-controls"><label for="axis-z">Z metric</label><select id="axis-z"></select><select class="goal" id="goal-z" aria-label="Z ideal direction"></select></div>
 </section><div class="workspace"><section class="chart"><div class="summary" id="summary" role="status"></div><div id="plot"></div><div id="ideal"></div>
-<p class="note">★ The ideal combines the best visible value on each axis; it need not be a real candidate. 2D axes point toward a lower-left ideal. Axis ranges stay fixed while filtering so movement is visible. Hover for values; use the toolbar to reset or export PNG.</p>
+<p class="note">★ The chosen member is closest to the ideal after scaling each selected axis to the visible range, with equal weight per axis. ◇ The theoretical ideal combines the best visible value on each axis; it need not be a real candidate. Both update with limits. Ties choose the first saved member. 2D axes point toward a lower-left ideal. Axis ranges stay fixed while filtering so movement is visible. Hover for values; use the toolbar to reset or export PNG.</p>
 <p class="note">Saved objectives may include penalties. Other metrics use saved aggregates or means; statistics are listed separately. This is a projection of saved members, not a recomputed Pareto front.</p><div id="error" role="alert" hidden></div></section>
 <aside><h2>Limits</h2><p class="muted">Inclusive floors and ceilings. Enabled limits stay active when you switch axes. Missing values fail an enabled limit.</p>
 <div class="add-filter"><select id="filter-metric" aria-label="Additional limit metric"></select><button id="add-filter">Add</button></div>
@@ -46,14 +46,30 @@ function computeView(dataset, axes, goals, limits) {
         if (!axes.every(key => finite(columns.get(key)[row]))) { missing++; continue; }
         indices.push(row);
     }
-    let ideal = null;
+    let ideal = null, selected = null;
     if (indices.length && goals.every(goal => goal === "min" || goal === "max")) {
         ideal = axes.map((key, axis) => indices.reduce((best, row) => {
             const value = columns.get(key)[row];
             return goals[axis] === "max" ? Math.max(best, value) : Math.min(best, value);
         }, goals[axis] === "max" ? -Infinity : Infinity));
     }
-    return {indices, ideal, filtered, missing};
+    if (ideal) {
+        const spans = axes.map(key => {
+            const values = columns.get(key);
+            let low = Infinity, high = -Infinity;
+            for (const row of indices) { low = Math.min(low, values[row]); high = Math.max(high, values[row]); }
+            return high - low;
+        });
+        let bestDistance = Infinity;
+        for (const row of indices) {
+            const distance = axes.reduce((sum, key, axis) => {
+                const delta = spans[axis] <= 1e-15 ? 0 : (columns.get(key)[row] - ideal[axis]) / spans[axis];
+                return sum + delta * delta;
+            }, 0);
+            if (distance < bestDistance) { bestDistance = distance; selected = row; }
+        }
+    }
+    return {indices, ideal, selected, filtered, missing};
 }
 function axisRange(metric, goal, dimensions) {
     const low = metric.min, high = metric.max;
@@ -77,12 +93,21 @@ function plotSpec(dataset, axes, goals, limits) {
     if (is3d) points.z = columns[2];
     const traces = [points];
     if (view.ideal) {
-        const ideal = {type:points.type, name:"Ideal (best visible values)", mode:is3d ? "markers+text" : "markers",
+        const ideal = {type:points.type, name:"Theoretical ideal", mode:"markers",
             x:[view.ideal[0]], y:[view.ideal[1]], showlegend:false,
-            marker:{symbol:is3d ? "circle" : "star",size:is3d ? 6 : 20,color:"#f4ae2b",line:{color:"#704907",width:1.5}},
+            marker:{symbol:"diamond-open",size:is3d ? 13 : 27,color:"#287b91",line:{color:"#287b91",width:2}},
             hovertemplate:"<b>Theoretical ideal</b><br>" + hover + "<extra></extra>"};
-        if (is3d) Object.assign(ideal,{z:[view.ideal[2]],text:["★"],textposition:"middle center",textfont:{size:32,color:"#e69b12"}});
-        traces.push(ideal);
+        const values = axes.map(key => metrics.get(key).values[view.selected]);
+        const chosen = {type:points.type, name:"Chosen member", mode:is3d ? "markers+text" : "markers",
+            x:[values[0]], y:[values[1]], showlegend:false,
+            customdata:[escapeHtml(dataset.names[view.selected])],
+            marker:{symbol:is3d ? "circle" : "star",size:is3d ? 6 : 20,color:"#f4ae2b",line:{color:"#704907",width:1.5}},
+            hovertemplate:"<b>Chosen member: %{customdata}</b><br>" + hover + "<extra></extra>"};
+        if (is3d) {
+            ideal.z = [view.ideal[2]];
+            Object.assign(chosen,{z:[values[2]],text:["★"],textposition:"middle center",textfont:{size:32,color:"#e69b12"}});
+        }
+        traces.push(ideal, chosen);
     }
     const revision = JSON.stringify([axes, goals]);
     const layout = {paper_bgcolor:"white",plot_bgcolor:"white",font:{family:"Arial, sans-serif",color:"#243449",size:12},
@@ -191,7 +216,7 @@ function mountExplorer(dataset) {
                 const result = plotSpec(dataset,keys,goals,[...limits.values()]);
                 await Plotly.react("plot",result.traces,preserveCamera(result.layout,document.getElementById("plot").layout),{responsive:true,scrollZoom:true,displaylogo:false,toImageButtonOptions:{format:"png",scale:2}});
                 document.getElementById("summary").textContent = `${result.view.indices.length.toLocaleString()} / ${dataset.names.length.toLocaleString()} candidates shown · ${result.view.filtered} excluded by limits · ${result.view.missing} missing axis values`;
-                document.getElementById("ideal").textContent = result.view.ideal ? "★ Ideal: " + keys.map((key,i) => `${byKey.get(key).label} = ${formatValue(result.view.ideal[i])}`).join(" · ") : result.view.indices.length ? "Choose an ideal direction for each axis to show the star." : "No ideal: no candidates remain.";
+                document.getElementById("ideal").textContent = result.view.ideal ? "★ Chosen member: " + dataset.names[result.view.selected] + " · " + keys.map(key => `${byKey.get(key).label} = ${formatValue(byKey.get(key).values[result.view.selected])}`).join(" · ") + "\n◇ Theoretical ideal: " + keys.map((key,i) => `${byKey.get(key).label} = ${formatValue(result.view.ideal[i])}`).join(" · ") : result.view.indices.length ? "Choose an ideal direction for each axis to show the chosen member and theoretical ideal." : "No ideal or chosen member: no candidates remain.";
                 document.getElementById("error").hidden = true;
             }
         } catch (error) {

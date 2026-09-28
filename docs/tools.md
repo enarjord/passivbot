@@ -116,11 +116,19 @@ aliases without a canonical value are rejected.
 Objectives can include penalties and legacy engine values are converted by the shared loader.
 Per-scenario values are not exported as separate metrics. No full configs are embedded.
 
-The highlighted star is the **theoretical ideal**: the best visible value on each selected
+The highlighted **star is the chosen Pareto member closest to the theoretical ideal** on
+those selected axes. Distance is Euclidean with equal weights after normalizing each axis
+to the surviving, plottable candidates' range, matching the Pareto selector's unweighted
+`ideal` method. Constant axes (range at most `1e-15`) contribute zero distance; exact ties
+choose the first member in saved loading order. The chosen filename and values appear below
+the plot and on hover.
+
+An **open blue diamond shows the theoretical ideal**: the best visible value on each selected
 axis, using its higher/lower-is-better direction. Different candidates may provide each
-coordinate, so the star need not represent a real candidate. Direction selectors use saved
+coordinate, so the diamond need not represent a real candidate. Both markers update when
+axes, directions, or limits change, and remain distinct when they coincide. Direction selectors use saved
 scoring goals or known metric goals; unknown directions, including standard deviations,
-require a choice before the ideal appears. In 2D, maximization axes are reversed so better
+require a choice before either marker appears. In 2D, maximization axes are reversed so better
 values always lie toward the lower-left. 3D axes use normal orientation.
 
 Limit cards offer inclusive floors and ceilings, a slider over the saved range, and an exact
@@ -129,7 +137,7 @@ number enables the limit; uncheck its box to disable it. **Add** creates a limit
 including one not plotted. Enabled limits remain active when axes change. **Reset all limits**
 restores the unfiltered data. The ideal is recomputed from candidates surviving every enabled
 limit and having finite values on every selected axis. Counts report exclusions from limits
-and missing axis values separately. No survivors means no ideal star. Axis and color ranges
+and missing axis values separately. No survivors means neither marker is shown. Axis and color ranges
 stay fixed to the saved data during filtering, so changes remain visually comparable; zoom
 and the 3D camera are retained when only limits change.
 
