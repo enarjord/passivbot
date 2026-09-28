@@ -17,7 +17,7 @@ from config.param_paths import (
 from config.optimize_bounds import flatten_optimize_bounds
 from config.shared_bot import flatten_shared_bot_side
 from config.schema import get_template_config
-from config.strategy import normalize_strategy_kind
+from config.strategy import merge_runtime_bot_side, normalize_strategy_kind
 from config.strategy_spec import (
     get_strategy_spec,
     strategy_optimize_key_path_map,
@@ -182,14 +182,29 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
         ceiling_bound = cooldown_ranges.get((pside, "max_duration_minutes"))
         if floor_bound is None and ceiling_bound is None:
             continue
-        cooldown = bot_config[pside]["entry_cooldown"]
-        highest_floor = floor_bound.high if floor_bound else cooldown["min_duration_minutes"]
-        lowest_ceiling = ceiling_bound.low if ceiling_bound else cooldown["max_duration_minutes"]
-        if lowest_ceiling is not None and highest_floor > lowest_ceiling:
-            raise ValueError(
-                f"optimize.bounds.{pside}.entry_cooldown: highest min_duration_minutes "
-                f"({highest_floor}) must not exceed lowest max_duration_minutes ({lowest_ceiling})"
-            )
+        # Apply the independently reachable corner first, then the same coin
+        # patches used at runtime: a pinned override wins over a searched gene.
+        corner = flatten_shared_bot_side(bot_config[pside])
+        if floor_bound:
+            corner["entry_cooldown_min_duration_minutes"] = floor_bound.high
+        if ceiling_bound:
+            corner["entry_cooldown_max_duration_minutes"] = ceiling_bound.low
+        effective_sides = [("bot", corner)]
+        for coin, patch in (config.get("coin_overrides") or {}).items():
+            override_side = patch.get("bot", {}).get(pside, {})
+            effective_sides.append((
+                f"coin_overrides.{coin}.bot",
+                merge_runtime_bot_side(corner, pside=pside, override_side=override_side),
+            ))
+        for source, effective in effective_sides:
+            highest_floor = effective["entry_cooldown_min_duration_minutes"]
+            lowest_ceiling = effective["entry_cooldown_max_duration_minutes"]
+            if lowest_ceiling is not None and highest_floor > lowest_ceiling:
+                raise ValueError(
+                    f"optimize.bounds.{pside}.entry_cooldown ({source}.{pside}): "
+                    f"highest min_duration_minutes ({highest_floor}) must not exceed "
+                    f"lowest max_duration_minutes ({lowest_ceiling})"
+                )
 
 
 def get_optimization_key_paths(config) -> List[Tuple[str, Tuple[str, ...]]]:

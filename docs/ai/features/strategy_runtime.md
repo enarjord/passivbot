@@ -280,7 +280,9 @@ Live replays the window. CPU uses rolling aggregate stacks with amortized consta
 work per candle, agreeing with replay within floating-point roundoff; all-flat windows
 are exactly zero. No RAM-only indicator state is needed for restart. Missing history is absent,
 never a neutral score. CPU candle intervals other than one minute are rejected
-when an RMS consumer is enabled.
+when an RMS consumer is enabled. Dormant weights on a statically disabled side do
+not request RMS history, allocate CPU trackers, or restrict candle intervals. Config
+preflight retains the requirement for sides reachable through optimizer bounds.
 
 Forager may carry a complete cached observation only within the existing candidate
 age budget, without feeding invented flat returns. Cooldown requires a current

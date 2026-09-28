@@ -176,6 +176,7 @@ def test_rms_history_budget_covers_optimizer_only_consumers(side, consumer, boun
     cfg["live"]["max_warmup_minutes"] = 1
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
+    bounds["risk"].update(n_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
     if consumer == "forager":
         bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
     else:
@@ -275,6 +276,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     cfg["backtest"]["candle_interval_minutes"] = 5
     cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 90.0
     bounds = cfg["optimize"]["bounds"][side]
+    bounds["risk"].update(n_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0])
     weight_bound = [0.0, 1.0 if positive_bound else 0.0]
     if consumer == "forager":
         bounds["forager"]["score_weights"] = {"unilateralness": weight_bound}
@@ -285,3 +287,71 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
             prepare_config(cfg, verbose=False)
     else:
         prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize(
+    "bounds,patch,valid",
+    [
+        ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": 10}, False),
+        ({"max_duration_minutes": [10, 60]}, {"min_duration_minutes": 20}, False),
+        ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": 20}, True),
+        # Coin pins supersede global genes, including the searched leaf itself.
+        ({"min_duration_minutes": [0, 20]}, {"min_duration_minutes": 5, "max_duration_minutes": 10}, True),
+        ({"max_duration_minutes": [10, 60]}, {"min_duration_minutes": 20, "max_duration_minutes": 30}, True),
+        ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": None}, True),
+    ],
+)
+@pytest.mark.parametrize("origin", ["inline", "file"])
+def test_cooldown_search_corners_respect_effective_coin_pins(side, bounds, patch, valid, origin):
+    cfg = get_template_config()
+    cfg["bot"][side]["entry_cooldown"].update(max_duration_minutes=60.0)
+    cfg["optimize"]["bounds"][side]["entry_cooldown"].update(bounds)
+    coin_patch = {"bot": {side: {"entry_cooldown": patch}}}
+    cfg["coin_overrides"] = {"BTC": coin_patch if origin == "inline" else {}}
+
+    def prepared():
+        return parse_overrides(
+            prepare_config(cfg, verbose=False), verbose=False,
+            override_loader=lambda config, coin: coin_patch if origin == "file" else {},
+        )
+
+    if valid:
+        result = prepared()
+        assert result["optimize"]["bounds"][side]["entry_cooldown"] == cfg["optimize"]["bounds"][side]["entry_cooldown"]
+        validate_optimize_bounds_against_bot_config(result, result["optimize"]["bounds"])
+    else:
+        with pytest.raises(ValueError, match="coin_overrides.BTC.*highest min_duration_minutes"):
+            prepared()
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("gate", ["n_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+@pytest.mark.parametrize("reactivates", [False, True])
+def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consumer, reactivates):
+    cfg = get_template_config()
+    cfg["backtest"]["candle_interval_minutes"] = 5
+    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    cfg["bot"][side]["risk"][gate] = 0
+    cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["optimize"]["bounds"][side]["risk"].update(
+        n_positions=[1, 1], total_wallet_exposure_limit=[1.0, 1.0]
+    )
+    cfg["optimize"]["bounds"][side]["risk"][gate] = [0, 1 if reactivates else 0]
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    if consumer == "forager":
+        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+    else:
+        cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
+    if reactivates:
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            prepare_config(cfg, verbose=False)
+    else:
+        prepared = prepare_config(cfg, verbose=False)
+        from warmup_utils import compute_backtest_warmup_minutes
+        reference = deepcopy(prepared)
+        reference["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0.0
+        reference["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
+        for activation in (False, True):
+            assert compute_backtest_warmup_minutes(prepared, for_trade_activation=activation) == compute_backtest_warmup_minutes(reference, for_trade_activation=activation)

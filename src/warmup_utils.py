@@ -148,7 +148,25 @@ def _unstuck_gate_may_run(config: dict, coin: str, pside: str, params: dict) -> 
     return True
 
 
+def rms_side_enabled(params, pside, *, bounds=None):
+    """RMS consumers need an enabled fixed side or an optimizer-reachable side."""
+    gates = ("total_wallet_exposure_limit", "n_positions")
+    fixed = [float(params.get(key, 0.0)) for key in gates]
+    if all(value > 0.0 for value in fixed):
+        return True
+    if not bounds:
+        return False
+    searched = [
+        Bound.from_config(f"{pside}_{key}", bounds[f"{pside}_{key}"]).high
+        if f"{pside}_{key}" in bounds else value
+        for key, value in zip(gates, fixed)
+    ]
+    return all(value > 0.0 for value in searched)
+
+
 def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=False):
+    if not rms_side_enabled(params, pside, bounds=None if for_trade_activation else bounds):
+        return 0
     scoring = params.get("forager_score_weights", {}).get("unilateralness", 0.0)
     adverse = params.get("entry_cooldown_weights_minutes", {}).get("adverse_directionality", 0.0)
     span = params.get("unilateralness_ema_span_1m")

@@ -112,8 +112,11 @@ projects to the upper search bound. History loading covers positive consumer wei
 maximum float spans reachable through optimizer bounds, even when fixed weights are zero.
 This history budget does not impose a delay on candidates that do not consume RMS.
 Search ranges for floor and ceiling must satisfy `highest floor <= lowest ceiling`,
-including a fixed bound when only the other is optimized. This prevents invalid sampled
-combinations. RMS requires one-minute backtest candles and its full replay window for
+including a fixed bound when only the other is optimized and every effective coin override.
+A coin-pinned limit supersedes its global search dimension. This prevents invalid sampled
+combinations. Dormant RMS weights on a statically disabled side do not require history
+or one-minute candles; a side that optimizer bounds can enable still requires both.
+RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. Adverse cooldown waits for that window before CPU trade
 activation; score-only RMS warmup is scoped to required ranking. Compare one
 modifier at a time before combinations across distinct periods and markets.

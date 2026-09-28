@@ -173,6 +173,7 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch):
 
     bot = SimpleNamespace(
         cm=CM(),
+        is_pside_enabled=lambda side: True,
         get_exchange_time=lambda: n * 60000 + 30000,
         bp=lambda side, key, symbol: {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
         bot_value=lambda side, key: (
@@ -486,3 +487,69 @@ def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close,
     # Unavailable history outside the declared listing range is not consumed.
     markets["LONGCOIN"]["first_valid_index"] = bad_row + 1
     run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("active_side", [None, "long", "short"])
+async def test_live_rms_skips_dormant_side_spans(active_side):
+    from live.unilateralness import load
+    from candlestick_manager import CANDLE_DTYPE
+
+    calls = []
+    async def candles(*args, **kwargs):
+        calls.append(kwargs)
+        # The disabled side's 100000-minute span must not enlarge this request.
+        assert kwargs["end_ts"] - kwargs["start_ts"] == 20 * 60000
+        rows = np.zeros(21, dtype=CANDLE_DTYPE)
+        rows["ts"] = np.arange(21) * 60000
+        rows["c"] = 100.0
+        return rows
+
+    bot = SimpleNamespace(
+        cm=SimpleNamespace(get_candles=candles),
+        get_exchange_time=lambda: 21 * 60000,
+        is_pside_enabled=lambda side: side == active_side,
+        bp=lambda side, key, symbol: {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
+        bot_value=lambda side, key: (
+            {"unilateralness": 1.0} if key == "forager_score_weights"
+            else (1.0 if side == active_side else 100000.0)
+        ),
+    )
+    result, ranking, missing = await load(bot, ["BTC"], {"BTC"})
+    expected = {"BTC": {1.0: 0.0} if active_side else {}}
+    assert result == ranking == expected
+    assert not missing
+    assert len(calls) == (1 if active_side else 0)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("gate", ["n_positions", "total_wallet_exposure_limit"])
+@pytest.mark.parametrize("interval", [1, 5])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer):
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["bot"][side]["risk"][gate] = 0
+    cfg["bot"][side]["risk"]["total_wallet_exposure_limit"] = 0.0
+    cfg["optimize"]["bounds"][side]["risk"][gate] = [0, 0]
+    cfg["backtest"]["candle_interval_minutes"] = interval
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    timestamps = timestamps[0] + np.arange(len(timestamps)) * interval * 60000
+    baseline = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    if consumer == "forager":
+        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+    else:
+        cfg["bot"][side]["entry_cooldown"].update(
+            max_duration_minutes=60.0,
+            weights_minutes={"exposure_ratio": 0.0, "adverse_directionality": 10.0},
+        )
+    result = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert len(result[0]) > 0
+    np.testing.assert_array_equal(result[0], baseline[0])
+    np.testing.assert_array_equal(result[1], baseline[1])
+    assert result[2] == baseline[2]

@@ -1509,8 +1509,7 @@ fn run_backtest_core<'py>(
     if backtest_params.candle_interval_minutes != 1
         && bot_params_vec.iter().any(|pair| {
             [&pair.long, &pair.short].iter().any(|p| {
-                p.forager_score_weights.unilateralness > 0.0
-                    || p.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                crate::unilateralness::backtest_enabled(p)
             })
         })
     {

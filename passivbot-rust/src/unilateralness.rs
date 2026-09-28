@@ -1,6 +1,14 @@
 //! Signed RMS directionality from completed one-minute closes.
 //! A deterministic 20-span window gives live, restart and CPU the same inputs.
 //! Weights are exponential; this is not a simple moving average.
+/// Backtests start flat, so a side with no entry budget cannot consume RMS.
+pub fn backtest_enabled(params: &crate::types::BotParams) -> bool {
+    params.total_wallet_exposure_limit > 0.0
+        && params.n_positions > 0
+        && (params.forager_score_weights.unilateralness > 0.0
+            || params.entry_cooldown_weights_minutes.adverse_directionality > 0.0)
+}
+
 pub fn warmup_returns(span: f64) -> Result<usize, String> {
     if !span.is_finite() || !(1.0..=100_000.0).contains(&span) {
         return Err("unilateralness span must be finite and between 1 and 100000".into());

@@ -154,10 +154,17 @@ def validate_config(
                 bot_side["entry_cooldown"]["weights_minutes"]["adverse_directionality"]
             ),
         }
-        if config["backtest"]["candle_interval_minutes"] != 1 and any(
-            fixed > 0.0
-            or (key in flat_bounds and Bound.from_config(key, flat_bounds[key]).high > 0.0)
-            for key, fixed in rms_weights.items()
+        from .shared_bot import flatten_shared_bot_side
+        from warmup_utils import rms_side_enabled
+
+        if (
+            config["backtest"]["candle_interval_minutes"] != 1
+            and rms_side_enabled(flatten_shared_bot_side(bot_side), pside, bounds=flat_bounds)
+            and any(
+                fixed > 0.0
+                or (key in flat_bounds and Bound.from_config(key, flat_bounds[key]).high > 0.0)
+                for key, fixed in rms_weights.items()
+            )
         ):
             raise ValueError(
                 "RMS unilateralness requires completed one-minute candles for the entire optimizer search"

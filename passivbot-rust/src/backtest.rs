@@ -1982,7 +1982,8 @@ impl<'a> Backtest<'a> {
             let rms_warmup = [&bot_params[i].long, &bot_params[i].short]
                 .iter()
                 .filter(|bp| {
-                    bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                    crate::unilateralness::backtest_enabled(bp)
+                        && bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
                 })
                 .map(|bp| {
                     crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
@@ -2201,8 +2202,7 @@ impl<'a> Backtest<'a> {
                 .map(|pair| {
                     let mut trackers = Vec::new();
                     for bp in [&pair.long, &pair.short] {
-                        if (bp.forager_score_weights.unilateralness > 0.0
-                            || bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0)
+                        if crate::unilateralness::backtest_enabled(bp)
                             && !trackers.iter().any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
                         {
                             trackers.push((
@@ -2407,8 +2407,7 @@ impl<'a> Backtest<'a> {
                 let requires_rms = [&self.bot_params[idx].long, &self.bot_params[idx].short]
                     .iter()
                     .any(|bp| {
-                        bp.forager_score_weights.unilateralness > 0.0
-                            || bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                        crate::unilateralness::backtest_enabled(bp)
                     });
                 for k in first..=last {
                     if requires_rms && self.hlcvs_value(k, idx, CLOSE) <= 0.0 {
@@ -5737,7 +5736,8 @@ impl<'a> Backtest<'a> {
         [&self.bot_params[idx].long, &self.bot_params[idx].short]
             .iter()
             .filter(|bp| {
-                bp.forager_score_weights.unilateralness > 0.0
+                crate::unilateralness::backtest_enabled(bp)
+                    && bp.forager_score_weights.unilateralness > 0.0
                     && k <= end
                     && k < start.saturating_add(
                         crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
@@ -5777,9 +5777,7 @@ impl<'a> Backtest<'a> {
         // rather than use a cached score from a different candle.
         let mut out = Vec::new();
         for bp in [&self.bot_params[idx].long, &self.bot_params[idx].short] {
-            if bp.forager_score_weights.unilateralness == 0.0
-                && bp.entry_cooldown_weights_minutes.adverse_directionality == 0.0
-            {
+            if !crate::unilateralness::backtest_enabled(bp) {
                 continue;
             }
             let span = bp.unilateralness_ema_span_1m;

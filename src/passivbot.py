@@ -19634,6 +19634,7 @@ class Passivbot:
             or self.bp(side, "entry_cooldown_weights_minutes", symbol)["adverse_directionality"] > 0
             for side in ("long", "short")
             for symbol in symbols
+            if self.is_pside_enabled(side)
         )
         if directional_enabled:
             directional, ranking_directional, missing_directional = await unilateralness.load(

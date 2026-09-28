@@ -18,7 +18,8 @@ since the latest release tag; these features may already be available when insta
   for searched weights/spans, permit numeric ceiling searches from a null default, and reject
   non-positive RMS closes with an actionable backtest error. Support joint ceiling/modifier
   searches, reject aggregated-candle RMS searches up front, and use bounded rolling RMS
-  aggregates for linear CPU backtest work.
+  aggregates for linear CPU backtest work. Validate search corners against effective coin
+  overrides and omit RMS requirements on sides that cannot trade.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

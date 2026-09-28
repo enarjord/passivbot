@@ -19,6 +19,8 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
     for symbol in symbols:
         spans = set()
         for side in ("long", "short"):
+            if not bot.is_pside_enabled(side):
+                continue
             weights = bot.bp(side, "entry_cooldown_weights_minutes", symbol)
             scoring = bot.bot_value(side, "forager_score_weights")
             if weights["adverse_directionality"] > 0 or scoring["unilateralness"] > 0:
