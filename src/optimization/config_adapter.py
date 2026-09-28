@@ -31,29 +31,8 @@ from optimizer_overrides import (
 
 def _flatten_bounds_for_config(config: dict, optimize_bounds: dict) -> dict:
     strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    has_flat_keys = any(
-        isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
-        for key in optimize_bounds
-    )
-    if not has_flat_keys:
-        return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
+    return flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
 
-    flat_bounds = {
-        key: value
-        for key, value in optimize_bounds.items()
-        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
-    }
-    nested_bounds = {
-        key: value
-        for key, value in optimize_bounds.items()
-        if not (isinstance(key, str) and key.startswith(("long_", "short_", "hsl_")))
-    }
-    if nested_bounds:
-        flat_bounds = {
-            **flatten_optimize_bounds(nested_bounds, strategy_kind=strategy_kind),
-            **flat_bounds,
-        }
-    return flat_bounds
 
 
 def _flatten_required_optimize_bounds(config: dict) -> dict:

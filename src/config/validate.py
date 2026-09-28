@@ -146,29 +146,8 @@ def validate_config(
                 raise ValueError(
                     f"bot.{pside}.entry_cooldown.max_duration_minutes must be finite when searching modifier weights"
                 )
-        rms_weights = {
-            f"{pside}_forager_score_weights_unilateralness": (
-                bot_side["forager"]["score_weights"]["unilateralness"]
-            ),
-            f"{pside}_entry_cooldown_weights_minutes_adverse_directionality": (
-                bot_side["entry_cooldown"]["weights_minutes"]["adverse_directionality"]
-            ),
-        }
-        from .shared_bot import flatten_shared_bot_side
-        from warmup_utils import rms_side_enabled
-
-        if (
-            config["backtest"]["candle_interval_minutes"] != 1
-            and rms_side_enabled(flatten_shared_bot_side(bot_side), pside, bounds=flat_bounds)
-            and any(
-                fixed > 0.0
-                or (key in flat_bounds and Bound.from_config(key, flat_bounds[key]).high > 0.0)
-                for key, fixed in rms_weights.items()
-            )
-        ):
-            raise ValueError(
-                "RMS unilateralness requires completed one-minute candles for the entire optimizer search"
-            )
+        # RMS candle compatibility is checked after dataset selection, when
+        # approved lists and per-coin overrides determine entry eligibility.
         entry_cooldown_minutes = float(
             get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
         )

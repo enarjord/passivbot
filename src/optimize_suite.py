@@ -20,6 +20,7 @@ from optimization.warmup import (
     compute_optimizer_backtest_warmup_minutes,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
+    validate_optimizer_dataset_intervals,
 )
 from shared_arrays import attach_shared_array
 from suite_runner import (
@@ -354,6 +355,7 @@ async def prepare_suite_contexts(
                     f"Suite scenario {scenario.label} has no coins after applying exchange filters."
                 )
             scenario_config["backtest"]["coins"][dataset.exchange] = list(selected_coins)
+            validate_optimizer_dataset_intervals(scenario_config, dataset.mss, dataset.exchange)
             if dataset.hlcvs_spec is not None:
                 start_idx, end_idx, coin_indices = _compute_slice_indices(
                     dataset,
@@ -459,6 +461,7 @@ async def prepare_suite_contexts(
                 continue
             exchanges_for_scenario.append(exchange_key)
             scenario_config["backtest"]["coins"][exchange_key] = list(coins_for_exchange)
+            validate_optimizer_dataset_intervals(scenario_config, dataset.mss, exchange_key)
             if dataset.hlcvs_spec is not None:
                 start_idx, end_idx, coin_indices = _compute_slice_indices(
                     dataset,

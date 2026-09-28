@@ -73,11 +73,13 @@ def _make_lazy_dataset(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rms_search", [False, True])
+@pytest.mark.parametrize("interval", [1, 5])
 async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_short_disabled(
-    monkeypatch, rms_search,
+    monkeypatch, rms_search, interval,
 ):
     _stub_market_identity_validation(monkeypatch)
     config = get_template_config()
+    config["backtest"]["candle_interval_minutes"] = interval
     config["backtest"]["start_date"] = "2024-01-01"
     config["backtest"]["end_date"] = "2024-01-02"
     config["backtest"]["exchanges"] = ["binance", "bybit"]
@@ -111,13 +113,18 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
 
     async def fake_prepare_master_datasets(*_args, **kwargs):
         captured["allow_internal_nan_gaps"] = kwargs["allow_internal_nan_gaps"]
-        return {
+        datasets = {
             "combined": _make_lazy_dataset(
                 coins=("HYPE",),
                 coin_exchange={"HYPE": "binance"},
                 available_exchanges=["binance", "bybit"],
             )
         }
+        datasets["combined"].mss["HYPE"].update(
+            qty_step=0.001, price_step=0.01, min_qty=0.001, min_cost=1.0,
+            c_mult=1.0, maker=0.0, taker=0.0,
+        )
+        return datasets
 
     monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)
     monkeypatch.setattr(
@@ -128,6 +135,12 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
+    if rms_search and interval > 1:
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            await optimize_suite.prepare_suite_contexts(
+                config, suite_cfg, shared_array_manager=_NoSharedArrayManager(),
+            )
+        return
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
         config,
         suite_cfg,

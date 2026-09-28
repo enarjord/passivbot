@@ -522,25 +522,24 @@ def _validate_effective_coin_config(
     for root in ("bot", "live"):
         if root in patch:
             nested_update(effective[root], deepcopy(patch[root]))
-    # This effective config represents one coin. Its pinned cooldown limits
+    # This effective config represents one coin. Its pinned cooldown leaves
     # cannot be changed by global optimizer genes, so omit those dimensions
     # while validating the merged policy and the remaining search corners.
     from .optimize_bounds import flatten_optimize_bounds
     from .param_paths import resolve_optimizer_key_path
 
-    pinned_limits = {
+    pinned_cooldown_paths = {
         path for path, _ in _iter_patch_leaves(patch)
-        if len(path) == 4 and path[0] == "bot" and path[2] == "entry_cooldown"
-        and path[3] in {"min_duration_minutes", "max_duration_minutes"}
+        if len(path) >= 4 and path[0] == "bot" and path[2] == "entry_cooldown"
     }
-    if pinned_limits:
+    if pinned_cooldown_paths:
         bounds = flatten_optimize_bounds(
             effective["optimize"]["bounds"],
             strategy_kind=effective.get("live", {}).get("strategy_kind"),
         )
         effective["optimize"]["bounds"] = {
             key: value for key, value in bounds.items()
-            if resolve_optimizer_key_path(effective, key) not in pinned_limits
+            if resolve_optimizer_key_path(effective, key) not in pinned_cooldown_paths
         }
     try:
         prepared = prepare_config(

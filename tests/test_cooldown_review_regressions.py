@@ -282,11 +282,17 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
         bounds["forager"]["score_weights"] = {"unilateralness": weight_bound}
     else:
         bounds["entry_cooldown"]["weights_minutes"] = {"adverse_directionality": weight_bound}
+    cfg = prepare_config(cfg, verbose=False)
+    from optimization.warmup import validate_optimizer_dataset_intervals
+    from test_backtest_directional_eligibility import _synthetic_inputs
+    _, markets, _, _ = _synthetic_inputs()
+    cfg["live"]["approved_coins"] = {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]}
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if positive_bound:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
-            prepare_config(cfg, verbose=False)
-    else:
-        prepare_config(cfg, verbose=False)
+            validate_optimizer_dataset_intervals(cfg, markets, "binance")
+        cfg["live"]["approved_coins"][side] = ["UNLOADEDCOIN"]
+    validate_optimizer_dataset_intervals(cfg, markets, "binance")
 
 
 @pytest.mark.parametrize("side", ["long", "short"])
@@ -344,14 +350,144 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:
         cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
+    prepared = prepare_config(cfg, verbose=False)
+    from optimization.warmup import validate_optimizer_dataset_intervals
+    from test_backtest_directional_eligibility import _synthetic_inputs
+    _, markets, _, _ = _synthetic_inputs()
+    prepared["live"]["approved_coins"] = {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]}
+    prepared["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if reactivates:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
-            prepare_config(cfg, verbose=False)
+            validate_optimizer_dataset_intervals(prepared, markets, "binance")
     else:
-        prepared = prepare_config(cfg, verbose=False)
+        validate_optimizer_dataset_intervals(prepared, markets, "binance")
         from warmup_utils import compute_backtest_warmup_minutes
         reference = deepcopy(prepared)
         reference["bot"][side]["forager"]["score_weights"]["unilateralness"] = 0.0
         reference["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 0.0
         for activation in (False, True):
             assert compute_backtest_warmup_minutes(prepared, for_trade_activation=activation) == compute_backtest_warmup_minutes(reference, for_trade_activation=activation)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_mixed_optimizer_bounds_preserve_all_adaptive_dimensions(side):
+    from optimization.config_adapter import get_optimization_key_paths
+    cfg = get_template_config()
+    bounds = cfg["optimize"]["bounds"]
+    bounds[f"{side}_n_positions"] = [2, 3]
+    del bounds[side]["risk"]["n_positions"]
+    bounds[side]["entry_cooldown"].update(
+        min_duration_minutes=[0, 5], max_duration_minutes=[30, 90],
+        weights_minutes={"exposure_ratio": [0, 10], "adverse_directionality": [0, 20]},
+    )
+    bounds[side]["forager"].update(
+        unilateralness_ema_span_1m=[10.5, 60.5], score_weights={"unilateralness": [0, 1]},
+    )
+    expected = flatten_optimize_bounds(bounds, strategy_kind="trailing_martingale")
+    prepared = prepare_config(cfg, verbose=False)
+    for candidate in (prepared, prepare_config(clean_config(prepared), verbose=False)):
+        actual = flatten_optimize_bounds(candidate["optimize"]["bounds"], strategy_kind="trailing_martingale")
+        assert actual == expected
+        paths = dict(get_optimization_key_paths(candidate))
+        for leaf in ("min_duration_minutes", "max_duration_minutes"):
+            assert paths[f"{side}_entry_cooldown_{leaf}"] == ("bot", side, "entry_cooldown", leaf)
+        for modifier in ("exposure_ratio", "adverse_directionality"):
+            assert paths[f"{side}_entry_cooldown_weights_minutes_{modifier}"] == ("bot", side, "entry_cooldown", "weights_minutes", modifier)
+        assert f"{side}_unilateralness_ema_span_1m" in paths
+        assert f"{side}_forager_score_weights_unilateralness" in paths
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("modifier", ["exposure_ratio", "adverse_directionality"])
+@pytest.mark.parametrize("origin", ["inline", "file"])
+def test_coin_zero_modifier_pin_can_clear_searched_ceiling(side, modifier, origin):
+    cfg = get_template_config()
+    cfg["optimize"]["bounds"][side]["entry_cooldown"].update(
+        max_duration_minutes=[30, 90], weights_minutes={modifier: [0, 20]},
+    )
+    patch = {"bot": {side: {"entry_cooldown": {
+        "max_duration_minutes": None, "weights_minutes": {modifier: 0.0},
+    }}}}
+    cfg["coin_overrides"] = {"BTC": patch if origin == "inline" else {}}
+    result = parse_overrides(prepare_config(cfg, verbose=False), verbose=False,
+        override_loader=lambda config, coin: patch if origin == "file" else {})
+    assert result["coin_overrides"]["BTC"] == patch
+    assert result["optimize"]["bounds"][side]["entry_cooldown"] == cfg["optimize"]["bounds"][side]["entry_cooldown"]
+    # A positive effective coin modifier still requires a ceiling.
+    patch["bot"][side]["entry_cooldown"]["weights_minutes"][modifier] = 1.0
+    with pytest.raises(ValueError, match="finite"):
+        parse_overrides(prepare_config(cfg, verbose=False), verbose=False,
+            override_loader=lambda config, coin: patch if origin == "file" else {})
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("parser_ceiling", [None, 60.0])
+@pytest.mark.parametrize("spelling", ["dotted", "underscored"])
+@pytest.mark.parametrize("argument,expected", [(None, 60.0), ("null", None), ("none", None), ("90.5", 90.5)])
+def test_nullable_cooldown_ceiling_cli_roundtrip(side, parser_ceiling, spelling, argument, expected):
+    import argparse
+    from config_utils import add_config_arguments, update_config_with_args
+    template = get_template_config()
+    template["bot"][side]["entry_cooldown"]["max_duration_minutes"] = parser_ceiling
+    parser = argparse.ArgumentParser()
+    keys = add_config_arguments(parser, template)
+    key = f"bot.{side}.entry_cooldown.max_duration_minutes"
+    option = key if spelling == "dotted" else key.replace(".", "_")
+    args = parser.parse_args([] if argument is None else [f"--{option}", argument])
+    if argument is None:
+        assert key not in vars(args)
+    cfg = get_template_config()
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    update_config_with_args(cfg, args, allowed_keys=keys)
+    result = prepare_config(cfg, verbose=False)
+    assert result["bot"][side]["entry_cooldown"]["max_duration_minutes"] == expected
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("eligibility", ["eligible", "excluded", "zero_wel", "zero_weight"])
+def test_optimizer_data_registration_checks_final_coin_rms_policy(side, eligibility):
+    from optimize import _register_exchange_data
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+    cfg = _ema_anchor_config(True)
+    cfg["backtest"]["candle_interval_minutes"] = 5
+    cfg["optimize"]["enable_overrides"] = []
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    cfg["optimize"]["bounds"] = {
+        f"{side}_n_positions": [1, 1],
+        f"{side}_total_wallet_exposure_limit": [1, 1],
+        f"{side}_entry_cooldown_weights_minutes_adverse_directionality": [0, 10],
+    }
+    if eligibility == "excluded":
+        cfg["live"]["approved_coins"][side] = ["UNLOADEDCOIN"]
+    elif eligibility in ("zero_wel", "zero_weight"):
+        coin = "LONGCOIN" if side == "long" else "SHORTCOIN"
+        patch = ({"wallet_exposure_limit": 0.0} if eligibility == "zero_wel" else
+                 {"entry_cooldown": {"weights_minutes": {"adverse_directionality": 0.0}}})
+        cfg["coin_overrides"] = {coin: {"bot": {side: patch}}}
+    cfg = parse_overrides(prepare_config(cfg, verbose=False), verbose=False)
+    cfg["backtest"]["coins"] = {}
+    hlcvs, mss, btc, timestamps = _synthetic_inputs()
+
+    class Arrays:
+        def __init__(self):
+            self.count = 0
+
+        def create_from(self, array):
+            self.count += 1
+            return object(), array
+
+    arrays = Arrays()
+
+    def register():
+        return _register_exchange_data(
+            "binance", (["LONGCOIN", "SHORTCOIN"], hlcvs, mss, None, None, btc, timestamps),
+            cfg, msss={}, hlcvs_specs={}, btc_usd_specs={}, timestamps_dict={}, array_manager=arrays,
+        )
+
+    if eligibility == "eligible":
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            register()
+        assert arrays.count == 0
+    else:
+        register()
+        assert arrays.count == 2

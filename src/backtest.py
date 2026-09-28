@@ -1126,11 +1126,25 @@ def build_backtest_payload(
 
     history_warmup_map = compute_per_coin_warmup_minutes(config)
     history_global_warmup = compute_backtest_warmup_minutes(config)
-    warmup_map = compute_per_coin_warmup_minutes(config, for_trade_activation=True)
+    warmup_map = compute_per_coin_warmup_minutes(
+        config, for_trade_activation=True, include_rms=False
+    )
     default_warm = int(warmup_map.get("__default__", 0))
     global_warmup_minutes = compute_backtest_warmup_minutes(
-        config, for_trade_activation=True
+        config, for_trade_activation=True, include_rms=False
     )
+    # History can cover unloaded/ineligible sides. Activation may only depend
+    # on RMS consumers in the finalized parameters for this dataset.
+    from warmup_utils import _rms_warmup_minutes
+
+    for coin, pair in zip(coins_order, bot_params_list):
+        rms_warm = max(
+            (_rms_warmup_minutes(params, side, for_trade_activation=True)
+             for side, params in pair.items() if params["entry_eligible"]),
+            default=0,
+        )
+        warmup_map[coin] = max(warmup_map.get(coin, default_warm), rms_warm)
+        global_warmup_minutes = max(global_warmup_minutes, rms_warm)
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []

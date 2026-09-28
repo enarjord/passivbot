@@ -189,7 +189,7 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
 
 
 def compute_backtest_warmup_minutes(
-    config: dict, *, for_trade_activation: bool = False
+    config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> int:
     """History covers searched RMS values; activation consumes only the fixed policy."""
 
@@ -288,19 +288,20 @@ def compute_backtest_warmup_minutes(
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
     if limit > 0:
         warmup_minutes = min(warmup_minutes, limit)
-    warmup_minutes = max(
-        warmup_minutes,
-        max(
-            (
-                _rms_warmup_minutes(
-                    params, side, bounds=bounds, for_trade_activation=for_trade_activation
-                )
-                for _, long, short, *_ in _iter_param_sets(config)
-                for side, params in (("long", long), ("short", short))
+    if include_rms:
+        warmup_minutes = max(
+            warmup_minutes,
+            max(
+                (
+                    _rms_warmup_minutes(
+                        params, side, bounds=bounds, for_trade_activation=for_trade_activation
+                    )
+                    for _, long, short, *_ in _iter_param_sets(config)
+                    for side, params in (("long", long), ("short", short))
+                ),
+                default=0,
             ),
-            default=0,
-        ),
-    )
+        )
     return int(math.ceil(warmup_minutes)) if warmup_minutes > 0.0 else 0
 
 

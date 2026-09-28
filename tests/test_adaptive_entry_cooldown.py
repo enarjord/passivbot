@@ -562,6 +562,7 @@ def test_cpu_dormant_rms_matches_disabled_policy(side, gate, interval, consumer)
 @pytest.mark.parametrize("interval", [1, 5])
 @pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
 def test_cpu_entry_ineligible_rms_policy_is_inert(side, interval, consumer):
+    from config_utils import clean_config
     from backtest import build_backtest_payload, execute_backtest
     from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
 
@@ -573,15 +574,17 @@ def test_cpu_entry_ineligible_rms_policy_is_inert(side, interval, consumer):
     payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
     assert all(not pair[side]["entry_eligible"] for pair in payload.bot_params_list)
     baseline = execute_backtest(payload, cfg)
-    # Exercise the Rust boundary with already-finalized side eligibility.
-    for pair in payload.bot_params_list:
-        bp = pair[side]
-        bp["unilateralness_ema_span_1m"] = 100000.0
-        if consumer == "forager":
-            bp["forager_score_weights"]["unilateralness"] = 1.0
-        else:
-            bp["entry_cooldown_max_duration_minutes"] = 60.0
-            bp["entry_cooldown_weights_minutes"]["adverse_directionality"] = 10.0
+    # Load a normal user config before dataset selection finalizes eligibility.
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    if consumer == "forager":
+        cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+    else:
+        cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+        cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
+    cfg = prepare_config(clean_config(cfg), verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert all(not pair[side]["entry_eligible"] for pair in payload.bot_params_list)
     result = execute_backtest(payload, cfg)
     assert len(result[0]) > 0
     np.testing.assert_array_equal(result[0], baseline[0])

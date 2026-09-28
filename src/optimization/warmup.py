@@ -309,6 +309,30 @@ def validate_optimizer_effective_configs(config: dict) -> None:
         )
 
 
+def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str) -> None:
+    """Reject reachable RMS consumers only after per-coin eligibility is known."""
+    if config["backtest"]["candle_interval_minutes"] == 1:
+        return
+    from backtest import prep_backtest_args
+    from warmup_utils import rms_side_enabled
+
+    for candidate in _build_optimizer_boundary_configs(config):
+        bot_params, _, _, _ = prep_backtest_args(candidate, mss, exchange)
+        for pair in bot_params:
+            for side, params in pair.items():
+                if (
+                    params["entry_eligible"]
+                    and rms_side_enabled(params, side)
+                    and (
+                        params["forager_score_weights"]["unilateralness"] > 0.0
+                        or params["entry_cooldown_weights_minutes"]["adverse_directionality"] > 0.0
+                    )
+                ):
+                    raise ValueError(
+                        "RMS unilateralness requires completed one-minute candles for the entire optimizer search"
+                    )
+
+
 def build_optimizer_data_config(config: dict) -> dict:
     """Return a copy whose side gates cover every optimizer-reachable side."""
     boundary_configs = _build_optimizer_boundary_configs(config)
@@ -395,4 +419,5 @@ __all__ = [
     "optimizer_dead_param_values",
     "stamp_warmup_metadata",
     "validate_optimizer_effective_configs",
+    "validate_optimizer_dataset_intervals",
 ]

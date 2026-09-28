@@ -219,6 +219,7 @@ from optimization.warmup import (
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
     validate_optimizer_effective_configs,
+    validate_optimizer_dataset_intervals,
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
@@ -423,6 +424,8 @@ def _register_exchange_data(
     """
     coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = prepare_result
     _propagate_optimizer_dataset_override(config, exchange, coins, cache_dir, mss)
+    config["backtest"]["coins"][exchange] = coins
+    validate_optimizer_dataset_intervals(config, mss, exchange)
     prepared_hlcvs = hlcvs
     hlcvs, timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
         hlcvs,

@@ -154,11 +154,6 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
     }
     if not isinstance(bounds, dict):
         return flat
-    if any(
-        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
-        for key in bounds
-    ):
-        return deepcopy(bounds)
     for key, value in bounds.get("hsl", {}).items():
         flat[f"hsl_{key}"] = deepcopy(value)
     for pside in BOT_POSITION_SIDES:
@@ -186,6 +181,11 @@ def flatten_optimize_bounds(bounds: dict | None, *, strategy_kind: str) -> dict:
             for key, value in shared_items:
                 flat_key = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name, {}).get(key, key)
                 flat[f"{pside}_{flat_key}"] = deepcopy(value)
+    # Flat leaves take precedence when legacy and grouped bounds are mixed.
+    flat.update({
+        key: deepcopy(value) for key, value in bounds.items()
+        if isinstance(key, str) and key.startswith(("long_", "short_", "hsl_"))
+    })
     return flat
 
 

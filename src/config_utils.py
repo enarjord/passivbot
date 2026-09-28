@@ -2227,6 +2227,9 @@ def add_arguments_recursively(
         else:
             acronym = create_acronym(full_name, acronyms)
             appendix = ""
+            nullable_cooldown_ceiling = full_name in {
+                f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")
+            }
             type_ = type(value)
             if "bounds" in full_name:
                 type_ = comma_separated_values_float
@@ -2249,10 +2252,10 @@ def add_arguments_recursively(
                 appendix = "Comma-separated labels or JSON array; [] disables screening."
             elif isinstance(value, list) and "bounds" not in full_name:
                 type_ = comma_separated_values
+            elif nullable_cooldown_ceiling:
+                type_ = optional_float
             elif value is None:
-                if full_name == "backtest.btc_collateral_ltv_cap" or full_name.endswith(
-                    ".entry_cooldown.max_duration_minutes"
-                ):
+                if full_name == "backtest.btc_collateral_ltv_cap":
                     type_ = optional_float
                 else:
                     type_ = str
@@ -2304,7 +2307,8 @@ def add_arguments_recursively(
                 type=type_,
                 dest=full_name,
                 required=False,
-                default=None,
+                # Omitted nullable ceilings must differ from an explicit null.
+                default=argparse.SUPPRESS if nullable_cooldown_ceiling else None,
                 metavar=_argument_metavar(type_, full_name, value),
                 help=(
                     _argument_help_text(full_name, appendix)
@@ -2385,13 +2389,17 @@ def update_config_with_args(
     transform_root = config
     config = effective_config_payload(config)
     from config.hsl_revised import validate_override_paths
+    nullable_cooldown_ceilings = {
+        f"bot.{side}.entry_cooldown.max_duration_minutes" for side in ("long", "short")
+    }
     supplied = {key: value for key, value in vars(args).items()
-                if value is not None and (key in allowed_keys if allowed_keys is not None else "." in key)}
+                if (value is not None or key in nullable_cooldown_ceilings)
+                and (key in allowed_keys if allowed_keys is not None else "." in key)}
     validate_override_paths(config, supplied, allow_engine=True)
     changed_keys = []
     diffs = []
     for key, value in vars(args).items():
-        if value is None:
+        if value is None and key not in nullable_cooldown_ceilings:
             continue
         if allowed_keys is not None:
             if key not in allowed_keys:

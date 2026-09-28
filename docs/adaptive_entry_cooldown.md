@@ -115,10 +115,13 @@ Optimizer and suite dataset metadata stamp only the shared non-RMS activation bu
 each candidate retains its own Rust RMS entry/ranking readiness.
 Search ranges for floor and ceiling must satisfy `highest floor <= lowest ceiling`,
 including a fixed bound when only the other is optimized and every effective coin override.
-A coin-pinned limit supersedes its global search dimension. This prevents invalid sampled
-combinations. Dormant RMS weights on a statically disabled side do not require history
-or one-minute candles; a side that optimizer bounds can enable still requires both.
-The CPU engine also excludes per-coin entry-ineligible sides from RMS activation.
+Coin-pinned cooldown leaves supersede their global search dimensions, including zero
+modifier pins with a null ceiling. Nested adaptive bounds may be mixed with legacy flat
+bounds. The CLI accepts `null` to clear a ceiling; omitting the option keeps its current value.
+Dormant RMS weights on a statically disabled side do not require history or one-minute
+candles. After selecting a dataset, optimizer preflight checks reachable RMS consumers
+against finalized per-coin eligibility and overrides. Entry-ineligible sides neither
+restrict the candle interval nor extend RMS trade activation.
 Live cooldown fill-history coverage includes only globally enabled sides.
 RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. Adverse cooldown waits for that window before CPU trade

@@ -17,12 +17,13 @@ since the latest release tag; these features may already be available when insta
   cooldowns, including bounds and modifiers, in the trailing inspection overview. Size RMS history
   for searched weights/spans, permit numeric ceiling searches from a null default, and reject
   non-positive RMS closes with an actionable backtest error. Support joint ceiling/modifier
-  searches, reject aggregated-candle RMS searches up front, and use bounded rolling RMS
+  searches, reject eligible aggregated-candle RMS searches before evaluation, and use bounded rolling RMS
   aggregates for linear CPU backtest work. Validate search corners against effective coin
   overrides and omit RMS requirements on disabled or entry-ineligible sides. Disabled live
   sides do not extend cooldown fill-history coverage. Activate adverse cooldown at the first
   complete RMS return window, without an extra candle of delay. Keep optimizer/suite RMS
-  history budgets separate from shared candidate activation metadata.
+  history budgets separate from shared candidate activation metadata. Preserve mixed flat/nested
+  adaptive bounds, honor zero modifier pins, and allow explicit null ceiling CLI overrides.
 
 - Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
   proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.

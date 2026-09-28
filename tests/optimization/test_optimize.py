@@ -2347,7 +2347,7 @@ class TestValidateArray:
         config = {"backtest": {"coins": {}, "candle_interval_minutes": 2}}
         manager = RecordingArrayManager()
 
-        with patch("optimize._stamp_optimizer_warmup"):
+        with patch("optimize._stamp_optimizer_warmup"), patch("optimize.validate_optimizer_dataset_intervals"):
             _register_exchange_data(
                 "binance",
                 (["BTC"], hlcvs, mss, None, None, btc_usd_prices, timestamps),
