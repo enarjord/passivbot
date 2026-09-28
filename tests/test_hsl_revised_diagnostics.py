@@ -167,7 +167,7 @@ def test_structured_console_shows_revised_counts_without_legacy_tiers(observed):
     event = LiveEvent(EventTypes.HSL_STATUS, status='degraded',
                       data=diagnostics.snapshot(bot, now_ms=NOW))
     text = format_console_event(event)
-    assert 'engine=revised mode=unified observation=current' in text
+    assert '[risk] HSL current mode=unified' in text
     assert 'red=1' in text and 'estimated=1' in text
     assert 'tier=disabled' not in text
 
@@ -181,7 +181,7 @@ def test_clean_red_aggregate_survives_smoke_and_startup_preview_consumers(observ
     diagnostics.record(bot, clean)
     event = dict(event_type='hsl.status', **{key: events[-1][1][key]
         for key in ('level', 'status', 'data')})
-    assert event['status'] == 'ok' and event['data']['tier'] == 'red'
+    assert event['status'] == 'succeeded' and event['data']['tier'] == 'red'
     group = _risk_event_group(bot_key='fake/example', row={'ts': NOW, 'seq': 1},
                              live_event=event, path=Path('events.ndjson'), line_no=1)
     assert _risk_attention_rank(group) == 35
@@ -424,6 +424,7 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(observed,
     bot.refresh_protective_authoritative_state = refresh
     bot._sleep_unless_shutdown = sleep
     bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_trailing_status = lambda: None
     bot.live_value = lambda key: .05
     owner.schedule_history = owner.schedule_sources = lambda: None
     owner._ordinary_plan = ordinary
@@ -431,6 +432,8 @@ async def test_failed_refresh_then_recovery_reports_expired_prior_wave(observed,
     assert len(calls) == 2
     assert [e[1]['data']['observation_status'] for e in events] == ['current', 'stale', 'current']
     assert events[1][1]['status'] == 'degraded'
+    assert events[1][1]['data']['console_replaced_observation'] is True
+    assert 'input_expired' in events[1][1]['data']['stale_reasons']
     assert all(e[1]['data']['counts']['green'] == 1 for e in events)
     capture_report(owner)
     assert len(events) == 3
@@ -483,6 +486,7 @@ async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(observed, m
     bot.refresh_protective_authoritative_state = refresh
     bot._sleep_unless_shutdown = sleep
     bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_trailing_status = lambda: None
     bot.live_value = lambda key: .05
     bot.execute_order_plan_to_exchange = execute
     owner.schedule_history = owner.schedule_sources = lambda: None
@@ -491,3 +495,45 @@ async def test_ready_ordinary_plan_is_admitted_before_slow_reporting(observed, m
     assert admitted == [True]
     assert any(ready for ready, _ in report_order)
     assert all(written for ready, written in report_order if ready)
+
+
+def test_console_identity_ignores_estimation_detail_but_retains_durable_changes(observed):
+    bot, _, wave, events = observed()
+    original = events[-1][1]['data']['console_state']
+    decision = wave.decisions[0]
+    diagnostics.record(bot, replace(wave, decisions=(replace(decision, reasons=('snapshot_skew',)),)))
+    diagnostics.record(bot, replace(wave, decisions=(replace(decision, reasons=('prices_before_mark',)),)))
+    assert len(events) == 3
+    assert all(item[1]['data']['console_state'] == original for item in events)
+
+
+def test_console_identity_covers_scopes_beyond_both_sample_limits(observed):
+    bot, _, wave, events = observed()
+    decision = wave.decisions[0]
+    decisions = tuple(replace(decision, scope=Scope('coin', 'long', f'COIN{i:04}/USDT:USDT'))
+                      for i in range(300))
+    diagnostics.record(bot, replace(wave, decisions=decisions))
+    first = events[-1][1]['data']
+    changed = decisions[:-1] + (replace(decisions[-1], scope=Scope('coin', 'short', 'COIN0299/USDT:USDT')),)
+    diagnostics.record(bot, replace(wave, decisions=changed))
+    second = events[-1][1]['data']
+    assert first['counts'] == second['counts']
+    assert first['scopes'] == second['scopes']
+    assert first['console_state'] != second['console_state']
+
+
+def test_estimate_recovery_uses_a_valid_event_status_with_real_pipeline(observed):
+    from live.event_bus import LiveEventPipeline, ListEventSink, LiveEvent
+    bot, _, wave, _ = observed()
+    durable = ListEventSink()
+    pipeline = LiveEventPipeline(structured_sinks=[durable])
+    bot._emit_live_event = lambda kind, **kwargs: pipeline.emit(LiveEvent(kind, **kwargs))
+    try:
+        clean = replace(wave, decisions=tuple(replace(d, reasons=()) for d in wave.decisions))
+        diagnostics.record(bot, clean)
+        assert pipeline.flush()
+        assert len(durable.events) == 1
+        assert durable.events[0].status == 'succeeded'
+        assert durable.events[0].data['counts']['estimated'] == 0
+    finally:
+        pipeline.close()

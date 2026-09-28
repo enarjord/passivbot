@@ -70,21 +70,35 @@ def record(bot, wave):
             tier=('red' if counts['red'] else 'unavailable' if counts['unavailable']
                   else 'green' if counts['green'] else 'inactive'),
             scopes=rows[:SCOPE_LIMIT], omitted_scopes=max(0, len(rows)-SCOPE_LIMIT))
+        # Human materiality ignores estimator-reason churn, numeric movement and
+        # cycle timestamps. Include every scope before either payload sample cap:
+        # equal aggregate counts must not hide a different affected position.
+        observation['console_state'] = hashlib.sha256(json.dumps(sorted([
+            (r['signal_mode'], r['symbol'] or '', r['pside'] or '', r['action'] or '',
+             r['tier'] or '', r['availability'], r['unavailable_reason'] or '', r['estimated'])
+            for r in rows]), sort_keys=True).encode()).hexdigest()
         scope_signature = hashlib.sha256(json.dumps([
             (r['signal_mode'], r['symbol'], r['pside'], r['action'], r['availability'],
              r['unavailable_reason'], r['estimates']) for r in rows], sort_keys=True).encode()).hexdigest()
         # A skipped account-refresh wave may let the previous observation expire.
-        # Publish that transition before replacing it, retaining only its compact
+        # Preserve the transition in durable history, retaining its compact
         # all-scope signature; this diagnostic state is never execution authority.
         previous = getattr(bot, '_hsl_revised_diagnostic_event', None)
-        if previous is not None:
-            prior = snapshot(bot, now_ms=int(utc_ms()))
-            if 'captured_at_ms' in prior:
-                _emit_status(bot, prior, previous[0][0])
+        prior = snapshot(bot, now_ms=int(utc_ms())) if previous is not None else None
         bot._hsl_revised_diagnostic_observation = observation
         bot._hsl_revised_diagnostic_failed = False
-        # Projection and the previous event sink may take time. Evaluate freshness
-        # only after those operations, immediately before creating the event.
+        replacement = snapshot(bot, now_ms=int(utc_ms()))
+        if prior is not None and 'captured_at_ms' in prior:
+            # Only classify expiry of an already replaced, unchanged GREEN/inactive
+            # observation. Actual current-input outages, RED and scope changes stay
+            # immediate. Both events remain durable with their original severity.
+            if (prior['observation_status'] == 'stale'
+                    and replacement['observation_status'] == 'current'
+                    and prior.get('console_state') == replacement.get('console_state')
+                    and not prior['counts']['red'] and not prior['counts']['unavailable']):
+                prior['console_replaced_observation'] = True
+            _emit_status(bot, prior, previous[0][0])
+        # Recheck after the prior sink write: a slow sink must not fabricate freshness.
         _emit_status(bot, snapshot(bot, now_ms=int(utc_ms())), scope_signature)
     except Exception as exc:
         # Optional diagnostics must never inhibit or fabricate a trading decision.
@@ -105,13 +119,14 @@ def _emit_status(bot, data, scope_signature):
     console_errors_before = _console_sink_error_count(bot)
     emitted = _safe_emit(bot, EventTypes.HSL_STATUS, component='risk.hsl', tags=(EventTags.RISK, EventTags.SUMMARY),
         level='warning' if unavailable else 'info',
-        status='degraded' if unavailable or counts['estimated'] else 'ok',
+        status='degraded' if unavailable or counts['estimated'] else 'succeeded',
         cycle_id=getattr(bot, '_live_event_current_cycle_id', None), data=data)
     console_errors_after = _console_sink_error_count(bot)
     console_failed = (console_errors_before is not None and console_errors_after is not None
                       and console_errors_after > console_errors_before)
     if emitted is None or console_failed:
-        logging.log(logging.WARNING if unavailable else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d',
+        logging.log(logging.DEBUG if data.get('console_replaced_observation') else
+                    logging.WARNING if unavailable else logging.INFO, '[risk] revised HSL | mode=%s observation=%s green=%d red=%d inactive=%d unavailable=%d estimated=%d',
                      data['signal_mode'], data['observation_status'], counts['green'], counts['red'],
                      counts['inactive'], counts['unavailable'], counts['estimated'])
 
@@ -129,8 +144,17 @@ def snapshot(bot, *, now_ms):
         missing = _account_unavailable(bot, now_ms)
         result['account_unavailable'] = missing
         age = now_ms - observed['captured_at_ms']
-        stale = (age < 0 or now_ms > observed['input_expires_at_ms'] or bool(missing)
-                 or observed['account_generation'] != int(getattr(bot, '_account_invalidation_generation', 0)))
+        stale_reasons = []
+        if age < 0:
+            stale_reasons.append('clock_before_capture')
+        if now_ms > observed['input_expires_at_ms']:
+            stale_reasons.append('input_expired')
+        if missing:
+            stale_reasons.append('account_unavailable')
+        if observed['account_generation'] != int(getattr(bot, '_account_invalidation_generation', 0)):
+            stale_reasons.append('account_generation_changed')
+        stale = bool(stale_reasons)
+        result['stale_reasons'] = stale_reasons
         result['age_ms'] = max(0, age)
         result['observation_status'] = ('diagnostic_unavailable' if getattr(bot, '_hsl_revised_diagnostic_failed', False)
                                         else 'stale' if stale else 'current')

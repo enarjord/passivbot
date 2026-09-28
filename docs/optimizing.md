@@ -717,8 +717,9 @@ The backend is hybrid rather than a replacement backtester:
    omit those unused accumulators. Dual-side runs retain the generic kernel. The selected variant
    is logged as `GPU MPS specialized kernel selected`; exact Rust validation and the normal drift
    gates remain authoritative.
-3. In suite mode, the same candidate batch is screened once per scenario and reduced with the
-   canonical suite scoring and limit contract.
+3. In suite mode, candidates are evaluated across scenarios and reduced with the canonical suite
+   scoring and limit contract. Compatible scenarios share GPU batches even when scenario screening
+   is disabled; incompatible scenarios are evaluated separately.
 4. Diverse proxy-front candidates and broad drift probes are sent to the unchanged Rust backtester.
 5. Only exact Rust results enter `all_results.bin` and the persisted Pareto front.
 6. Rolling rank and constraint-agreement gates independently stop the run if proxy/exact agreement
@@ -848,9 +849,9 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   drift comparisons. Seed bootstrap still evaluates the complete suite.
   Screening supports GPU-supported suite strategies, including EMA Anchor and Trailing
   Martingale. Compatible single-side multicoin Trailing Martingale scenarios share batches
-  during screening and full evaluation; device dispatch limits remain unchanged.
-  Runs without screening retain their existing batching. General evaluator compatibility
-  rules still apply when resuming checkpoints across code updates.
+  during screening and full evaluation, including runs with screening disabled; device dispatch
+  limits remain unchanged. General evaluator compatibility rules still apply when resuming
+  checkpoints across code updates.
   Screening labels and promotion settings are part of checkpoint identity, alongside scenario
   dates and runtime settings. Changing that policy requires a fresh optimization.
   Choose representative scenarios: aggressive screening can discard candidates that perform

@@ -148,8 +148,12 @@
    processing time is not post-boundary transport provenance. The current in-progress minute is
    rejected, an existing canonical basis is required, and WebSocket silence and reconnect gaps remain
    missing. A later changed row for the same timestamp overwrites the candle and invalidates affected
-   EMA state. WebSocket shard persistence must be read-verified before the row is exposed to cache
-   and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
+   EMA state. WebSocket canonical reads, merge-before-write reads, and persistence verification
+   propagate shard read failures, including failures masked by another legacy or primary source.
+   Missing shards are distinct from unreadable history. Strict canonical reads refresh source
+   discovery; strict merges read the actual write target under the fetch lock rather than trusting
+   a cached directory listing. WebSocket shard persistence must be read-verified before the row is
+   exposed to cache and EMA readers, including where an immutable legacy shard shadows primary storage. REST remains
    the complete fallback for startup basis, historical and internal gaps,
    prolonged silence, reconnect recovery, and a configured periodic integrity audit. Audits force a
    bounded REST overlap even while the persisted WebSocket tail is current; a successful REST
@@ -312,7 +316,9 @@
     no-trade fragments may share the proof window, but terminal and uncovered fragments cannot.
     Ordinary historical repair recognizes the union of deferred records without merging their
     independent retry clocks or refetching the surrounding cached history. Coverage uses one sorted
-    metadata snapshot per check. Contextual proof is scheduled only when both real bounds and the
+    metadata snapshot per check. Live present and historical scans index overlapping
+    records without merging their retry clocks, and rebuild the read index when canonical
+    metadata changes locally or through a shared-cache writer. Contextual proof is scheduled only when both real bounds and the
     overlap fit one request page; wider gaps remain unavailable under ordinary retry policy. Ordinary
     missing-range retries retain their existing independent schedule.
 15. Urgent active-candle refresh records and reports incomplete symbol coverage but does not itself
@@ -409,3 +415,17 @@ unexpected late programming failures are raised on the next acquisition instead 
 silently hidden. No source projection is written into factual caches. The caller owns
 background scheduling and coherent current-state capture; this staged reader alone
 does not activate revised trading.
+
+Revised-HSL source batches may retain a native copy of their immutable scalar candle
+rows for repeated evaluations. Replacing a source batch replaces that native copy.
+The copy contains no projected window or trading permission: every projection
+reapplies its exact lookback bounds and current exchange/UTC observation offset,
+and every risk evaluation still consumes current account and mark facts.
+
+### Live EMA preparation pacing
+
+Live EMA preparation keeps serial symbol loading when candle fetch pacing is positive and parallel
+loading when it is zero. Position symbols remain first in the ordered list. It does not add a sleep
+after preparing each symbol, but yields to other tasks without delay. The candle manager enforces the configured process-local spacing at
+actual CCXT OHLCV requests, so cache-only preparation incurs no artificial per-symbol pause.
+See [EMA preparation timings](live_events.md#ema-preparation-timings) for structured attribution.

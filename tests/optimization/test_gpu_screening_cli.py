@@ -1,4 +1,4 @@
-"""Scenario screening through the offline CLI, exact Rust validation and resume."""
+"""GPU suites through the offline CLI, exact Rust validation and resume."""
 
 import json
 import os
@@ -20,7 +20,10 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.mark.asyncio
-async def test_gpu_screening_cli_dates_exact_validation_and_resume(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("screening", [False, True])
+async def test_gpu_suite_cli_dates_exact_validation_and_resume(
+    tmp_path, monkeypatch, capsys, screening
+):
     from optimize import main
     from optimization.backends import gpu_backend
     from optimization.shape import build_optimization_shape
@@ -32,6 +35,9 @@ async def test_gpu_screening_cli_dates_exact_validation_and_resume(tmp_path, mon
     original_evaluate = gpu_backend._evaluate_gpu_suite_proxies
 
     def record_evaluate(suite, proxies, candidates, **kwargs):
+        # The optimizer must allow compatible grouping even without screening.
+        # These different-date scenarios still go through compatibility checks.
+        assert kwargs["batch_compatible_scenarios"] is True
         suite_calls.append(
             (len(candidates), tuple(kwargs["screening_scenarios"]), kwargs["evaluation_stage"])
         )
@@ -65,7 +71,8 @@ async def test_gpu_screening_cli_dates_exact_validation_and_resume(tmp_path, mon
     cfg["optimize"]["gpu"].update(
         population_size=8, batch_size=8, exact_workers=1,
         max_pending_exact=2, validate_per_generation=2, drift_probes=1,
-        screening=dict(scenarios=["recent"], survival_fraction=0.5, min_survivors=2),
+        screening=dict(scenarios=["recent"] if screening else [],
+                       survival_fraction=0.5, min_survivors=2),
         successive_halving={"enabled": False},
     )
     shape = build_optimization_shape(cfg)
@@ -92,7 +99,8 @@ async def test_gpu_screening_cli_dates_exact_validation_and_resume(tmp_path, mon
     path.write_text(json.dumps(cfg))
     monkeypatch.setattr(
         sys, "argv", ["optimize", str(path), "--suite", "y",
-                      "--optimize.gpu.screening.scenarios", '["recent"]']
+                      "--optimize.gpu.screening.scenarios",
+                      json.dumps(cfg["optimize"]["gpu"]["screening"]["scenarios"])]
     )
     with pytest.raises(SystemExit) as finished:
         await main()
@@ -105,9 +113,14 @@ async def test_gpu_screening_cli_dates_exact_validation_and_resume(tmp_path, mon
     state = pickle.loads(checkpoint.read_bytes())
     log_output = capsys.readouterr().err
     assert "Removed disabled legacy" in log_output
-    assert "stages=screening:8,full:4" in log_output
-    assert (8, ("recent",), "screening") in suite_calls
-    assert (4, (), "full") in suite_calls
+    if screening:
+        assert "stages=screening:8,full:4" in log_output
+        assert (8, ("recent",), "screening") in suite_calls
+        assert (4, (), "full") in suite_calls
+    else:
+        assert "GPU scenario screening" not in log_output
+        assert (8, (), "full") in suite_calls
+        assert all(labels == () and stage == "full" for _, labels, stage in suite_calls)
     assert state["generation"] > 0
     assert state["exact_done"] >= 32
     assert state["halt_reason"] is None

@@ -270,24 +270,34 @@ The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid`
 
 If a position is stuck, the bot uses profits from other positions to realize losses for the stuck position. If multiple positions are stuck, the position with the lowest price action distance is selected for unstucking.
 
-- **unstuck_close_pct**:
-  - Percentage of `full pos size * wallet_exposure_limit` to close for each unstucking order.
-- **unstuck_ema_dist**:
-  - Distance from EMA band to place unstucking order:
-    - `long_unstuck_close_price = upper_EMA_band * (1 + unstuck_ema_dist)`
-    - `short_unstuck_close_price = lower_EMA_band * (1 - unstuck_ema_dist)`
+These settings live under `bot.<side>.unstuck`. Effective WEL includes the resolved excess
+allowance: `effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)`.
+
+- **unstuck.close_pct**:
+  - Fraction of the effective exposure budget used to size each close, not a fraction of the current position.
+  - Before quantity rounding and other constraints, `close_qty_abs = balance * effective_wel * close_pct / (close_price * c_mult)`.
+  - Rust applies quantity-step rounding, exchange minimums, remaining-position sizing and loss-allowance scaling. There is no additional cap to stop precisely at `unstuck.threshold`.
+- **unstuck.ema_dist**:
+  - Offset for the EMA eligibility trigger, not the submitted order price:
+    - Long: current price must reach `upper_EMA_band * (1 + ema_dist)`, rounded up to the price tick.
+    - Short: current price must reach `lower_EMA_band * (1 - ema_dist)`, rounded down to the price tick.
+  - Once eligible, the close uses current price rounded up for longs or down for shorts.
 - **unstuck.ema_gating_enabled**:
   - Fixed boolean toggle for the auto-unstuck EMA trigger. Default is `true`.
   - When `false`, auto-unstuck skips the EMA trigger/readiness check but still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
-- **unstuck_loss_allowance_pct**:
-  - Weighted percentage below past peak balance to allow losses.
-  - `loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)`
-  - Example: If past peak balance was `$10,000`, `unstuck_loss_allowance_pct = 0.02`, and `total_wallet_exposure_limit = 1.5`, the bot stops taking losses when balance reaches `$10,000 * (1 - 0.02 * 1.5) = $9,700`.
+- **unstuck.loss_allowance_pct**:
+  - Sets a realized-loss budget weighted by the side's `total_wallet_exposure_limit`.
+  - `balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`.
+  - `loss_floor = balance_peak * (1 - loss_allowance_pct * total_wallet_exposure_limit)`; remaining allowance is `max(0, balance - loss_floor)`.
+  - Example: A reconstructed peak balance of `$10,000`, `loss_allowance_pct = 0.02`, and `total_wallet_exposure_limit = 1.5` give a `$9,700` floor. At a current balance of `$9,800`, the remaining allowance is `$100`.
+  - This is a pacing budget: exchange minimum sizing may exceed it. See the [loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
   - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_pct`; the selected coin+side then uses that percentage in the same account-wide formula.
-- **unstuck_threshold**:
-  - If a position is larger than the threshold, consider it stuck and activate unstucking.
-  - `if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled`
-  - Example: If a position size is `$500` and max allowed position size is `$1000`, the position is 50% full. If `unstuck_threshold = 0.45`, unstuck the position until its size is `$450`.
+- **unstuck.threshold**:
+  - Exposure eligibility trigger: `wallet_exposure / effective_wel > threshold`. Equality does not qualify.
+  - Wallet exposure uses the position's average entry price: `abs(position_size) * position_price * c_mult / balance`.
+  - This is not a target remaining exposure or a floor on the close. An eligible position can finish below the threshold after a close sized by `close_pct`.
+  - For an illustrative long at 100% of effective WEL, `threshold = 0.90` and `close_pct = 0.12` would leave about 88% if close price equals entry price and balance is unchanged, before rounding and other constraints. The order is not reduced to leave exactly 90%.
+  - When close price differs from entry price, the exposure reduction also differs from `close_pct`; see the [sizing formulas](config.bot.md#auto-unstucking).
 
 One non-panic protective reducer (TWEL/WEL auto-reduce or auto-unstuck) may coexist with ordinary
 grid, trailing, or EMA-anchor closes for the same position. Passivbot reserves the reducer quantity

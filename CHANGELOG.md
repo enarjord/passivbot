@@ -10,9 +10,60 @@ since the latest release tag; these features may already be available when insta
   bounds (config schema v8.5.0), retaining legacy config/CLI/selector aliases and all numeric defaults.
   Isolate Rust cooldown timing policy without changing fill timing or staged entry behavior.
 
+- Reduce repeated fill-history reconstruction after successful empty refreshes once full replay
+  proves the history unchanged; keep fetches, coverage, checkpoints and enrichment processing intact.
+
+- Reduce repeated strategy resolution during live warmup and market diagnostics, keeping reuse
+  local to each synchronous calculation so subsequent calculations observe current settings.
+
+- Reduce live candle ingestion CPU use for ordered appends and open-candle replacements, and
+  avoid searching historical gaps outside incoming rows while preserving overwrite and retry rules.
+
+- Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
+  does not exist yet. Reject unavailable existing shards, preserve finality and verified
+  persistence, and distinguish receive
+  failures from local ingestion failures in fallback warnings.
+
+- Remove redundant per-symbol sleeps during live EMA preparation while preserving remote candle
+  request pacing. Add bounded per-symbol and stage timings to structured EMA completion events.
+
+- Orient 2D Pareto plot axes so the ideal point is always toward the lower-left,
+  reversing maximization axes while preserving metric values and 3D orientation.
+
+- Highlight the Pareto member closest to the normalized ideal with a star in the plot
+  explorer, while retaining the theoretical ideal as an open diamond. Both update with limits.
+
+- Expand the Pareto plot HTML into an offline explorer with all saved metrics, 2D/3D
+  axis selectors, persistent floor/ceiling sliders, and a highlighted theoretical ideal
+  that updates from the filtered candidates.
+
+- Add `passivbot tool pareto-plot` for offline interactive 2D and rotatable 3D objective
+  scatter plots, with candidate hover details, metric discovery, and PNG export.
+
+- Make live console health easier to interpret: report trailing-input recovery, current close
+  coverage and account age, label summary delay and reconnect totals explicitly, and keep routine
+  timing and order-refresh mechanics in DEBUG. Summarize replaced HSL observations without hiding
+  current outages or RED transitions; retain detailed structured events and concise warnings.
+
+- Reduce repeated revised-HSL console summaries with bounded transition-aware admission,
+  retaining immediate scope/risk/availability changes and full structured events. Console summaries
+  identify estimated inputs explicitly and aggregate equivalent updates at most every five minutes;
+  estimate-free recovery events now use a valid registered status.
+
+- Batch compatible GPU optimization suite scenarios even when scenario screening is disabled,
+  preserving scenario scoring, exact validation, and existing dispatch limits.
+
+- Reduce live monitor CPU use by resolving strategy settings once per symbol and side within each snapshot.
+
+- Reduce live candle-gap scan CPU use by reusing indexed metadata within each read cohort while preserving retry and shared-cache freshness behavior.
+
+- Avoid repeated sorting of already ordered live candle arrays while preserving duplicate ordering and detached read results.
+
 - Add Lighter USDC perpetual trading through CCXT, including existing API-key authentication,
   one-way and reduce-only orders, cross/isolated margin, leverage, live and historical market data, and
   paginated fill/PnL history with restart reconstruction. See the Lighter setup guide.
+
+- Reduce revised live HSL candle-processing CPU use by retaining immutable native source rows and avoiding per-minute temporary allocations; every projection and risk decision still uses the current observation window and account inputs.
 
 - Replace GPU successive halving with one scenario-based screening pass: select
   `optimize.gpu.screening.scenarios`, promote a Pareto-diverse subset, then evaluate survivors

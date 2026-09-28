@@ -312,10 +312,11 @@ def capture(bot, quotes, candle_sources, *, symbols, now_ms, utc_now_ms,
                 continue
             if symbol not in projected:
                 source = candle_sources.get(symbol)
-                candles = [(c.start, c.minutes, c.open, c.high, c.low, c.close,
-                            c.available_at + offset)
-                           for tape in source.tapes for c in tape.candles] if source is not None else []
-                projected[symbol] = pbr.hsl_revised_native_price_grid(start, now_ms, candles)
+                projected[symbol] = (
+                    source.native_source.project(start, now_ms, offset)
+                    if source is not None
+                    else pbr.hsl_revised_native_price_grid(start, now_ms, [])
+                )
             _grid, last_price, price_reasons = projected[symbol]
             quote = quotes.get(symbol)
             flat_fill_prices = [(fill.timestamp, fill.price) for fill in history.fills

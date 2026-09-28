@@ -68,10 +68,21 @@ Instead of a traditional stop-loss that closes the entire position at a massive 
 Auto-unstuck works best when running multiple coins:
 * **Prioritization:** It prioritizes unstucking the **least underwater** coin first, quickly returning it to profitability.
 * **Profit Offsetting:** While one coin realizes losses to unstuck, the other active coins continue generating profit, smoothing out the equity curve.
-* **Capped Drawdown:** Total unstuck losses are capped at a configurable percentage below the historical peak balance (e.g., 1%). After the loss allowance is consumed, further losses can only be taken after other positions have made profits.
+* **Loss Pacing:** A realized-loss allowance limits how quickly auto-unstuck takes losses relative to a reconstructed balance peak. Exchange minimum sizing can exceed the remaining allowance; later realized profits can rebuild it, as described below.
 
 #### Weakness of Auto-Unstuck
 Extreme black-swan events (exchange failure, stablecoin depeg, delisting, and other causes of prolonged unilateral price movement) may cause the auto-unstuck mechanism to keep taking losses and re-entering continually on an adversely moving coin. The only realistic solution to these edge cases is **human intervention** as the final backstop.
+
+#### Auto-Unstuck Threshold And Close Size
+
+`bot.<side>.unstuck.threshold` is an eligibility trigger: the position's wallet exposure divided
+by its effective WEL must be strictly greater than the threshold. It does not specify a target
+remaining position or prevent a close from crossing below that threshold.
+
+`unstuck.close_pct` sizes each chunk from `balance * effective_wel` at the close order's price,
+while wallet exposure uses average entry price. The chunk can therefore reduce the exposure ratio
+by more or less than `close_pct`, before accounting for rounding, exchange minimums, loss allowance
+and balance changes. See the [auto-unstuck formulas](config.bot.md#auto-unstucking) for details.
 
 #### Auto-Unstuck Loss-Allowance Contract
 
@@ -176,8 +187,9 @@ Set `we_excess_allowance_mode = "legacy_raw"` only when intentionally preserving
 > With `n_positions=1`, the effective excess is capped at `0.0`: `min(1 - 1, excess_allowance)`. The single position's per-position allowance therefore remains `TWEL`; raw excess does not increase it.
 >
 > **Auto-Unstuck Trigger:**
-> Auto unstuck will begin at `effective_we_limit * unstuck_threshold`:
-> `0.375 * 0.48 == 0.18` (or 48% of the full position).
+> The exposure eligibility boundary is `effective_we_limit * unstuck_threshold`:
+> `0.375 * 0.48 == 0.18`. Wallet exposure must be strictly above this boundary,
+> and the other unstuck gates must pass. This is not a target remaining exposure.
 
 
 

@@ -110,6 +110,13 @@ must not alter event production, trading decisions, counters, or monitor history
 Each family that uses numeric materiality or hysteresis must define that boundary explicitly and
 test values on both sides; the console sink must not invent a generic threshold after emission.
 
+Revised-HSL console state includes every scope's identity, action/tier, availability and unavailable
+reason, plus whether estimates are in use. Estimation-reason churn and ordinary numeric/timestamp
+movement remain structured detail. Current-observation freshness, account availability and severity changes print
+immediately; equivalent degraded observations get an event-driven repeat summary at most every
+five minutes. No reminder is generated without a new observation. Presentation state is bounded,
+resets on restart, and advances its delivery checkpoint only after a successful sink write.
+
 ### Incident Projection
 
 Recoverable incidents use a bounded signature. Unexpected failures that abort a run additionally
@@ -169,3 +176,27 @@ Numbered failures that advance the finite risk-input recovery budget each emit o
 final attempt emits an error), even within five minutes. Readiness polls during backoff do not
 advance this budget or repeat the warning. First and final failures include bounded frame-only
 tracebacks. See `features/equity_hard_stop_loss.md` for the episode and terminal-stop contract.
+
+## Console Health And Refresh Boundaries
+
+The periodic heartbeat reports current open orders, last-loop duration, account observation age,
+and held close coverage (resting, waiting on a proven native trailing diagnostic, blocked, or
+unknown). A zero order count never implies either waiting or failure. Account age is unknown while
+required observations or confirmations are missing. Summary scheduling lateness is labelled
+`summary_late`; reconnect/rate-limit counts are process totals. Balance and cumulative trading
+activity remain in the durable health event and dedicated action/position records. Long health
+summaries split into bounded, individually timestamped records. Diagnostic projection failure must
+leave the base heartbeat visible with readiness unavailable.
+
+A prior GREEN/inactive HSL observation may expire immediately before an unchanged fresh observation
+replaces it. The producer marks only this proven replacement case; both events retain their durable
+severity and freshness. Its console projection uses DEBUG and a bounded five-minute aggregate of
+replacement count and maximum prior-sample age. This age is not an outage duration. Current stale
+observations, RED, unavailable scopes and changed semantic state remain immediate. Estimation
+provenance is labelled separately from freshness reasons. No trading authority uses these fields.
+
+Trailing-input warnings get an immediate recovery/clear notice without waiting for the periodic
+trailing diagnostic. Recovery means the input blocker cleared, not that a close order must exist.
+Routine refresh statistics and cancel-first mechanics stay in DEBUG; action outcomes and abnormal
+slow refreshes remain visible. A recognized self-generated websocket hint can use DEBUG only for
+presentation: required account refresh and fill-progress visibility remain unchanged.

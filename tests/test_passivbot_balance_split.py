@@ -3526,8 +3526,8 @@ def test_handle_order_update_logs_summary_and_dedupes(caplog, monkeypatch):
 
     ws_logs = [record.message for record in caplog.records if "[ws]" in record.message]
     assert ws_logs == [
-        "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC,SOL | statuses=canceled,open | scheduling refresh",
-        "[ws] order update detected | cause=replace_hint | events=2 | symbols=BTC,SOL | statuses=canceled,open | scheduling refresh",
+        "[ws] account refresh requested cause=replace_hint events=2 symbols=BTC,SOL statuses=canceled,open",
+        "[ws] account refresh requested cause=replace_hint events=2 symbols=BTC,SOL statuses=canceled,open",
     ]
     assert bot.execution_scheduled is True
     assert bot._authoritative_pending_confirmations == {
@@ -12915,7 +12915,7 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
     bot._authoritative_pending_confirmations = {}
     _set_authoritative_epoch_state(bot)
 
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         for i in range(60):
             bot._log_staged_refresh_timings(
                 {"open_orders"},
@@ -12923,7 +12923,7 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
                 100 + i,
             )
 
-    messages = [record.message for record in caplog.records]
+    messages = [record.message for record in caplog.records if "timing summary" in record.message]
     assert len(messages) == 1
     assert "[state] staged refresh timing summary" in messages[0]
     assert "plan=open_orders" in messages[0]
@@ -13112,7 +13112,7 @@ def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
     bot._authoritative_pending_confirmations = {}
     _set_authoritative_epoch_state(bot)
 
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         for _ in range(60):
             bot._log_staged_refresh_timings(
                 {"balance", "fills", "open_orders", "positions"},
@@ -13125,7 +13125,7 @@ def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
                 1_500,
             )
 
-    messages = [record.message for record in caplog.records]
+    messages = [record.message for record in caplog.records if "timing summary" in record.message]
     assert len(messages) == 1
     assert "[state] staged refresh timing summary" in messages[0]
     assert "plan=balance,fills,open_orders,positions" in messages[0]
@@ -13846,3 +13846,63 @@ async def test_fill_capture_interval_records_io_even_when_pnl_readiness_is_pendi
             from dataclasses import replace
             event = replace(event, qty=999.)
             assert observed.tape.pairs[0].fills[0].delta != event.qty
+
+
+def test_empty_forager_selection_is_not_repeated_periodically(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._forager_selection_info_interval_ms = 1000
+    bot._forager_selection_debug_interval_ms = 1000
+    now = [1000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+    result = {"diagnostics": {"forager_selections": [{
+        "pside": "short", "slots_to_fill": 1, "score_hysteresis_pct": .02,
+        "selected_symbol_indices": [], "incumbent_symbol_indices": [],
+        "top_scores": [], "hysteresis_events": []}]}}
+    with caplog.at_level(logging.INFO):
+        bot._log_forager_selection_diagnostics(result, {})
+        now[0] += 1001
+        bot._log_forager_selection_diagnostics(result, {})
+    assert len([r for r in caplog.records if '[forager] short selection' in r.message]) == 1
+
+
+def test_self_echo_console_demotion_preserves_required_refresh(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.execution_scheduled = False
+    _set_authoritative_epoch_state(bot, epoch=0)
+    now_ms = 1_000_000
+    import utils
+    monkeypatch.setattr(utils, 'utc_ms', lambda: now_ms)
+    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: now_ms)
+    order = dict(id='local', symbol='BTC/USDT:USDT', side='buy', position_side='long',
+                 price=100., qty=1., status='open',
+                 _pb_order_update_requires_authoritative_refresh=True)
+    recent = [{**order, 'execution_timestamp': now_ms}]
+    bot.recent_order_executions = recent
+    with caplog.at_level(logging.DEBUG):
+        bot.handle_order_update([order])
+    lines = [r for r in caplog.records if '[ws]' in r.message]
+    assert len(lines) == 1 and lines[0].levelno == logging.DEBUG
+    assert set(bot._authoritative_pending_confirmations) == {'balance', 'positions', 'open_orders', 'fills'}
+    assert bot.execution_scheduled is True
+    assert bot.recent_order_executions is recent
+
+
+def test_forager_selection_becoming_empty_is_visible_once(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._forager_selection_info_interval_ms = 1000
+    bot._forager_selection_debug_interval_ms = 1000
+    now = [1000]
+    monkeypatch.setattr(passivbot_module, 'utc_ms', lambda: now[0])
+    selection = dict(pside='long', slots_to_fill=1, selected_symbol_indices=[0],
+                     incumbent_symbol_indices=[], top_scores=[], hysteresis_events=[])
+    result = {'diagnostics': {'forager_selections': [selection]}}
+    with caplog.at_level(logging.INFO):
+        bot._log_forager_selection_diagnostics(result, {0: 'BTC/USDT:USDT'})
+        selection['selected_symbol_indices'] = []
+        now[0] += 1
+        bot._log_forager_selection_diagnostics(result, {})
+        now[0] += 1001
+        bot._log_forager_selection_diagnostics(result, {})
+    lines = [r.message for r in caplog.records if '[forager] long selection' in r.message]
+    assert len(lines) == 2
+    assert 'selected=-' in lines[1] and 'reason=selection_changed' in lines[1]

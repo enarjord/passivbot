@@ -840,7 +840,7 @@ async def test_completed_planner_failure_surfaces_while_account_refresh_is_block
     bot = SimpleNamespace(stop_signal_received=False,
         _begin_live_event_cycle=lambda **kwargs: None,
         refresh_protective_authoritative_state=refresh,
-        _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None,
+        _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None, _maybe_log_trailing_status=lambda: None,
         live_value=lambda key: .05)
     instance = hsl_revised_live.Owner(bot)
     instance.remember_position = lambda: None
@@ -1025,7 +1025,7 @@ async def test_next_planner_cannot_run_while_previous_plan_is_writing():
     bot = SimpleNamespace(stop_signal_received=False,
         _begin_live_event_cycle=lambda **kwargs: None,
         refresh_protective_authoritative_state=noop,
-        _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None,
+        _sleep_unless_shutdown=noop, _maybe_log_health_summary=lambda: None, _maybe_log_trailing_status=lambda: None,
         live_value=lambda key: .05)
     instance = hsl_revised_live.Owner(bot)
     instance._account_matches = lambda *args: True
@@ -1529,6 +1529,7 @@ async def test_revised_run_exits_on_each_canonical_shutdown_flag(flag):
         assert calls == ['cycle']
     instance.cycle = cycle
     bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_trailing_status = lambda: None
     bot._sleep_unless_shutdown = sleep
     bot.live_value = lambda key: .05
     await instance.run()
@@ -1628,3 +1629,26 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
         assert completed
     finally:
         _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+async def test_revised_trailing_console_failure_does_not_stop_execution():
+    from types import SimpleNamespace
+    bot = SimpleNamespace(stop_signal_received=False)
+    instance = hsl_revised_live.Owner(bot)
+    calls = []
+    async def cycle():
+        calls.append('cycle')
+        return {'updated': True}
+    async def sleep(*args, **kwargs):
+        bot.stop_signal_received = True
+    def broken_console():
+        calls.append('console')
+        raise OSError('optional sink')
+    instance.cycle = cycle
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_trailing_status = broken_console
+    bot._sleep_unless_shutdown = sleep
+    bot.live_value = lambda key: .05
+    await instance.run()
+    assert calls == ['cycle', 'console'] and not instance._running
