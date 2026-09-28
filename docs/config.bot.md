@@ -182,34 +182,62 @@ Apple MPS screening supports independent unstuck horizons and bounds for both su
 including per-coin overrides and candle-interval scaling. Start a fresh GPU run after upgrading;
 older screening checkpoints use a different parameter layout.
 
-When aggregated realised PnL falls below the peak by more than
-`unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is
-selected for loss realization:
-
-If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
-coin+side uses the override percentage in the same account-wide allowance formula
-when it is selected for unstucking. The override does not switch unstuck to a
-per-slot budget and does not create separate per-coin realized-PnL tracking.
+Auto-unstuck requires a positive remaining realized-loss allowance. It does not wait for equity
+to fall below a loss floor. The allowance is reconstructed from the account-wide realized-PnL
+window configured by `live.pnls_max_lookback_days`:
 
 ```text
-unstuck_allowed = peak_balance * (1 - unstuck_loss_allowance_pct *
-                                  total_wallet_exposure_limit)
-if equity < unstuck_allowed:
-    close_qty   = full_pos_size * unstuck_close_pct
-    close_price = EMA_band_opposite *
-                    (1 + sign(pside) * unstuck_ema_dist)
+balance_peak = balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)
+loss_fraction = unstuck.loss_allowance_pct * total_wallet_exposure_limit
+remaining_allowance = max(0, balance - balance_peak * (1 - loss_fraction))
 ```
 
-Positions become eligible when
-`wallet_exposure / wel_allowed > unstuck_threshold`.
+If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
+coin+side uses the override percentage in this same account-wide allowance formula.
+The override does not create a per-slot budget or separate per-coin realized-PnL tracking.
+
+With auto-unstuck enabled and positive `loss_allowance_pct`, `close_pct`, `threshold` and side
+TWEL, positions must pass the exposure test and, when enabled, the EMA gate described above:
+
+```text
+effective_wel = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)
+wallet_exposure = abs(position_size) * position_price * c_mult / balance
+eligible_exposure = wallet_exposure / effective_wel > unstuck.threshold
+```
+
+Here `position_price` is average entry price. The threshold is an eligibility trigger only;
+equality does not qualify. It is not a target remaining exposure, and Rust does not cap an
+unstuck close at the quantity needed to reach it.
+
+For the selected candidate, Rust uses current price rounded up to the price tick for a long
+close or down for a short close. Before quantity rounding and other constraints:
+
+```text
+close_qty_abs = balance * effective_wel * unstuck.close_pct / (close_price * c_mult)
+```
+
+This sizes a fraction of the effective exposure budget at the close price, not a fraction of
+the current position. Rust rounds quantity down, applies exchange minimums and position sizing,
+and scales loss-making closes when their estimated loss exceeds the remaining allowance.
+Minimum sizing can exceed the remaining allowance; see the
+[loss-allowance contract](risk_management.md#auto-unstuck-loss-allowance-contract).
+
+At unchanged balance and effective WEL, the nominal reduction in `wallet_exposure / effective_wel`
+is `close_pct * position_price / close_price`, before rounding and other constraints. For example,
+a long at 100% of effective WEL with `threshold = 0.90`, `close_pct = 0.12`, entry price 110 and
+close price 100 would fall to about 86.8%, not 90%. Realized losses, fees or other balance changes
+also change the denominator of the post-fill exposure ratio.
+
+These formulas describe [Rust's unstuck calculation](../passivbot-rust/src/risk.rs);
+[the allowance helper](../passivbot-rust/src/utils.rs) supplies the realized-loss budget.
 
 When multiple positions are eligible, auto-unstuck chooses the least stuck
 position first, defined as the lowest pside-aware relative distance between
 position price and market price. TWEL enforcer uses the same selector.
 
 `unstuck_ema_dist` must keep the EMA-derived trigger price positive:
-- `bot.long.unstuck_ema_dist > -1.0`
-- `bot.short.unstuck_ema_dist < 1.0`
+- `bot.long.unstuck.ema_dist > -1.0`
+- `bot.short.unstuck.ema_dist < 1.0`
 
 Configs that cross those boundaries now hard-fail during validation instead of silently
 disabling auto-unstuck. For near-always-on EMA triggering on either side, use a value like
