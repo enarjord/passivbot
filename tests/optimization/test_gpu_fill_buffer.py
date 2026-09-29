@@ -27,9 +27,11 @@ def test_buffered_ticks_reject_invalid_buffer(buffer):
         _strict_fill_tick_boundaries([100.0], [99.0], 0.01, buffer)
 
 
-def test_buffered_ticks_reject_overflow_before_integer_conversion():
-    with pytest.raises(ValueError, match='32-bit'):
-        _strict_fill_tick_boundaries([100.0], [99.0], 0.0001, np.nextafter(1.0, 0.0))
+def test_buffered_ticks_saturate_before_integer_conversion():
+    _, low_ticks = _strict_fill_tick_boundaries(
+        [100.0], [99.0], 0.0001, np.nextafter(1.0, 0.0),
+    )
+    assert low_ticks[0] == np.iinfo(np.int32).max
 
 
 def test_buffered_suite_cache_separates_fill_assumptions(monkeypatch):
@@ -237,5 +239,55 @@ def test_buffered_ticks_check_storage_range_after_strict_boundary_repair(buffer)
     high = np.array([(maximum + 1) * (1.0 + buffer)])
     high_ticks, _ = _strict_fill_tick_boundaries(high, [100.0], 1.0, buffer)
     assert high_ticks[0] == maximum
-    with pytest.raises(ValueError, match="32-bit"):
-        _strict_fill_tick_boundaries(np.nextafter(high, np.inf), [100.0], 1.0, buffer)
+    saturated_high, _ = _strict_fill_tick_boundaries(
+        np.nextafter(high, np.inf), [100.0], 1.0, buffer,
+    )
+    assert saturated_high[0] == maximum
+
+
+@pytest.mark.parametrize("buffer", [0.999, np.nextafter(1.0, 0.0)])
+def test_large_buffer_saturates_unreachable_buy_threshold(buffer):
+    high_ticks, low_ticks = _strict_fill_tick_boundaries([100000.0], [100000.0], 0.01, buffer)
+    maximum = np.iinfo(np.int32).max
+    assert low_ticks[0] == maximum
+    ticks = np.array([1, 10, 10000000, maximum - 1, maximum], dtype=np.int64)
+    prices = np.round(ticks * 0.01, 10)
+    np.testing.assert_array_equal(ticks <= high_ticks[0], 100000.0 > prices * (1 + buffer))
+    np.testing.assert_array_equal(ticks > low_ticks[0], 100000.0 < prices * (1 - buffer))
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("coin_count", [1, 2])
+def test_gpu_large_buffer_with_representable_prices_matches_rust(side, coin_count):
+    torch = pytest.importorskip("torch")
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip("GPU unavailable")
+    from backtest import run_backtest
+    from optimization.gpu.service import MpsSingleCoinProxy, MpsMulticoinProxy
+    cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.999, coin_count)
+    candles[:, :, :3] *= 1000.0
+    cfg["backtest"]["starting_balance"] = 1000000.0
+    cls = MpsSingleCoinProxy if coin_count == 1 else MpsMulticoinProxy
+    for buffer in [0.0, 0.999, np.nextafter(1.0, 0.0)]:
+        cfg["backtest"]["limit_order_fill_buffer_pct"] = buffer
+        proxy = cls(config=cfg, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
+                    exchange="bybit", batch_size=1, needed_metrics={"fills_per_day"})
+        result = proxy.evaluate([{}])[0]
+        fills, _, exact = run_backtest(candles, mss, cfg, "bybit", btc, ts)
+        assert result["fills_per_day"] == pytest.approx(exact["fills_per_day"], rel=1e-5)
+        assert (len(fills) == 0) == (buffer > 0.0)
+
+
+def test_threshold_division_overflow_saturates_without_integer_overflow():
+    with np.errstate(all="raise"):
+        high, low = _strict_fill_tick_boundaries(
+            [1e300], [1e300], 0.001, np.nextafter(1.0, 0.0),
+        )
+    maximum = np.iinfo(np.int32).max
+    assert high[0] == low[0] == maximum
+
+
+def test_saturation_does_not_relax_executable_price_range():
+    from optimization.gpu.model import _directional_touch_ticks
+    with pytest.raises(ValueError, match="touch ticks exceed signed 32-bit range"):
+        _directional_touch_ticks([float(np.iinfo(np.int32).max + 1)], 1.0)

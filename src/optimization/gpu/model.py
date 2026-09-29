@@ -687,14 +687,15 @@ def _strict_fill_tick_boundaries(
         sell_ticks = np.floor((safe_high / sell_factor) / price_step)
         buy_ticks = np.floor((safe_low / buy_factor) / price_step)
     i32 = np.iinfo(np.int32)
-    # Allow the bounded repair below to bring an exact endpoint into range
-    # before enforcing int32 storage. For example, an exact high at max+1
-    # has max as its largest strictly fillable sell tick.
+    # Thresholds above every representable order tick mean all sells / no
+    # buys cross. Cap the float estimate before integer conversion (even when
+    # division overflowed), retaining room for the strict-boundary repair.
+    # Actual executable prices are still validated by directional touch packing.
     for ticks in (sell_ticks, buy_ticks):
-        if not np.all(np.isfinite(ticks) & (ticks >= i32.min - 2) & (ticks <= i32.max + 2)):
+        if not np.all(~np.isnan(ticks) & (ticks >= i32.min - 2)):
             raise ValueError("MPS proxy candle price ticks exceed signed 32-bit range")
-    high_fill_max = sell_ticks.astype(np.int64)
-    low_nonfill_max = buy_ticks.astype(np.int64)
+    high_fill_max = np.minimum(sell_ticks, i32.max + 2).astype(np.int64)
+    low_nonfill_max = np.minimum(buy_ticks, i32.max + 2).astype(np.int64)
 
     decimal_multiplier = None
     multiplier = 1.0
@@ -736,12 +737,13 @@ def _strict_fill_tick_boundaries(
 
     high_fill_max[~finite] = 0
     low_nonfill_max[~finite] = 0
-    i32 = np.iinfo(np.int32)
+    # Saturation preserves both comparisons over the complete int32 order
+    # domain: order <= high_fill_max and order > low_nonfill_max.
+    high_fill_max = np.minimum(high_fill_max, i32.max)
+    low_nonfill_max = np.minimum(low_nonfill_max, i32.max)
     if (
         high_fill_max.min(initial=0) < i32.min
-        or high_fill_max.max(initial=0) > i32.max
         or low_nonfill_max.min(initial=0) < i32.min
-        or low_nonfill_max.max(initial=0) > i32.max
     ):
         raise ValueError("MPS proxy candle price ticks exceed signed 32-bit range")
     return high_fill_max.astype(np.int32), low_nonfill_max.astype(np.int32)
