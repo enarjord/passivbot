@@ -1102,3 +1102,41 @@ def test_volume_pruning_limits_required_rms_scoring_set(side, marker, missing_id
     symbols[0]["emas"]["m1"]["signed_unilateralness"] = [[60.0, 1.5]]
     with pytest.raises(ValueError, match="signed_unilateralness"):
         compute(pbr, inp)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("score_weight", [0.0, 1.0])
+def test_late_validity_end_rejects_held_valuation_before_optional_rms_ranking(side, score_weight):
+    from backtest import build_backtest_payload, execute_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    coins = ["LONGCOIN", "SHORTCOIN", "THIRDCOIN"]
+    cfg["live"]["approved_coins"] = {"long": [], "short": []}
+    cfg["live"]["approved_coins"][side] = coins
+    cfg["bot"][side]["risk"]["n_positions"] = 3
+    cfg["bot"][side]["forager"].update(unilateralness_ema_span_1m=1.0,
+        score_weights={"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": score_weight})
+    cfg["backtest"].update(dynamic_wel_by_tradability=False, candle_interval_minutes=1)
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": coins}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    hlcvs = np.concatenate([hlcvs, hlcvs[:, 1:2].copy()], axis=1)
+    markets["THIRDCOIN"] = copy.deepcopy(markets["SHORTCOIN"])
+    # The first coin fills early, then moves adversely and stays held through its
+    # late validity end. Two candidates would compete if planning could proceed.
+    held_price = 80.0 if side == "long" else 120.0
+    hlcvs[12:, 0, :3] = [held_price + 0.01, held_price - 0.01, held_price]
+    payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
+    payload.backtest_params["trade_start_indices"] = [10, 31, 31]
+    # Keep actual candles beyond the tradable range for held-position valuation.
+    payload.backtest_params["last_valid_indices"] = [30, 59, 59]
+    assert all(pair[side]["entry_eligible"] for pair in payload.bot_params_list)
+    assert all(pair[side]["n_positions"] == 3 for pair in payload.bot_params_list)
+    assert all(pair[side]["forager_score_weights"]["unilateralness"] == score_weight
+               for pair in payload.bot_params_list)
+    # An out-of-range held position cannot be valued, even when finite prices
+    # exist outside its declared valid range. This guard precedes ranking and
+    # must remain fatal with both disabled and enabled RMS scoring.
+    with pytest.raises(ValueError, match="missing held-position valuation candle: coin LONGCOIN index 0 candle 31"):
+        execute_backtest(payload, cfg)
