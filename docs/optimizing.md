@@ -302,6 +302,7 @@ The supported slice is intentionally narrow:
   the configured rolling realized net-PnL window, including fees and a shared long/short
   history. The history retains at most one event per candle, preserves intrabar peaks,
   and uses bounded candidate batches when its buffers would exceed the scratch budget.
+  History buffers are omitted when auto-unstuck is disabled on every effective side/coin.
   Other topologies use a conservative all-history realized net-PnL peak. Metal admits
   at most one least-stuck eligible position per portfolio, scales a
   losing close to its own allowance subject to exchange minimums, and lets that close compete with
@@ -923,10 +924,17 @@ duplicate-elimination controls as the ordinary pymoo optimizer.
   It must be at least `validate_per_generation` so throttling cannot change the configured
   proxy-front/broad-probe evidence allocation; the backend waits for that capacity before
   screening another generation.
-- `checkpoint_interval_seconds` bounds generation-level optimizer-state checkpoint writes. Exact
-   result batches are checkpointed immediately, and each durable result carries the proxy/exact
-   safety evidence needed to recover if its flush outruns the companion checkpoint. A final
-   evidence-budget check applies to fresh and resumed runs and includes recovered class membership,
+- Completed exact CPU results are recorded in submission order while the next GPU proxy pass
+   runs, with structured `exact_progress` events after each collected batch. A collector failure
+   reaches the main thread when the current proxy pass returns; no next generation or additional
+   exact jobs are submitted after that failure. The collector is joined before shutdown.
+- GPU optimizer state is checkpointed after every completed generation and after exact-result
+   batches collected outside a proxy pass. `checkpoint_interval_seconds` does not throttle these
+   forced safety checkpoints. During a proxy pass, only the durable result stream advances;
+   checkpoints wait until the ask/tell transaction is complete. Each durable result carries the
+   candidate identity and proxy/exact safety evidence needed to recover results ahead of the last
+   safe checkpoint after interruption or a failure following a successful result flush. A final evidence-budget check applies
+   to fresh and resumed runs and includes recovered class membership,
    the rolling-window suffix, discarded pending work, and all full or partial validation batches.
    Exact worker results are consumed in submission order even if workers finish out of order,
    preserving the modeled batch sequence. Resume fails closed if the mandatory proxy-front gate can

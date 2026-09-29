@@ -3127,28 +3127,60 @@ async def test_ema_bundle_keeps_parallel_fetches_when_exchange_has_zero_delay(mo
 
 
 @pytest.mark.asyncio
-async def test_ema_bundle_serializes_fetches_when_exchange_has_default_pacing(monkeypatch):
-    try:
-        import passivbot as pb_mod
-    except ImportError:
-        pytest.skip("passivbot module not importable in test environment")
+@pytest.mark.parametrize("exchange", ["bybit", "hyperliquid", "kucoin"])
+async def test_ema_bundle_serializes_without_post_symbol_sleeps(monkeypatch, exchange):
+    import passivbot as pb_mod
 
     original_sleep = asyncio.sleep
+    sleeps = []
 
-    async def _no_delay(_seconds):
-        return None
+    async def record_sleep(seconds):
+        sleeps.append(seconds)
 
     monkeypatch.setattr(pb_mod.random, "shuffle", lambda items: None)
-    monkeypatch.setattr(pb_mod.asyncio, "sleep", _no_delay)
-    bot = _PacingProbeBot(exchange="bybit", sleep_fn=original_sleep)
-
-    await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-        bot,
-        ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
-        {"long": {}, "short": {}},
-    )
+    monkeypatch.setattr(pb_mod.asyncio, "sleep", record_sleep)
+    bot = _PacingProbeBot(exchange=exchange, sleep_fn=original_sleep)
+    symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
+    modes = {"long": {}, "short": {}}
+    result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, modes)
 
     assert bot.cm.max_concurrency == 1
+    assert sleeps == [0, 0, 0]  # Cooperative yields, no cache-only pacing floor.
+    parallel_bot = _PacingProbeBot(exchange="binance", sleep_fn=original_sleep)
+    parallel_result = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        parallel_bot, symbols, modes
+    )
+    assert result == parallel_result
+
+
+@pytest.mark.asyncio
+async def test_paced_cached_ema_bundle_yields_to_background_tasks(monkeypatch):
+    import passivbot as pb_mod
+
+    loads = []
+    observations = []
+    done = False
+
+    async def cached_read(_seconds):
+        loads.append(True)  # Cache hits complete synchronously, despite being async.
+
+    async def background():
+        while not done:
+            observations.append(len(loads))
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(pb_mod.random, "shuffle", lambda items: None)
+    bot = _PacingProbeBot(exchange="hyperliquid", sleep_fn=cached_read)
+    task = asyncio.create_task(background())
+    try:
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            {"long": {}, "short": {}},
+        )
+    finally:
+        done = True
+        await task
+    assert any(0 < count < len(loads) for count in observations)
 
 
 @pytest.mark.asyncio

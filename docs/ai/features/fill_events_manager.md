@@ -116,6 +116,14 @@ strategy inputs; revised HSL still uses the Rust best-effort reconciler independ
     requirements after fetching so delayed fills cannot be accepted under the
     earlier boundary and older discarded episodes cannot remain PnL blockers.
 
+## Empty-refresh replay reuse
+
+A successful empty fetch may skip reconstruction only after a full replay proved the same history
+was unchanged, with the same fee policy and no new PnL observations. The disposable proof owns a
+deep copy including mutable raw/fee/provenance data. Fetched duplicates and all enrichment still
+use the full path. Fetches, failure propagation, coverage repair, metadata and refresh checkpoints
+remain unconditional; restart or loss of the proof simply repeats full reconstruction.
+
 ## Runtime Provenance
 
 The optional fill provenance record contains the runtime run id, Passivbot

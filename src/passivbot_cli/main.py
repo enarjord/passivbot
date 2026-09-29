@@ -235,6 +235,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "select a single candidate from a Pareto front (requires full install)",
         requires_full=True,
     ),
+    "pareto-plot": CommandSpec(
+        "tools.pareto_plot",
+        "explore Pareto metrics and limits in offline HTML (requires full install)",
+        requires_full=True,
+    ),
     "pareto-dash": CommandSpec(
         "tools.pareto_dash",
         "launch Pareto dashboard (requires full install)",

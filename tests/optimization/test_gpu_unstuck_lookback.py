@@ -55,6 +55,53 @@ def make_proxy(sides, lookback=8 / 1440):
 
 
 @pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
+@pytest.mark.parametrize("policy", ["disabled", "enabled", "coin_enabled", "coins_disabled"])
+def test_unstuck_history_requires_an_effective_consumer(sides, policy):
+    from optimization.gpu.service import MpsMulticoinProxy
+
+    config, candles, markets, btc, timestamps = _fixture(sides[0], 2, "initial")
+    config["live"]["pnls_max_lookback_days"] = 30.0
+    for side in sides:
+        config["bot"][side]["risk"].update(
+            n_positions=2, total_wallet_exposure_limit=2.0
+        )
+        config["bot"][side]["unstuck"]["enabled"] = policy in {"enabled", "coins_disabled"}
+        # These are optimizer genes: a zero base value must not elide history.
+        config["bot"][side]["unstuck"]["loss_allowance_pct"] = 0.0
+    if len(sides) == 1:
+        inactive_side = "short" if sides[0] == "long" else "long"
+        config["bot"][inactive_side]["unstuck"]["enabled"] = True
+    if policy == "coin_enabled":
+        config["coin_overrides"] = {
+            "ETH": {"bot": {sides[-1]: {"unstuck": {"enabled": True}}}}
+        }
+    elif policy == "coins_disabled":
+        config["coin_overrides"] = {
+            coin: {"bot": {side: {"unstuck": {"enabled": False}} for side in sides}}
+            for coin in ("BTC", "ETH")
+        }
+    proxy = MpsMulticoinProxy(
+        config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+        exchange="bybit", batch_size=2, needed_metrics={"adg_strategy_eq"},
+    )
+    runner, finite = raw(proxy, [{}, {}])
+    expected = policy in {"enabled", "coin_enabled"}
+    assert runner.unstuck_pnl_lookback_bars == (43_200 if expected else 0)
+    assert runner.unstuck_pnl_capacity == (len(candles) if expected else 0)
+    assert bool(runner._unstuck_pnl_buffers) == expected
+    if not expected:
+        assert runner._history_bytes_per_candidate() == 0
+        config["live"]["pnls_max_lookback_days"] = "all"
+        all_history_proxy = MpsMulticoinProxy(
+            config=config, hlcvs=candles, mss=markets, btc=btc, timestamps=timestamps,
+            exchange="bybit", batch_size=2, needed_metrics={"adg_strategy_eq"},
+        )
+        _, all_history = raw(all_history_proxy, [{}, {}])
+        for key in ("balance", "fill_count", "psize"):
+            np.testing.assert_array_equal(finite[key].cpu(), all_history[key].cpu())
+
+
+@pytest.mark.parametrize("sides", [("long",), ("short",), ("long", "short")])
 @pytest.mark.parametrize("lookback", [8 / 1440, "all"])
 def test_unstuck_expiring_loss_budget_matches_exact_rust(sides, lookback):
     from backtest import run_backtest

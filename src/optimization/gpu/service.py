@@ -3488,8 +3488,16 @@ class MpsMulticoinProxy:
             "entry_interval_enabled": self.entry_interval_enabled,
         }
         if self.strategy_kind == "trailing_martingale":
-            common_runner_kwargs["unstuck_pnl_lookback_bars"] = _legacy_pnl_lookback_bars(
-                backtest_params
+            # The payload includes effective per-coin flags after overrides.
+            # Numeric unstuck genes may vary, so retain history whenever an
+            # enabled side/coin can consume it, even if its base allowance is zero.
+            unstuck_enabled = any(
+                bool(item[side]["unstuck_enabled"])
+                for item in projected
+                for side in self.sides
+            )
+            common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
+                _legacy_pnl_lookback_bars(backtest_params) if unstuck_enabled else 0
             )
         if self.hsl_engine == "revised":
             common_runner_kwargs.update(hsl_engine="revised",

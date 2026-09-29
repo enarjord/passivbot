@@ -609,6 +609,10 @@ class Owner:
                     continue
                 bot._last_loop_duration_ms = int(utc_ms()) - started
                 bot._maybe_log_health_summary()
+                try:
+                    bot._maybe_log_trailing_status()
+                except Exception as exc:
+                    logging.debug('[trailing] status presentation failed | error_type=%s', type(exc).__name__)
                 await bot._sleep_unless_shutdown(
                     max(.05, float(bot.live_value('execution_delay_seconds'))),
                     stage='revised_execution_delay')
