@@ -1968,18 +1968,35 @@ class Passivbot:
         )
 
     def _max_configured_entry_cooldown_minutes(self) -> float:
-        symbols: list[Optional[str]] = [None]
-        symbols.extend(sorted((getattr(self, "coin_overrides", {}) or {}).keys()))
-        return max(
-            (
+        overrides = getattr(self, "coin_overrides", {}) or {}
+        config = getattr(self, "config", {})
+        source = config.get("_coins_sources", {}).get(
+            "approved_coins", config.get("live", {}).get("approved_coins")
+        )
+        horizons = []
+        for pside in ("long", "short"):
+            if not self.is_pside_enabled(pside):
+                continue
+            raw = source.get(pside) if isinstance(source, dict) else source
+            approved = getattr(self, "approved_coins_minus_ignored_coins", {}).get(pside)
+            explicit = isinstance(raw, (list, tuple, set)) and not any(
+                str(coin).strip().lower() == "all" for coin in raw
+            )
+            # Until selection is resolved (or for an all universe), retain the
+            # default. Otherwise each approved symbol supplies its effective policy.
+            if explicit and approved:
+                eligible = {symbol for symbol in approved if self.is_approved(pside, symbol)}
+                symbols = sorted(eligible.intersection(overrides))
+                if eligible.difference(overrides):
+                    symbols.append(None)
+            else:
+                symbols = [None, *sorted(overrides)]
+            horizons.extend(
                 Passivbot._entry_cooldown_horizon(self, pside, symbol)
                 for symbol in symbols
-                for pside in ("long", "short")
-                if self.is_pside_enabled(pside)
-                and (symbol is None or self.is_approved(pside, symbol))
-            ),
-            default=0.0,
-        )
+                if symbol is None or self.is_approved(pside, symbol)
+            )
+        return max(horizons, default=0.0)
 
     def _required_pnl_history_start_ms(
         self, now_ms: int, *, pnl_start_ms: Optional[int]

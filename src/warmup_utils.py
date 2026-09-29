@@ -201,8 +201,9 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
 
 
 def _rms_param_sets(config, bounds, *, param_sets=None):
-    """Use selected coin policies when known; retain defaults for inheriting coins."""
+    """Size RMS from eligible coin-side policies, retaining unresolved defaults."""
     from backtest_universe import normalize_backtest_coin
+    from utils import heuristic_symbol_to_coin, looks_like_exact_market_identifier
 
     coins = config.get("backtest", {}).get("coins", {})
     groups = list(coins.values()) if isinstance(coins, dict) else [coins]
@@ -210,24 +211,36 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
         normalize_backtest_coin(coin) for group in groups
         if isinstance(group, (list, tuple, set)) for coin in group
     }
-    if not selected:
-        approved = config.get("live", {}).get("approved_coins", {})
-        if isinstance(approved, dict):
-            selected = {
-                normalize_backtest_coin(coin) for group in approved.values()
-                if isinstance(group, (list, tuple, set)) for coin in group
-            }
+    approved = config.get("live", {}).get("approved_coins", {})
+    if not selected and isinstance(approved, dict):
+        selected = {
+            normalize_backtest_coin(coin) for group in approved.values()
+            if isinstance(group, (list, tuple, set)) for coin in group
+        }
+    selected.discard("ALL")
+    by_side = {}
+    for side in ("long", "short"):
+        raw = approved.get(side) if isinstance(approved, dict) else None
+        if selected and isinstance(raw, (list, tuple, set)) and not any(str(x).lower() == "all" for x in raw):
+            exact = {normalize_backtest_coin(coin) for coin in raw}
+            aliases = {heuristic_symbol_to_coin(coin) for coin in exact if not looks_like_exact_market_identifier(coin)}
+            by_side[side] = {coin for coin in selected if coin in exact or heuristic_symbol_to_coin(coin) in aliases}
+        else:
+            by_side[side] = selected or None
     overrides = config.get("coin_overrides", {})
     for coin, long, short, *_ in (param_sets if param_sets is not None else _iter_param_sets(config)):
-        if selected and (
-            (coin == "__default__" and selected.issubset(overrides))
-            or (coin != "__default__" and coin not in selected)
-        ):
-            continue
-        # A coin's cooldown leaves win over global search dimensions too.
-        effective_bounds = dict(bounds)
-        for side in ("long", "short"):
+        for side, params in (("long", long), ("short", short)):
+            eligible = by_side[side]
+            if eligible is not None and (
+                (coin == "__default__" and eligible.issubset(overrides))
+                or (coin != "__default__" and coin not in eligible)
+            ):
+                continue
             patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
+            if patch.get("wallet_exposure_limit") == 0.0:
+                continue
+            # Coin pins supersede global search dimensions for this side.
+            effective_bounds = dict(bounds)
             for key in list(effective_bounds):
                 prefix = f"{side}_"
                 if not key.startswith(prefix):
@@ -237,7 +250,7 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
                 if (name in patch or (name.startswith(weights) and
                         name[len(weights):] in patch.get("entry_cooldown_weights_minutes", {}))):
                     del effective_bounds[key]
-        yield coin, long, short, effective_bounds
+            yield coin, side, params, effective_bounds
 
 
 def _rms_history_configs(config, bounds):
@@ -383,8 +396,7 @@ def compute_backtest_warmup_minutes(
                     for rms_config, rms_bounds in (
                         [(config, {})] if for_trade_activation else _rms_history_configs(config, bounds)
                     )
-                    for _, long, short, effective_bounds in _rms_param_sets(rms_config, rms_bounds)
-                    for side, params in (("long", long), ("short", short))
+                    for _, side, params, effective_bounds in _rms_param_sets(rms_config, rms_bounds)
                 ),
                 default=0,
             ),
@@ -402,7 +414,7 @@ def compute_per_coin_warmup_minutes(
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
     param_sets = list(_iter_param_sets(config))
-    rms_coins = {coin for coin, *_ in _rms_param_sets(config, {}, param_sets=param_sets)} if include_rms else set()
+    rms_pairs = {(coin, side) for coin, side, *_ in _rms_param_sets(config, {}, param_sets=param_sets)} if include_rms else set()
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
@@ -443,8 +455,10 @@ def compute_per_coin_warmup_minutes(
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
-        if include_rms and coin in rms_coins:
+        if include_rms:
             for side, params in (("long", long_params), ("short", short_params)):
+                if (coin, side) not in rms_pairs:
+                    continue
                 warmup_minutes = max(
                     warmup_minutes,
                     _rms_warmup_minutes(params, side, for_trade_activation=for_trade_activation),

@@ -8,7 +8,7 @@ resolved, and shows examples for both inline and file-based overrides.
 
 Allowed fields are intentionally limited:
 
-- **Bot params** (per side): per-coin wallet exposure limits; `entry_cooldown.base_duration_minutes`;
+- **Bot params** (per side): per-coin wallet exposure limits; all `entry_cooldown` leaves (listed below);
   selected risk fields (position-exposure enforcer settings and
   `we_excess_allowance_pct`); selected unstuck fields (`close_pct`, `ema_dist`,
   `ema_gating_enabled`, `ema_span_0`, `ema_span_1`, `enabled`, `loss_allowance_pct`, and `threshold`); and
@@ -27,6 +27,19 @@ nested v8 strategy path instead.
 patches that contain it fail with a migration message. A complete file used through
 `override_config_path` may contain the global field, but it is warned about and ignored for the
 coin patch; set the value in the main config instead.
+
+The complete cooldown override group is:
+
+- `entry_cooldown.base_duration_minutes`
+- `entry_cooldown.min_duration_minutes`
+- `entry_cooldown.max_duration_minutes`
+- `entry_cooldown.weights_minutes.exposure_ratio`
+- `entry_cooldown.weights_minutes.adverse_directionality`
+
+Omitted leaves inherit the global policy. An explicit zero disables that modifier for the coin;
+`max_duration_minutes: null` clears the ceiling only when the effective modifier weights are zero.
+Positive effective weights require a finite ceiling, and the ceiling must be at least the floor.
+Forager scoring weights and the RMS span remain global, not per-coin overrides.
 
 The complete conditional HSL override group is:
 
@@ -92,7 +105,13 @@ Coin keys that normalize to the same ticker are also rejected instead of overwri
             "loss_allowance_pct": 0.005
           },
           "entry_cooldown": {
-            "base_duration_minutes": 0.05
+            "base_duration_minutes": 0.05,
+            "min_duration_minutes": 0.0,
+            "max_duration_minutes": 60.0,
+            "weights_minutes": {
+              "exposure_ratio": 10.0,
+              "adverse_directionality": 20.0
+            }
           },
           "hsl": {
             "enabled": true,

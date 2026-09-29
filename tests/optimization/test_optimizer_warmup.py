@@ -354,9 +354,46 @@ def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, search
     assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
     # An inheriting selected coin makes the global policy reachable again.
     cfg["backtest"]["coins"]["binance"].append("XRP")
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    cfg["live"]["approved_coins"][side].append("XRP")
     assert compute_backtest_warmup_minutes(cfg) == 2000001
     assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
     # Without a resolved selection, retain the conservative global history.
     cfg["backtest"]["coins"] = {}
     cfg["live"]["approved_coins"] = {"long": [], "short": []}
     assert compute_backtest_warmup_minutes(cfg) == 2000001
+
+
+@pytest.mark.parametrize("searched", [False, True])
+@pytest.mark.parametrize("dataset_known", [False, True])
+def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_known):
+    from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]} if dataset_known else {}
+    cfg["optimize"]["bounds"] = {}
+    cfg["coin_overrides"] = {}
+    for side, coin in (("long", "BTC"), ("short", "ETH")):
+        cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+        cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+        cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+        cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
+        cfg["optimize"]["bounds"].update({f"{side}_n_positions": [1.0], f"{side}_total_wallet_exposure_limit": [1.0]})
+        if searched:
+            cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+        cfg["coin_overrides"][coin] = {"bot": {side: {"entry_cooldown": {
+            "weights_minutes": {"adverse_directionality": 0.0}, "max_duration_minutes": None,
+        }}}}
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    assert max(compute_per_coin_warmup_minutes(cfg).values()) == 0
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
+    # Opening the opposite side makes that inherited policy a real consumer.
+    cfg["live"]["approved_coins"]["long"].append("ETH")
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
+    # A zero per-coin exposure pin still makes the newly approved side ineligible.
+    cfg["coin_overrides"]["ETH"]["bot"]["long"] = {"wallet_exposure_limit": 0.0}
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 0

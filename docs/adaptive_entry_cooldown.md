@@ -122,12 +122,13 @@ bounds. The CLI accepts `null` to clear a ceiling; omitting the option keeps its
 Dormant RMS weights on a statically disabled side do not require history or one-minute
 candles. After selecting a dataset, optimizer preflight checks reachable RMS consumers
 against finalized per-coin eligibility and overrides. When selected coins are known,
-RMS history follows their effective policies; an unused global policy or unselected
-override does not extend it. Inheriting coins and unresolved selections retain the
+RMS history follows their effective, entry-eligible coin-side policies; an unused global
+policy, opposite ineligible side, or unselected override does not extend it. Inheriting coins and unresolved selections retain the
 default requirement. Entry-ineligible sides neither
 restrict the candle interval nor extend RMS trade activation.
 Live cooldown fill-history coverage includes only globally enabled sides and approved
-coin overrides, retaining the default horizon for inheriting symbols.
+coin overrides. An explicit resolved universe uses each approved symbol's effective
+policy; inheriting symbols and unresolved or `all` universes retain the default horizon.
 RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. An incomplete window defers only the entry side that uses
 adverse cooldown, leaving closes and unrelated sides/coins available. N returns need

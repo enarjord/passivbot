@@ -1408,3 +1408,47 @@ def test_direct_rust_orders_enforce_supported_rms_span(side, consumer):
         symbol["emas"]["m1"]["signed_unilateralness"] = [[100000.01, 0.5]]
     with pytest.raises(ValueError, match="unilateralness.*100000"):
         compute(pbr, inp)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
+    from passivbot import Passivbot
+    from config.runtime_compile import compile_runtime_config
+
+    bot = Passivbot.__new__(Passivbot)
+    cfg = prepare_config(get_template_config(), verbose=False)
+    for pside in ("long", "short"):
+        cfg["bot"][pside]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(pside == side))
+    cfg["live"]["approved_coins"] = {pside: ["BTC", "ETH"] for pside in ("long", "short")}
+    cfg.pop("_coins_sources", None)
+    cfg["bot"][side]["entry_cooldown"].update(
+        base_duration_minutes=0.0, max_duration_minutes=14400.0,
+        weights_minutes={"exposure_ratio": 10.0, "adverse_directionality": 0.0},
+    )
+    bot.config = compile_runtime_config(cfg, runtime="live")
+    bot.approved_coins_minus_ignored_coins = {side: {"BTC", "ETH"}}
+    bot.is_approved = lambda pside, symbol: symbol in bot.approved_coins_minus_ignored_coins.get(pside, set())
+    bot._equity_hard_stop_enabled = lambda: False
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    bot.coin_overrides = {coin: {"bot": {side: {"entry_cooldown": {
+        "max_duration_minutes": None, "weights_minutes": {"exposure_ratio": 0.0},
+    }}}} for coin in ("BTC", "ETH")}
+    now = 30 * 24 * 60 * 60000
+    assert bot._max_configured_entry_cooldown_minutes() == 0.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (False, None)
+    # An inheriting approved symbol restores the global adaptive horizon.
+    bot.approved_coins_minus_ignored_coins[side].add("XRP")
+    assert bot._max_configured_entry_cooldown_minutes() == 14400.0
+    bot.approved_coins_minus_ignored_coins[side].remove("XRP")
+    # A partial override still inherits its unspecified modifier.
+    bot.coin_overrides["BTC"]["bot"][side]["entry_cooldown"] = {"max_duration_minutes": 60.0}
+    assert bot._max_configured_entry_cooldown_minutes() == 60.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 61 * 60000)
+    # All and unresolved sources remain conservative even with a resolved current set.
+    bot.config["_coins_sources"] = {"approved_coins": "all"}
+    assert bot._max_configured_entry_cooldown_minutes() == 14400.0
+    bot.config["_coins_sources"] = {"approved_coins": {side: ["all"]}}
+    assert bot._max_configured_entry_cooldown_minutes() == 14400.0
+    bot.config.pop("_coins_sources")
+    bot.approved_coins_minus_ignored_coins = {}
+    assert bot._max_configured_entry_cooldown_minutes() == 14400.0
