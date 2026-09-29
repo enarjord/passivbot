@@ -126,9 +126,13 @@ RMS history follows their effective, entry-eligible coin-side policies; an unuse
 policy, opposite ineligible side, or unselected override does not extend it. Inheriting coins and unresolved selections retain the
 default requirement. Entry-ineligible sides neither
 restrict the candle interval nor extend RMS trade activation.
-Live cooldown fill-history coverage includes only globally enabled sides and approved
-coin overrides. An explicit resolved universe uses each approved symbol's effective
-policy; inheriting symbols and unresolved or `all` universes retain the default horizon.
+Live cooldown fill-history coverage includes globally enabled sides' approved symbols
+and held positions. A removed or ignored held coin can still DCA under graceful stop,
+so its effective cooldown horizon and adverse RMS input remain required. Held policies
+are retained conservatively even before per-cycle modes are resolved on restart;
+Rust decides whether a position may add entries. An explicit resolved universe uses
+these symbols' effective policies; inheriting symbols and unresolved or `all` universes
+retain the default horizon. Flat unapproved sides impose no adverse RMS load.
 RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. An incomplete window defers only the entry side that uses
 adverse cooldown, leaving closes and unrelated sides/coins available. N returns need
@@ -153,6 +157,9 @@ Cooldown still requires the current completed window, and remote-enabled consume
 can refresh stale history. Canonical candle repairs and gap evidence invalidate
 that cache; incomplete windows remain retryable. Cache loss recomputes the same score
 from candles, so neither live nor CPU cache state is restart state.
+When an approved universe fits its slot budget, holding an eligible coin consumes one
+candidate and one slot equally and does not activate RMS scoring. Held coins outside
+the eligible set can still force ranking of the remaining flat candidates.
 
 A reproducible synthetic comparison against the replay reference is available:
 

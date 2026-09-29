@@ -3507,7 +3507,8 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("side", ["long", "short"])
-async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slot(side):
+@pytest.mark.parametrize("held_eligibility", ["outside", "approved", "inactive", "zero_exposure"])
+async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slot(side, held_eligibility):
     import numpy as np
     import passivbot_rust as pbr
     from candlestick_manager import CANDLE_DTYPE
@@ -3523,6 +3524,17 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     }
     bot.PB_modes = {s: {name: None for name in names} for s in ("long", "short")}
     bot.approved_coins_minus_ignored_coins = {s: set(names[1:]) for s in ("long", "short")}
+    if held_eligibility != "outside":
+        bot.approved_coins_minus_ignored_coins = {s: set(names) for s in ("long", "short")}
+    bot.is_approved = lambda s, name: name in bot.approved_coins_minus_ignored_coins[s]
+    bot.markets_dict = {names[0]: {"active": held_eligibility != "inactive"}}
+    original_bp = bot.bp
+    bot.bp = lambda s, key, symbol=None: (
+        (0.0 if symbol == names[0] and held_eligibility == "zero_exposure" else 1.0)
+        if key == "wallet_exposure_limit" else original_bp(s, key, symbol)
+    )
+    slots = 2 if held_eligibility == "outside" else 3
+    span = 100000.0 if held_eligibility == "approved" else 1.0
     bot.live_value = lambda key: ""
     bot.get_max_n_positions = lambda s: Passivbot.get_max_n_positions(bot, s)
     bot.is_forager_mode = lambda s=None: (
@@ -3535,8 +3547,8 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
     weights = {"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
 
     def bot_value(s, key):
-        values = {"forager_score_weights": weights, "unilateralness_ema_span_1m": 1.0,
-                  "total_wallet_exposure_limit": 1.0, "n_positions": 2}
+        values = {"forager_score_weights": weights, "unilateralness_ema_span_1m": span,
+                  "total_wallet_exposure_limit": 1.0, "n_positions": slots}
         return values[key] if key in values else original(s, key)
 
     bot.bot_value = bot_value
@@ -3553,10 +3565,12 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
         return rows[:-1] if name == missing else rows
 
     bot.cm.get_candles = candles
-    params = {"n_positions": 2, "total_wallet_exposure_limit": 1.0,
-              "forager_score_weights": weights, "unilateralness_ema_span_1m": 1.0}
+    params = {"n_positions": slots, "total_wallet_exposure_limit": 1.0,
+              "forager_score_weights": weights, "unilateralness_ema_span_1m": span}
     symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
-    symbols[0]["tradable"] = False
+    symbols[0]["tradable"] = held_eligibility in {"approved", "zero_exposure"}
+    if held_eligibility == "zero_exposure":
+        symbols[0][side]["bot_params"]["wallet_exposure_limit"] = 0.0
     symbols[0][side]["position"] = bot.positions[names[0]][side].copy()
     for symbol in symbols:
         symbol[side]["mode"] = None
@@ -3570,9 +3584,14 @@ async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slo
             symbol["unilateralness_unavailable"] = bot._orchestrator_unilateralness_unavailable.get(name, {})
         out = compute(pbr, inp)
         result = next(x for x in out["diagnostics"]["forager_selections"] if x["pside"] == side)
-        assert result["ranking_required"] and result["slots_to_fill"] == 1
+        assert result["ranking_required"] == (held_eligibility != "approved")
+        assert result["slots_to_fill"] == (2 if held_eligibility == "approved" else 1)
         return result["selected_symbol_indices"]
 
+    if held_eligibility == "approved":
+        assert set(await selection()) == {1, 2}
+        assert calls == []  # Even a supported 100000-minute span does no RMS replay.
+        return
     assert await selection() == [2]
     assert set(calls) == set(names)
     # Every bundle must replay fresh scores, and missing data must not reuse a

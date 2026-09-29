@@ -1173,6 +1173,17 @@ def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
     assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
     approved.clear()
     assert bot._max_configured_entry_cooldown_minutes() == 5.0
+    # A removed held coin still permits DCA under auto graceful-stop. Include its
+    # override even on a cold restart before the per-cycle mode map is available.
+    bot.config["_coins_sources"] = {"approved_coins": {side: ["ETH"]}}
+    bot.approved_coins_minus_ignored_coins = {side: {"ETH"}}
+    approved.add((side, "ETH"))
+    bot.positions = {"BTC": {side: {"size": 1.0 if side == "long" else -1.0}}}
+    assert bot._max_configured_entry_cooldown_minutes() == 14400.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
+    # Closing the unapproved position releases the extra history requirement.
+    bot.positions["BTC"][side]["size"] = 0.0
+    assert bot._max_configured_entry_cooldown_minutes() == 5.0
 
 
 @pytest.mark.asyncio
@@ -1505,3 +1516,44 @@ async def test_live_adverse_rms_respects_side_approval_and_transitions(side):
     scoring[other] = 1.0
     _, _, missing = await load(bot, ["BTC"], set())
     assert missing["BTC"] == {"current": [], "forager": [100000.0]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("available", [False, True])
+async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(side, available):
+    import passivbot_rust as pbr
+    from live.unilateralness import load
+    from candlestick_manager import CANDLE_DTYPE
+
+    rows = np.zeros(21 if available else 0, dtype=CANDLE_DTYPE)
+    rows["ts"] = np.arange(len(rows)) * 60000
+    rows["c"] = 100.0
+    async def candles(*args, **kwargs):
+        return rows.copy()
+    bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0,
+          "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
+          "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+          "entry_cooldown_max_duration_minutes": 30.0, "unilateralness_ema_span_1m": 1.0}
+    position = {"size": 1.0 if side == "long" else -1.0, "price": 100.0}
+    bot = SimpleNamespace(
+        cm=SimpleNamespace(get_candles=candles), get_exchange_time=lambda: 21 * 60000,
+        positions={"BTC": {side: position}}, PB_modes={side: {"BTC": "graceful_stop"}},
+        is_approved=lambda s, symbol: False, is_pside_enabled=lambda s: s == side,
+        is_forager_mode=lambda s: False,
+        bot_value=lambda s, key: {"unilateralness": 0.0} if key == "forager_score_weights" else bp[key],
+        bp=lambda s, key, symbol: bp[key],
+    )
+    current, _, missing = await load(bot, ["BTC"], set())
+    assert current["BTC"] == ({1.0: 0.0} if available else {})
+    assert missing == ({} if available else {"BTC": {"current": [1.0], "forager": []}})
+    symbol = make_symbol(0, bid=100.0, ask=100.0, **{f"{side}_bp": bp})
+    symbol[side].update(mode="graceful_stop", position=position)
+    symbol["emas"]["m1"]["signed_unilateralness"] = sorted(current["BTC"].items())
+    symbol["unilateralness_unavailable"] = missing.get("BTC", {})
+    inp = make_input(balance=1000, global_bp=bot_params_pair(**{f"{side}_overrides": bp}), symbols=[symbol])
+    result = compute(pbr, inp)
+    assert any(o["pside"] == side and o["order_type"].startswith("close_") for o in result["orders"])
+    # A missing score must defer only this entry consumer, never fail the batch.
+    if not available:
+        assert not any(o["pside"] == side and o["order_type"].startswith("entry_") for o in result["orders"])

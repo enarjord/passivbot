@@ -315,7 +315,10 @@ A validated policy whose base/floor already reaches its ceiling is constant and
 requires no modifier inputs. Inactive adverse modifiers impose no RMS history or
 interval requirement; optimizer bounds must account for nonconstant corners.
 Enabled weights require a finite ceiling; structural fill coverage, pair activation
-and restart anchors use that horizon even at base zero. Current effective duration,
+and restart anchors use that horizon even at base zero. Live approval gates initial
+entries, not DCA on held graceful-stop positions. Keep held-side cooldown history and
+adverse inputs conservatively; effective trading modes remain Rust's decision.
+Current effective duration,
 not base alone, governs elapsed-time gating and entry-ladder staging. At effective
 zero retain existing strategy rules. Partial fills remain ordinary increasing fills.
 All new weights default to zero; GPU rejects enabled unsupported settings.

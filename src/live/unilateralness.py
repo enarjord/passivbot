@@ -16,20 +16,33 @@ def scoring_enabled(bot, side, symbols):
         return False
     if bot.is_forager_mode(side):
         return True
-    # A held ineligible symbol can consume a slot even when the approved
-    # universe fits the configured cap. Keep a conservative input superset:
-    # with occupied slots and competing flat symbols, Rust may need ranking.
-    # Rust retains exact mode, eligibility, effective-slot and cost decisions.
-    held = sum(
-        bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0) != 0.0
-        for symbol in symbols
+    # With a fixed universe that fits the cap, an ordinary eligible held coin
+    # consumes one candidate and one slot equally. Only held coins outside that
+    # set can force ranking of the remaining flat candidates. Keep a conservative
+    # superset here; Rust retains exact modes, costs and final slot decisions.
+    held = {
+        symbol for symbol in symbols
+        if bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0) != 0.0
+    }
+    unavailable = getattr(bot, "_orchestrator_ema_unavailable_symbols", set())
+    markets = getattr(bot, "markets_dict", {})
+    return len(symbols) - len(held) > 1 and any(
+        not bot.is_approved(side, symbol)
+        or bot.bp(side, "wallet_exposure_limit", symbol) == 0.0
+        or not markets.get(symbol, {}).get("active", True)
+        or symbol in unavailable
+        for symbol in held
     )
-    return held > 0 and len(symbols) - held > 1
 
 
 def adverse_enabled(bot, side, symbol):
     weights = bot.bp(side, "entry_cooldown_weights_minutes", symbol)
-    if weights["adverse_directionality"] <= 0 or not bot.is_approved(side, symbol):
+    if weights["adverse_directionality"] <= 0:
+        return False
+    held = getattr(bot, "positions", {}).get(symbol, {}).get(side, {}).get("size", 0.0) != 0.0
+    # Approval only governs initials. Held graceful-stop positions still DCA;
+    # conservatively supply their inputs while Rust decides effective modes.
+    if not held and not bot.is_approved(side, symbol):
         return False
     return uses_adverse_rms({
         "entry_cooldown_weights_minutes": weights,

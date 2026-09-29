@@ -17,7 +17,9 @@ since the latest release tag; these features may already be available when insta
   Constant clamps need no modifier inputs. Validate optimizer bounds, coin overrides and candle
   intervals against reachable consumers while keeping RMS history separate from shared activation.
   Size history from eligible coin-side consumers and finalized optimizer pins; omit unused global
-  cooldown horizons for explicit resolved universes. Defer cooldown inputs
+  cooldown horizons for explicit resolved universes while retaining held graceful-stop
+  policies. Skip RMS scoring for ordinary held eligible coins whose universe fits its slots.
+  Defer cooldown inputs
   that become stale during loading. Reuse live RMS replay within a completed minute, invalidating
   results on candle repairs or gap evidence; cache-only ranking retains its original source age.
   Document configuration, benchmarks, effective cooldown inspection, and unchanged partial-fill semantics.

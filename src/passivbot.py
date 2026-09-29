@@ -1982,10 +1982,16 @@ class Passivbot:
             explicit = isinstance(raw, (list, tuple, set)) and not any(
                 str(coin).strip().lower() == "all" for coin in raw
             )
+            held = {
+                symbol for symbol, positions in getattr(self, "positions", {}).items()
+                if positions.get(pside, {}).get("size", 0.0) != 0.0
+            }
+            # Held positions can still DCA after removal under graceful stop.
+            # Include them even before a restart has resolved per-cycle modes.
             # Until selection is resolved (or for an all universe), retain the
             # default. Otherwise each approved symbol supplies its effective policy.
             if explicit and approved:
-                eligible = {symbol for symbol in approved if self.is_approved(pside, symbol)}
+                eligible = held | {symbol for symbol in approved if self.is_approved(pside, symbol)}
                 symbols = sorted(eligible.intersection(overrides))
                 if eligible.difference(overrides):
                     symbols.append(None)
@@ -1994,7 +2000,7 @@ class Passivbot:
             horizons.extend(
                 Passivbot._entry_cooldown_horizon(self, pside, symbol)
                 for symbol in symbols
-                if symbol is None or self.is_approved(pside, symbol)
+                if symbol is None or symbol in held or self.is_approved(pside, symbol)
             )
         return max(horizons, default=0.0)
 
@@ -19652,6 +19658,7 @@ class Passivbot:
         }
         from live import unilateralness
 
+        self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
         directional_scoring_sides = {
             side for side in ("long", "short")
             if self.is_pside_enabled(side)
@@ -19710,7 +19717,6 @@ class Passivbot:
         self._forager_rank_feature_unavailable_by_side = (
             rank_feature_unavailable_by_side
         )
-        self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
         candidate_reason_names = {
             reason
             for reason in (
