@@ -487,3 +487,53 @@ def test_exact_symbol_override_is_not_collapsed_to_coin():
         "coin_overrides.BTC.bot.long.hsl.red_threshold": .3}}]
     with pytest.raises(ValueError, match="missing coin_overrides.BTC"):
         migrate(cfg, restart_policies={"long": "always"})
+
+
+@pytest.mark.parametrize('field', ['scoring', 'limits'])
+def test_migrated_unified_rejects_side_optimizer_metrics(field):
+    cfg = legacy('unified')
+    metric = {'metric': 'hard_stop_triggers_long'}
+    cfg['optimize'][field] = [{**metric, 'goal': 'min'} if field == 'scoring' else {**metric, 'penalize_if': 'greater_than', 'value': 1}]
+    policy = generated_template(get_template_config(), 'unified')['bot']['hsl']
+    policy.update(enabled=True, restart_after_red_policy='always')
+    with pytest.raises(ValueError, match='unified'):
+        migrate(cfg, portfolio=policy)
+
+
+@pytest.mark.parametrize('field', ['scoring', 'limits'])
+@pytest.mark.parametrize('selected', ['active', 'inactive', None])
+def test_optimizer_metrics_follow_scenario_selection(field, selected):
+    cfg = legacy()
+    metric = {'metric': 'hard_stop_triggers_long', 'scenario': selected}
+    cfg['optimize'][field] = [{**metric, 'goal': 'min'} if field == 'scoring' else {**metric, 'penalize_if': 'greater_than', 'value': 1}]
+    cfg['backtest']['scenarios'] = [
+        {'label': 'active', 'overrides': {}},
+        {'label': 'inactive', 'overrides': {'bot.long.hsl.enabled': False}},
+    ]
+    if selected == 'active':
+        migrate(cfg, restart_policies={'long': 'always'})
+    else:
+        with pytest.raises(ValueError, match='inactive|disabled'):
+            migrate(cfg, restart_policies={'long': 'always'})
+
+
+def test_ordered_scenario_can_introduce_coin_before_addressing_leaf():
+    cfg = legacy()
+    cfg['backtest']['scenarios'] = [{'label': 'ordered', 'overrides': {
+        'coin_overrides': {'BTC': {'bot': {'long': {'hsl': {'red_threshold': .2}}}}},
+        'coin_overrides.BTC.bot.long.hsl.red_threshold': .3,
+    }}]
+    result = migrate(cfg, restart_policies={'long': 'always'})
+    assert result['backtest']['scenarios'][0]['overrides']['coin_overrides']['BTC']['bot']['long']['hsl']['red_threshold'] == .3
+
+
+@pytest.mark.parametrize('scenario', [False, True])
+def test_gpu_coarse_candle_interval_rejected_offline(scenario):
+    cfg = legacy()
+    cfg['optimize']['backend'] = 'gpu'
+    if scenario:
+        cfg['backtest']['scenarios'] = [{'label': 'coarse', 'overrides': {'backtest.candle_interval_minutes': 5}}]
+    else:
+        cfg['backtest']['candle_interval_minutes'] = 5
+    with pytest.raises(ValueError, match='1m candles'):
+        migrate(cfg, restart_policies={'long': 'always'})

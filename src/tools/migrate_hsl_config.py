@@ -7,14 +7,43 @@ from pathlib import Path
 import sys
 
 from config import prepare_config
-from config.hsl_revised import _mode, validate_parameter_path
+from config.hsl_revised import _mode, validate_parameter_path, validate_optimizer_metrics
 from config.load import load_input_config
 from config.optimize_bounds import flatten_optimize_bounds
 from config.overrides import normalize_coin_override_keys, parse_overrides
-from config.param_paths import require_existing_config_path, resolve_bound_selectors
+from config.param_paths import require_existing_config_path, resolve_bound_selectors, resolve_dotted_config_path
+from config.scoring import extract_objective_specs, default_scoring_weights, objective_index_map, resolve_objective_basis
+from limit_utils import expand_limit_checks
 from config_utils import strip_config_metadata
 from optimization.warmup import _finalize_optimizer_vector_config
 from suite_runner import apply_scenario_overrides, build_scenarios
+
+
+def _validate_optimizer_inputs(candidate, authored, *, label=None, reducer_cfg=None):
+    """Reuse runtime metric selection and static GPU guards without hardware access."""
+    specs = extract_objective_specs(authored)
+    optimize = authored["optimize"]
+    checks = expand_limit_checks(
+        optimize.get("limits", []), default_scoring_weights(), penalty_weight=1e6,
+        objective_index_map=objective_index_map(specs), reducer_cfg=reducer_cfg,
+    )
+    if label is None:
+        metrics = [*(spec.metric for spec in specs), *(check["metric"] for check in checks)]
+    else:
+        default_scenario = optimize.get("objective_scenario")
+        default_scenario = str(default_scenario).strip() or None if default_scenario is not None else None
+        bases = [resolve_objective_basis(spec, default_scenario=default_scenario,
+                                         reducer_cfg=reducer_cfg) for spec in specs]
+        metrics = [
+            *(spec.metric for spec, basis in zip(specs, bases)
+              if basis.scenario is None or basis.scenario == label),
+            *(check["metric"] for check in checks
+              if check.get("scenario") is None or check["scenario"] == label),
+        ]
+    validate_optimizer_metrics(candidate, metrics)
+    if optimize.get("backend") == "gpu":
+        from optimization.backends.gpu_backend import _validate_revised_gpu_inputs
+        _validate_revised_gpu_inputs(candidate)
 
 
 def migrate(source, *, restart_policies=None, portfolio=None, base_config_path=""):
@@ -104,7 +133,7 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
                 "(including mirror_short_from_long) with the restart choices"
             )
     if prepared["backtest"].get("scenarios"):
-        scenarios, _ = build_scenarios(prepared["backtest"])
+        scenarios, reducer_cfg = build_scenarios(prepared["backtest"])
         for raw, scenario in zip(prepared["backtest"]["scenarios"], scenarios):
             try:
                 effective = deepcopy(scenario_base)
@@ -127,7 +156,8 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
                         target = target.setdefault(key, {})
                     target.setdefault(path[-1], deepcopy(source[path[-1]]))
                 for path in scenario.overrides or {}:
-                    if require_existing_config_path(effective, path)[0] == "optimize":
+                    resolved = resolve_dotted_config_path(effective, path)
+                    if resolved and resolved[0] == "optimize":
                         raise ValueError("scenario optimizer controls are not applied; move them to top-level optimize")
                 apply_scenario_overrides(effective, scenario.overrides)
                 effective = parse_overrides(effective, verbose=False)
@@ -142,11 +172,15 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
                     overrides["coin_overrides"] = effective["coin_overrides"]
                 optimized_scenario = deepcopy(optimized)
                 apply_scenario_overrides(optimized_scenario, overrides)
-                parse_overrides(optimized_scenario, verbose=False)
+                optimized_scenario = parse_overrides(optimized_scenario, verbose=False)
+                _validate_optimizer_inputs(optimized_scenario, prepared, label=scenario.label,
+                                           reducer_cfg=reducer_cfg)
                 if scenario.overrides is not None:
                     raw["overrides"] = overrides
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 raise ValueError(f"backtest scenario {scenario.label!r}: {exc}") from exc
+    else:
+        _validate_optimizer_inputs(optimized, prepared)
     return strip_config_metadata(prepared)
 
 
