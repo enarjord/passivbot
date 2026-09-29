@@ -1,10 +1,10 @@
 # Revised HSL sole-engine migration
 
-Status: migration preparation. Both engines remain available and legacy remains the default.
-This document defines the retirement work; it does not claim that deletion, deployment, or
-exchange acceptance has happened. The tracking PR must remain draft until its acceptance
-criteria are met. Passing tests on the starting revision is baseline evidence, not evidence
-for a later deletion diff.
+Status: migration preparation complete. Both engines remain available and legacy remains the default.
+The preparation PR delivers this contract and the offline configuration helper. A separate draft
+implementation PR owns the cutover and legacy removal below. This document does not claim that
+deletion, deployment, or exchange acceptance has happened. The implementation PR remains draft
+until its acceptance criteria are met. Passing baseline tests does not qualify a later deletion diff.
 
 ## Decision and scope
 
