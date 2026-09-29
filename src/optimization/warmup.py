@@ -275,21 +275,32 @@ def build_optimizer_max_config(config: dict) -> dict:
     )
 
 
-def _build_optimizer_boundary_configs(config: dict) -> list[dict]:
+def _build_optimizer_boundary_configs(config: dict, *, minimum_positions: bool = False) -> list[dict]:
     anchor_plan = get_anchor_plan(config)
-    if anchor_plan is None:
+    if anchor_plan is None and not minimum_positions:
         return [build_optimizer_max_config(config)]
     shape = build_optimization_shape(config)
     overrides_list = config.get("optimize", {}).get("enable_overrides", []) or []
-    tunable_max_vector = [bound.high for bound in shape.bounds[1:]]
+    vector = [bound.high for bound in shape.bounds]
+    if minimum_positions:
+        # Ranking can become necessary at fewer slots even when the all-high
+        # corner fits the universe. Use the smallest positive slot count, then
+        # finalize normally so fixed runtime overrides and anchor pins still win.
+        for i, ((_, path), bound) in enumerate(zip(shape.key_paths, shape.bounds)):
+            if path and path[-1] == "n_positions":
+                value = bound.quantize(max(1.0, bound.low))
+                if round(value) <= 0 and bound.is_stepped and bound.max_index > 0:
+                    value = bound.quantize(bound.low + bound.step)
+                vector[i] = value
+    vectors = (
+        [[float(anchor_id), *vector[1:]] for anchor_id in range(len(anchor_plan.get("anchors") or []))]
+        if anchor_plan is not None else [vector]
+    )
     return [
         build_optimizer_vector_config(
-            [float(anchor_id), *tunable_max_vector],
-            config,
-            key_paths=shape.key_paths,
-            overrides_list=overrides_list,
+            candidate_vector, config, key_paths=shape.key_paths, overrides_list=overrides_list,
         )
-        for anchor_id in range(len(anchor_plan.get("anchors") or []))
+        for candidate_vector in vectors
     ]
 
 
@@ -316,15 +327,21 @@ def validate_optimizer_dataset_intervals(config: dict, mss: dict, exchange: str)
     from backtest import prep_backtest_args
     from warmup_utils import rms_side_enabled
 
-    for candidate in _build_optimizer_boundary_configs(config):
+    for candidate in _build_optimizer_boundary_configs(config, minimum_positions=True):
         bot_params, _, _, _ = prep_backtest_args(candidate, mss, exchange)
-        for pair in bot_params:
-            for side, params in pair.items():
+        for side in ("long", "short"):
+            eligible = sum(pair[side]["entry_eligible"] for pair in bot_params)
+            for pair in bot_params:
+                params = pair[side]
+                ranking_possible = eligible > 1 and (
+                    candidate["backtest"]["dynamic_wel_by_tradability"]
+                    or eligible > bot_params[0][side]["n_positions"]
+                )
                 if (
                     params["entry_eligible"]
                     and rms_side_enabled(params, side)
                     and (
-                        params["forager_score_weights"]["unilateralness"] > 0.0
+                        (ranking_possible and params["forager_score_weights"]["unilateralness"] > 0.0)
                         or params["entry_cooldown_weights_minutes"]["adverse_directionality"] > 0.0
                     )
                 ):

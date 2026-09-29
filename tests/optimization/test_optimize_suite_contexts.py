@@ -135,12 +135,7 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     monkeypatch.setattr(optimize_suite, "prepare_master_datasets", fake_prepare_master_datasets)
 
     suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
-    if rms_search and interval > 1:
-        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
-            await optimize_suite.prepare_suite_contexts(
-                config, suite_cfg, shared_array_manager=_NoSharedArrayManager(),
-            )
-        return
+    # One eligible coin cannot require ranking, even while RMS weights are searched.
     contexts, _reducer_cfg = await optimize_suite.prepare_suite_contexts(
         config,
         suite_cfg,

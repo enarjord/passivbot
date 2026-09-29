@@ -2,12 +2,37 @@
 //! A deterministic 20-span window gives live, restart and CPU the same inputs.
 //! Weights are exponential; this is not a simple moving average.
 /// Backtests start flat, so a side with no entry budget cannot consume RMS.
-pub fn backtest_enabled(params: &crate::types::BotParams) -> bool {
+pub fn backtest_enabled(params: &crate::types::BotParams, ranking_possible: bool) -> bool {
     params.entry_eligible
         && params.total_wallet_exposure_limit > 0.0
         && params.n_positions > 0
-        && (params.forager_score_weights.unilateralness > 0.0
+        && ((ranking_possible && params.forager_score_weights.unilateralness > 0.0)
             || params.entry_cooldown_weights_minutes.adverse_directionality > 0.0)
+}
+
+/// Static upper bound on score consumers. A single eligible coin never needs
+/// ranking. With fixed slots, a universe fitting in those slots does not either.
+/// Dynamic tradability can leave held delisted coins occupying slots while new
+/// candidates arrive, so retain ranking for multi-coin dynamic universes.
+pub fn backtest_enabled_sides(
+    params: &[crate::types::BotParamsPair],
+    dynamic_wel_by_tradability: bool,
+) -> Vec<[bool; 2]> {
+    let mut ranking_possible = [false; 2];
+    if let Some(first) = params.first() {
+        for (side, global) in [&first.long, &first.short].iter().enumerate() {
+            let eligible = params.iter().filter(|pair| {
+                let bp = if side == 0 { &pair.long } else { &pair.short };
+                bp.entry_eligible
+            }).count();
+            ranking_possible[side] = eligible > 1
+                && (dynamic_wel_by_tradability || eligible > global.n_positions);
+        }
+    }
+    params.iter().map(|pair| [
+        backtest_enabled(&pair.long, ranking_possible[0]),
+        backtest_enabled(&pair.short, ranking_possible[1]),
+    ]).collect()
 }
 
 pub fn warmup_returns(span: f64) -> Result<usize, String> {
@@ -146,6 +171,26 @@ pub fn calc_signed_unilateralness(closes: Vec<f64>, span: f64) -> pyo3::PyResult
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backtest_consumers_require_possible_ranking_or_adverse_weight() {
+        let mut pair = crate::types::BotParamsPair::default();
+        for bp in [&mut pair.long, &mut pair.short] {
+            bp.entry_eligible = true;
+            bp.n_positions = 2;
+            bp.total_wallet_exposure_limit = 1.0;
+            bp.forager_score_weights.unilateralness = 1.0;
+        }
+        assert_eq!(backtest_enabled_sides(&[pair.clone()], true), vec![[false; 2]]);
+        assert_eq!(backtest_enabled_sides(&[pair.clone(), pair.clone()], false), vec![[false; 2]; 2]);
+        assert_eq!(backtest_enabled_sides(&[pair.clone(), pair.clone()], true), vec![[true; 2]; 2]);
+        pair.long.n_positions = 1;
+        assert_eq!(backtest_enabled_sides(&[pair.clone(), pair.clone()], false), vec![[true, false]; 2]);
+        pair.short.entry_cooldown_weights_minutes.adverse_directionality = 1.0;
+        assert_eq!(backtest_enabled_sides(&[pair.clone()], false), vec![[false, true]]);
+        pair.short.entry_eligible = false;
+        assert_eq!(backtest_enabled_sides(&[pair], false), vec![[false; 2]]);
+    }
+
     #[test]
     fn direction_flat_decay_and_fractional_span() {
         let span = 10.5;

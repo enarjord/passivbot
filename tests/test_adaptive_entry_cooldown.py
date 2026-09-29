@@ -492,6 +492,7 @@ def test_cpu_rms_rejects_nonpositive_close_with_normal_backtest_error(bad_close,
     cfg = _ema_anchor_config(True)
     cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 1.0
     if consumer == "forager":
+        cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"]
         cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
     else:
         cfg["bot"][side]["entry_cooldown"].update(
@@ -609,7 +610,8 @@ def test_cpu_entry_ineligible_rms_policy_is_inert(side, interval, consumer):
     np.testing.assert_array_equal(result[1], baseline[1])
     assert result[2] == baseline[2]
     if interval == 5:
-        payload.bot_params_list[0][side]["entry_eligible"] = True
+        for pair in payload.bot_params_list:
+            pair[side]["entry_eligible"] = True
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
             execute_backtest(payload, cfg)
 
@@ -801,3 +803,35 @@ def test_score_only_rms_keeps_legacy_zero_budget_when_ranking_is_unused():
     np.testing.assert_array_equal(actual[0], baseline[0])
     np.testing.assert_array_equal(actual[1], baseline[1])
     assert actual[2] == baseline[2]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("interval", [1, 5])
+@pytest.mark.parametrize("universe,slots,dynamic", [(1, 1, False), (1, 1, True), (2, 2, False)])
+def test_cpu_unused_forager_rms_preserves_aggregated_candle_results(side, interval, universe, slots, dynamic):
+    from backtest import run_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["backtest"].update(candle_interval_minutes=interval, dynamic_wel_by_tradability=dynamic)
+    cfg["bot"][side]["risk"]["n_positions"] = slots
+    if universe == 2:
+        cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"]
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    timestamps = timestamps[0] + np.arange(len(timestamps)) * interval * 60000
+    baseline = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    cfg["bot"][side]["forager"]["score_weights"]["unilateralness"] = 1.0
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    actual = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert len(actual[0]) > 0
+    np.testing.assert_array_equal(actual[0], baseline[0])
+    np.testing.assert_array_equal(actual[1], baseline[1])
+    assert actual[2] == baseline[2]
+    if interval > 1:
+        # The same no-ranking universe still needs 1m data for adverse cooldown.
+        cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+        cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)

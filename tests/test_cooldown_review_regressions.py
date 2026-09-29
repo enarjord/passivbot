@@ -286,7 +286,7 @@ def test_aggregated_candle_config_rejects_reachable_rms_before_optimization(side
     from optimization.warmup import validate_optimizer_dataset_intervals
     from test_backtest_directional_eligibility import _synthetic_inputs
     _, markets, _, _ = _synthetic_inputs()
-    cfg["live"]["approved_coins"] = {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]}
+    cfg["live"]["approved_coins"] = {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]}
     cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if positive_bound:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
@@ -354,7 +354,7 @@ def test_aggregated_rms_ignores_only_statically_disabled_sides(side, gate, consu
     from optimization.warmup import validate_optimizer_dataset_intervals
     from test_backtest_directional_eligibility import _synthetic_inputs
     _, markets, _, _ = _synthetic_inputs()
-    prepared["live"]["approved_coins"] = {"long": ["LONGCOIN"], "short": ["SHORTCOIN"]}
+    prepared["live"]["approved_coins"] = {"long": ["LONGCOIN", "SHORTCOIN"], "short": ["LONGCOIN", "SHORTCOIN"]}
     prepared["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
     if reactivates:
         with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
@@ -491,3 +491,37 @@ def test_optimizer_data_registration_checks_final_coin_rms_policy(side, eligibil
     else:
         register()
         assert arrays.count == 2
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("slots,eligible,pinned,dynamic,reject", [
+    ([1, 1], 1, None, True, False),
+    ([2, 2], 2, None, False, False),
+    ([1, 3], 2, None, False, True),
+    ([0, 3], 2, None, False, True),
+    ([0, 4, 2], 2, None, False, False),
+    ([1, 3], 2, 2, False, False),
+    ([2, 3], 2, 1, False, True),
+    ([2, 2], 2, None, True, True),
+])
+def test_optimizer_interval_guard_uses_reachable_ranking_slots(side, slots, eligible, pinned, dynamic, reject):
+    from optimization.warmup import validate_optimizer_dataset_intervals
+    from test_backtest_directional_eligibility import _synthetic_inputs
+
+    cfg = get_template_config()
+    cfg["backtest"].update(candle_interval_minutes=5, dynamic_wel_by_tradability=dynamic)
+    bounds = cfg["optimize"]["bounds"][side]
+    bounds["risk"].update(n_positions=slots, total_wallet_exposure_limit=[1.0, 1.0])
+    bounds["forager"]["score_weights"] = {"unilateralness": [0.0, 1.0]}
+    if pinned is not None:
+        cfg["optimize"]["fixed_runtime_overrides"] = {f"bot.{side}.risk.n_positions": pinned}
+    cfg = prepare_config(cfg, verbose=False)
+    _, markets, _, _ = _synthetic_inputs()
+    cfg["live"]["approved_coins"] = {"long": [], "short": []}
+    cfg["live"]["approved_coins"][side] = ["LONGCOIN", "SHORTCOIN"][:eligible]
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    if reject:
+        with pytest.raises(ValueError, match="RMS unilateralness requires.*one-minute"):
+            validate_optimizer_dataset_intervals(cfg, markets, "binance")
+    else:
+        validate_optimizer_dataset_intervals(cfg, markets, "binance")

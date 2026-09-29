@@ -13,7 +13,7 @@ since the latest release tag; these features may already be available when insta
   float EMA span, reconstruct inputs from completed candles, and preserve defaults with zero new
   weights. Adaptive fill-history coverage works with a zero base; GPU rejects unsupported settings.
   Validate adaptive optimizer ranges before evaluation and allow per-coin fixed cooldowns to clear
-  inherited ceilings. Scope score-only RMS warmup to required ranking and describe effective
+  inherited ceilings. Scope score-only RMS activation and candle requirements to possible ranking and describe effective
   cooldowns, including bounds and modifiers, in the trailing inspection overview. Size RMS history
   for searched weights/spans, permit numeric ceiling searches from a null default, and reject
   non-positive RMS closes with an actionable backtest error. Support joint ceiling/modifier

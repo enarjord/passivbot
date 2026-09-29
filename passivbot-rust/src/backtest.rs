@@ -2129,8 +2129,7 @@ impl<'a> Backtest<'a> {
             // unchanged when no eligible side consumes adverse RMS.
             let scoped_rms = bot_params.iter().any(|pair| {
                 [&pair.long, &pair.short].iter().any(|bp| {
-                    crate::unilateralness::backtest_enabled(bp)
-                        && bp.entry_cooldown_weights_minutes.adverse_directionality > 0.0
+                    crate::unilateralness::backtest_enabled(bp, false)
                 })
             });
             warmup_bars = if scoped_rms { 1 } else {
@@ -2173,6 +2172,9 @@ impl<'a> Backtest<'a> {
             .any(|sp| strategy_needs_log_range_1h(&sp.short));
         let btc_collateral_initialized = !balance.use_btc_collateral;
 
+        let rms_enabled = crate::unilateralness::backtest_enabled_sides(
+            &bot_params, backtest_params.dynamic_wel_by_tradability,
+        );
         Backtest {
             hlcvs,
             btc_usd_prices,
@@ -2194,10 +2196,11 @@ impl<'a> Backtest<'a> {
             emas: initial_emas,
             unilateralness: bot_params
                 .iter()
-                .map(|pair| {
+                .zip(rms_enabled.iter())
+                .map(|(pair, enabled)| {
                     let mut trackers = Vec::new();
-                    for bp in [&pair.long, &pair.short] {
-                        if crate::unilateralness::backtest_enabled(bp)
+                    for (bp, enabled) in [&pair.long, &pair.short].iter().zip(enabled) {
+                        if *enabled
                             && !trackers.iter().any(|(span, _)| *span == bp.unilateralness_ema_span_1m)
                         {
                             trackers.push((
@@ -2399,11 +2402,7 @@ impl<'a> Backtest<'a> {
                 }
             }
             if let Some((first, last)) = self.coin_valid_range(idx) {
-                let requires_rms = [&self.bot_params[idx].long, &self.bot_params[idx].short]
-                    .iter()
-                    .any(|bp| {
-                        crate::unilateralness::backtest_enabled(bp)
-                    });
+                let requires_rms = !self.unilateralness[idx].is_empty();
                 for k in first..=last {
                     if requires_rms && self.hlcvs_value(k, idx, CLOSE) <= 0.0 {
                         return Err(format!(
@@ -5728,17 +5727,15 @@ impl<'a> Backtest<'a> {
         let Some((start, end)) = self.coin_valid_range(idx) else {
             return Vec::new();
         };
-        [&self.bot_params[idx].long, &self.bot_params[idx].short]
-            .iter()
-            .filter(|bp| {
-                crate::unilateralness::backtest_enabled(bp)
-                    && k <= end
+        self.unilateralness[idx].iter()
+            .filter(|(span, _)| {
+                k <= end
                     && k < start.saturating_add(
-                        crate::unilateralness::warmup_returns(bp.unilateralness_ema_span_1m)
+                        crate::unilateralness::warmup_returns(*span)
                             .expect("validated unilateralness span"),
                     )
             })
-            .map(|bp| bp.unilateralness_ema_span_1m)
+            .map(|(span, _)| *span)
             .collect()
     }
 
@@ -5770,14 +5767,8 @@ impl<'a> Backtest<'a> {
         // Standalone snapshots may request another index. Replay that window
         // rather than use a cached score from a different candle.
         let mut out = Vec::new();
-        for bp in [&self.bot_params[idx].long, &self.bot_params[idx].short] {
-            if !crate::unilateralness::backtest_enabled(bp) {
-                continue;
-            }
-            let span = bp.unilateralness_ema_span_1m;
-            if out.iter().any(|(s, _)| *s == span) {
-                continue;
-            }
+        for (span, _) in &self.unilateralness[idx] {
+            let span = *span;
             let n =
                 crate::unilateralness::warmup_returns(span).expect("validated unilateralness span");
             let (start, end) = self.coin_valid_range(idx).unwrap_or((0, 0));

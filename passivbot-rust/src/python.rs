@@ -1507,11 +1507,9 @@ fn run_backtest_core<'py>(
         bot_params_vec.push(bot_params_pair_from_dict(dict, backtest_params.equity_hard_stop_loss.revised.is_some())?);
     }
     if backtest_params.candle_interval_minutes != 1
-        && bot_params_vec.iter().any(|pair| {
-            [&pair.long, &pair.short].iter().any(|p| {
-                crate::unilateralness::backtest_enabled(p)
-            })
-        })
+        && crate::unilateralness::backtest_enabled_sides(
+            &bot_params_vec, backtest_params.dynamic_wel_by_tradability,
+        ).iter().flatten().any(|enabled| *enabled)
     {
         return Err(PyValueError::new_err(
             "RMS unilateralness requires completed one-minute candles",

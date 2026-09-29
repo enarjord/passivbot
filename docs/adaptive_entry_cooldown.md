@@ -152,3 +152,10 @@ cargo test --release --no-default-features --manifest-path passivbot-rust/Cargo.
 The test reports both timings and maximum score error for the same fixed input.
 Record CPU, compiler, OS, system load and repeated runs when comparing performance;
 this indicator benchmark does not establish whole-optimizer throughput or profitability.
+
+CPU backtests require one-minute candles only when RMS can be consumed. A
+score-only side with one eligible coin, or a fixed position-slot budget covering
+its eligible universe, leaves RMS inactive and can use aggregated candles.
+Multi-coin dynamic-tradability budgets retain the requirement: held positions can
+occupy slots while new coins become tradable. Adverse cooldown always requires
+one-minute candles on an entry-eligible, enabled side.
