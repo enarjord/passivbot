@@ -11,6 +11,13 @@ from candlestick_manager import OhlcvFetchError
 from config.entry_cooldown import uses_adverse_rms
 
 
+def scoring_enabled(bot, side):
+    return (
+        bot.bot_value(side, "forager_score_weights")["unilateralness"] > 0
+        and bot.is_forager_mode(side)
+    )
+
+
 def adverse_enabled(bot, side, symbol):
     weights = bot.bp(side, "entry_cooldown_weights_minutes", symbol)
     if weights["adverse_directionality"] <= 0:
@@ -36,11 +43,10 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         for side in ("long", "short"):
             if not bot.is_pside_enabled(side):
                 continue
-            scoring = bot.bot_value(side, "forager_score_weights")
             span = float(bot.bot_value(side, "unilateralness_ema_span_1m"))
             if adverse_enabled(bot, side, symbol):
                 current_spans.add(span)
-            if scoring["unilateralness"] > 0:
+            if scoring_enabled(bot, side):
                 forager_spans.add(span)
         spans = current_spans | forager_spans
         required[symbol] = (current_spans, forager_spans)

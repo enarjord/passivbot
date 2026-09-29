@@ -106,6 +106,10 @@ def validate_config(
     validate_limit_order_fill_buffer_pct(config["backtest"]["limit_order_fill_buffer_pct"])
     require_config_dict(config, "monitor")
     _validate_fixed_runtime_overrides(config)
+    fixed_runtime = {
+        require_existing_config_path(config, key): value
+        for key, value in config["optimize"]["fixed_runtime_overrides"].items()
+    }
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
     optimize_bounds = (
         raw_optimize.get("bounds")
@@ -137,11 +141,25 @@ def validate_config(
         flat_bounds = flatten_optimize_bounds(optimize_bounds, strategy_kind=strategy_kind)
         for modifier in ("exposure_ratio", "adverse_directionality"):
             key = f"{pside}_entry_cooldown_weights_minutes_{modifier}"
-            if (
-                key in flat_bounds
-                and Bound.from_config(key, flat_bounds[key]).high > 0
-                and bot_side["entry_cooldown"]["max_duration_minutes"] is None
-                and f"{pside}_entry_cooldown_max_duration_minutes" not in flat_bounds
+            if key not in flat_bounds:
+                continue
+            # Runtime pins win over sampled genes, including an explicit null
+            # ceiling or a zero weight that disables the searched modifier.
+            weight = fixed_runtime.get(
+                ("bot", pside, "entry_cooldown", "weights_minutes", modifier),
+                Bound.from_config(key, flat_bounds[key]).high,
+            )
+            ceiling_key = f"{pside}_entry_cooldown_max_duration_minutes"
+            ceiling = fixed_runtime.get(
+                ("bot", pside, "entry_cooldown", "max_duration_minutes"),
+                Bound.from_config(ceiling_key, flat_bounds[ceiling_key]).low
+                if ceiling_key in flat_bounds
+                else bot_side["entry_cooldown"]["max_duration_minutes"],
+            )
+            if weight > 0 and (
+                isinstance(ceiling, bool)
+                or not isinstance(ceiling, (int, float))
+                or not math.isfinite(ceiling)
             ):
                 raise ValueError(
                     f"bot.{pside}.entry_cooldown.max_duration_minutes must be finite when searching modifier weights"

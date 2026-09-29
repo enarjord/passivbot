@@ -3417,6 +3417,7 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
     symbol = "BTC/USDT:USDT"
     bot = _BundleReproBot(symbol, close_mode="value")
     bot.is_pside_enabled = lambda side: side == "long"
+    bot.is_forager_mode = lambda side=None: side in (None, "long")
     original = bot.bot_value
     bot.bot_value = lambda side, key: (
         {"volume": 0.0, "volatility": 1.0, "ema_readiness": 0.0, "unilateralness": 1.0}
@@ -3434,4 +3435,68 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
         return {symbol: {60.0: 0.2}}, {symbol: {60.0: 0.2}}, {}
     monkeypatch.setattr(unilateralness, "load", ready)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    assert bot._orchestrator_unilateralness_unavailable == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("ranking", [False, True])
+@pytest.mark.parametrize("adverse", [False, True])
+async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, side, ranking, adverse):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE
+    from live import unilateralness
+    from passivbot import Passivbot
+
+    symbol = "BTC/USDT:USDT"
+    bot = _BundleReproBot(symbol, "value")
+    bot.is_pside_enabled = lambda pside: True
+    bot.is_forager_mode = lambda pside=None: ranking and pside in (None, side)
+    bot.get_exchange_time = lambda: 21 * 60000
+    original_bot_value, original_bp = bot.bot_value, bot.bp
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {**original_bot_value(pside, key), "unilateralness": 1.0}
+        if key == "unilateralness_ema_span_1m":
+            # The opposite side never ranks or consumes adverse RMS. Its huge
+            # configured span must not enlarge an active side's candle request.
+            return 1.0 if pside == side else 100000.0
+        return original_bot_value(pside, key)
+
+    def bp(pside, key, symbol=None):
+        values = {
+            "entry_cooldown_weights_minutes": {
+                "exposure_ratio": 0.0,
+                "adverse_directionality": 10.0 if adverse and pside == side else 0.0,
+            },
+            "risk_entry_cooldown_minutes": 0.0,
+            "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }
+        return values[key] if key in values else original_bp(pside, key, symbol)
+
+    bot.bot_value, bot.bp = bot_value, bp
+    calls = []
+
+    async def candles(sym, **kwargs):
+        calls.append(kwargs)
+        assert kwargs["start_ts"] == (-600000 if ranking else 0)
+        assert kwargs["end_ts"] == 20 * 60000
+        rows = np.zeros(21, dtype=CANDLE_DTYPE)
+        rows["ts"] = np.arange(21) * 60000
+        rows["c"] = 100.0
+        return rows
+
+    bot.cm.get_candles = candles
+    if not ranking and not adverse:
+        async def unexpected_load(*args, **kwargs):
+            pytest.fail("unused score-only RMS must skip the loader entirely")
+        monkeypatch.setattr(unilateralness, "load", unexpected_load)
+    await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    assert len(calls) == int(ranking or adverse)
+    if ranking or adverse:
+        assert bot._orchestrator_signed_unilateralness == {symbol: {1.0: 0.0}}
+    else:
+        assert bot._orchestrator_signed_unilateralness == {}
     assert bot._orchestrator_unilateralness_unavailable == {}

@@ -601,3 +601,29 @@ def test_coin_cooldown_pins_apply_after_fixed_runtime_overrides(side):
         prepare_config(cfg, verbose=False)
     cfg["coin_overrides"]["BTC"]["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 30
     prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("modifier", ["exposure_ratio", "adverse_directionality"])
+@pytest.mark.parametrize("ceiling_bound", [False, True])
+def test_modifier_search_honors_fixed_ceiling_and_weight_pins(side, modifier, ceiling_bound):
+    from optimization.warmup import validate_optimizer_effective_configs
+
+    cfg = get_template_config()
+    bounds = cfg["optimize"]["bounds"][side]["entry_cooldown"]
+    bounds["weights_minutes"] = {modifier: [0.0, 20.0]}
+    if ceiling_bound:
+        bounds["max_duration_minutes"] = [30.0, 90.0]
+    pins = cfg["optimize"]["fixed_runtime_overrides"]
+    ceiling_path = f"bot.{side}.entry_cooldown.max_duration_minutes"
+    pins[ceiling_path] = 60.0
+    prepared = prepare_config(cfg, verbose=False)
+    validate_optimizer_effective_configs(prepared)
+    assert prepared["bot"][side]["entry_cooldown"]["max_duration_minutes"] is None
+    # A null runtime pin wins even over a finite searched ceiling.
+    pins[ceiling_path] = None
+    with pytest.raises(ValueError, match="finite when searching modifier weights"):
+        prepare_config(cfg, verbose=False)
+    # A zero runtime weight pin disables the searched modifier.
+    pins[f"bot.{side}.entry_cooldown.weights_minutes.{modifier}"] = 0.0
+    validate_optimizer_effective_configs(prepare_config(cfg, verbose=False))

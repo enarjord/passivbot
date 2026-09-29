@@ -19635,7 +19635,7 @@ class Passivbot:
         from live import unilateralness
 
         directional_enabled = any(
-            self.bot_value(side, "forager_score_weights").get("unilateralness", 0.0) > 0
+            unilateralness.scoring_enabled(self, side)
             or unilateralness.adverse_enabled(self, side, symbol)
             for side in ("long", "short")
             for symbol in symbols

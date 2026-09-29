@@ -174,6 +174,7 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch, 
 
     bot = SimpleNamespace(
         cm=CM(),
+        is_forager_mode=lambda side: True,
         is_pside_enabled=lambda side: True,
         get_exchange_time=lambda: n * 60000 + 30000,
         bp=lambda side, key, symbol: {
@@ -537,6 +538,7 @@ async def test_live_rms_skips_dormant_side_spans(active_side):
     bot = SimpleNamespace(
         cm=SimpleNamespace(get_candles=candles),
         get_exchange_time=lambda: 21 * 60000,
+        is_forager_mode=lambda side: True,
         is_pside_enabled=lambda side: side == active_side,
         bp=lambda side, key, symbol: {
             "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 10.0},

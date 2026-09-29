@@ -314,6 +314,9 @@ def validate_optimizer_effective_configs(config: dict) -> None:
     for candidate in _build_optimizer_boundary_configs(config):
         effective = deepcopy(candidate)
         effective.setdefault("optimize", {})["fixed_runtime_overrides"] = {}
+        # Validate the finalized candidate itself. Search bounds were checked
+        # while building its shape; reapplying them here would undo runtime pins.
+        effective["optimize"]["bounds"] = {}
         validate_config(
             effective,
             raw_optimize=effective.get("optimize", {}),
