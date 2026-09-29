@@ -123,7 +123,8 @@ Dormant RMS weights on a statically disabled side do not require history or one-
 candles. After selecting a dataset, optimizer preflight checks reachable RMS consumers
 against finalized per-coin eligibility and overrides. Entry-ineligible sides neither
 restrict the candle interval nor extend RMS trade activation.
-Live cooldown fill-history coverage includes only globally enabled sides.
+Live cooldown fill-history coverage includes only globally enabled sides and approved
+coin overrides, retaining the default horizon for inheriting symbols.
 RMS requires one-minute backtest candles and its full replay window for
 each consuming decision. An incomplete window defers only the entry side that uses
 adverse cooldown, leaving closes and unrelated sides/coins available. N returns need
@@ -141,7 +142,10 @@ processed on arrival and transferred at most once, giving amortized constant wor
 per candle and memory proportional to the window, per enabled coin/span. Both sides
 share a tracker when their spans match. This preserves finite-window expiry and
 exact zero for an entirely flat window without subtracting nearly equal moments.
-The live reconstruction remains a full replay; CPU cache state is not restart state.
+Live reconstructs each new completed window with a full replay and reuses complete
+results at the same cutoff. Canonical candle repairs and gap evidence invalidate
+that cache; incomplete windows remain retryable. Cache loss recomputes the same score
+from candles, so neither live nor CPU cache state is restart state.
 
 A reproducible synthetic comparison against the replay reference is available:
 

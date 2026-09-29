@@ -1218,3 +1218,96 @@ async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_min
     assert not missing
     assert current == ranking
     assert all(current[symbol][1.0] > 0.99 for symbol in symbols)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monkeypatch, side):
+    from live.unilateralness import load
+    from candlestick_manager import CandlestickManager, CANDLE_DTYPE
+    import passivbot_rust as pbr
+
+    cm = CandlestickManager(exchange=None, exchange_name="fake", cache_dir=str(tmp_path))
+    now = 100 * 60000 + 30000
+    span = 2.5
+    enabled = True
+    rows = np.zeros(51, dtype=CANDLE_DTYPE)
+    rows["ts"] = (np.arange(51) + 49) * 60000
+    rows["c"] = np.exp(np.arange(51) * 0.001)
+    for field in ("o", "h", "l"):
+        rows[field] = rows["c"]
+    rows["bv"] = 1.0
+    cm._persist_batch("BTC", rows, skip_memory_retention=True)
+    fetches, replays = [], []
+    missing = False
+
+    async def candles(symbol, **kwargs):
+        fetches.append(symbol)
+        return np.empty(0, dtype=CANDLE_DTYPE) if missing else cm._cache[symbol].copy()
+
+    original = pbr.calc_signed_unilateralness
+
+    def replay(closes, requested_span):
+        replays.append(requested_span)
+        return original(closes, requested_span)
+
+    monkeypatch.setattr(cm, "get_candles", candles)
+    monkeypatch.setattr(pbr, "calc_signed_unilateralness", replay)
+    bot = SimpleNamespace(
+        cm=cm, get_exchange_time=lambda: now,
+        is_pside_enabled=lambda pside: pside == side and enabled,
+        is_forager_mode=lambda pside: True,
+        bot_value=lambda pside, key: {"unilateralness": 1.0} if key == "forager_score_weights" else span,
+        bp=lambda pside, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
+    )
+    first = await load(bot, ["BTC"], set())
+    for _ in range(10):
+        assert await load(bot, ["BTC"], {"BTC"}) == first
+    assert len(fetches) == len(replays) == 1
+    # Real canonical ingestion invalidates the cached value at the same cutoff.
+    repaired = rows[-1:].copy()
+    for field in ("o", "h", "l", "c"):
+        repaired[field] *= 0.9
+    cm._persist_batch("BTC", repaired, skip_memory_retention=True)
+    changed = await load(bot, ["BTC"], set())
+    assert changed != first
+    assert len(fetches) == len(replays) == 2
+    # Losing cache is restart-equivalent, including the repaired candle.
+    cm._ema_cache.clear()
+    assert await load(bot, ["BTC"], set()) == changed
+    assert len(replays) == 3
+    # Gap invalidation and failed reads never acquire a reusable neutral value.
+    cm._invalidate_ema_cache("BTC", timeframe="1m")
+    missing = True
+    for _ in range(2):
+        current, ranking, unavailable = await load(bot, ["BTC"], set())
+        assert current == ranking == {"BTC": {}}
+        assert unavailable == {"BTC": {"current": [span], "forager": [span]}}
+    assert len(fetches) == 5 and len(replays) == 3
+    missing = False
+    assert await load(bot, ["BTC"], set()) == changed
+    # A new cutoff is never served by the previous minute's cache.
+    now += 60000
+    current, ranking, unavailable = await load(bot, ["BTC"], set())
+    assert current == ranking == {"BTC": {}}
+    assert unavailable
+    appended = repaired.copy()
+    appended["ts"] += 60000
+    cm._persist_batch("BTC", appended, skip_memory_retention=True)
+    assert not (await load(bot, ["BTC"], set()))[2]
+    # Config/universe changes bound the namespace; unrelated EMA cache survives.
+    cm._ema_cache["BTC"][("close", 3.0, "60000")] = (1.0, 0, 0)
+    span = 1.0
+    assert not (await load(bot, ["BTC"], set()))[2]
+    assert [key[1] for key in cm._ema_cache["BTC"] if key[0] == "signed_unilateralness"] == [1.0]
+    enabled = False
+    assert await load(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})
+    assert list(cm._ema_cache["BTC"]) == [("close", 3.0, "60000")]
+    enabled = True
+    await load(bot, ["BTC"], set())
+    await load(bot, [], set())
+    assert list(cm._ema_cache["BTC"]) == [("close", 3.0, "60000")]

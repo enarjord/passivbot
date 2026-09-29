@@ -44,6 +44,15 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
     result = {symbol: {} for symbol in symbols}
     ranking = {symbol: {} for symbol in symbols}
     required = {}
+    # Share canonical EMA invalidation: candle repairs and new gap evidence
+    # invalidate these results even when the completed-candle cutoff is unchanged.
+    replay_cache = getattr(bot.cm, "_ema_cache", None)
+    if replay_cache is not None:
+        for symbol, cached in replay_cache.items():
+            if symbol not in result:
+                for key in list(cached):
+                    if key[0] == "signed_unilateralness":
+                        del cached[key]
     source_ends = {}
     ages = forager_age_by_symbol or {}
     scoring_sides = {
@@ -64,10 +73,20 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
                 forager_spans.add(span)
         spans = current_spans | forager_spans
         required[symbol] = (current_spans, forager_spans)
+        cached = replay_cache.get(symbol, {}) if replay_cache is not None else {}
+        for key in list(cached):
+            if key[0] == "signed_unilateralness" and key[1] not in spans:
+                del cached[key]
         if not spans:
             continue
         if any(not math.isfinite(s) or not 1 <= s <= 100_000 for s in spans):
             raise ValueError("unilateralness EMA span must be between 1 and 100000")
+        keys = {span: ("signed_unilateralness", span, "60000") for span in spans}
+        if all(key in cached and cached[key][1] == end for key in keys.values()):
+            result[symbol] = {span: cached[key][0] for span, key in keys.items()}
+            ranking[symbol] = dict(result[symbol])
+            source_ends[symbol] = end
+            continue
         count = math.ceil(max(spans) * 20.0) + 1
         allowed_age = max(0, int(ages.get(symbol, 0)))
         start = end - (count - 1) * 60_000 - math.ceil(allowed_age / 60_000) * 60_000
@@ -105,6 +124,12 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             ranking[symbol][span] = value
             if window["ts"][-1] == end:
                 result[symbol][span] = value
+                if replay_cache is not None:
+                    # Fetching may have invalidated/replaced the symbol's cache.
+                    # Cache only complete current windows, never missing/stale data.
+                    replay_cache.setdefault(symbol, {})[keys[span]] = (
+                        value, end, int(bot.get_exchange_time())
+                    )
             else:
                 logging.debug(
                     "[ema] cached unilateralness | symbol=%s span=%s source=completed_candles age_ms=%d max_age_ms=%d",
