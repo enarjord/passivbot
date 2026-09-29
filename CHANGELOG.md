@@ -6,6 +6,15 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Improve GPU optimizer parity with exact Rust: apply the same forager-weight
+  normalization and bound quantization, refresh Trailing Martingale flat-coin rankings
+  each candle, grant selection hysteresis only to existing entry orders, and size
+  raw-touch entries before executable-price finalization. Multi-coin Trailing Martingale
+  auto-unstuck now honors the configured rolling PnL lookback, including fees and shared
+  long/short accounting.
+  Start a fresh GPU run after this update; older GPU checkpoints contain incompatible
+  screening scores. Existing result configs remain usable as starting configs.
+
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 
 - Record completed GPU optimizer CPU validations during the following GPU proxy pass and report exact progress immediately, while keeping resumable checkpoints at completed generation boundaries.
