@@ -15757,8 +15757,9 @@ def test_mps_dual_side_single_coin_hsl_respects_signal_scope(
     ],
 )
 @pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("fill_buffer", [0.0, 0.0015])
 def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
-    strategy_kind, market_orders_allowed, side
+    strategy_kind, market_orders_allowed, side, fill_buffer
 ):
     count = 6
     close = np.full(count, 100.0)
@@ -15784,7 +15785,8 @@ def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
         0,
         count - 1,
     )
-    data = build_mps_data(high, low, close, timestamps, run, market)
+    data = build_mps_data(high, low, close, timestamps, run, market,
+                          limit_order_fill_buffer_pct=fill_buffer)
 
     def candidate(unstuck_enabled, *, ema_gating=False, ema_dist=0.0):
         if strategy_kind == "trailing_martingale":
@@ -15864,7 +15866,9 @@ def test_mps_single_coin_auto_unstuck_reduces_eligible_position(
     # whole contracts; both strategy kernels must share that result.
     initial_size = 9.0 if side == "short" else 10.0
     assert remaining[0] == pytest.approx(initial_size)
-    assert remaining[1] == pytest.approx(initial_size - 1.0)
+    assert remaining[1] == pytest.approx(
+        initial_size if fill_buffer and not market_orders_allowed else initial_size - 1.0
+    )
     assert remaining[2] == pytest.approx(initial_size)
 
 
@@ -20927,7 +20931,8 @@ def test_mps_trailing_martingale_shader_contract_and_directional_smoke(
     not GPU_AVAILABLE, reason="Apple MPS and NVIDIA CUDA unavailable"
 )
 @pytest.mark.parametrize("is_long", [True, False])
-def test_mps_trailing_martingale_fills_recursive_entry_ladder(is_long):
+@pytest.mark.parametrize("fill_buffer", [0.0, 0.0015])
+def test_mps_trailing_martingale_fills_recursive_entry_ladder(is_long, fill_buffer):
     from optimization.gpu.mps_kernel import MpsTrailingMartingaleRunner
 
     count = 7
@@ -20935,10 +20940,10 @@ def test_mps_trailing_martingale_fills_recursive_entry_ladder(is_long):
     high = np.full(count, 100.0)
     low = np.full(count, 100.0)
     if is_long:
-        low[2] = 99.99  # Fill the initial entry generated on the prior bar.
+        low[2] = 99.8  # Fill the initial entry generated on the prior bar.
         low[3] = 90.0  # Strictly cross several pre-generated recursive rungs.
     else:
-        high[2] = 100.01
+        high[2] = 100.2
         high[3] = 110.0
     timestamps = 1_700_000_000_000 + np.arange(count, dtype=np.int64) * 60_000
     market = ProxyMarket(0.001, 0.01, 0.001, 5.0, 1.0, 0.0002)
@@ -20954,7 +20959,8 @@ def test_mps_trailing_martingale_fills_recursive_entry_ladder(is_long):
         0,
         count - 1,
     )
-    data = build_mps_data(high, low, close, timestamps, run, market)
+    data = build_mps_data(high, low, close, timestamps, run, market,
+                          limit_order_fill_buffer_pct=fill_buffer)
     row = _tm_single_row(initial_ema_dist=0.0, gate_initial=0.0, gate_reentry=0.0)
     row[4] = 1.5  # entry double-down factor
     row[6] = 0.05  # initial entry uses 5% of the exposure budget

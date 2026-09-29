@@ -11,6 +11,7 @@ import time
 import numpy as np
 
 from config.shared_bot import flatten_shared_bot_side
+from config.validate import validate_limit_order_fill_buffer_pct
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
 from optimization.gpu.metric_registry import (
@@ -604,6 +605,7 @@ def _gpu_proxy_execution_checkpoint_contract(
         "trade_start_indices",
         "global_warmup_bars",
         "liquidation_threshold",
+        "limit_order_fill_buffer_pct",
         "filter_by_min_effective_cost",
         "dynamic_wel_by_tradability",
         "hedge_mode",
@@ -1998,11 +2000,9 @@ class MpsSingleCoinProxy:
                 f"prepared {len(payload.bot_params_list)}"
             )
         backtest_params = payload.backtest_params
-        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
-            raise ValueError(
-                "GPU optimization does not support nonzero "
-                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
-            )
+        limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
+            backtest_params.get("limit_order_fill_buffer_pct", 0.0)
+        )
         candle_interval_minutes = _single_coin_candle_interval_minutes(
             backtest_params
         )
@@ -2220,7 +2220,10 @@ class MpsSingleCoinProxy:
                 first_valid_idx=self.run.first_valid_idx,
                 last_valid_idx=self.run.last_valid_idx,
             )
-        self.data = build_mps_data(high, low, close, timestamps, self.run, self.market)
+        self.data = build_mps_data(
+            high, low, close, timestamps, self.run, self.market,
+            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
+        )
         self.metrics_data = {
             "ts0": self.data["ts0"],
             "n": self.data["n"],
@@ -2927,15 +2930,19 @@ def _build_single_coin_override_params(
 
 def _prepared_multicoin_data(
     values, timestamps, *, runs, markets, checkpoint_contract, cache=None,
+    limit_order_fill_buffer_pct=0.0,
 ):
     """Share immutable suite tensors only for identical validated packing inputs."""
+    limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
+        limit_order_fill_buffer_pct
+    )
     candles = checkpoint_contract["hlcvs"]
     timeline = checkpoint_contract["timestamps"]
     key = (
         tuple(checkpoint_contract["coins"]),
         tuple(candles["shape"]), candles["dtype"], candles["sha256"],
         timeline["count"], timeline["first"], timeline["last"], timeline["sha256"],
-        tuple(runs), tuple(markets),
+        tuple(runs), tuple(markets), limit_order_fill_buffer_pct,
     )
     if cache is not None and key in cache:
         data = cache[key]
@@ -2946,6 +2953,7 @@ def _prepared_multicoin_data(
         return data
     data = build_mps_multicoin_data(
         values, timestamps, runs=runs, markets=markets, include_hourly_ranges=True,
+        limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
     )
     if cache is not None:
         cache[key] = data
@@ -3114,11 +3122,9 @@ class MpsMulticoinProxy:
                 f"markets={len(payload.exchange_params)}"
             )
         backtest_params = payload.backtest_params
-        if backtest_params.get("limit_order_fill_buffer_pct", 0.0) != 0.0:
-            raise ValueError(
-                "GPU optimization does not support nonzero "
-                "backtest.limit_order_fill_buffer_pct; use the CPU backend"
-            )
+        limit_order_fill_buffer_pct = validate_limit_order_fill_buffer_pct(
+            backtest_params.get("limit_order_fill_buffer_pct", 0.0)
+        )
         from optimization.gpu.revised_hsl import project_bot
         hsl_config = backtest_params.get("equity_hard_stop_loss", {})
         self.hsl_engine = hsl_config.get("engine", "legacy")
@@ -3423,6 +3429,7 @@ class MpsMulticoinProxy:
         self.data = _prepared_multicoin_data(
             values, timestamps, runs=runs, markets=markets,
             checkpoint_contract=self.checkpoint_contract, cache=prepared_data_cache,
+            limit_order_fill_buffer_pct=limit_order_fill_buffer_pct,
         )
         self.metrics_data = {
             "ts0": self.data["ts0"],

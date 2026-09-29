@@ -1619,6 +1619,7 @@ def test_gpu_suite_inputs_materialize_each_exchange_in_one_scenario():
         ("backtest.starting_balance", 12_345.0, ("backtest", "starting_balance")),
         ("backtest.maker_fee_override", 0.0002, ("backtest", "maker_fee_override")),
         ("backtest.taker_fee_override", 0.0007, ("backtest", "taker_fee_override")),
+        ("backtest.limit_order_fill_buffer_pct", 0.0015, ("backtest", "limit_order_fill_buffer_pct")),
         (
             "backtest.market_order_slippage_pct",
             0.0015,
@@ -5953,6 +5954,8 @@ def test_proxy_forager_roundtrip_reapplies_fixed_and_mirrored_weights(fixed_volu
 
 def test_proxy_forager_roundtrip_preserves_anchor_fixed_weights():
     from config.bot import normalize_forager_score_weights
+    from config.optimize_bounds import set_flat_optimize_bound
+    from optimization.shape import build_optimization_shape
     from optimize import _canonicalize_optimizer_individual
 
     config = get_template_config()
@@ -5968,15 +5971,27 @@ def test_proxy_forager_roundtrip_preserves_anchor_fixed_weights():
             for key, value in fixed.items()
         ]}],
     }
-    bounds = [Bound(0.0, 0.0, 1.0), Bound(0.0, 1.0, 0.01)]
-    paths = [(ANCHOR_GENE_KEY, (ANCHOR_GENE_KEY,)), (prefix + "volume", path)]
+    set_flat_optimize_bound(
+        config["optimize"]["bounds"], config["live"]["strategy_kind"],
+        prefix + "volume", [0.0, 1.0, 0.01],
+    )
+    shape = build_optimization_shape(config)
+    bounds, paths = shape.bounds, shape.key_paths
+    mapped = {
+        name: (index, bounds[index])
+        for index, (name, _) in enumerate(paths)
+        if name.startswith(prefix)
+    }
+    # Real anchored shapes exclude fixed weights from the optimizer vector.
+    assert set(mapped) == {prefix + "volume"}
     exact = _canonicalize_optimizer_individual([0.0, 0.31], config, bounds, 6, paths, [])
     proxy = _build_proxy_parameter_dicts(
-        [0.0, 0.31], {prefix + "volume": (1, bounds[1])},
+        [0.0, 0.31], mapped,
         [(ANCHOR_GENE_KEY, 0, bounds[0]), (prefix + "volume", 1, bounds[1])],
         np.array([[0.0, 0.31]]), sig_digits=6,
         anchor_parameter_overrides=[{prefix + key: value for key, value in fixed.items()}],
     )[0]
+    assert {key: proxy[prefix + key] for key in fixed} == fixed
     effective = normalize_forager_score_weights(
         {key: proxy[prefix + key] for key in ("volume", "ema_readiness", "volatility")},
         path="proxy weights",
