@@ -364,19 +364,34 @@ pub fn select_coins_with_diagnostics(
 
     let slots_to_fill = cfg.slots_to_fill.max(1);
     prune_low_volume_tail(
-        features,
         &mut enabled_pos,
         cfg.volume_drop().expect("invalid forager_volume_drop_pct"),
         slots_to_fill,
+        |pos| (features[pos].volume_score, features[pos].index),
     );
     score_forager_candidates(features, &enabled_pos, cfg, slots_to_fill)
 }
 
+/// Positions whose scores can affect selection after deterministic volume pruning.
+/// Shares the exact keep count and tie break with final coin selection.
+pub(crate) fn forager_scoring_positions(
+    candidates: &[ForagerCandidate],
+    cfg: &ForagerSelectionConfig,
+) -> Result<Vec<usize>, ForagerSelectionError> {
+    let mut positions: Vec<usize> = candidates.iter().enumerate()
+        .filter_map(|(pos, candidate)| candidate.enabled.then_some(pos)).collect();
+    if cfg.require_forager {
+        prune_low_volume_tail(&mut positions, cfg.volume_drop()?, cfg.slots_to_fill.max(1),
+            |pos| (candidates[pos].volume_score, candidates[pos].index));
+    }
+    Ok(positions)
+}
+
 fn prune_low_volume_tail(
-    features: &[CoinFeature],
     positions: &mut Vec<usize>,
     volume_drop_pct: f64,
     slots_to_fill: usize,
+    volume_and_index: impl Fn(usize) -> (f64, usize),
 ) {
     if positions.is_empty() {
         return;
@@ -392,9 +407,9 @@ fn prune_low_volume_tail(
     }
 
     let cmp_volume = |pa: &usize, pb: &usize| {
-        let a = &features[*pa];
-        let b = &features[*pb];
-        compare_desc(a.volume_score, b.volume_score, a.index, b.index)
+        let (a_volume, a_index) = volume_and_index(*pa);
+        let (b_volume, b_index) = volume_and_index(*pb);
+        compare_desc(a_volume, b_volume, a_index, b_index)
     };
     positions.select_nth_unstable_by(keep.saturating_sub(1), cmp_volume);
     positions.truncate(keep);
@@ -830,6 +845,29 @@ mod tests {
             ema_lower: 100.0,
             ema_upper: 100.0,
             entry_initial_ema_dist: 0.1,
+        }
+    }
+
+    #[test]
+    fn rms_scoring_set_matches_volume_pruning_with_ties_and_disabled_candidates() {
+        let mut candidates: Vec<_> = [7, 3, 9, 0].iter()
+            .map(|&index| make_candidate(index, 100.0, 1.0, 100.0, 100.0)).collect();
+        candidates[3].enabled = false;
+        for slots in [1, 2, 3] {
+            for drop in [0.0, 0.5, 1.0] {
+                let cfg = ForagerSelectionConfig {
+                    slots_to_fill: slots,
+                    volume_drop_pct: drop,
+                    ..default_forager_config(ForagerPositionSide::Long)
+                };
+                let mut expected: Vec<_> = forager_scoring_positions(&candidates, &cfg)
+                    .unwrap().iter().map(|&pos| candidates[pos].index).collect();
+                let mut actual: Vec<_> = select_forager_candidates_with_diagnostics(&candidates, &cfg)
+                    .unwrap().scored.iter().map(|item| item.index).collect();
+                expected.sort_unstable();
+                actual.sort_unstable();
+                assert_eq!(expected, actual);
+            }
         }
     }
 

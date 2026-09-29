@@ -1062,3 +1062,43 @@ def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected
     payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
     assert payload.backtest_params["warmup_minutes"] == [expected, expected]
     assert payload.backtest_params["trade_start_indices"] == [expected, expected]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("marker", ["live", "warmup", "unmarked"])
+@pytest.mark.parametrize("missing_idx", [1, 2])
+def test_volume_pruning_limits_required_rms_scoring_set(side, marker, missing_idx):
+    import passivbot_rust as pbr
+
+    bp = {"n_positions": 1, "total_wallet_exposure_limit": 1.0,
+          "filter_volume_drop_pct": 1.0 / 3.0,
+          "filter_volume_ema_span_1m": 10.0,
+          "unilateralness_ema_span_1m": 60.0,
+          "forager_score_weights": {
+              "volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}}
+    symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(3)]
+    for i, symbol in enumerate(symbols):
+        symbol[side]["mode"] = None
+        symbol["emas"]["m1"]["volume"] = [[10.0, 1.0 if i == 2 else 100.0]]
+        symbol["emas"]["m1"]["signed_unilateralness"] = [[60.0, 0.9 if i == 0 else 0.1]]
+    symbols[missing_idx]["emas"]["m1"]["signed_unilateralness"] = []
+    if marker == "live":
+        symbols[missing_idx]["unilateralness_unavailable"] = {"forager": [60.0]}
+    elif marker == "warmup":
+        symbols[missing_idx]["unilateralness_warmup_spans"] = [60.0]
+    inp = make_input(balance=1000, global_bp=bot_params_pair(**{f"{side}_overrides": bp}), symbols=symbols)
+    if missing_idx == 1 and marker == "unmarked":
+        with pytest.raises(ValueError, match="MissingEma"):
+            compute(pbr, inp)
+        return
+    out = compute(pbr, inp)
+    selection = next(s for s in out["diagnostics"]["forager_selections"] if s["pside"] == side)
+    assert selection["selected_symbol_indices"] == ([1] if missing_idx == 2 else [])
+    # Supplying the dropped score cannot change the winner; restoring a retained
+    # score restores the complete ranking, and malformed retained scores fail.
+    symbols[missing_idx]["emas"]["m1"]["signed_unilateralness"] = [[60.0, 0.0]]
+    ready = compute(pbr, inp)
+    assert next(s for s in ready["diagnostics"]["forager_selections"] if s["pside"] == side)["selected_symbol_indices"] == [1]
+    symbols[0]["emas"]["m1"]["signed_unilateralness"] = [[60.0, 1.5]]
+    with pytest.raises(ValueError, match="signed_unilateralness"):
+        compute(pbr, inp)

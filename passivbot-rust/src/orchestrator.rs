@@ -30,7 +30,7 @@ pub struct ForagerHysteresisState {
 mod core {
     use crate::closes::{calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
     use crate::coin_selection::{
-        select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
+        forager_scoring_positions, select_forager_candidates_with_diagnostics, ForagerCandidate, ForagerPositionSide,
         ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
@@ -2332,7 +2332,6 @@ mod core {
         let ema_readiness_required = cfg.require_forager && normalized_weights.ema_readiness != 0.0;
         out.clear();
         out.reserve(candidate_indices.len());
-        let mut ranking_unavailable = false;
         for &symbol_idx in candidate_indices {
             let s = &symbols[symbol_idx];
             let forager_m1 = s.forager_m1.as_ref().unwrap_or(&s.emas.m1);
@@ -2350,26 +2349,6 @@ mod core {
                 },
                 side,
             )?;
-            let unilateralness_score =
-                if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
-                    match signed_unilateralness(s, &side.bot_params, true) {
-                        Ok(value) => value.abs(),
-                        Err(err) => {
-                            handle_strategy_input_error(
-                                err,
-                                s,
-                                pside,
-                                StrategyInputScope::ForagerSelection,
-                                diagnostics,
-                            )?;
-                            ranking_unavailable = true;
-                            out.push(unavailable_forager_candidate(s.symbol_idx));
-                            continue;
-                        }
-                    }
-                } else {
-                    0.0
-                };
             let volume_score = if volume_required {
                 let value = match ema_lookup(
                     &forager_m1.volume,
@@ -2463,7 +2442,8 @@ mod core {
                 enabled: true,
                 volume_score,
                 volatility_score,
-                unilateralness_score,
+                // Filled below only if this candidate survives volume pruning.
+                unilateralness_score: 0.0,
                 bid,
                 ask,
                 ema_lower,
@@ -2471,10 +2451,28 @@ mod core {
                 entry_initial_ema_dist,
             });
         }
-        if ranking_unavailable {
-            // A missing compared score can change the winner. Never rank a
-            // ready subset merely because its history arrived first.
-            out.clear();
+        if cfg.require_forager && normalized_weights.unilateralness > 0.0 {
+            let scoring_positions = forager_scoring_positions(out, cfg)
+                .map_err(map_forager_selection_error)?;
+            let mut ranking_unavailable = false;
+            for pos in scoring_positions {
+                let s = &symbols[out[pos].index];
+                let side = symbol_side_input(s, pside);
+                match signed_unilateralness(s, &side.bot_params, true) {
+                    Ok(value) => out[pos].unilateralness_score = value.abs(),
+                    Err(err) => {
+                        handle_strategy_input_error(
+                            err, s, pside, StrategyInputScope::ForagerSelection, diagnostics,
+                        )?;
+                        ranking_unavailable = true;
+                    }
+                }
+            }
+            if ranking_unavailable {
+                // Never rank a ready subset of the retained scoring set.
+                // Keep scanning above so malformed supplied scores stay fatal.
+                out.clear();
+            }
         }
         Ok(())
     }
