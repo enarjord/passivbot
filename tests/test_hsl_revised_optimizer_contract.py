@@ -63,7 +63,8 @@ def test_unified_rejects_inactive_side_signal_objectives(metric):
         cfg["live"]["hsl_signal_mode"] = mode
         validate_optimizer_metrics(cfg, [metric])
     cfg["live"].update(hsl_engine="legacy", hsl_signal_mode="unified")
-    validate_optimizer_metrics(cfg, [metric])
+    with pytest.raises(ValueError, match="legacy HSL has been removed"):
+        validate_optimizer_metrics(cfg, [metric])
 
 
 def test_unified_keeps_general_side_performance_and_portfolio_signal_metrics():

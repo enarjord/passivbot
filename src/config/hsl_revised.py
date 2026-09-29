@@ -10,17 +10,18 @@ import re
 
 from .shared_bot import canonicalize_shared_bot_side
 
-ENGINES = frozenset({"legacy", "revised"})
 REMOVED_FIELDS = frozenset({"tier_ratios", "orange_tier_mode", "no_restart_drawdown_threshold"})
 FIELDS = frozenset({"enabled", "red_threshold", "ema_span_minutes", "panic_close_order_type",
                     "cooldown_minutes_after_red", "restart_after_red_policy"})
 
 
 def engine(config):
-    value = config.get("live", {}).get("hsl_engine", "legacy")
-    if not isinstance(value, str) or value.strip().lower() not in ENGINES:
-        raise ValueError("live.hsl_engine must be legacy or revised")
-    return value.strip().lower()
+    value = config.get("live", {}).get("hsl_engine", "revised")
+    if isinstance(value, str) and value.strip().lower() == "legacy":
+        raise ValueError("legacy HSL has been removed; migrate this config with passivbot tool migrate-hsl and re-backtest before use")
+    if not isinstance(value, str) or value.strip().lower() != "revised":
+        raise ValueError("live.hsl_engine accepts only revised; HSL now has one implementation")
+    return "revised"
 
 
 def _mode(config):
@@ -32,8 +33,7 @@ def _mode(config):
 
 def normalization_template(template, config):
     """Engine-specific hydration defaults, never a new-config authorization."""
-    if engine(config) == "legacy":
-        return template
+    engine(config)
     result = deepcopy(template)
     result["live"]["hsl_engine"] = "revised"
     result["live"].pop("hsl_position_during_cooldown_policy", None)
@@ -177,8 +177,7 @@ def validate_override_paths(config, overrides, *, allow_engine=False):
     for key in ("hsl_engine", "hsl_signal_mode"):
         if f"live.{key}" in leaves:
             selected["live"][key] = leaves[f"live.{key}"]
-    if engine(selected) != "revised":
-        return
+    engine(selected)
     for path in leaves:
         validate_parameter_path(path, _mode(selected))
     validate_revised_paths({**selected, "optimize": {"scoring": overrides}})
@@ -188,10 +187,6 @@ def normalize_revised(config, template, *, verbose=True):
     """Run before hydration, and again for effective CLI/scenario configurations."""
     selected = engine(config)
     config.setdefault("live", {})["hsl_engine"] = selected
-    if selected == "legacy":
-        if "hsl" in config.get("bot", {}):
-            raise ValueError("bot.hsl is a revised unified block; select revised or supply a legacy-compatible config")
-        return
     mode = _mode(config)
     config["live"]["hsl_signal_mode"] = mode
     bot = config.setdefault("bot", {})
@@ -232,7 +227,7 @@ def normalize_revised(config, template, *, verbose=True):
 
 def require_runtime_support(config, supported_modes=()):
     if engine(config) == "revised" and _mode(config) not in supported_modes:
-        raise ValueError(f"revised HSL {_mode(config)} runtime integration is not available in this build; legacy remains the default")
+        raise ValueError(f"revised HSL {_mode(config)} runtime integration is not available in this build")
 
 
 def _side_has_enabled_policy(config, side, markets_by_exchange):

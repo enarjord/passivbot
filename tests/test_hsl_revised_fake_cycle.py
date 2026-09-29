@@ -21,7 +21,7 @@ import tools.run_fake_live as runner
 async def test_standard_fake_runner_revised_execution_and_trace(tmp_path, monkeypatch, mode, side, case, entrypoint):
     user = f'fake_revised_cli_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     if side == 'short':
@@ -302,3 +302,5 @@ async def test_fake_cycle_raises_read_failure_in_last_bounded_wait(monkeypatch):
     with pytest.raises(RuntimeError, match="last wait history failure"):
         await runner._run_fake_cycle_ready(bot)
     assert calls == 8
+
+from hsl_revised_fixture import load_fake_hsl_config

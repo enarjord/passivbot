@@ -256,8 +256,7 @@ async def filter_fresh_market_snapshot_creations(
         )
         return []
     from live import hsl_revised_live
-    if hsl_revised_live.selected(bot):
-        hsl_revised_live.owner(bot).quotes.update(snapshots)
+    hsl_revised_live.owner(bot).quotes.update(snapshots)
     orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)
     return orders
 

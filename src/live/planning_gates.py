@@ -26,15 +26,14 @@ def staged_planner_required_surfaces(
     """Return live input surfaces required before staged order planning may proceed."""
     surfaces = set(ACCOUNT_SURFACES)
     from live import hsl_revised_live
-    if hsl_revised_live.selected(bot):
-        now = int(bot.get_exchange_time())
-        start = max(0, now - round(bot.config['live']['pnls_max_lookback_days'] * 86_400_000))
-        required, _ = bot._required_fill_history_start_ms(now, pnl_start_ms=start)
-        if not required:
-            # Revised HSL can estimate history. Other enabled fill/PnL
-            # consumers retain the canonical strict surface; trailing input
-            # availability is scoped separately by the strategy reader.
-            surfaces.discard('fills')
+    now = int(bot.get_exchange_time())
+    start = max(0, now - round(bot.config['live']['pnls_max_lookback_days'] * 86_400_000))
+    required, _ = bot._required_fill_history_start_ms(now, pnl_start_ms=start)
+    if not required:
+        # Revised HSL can estimate history. Other enabled fill/PnL
+        # consumers retain the canonical strict surface; trailing input
+        # availability is scoped separately by the strategy reader.
+        surfaces.discard('fills')
     if include_market_snapshot:
         surfaces.add("market_snapshot")
     return frozenset(surfaces)

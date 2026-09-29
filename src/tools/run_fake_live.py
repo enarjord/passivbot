@@ -715,110 +715,41 @@ async def _run_fake_bot(
 
 
 async def _run_fake_cycle(bot):
-    try:
-        return await _run_fake_cycle_ready(bot)
-    except AuthoritativeSurfaceUnavailable as exc:
-        if exc.surface != "hsl_episode_boundaries":
-            raise
-        # Match the live loop: unknown held-episode evidence defers shared ordinary
-        # planning, while an independently latched RED scope keeps supervision.
-        if await bot._run_halted_hsl_protection_if_active():
-            return {"cooldown_supervisor": True}
-        if bot._equity_hard_stop_signal_mode() == "coin":
-            if bot._equity_hard_stop_coin_red_active():
-                await bot._equity_hard_stop_run_coin_red_supervisor(single_pass=True)
-                return {"red_supervisor": True, "mode": "coin"}
-        elif _fake_active_red_psides(bot):
-            return await _run_fake_red_supervisor_step(bot)
-        return {"updated": False, "hsl_ready": False}
+    return await _run_fake_cycle_ready(bot)
 
 
 async def _run_fake_cycle_ready(bot):
-    from live import risk_input_recovery, hsl_revised_live
-    if hsl_revised_live.selected(bot):
-        instance = hsl_revised_live.owner(bot)
-        # Settle fast fake reads/planning at one scenario timestamp. An outage
-        # remains pending after a bounded number of production passes; never
-        # await arbitrary ordinary work to completion before protection.
-        for attempt in range(8):
-            # poll_inputs() runs at the start of cycle(). A read completing
-            # during that cycle still needs a subsequent consuming pass.
-            completed_before = {task for task in (getattr(instance, '_fill_task', None),
-                getattr(instance, '_source_task', None)) if task is not None and task.done()}
-            result = await instance.cycle()
-            input_tasks = [task for task in (getattr(instance, '_fill_task', None),
-                getattr(instance, '_source_task', None)) if task is not None]
+    from live import hsl_revised_live
+    instance = hsl_revised_live.owner(bot)
+    # Settle fast fake reads/planning at one scenario timestamp. An outage
+    # remains pending after a bounded number of production passes; never
+    # await arbitrary ordinary work to completion before protection.
+    for attempt in range(8):
+        # poll_inputs() runs at the start of cycle(). A read completing
+        # during that cycle still needs a subsequent consuming pass.
+        completed_before = {task for task in (getattr(instance, '_fill_task', None),
+            getattr(instance, '_source_task', None)) if task is not None and task.done()}
+        result = await instance.cycle()
+        input_tasks = [task for task in (getattr(instance, '_fill_task', None),
+            getattr(instance, '_source_task', None)) if task is not None]
+        for task in input_tasks:
+            if task.done():
+                task.result()  # Never relegate a final-step failure to shutdown.
+        inputs_consumed = all(task in completed_before for task in input_tasks)
+        if not result['updated'] or (result['ordinary_executed'] and inputs_consumed):
+            return dict(result, engine='revised', passes=attempt+1)
+        # A completed ordinary plan does not settle newly scheduled history
+        # reads. Give them the same bounded opportunity before advancing the
+        # scenario clock; the next production pass observes their results.
+        pending = [task for task in (instance._ordinary, *input_tasks)
+            if task is not None and not task.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=.25)
             for task in input_tasks:
                 if task.done():
-                    task.result()  # Never relegate a final-step failure to shutdown.
-            inputs_consumed = all(task in completed_before for task in input_tasks)
-            if not result['updated'] or (result['ordinary_executed'] and inputs_consumed):
-                return dict(result, engine='revised', passes=attempt+1)
-            # A completed ordinary plan does not settle newly scheduled history
-            # reads. Give them the same bounded opportunity before advancing the
-            # scenario clock; the next production pass observes their results.
-            pending = [task for task in (instance._ordinary, *input_tasks)
-                if task is not None and not task.done()]
-            if pending:
-                await asyncio.wait(pending, timeout=.25)
-                for task in input_tasks:
-                    if task.done():
-                        task.result()  # Includes completion during the final bounded wait.
-        return dict(result, engine='revised', passes=8, preparation_pending=True)
-    if getattr(bot, "_risk_input_recovery", None) is not None:
-        if await risk_input_recovery.protect_before_history_refresh(bot):
-            return {"updated": False, "hsl_protection": True}
-    if not await bot.update_pos_oos_pnls_ohlcvs():
-        if bot._equity_hard_stop_enabled():
-            risk_input_recovery.defer_authoritative_hsl(bot)
-            await risk_input_recovery.protect_and_wait(bot)
-        return {"updated": False}
-    if bot._equity_hard_stop_enabled():
-        if bot._equity_hard_stop_signal_mode() != "coin" and _fake_active_red_psides(bot):
-            return await _run_fake_red_supervisor_step(bot)
-        if not await risk_input_recovery.ensure_ready(bot):
-            await risk_input_recovery.protect_and_wait(bot)
-            return {"updated": False, "hsl_protection": True}
-        if bot._equity_hard_stop_signal_mode() == "coin":
-            if bot._equity_hard_stop_coin_red_active():
-                # Exercise the production coin RED supervisor instead of the legacy
-                # pside stepping shim. The production path uses protective planning
-                # and its own authoritative refresh contract, which prevents normal
-                # staged planning from running while post-write confirmation is due.
-                await bot._equity_hard_stop_run_coin_red_supervisor(single_pass=True)
-                return {"red_supervisor": True, "mode": "coin"}
-        else:
-            if any(
-                bot._equity_hard_stop_runtime_red_latched(pside)
-                and not bot._hsl_state(pside)["halted"]
-                for pside in bot._hsl_psides()
-                if bot._equity_hard_stop_enabled(pside)
-            ):
-                if getattr(bot, "exchange", "").lower() == "fake":
-                    return await _run_fake_red_supervisor_step(bot)
-                await bot._equity_hard_stop_run_red_supervisor()
-                return {"red_supervisor": True}
-            if any(
-                bot._equity_hard_stop_runtime_red_latched(pside)
-                and not bot._hsl_state(pside)["halted"]
-                for pside in bot._hsl_psides()
-                if bot._equity_hard_stop_enabled(pside)
-            ):
-                if getattr(bot, "exchange", "").lower() == "fake":
-                    return await _run_fake_red_supervisor_step(bot)
-                await bot._equity_hard_stop_run_red_supervisor()
-                return {"red_supervisor": True}
-            if _fake_all_hsl_psides_terminal_latched(bot):
-                return {"terminal_hsl": True}
-    refresh_authoritative = getattr(bot, "refresh_authoritative_state", None)
-    if callable(refresh_authoritative) and not await refresh_authoritative():
-        return {"updated": False}
-    refresh_market = getattr(bot, "refresh_market_state_if_needed", None)
-    if callable(refresh_market) and not await refresh_market():
-        return {"updated": False, "market_ready": False}
-    result = await bot.execute_to_exchange(prepare_cycle=False)
-    risk_input_recovery.mark_ready(bot)
-    return result
+                    task.result()  # Includes completion during the final bounded wait.
+    return dict(result, engine='revised', passes=8, preparation_pending=True)
+
 
 def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
     def _load(name: str, default):

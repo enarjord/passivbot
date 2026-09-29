@@ -316,3 +316,20 @@ def test_disabled_revised_zero_balance_keeps_halt_loss_metric_finite():
         policy["enabled"] = False
     result = run(args)
     assert result[2]["hard_stop_halt_to_restart_equity_loss_pct"] == 0.0
+
+
+def test_native_boundary_rejects_explicit_legacy_engine():
+    args = payload()
+    args[-1]["equity_hard_stop_loss"]["engine"] = "legacy"
+    with pytest.raises(ValueError, match="legacy HSL has been removed"):
+        run(args)
+
+
+def test_native_missing_selector_retains_exact_revised_results():
+    args = payload()
+    selected = run(args)
+    del args[-1]["equity_hard_stop_loss"]["engine"]
+    implicit = run(args)
+    np.testing.assert_array_equal(implicit[0], selected[0])
+    assert implicit[2] == selected[2]
+    assert implicit[4] == selected[4]

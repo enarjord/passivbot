@@ -970,14 +970,12 @@ async def calc_orders_to_cancel_and_create(bot):
     else:
         state.clear_history()
     from live import hsl_revised_live
-    if hsl_revised_live.selected(bot):
-        wave = bot._hsl_revised_planning_wave
-        snapshot = bot._current_planning_snapshot
-        cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
-        hsl_revised_live.owner(bot).bind(wave, cancels, creates, ordinary=True)
-        bot._current_planning_snapshot = snapshot
-        return cancels, creates
-    return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+    wave = bot._hsl_revised_planning_wave
+    snapshot = bot._current_planning_snapshot
+    cancels, creates = await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+    hsl_revised_live.owner(bot).bind(wave, cancels, creates, ordinary=True)
+    bot._current_planning_snapshot = snapshot
+    return cancels, creates
 
 
 def validate_rust_ideal_orders(ideal_orders: object) -> None:

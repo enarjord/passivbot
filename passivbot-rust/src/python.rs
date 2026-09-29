@@ -29,7 +29,7 @@ use crate::trailing::{
 use crate::types::{Analysis, OrderType};
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
-    EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
+    EquityHardStopLossConfig, ExchangeParams, ForagerScoreWeights,
     HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
     StrategyParamsPairValue, TrailingPriceBundle, TwelEnforcerPolicy, WeExcessAllowanceMode,
 };
@@ -2155,63 +2155,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         let cfg = item
             .downcast::<PyDict>()
             .map_err(|_| PyValueError::new_err(format!("{key} must be a dict")))?;
-        let engine = extract_optional_string(cfg, "engine", "legacy")?;
-        if engine == "revised" {
-            let revised = revised_hsl_from_dict(cfg)?;
-            // The legacy storage is inert when revised is Some. No removed
-            // policy is hydrated into the revised controller or producer payload.
-            return Ok(EquityHardStopLossConfig {
-                signal_mode: revised.mode.clone(),
-                revised: Some(revised),
-                ..EquityHardStopLossConfig::default()
-            });
+        let engine = extract_optional_string(cfg, "engine", "revised")?;
+        if engine != "revised" {
+            return Err(PyValueError::new_err(
+                "unsupported HSL engine; legacy HSL has been removed; migrate to revised HSL",
+            ));
         }
-        if engine != "legacy" {
-            return Err(PyValueError::new_err("HSL engine must be legacy or revised"));
-        }
-        let ratios_item = cfg.get_item("tier_ratios")?.ok_or_else(|| {
-            PyValueError::new_err(format!("missing required key: {key}.tier_ratios"))
-        })?;
-        let ratios = ratios_item
-            .downcast::<PyDict>()
-            .map_err(|_| PyValueError::new_err(format!("{key}.tier_ratios must be a dict")))?;
-        let signal_mode = cfg
-            .get_item("signal_mode")?
-            .map(|item| item.extract::<String>())
-            .transpose()?
-            .unwrap_or_else(|| "unified".to_string());
-        if signal_mode != "coin" && signal_mode != "pside" && signal_mode != "unified" {
-            return Err(PyValueError::new_err(format!(
-                "{key}.signal_mode must be one of {{coin, pside, unified}}, got {:?}",
-                signal_mode
-            )));
-        }
-        let restart_after_red_policy =
-            extract_optional_string(cfg, "restart_after_red_policy", "threshold")?;
-        match restart_after_red_policy.as_str() {
-            "always" | "threshold" | "never" => {}
-            raw => {
-                return Err(PyValueError::new_err(format!(
-                    "{key}.restart_after_red_policy must be one of {{always, threshold, never}}, got {:?}",
-                    raw
-                )));
-            }
-        }
+        let revised = revised_hsl_from_dict(cfg)?;
         Ok(EquityHardStopLossConfig {
-            revised: None,
-            enabled: extract_value(cfg, "enabled")?,
-            signal_mode,
-            red_threshold: extract_value(cfg, "red_threshold")?,
-            ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
-            cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
-            no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
-            restart_after_red_policy,
-            tier_ratios: EquityHardStopLossTierRatios {
-                yellow: extract_value(ratios, "yellow")?,
-                orange: extract_value(ratios, "orange")?,
-            },
-            orange_tier_mode: extract_value(cfg, "orange_tier_mode")?,
-            panic_close_order_type: extract_value(cfg, "panic_close_order_type")?,
+            signal_mode: revised.mode.clone(),
+            revised: Some(revised),
+            ..EquityHardStopLossConfig::default()
         })
     };
     let hard_stop_cfg = parse_hsl_cfg(dict, "equity_hard_stop_loss")?;

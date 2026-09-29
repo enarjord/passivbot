@@ -35,13 +35,19 @@ def test_explicit_revised_config_roundtrips_without_legacy_fields(mode):
     assert not ({"tier_ratios", "orange_tier_mode", "no_restart_drawdown_threshold"} & block.keys())
 
 
-def test_legacy_default_keeps_legacy_policy():
+def test_missing_selector_uses_sole_engine_without_authorizing_restart():
     cfg = get_template_config()
     del cfg["live"]["hsl_engine"]
     result = prepared(cfg)
-    assert result["live"]["hsl_engine"] == "legacy"
-    assert result["bot"]["long"]["hsl"]["restart_after_red_policy"] == "threshold"
-    assert "tier_ratios" in result["bot"]["long"]["hsl"]
+    assert result["live"]["hsl_engine"] == "revised"
+    assert "tier_ratios" not in result["bot"]["long"]["hsl"]
+
+
+def test_explicit_legacy_selector_is_rejected_before_runtime():
+    cfg = source()
+    cfg["live"]["hsl_engine"] = "legacy"
+    with pytest.raises(ValueError, match="legacy HSL has been removed.*migrate-hsl"):
+        prepared(cfg)
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
@@ -170,7 +176,7 @@ def test_inactive_coin_hsl_override_is_not_silently_ignored(mode):
 def test_unimplemented_runtime_mode_is_explicitly_rejected(mode):
     with pytest.raises(ValueError, match="runtime integration is not available"):
         require_runtime_support(prepared(source(mode)))
-    require_runtime_support(prepared(get_template_config()))
+    require_runtime_support(prepared(get_template_config()), supported_modes=("coin",))
 
 
 @pytest.mark.parametrize("mode", ["coin", "pside", "unified"])
@@ -192,7 +198,7 @@ def test_live_constructor_rejects_unknown_engine_before_credentials(monkeypatch)
     monkeypatch.setattr(passivbot, "load_user_info", forbidden)
     cfg = prepared(source())
     cfg['live']['hsl_engine'] = 'unknown'
-    with pytest.raises(ValueError, match="legacy or revised"):
+    with pytest.raises(ValueError, match="accepts only revised"):
         passivbot.Passivbot(cfg)
 
 
@@ -236,15 +242,12 @@ def test_optimizer_finalization_rechecks_fixed_enablement():
         _finalize_optimizer_vector_config(cfg)
 
 
-@pytest.mark.parametrize("key,value", [("hsl_engine", "revised"), ("hsl_position_during_cooldown_policy", "normal")])
-def test_engine_and_intervention_changes_invalidate_saved_fitness(key, value):
+def test_legacy_saved_fitness_is_incompatible_with_sole_engine():
     from optimization.evaluation_contract import CONTRACT_KEY, build_evaluation_contract
     from optimize import _resume_config_mismatches
-    cfg = prepared(get_template_config())
+    cfg = prepared(source(enabled=False))
     old = {**deepcopy(cfg), CONTRACT_KEY: build_evaluation_contract(cfg)}
-    cfg["live"][key] = value
-    if key == "hsl_engine":
-        cfg = prepared(source(enabled=False))
+    old[CONTRACT_KEY]["live"]["hsl_engine"] = "legacy"
     assert any("evaluation.live" in item for item in _resume_config_mismatches(old, cfg))
 
 

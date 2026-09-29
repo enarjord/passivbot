@@ -34,9 +34,7 @@ async def test_pending_history_cannot_starve_real_protective_execution(
     _cleanup_fake_user_state(user)
     cfg = generated_template(
         prepare_config(
-            load_config(
-                str(REPO_ROOT / "configs/fake_live_hsl_btc.hjson"), verbose=False
-            ),
+            load_fake_hsl_config(),
             target="canonical",
             runtime=None,
             verbose=False,
@@ -223,3 +221,5 @@ async def test_pending_history_cannot_starve_real_protective_execution(
         assert completed
     finally:
         _cleanup_fake_user_state(user)
+
+from hsl_revised_fixture import load_fake_hsl_config

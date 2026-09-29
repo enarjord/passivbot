@@ -22,7 +22,7 @@ import tools.run_fake_live as runner
 async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fills(tmp_path, monkeypatch, mode, side, current_size):
     user = f'fake_history_timing_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT/'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     if side == 'short':
@@ -95,3 +95,5 @@ async def test_completed_loss_does_not_repanic_when_account_refresh_follows_fill
         assert completed
     finally:
         _cleanup_fake_user_state(user)
+
+from hsl_revised_fixture import load_fake_hsl_config

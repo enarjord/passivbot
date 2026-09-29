@@ -254,39 +254,6 @@ def _looks_like_bool_token(value: str) -> bool:
     return lowered in {"1", "0", "true", "false", "t", "f", "yes", "no", "y", "n"}
 
 
-def _resolve_backtest_hsl_configs(config: dict) -> tuple[dict, dict]:
-    long_cfg = flatten_shared_bot_side(config.get("bot", {}).get("long", {}))
-    short_cfg = flatten_shared_bot_side(config.get("bot", {}).get("short", {}))
-    if not (
-        all(key in long_cfg for key in HSL_PSIDE_KEYS)
-        and all(key in short_cfg for key in HSL_PSIDE_KEYS)
-    ):
-        raise KeyError("missing required per-side HSL config under bot.long/bot.short")
-
-    def _convert(pside_cfg: dict) -> dict:
-        return {
-            "enabled": bool(pside_cfg["hsl_enabled"]),
-            "red_threshold": float(pside_cfg["hsl_red_threshold"]),
-            "ema_span_minutes": float(pside_cfg["hsl_ema_span_minutes"]),
-            "cooldown_minutes_after_red": float(
-                pside_cfg["hsl_cooldown_minutes_after_red"]
-            ),
-            "no_restart_drawdown_threshold": float(
-                pside_cfg["hsl_no_restart_drawdown_threshold"]
-            ),
-            "restart_after_red_policy": normalize_hsl_restart_after_red_policy(
-                pside_cfg["hsl_restart_after_red_policy"],
-                path="bot.<pside>.hsl.restart_after_red_policy",
-            ),
-            "tier_ratios": {
-                "yellow": float(pside_cfg["hsl_tier_ratios"]["yellow"]),
-                "orange": float(pside_cfg["hsl_tier_ratios"]["orange"]),
-            },
-            "orange_tier_mode": str(pside_cfg["hsl_orange_tier_mode"]),
-            "panic_close_order_type": str(pside_cfg["hsl_panic_close_order_type"]),
-        }
-
-    return _convert(long_cfg), _convert(short_cfg)
 
 
 def _resolve_backtest_revised_hsl(config, coin_policies):
@@ -2527,6 +2494,7 @@ def prep_backtest_args(
     metrics_only: bool = False,
 ):
     from config.hsl_revised import engine
+    engine(config)
 
     if not is_runtime_compiled:
         config = compile_runtime_config(config, runtime="backtest", record_step=False)
@@ -2585,12 +2553,11 @@ def prep_backtest_args(
             coin_specific_bot_params[pside]["entry_eligible"] = (
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] != 0.0
             )
-        if engine(config) == "revised":
-            revised_coin_policies[coin] = [
-                {**deepcopy(bot_params_template[side]["hsl"]),
-                 **deepcopy(coin_override_bot.get(side, {}).get("hsl", {}))}
-                for side in POSITION_SIDES
-            ]
+        revised_coin_policies[coin] = [
+            {**deepcopy(bot_params_template[side]["hsl"]),
+             **deepcopy(coin_override_bot.get(side, {}).get("hsl", {}))}
+            for side in POSITION_SIDES
+        ]
         bot_params_list.append(coin_specific_bot_params)
         strategy_params_list.append(coin_specific_strategy_params)
     maker_fee_override = get_optional_config_value(
@@ -2648,97 +2615,12 @@ def prep_backtest_args(
         supplied_hsl = backtest_params["equity_hard_stop_loss"]
         if supplied_hsl.get("engine", "legacy") != engine(config):
             raise ValueError("cached backtest HSL engine differs from the selected config")
-        if engine(config) == "revised" and supplied_hsl != _resolve_backtest_revised_hsl(
+        if True and supplied_hsl != _resolve_backtest_revised_hsl(
             config, revised_coin_policies
         ):
             raise ValueError("cached revised HSL policies differ from the effective config")
     if backtest_params is None:
-        if engine(config) == "revised":
-            hard_stop_cfg_long = _resolve_backtest_revised_hsl(config, revised_coin_policies)
-        else:
-            hard_stop_cfg_long, hard_stop_cfg_short = _resolve_backtest_hsl_configs(config)
-            hsl_signal_mode = _resolve_backtest_hsl_signal_mode(config)
-            if not isinstance(hard_stop_cfg_long, dict) or not isinstance(
-                hard_stop_cfg_short, dict
-            ):
-                raise TypeError("HSL pside configs must be dicts")
-
-            def _normalize_hsl_cfg(cfg: dict, path_prefix: str) -> dict:
-                tier_ratios = cfg.get("tier_ratios")
-                if not isinstance(tier_ratios, dict):
-                    raise TypeError(
-                        f"{path_prefix}.tier_ratios must be a dict, got {type(tier_ratios).__name__}"
-                    )
-                enabled = bool(cfg["enabled"])
-                red_threshold = float(cfg["red_threshold"])
-                ema_span_minutes = float(cfg["ema_span_minutes"])
-                cooldown_minutes_after_red = float(cfg["cooldown_minutes_after_red"])
-                no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
-                tier_ratio_yellow = float(tier_ratios["yellow"])
-                tier_ratio_orange = float(tier_ratios["orange"])
-                orange_tier_mode = str(cfg["orange_tier_mode"])
-                panic_close_order_type = str(cfg["panic_close_order_type"])
-                restart_after_red_policy = normalize_hsl_restart_after_red_policy(
-                    cfg.get("restart_after_red_policy", "threshold"),
-                    path=f"{path_prefix}.restart_after_red_policy",
-                )
-                if enabled and red_threshold <= 0.0:
-                    raise ValueError(
-                        f"{path_prefix}.red_threshold must be > 0.0 when enabled"
-                    )
-                if enabled and ema_span_minutes <= 0.0:
-                    raise ValueError(
-                        f"{path_prefix}.ema_span_minutes must be > 0.0 when enabled"
-                    )
-                if cooldown_minutes_after_red < 0.0:
-                    raise ValueError(
-                        f"{path_prefix}.cooldown_minutes_after_red must be >= 0.0"
-                    )
-                if no_restart_drawdown_threshold < red_threshold:
-                    logging.info(
-                        "[config] clamped %s.no_restart_drawdown_threshold %.6f -> %.6f to match red_threshold",
-                        path_prefix,
-                        no_restart_drawdown_threshold,
-                        red_threshold,
-                    )
-                    no_restart_drawdown_threshold = red_threshold
-                if not (red_threshold <= no_restart_drawdown_threshold <= 1.0):
-                    raise ValueError(
-                        f"{path_prefix}.no_restart_drawdown_threshold must satisfy red_threshold <= no_restart_drawdown_threshold <= 1.0"
-                    )
-                if not (0.0 < tier_ratio_yellow < tier_ratio_orange < 1.0):
-                    raise ValueError(
-                        f"{path_prefix}.tier_ratios must satisfy 0 < yellow < orange < 1"
-                    )
-                if orange_tier_mode not in {
-                    "graceful_stop",
-                    "tp_only_with_active_entry_cancellation",
-                }:
-                    raise ValueError(
-                        f"{path_prefix}.orange_tier_mode must be one of {{graceful_stop, tp_only_with_active_entry_cancellation}}"
-                    )
-                if panic_close_order_type not in {"market", "limit"}:
-                    raise ValueError(
-                        f"{path_prefix}.panic_close_order_type must be one of {{market, limit}}"
-                    )
-                return {
-                    "enabled": enabled,
-                    "signal_mode": hsl_signal_mode,
-                    "red_threshold": red_threshold,
-                    "ema_span_minutes": ema_span_minutes,
-                    "cooldown_minutes_after_red": cooldown_minutes_after_red,
-                    "no_restart_drawdown_threshold": no_restart_drawdown_threshold,
-                    "restart_after_red_policy": restart_after_red_policy,
-                    "tier_ratios": {
-                        "yellow": tier_ratio_yellow,
-                        "orange": tier_ratio_orange,
-                    },
-                    "orange_tier_mode": orange_tier_mode,
-                    "panic_close_order_type": panic_close_order_type,
-                }
-
-            hard_stop_cfg_long = _normalize_hsl_cfg(hard_stop_cfg_long, "bot.long.hsl")
-            hard_stop_cfg_short = _normalize_hsl_cfg(hard_stop_cfg_short, "bot.short.hsl")
+        hard_stop_cfg_long = _resolve_backtest_revised_hsl(config, revised_coin_policies)
         liquidation_threshold = float(
             get_optional_config_value(config, "backtest.liquidation_threshold", 0.05)
             or 0.0
@@ -2954,10 +2836,11 @@ def post_process(
     plot_context: BacktestPlotContext | None = None,
 ):
     from config.hsl_revised import engine
+    engine(config)
     from hsl_revised_reporting import revised_report
 
     hsl_report = revised_report(plot_context.hard_stop_plot_data if plot_context else None)
-    if engine(config) == "revised" and hsl_report is None:
+    if True and hsl_report is None:
         raise ValueError("revised backtest results require their native HSL report")
     sts = utc_ms()
     disabled_plot_groups = parse_disabled_plot_groups(config.get("disable_plotting"))

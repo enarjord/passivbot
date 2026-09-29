@@ -323,14 +323,12 @@ def _monitor_emit_stop(
 
 def _monitor_hsl_section(self, *, now_ms):
     from live.hsl_revised_live import selected
-    if selected(self):
-        from live.hsl_revised_diagnostics import snapshot
-        return snapshot(self, now_ms=now_ms)
-    return {pside: self._monitor_hsl_payload(pside) for pside in ("long", "short")}
+    from live.hsl_revised_diagnostics import snapshot
+    return snapshot(self, now_ms=now_ms)
 
 
 def _monitor_hsl_payload(self, pside: str) -> dict:
-    enabled = self._equity_hard_stop_enabled(pside)
+    enabled = False
     state = self._hsl_state(pside)
     last_metrics = state.get("last_metrics") or {}
     payload = {

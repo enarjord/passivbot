@@ -111,6 +111,7 @@ from live.market_snapshot import (MarketSnapshot, MarketSnapshotProvider, Market
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
+from live import exchange_params
 import passivbot_monitor as pb_monitor
 from typing import Dict, Iterable, Tuple, List, Optional, Any, Callable
 from config import get_template_config, load_input_config, prepare_config
@@ -1739,7 +1740,7 @@ class Passivbot:
         self._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
-        self.hsl = {} if hsl_revised_live.selected(self) else self._parse_hsl_config()
+        self.hsl = {}
         self._runtime_forced_modes = {"long": {}, "short": {}}
         self._equity_hard_stop_supervisor_running = False
         self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
@@ -1864,7 +1865,7 @@ class Passivbot:
     def _live_risk_uses_authoritative_pnl(self) -> bool:
         return (
             self._orchestrator_uses_realized_pnl()
-            or self._equity_hard_stop_enabled()
+            or False
         )
 
     def bot_value(self, pside: str, key: str):
@@ -1964,7 +1965,7 @@ class Passivbot:
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return the earliest fill whose PnL an enabled risk consumer needs."""
-        hsl_enabled = self._equity_hard_stop_enabled()
+        hsl_enabled = False
         pnl_required = (
             self._orchestrator_uses_realized_pnl()
             if hsl_enabled
@@ -1985,7 +1986,7 @@ class Passivbot:
         self, now_ms: int, *, pnl_start_ms: Optional[int]
     ) -> tuple[bool, Optional[int]]:
         """Return whether planning needs historical coverage and its earliest timestamp."""
-        hsl_enabled = self._equity_hard_stop_enabled()
+        hsl_enabled = False
         orchestrator_pnl_required = (
             self._orchestrator_uses_realized_pnl()
             if hsl_enabled
@@ -2025,7 +2026,7 @@ class Passivbot:
         """Select rows that can block the enabled live PnL consumers."""
         if not required:
             return []
-        hsl_enabled = self._equity_hard_stop_enabled()
+        hsl_enabled = False
         orchestrator_pnl_required = (
             self._orchestrator_uses_realized_pnl()
             if hsl_enabled
@@ -2239,8 +2240,8 @@ class Passivbot:
     _equity_hard_stop_flatten_fill_timestamp_with_refresh = (
         pb_hsl._equity_hard_stop_flatten_fill_timestamp_with_refresh
     )
-    _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
-    _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
+    _get_exchange_fee_rates = exchange_params._get_exchange_fee_rates
+    _orchestrator_exchange_params = exchange_params._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
     _equity_hard_stop_coverage_allow_incomplete = (
         pb_hsl._equity_hard_stop_coverage_allow_incomplete
@@ -3471,16 +3472,7 @@ class Passivbot:
                 return
             # Minimal trading-ready warmup first; broad approved-coin catch-up runs in background.
             boot_stage = "warmup_trading_ready_candles"
-            if hsl_revised_live.selected(self):
-                await hsl_revised_live.owner(self).during_preparation(hsl_revised_live.owner(self).warmup())
-            else:
-                try:
-                    await self.warmup_trading_ready_candles()
-                except Exception as e:
-                    logging.info(
-                        "[boot] trading-ready candle warmup skipped | error_type=%s",
-                        bounded_exception_type(e),
-                    )
+            await hsl_revised_live.owner(self).during_preparation(hsl_revised_live.owner(self).warmup())
             Passivbot._startup_timing_mark(self, "active-candle")
             if self.stop_signal_received:
                 self._monitor_emit_stop(
@@ -3490,17 +3482,9 @@ class Passivbot:
                 )
                 return
             boot_stage = "risk_input_readiness"
-            if self._equity_hard_stop_enabled():
-                boot_stage = (
-                    "equity_hard_stop_initialize_coin_from_history"
-                    if self._equity_hard_stop_signal_mode() == "coin"
-                    else "equity_hard_stop_initialize_from_history"
-                )
+            pass
             await risk_input_recovery.wait_for_startup(self)
-            if self._equity_hard_stop_enabled():
-                Passivbot._startup_timing_mark(
-                    self, "hsl", details=f"mode={self._equity_hard_stop_signal_mode()}"
-                )
+            pass
             if self.stop_signal_received:
                 self._monitor_emit_stop(
                     "startup_aborted", ts=utc_ms(),
@@ -3891,26 +3875,13 @@ class Passivbot:
         """Load exchange market metadata and refresh approval lists."""
         # called at bot startup and once an hour thereafter
         self.init_markets_last_update_ms = utc_ms()
-        if hsl_revised_live.selected(self) and not getattr(self, "_bot_ready", False):
+        if not getattr(self, "_bot_ready", False):
             await self._load_market_metadata(verbose=verbose)
             await self._prepare_protective_account()
             return await hsl_revised_live.owner(self).during_preparation(
                 self._init_markets_account_config(verbose=verbose, metadata_loaded=True))
-        # A journal commitment needs no new balance or equity reconstruction.
-        # Load only execution metadata before servicing it, even on a cold start.
-        protection_bootstrap = (not hsl_revised_live.selected(self)
-                                and not getattr(self, "_bot_ready", False)
-                                and bool(hsl_protection.manager(self).pending_exits()))
-        if protection_bootstrap:
-            await self._load_market_metadata(verbose=verbose)
-            hsl_protection.reconcile_config(self)
-            if hsl_protection.manager(self).pending_exits():
-                await self._prepare_protective_account()
-                await risk_input_recovery.drain_startup_commitments(self)
-                if self.stop_signal_received:
-                    return
         return await self._init_markets_account_config(
-            verbose=verbose, metadata_loaded=protection_bootstrap)
+            verbose=verbose, metadata_loaded=False)
 
     async def _init_markets_account_config(self, *, verbose, metadata_loaded):
         """Ordinary startup/maintenance work supervised by the selected protection owner."""
@@ -6276,17 +6247,12 @@ class Passivbot:
             ready_pairs = getattr(self, "_equity_hard_stop_coin_replay_ready_pairs", set())
             for pside, states in getattr(self, "_equity_hard_stop_coin", {}).items():
                 for symbol, state in states.items():
-                    if (
-                        state["halted"]
-                        and self._equity_hard_stop_enabled(pside, symbol=symbol)
-                        and (initialized or (pside, symbol) in ready_pairs)
-                    ):
-                        scopes.append((pside, symbol, state))
+                    pass
         else:
             scopes = [
                 (pside, None, self._hsl_state(pside))
                 for pside in self._hsl_psides()
-                if self._equity_hard_stop_enabled(pside) and self._hsl_state(pside)["halted"]
+                if False and self._hsl_state(pside)["halted"]
             ]
         if not scopes:
             return False
@@ -6429,33 +6395,7 @@ class Passivbot:
         self, *, cycle_id: object, loop_timings_ms: dict[str, int], single_pass: bool = False, after_close=None
     ) -> bool:
         """Run already-latched RED supervision without requiring fill readiness."""
-        if not self._equity_hard_stop_enabled():
-            return False
-        if self._equity_hard_stop_signal_mode() == "coin":
-            if not self._equity_hard_stop_coin_red_active():
-                return False
-            reason_code = "coin_hsl_red_supervisor"
-            supervisor = self._equity_hard_stop_run_coin_red_supervisor
-        else:
-            if not any(
-                self._equity_hard_stop_runtime_red_latched(pside)
-                and not self._hsl_state(pside)["halted"]
-                for pside in self._hsl_psides()
-                if self._equity_hard_stop_enabled(pside)
-            ):
-                return False
-            reason_code = "hsl_red_supervisor"
-            supervisor = self._equity_hard_stop_run_red_supervisor
-        self._emit_live_cycle_degraded(
-            cycle_id=cycle_id,
-            reason_code=reason_code,
-            data={"timings_ms": dict(loop_timings_ms)},
-        )
-        if single_pass:
-            await supervisor(single_pass=True, **({"after_close": after_close} if after_close else {}))
-        else:
-            await supervisor()
-        return True
+        return False
 
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
@@ -6464,536 +6404,10 @@ class Passivbot:
         self._execution_loop_task = current_task
         self._execution_loop_task_is_inline = True
         self._execution_loop_stopped = execution_loop_stopped
-        if hsl_revised_live.selected(self):
-            try:
-                return await hsl_revised_live.owner(self).run()
-            finally:
-                self._execution_loop_task = None
-                execution_loop_stopped.set()
-        failed_update_pos_oos_pnls_ohlcvs_count = 0
-        authoritative_fill_retry_count = 0
-        authoritative_fill_retry_reason = None
-        balance_consistency_retry_count = 0
-        balance_consistency_last_warning_ms = 0
-        max_n_fails = 10
-        while not self.stop_signal_received:
-            loop_start_ms = utc_ms()
-            loop_timings_ms: dict[str, int] = {}
-            cycle_id = None
-            try:
-                cycle_id = self._begin_live_event_cycle(loop_start_ms=loop_start_ms)
-
-                def mark_phase(phase: str, started_ms: int) -> None:
-                    try:
-                        loop_timings_ms[str(phase)] = int(max(0, utc_ms() - started_ms))
-                    except Exception:
-                        pass
-
-                self.execution_scheduled = False
-                self.state_change_detected_by_symbol = set()
-                if await risk_input_recovery.protect_before_history_refresh(
-                    self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
-                ):
-                    continue
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="refresh_authoritative_state"
-                )
-                phase_start_ms = utc_ms()
-                try:
-                    authoritative_ok = await self.refresh_authoritative_state()
-                except asyncio.CancelledError:
-                    if self._shutdown_requested():
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="shutdown_authoritative_refresh_cancelled",
-                            data={"timings_ms": dict(loop_timings_ms)},
-                        )
-                        logging.debug(
-                            "[shutdown] authoritative refresh cancelled during shutdown"
-                        )
-                        break
-                    raise
-                mark_phase("authoritative", phase_start_ms)
-                if authoritative_ok and balance_consistency_retry_count:
-                    logging.info(
-                        "[balance] authoritative balance consistency recovered "
-                        "after %d retries; action=resume_execution",
-                        balance_consistency_retry_count,
-                    )
-                    balance_consistency_retry_count = 0
-                    balance_consistency_last_warning_ms = 0
-                if not authoritative_ok:
-                    if self._shutdown_requested():
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="shutdown_requested",
-                            data={"timings_ms": dict(loop_timings_ms)},
-                        )
-                        break
-                    authoritative_block_reason = getattr(
-                        self, "_last_authoritative_block_reason", None
-                    )
-                    if risk_input_recovery.defer_authoritative_hsl(self):
-                        await risk_input_recovery.protect_and_wait(
-                            self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
-                        )
-                        continue
-                    if authoritative_block_reason in {
-                        "pending_pnl",
-                        "degraded_pnl",
-                        "fill_history_coverage",
-                        "balance_consistency_check",
-                    }:
-                        if (
-                            authoritative_block_reason
-                            == "balance_consistency_check"
-                        ):
-                            authoritative_fill_retry_count = 0
-                            authoritative_fill_retry_reason = None
-                            failed_update_pos_oos_pnls_ohlcvs_count = 0
-                            balance_consistency_retry_count += 1
-                            now_ms = utc_ms()
-                            warning_due = (
-                                balance_consistency_last_warning_ms <= 0
-                                or now_ms - balance_consistency_last_warning_ms
-                                >= 15 * 60 * 1000
-                            )
-                            if warning_due:
-                                balance_consistency_last_warning_ms = now_ms
-                            self._emit_live_cycle_degraded(
-                                cycle_id=cycle_id,
-                                reason_code=authoritative_block_reason,
-                                data={
-                                    "retry_count": balance_consistency_retry_count,
-                                    "retry_delay_seconds": 5.0,
-                                    "timings_ms": dict(loop_timings_ms),
-                                },
-                                level="warning" if warning_due else "debug",
-                            )
-                            await self._sleep_unless_shutdown(
-                                5.0,
-                                stage="balance_consistency_check",
-                            )
-                            continue
-                        if authoritative_fill_retry_reason != authoritative_block_reason:
-                            authoritative_fill_retry_count = 0
-                            authoritative_fill_retry_reason = authoritative_block_reason
-                        authoritative_fill_retry_count += 1
-                        failed_update_pos_oos_pnls_ohlcvs_count = 0
-                        retry_delay_seconds = (
-                            self._authoritative_fill_retry_delay_seconds(
-                                authoritative_fill_retry_count,
-                                block_reason=authoritative_block_reason,
-                            )
-                        )
-                        self._maybe_log_authoritative_fill_block(
-                            retry_delay_seconds=retry_delay_seconds
-                        )
-                        coverage_blocked = (
-                            authoritative_block_reason == "fill_history_coverage"
-                        )
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code=(
-                                "fill_history_coverage_unavailable"
-                                if coverage_blocked
-                                else "degraded_pnl_authoritative_refresh"
-                                if authoritative_block_reason == "degraded_pnl"
-                                else "pending_pnl_authoritative_refresh"
-                            ),
-                            data={
-                                "retry_count": authoritative_fill_retry_count,
-                                "retry_delay_seconds": retry_delay_seconds,
-                                "pending_pnl_count": int(
-                                    getattr(
-                                        self,
-                                        "_last_authoritative_pending_pnl_count",
-                                        0,
-                                    )
-                                    or 0
-                                ),
-                                "degraded_pnl_count": int(
-                                    getattr(
-                                        self,
-                                        "_last_authoritative_degraded_pnl_count",
-                                        0,
-                                    )
-                                    or 0
-                                ),
-                                "timings_ms": dict(loop_timings_ms),
-                            },
-                        )
-                        if (
-                            coverage_blocked
-                            and await self._run_latched_hsl_supervisor_if_active(
-                                cycle_id=cycle_id,
-                                loop_timings_ms=loop_timings_ms,
-                            )
-                        ):
-                            continue
-                        await self._sleep_unless_shutdown(
-                            retry_delay_seconds,
-                            stage=(
-                                "fill_history_coverage_retry"
-                                if coverage_blocked
-                                else "degraded_pnl_authoritative_retry"
-                                if authoritative_block_reason == "degraded_pnl"
-                                else "pending_pnl_authoritative_retry"
-                            ),
-                        )
-                    else:
-                        authoritative_fill_retry_count = 0
-                        authoritative_fill_retry_reason = None
-                        failed_update_pos_oos_pnls_ohlcvs_count += 1
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="authoritative_refresh_unavailable",
-                            data={
-                                "failed_count": failed_update_pos_oos_pnls_ohlcvs_count,
-                                "last_block_reason": getattr(
-                                    self, "_last_authoritative_block_reason", None
-                                ),
-                                "timings_ms": dict(loop_timings_ms),
-                            },
-                        )
-                        await self._sleep_unless_shutdown(
-                            0.5, stage="authoritative_refresh_retry"
-                        )
-                        if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
-                            await self.restart_bot_on_too_many_errors()
-                    continue
-                authoritative_fill_retry_count = 0
-                authoritative_fill_retry_reason = None
-                failed_update_pos_oos_pnls_ohlcvs_count = 0
-                if self.stop_signal_received:
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_requested",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    break
-                risk_ready = await risk_input_recovery.ensure_ready(self)
-                if not risk_ready:
-                    await risk_input_recovery.protect_and_wait(
-                        self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
-                    )
-                    continue
-                if (getattr(self, "_risk_input_recovery", None) is not None
-                        and await self._run_halted_hsl_protection_if_active()):
-                    continue
-                if await self._run_latched_hsl_supervisor_if_active(
-                    cycle_id=cycle_id,
-                    loop_timings_ms=loop_timings_ms,
-                ):
-                    risk_input_recovery.mark_ready(self)
-                    continue
-                blocked, barrier_details = self._authoritative_execution_barrier_state()
-                if blocked:
-                    self._log_authoritative_execution_barrier(barrier_details)
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="execution_barrier",
-                        data={
-                            "barrier": dict(barrier_details or {}),
-                            "timings_ms": dict(loop_timings_ms),
-                        },
-                    )
-                    self._last_loop_duration_ms = utc_ms() - loop_start_ms
-                    self._last_loop_timing_ms = dict(loop_timings_ms)
-                    self._maybe_log_health_summary()
-                    self._maybe_log_trailing_status()
-                    self._maybe_log_unstuck_status()
-                    self._set_log_silence_watchdog_context(
-                        phase="runtime", stage="flush_snapshot"
-                    )
-                    await self._monitor_flush_snapshot()
-                    self._set_log_silence_watchdog_context(
-                        phase="runtime", stage="confirmation_delay"
-                    )
-                    await self._sleep_unless_shutdown(
-                        self._authoritative_confirmation_retry_delay_seconds(
-                            details=barrier_details
-                        ),
-                        stage="authoritative_confirmation_delay",
-                    )
-                    continue
-                if self.stop_signal_received:
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_requested",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    break
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="prepare_planning_universe"
-                )
-                phase_start_ms = utc_ms()
-                await self.prepare_planning_universe()
-                mark_phase("planning_universe", phase_start_ms)
-                if self.stop_signal_received:
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_requested",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    break
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="refresh_market_state_if_needed"
-                )
-                phase_start_ms = utc_ms()
-                try:
-                    market_ok = await self.refresh_market_state_if_needed()
-                except asyncio.CancelledError:
-                    if self._shutdown_requested():
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="shutdown_market_refresh_cancelled",
-                            data={"timings_ms": dict(loop_timings_ms)},
-                        )
-                        logging.debug(
-                            "[shutdown] market refresh cancelled during shutdown"
-                        )
-                        break
-                    raise
-                mark_phase("market_state", phase_start_ms)
-                if not market_ok:
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="market_state_unavailable",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    await self._sleep_unless_shutdown(
-                        0.5, stage="market_state_retry"
-                    )
-                    continue
-                Passivbot._startup_timing_mark(self, "market")
-                if self.stop_signal_received:
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_requested",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    break
-                staged_ready, staged_details = self._staged_execution_ready_state(
-                    include_market_snapshot=False, context="market snapshot refresh"
-                )
-                if not staged_ready:
-                    self._last_loop_timing_ms = dict(loop_timings_ms)
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="staged_execution_not_ready",
-                        data={
-                            "details": dict(staged_details or {}),
-                            "timings_ms": dict(loop_timings_ms),
-                        },
-                    )
-                    await self._defer_staged_execution_cycle(
-                        staged_details, loop_start_ms
-                    )
-                    continue
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="execute_to_exchange"
-                )
-                phase_start_ms = utc_ms()
-                try:
-                    res = await self.execute_to_exchange(prepare_cycle=False)
-                except asyncio.CancelledError:
-                    if self._shutdown_requested():
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="shutdown_execution_cancelled",
-                            data={"timings_ms": dict(loop_timings_ms)},
-                        )
-                        logging.debug("[shutdown] execution cancelled during shutdown")
-                        break
-                    raise
-                except RuntimeError as exc:
-                    handled, details = self._handle_staged_execution_precondition_error(
-                        exc
-                    )
-                    if handled:
-                        self._last_loop_timing_ms = dict(loop_timings_ms)
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="staged_execution_precondition",
-                            data={
-                                "details": dict(details or {}),
-                                "timings_ms": dict(loop_timings_ms),
-                            },
-                        )
-                        await self._defer_staged_execution_cycle(details, loop_start_ms)
-                        continue
-                    raise
-                mark_phase("execute", phase_start_ms)
-                risk_input_recovery.mark_ready(self)
-                if self.debug_mode:
-                    self._emit_live_cycle_completed(
-                        cycle_id=cycle_id,
-                        loop_start_ms=loop_start_ms,
-                        timings_ms=loop_timings_ms,
-                    )
-                    if getattr(self, "_execution_loop_task", None) is current_task:
-                        self._execution_loop_task = None
-                    if (
-                        getattr(self, "_execution_loop_stopped", None)
-                        is execution_loop_stopped
-                    ):
-                        execution_loop_stopped.set()
-                    return res
-                if self.stop_signal_received:
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_requested",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    break
-                # Track loop duration for health reporting
-                self._last_loop_duration_ms = utc_ms() - loop_start_ms
-                self._last_loop_timing_ms = dict(loop_timings_ms)
-                # Periodic health summary
-                self._maybe_log_health_summary()
-                self._maybe_log_trailing_status()
-                self._maybe_log_unstuck_status()
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="flush_snapshot"
-                )
-                phase_start_ms = utc_ms()
-                await self._monitor_flush_snapshot()
-                mark_phase("monitor_flush", phase_start_ms)
-                self._emit_live_cycle_completed(
-                    cycle_id=cycle_id,
-                    loop_start_ms=loop_start_ms,
-                    timings_ms=loop_timings_ms,
-                )
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="execution_delay"
-                )
-                phase_start_ms = utc_ms()
-                await self._sleep_unless_shutdown(
-                    float(self.live_value("execution_delay_seconds")),
-                    stage="execution_delay",
-                )
-                mark_phase("execution_delay", phase_start_ms)
-                sleep_duration = EXECUTION_SCHEDULED_WAIT_SECONDS
-                self._set_log_silence_watchdog_context(
-                    phase="runtime", stage="scheduled_wait"
-                )
-                phase_start_ms = utc_ms()
-                for i in range(sleep_duration * 10):
-                    if self.execution_scheduled or self.stop_signal_received:
-                        break
-                    await asyncio.sleep(0.1)
-                mark_phase("scheduled_wait", phase_start_ms)
-            except (RestartBotException, FatalBotException) as e:
-                self._emit_live_cycle_degraded(
-                    cycle_id=cycle_id,
-                    reason_code=bounded_exception_type(e),
-                    data={"timings_ms": dict(loop_timings_ms)},
-                    level="warning",
-                )
-                raise  # Propagate restart without incrementing error count
-            except RateLimitExceeded as e:
-                if self._shutdown_requested():
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_rate_limit_handling",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    logging.debug(
-                        "[shutdown] execution loop stopped during rate-limit handling | "
-                        "error_type=%s",
-                        bounded_exception_type(e),
-                    )
-                    break
-                self._health_errors += 1
-                self._health_rate_limits += 1
-                self._monitor_record_error(
-                    "error.exchange",
-                    e,
-                    tags=("error", "exchange", "rate_limit"),
-                    payload={"source": "run_execution_loop"},
-                )
-                logging.warning(
-                    "[rate] execution loop hit rate limit; backing off 5s..."
-                )
-                self._emit_live_cycle_degraded(
-                    cycle_id=cycle_id,
-                    reason_code="rate_limit",
-                    data={
-                        "error_type": bounded_exception_type(e),
-                        "timings_ms": dict(loop_timings_ms),
-                    },
-                    level="warning",
-                )
-                await self.restart_bot_on_too_many_errors()
-                await self._sleep_unless_shutdown(
-                    5.0, stage="rate_limit_backoff"
-                )
-            except asyncio.CancelledError as e:
-                if not await self._handle_execution_loop_failure(
-                    e, allow_time_sync_recovery=False
-                ):
-                    if getattr(self, "_live_event_current_cycle_id", None) == cycle_id:
-                        self._emit_live_cycle_degraded(
-                            cycle_id=cycle_id,
-                            reason_code="execution_loop_cancelled",
-                            data={"timings_ms": dict(loop_timings_ms)},
-                        )
-                    break
-            except risk_input_recovery.RiskInputUnavailable as exc:
-                risk_input_recovery.defer(self, exc)
-                await risk_input_recovery.protect_and_wait(
-                    self, cycle_id=cycle_id, loop_timings_ms=loop_timings_ms,
-                )
-            except FillHistoryCoverageUnavailable as e:
-                if self._shutdown_requested():
-                    self._emit_live_cycle_degraded(
-                        cycle_id=cycle_id,
-                        reason_code="shutdown_fill_history_coverage_retry",
-                        data={"timings_ms": dict(loop_timings_ms)},
-                    )
-                    logging.debug(
-                        "[shutdown] execution loop stopped during fill-history coverage retry | "
-                        "error_type=%s",
-                        bounded_exception_type(e),
-                    )
-                    break
-                self._request_authoritative_confirmation({"fills"})
-                logging.warning(
-                    "[fills] live planning deferred pending fill-history coverage | "
-                    "action=refresh_lookback_before_retry error_type=%s",
-                    bounded_exception_type(e),
-                )
-                self._emit_live_cycle_degraded(
-                    cycle_id=cycle_id,
-                    reason_code="fill_history_coverage_unavailable",
-                    data={
-                        "error_type": bounded_exception_type(e),
-                        "timings_ms": dict(loop_timings_ms),
-                    },
-                    level="warning",
-                )
-                await self._sleep_unless_shutdown(
-                    1.0, stage="fill_history_coverage_retry"
-                )
-            except Exception as e:
-                error_type = bounded_exception_type(e)
-                self._emit_live_cycle_degraded(
-                    cycle_id=cycle_id,
-                    reason_code=error_type,
-                    data={
-                        "error_type": error_type,
-                        "timings_ms": dict(loop_timings_ms),
-                    },
-                    level="error",
-                )
-                if not await self._handle_execution_loop_failure(
-                    e, allow_time_sync_recovery=True
-                ):
-                    break
-        if getattr(self, "_execution_loop_task", None) is current_task:
+        try:
+            return await hsl_revised_live.owner(self).run()
+        finally:
             self._execution_loop_task = None
-        if getattr(self, "_execution_loop_stopped", None) is execution_loop_stopped:
             execution_loop_stopped.set()
 
     def _shutdown_requested(self) -> bool:
@@ -11175,38 +10589,10 @@ class Passivbot:
 
     def get_forced_PB_mode(self, pside, symbol=None):
         """Return an explicitly forced mode for the side or symbol, if configured."""
-        if (not hsl_revised_live.selected(self) and symbol is not None
-                and hsl_protection.holds_after_emergency_exit(self, pside, symbol)):
-            return "panic"
-        if self._equity_hard_stop_enabled(pside):
-            state = self._hsl_state(pside)
-            if (
-                self._equity_hard_stop_runtime_red_latched(pside)
-                and not state["halted"]
-            ):
-                return ("panic" if (state.get("last_metrics") or {}).get("red_active_now", True)
-                        else "tp_only_with_active_entry_cancellation")
-            if state["halted"]:
-                if symbol is None:
-                    return "graceful_stop"
-                return self._equity_hard_stop_halted_mode(pside, symbol)
+        pass
+        pass
         if symbol is not None:
-            if (
-                self._equity_hard_stop_enabled(pside)
-                and self._equity_hard_stop_signal_mode() == "coin"
-                and (pside, symbol)
-                in getattr(
-                    self, "_equity_hard_stop_coin_replay_pending_pairs", set()
-                )
-            ):
-                configured_mode = self.config_get(
-                    ["live", f"forced_mode_{pside}"], symbol
-                )
-                if configured_mode:
-                    expanded_mode = expand_PB_mode(configured_mode)
-                    if expanded_mode != "normal":
-                        return expanded_mode
-                return "graceful_stop"
+            pass
             runtime_forced = (
                 getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
             )
@@ -13494,7 +12880,7 @@ class Passivbot:
 
             if fill_fetch_completed:
                 self._hsl_revised_fill_capture_interval = fill_capture_interval
-                if hsl_revised_live.selected(self) and fill_capture_interval is not None:
+                if True and fill_capture_interval is not None:
                     # Capture before yielding again. A later cache mutation or
                     # replacement cannot inherit this remote observation time.
                     self._hsl_revised_fill_observation = hsl_revised_live.runtime.observe_fills(
@@ -16901,72 +16287,11 @@ class Passivbot:
                     )
             else:
                 out[out_key] = float(val or 0.0)
-        if hsl_revised_live.selected(self):
-            policy = hsl_revised_live.policy(self, pside, symbol)
-            # The order kernel consumes only execution policy; the shared
-            # revised evaluator owns the signal and controller.
-            out.update(hsl_enabled=policy["enabled"],
-                       hsl_panic_close_order_type=policy["panic_close_order_type"])
-            return out
-        hsl_cfg = (
-            self._equity_hard_stop_config(pside, symbol)
-            if symbol is not None and hasattr(self, "_equity_hard_stop_config")
-            else {
-                "enabled": bool(self.bot_value(pside, "hsl_enabled")),
-                "red_threshold": float(self.bot_value(pside, "hsl_red_threshold")),
-                "ema_span_minutes": float(
-                    self.bot_value(pside, "hsl_ema_span_minutes")
-                ),
-                "cooldown_minutes_after_red": float(
-                    self.bot_value(pside, "hsl_cooldown_minutes_after_red")
-                ),
-                "no_restart_drawdown_threshold": float(
-                    self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
-                ),
-                "restart_after_red_policy": self.bot_value(
-                    pside, "hsl_restart_after_red_policy"
-                ),
-                "tier_ratios": {
-                    "yellow": float(
-                        self.bot_value(pside, "hsl_tier_ratios.yellow")
-                    ),
-                    "orange": float(
-                        self.bot_value(pside, "hsl_tier_ratios.orange")
-                    ),
-                },
-                "orange_tier_mode": str(
-                    self.bot_value(pside, "hsl_orange_tier_mode")
-                ),
-                "panic_close_order_type": str(
-                    self.bot_value(pside, "hsl_panic_close_order_type")
-                ),
-            }
-        )
-        out.update(
-            {
-                "hsl_enabled": bool(hsl_cfg["enabled"]),
-                "hsl_red_threshold": float(hsl_cfg["red_threshold"]),
-                "hsl_ema_span_minutes": float(hsl_cfg["ema_span_minutes"]),
-                "hsl_cooldown_minutes_after_red": float(
-                    hsl_cfg["cooldown_minutes_after_red"]
-                ),
-                "hsl_no_restart_drawdown_threshold": float(
-                    hsl_cfg["no_restart_drawdown_threshold"]
-                ),
-                "hsl_restart_after_red_policy": normalize_hsl_restart_after_red_policy(
-                    hsl_cfg["restart_after_red_policy"],
-                    path=f"bot.{pside}.hsl_restart_after_red_policy",
-                ),
-                "hsl_tier_ratio_yellow": float(
-                    hsl_cfg["tier_ratios"]["yellow"]
-                ),
-                "hsl_tier_ratio_orange": float(
-                    hsl_cfg["tier_ratios"]["orange"]
-                ),
-                "hsl_orange_tier_mode": str(hsl_cfg["orange_tier_mode"]),
-                "hsl_panic_close_order_type": str(hsl_cfg["panic_close_order_type"]),
-            }
-        )
+        policy = hsl_revised_live.policy(self, pside, symbol)
+        # The order kernel consumes only execution policy; the shared
+        # revised evaluator owns the signal and controller.
+        out.update(hsl_enabled=policy["enabled"],
+                   hsl_panic_close_order_type=policy["panic_close_order_type"])
         return out
 
     def _unstuck_ema_required(
@@ -17183,46 +16508,10 @@ class Passivbot:
         return set(due)
 
     def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
-        if (not hsl_revised_live.selected(self)
-                and hsl_protection.holds_after_emergency_exit(self, pside, symbol)):
-            return "panic"
-        if self._equity_hard_stop_enabled(pside):
-            state = self._hsl_state(pside)
-            if (
-                self._equity_hard_stop_runtime_red_latched(pside)
-                and not state["halted"]
-            ):
-                return ("panic" if (state.get("last_metrics") or {}).get("red_active_now", True)
-                        else "tp_only_with_active_entry_cancellation")
-            if state["halted"]:
-                return self._equity_hard_stop_halted_mode(pside, symbol)
-            if self._equity_hard_stop_runtime_tier(pside) == "orange":
-                orange_mode = str(self.hsl[pside]["orange_tier_mode"])
-                if orange_mode == "graceful_stop":
-                    return "graceful_stop"
-                if orange_mode == "tp_only_with_active_entry_cancellation":
-                    return "tp_only_with_active_entry_cancellation"
+        pass
+        pass
 
-        if (
-            self._equity_hard_stop_enabled(pside)
-            and self._equity_hard_stop_signal_mode() == "coin"
-        ):
-            replay_pending = getattr(
-                self, "_equity_hard_stop_coin_replay_pending_pairs", set()
-            )
-            if (pside, symbol) in replay_pending:
-                configured_mode = self.config_get(
-                    ["live", f"forced_mode_{pside}"], symbol
-                )
-                if configured_mode:
-                    expanded_mode = expand_PB_mode(configured_mode)
-                    if expanded_mode != "normal":
-                        return self._apply_entry_eligibility_mode(
-                            pside, symbol, expanded_mode
-                        )
-                return self._apply_entry_eligibility_mode(
-                    pside, symbol, "graceful_stop"
-                )
+        pass
 
         runtime_forced = (
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
@@ -19731,8 +19020,7 @@ class Passivbot:
             )
         )
         if not symbols:
-            if hsl_revised_live.selected(self):
-                self._hsl_revised_planning_wave = hsl_revised_live.owner(self).capture()
+            self._hsl_revised_planning_wave = hsl_revised_live.owner(self).capture()
             return {}
         mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         exchange_unavailable_symbols = (
@@ -19786,17 +19074,16 @@ class Passivbot:
             getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
         )
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
-        if hsl_revised_live.selected(self):
-            revised = hsl_revised_live.owner(self)
-            wave = revised.capture(market_snapshots)
-            self._hsl_revised_planning_wave = wave
-            for side in ("long", "short"):
-                for symbol in symbols:
-                    action, _ = wave.permission(symbol, side)
-                    if action in {"panic", "halted"}:
-                        mode_overrides[side][symbol] = "panic"
-                    elif action == "unavailable":
-                        mode_overrides[side][symbol] = "manual"
+        revised = hsl_revised_live.owner(self)
+        wave = revised.capture(market_snapshots)
+        self._hsl_revised_planning_wave = wave
+        for side in ("long", "short"):
+            for symbol in symbols:
+                action, _ = wave.permission(symbol, side)
+                if action in {"panic", "halted"}:
+                    mode_overrides[side][symbol] = "panic"
+                elif action == "unavailable":
+                    mode_overrides[side][symbol] = "manual"
         self._assert_staged_planner_preconditions(
             include_market_snapshot=True,
             context="rust order calculation",

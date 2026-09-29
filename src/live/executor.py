@@ -8,7 +8,7 @@ import time
 from collections import Counter, defaultdict
 
 from passivbot_exceptions import RestartBotException, FatalBotException
-from live import hsl_protection, hsl_revised_live, position_fill_sync
+from live import hsl_revised_live, position_fill_sync
 from live.diagnostic_safety import bounded_exception_type
 from live.event_bus import EventTypes, ReasonCodes
 from live.fresh_entry_eligibility import FreshEntryEligibilityTrace
@@ -176,56 +176,6 @@ def _cancel_first_scope(bot, order: dict) -> tuple[str, str] | None:
     return symbol, position_side
 
 
-def _filter_hsl_replay_pending_creates(
-    bot, passivbot_cls, orders: list[dict], order_wave
-) -> list[dict]:
-    pending_pairs = set(
-        getattr(bot, "_equity_hard_stop_coin_replay_pending_pairs", set()) or set()
-    )
-    # Replay can fail before discovering its pending set. Derive unknown pairs
-    # from actual creates so a newly selected flat symbol cannot bypass the gate.
-    if getattr(bot, "_risk_input_recovery", None) is not None:
-        mode = bot._equity_hard_stop_signal_mode()
-        ready_pairs = getattr(bot, "_equity_hard_stop_coin_replay_ready_pairs", set())
-        for order in orders:
-            side = str(order.get("position_side") or order.get("positionSide") or "").lower()
-            symbol = str(order.get("symbol") or "")
-            enabled = bot._equity_hard_stop_enabled(side, **({"symbol": symbol} if mode == "coin" else {}))
-            ready = ((getattr(bot, "_equity_hard_stop_coin_initialized", False)
-                      or (side, symbol) in ready_pairs) if mode == "coin"
-                     else bot._equity_hard_stop_runtime_initialized(side))
-            if enabled and not ready:
-                pending_pairs.add((side, symbol))
-    if not pending_pairs:
-        return orders
-    blocked = [
-        order
-        for order in orders
-        if not _order_is_protective_create(order)
-        and not hsl_protection.allows_held_entries(bot, str(order.get("position_side") or ""), str(order.get("symbol") or ""))
-        and (
-            str(order.get("position_side") or order.get("positionSide") or "").lower(),
-            str(order.get("symbol") or ""),
-        )
-        in pending_pairs
-    ]
-    if not blocked:
-        return orders
-    blocked_ids = {id(order) for order in blocked}
-    if order_wave is not None:
-        order_wave["skipped_create"] += len(blocked)
-    passivbot_cls._emit_execution_create_filter_event(
-        bot,
-        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
-        status="skipped",
-        reason_code=ReasonCodes.HSL_REPLAY_PENDING,
-        order_count=len(blocked),
-        symbols=_symbols_from_orders(blocked),
-        wave=order_wave,
-        message="initial-entry creates skipped until HSL replay is ready",
-        data={"pending_pairs_count": len(pending_pairs)},
-    )
-    return [order for order in orders if id(order) not in blocked_ids]
 
 
 def _symbols_from_orders(orders: list[dict]) -> list[str]:
@@ -681,16 +631,6 @@ async def execute_order_plan(
                     len(to_cancel),
                     len(to_create),
                 )
-    before_hsl_filter = list(to_create)
-    to_create = _filter_hsl_replay_pending_creates(
-        bot, passivbot_cls, to_create, order_wave
-    )
-    _record_fresh_entry_orders(
-        bot,
-        "record_blocked_orders",
-        _orders_removed_by_identity(before_hsl_filter, to_create),
-        "hsl_replay_pending",
-    )
     if bot.debug_mode:
         if to_cancel:
             logging.info(
@@ -988,7 +928,7 @@ async def execute_order_plan(
         before_market_filter = len(to_create_mod)
         to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
             bot, to_create_mod,
-            **({"planning_snapshot": snapshot} if hsl_revised_live.selected(bot) else {}),
+            planning_snapshot=snapshot,
         )
         if order_wave is not None:
             order_wave["skipped_create"] += max(

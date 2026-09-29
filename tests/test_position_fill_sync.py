@@ -105,7 +105,7 @@ def test_restart_does_not_restore_expired_local_gate():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("action", ["create", "cancel"])
-@pytest.mark.parametrize("engine", ["legacy", "revised"])
+@pytest.mark.parametrize("engine", ["revised"])
 async def test_connector_boundary_defers_all_actions_before_any_io(
     action, engine, monkeypatch
 ):
@@ -137,12 +137,7 @@ async def test_connector_boundary_defers_all_actions_before_any_io(
         DeferredOrderCreation if action == "create" else DeferredOrderCancellation,
     )
     assert not called and not recorded
-    if engine == "legacy":
-        other = dict(symbol=B[0], position_side=B[1])
-        assert await write(bot, other) == "sent"
-        now[0] = 15
-        assert await write(bot, order) == "sent"
-        assert recorded == ([other, order] if action == "cancel" else [])
+
 
 
 @pytest.mark.asyncio

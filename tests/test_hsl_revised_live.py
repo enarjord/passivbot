@@ -22,7 +22,7 @@ async def test_revised_protective_wave_uses_actual_executor_without_history(tmp_
     assert not getattr(pbr, '__is_stub__', False)
     user = f'fake_revised_live_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     if side == 'short':
@@ -259,7 +259,7 @@ async def test_revised_green_can_plan_entries_without_hsl_history(tmp_path, monk
     import asyncio
     user = f'fake_revised_green_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     for side in ('long', 'short'):
@@ -340,7 +340,7 @@ async def test_revised_other_coin_closes_while_first_coin_is_pending(tmp_path, m
     from live.market_snapshot import MarketSnapshotUnavailable
     user = f'fake_revised_fair_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, 'coin')
     cfg['bot']['long']['hsl'].update(enabled=True, ema_span_minutes=1., red_threshold=.06,
@@ -537,7 +537,7 @@ async def test_revised_real_close_reconstructs_halt_on_fresh_bot_then_expires(tm
     import asyncio
     from copy import deepcopy
     symbol = 'BTC/USDT:USDT'
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     cfg['live']['pnls_max_lookback_days'] = 1.
@@ -665,7 +665,7 @@ async def test_revised_startup_services_new_red_during_stalled_warmup(tmp_path, 
     from passivbot import Passivbot
     user = f'fake_revised_startup_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     cfg['live']['pnls_max_lookback_days'] = 1.
@@ -1544,7 +1544,7 @@ async def test_partial_panic_recovery_retires_resting_close_without_ordinary_pla
     symbol = 'BTC/USDT:USDT'
     user = f'fake_revised_recovery_{tmp_path.name}'
     _cleanup_fake_user_state(user)
-    legacy = prepare_config(load_config(str(REPO_ROOT / 'configs/fake_live_hsl_btc.hjson'), verbose=False),
+    legacy = prepare_config(load_fake_hsl_config(),
                             target='canonical', runtime=None, verbose=False)
     cfg = generated_template(legacy, mode)
     cfg['live']['pnls_max_lookback_days'] = 1.
@@ -1652,3 +1652,5 @@ async def test_revised_trailing_console_failure_does_not_stop_execution():
     bot.live_value = lambda key: .05
     await instance.run()
     assert calls == ['cycle', 'console'] and not instance._running
+
+from hsl_revised_fixture import load_fake_hsl_config
