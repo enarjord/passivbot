@@ -43,6 +43,8 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         if "hsl" in bot:
             raise ValueError("bot.hsl already exists; edit it explicitly instead of replacing it")
         bot["hsl"] = deepcopy(portfolio)
+        if isinstance(portfolio, dict) and "restart_after_red_policy" in portfolio:
+            chosen_paths[("bot", "hsl", "restart_after_red_policy")] = portfolio["restart_after_red_policy"]
     for scope, policy in (restart_policies or {}).items():
         if scope not in {"long", "short", "portfolio"} or policy not in {"always", "never"}:
             raise ValueError("restart choices must be long|short|portfolio=always|never")

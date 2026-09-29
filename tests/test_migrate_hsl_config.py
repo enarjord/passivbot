@@ -410,3 +410,30 @@ def test_matching_explicit_restart_choices_allow_optimizer_mirroring(policy):
     assert result["optimize"]["enable_overrides"] == ["mirror_short_from_long"]
     assert all(result["bot"][side]["hsl"]["restart_after_red_policy"] == policy
                for side in ("long", "short"))
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("policy,fixed", [("never", "always"), ("always", "never")])
+def test_portfolio_file_restart_choice_survives_optimizer_overrides(enabled, policy, fixed):
+    from optimization.warmup import _finalize_optimizer_vector_config
+    cfg = legacy("unified")
+    cfg["optimize"]["fixed_runtime_overrides"] = {"bot.hsl.restart_after_red_policy": fixed}
+    portfolio = generated_template(get_template_config(), "unified")["bot"]["hsl"]
+    portfolio.update(enabled=enabled, restart_after_red_policy=policy)
+    original, original_portfolio = deepcopy(cfg), deepcopy(portfolio)
+    result = migrate(cfg, portfolio=portfolio)
+    assert result["bot"]["hsl"]["restart_after_red_policy"] == policy
+    assert result["optimize"]["fixed_runtime_overrides"]["bot.hsl.restart_after_red_policy"] == policy
+    optimized = _finalize_optimizer_vector_config(deepcopy(result))
+    assert optimized["bot"]["hsl"]["restart_after_red_policy"] == policy
+    assert cfg == original and portfolio == original_portfolio
+
+
+def test_explicit_restart_argument_overrides_portfolio_file_choice():
+    cfg = legacy("unified")
+    cfg["optimize"]["fixed_runtime_overrides"] = {"bot.hsl.restart_after_red_policy": "never"}
+    portfolio = generated_template(get_template_config(), "unified")["bot"]["hsl"]
+    portfolio.update(enabled=True, restart_after_red_policy="never")
+    result = migrate(cfg, portfolio=portfolio, restart_policies={"portfolio": "always"})
+    assert result["bot"]["hsl"]["restart_after_red_policy"] == "always"
+    assert result["optimize"]["fixed_runtime_overrides"]["bot.hsl.restart_after_red_policy"] == "always"

@@ -98,7 +98,8 @@ For unified mode, supply a complete portfolio policy as JSON through `--portfoli
 or author `bot.hsl` in the input. The helper never copies side policy into it. Retired
 optimizer search dimensions/objectives must be edited explicitly before conversion succeeds.
 Each `optimize.fixed_params` selector must match active bounds; retired or unmatched selectors
-are rejected. Explicit restart choices also update matching `optimize.fixed_runtime_overrides`
+are rejected. Explicit restart choices, including the restart policy in a supplied portfolio
+file, also update matching `optimize.fixed_runtime_overrides`
 (including accepted path aliases), with a warning, so optimization cannot undo the choice.
 Other fixed overrides and explicit per-coin policies are preserved. Migration rejects optimizer
 transformations such as `mirror_short_from_long` when they change an explicit restart choice;
