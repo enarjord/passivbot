@@ -835,3 +835,13 @@ The archive helper also supports symmetric `pull` and local `extract` modes, inc
 ```shell
 passivbot tool generate-mcap-list -n 80 -m 200 -e binance,bybit -o configs/approved_coins_top80.json
 ```
+
+## Revised HSL configuration migration
+
+`passivbot tool migrate-hsl input.json output.json` prepares a separate revised-HSL
+configuration without exchange access or deployment. File-backed coin overrides are validated
+and saved inline (including scenario-local patches), so moving the output cannot change their policy.
+Effective optimizer and scenario policies are validated as well as the base config. Explicit restart choices also
+update matching optimizer fixed overrides; retired or unmatched fixed selectors are rejected.
+See the [migration contract](plans/hsl_sole_engine_migration.md#offline-configuration-preparation)
+for explicit restart choices, unified portfolio policy, and compatibility limits.

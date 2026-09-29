@@ -4,6 +4,8 @@ Select `live.hsl_engine=revised` at startup to use this engine. `legacy` remains
 implicit default. The selector applies to live execution, the offline fake runner,
 backtests, CPU optimization and GPU optimization.
 Changing engines requires a restart and an engine-compatible configuration.
+The [sole-engine migration plan](plans/hsl_sole_engine_migration.md) defines the remaining
+acceptance and retirement work; it does not change this version's default.
 
 ## Signals and scopes
 

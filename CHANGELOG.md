@@ -6,6 +6,8 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- Reject HSL configuration migration when optimizer mirroring would overwrite an explicitly chosen restart policy. Matching policies remain supported. Preserve canonically normalized restart choices supplied by unified portfolio policy files when reconciling fixed optimizer overrides, and support scenario paths into file-derived coin policy fields without changing file/inline precedence. Validate migrated optimizer metrics against effective scenario policies, retain ordered coin-mapping replacements, and reject unsupported GPU candle intervals before writing output.
+
 - Improve GPU optimizer parity with exact Rust: apply the same forager-weight
   normalization and bound quantization, refresh Trailing Martingale flat-coin rankings
   each candle, grant selection hysteresis only to existing entry orders, and size
@@ -27,6 +29,13 @@ since the latest release tag; these features may already be available when insta
 
 - Reduce live candle ingestion CPU use for ordered appends and open-candle replacements, and
   avoid searching historical gaps outside incoming rows while preserving overwrite and retry rules.
+
+- Add an offline `passivbot tool migrate-hsl` helper that validates a separately saved revised-HSL
+  configuration, requires explicit replacement of unsupported enabled restart policies, and
+  refuses input/output overwrite. Resolve and validate file-backed coin policies into inline
+  overrides including scenario-local patches, validate effective optimizer/scenario policies,
+  preserve explicit restart choices through optimization, and reject inactive fixed
+  parameter selectors. Engine defaults and running bots are unchanged.
 
 - Fix forager WebSocket candle ingestion at UTC day rollover when the new day's shard
   does not exist yet. Reject unavailable existing shards, preserve finality and verified
