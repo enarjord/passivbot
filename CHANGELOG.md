@@ -11,7 +11,7 @@ since the latest release tag; these features may already be available when insta
   restart choices; re-backtest migrated configurations before use. The sole-engine
   removal draft remains incomplete and is not a deployment candidate.
 
-- Reject HSL configuration migration when optimizer mirroring would overwrite an explicitly chosen restart policy. Matching policies remain supported.
+- Reject HSL configuration migration when optimizer mirroring would overwrite an explicitly chosen restart policy. Matching policies remain supported. Preserve the restart choice supplied by a unified portfolio policy file when reconciling fixed optimizer overrides.
 
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 
