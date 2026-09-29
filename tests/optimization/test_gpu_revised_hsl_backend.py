@@ -52,7 +52,8 @@ def test_engine_and_portfolio_policy_invalidate_resume_identity():
     assert _gpu_hsl_checkpoint_contract(changed) != original
     changed=deepcopy(c)
     changed['live']['hsl_engine']='legacy'
-    assert _gpu_hsl_checkpoint_contract(changed) != original
+    with pytest.raises(ValueError, match="legacy HSL has been removed"):
+        _gpu_hsl_checkpoint_contract(changed)
 
 
 def test_portfolio_bounds_are_validated_using_the_portfolio_policy():
