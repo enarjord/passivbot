@@ -62,3 +62,17 @@ three on this draft. The corresponding preparation branch passes all 260.
 These failures reinforce the schema/test obligations above. The earlier focused
 601-test and 367-test Rust results cover the preceding integrated caller slice,
 not completion of this broader migration.
+
+## Removal boundaries and direct validation targets
+
+| Boundary | Preserve or prove before deletion | Existing validation to extend |
+| --- | --- | --- |
+| `Passivbot` startup and `live/risk_input_recovery.py` | Revised startup currently returns immediately from `wait_for_startup`, but order input construction still calls `validate_balances`; retain positive finite raw/sizing balance checks in a shared owner | Revised live input/admission cases; a direct invalid-balance regression at the relocated caller |
+| Legacy aliases and shared exchange parameters | Remove aliases only after checking their callers; fee and exchange parameter construction now use `live/exchange_params.py` | Revised live/fake cycles plus fee/parameter parity at order construction |
+| Live owner and execution admission | Keep valid empty plans, plan receipts, protection-first service, canonical shutdown flags, queued-write checks and bounded position/fill settling | `test_hsl_revised_live.py`, `test_hsl_revised_fake_cycle.py`, `test_position_fill_sync_fake_live.py` |
+| Legacy backtest state versus revised reporting | Separate obsolete controllers from strategy-equity, liquidation, unstuck and current revised reporting before removing fields or bindings | Rust tests, `test_hsl_revised_trace.py`, `test_hsl_revised_reporting.py`, disabled-HSL trace comparisons |
+| GPU preparation and low-level dispatch | Reject legacy at the boundary, then remove unreachable implementations without changing revised screening/exact validation or resume semantics | GPU revised service/backend/CLI tests and the final CPU/GPU benchmark matrix |
+
+This map is a removal checklist, not a claim that the remaining deletion has been
+validated. Each implementation patch must identify its direct consumers and keep
+the draft incomplete until the integrated acceptance matrix is satisfied.
