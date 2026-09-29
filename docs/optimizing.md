@@ -494,7 +494,16 @@ points (0.15%). Buffered strict fill boundaries are prepared once; the GPU kerne
 per-candidate work are unchanged. Different buffers may change the trading path and therefore
 runtime. Raw candles, market execution, and original limit fill prices remain unchanged.
 Changing the buffer requires a fresh search; checkpoints and prepared suite tensors include it
-in their execution identity.
+in their execution identity. For a fill-sensitivity suite, set `backtest.suite_enabled` to
+`true` and add scenarios such as:
+
+```json
+"scenarios": [
+  {"label": "baseline", "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0}},
+  {"label": "buffer_0_0001", "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0001}},
+  {"label": "buffer_0_0005", "overrides": {"backtest.limit_order_fill_buffer_pct": 0.0005}}
+]
+```
 
 #### Deliberate current limitations
 

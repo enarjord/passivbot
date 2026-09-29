@@ -687,8 +687,11 @@ def _strict_fill_tick_boundaries(
         sell_ticks = np.floor((safe_high / sell_factor) / price_step)
         buy_ticks = np.floor((safe_low / buy_factor) / price_step)
     i32 = np.iinfo(np.int32)
+    # Allow the bounded repair below to bring an exact endpoint into range
+    # before enforcing int32 storage. For example, an exact high at max+1
+    # has max as its largest strictly fillable sell tick.
     for ticks in (sell_ticks, buy_ticks):
-        if not np.all(np.isfinite(ticks) & (ticks >= i32.min) & (ticks <= i32.max)):
+        if not np.all(np.isfinite(ticks) & (ticks >= i32.min - 2) & (ticks <= i32.max + 2)):
             raise ValueError("MPS proxy candle price ticks exceed signed 32-bit range")
     high_fill_max = sell_ticks.astype(np.int64)
     low_nonfill_max = buy_ticks.astype(np.int64)

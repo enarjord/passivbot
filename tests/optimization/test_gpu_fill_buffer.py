@@ -166,3 +166,76 @@ def test_buffer_delays_limit_close_until_strict_crossing(side, coin_count):
         assert all(int(f[0]) == (21 if buffer else 11) for f in close_fills)
         assert result['fills_per_day'] == pytest.approx(exact['fills_per_day'], rel=1e-5)
         assert result['adg_usd'] == pytest.approx(exact['adg_usd'], abs=1e-5, rel=1e-3)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_buffered_suite_scenarios_keep_distinct_tensors_and_results(side):
+    from types import SimpleNamespace
+    from copy import deepcopy
+
+    torch = pytest.importorskip("torch")
+    if not (torch.backends.mps.is_available() or torch.cuda.is_available()):
+        pytest.skip("GPU unavailable")
+    from suite_runner import SuiteScenario, apply_scenario
+    from optimization.backends.gpu_backend import (
+        _evaluate_gpu_suite_proxies, _GPU_SUITE_METRICS_KEY,
+    )
+    from optimization.gpu.service import MpsMulticoinProxy
+
+    cfg, candles, mss, btc, ts = _fixture(side, "trailing_martingale", 0.0, 2)
+    cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ["long", "short"]}
+    cache, scenarios, proxies = {}, [], []
+    interrupt_check = lambda: None
+    for label, buffer in [("zero", 0.0), ("buffered", 0.0015), ("same_buffer", 0.0015)]:
+        scenario = SuiteScenario(
+            label=label, start_date=None, end_date=None,
+            coins=["BTC", "ETH"], ignored_coins=[],
+            overrides={"backtest.limit_order_fill_buffer_pct": buffer},
+        )
+        effective, _ = apply_scenario(
+            deepcopy(cfg), scenario, master_coins=["BTC", "ETH"], master_ignored=[],
+            available_exchanges=["bybit"], available_coins={"BTC", "ETH"},
+            base_coin_sources={"BTC": "bybit", "ETH": "bybit"},
+        )
+        proxy = MpsMulticoinProxy(
+            config=effective, hlcvs=candles, mss=mss, btc=btc, timestamps=ts,
+            exchange="bybit", batch_size=8, needed_metrics={"fills_per_day"},
+            prepared_data_cache=cache, interrupt_check=interrupt_check,
+        )
+        proxies.append(proxy)
+        scenarios.append((SimpleNamespace(label=label), [("bybit", proxy)], {}))
+    assert proxies[0].data is not proxies[1].data
+    assert proxies[1].data is proxies[2].data
+    assert proxies[0].suite_batch_key() != proxies[1].suite_batch_key()
+    assert proxies[1].suite_batch_key() == proxies[2].suite_batch_key()
+
+    class Suite:
+        @staticmethod
+        def score_scenario_results(results):
+            fills = tuple(result.metrics["stats"]["fills_per_day"]["mean"] for result in results)
+            return dict(objectives=fills, unpenalized_objectives=fills,
+                        constraint_violation=0.0, suite_metrics=fills)
+
+    candidates = [{}, {}]
+    separate = _evaluate_gpu_suite_proxies(
+        Suite(), scenarios, candidates, batch_compatible_scenarios=False,
+    )
+    grouped = _evaluate_gpu_suite_proxies(
+        Suite(), scenarios, candidates, batch_compatible_scenarios=True,
+    )
+    assert grouped == separate
+    for result in grouped:
+        fills = result[_GPU_SUITE_METRICS_KEY]
+        assert fills[0] > 0.0
+        assert fills[1:] == (0.0, 0.0)
+    assert cfg["backtest"]["limit_order_fill_buffer_pct"] == 0.0
+
+
+@pytest.mark.parametrize("buffer", [0.0, 0.0015])
+def test_buffered_ticks_check_storage_range_after_strict_boundary_repair(buffer):
+    maximum = np.iinfo(np.int32).max
+    high = np.array([(maximum + 1) * (1.0 + buffer)])
+    high_ticks, _ = _strict_fill_tick_boundaries(high, [100.0], 1.0, buffer)
+    assert high_ticks[0] == maximum
+    with pytest.raises(ValueError, match="32-bit"):
+        _strict_fill_tick_boundaries(np.nextafter(high, np.inf), [100.0], 1.0, buffer)
