@@ -100,7 +100,9 @@ optimizer search dimensions/objectives must be edited explicitly before conversi
 Each `optimize.fixed_params` selector must match active bounds; retired or unmatched selectors
 are rejected. Explicit restart choices also update matching `optimize.fixed_runtime_overrides`
 (including accepted path aliases), with a warning, so optimization cannot undo the choice.
-Other fixed overrides and explicit per-coin policies are preserved. Validation also applies
+Other fixed overrides and explicit per-coin policies are preserved. Migration rejects optimizer
+transformations such as `mirror_short_from_long` when they change an explicit restart choice;
+remove the conflicting transformation or supply compatible choices. Validation also applies
 optimizer finalization to a copy and checks its effective policy, including enablement overrides
 and coin patches; a policy valid only while disabled must not silently become active.
 Scenario policies are checked both against the base configuration and after optimizer finalization.

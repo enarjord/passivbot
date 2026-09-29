@@ -196,8 +196,13 @@ Limit buys require `low < price * (1 - buffer)` and limit sells require
 filled limit orders retain the original order price and maker fees. Market execution bypasses it.
 The actual fill and next-candle ladder-expansion hint share the same Rust predicate; raw candles
 used for indicators, trailing extrema, equity, and risk remain unchanged. Live inputs do not
-forward this setting. CPU optimization treats it as fixed evaluation policy; GPU screening
-rejects nonzero values until it implements the same contract.
+forward this setting. CPU and GPU optimization treat it as fixed evaluation policy. GPU screening
+encodes buffered strict crossings as immutable integer tick boundaries during data preparation; kernels retain
+the same fill comparisons and original candle/touch inputs. Prepared-data cache keys and
+checkpoint execution identity include the buffer.
+Thresholds above all representable order ticks saturate at the maximum tick: this preserves
+all-sell/no-buy eligibility without rejecting large valid buffers. Executable price range checks
+remain unchanged.
 The native backtest payload loader accepts an absent buffer as `0.0` for payloads from before
 this setting existed; explicit invalid values still fail. Canonical Python loading always supplies
 the field. Orchestrator next-candle hints likewise default absence to zero and reject non-finite

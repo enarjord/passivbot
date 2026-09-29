@@ -11,6 +11,8 @@ since the latest release tag; these features may already be available when insta
   restart choices; re-backtest migrated configurations before use. The sole-engine
   removal draft remains incomplete and is not a deployment candidate.
 
+- Reject HSL configuration migration when optimizer mirroring would overwrite an explicitly chosen restart policy. Matching policies remain supported.
+
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 
 - Record completed GPU optimizer CPU validations during the following GPU proxy pass and report exact progress immediately, while keeping resumable checkpoints at completed generation boundaries.
@@ -85,8 +87,9 @@ since the latest release tag; these features may already be available when insta
 
 - Add `backtest.limit_order_fill_buffer_pct` (default `0.0`) to require a strict additional price
   crossing before limit fills. The buffer uses a fraction of the order price, leaves market
-  execution unchanged, and is supported by CPU backtests and optimization. GPU optimization
-  rejects nonzero values.
+  execution unchanged, and is supported by CPU backtests and CPU/GPU optimization, including
+  suite overrides. GPU fill boundaries are prepared once without changing kernels; caches and
+  checkpoints distinguish fill assumptions.
 
 - Default Bitunix live quote refreshes to the requested symbols so unrelated quiet markets cannot
   delay protective or ordinary order planning. Explicit bulk overrides remain supported.
