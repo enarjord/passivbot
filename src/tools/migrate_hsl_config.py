@@ -82,6 +82,16 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
     optimized = _finalize_optimizer_vector_config(deepcopy(prepared))
     optimized = prepare_config(optimized, verbose=False, target="canonical", runtime=None)
     optimized = parse_overrides(optimized, verbose=False)
+    for path, chosen in chosen_paths.items():
+        effective_choice = optimized
+        for key in path:
+            effective_choice = effective_choice[key]
+        if effective_choice != chosen:
+            raise ValueError(
+                f"optimizer changes explicit {'.'.join(path)} choice from {chosen!r} "
+                f"to {effective_choice!r}; reconcile optimize.enable_overrides "
+                "(including mirror_short_from_long) with the restart choices"
+            )
     if prepared["backtest"].get("scenarios"):
         scenarios, _ = build_scenarios(prepared["backtest"])
         for raw, scenario in zip(prepared["backtest"]["scenarios"], scenarios):

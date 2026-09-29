@@ -388,3 +388,25 @@ def test_scenario_optimizer_controls_rejected_even_if_selector_is_valid(selector
         'optimize.fixed_params': [selector]}}]
     with pytest.raises(ValueError, match='optimizer controls.*top-level'):
         migrate(cfg, restart_policies={'long': 'always'})
+
+
+@pytest.mark.parametrize("mode", ["coin", "pside"])
+@pytest.mark.parametrize("short_enabled", [False, True])
+def test_optimizer_mirroring_cannot_overwrite_explicit_restart_choice(mode, short_enabled):
+    cfg = legacy(mode)
+    cfg["bot"]["short"]["hsl"]["enabled"] = short_enabled
+    cfg["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    original = deepcopy(cfg)
+    with pytest.raises(ValueError, match=r"optimizer.*bot.short.hsl.restart_after_red_policy.*never.*always"):
+        migrate(cfg, restart_policies={"long": "always", "short": "never"})
+    assert cfg == original
+
+
+@pytest.mark.parametrize("policy", ["always", "never"])
+def test_matching_explicit_restart_choices_allow_optimizer_mirroring(policy):
+    cfg = legacy()
+    cfg["optimize"]["enable_overrides"] = ["mirror_short_from_long"]
+    result = migrate(cfg, restart_policies={"long": policy, "short": policy})
+    assert result["optimize"]["enable_overrides"] == ["mirror_short_from_long"]
+    assert all(result["bot"][side]["hsl"]["restart_after_red_policy"] == policy
+               for side in ("long", "short"))
