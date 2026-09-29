@@ -1619,6 +1619,7 @@ def test_gpu_suite_inputs_materialize_each_exchange_in_one_scenario():
         ("backtest.starting_balance", 12_345.0, ("backtest", "starting_balance")),
         ("backtest.maker_fee_override", 0.0002, ("backtest", "maker_fee_override")),
         ("backtest.taker_fee_override", 0.0007, ("backtest", "taker_fee_override")),
+        ("backtest.limit_order_fill_buffer_pct", 0.0015, ("backtest", "limit_order_fill_buffer_pct")),
         (
             "backtest.market_order_slippage_pct",
             0.0015,
