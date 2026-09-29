@@ -3500,3 +3500,85 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
     else:
         assert bot._orchestrator_signed_unilateralness == {}
     assert bot._orchestrator_unilateralness_unavailable == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+async def test_live_rms_ranks_competitors_after_ineligible_position_occupies_slot(side):
+    import numpy as np
+    import passivbot_rust as pbr
+    from candlestick_manager import CANDLE_DTYPE
+    from passivbot import Passivbot
+    from test_orchestrator_json_api import make_input, make_symbol, bot_params_pair, compute
+
+    names = ["OLD/USDT:USDT", "AAA/USDT:USDT", "BBB/USDT:USDT"]
+    bot = _BundleReproBot(names[0], "value")
+    bot.positions = {
+        name: {s: {"size": (1.0 if s == "long" else -1.0) if i == 0 and s == side else 0.0,
+                   "price": 100.0} for s in ("long", "short")}
+        for i, name in enumerate(names)
+    }
+    bot.PB_modes = {s: {name: None for name in names} for s in ("long", "short")}
+    bot.approved_coins_minus_ignored_coins = {s: set(names[1:]) for s in ("long", "short")}
+    bot.live_value = lambda key: ""
+    bot.get_max_n_positions = lambda s: Passivbot.get_max_n_positions(bot, s)
+    bot.is_forager_mode = lambda s=None: (
+        any(Passivbot.is_forager_mode(bot, p) for p in ("long", "short"))
+        if s is None else Passivbot.is_forager_mode(bot, s)
+    )
+    bot.is_pside_enabled = lambda s: s == side
+    bot.get_exchange_time = lambda: 21 * 60000
+    original = bot.bot_value
+    weights = {"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+
+    def bot_value(s, key):
+        values = {"forager_score_weights": weights, "unilateralness_ema_span_1m": 1.0,
+                  "total_wallet_exposure_limit": 1.0, "n_positions": 2}
+        return values[key] if key in values else original(s, key)
+
+    bot.bot_value = bot_value
+    assert not bot.is_forager_mode(side)  # Two approved coins fit two configured slots.
+    calm = names[2]
+    missing = None
+    calls = []
+
+    async def candles(name, **kwargs):
+        calls.append(name)
+        rows = np.zeros(21, dtype=CANDLE_DTYPE)
+        rows["ts"] = np.arange(21) * 60000
+        rows["c"] = 100.0 if name == calm else 100 * np.exp(np.arange(21) * 0.001)
+        return rows[:-1] if name == missing else rows
+
+    bot.cm.get_candles = candles
+    params = {"n_positions": 2, "total_wallet_exposure_limit": 1.0,
+              "forager_score_weights": weights, "unilateralness_ema_span_1m": 1.0}
+    symbols = [make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": params}) for i in range(3)]
+    symbols[0]["tradable"] = False
+    symbols[0][side]["position"] = bot.positions[names[0]][side].copy()
+    for symbol in symbols:
+        symbol[side]["mode"] = None
+    inp = make_input(balance=1000, global_bp=bot_params_pair(**{f"{side}_overrides": params}), symbols=symbols)
+
+    async def selection():
+        await Passivbot._load_orchestrator_ema_bundle(bot, names, bot.PB_modes)
+        for name, symbol in zip(names, symbols):
+            symbol["emas"]["m1"]["signed_unilateralness"] = sorted(bot._orchestrator_signed_unilateralness.get(name, {}).items())
+            symbol["forager_m1"] = {**symbol["emas"]["m1"], "signed_unilateralness": sorted(bot._orchestrator_forager_signed_unilateralness.get(name, {}).items())}
+            symbol["unilateralness_unavailable"] = bot._orchestrator_unilateralness_unavailable.get(name, {})
+        out = compute(pbr, inp)
+        result = next(x for x in out["diagnostics"]["forager_selections"] if x["pside"] == side)
+        assert result["ranking_required"] and result["slots_to_fill"] == 1
+        return result["selected_symbol_indices"]
+
+    assert await selection() == [2]
+    assert set(calls) == set(names)
+    # Every bundle must replay fresh scores, and missing data must not reuse a
+    # prior score or silently rank only the available competitor.
+    calm = names[1]
+    assert await selection() == [1]
+    missing = names[1]
+    assert await selection() == []
+    assert bot._orchestrator_forager_signed_unilateralness[names[1]] == {}
+    assert bot._orchestrator_unilateralness_unavailable[names[1]]["forager"] == [1.0]
+    missing = None
+    assert await selection() == [1]

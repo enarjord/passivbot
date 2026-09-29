@@ -11,11 +11,20 @@ from candlestick_manager import OhlcvFetchError
 from config.entry_cooldown import uses_adverse_rms
 
 
-def scoring_enabled(bot, side):
-    return (
-        bot.bot_value(side, "forager_score_weights")["unilateralness"] > 0
-        and bot.is_forager_mode(side)
+def scoring_enabled(bot, side, symbols):
+    if bot.bot_value(side, "forager_score_weights")["unilateralness"] <= 0:
+        return False
+    if bot.is_forager_mode(side):
+        return True
+    # A held ineligible symbol can consume a slot even when the approved
+    # universe fits the configured cap. Keep a conservative input superset:
+    # with occupied slots and competing flat symbols, Rust may need ranking.
+    # Rust retains exact mode, eligibility, effective-slot and cost decisions.
+    held = sum(
+        bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0) != 0.0
+        for symbol in symbols
     )
+    return held > 0 and len(symbols) - held > 1
 
 
 def adverse_enabled(bot, side, symbol):
@@ -36,6 +45,10 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
     ranking = {symbol: {} for symbol in symbols}
     required = {}
     ages = forager_age_by_symbol or {}
+    scoring_sides = {
+        side for side in ("long", "short")
+        if bot.is_pside_enabled(side) and scoring_enabled(bot, side, symbols)
+    }
     end = int(bot.get_exchange_time()) // 60_000 * 60_000 - 60_000
     for symbol in symbols:
         current_spans = set()
@@ -46,7 +59,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             span = float(bot.bot_value(side, "unilateralness_ema_span_1m"))
             if adverse_enabled(bot, side, symbol):
                 current_spans.add(span)
-            if scoring_enabled(bot, side):
+            if side in scoring_sides:
                 forager_spans.add(span)
         spans = current_spans | forager_spans
         required[symbol] = (current_spans, forager_spans)

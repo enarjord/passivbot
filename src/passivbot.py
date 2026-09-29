@@ -19634,8 +19634,13 @@ class Passivbot:
         }
         from live import unilateralness
 
+        directional_scoring_sides = {
+            side for side in ("long", "short")
+            if self.is_pside_enabled(side)
+            and unilateralness.scoring_enabled(self, side, symbols)
+        }
         directional_enabled = any(
-            unilateralness.scoring_enabled(self, side)
+            side in directional_scoring_sides
             or unilateralness.adverse_enabled(self, side, symbol)
             for side in ("long", "short")
             for symbol in symbols
@@ -19659,13 +19664,13 @@ class Passivbot:
             ("long", vol_span_long, lr_span_long),
             ("short", vol_span_short, lr_span_short),
         ):
-            if not bool(is_forager_mode(pside)):
-                continue
-            if directional_enabled and _forager_score_weight(pside, "unilateralness") > 0.0:
+            if pside in directional_scoring_sides:
                 span = float(self.bot_value(pside, "unilateralness_ema_span_1m"))
                 rank_feature_unavailable_by_side[pside].update(
                     s for s in symbols if span not in ranking_directional.get(s, {})
                 )
+            if not bool(is_forager_mode(pside)):
+                continue
             volume_required = volume_span > 0.0 and (
                 _forager_volume_drop_pct(pside) > 0.0
                 or _forager_score_weight(pside, "volume") != 0.0
