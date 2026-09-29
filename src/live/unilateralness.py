@@ -24,10 +24,13 @@ def scoring_enabled(bot, side, symbols):
         symbol for symbol in symbols
         if bot.positions.get(symbol, {}).get(side, {}).get("size", 0.0) != 0.0
     }
+    if not held or len(symbols) - len(held) <= 1:
+        return False
+    approved = bot.approved_coins_minus_ignored_coins[side]
     unavailable = getattr(bot, "_orchestrator_ema_unavailable_symbols", set())
     markets = getattr(bot, "markets_dict", {})
-    return len(symbols) - len(held) > 1 and any(
-        not bot.is_approved(side, symbol)
+    return any(
+        symbol not in approved
         or bot.bp(side, "wallet_exposure_limit", symbol) == 0.0
         or not markets.get(symbol, {}).get("active", True)
         or symbol in unavailable
@@ -107,7 +110,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             result[symbol] = {
                 span: cached[key][0] for span, key in keys.items() if cached[key][1] == end
             }
-            source_ends[symbol] = min(cached[key][1] for key in keys.values())
+            source_ends[symbol] = {span: cached[key][1] for span, key in keys.items()}
             continue
         # A failed refresh must not leave an older score available on a later load.
         for key in keys.values():
@@ -131,26 +134,33 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             )
             continue
         rows = rows[(rows["ts"] >= start) & (rows["ts"] <= end)]
+        if not len(rows):
+            continue
+        # A newer partial segment after a gap must not hide a complete older
+        # observation still inside the ranking age allowance. Split once, then
+        # choose the latest eligible endpoint independently for each span.
+        segment_ends = np.r_[np.flatnonzero(np.diff(rows["ts"]) != 60_000) + 1, len(rows)]
+        segment_starts = np.r_[0, segment_ends[:-1]]
+        recent = end - rows["ts"][segment_ends - 1] <= allowed_age
         for span in sorted(spans):
             n = math.ceil(span * 20.0) + 1
-            window = rows[-n:]
-            if (
-                len(window) != n
-                or end - int(window["ts"][-1]) > allowed_age
-                or np.any(np.diff(window["ts"]) != 60_000)
-            ):
+            ends = segment_ends[recent & (segment_ends - segment_starts >= n)]
+            if not len(ends):
                 continue
+            stop = int(ends[-1])
+            window = rows[stop - n:stop]
             # Rust rejects malformed prices. Missing history stays absent, never a zero score.
             value = passivbot_rust.calc_signed_unilateralness(
                 window["c"].astype(float).tolist(), span
             )
-            source_ends[symbol] = int(window["ts"][-1])
+            source_end = int(window["ts"][-1])
+            source_ends.setdefault(symbol, {})[span] = source_end
             ranking[symbol][span] = value
             if replay_cache is not None:
                 # Fetching may have replaced the symbol's cache. Store the actual
                 # source cutoff; only cache-only ranking can reuse an older window.
                 replay_cache.setdefault(symbol, {})[keys[span]] = (
-                    value, source_ends[symbol], int(bot.get_exchange_time())
+                    value, source_end, int(bot.get_exchange_time())
                 )
             if window["ts"][-1] == end:
                 result[symbol][span] = value
@@ -169,8 +179,11 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         # load invalidates current cooldown inputs; do not privilege later fetches.
         for symbol in symbols:
             result[symbol].clear()
-            if final_end - source_ends.get(symbol, end) > max(0, int(ages.get(symbol, 0))):
-                ranking[symbol].clear()
+            allowed_age = max(0, int(ages.get(symbol, 0)))
+            ranking[symbol] = {
+                span: value for span, value in ranking[symbol].items()
+                if 0 <= final_end - source_ends[symbol][span] <= allowed_age
+            }
     missing = {}
     for symbol, (current_spans, forager_spans) in required.items():
         unavailable = {

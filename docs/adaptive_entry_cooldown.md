@@ -153,6 +153,9 @@ exact zero for an entirely flat window without subtracting nearly equal moments.
 Live reconstructs each new completed window with a full replay and reuses complete
 results at the same cutoff. Cache-only Forager candidates may also reuse an older
 complete window within their age allowance; its original source timestamp is retained.
+A newer partial segment after a gap does not hide an older complete window: each span
+uses its latest contiguous window within the allowance. Age is rechecked per span if
+the completed-minute cutoff changes during loading or cache reuse.
 Cooldown still requires the current completed window, and remote-enabled consumers
 can refresh stale history. Canonical candle repairs and gap evidence invalidate
 that cache; incomplete windows remain retryable. Cache loss recomputes the same score

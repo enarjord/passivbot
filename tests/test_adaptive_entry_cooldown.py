@@ -1557,3 +1557,65 @@ async def test_unapproved_held_graceful_stop_keeps_adverse_inputs_and_closes(sid
     # A missing score must defer only this entry consumer, never fail the batch.
     if not available:
         assert not any(o["pside"] == side and o["order_type"].startswith("entry_") for o in result["orders"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("long_span", [1.0, 2.5])
+@pytest.mark.parametrize("age_minutes", [29, 30, 31])
+@pytest.mark.parametrize("rollover", [False, True])
+async def test_live_rms_uses_latest_complete_pre_gap_window(long_span, age_minutes, rollover):
+    import passivbot_rust as pbr
+    from live.unilateralness import load
+    from candlestick_manager import CANDLE_DTYPE
+
+    # The larger span is complete only before the gap; the smaller one is current.
+    minutes = np.r_[np.arange(51), np.arange(52, 81)]
+    rows = np.zeros(len(minutes), dtype=CANDLE_DTYPE)
+    rows["ts"] = minutes * 60000
+    rows["c"] = np.exp(minutes * .001)
+    now = 81 * 60000
+    calls = 0
+    async def candles(*args, **kwargs):
+        nonlocal now, calls
+        calls += 1
+        if rollover:
+            now += 60000
+        return rows.copy()
+    spans = {"long": long_span, "short": 3.5 - long_span}
+    bot = SimpleNamespace(
+        cm=SimpleNamespace(get_candles=candles, _ema_cache={}),
+        get_exchange_time=lambda: now,
+        is_pside_enabled=lambda side: True, is_forager_mode=lambda side: True,
+        is_approved=lambda side, symbol: True,
+        bot_value=lambda side, key: {"unilateralness": 1.0} if key == "forager_score_weights" else spans[side],
+        bp=lambda side, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
+    )
+    result, rank, missing = await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000})
+    assert set(result["BTC"]) == (set() if rollover else {1.0})
+    expected = {1.0, 2.5} if age_minutes >= 30 + int(rollover) else {1.0}
+    assert set(rank["BTC"]) == expected
+    assert missing["BTC"] == {"current": [1.0, 2.5] if rollover else [2.5],
+                              "forager": [] if 2.5 in expected else [2.5]}
+    if 2.5 in expected:
+        assert rank["BTC"][2.5] == pbr.calc_signed_unilateralness(rows["c"][:51].tolist(), 2.5)
+        assert bot.cm._ema_cache["BTC"][("signed_unilateralness", 2.5, "60000")][1] == 50 * 60000
+    assert bot.cm._ema_cache["BTC"][("signed_unilateralness", 1.0, "60000")][1] == 80 * 60000
+    if not rollover and age_minutes >= 30:
+        assert await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
+        assert calls == 1
+        # The cache path also rechecks each span's own source age on rollover.
+        clock = iter([81 * 60000, 82 * 60000])
+        bot.get_exchange_time = lambda: next(clock)
+        cached_rollover = await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000})
+        assert cached_rollover[0] == {"BTC": {}}
+        assert set(cached_rollover[1]["BTC"]) == ({1.0, 2.5} if age_minutes >= 31 else {1.0})
+        assert calls == 1
+        bot.get_exchange_time = lambda: now
+        # Losing the memo reconstructs exactly the same bounded-age observation.
+        bot.cm._ema_cache.clear()
+        assert await load(bot, ["BTC"], {"BTC"}, {"BTC": age_minutes * 60000}) == (result, rank, missing)
+        assert calls == 2
