@@ -13,6 +13,7 @@ from config.param_paths import (
     OPTIMIZABLE_BOT_KEY_PATHS,
     canonical_optimizer_key,
     resolve_optimizer_key_path,
+    require_existing_config_path,
 )
 from config.optimize_bounds import flatten_optimize_bounds
 from config.shared_bot import flatten_shared_bot_side
@@ -156,6 +157,11 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
 
     # Independently sampled dimensions must be valid at every corner, not just
     # the all-low/all-high configurations used to estimate warmup.
+    fixed_cooldowns = {"long": {}, "short": {}}
+    for dotted_path, value in (config.get("optimize", {}).get("fixed_runtime_overrides") or {}).items():
+        path = require_existing_config_path(config, dotted_path)
+        if len(path) == 4 and path[0] == "bot" and path[1] in fixed_cooldowns and path[2] == "entry_cooldown":
+            fixed_cooldowns[path[1]][path[3]] = value
     for pside in ("long", "short"):
         floor_bound = cooldown_ranges.get((pside, "min_duration_minutes"))
         ceiling_bound = cooldown_ranges.get((pside, "max_duration_minutes"))
@@ -168,6 +174,10 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
             corner["entry_cooldown_min_duration_minutes"] = floor_bound.high
         if ceiling_bound:
             corner["entry_cooldown_max_duration_minutes"] = ceiling_bound.low
+        corner = merge_runtime_bot_side(
+            corner, pside=pside,
+            override_side={"entry_cooldown": fixed_cooldowns[pside]},
+        )
         effective_sides = [("bot", corner)]
         for coin, patch in (config.get("coin_overrides") or {}).items():
             override_side = patch.get("bot", {}).get(pside, {})

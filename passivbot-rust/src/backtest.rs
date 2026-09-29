@@ -2124,18 +2124,9 @@ impl<'a> Backtest<'a> {
             .collect();
         let mut warmup_bars = backtest_params.global_warmup_bars;
         if warmup_bars == 0 {
-            // Zero historically requests automatic shared warmup. With scoped
-            // adverse RMS readiness, Python's non-RMS budget can be zero;
-            // do not restore an unrelated shared delay. Keep the legacy path
-            // unchanged when no eligible side consumes adverse RMS.
-            let scoped_rms = bot_params.iter().any(|pair| {
-                [&pair.long, &pair.short].iter().any(|bp| {
-                    crate::unilateralness::backtest_enabled(bp, false)
-                })
-            });
-            warmup_bars = if scoped_rms { 1 } else {
-                calc_warmup_bars(&bot_params, &strategy_params_parsed)
-            };
+            // Zero is the legacy automatic non-RMS warmup sentinel, including
+            // direct callers. RMS readiness remains separately consumer-scoped.
+            warmup_bars = calc_warmup_bars(&bot_params, &strategy_params_parsed);
         }
 
         let trailing_enabled: Vec<TrailingEnabled> = strategy_params_parsed

@@ -563,3 +563,41 @@ def test_optimizer_rms_considers_corners_that_unpin_constant_cooldown(side, base
             validate_optimizer_dataset_intervals(cfg, markets, "binance")
     else:
         validate_optimizer_dataset_intervals(cfg, markets, "binance")
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("bounds,fixed,valid", [
+    ({"max_duration_minutes": [10, 30]}, {"min_duration_minutes": 20}, False),
+    ({"max_duration_minutes": [10, 30]}, {"min_duration_minutes": 10}, True),
+    ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": 10}, False),
+    ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": 20}, True),
+    ({"min_duration_minutes": [0, 20]}, {"min_duration_minutes": 5, "max_duration_minutes": 10}, True),
+    ({"max_duration_minutes": [10, 30]}, {"min_duration_minutes": 20, "max_duration_minutes": 30}, True),
+    ({"min_duration_minutes": [0, 20]}, {"max_duration_minutes": None}, True),
+])
+def test_cooldown_corners_apply_fixed_runtime_pins_after_genes(side, bounds, fixed, valid):
+    cfg = get_template_config()
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 30.0
+    cfg["optimize"]["bounds"][side]["entry_cooldown"].update(bounds)
+    cfg["optimize"]["fixed_runtime_overrides"] = {
+        f"bot.{side}.entry_cooldown.{key}": value for key, value in fixed.items()
+    }
+    if valid:
+        prepare_config(cfg, verbose=False)
+    else:
+        with pytest.raises(ValueError, match="highest min_duration_minutes"):
+            prepare_config(cfg, verbose=False)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_coin_cooldown_pins_apply_after_fixed_runtime_overrides(side):
+    cfg = get_template_config()
+    cfg["optimize"]["bounds"][side]["entry_cooldown"]["max_duration_minutes"] = [10, 30]
+    cfg["optimize"]["fixed_runtime_overrides"] = {
+        f"bot.{side}.entry_cooldown.max_duration_minutes": 20,
+    }
+    cfg["coin_overrides"] = {"BTC": {"bot": {side: {"entry_cooldown": {"min_duration_minutes": 25}}}}}
+    with pytest.raises(ValueError, match="coin_overrides.BTC.*highest min_duration_minutes"):
+        prepare_config(cfg, verbose=False)
+    cfg["coin_overrides"]["BTC"]["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 30
+    prepare_config(cfg, verbose=False)

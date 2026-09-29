@@ -448,8 +448,8 @@ The earlier incremental entries are preserved in the
 
 ### Upgrade notes
 
-- Current configs use schema `v8.4.0`; package/release versions and config-schema versions are
-  separate. Supported v8.0.0–v8.3.0 configs migrate on load. Review migration warnings and the
+- Current configs use schema `v8.5.0`; package/release versions and config-schema versions are
+  separate. Supported v8.0.0–v8.4.0 configs migrate on load. Review migration warnings and the
   normalized result before live use; do not relabel an old config to bypass migration.
 - Auto-unstuck owns independent `bot.<side>.unstuck.ema_span_0/1` horizons. Migration derives
   missing values from the effective strategy where possible. Trailing Martingale entry spans

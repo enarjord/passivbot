@@ -293,6 +293,12 @@ Live `unilateralness_unavailable` carries separate `current` and `forager` span
 lists. RMS transport failures must not set the generic missing-strategy-input
 permission. A valid cached ranking value does not satisfy current cooldown input.
 CPU history requests include RMS, but shared trade activation does not wait for it.
+Per-coin `warmup_minutes_source` distinguishes producer-stamped `history` from
+`activation` budgets. Only known history metadata may be replaced by a candidate's
+non-RMS activation budget; optimizer activation stamps and untyped external budgets
+remain authoritative. Rust's zero global warmup retains its automatic non-RMS
+fallback. Python sends the minimum positive budget when it explicitly computes a
+zero activation budget for an adverse-RMS consumer.
 The backtest marks exact spans still warming from known listing history in
 `unilateralness_warmup_spans`. A missing score at a marked span defers only required
 ranking or the side/order branch consuming adverse cooldown. If any compared

@@ -368,6 +368,7 @@ def test_cpu_score_only_rms_warmup_blocks_only_required_ranking(ranking_required
         cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = span
     for coin in ("LONGCOIN", "SHORTCOIN"):
         markets[coin]["warmup_minutes"] = metadata_history
+        markets[coin]["warmup_minutes_source"] = "history"
     fills, _, _ = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps)
     if ranking_required and span == 60.0:
         assert len(fills) == 0
@@ -691,6 +692,7 @@ def test_adverse_rms_activates_at_first_complete_return_window(side, span):
     for coin in ("LONGCOIN", "SHORTCOIN"):
         markets[coin]["first_valid_index"] = first
         markets[coin]["warmup_minutes"] = n_returns + 1
+        markets[coin]["warmup_minutes_source"] = "history"
     coin_index, coin = (0, "LONGCOIN") if side == "long" else (1, "SHORTCOIN")
     closes = hlcvs[first:first + n_returns + 1, coin_index, 2].tolist()
     with pytest.raises(ValueError, match="incomplete unilateralness warmup"):
@@ -733,6 +735,7 @@ def test_adverse_rms_warmup_does_not_delay_other_sides_or_coins(side, span, targ
     # Cached history represents the long RMS window, not universal trade readiness.
     for coin in coins:
         markets[coin]["warmup_minutes"] = math.ceil(20 * span) + 1
+        markets[coin]["warmup_minutes_source"] = "history"
     fills, _, _, payload = run_backtest(
         hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True,
     )
@@ -787,8 +790,9 @@ def test_zero_non_rms_budget_does_not_restore_automatic_shared_delay(side):
     hlcvs, markets, btc, timestamps = _synthetic_inputs()
     for coin in ("LONGCOIN", "SHORTCOIN"):
         markets[coin]["warmup_minutes"] = 21
+        markets[coin]["warmup_minutes_source"] = "history"
     fills, _, _, payload = run_backtest(hlcvs, markets, cfg, "binance", btc, timestamps, return_payload=True)
-    assert payload.backtest_params["global_warmup_bars"] == 0
+    assert payload.backtest_params["global_warmup_bars"] == 1
     first_entries = {
         s: min(int(row[0]) for row in fills if str(row[13]).startswith("entry_") and s in str(row[13]))
         for s in ("long", "short")
@@ -992,3 +996,67 @@ async def test_live_constant_clamp_skips_rms_fetch(base, floor, ceiling):
         bot_value=lambda side,key: {"unilateralness": 0.0} if key=="forager_score_weights" else 60.0,
     )
     assert await load(bot, ["BTC"], set()) == ({"BTC": {}}, {"BTC": {}}, {})
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("metadata", [[], [0, 0]])
+def test_direct_rust_zero_warmup_keeps_automatic_non_rms_budget(side, metadata):
+    from backtest import build_backtest_payload, execute_backtest
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    for pside in ("long", "short"):
+        cfg["bot"][pside]["forager"].update(volume_ema_span_1m=30.0, unilateralness_ema_span_1m=1.0)
+        cfg["bot"][pside]["strategy"]["ema_anchor"]["offset_volatility_ema_span_1h"] = 0.1
+        cfg["bot"][pside]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    hlcvs, markets, btc, timestamps = _synthetic_inputs()
+    payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
+    # Direct Rust callers use zero to request automatic EMA warmup, even when
+    # Python normally provides an explicitly calculated activation budget.
+    payload.backtest_params["global_warmup_bars"] = 0
+    payload.backtest_params["warmup_minutes"] = metadata
+    payload.backtest_params["trade_start_indices"] = metadata
+    baseline = execute_backtest(payload, cfg)
+    for pair in payload.bot_params_list:
+        pair[side]["entry_cooldown_weights_minutes"]["adverse_directionality"] = 10.0
+    actual = execute_backtest(payload, cfg)
+    assert len(actual[0]) > 0
+    assert min(int(row[0]) for row in actual[0]) == 32
+    np.testing.assert_array_equal(actual[0], baseline[0])
+    np.testing.assert_array_equal(actual[1], baseline[1])
+    assert actual[2] == baseline[2]
+
+
+@pytest.mark.parametrize("source,expected", [("activation", 1000), (None, 1000), ("history", 10)])
+@pytest.mark.parametrize("consumer", ["forager", "adverse_cooldown"])
+def test_rms_history_never_erases_stamped_or_untyped_activation(source, expected, consumer):
+    from backtest import build_backtest_payload
+    from optimization.warmup import stamp_warmup_metadata
+    from test_backtest_directional_eligibility import _ema_anchor_config, _synthetic_inputs
+
+    cfg = _ema_anchor_config(True)
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 60.0
+    if consumer == "forager":
+        cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+    else:
+        cfg["bot"]["long"]["entry_cooldown"].update(max_duration_minutes=60.0)
+        cfg["bot"]["long"]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = 10.0
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["backtest"]["coins"] = {"binance": ["LONGCOIN", "SHORTCOIN"]}
+    h, markets, b, timestamps = _synthetic_inputs()
+    hlcvs = np.tile(h, (25, 1, 1))
+    btc = np.full(len(hlcvs), b[0])
+    timestamps = timestamps[0] + np.arange(len(hlcvs)) * 60000
+    for coin in ("LONGCOIN", "SHORTCOIN"):
+        markets[coin]["last_valid_index"] = len(hlcvs)-1
+    stamp_warmup_metadata(markets, ["LONGCOIN", "SHORTCOIN"], {"__default__": 1000})
+    for coin in ("LONGCOIN", "SHORTCOIN"):
+        if source is None:
+            del markets[coin]["warmup_minutes_source"]
+        elif source == "history":
+            markets[coin].update(warmup_minutes_source="history", warmup_minutes=1201)
+    payload = build_backtest_payload(hlcvs, markets, cfg, "binance", btc, timestamps)
+    assert payload.backtest_params["warmup_minutes"] == [expected, expected]
+    assert payload.backtest_params["trade_start_indices"] == [expected, expected]

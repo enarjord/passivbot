@@ -1878,6 +1878,7 @@ def _recompute_index_metadata(
         meta["last_valid_index"] = last_idx
         if warmup_map:
             warm_minutes = int(warmup_map.get(coin, default_warm))
+            meta["warmup_minutes_source"] = "history"
         else:
             cached_warm_minutes = meta.get("warmup_minutes")
             warm_minutes = int(cached_warm_minutes) if cached_warm_minutes is not None else 0

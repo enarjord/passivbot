@@ -429,6 +429,7 @@ def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> 
         else:
             trade_start = min(last_idx, first_idx + warmup_minutes)
         meta["warmup_minutes"] = warmup_minutes
+        meta["warmup_minutes_source"] = "activation"
         meta["trade_start_index"] = trade_start
         stamped[(warmup_minutes, trade_start)] += 1
     return stamped
