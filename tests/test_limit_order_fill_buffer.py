@@ -51,11 +51,20 @@ def test_resume_requires_same_fill_assumption():
     assert _resume_config_mismatches(prior, cfg) == []
 
 
-def test_gpu_rejects_nonzero_buffer_before_preparing_data():
+@pytest.mark.parametrize("buffer", [0.0, 0.0001, 0.0015])
+def test_gpu_accepts_valid_buffer_before_preparing_data(buffer):
     from optimization.backends.gpu_backend import _validate_gpu_static_scope
     cfg = get_template_config()
-    cfg['backtest']['limit_order_fill_buffer_pct'] = 0.0001
-    with pytest.raises(ValueError, match='limit_order_fill_buffer_pct.*CPU'):
+    cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
+    _validate_gpu_static_scope(cfg)
+
+
+@pytest.mark.parametrize("buffer", [-0.1, 1.0, float("nan"), float("inf"), True])
+def test_gpu_rejects_invalid_buffer_before_preparing_data(buffer):
+    from optimization.backends.gpu_backend import _validate_gpu_static_scope
+    cfg = get_template_config()
+    cfg['backtest']['limit_order_fill_buffer_pct'] = buffer
+    with pytest.raises(ValueError, match="limit_order_fill_buffer_pct"):
         _validate_gpu_static_scope(cfg)
 
 

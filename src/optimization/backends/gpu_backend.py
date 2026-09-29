@@ -22,6 +22,7 @@ import numpy as np
 from config.gpu import GPU_SCREENING_DEFAULTS, resolve_gpu_screening
 from config.metrics import resolve_metric_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
+from config.validate import validate_limit_order_fill_buffer_pct
 from limit_utils import compute_limit_violation
 from metrics_schema import flatten_metric_stats
 from optimization.backend_shared import (
@@ -406,6 +407,7 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
     ("backtest", "dynamic_wel_by_tradability"),
     ("backtest", "filter_by_min_effective_cost"),
     ("backtest", "liquidation_threshold"),
+    ("backtest", "limit_order_fill_buffer_pct"),
     ("backtest", "maker_fee_override"),
     ("backtest", "market_order_slippage_pct"),
     ("backtest", "starting_balance"),
@@ -424,11 +426,9 @@ GPU_SUPPORTED_SUITE_NON_BOT_OVERRIDE_PATHS = {
 def _validate_gpu_static_scope(config: dict) -> str:
     """Reject immutable GPU limitations without touching data or optional runtime state."""
 
-    if config.get("backtest", {}).get("limit_order_fill_buffer_pct", 0.0) != 0.0:
-        raise ValueError(
-            "GPU optimization does not support nonzero "
-            "backtest.limit_order_fill_buffer_pct; use the CPU backend"
-        )
+    validate_limit_order_fill_buffer_pct(
+        config.get("backtest", {}).get("limit_order_fill_buffer_pct", 0.0)
+    )
     strategy_kind = (
         str(config.get("live", {}).get("strategy_kind", "")).strip().lower()
     )
