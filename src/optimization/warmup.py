@@ -362,6 +362,8 @@ def build_optimizer_data_config(config: dict) -> dict:
     if not boundary_configs:
         return deepcopy(config)
     data_config = deepcopy(config)
+    # Dataset sizing must see runtime pins already applied, just as candidates do.
+    _apply_config_overrides(data_config, config.get("optimize", {}).get("fixed_runtime_overrides", {}))
     for pside in ("long", "short"):
         source = next(
             (

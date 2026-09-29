@@ -200,6 +200,38 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
     return n_returns if for_trade_activation else n_returns + 1
 
 
+def _rms_history_configs(config, bounds):
+    """Yield effective RMS values and only bounds not superseded by pins."""
+    from config.param_paths import require_existing_config_path
+    from optimization.config_adapter import resolve_optimization_bound_path
+    from optimization.fine_tune_anchors import get_anchor_plan
+    from optimization.warmup import _build_optimizer_boundary_configs, _try_get_path
+
+    if get_anchor_plan(config) is not None:
+        # Each anchor supplies its own fixed values. Evaluate finalized corners
+        # independently rather than combining pins from different anchors.
+        for candidate in _build_optimizer_boundary_configs(config, rms_consumer_corner=True):
+            yield candidate, {}
+        return
+    pins = config.get("optimize", {}).get("fixed_runtime_overrides", {}) or {}
+    fixed_keys = set(config.get("_optimizer_anchor", {}).get("fixed_keys", []))
+    if not pins and not fixed_keys:
+        yield config, bounds
+        return
+    # Only materialized pins supersede bounds. A standalone backtest may keep
+    # optimizer overrides which differ from the bot values it actually runs.
+    pinned_paths = {
+        tuple(path) for key, value in pins.items()
+        if _try_get_path(config, path := require_existing_config_path(config, key)) == value
+    }
+    effective_bounds = {
+        key: value for key, value in bounds.items()
+        if key not in fixed_keys
+        and tuple(resolve_optimization_bound_path(config, key) or ()) not in pinned_paths
+    }
+    yield config, effective_bounds
+
+
 def compute_backtest_warmup_minutes(
     config: dict, *, for_trade_activation: bool = False, include_rms: bool = True
 ) -> int:
@@ -306,9 +338,12 @@ def compute_backtest_warmup_minutes(
             max(
                 (
                     _rms_warmup_minutes(
-                        params, side, bounds=bounds, for_trade_activation=for_trade_activation
+                        params, side, bounds=rms_bounds, for_trade_activation=for_trade_activation
                     )
-                    for _, long, short, *_ in _iter_param_sets(config)
+                    for rms_config, rms_bounds in (
+                        [(config, {})] if for_trade_activation else _rms_history_configs(config, bounds)
+                    )
+                    for _, long, short, *_ in _iter_param_sets(rms_config)
                     for side, params in (("long", long), ("short", short))
                 ),
                 default=0,

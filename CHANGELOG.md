@@ -16,6 +16,8 @@ since the latest release tag; these features may already be available when insta
   ranking, and scope unavailable inputs to their consumers so closes remain independent.
   Constant clamps need no modifier inputs. Validate optimizer bounds, coin overrides and candle
   intervals against reachable consumers while keeping RMS history separate from shared activation.
+  Size history from eligible cooldown consumers and finalized optimizer pins; defer cooldown inputs
+  that become stale during loading.
   Document configuration, benchmarks, effective cooldown inspection, and unchanged partial-fill semantics.
 
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.

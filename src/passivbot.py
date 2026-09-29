@@ -1976,6 +1976,7 @@ class Passivbot:
                 for symbol in symbols
                 for pside in ("long", "short")
                 if self.is_pside_enabled(pside)
+                and (symbol is None or self.is_approved(pside, symbol))
             ),
             default=0.0,
         )

@@ -44,6 +44,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
     result = {symbol: {} for symbol in symbols}
     ranking = {symbol: {} for symbol in symbols}
     required = {}
+    source_ends = {}
     ages = forager_age_by_symbol or {}
     scoring_sides = {
         side for side in ("long", "short")
@@ -100,6 +101,7 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             value = passivbot_rust.calc_signed_unilateralness(
                 window["c"].astype(float).tolist(), span
             )
+            source_ends[symbol] = int(window["ts"][-1])
             ranking[symbol][span] = value
             if window["ts"][-1] == end:
                 result[symbol][span] = value
@@ -112,6 +114,14 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
                     allowed_age,
                 )
         await asyncio.sleep(0)
+    final_end = int(bot.get_exchange_time()) // 60_000 * 60_000 - 60_000
+    if final_end != end:
+        # All symbols were read against one cutoff. A rollover during a slow
+        # load invalidates current cooldown inputs; do not privilege later fetches.
+        for symbol in symbols:
+            result[symbol].clear()
+            if final_end - source_ends.get(symbol, end) > max(0, int(ages.get(symbol, 0))):
+                ranking[symbol].clear()
     missing = {}
     for symbol, (current_spans, forager_spans) in required.items():
         unavailable = {

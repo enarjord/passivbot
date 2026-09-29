@@ -646,6 +646,7 @@ def test_disabled_side_cooldown_does_not_extend_fill_coverage(side, override):
     dormant["max_duration_minutes"] = 7 * 24 * 60
     dormant["weights_minutes"]["exposure_ratio"] = 10.0
     bot.coin_overrides = {}
+    bot.is_approved = lambda pside, symbol: True
     if override:
         bot.coin_overrides = {
             "BTC": {"bot": {side: {"entry_cooldown": {"max_duration_minutes": 14 * 24 * 60}}}}
@@ -1140,3 +1141,80 @@ def test_late_validity_end_rejects_held_valuation_before_optional_rms_ranking(si
     # must remain fatal with both disabled and enabled RMS scoring.
     with pytest.raises(ValueError, match="missing held-position valuation candle: coin LONGCOIN index 0 candle 31"):
         execute_backtest(payload, cfg)
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_unapproved_override_cooldown_does_not_extend_fill_coverage(side):
+    from passivbot import Passivbot
+    from config.runtime_compile import compile_runtime_config
+
+    bot = Passivbot.__new__(Passivbot)
+    cfg = prepare_config(get_template_config(), verbose=False)
+    for pside in ("long", "short"):
+        cfg["bot"][pside]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(pside == side))
+        cfg["bot"][pside]["entry_cooldown"]["base_duration_minutes"] = 5.0
+    bot.config = compile_runtime_config(cfg, runtime="live")
+    bot.coin_overrides = {"BTC": {"bot": {side: {"entry_cooldown": {
+        "max_duration_minutes": 14400.0,
+        "weights_minutes": {"exposure_ratio": 10.0},
+    }}}}}
+    approved = set()
+    bot.is_approved = lambda pside, symbol: (pside, symbol) in approved
+    bot._equity_hard_stop_enabled = lambda: False
+    bot._live_risk_uses_authoritative_pnl = lambda: False
+    now = 30 * 24 * 60 * 60000
+    assert bot._max_configured_entry_cooldown_minutes() == 5.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 6 * 60000)
+    approved.add((side, "BTC"))
+    assert bot._max_configured_entry_cooldown_minutes() == 14400.0
+    assert bot._required_fill_history_start_ms(now, pnl_start_ms=None) == (True, now - 14401 * 60000)
+    approved.clear()
+    assert bot._max_configured_entry_cooldown_minutes() == 5.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("age_minutes", [0, 1, 2])
+async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_minutes):
+    from live.unilateralness import load
+    from candlestick_manager import CANDLE_DTYPE
+
+    now = 30 * 60000 + 59999
+    roll = True
+    calls = []
+
+    async def candles(symbol, **kwargs):
+        nonlocal now
+        calls.append(kwargs["end_ts"])
+        rows = np.zeros(21, dtype=CANDLE_DTYPE)
+        rows["ts"] = kwargs["end_ts"] - np.arange(20, -1, -1) * 60000
+        rows["c"] = np.exp(np.arange(21) * 0.001)
+        if roll:
+            now += 60000
+        return rows
+
+    bot = SimpleNamespace(
+        cm=SimpleNamespace(get_candles=candles),
+        get_exchange_time=lambda: now,
+        is_pside_enabled=lambda pside: pside == side,
+        is_forager_mode=lambda pside: True,
+        bot_value=lambda pside, key: {"unilateralness": 1.0} if key == "forager_score_weights" else 1.0,
+        bp=lambda pside, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
+    )
+    symbols = ["BTC", "ETH"]
+    ages = dict.fromkeys(symbols, age_minutes * 60000)
+    current, ranking, missing = await load(bot, symbols, set(), ages)
+    assert len(set(calls)) == 1
+    assert current == {symbol: {} for symbol in symbols}
+    for symbol in symbols:
+        assert bool(ranking[symbol]) == (age_minutes == 2)
+        assert missing[symbol] == {"current": [1.0], "forager": [] if age_minutes == 2 else [1.0]}
+    roll = False
+    current, ranking, missing = await load(bot, symbols, set(), ages)
+    assert not missing
+    assert current == ranking
+    assert all(current[symbol][1.0] > 0.99 for symbol in symbols)

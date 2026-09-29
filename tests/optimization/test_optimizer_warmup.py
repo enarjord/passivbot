@@ -255,3 +255,72 @@ def test_optimizer_rms_history_is_not_a_shared_activation_delay(consumer):
         standalone = run_backtest(hlcvs, unstamped_markets, cfg, "binance", btc, timestamps)
         np.testing.assert_array_equal(fills, standalone[0])
         assert len(fills) > 0
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("consumer", ["forager", "adverse"])
+@pytest.mark.parametrize("pin", ["weight", "span"])
+@pytest.mark.parametrize("pin_source", ["runtime", "anchor"])
+def test_rms_dataset_history_respects_pins(side, consumer, pin, pin_source):
+    from copy import deepcopy
+    from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY
+    from optimization.warmup import _build_optimizer_boundary_configs
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["optimize"]["bounds"] = {}
+    cfg["bot"][side]["risk"].update(n_positions=1, total_wallet_exposure_limit=1.0)
+    cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    weight_path = (["forager", "score_weights", "unilateralness"] if consumer == "forager"
+                   else ["entry_cooldown", "weights_minutes", "adverse_directionality"])
+    weight_key = ("forager_score_weights_unilateralness" if consumer == "forager"
+                  else "entry_cooldown_weights_minutes_adverse_directionality")
+    span_path = ["forager", "unilateralness_ema_span_1m"]
+    bounds = cfg["optimize"]["bounds"]
+    for pside in ("long", "short"):
+        bounds[f"{pside}_n_positions"] = [1.0]
+        bounds[f"{pside}_total_wallet_exposure_limit"] = [float(pside == side)]
+    bounds[f"{side}_{weight_key}"] = [0.0, 1.0]
+    bounds[f"{side}_unilateralness_ema_span_1m"] = [1.0, 100000.0]
+    key = f"{side}_{weight_key}" if pin == "weight" else f"{side}_unilateralness_ema_span_1m"
+    path = ["bot", side, *(weight_path if pin == "weight" else span_path)]
+    value = 0.0 if pin == "weight" else 2.5
+    expected = 0 if pin == "weight" else 51
+    if pin_source == "runtime":
+        cfg["optimize"]["fixed_runtime_overrides"] = {".".join(path): value}
+    else:
+        other_key = f"{side}_unilateralness_ema_span_1m" if pin == "weight" else f"{side}_{weight_key}"
+        other_path = ["bot", side, *(span_path if pin == "weight" else weight_path)]
+        cfg[ANCHOR_PLAN_KEY] = {
+            "anchors": [{"source": "anchor.json", "fixed_values": [{"key": key, "path": path, "value": value}]}],
+            "fixed_keys": [key], "tunable_keys": [other_key], "key_paths": [other_path],
+        }
+    before = deepcopy(cfg)
+    # Exercise the config passed to dataset preparation as well as finalized candidates.
+    data_cfg = build_optimizer_data_config(cfg)
+    assert compute_backtest_warmup_minutes(data_cfg) == expected
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == expected
+    for candidate in _build_optimizer_boundary_configs(cfg, rms_consumer_corner=True):
+        assert compute_backtest_warmup_minutes(candidate) == expected
+    assert cfg == before
+    if pin_source == "runtime":
+        cfg["optimize"]["fixed_runtime_overrides"] = {}
+    else:
+        cfg.pop(ANCHOR_PLAN_KEY)
+    assert compute_backtest_warmup_minutes(build_optimizer_data_config(cfg)) == 2000001
+
+
+def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["optimize"]["bounds"] = {}
+    cfg["bot"]["long"]["forager"]["score_weights"]["unilateralness"] = 1.0
+    cfg["bot"]["long"]["forager"]["unilateralness_ema_span_1m"] = 2.5
+    cfg["optimize"]["fixed_runtime_overrides"] = {
+        "bot.long.forager.score_weights.unilateralness": 0.0,
+        "bot.long.forager.unilateralness_ema_span_1m": 1.0,
+    }
+    assert compute_backtest_warmup_minutes(cfg) == 51
