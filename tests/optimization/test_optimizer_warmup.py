@@ -324,3 +324,39 @@ def test_standalone_rms_history_does_not_apply_optimizer_only_pin():
         "bot.long.forager.unilateralness_ema_span_1m": 1.0,
     }
     assert compute_backtest_warmup_minutes(cfg) == 51
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("searched", [False, True])
+def test_rms_history_uses_selected_coin_overrides_not_unused_global(side, searched):
+    from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+
+    cfg = get_template_config()
+    cfg["live"]["warmup_ratio"] = 0.0
+    cfg["live"]["approved_coins"] = {s: ["BTC", "ETH"] for s in ("long", "short")}
+    cfg["backtest"]["coins"] = {"binance": ["BTC", "ETH"]}
+    cfg["optimize"]["bounds"] = {}
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(s == side))
+        cfg["optimize"]["bounds"].update({f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 100000.0
+    cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not searched)
+    if searched:
+        cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+    cfg["coin_overrides"] = {coin: {"bot": {side: {"entry_cooldown": {
+        "weights_minutes": {"adverse_directionality": 0.0}, "max_duration_minutes": None,
+    }}}} for coin in ("BTC", "ETH")}
+    # An unselected override with an active inherited policy must not inflate history either.
+    cfg["coin_overrides"]["SOL"] = {"bot": {side: {"entry_cooldown": {"base_duration_minutes": 0.0}}}}
+    assert compute_backtest_warmup_minutes(cfg) == 0
+    assert max(compute_per_coin_warmup_minutes(cfg).values()) == 0
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
+    # An inheriting selected coin makes the global policy reachable again.
+    cfg["backtest"]["coins"]["binance"].append("XRP")
+    assert compute_backtest_warmup_minutes(cfg) == 2000001
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == 2000001
+    # Without a resolved selection, retain the conservative global history.
+    cfg["backtest"]["coins"] = {}
+    cfg["live"]["approved_coins"] = {"long": [], "short": []}
+    assert compute_backtest_warmup_minutes(cfg) == 2000001

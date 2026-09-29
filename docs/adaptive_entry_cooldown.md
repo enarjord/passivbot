@@ -121,7 +121,10 @@ modifier pins with a null ceiling. Nested adaptive bounds may be mixed with lega
 bounds. The CLI accepts `null` to clear a ceiling; omitting the option keeps its current value.
 Dormant RMS weights on a statically disabled side do not require history or one-minute
 candles. After selecting a dataset, optimizer preflight checks reachable RMS consumers
-against finalized per-coin eligibility and overrides. Entry-ineligible sides neither
+against finalized per-coin eligibility and overrides. When selected coins are known,
+RMS history follows their effective policies; an unused global policy or unselected
+override does not extend it. Inheriting coins and unresolved selections retain the
+default requirement. Entry-ineligible sides neither
 restrict the candle interval nor extend RMS trade activation.
 Live cooldown fill-history coverage includes only globally enabled sides and approved
 coin overrides, retaining the default horizon for inheriting symbols.
@@ -143,7 +146,10 @@ per candle and memory proportional to the window, per enabled coin/span. Both si
 share a tracker when their spans match. This preserves finite-window expiry and
 exact zero for an entirely flat window without subtracting nearly equal moments.
 Live reconstructs each new completed window with a full replay and reuses complete
-results at the same cutoff. Canonical candle repairs and gap evidence invalidate
+results at the same cutoff. Cache-only Forager candidates may also reuse an older
+complete window within their age allowance; its original source timestamp is retained.
+Cooldown still requires the current completed window, and remote-enabled consumers
+can refresh stale history. Canonical candle repairs and gap evidence invalidate
 that cache; incomplete windows remain retryable. Cache loss recomputes the same score
 from candles, so neither live nor CPU cache state is restart state.
 

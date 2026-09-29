@@ -1311,3 +1311,100 @@ async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monke
     await load(bot, ["BTC"], set())
     await load(bot, [], set())
     assert list(cm._ema_cache["BTC"]) == [("close", 3.0, "60000")]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("modifier", ["exposure_ratio", "adverse_directionality"])
+def test_coin_zero_modifier_shadows_positive_fixed_runtime_pin(side, modifier):
+    from config.overrides import parse_overrides
+
+    cfg = get_template_config()
+    cfg["bot"][side]["entry_cooldown"]["max_duration_minutes"] = 60.0
+    path = f"bot.{side}.entry_cooldown.weights_minutes.{modifier}"
+    cfg["optimize"]["fixed_runtime_overrides"] = {path: 10.0}
+    cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_{modifier}"] = [0.0, 10.0]
+    cfg = prepare_config(cfg, verbose=False)
+    cfg["coin_overrides"] = {"BTC": {"bot": {side: {"entry_cooldown": {
+        "max_duration_minutes": None, "weights_minutes": {modifier: 0.0},
+    }}}}}
+    parsed = parse_overrides(cfg, verbose=False)
+    assert parsed["optimize"]["fixed_runtime_overrides"][path] == 10.0
+    assert parsed["coin_overrides"]["BTC"]["bot"][side]["entry_cooldown"]["max_duration_minutes"] is None
+    cfg["coin_overrides"]["BTC"]["bot"][side]["entry_cooldown"]["weights_minutes"][modifier] = 1.0
+    with pytest.raises(ValueError, match="ceiling|finite|max_duration"):
+        parse_overrides(cfg, verbose=False)
+
+
+@pytest.mark.asyncio
+async def test_stale_rms_ranking_cache_keeps_actual_age_and_refresh_policy():
+    from live.unilateralness import load
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager
+
+    rows = np.zeros(21, dtype=CANDLE_DTYPE)
+    rows["ts"] = np.arange(21) * 60000
+    rows["c"] = np.exp(np.arange(21) * .001)
+    calls = 0
+    now = 22 * 60000
+
+    async def candles(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return rows.copy()
+
+    cm = SimpleNamespace(_ema_cache={}, get_candles=candles)
+    bot = SimpleNamespace(
+        cm=cm, get_exchange_time=lambda: now,
+        is_pside_enabled=lambda side: side == "long", is_forager_mode=lambda side: True,
+        bot_value=lambda side, key: {"unilateralness": 1.0} if key == "forager_score_weights" else 1.0,
+        bp=lambda side, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
+    )
+    first = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    assert first[0] == {"BTC": {}} and first[1]["BTC"][1.0] > .99
+    assert first[2] == {"BTC": {"current": [1.0], "forager": []}}
+    for _ in range(10):
+        assert await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000}) == first
+    assert calls == 1
+    # Remote-enabled consumers still get a chance to refresh their stale history.
+    assert await load(bot, ["BTC"], set(), {"BTC": 120000}) == first
+    assert calls == 2
+    CandlestickManager._invalidate_ema_cache(cm, "BTC", timeframe="1m")
+    rows["c"][-1] *= .9
+    changed = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    assert changed != first and calls == 3
+    now += 60000
+    assert await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000}) == changed
+    assert calls == 3
+    # Both elapsed time and a tightened age budget reject the cached observation.
+    assert (await load(bot, ["BTC"], {"BTC"}, {"BTC": 60000}))[1] == {"BTC": {}}
+    now += 60000
+    assert (await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000}))[1] == {"BTC": {}}
+    rows["ts"] += 3 * 60000
+    recovered = await load(bot, ["BTC"], {"BTC"}, {"BTC": 120000})
+    assert recovered[0] == recovered[1] and not recovered[2]
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("consumer", ["forager", "adverse"])
+def test_direct_rust_orders_enforce_supported_rms_span(side, consumer):
+    import passivbot_rust as pbr
+
+    bp = {"unilateralness_ema_span_1m": 100000.0, "n_positions": 1,
+          "entry_cooldown_max_duration_minutes": 60.0,
+          "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": float(consumer == "adverse")}}
+    if consumer == "forager":
+        bp["forager_score_weights"] = {"volume": 0.0, "volatility": 0.0, "ema_readiness": 0.0, "unilateralness": 1.0}
+    inp = make_input(balance=1000.0, global_bp=bot_params_pair(**{f"{side}_overrides": bp}),
+                     symbols=[make_symbol(i, bid=100.0, ask=100.0, **{f"{side}_bp": bp}) for i in range(2)])
+    for symbol in inp["symbols"]:
+        symbol["emas"]["m1"]["signed_unilateralness"] = [[100000.0, 0.5]]
+    compute(pbr, inp)
+    inp["global"]["global_bot_params"][side]["unilateralness_ema_span_1m"] = 100000.01
+    for symbol in inp["symbols"]:
+        symbol[side]["bot_params"]["unilateralness_ema_span_1m"] = 100000.01
+        symbol["emas"]["m1"]["signed_unilateralness"] = [[100000.01, 0.5]]
+    with pytest.raises(ValueError, match="unilateralness.*100000"):
+        compute(pbr, inp)

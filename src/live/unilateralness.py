@@ -82,13 +82,24 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
         if any(not math.isfinite(s) or not 1 <= s <= 100_000 for s in spans):
             raise ValueError("unilateralness EMA span must be between 1 and 100000")
         keys = {span: ("signed_unilateralness", span, "60000") for span in spans}
-        if all(key in cached and cached[key][1] == end for key in keys.values()):
-            result[symbol] = {span: cached[key][0] for span, key in keys.items()}
-            ranking[symbol] = dict(result[symbol])
-            source_ends[symbol] = end
-            continue
-        count = math.ceil(max(spans) * 20.0) + 1
         allowed_age = max(0, int(ages.get(symbol, 0)))
+        if all(
+            key in cached and (
+                cached[key][1] == end
+                or (symbol in cache_only_symbols and 0 <= end - cached[key][1] <= allowed_age)
+            )
+            for key in keys.values()
+        ):
+            ranking[symbol] = {span: cached[key][0] for span, key in keys.items()}
+            result[symbol] = {
+                span: cached[key][0] for span, key in keys.items() if cached[key][1] == end
+            }
+            source_ends[symbol] = min(cached[key][1] for key in keys.values())
+            continue
+        # A failed refresh must not leave an older score available on a later load.
+        for key in keys.values():
+            cached.pop(key, None)
+        count = math.ceil(max(spans) * 20.0) + 1
         start = end - (count - 1) * 60_000 - math.ceil(allowed_age / 60_000) * 60_000
         try:
             rows = await bot.cm.get_candles(
@@ -122,14 +133,14 @@ async def load(bot, symbols, cache_only_symbols, forager_age_by_symbol=None):
             )
             source_ends[symbol] = int(window["ts"][-1])
             ranking[symbol][span] = value
+            if replay_cache is not None:
+                # Fetching may have replaced the symbol's cache. Store the actual
+                # source cutoff; only cache-only ranking can reuse an older window.
+                replay_cache.setdefault(symbol, {})[keys[span]] = (
+                    value, source_ends[symbol], int(bot.get_exchange_time())
+                )
             if window["ts"][-1] == end:
                 result[symbol][span] = value
-                if replay_cache is not None:
-                    # Fetching may have invalidated/replaced the symbol's cache.
-                    # Cache only complete current windows, never missing/stale data.
-                    replay_cache.setdefault(symbol, {})[keys[span]] = (
-                        value, end, int(bot.get_exchange_time())
-                    )
             else:
                 logging.debug(
                     "[ema] cached unilateralness | symbol=%s span=%s source=completed_candles age_ms=%d max_age_ms=%d",

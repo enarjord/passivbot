@@ -200,6 +200,46 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
     return n_returns if for_trade_activation else n_returns + 1
 
 
+def _rms_param_sets(config, bounds, *, param_sets=None):
+    """Use selected coin policies when known; retain defaults for inheriting coins."""
+    from backtest_universe import normalize_backtest_coin
+
+    coins = config.get("backtest", {}).get("coins", {})
+    groups = list(coins.values()) if isinstance(coins, dict) else [coins]
+    selected = {
+        normalize_backtest_coin(coin) for group in groups
+        if isinstance(group, (list, tuple, set)) for coin in group
+    }
+    if not selected:
+        approved = config.get("live", {}).get("approved_coins", {})
+        if isinstance(approved, dict):
+            selected = {
+                normalize_backtest_coin(coin) for group in approved.values()
+                if isinstance(group, (list, tuple, set)) for coin in group
+            }
+    overrides = config.get("coin_overrides", {})
+    for coin, long, short, *_ in (param_sets if param_sets is not None else _iter_param_sets(config)):
+        if selected and (
+            (coin == "__default__" and selected.issubset(overrides))
+            or (coin != "__default__" and coin not in selected)
+        ):
+            continue
+        # A coin's cooldown leaves win over global search dimensions too.
+        effective_bounds = dict(bounds)
+        for side in ("long", "short"):
+            patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
+            for key in list(effective_bounds):
+                prefix = f"{side}_"
+                if not key.startswith(prefix):
+                    continue
+                name = key[len(prefix):]
+                weights = "entry_cooldown_weights_minutes_"
+                if (name in patch or (name.startswith(weights) and
+                        name[len(weights):] in patch.get("entry_cooldown_weights_minutes", {}))):
+                    del effective_bounds[key]
+        yield coin, long, short, effective_bounds
+
+
 def _rms_history_configs(config, bounds):
     """Yield effective RMS values and only bounds not superseded by pins."""
     from config.param_paths import require_existing_config_path
@@ -338,12 +378,12 @@ def compute_backtest_warmup_minutes(
             max(
                 (
                     _rms_warmup_minutes(
-                        params, side, bounds=rms_bounds, for_trade_activation=for_trade_activation
+                        params, side, bounds=effective_bounds, for_trade_activation=for_trade_activation
                     )
                     for rms_config, rms_bounds in (
                         [(config, {})] if for_trade_activation else _rms_history_configs(config, bounds)
                     )
-                    for _, long, short, *_ in _iter_param_sets(rms_config)
+                    for _, long, short, effective_bounds in _rms_param_sets(rms_config, rms_bounds)
                     for side, params in (("long", long), ("short", short))
                 ),
                 default=0,
@@ -361,6 +401,8 @@ def compute_per_coin_warmup_minutes(
     )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
+    param_sets = list(_iter_param_sets(config))
+    rms_coins = {coin for coin, *_ in _rms_param_sets(config, {}, param_sets=param_sets)} if include_rms else set()
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
@@ -369,7 +411,7 @@ def compute_per_coin_warmup_minutes(
         "forager_volume_ema_span_1m",
         "forager_volatility_ema_span_1m",
     ]
-    for coin, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
+    for coin, long_params, short_params, long_strategy, short_strategy in param_sets:
         max_minutes = 0.0
         side_sets = (
             ("long", long_params, long_strategy),
@@ -401,7 +443,7 @@ def compute_per_coin_warmup_minutes(
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
-        if include_rms:
+        if include_rms and coin in rms_coins:
             for side, params in (("long", long_params), ("short", short_params)):
                 warmup_minutes = max(
                     warmup_minutes,
