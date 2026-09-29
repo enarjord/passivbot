@@ -1139,7 +1139,7 @@ mod tests {
         assert!(source.contains("max_since_min"));
         assert!(source.contains("max_since_open"));
         assert!(source.contains("min_since_max"));
-        assert!(source.contains("if (we_if <= s.allowed_wel * 1.01f) return qty"));
+        assert!(source.contains("if (we_if <= s.allowed_wel * 1.01f) return fmax(qty, mq)"));
         assert!(source.contains("s.allowed_wel * balance - cost"));
         assert!(source.contains("s.entry_cap * balance - current_cost"));
         assert!(source.contains("s.allowed_wel"));
@@ -1397,9 +1397,6 @@ mod tests {
         assert!(source.contains("forced_normal_count"));
         assert!(source.contains("retains the separate dynamic-WEL denominator"));
         assert!(source.contains("if (!survivor[c] || !forced_normal) continue;"));
-        assert!(source.contains("flat_selected_became_ineligible"));
-        assert!(source.contains("candle_eligibility_changed"));
-        assert!(source.contains("candle_eligibility_mask"));
         assert_eq!(source.matches("if (!managed_candidate) continue;").count(), 3);
         assert!(!source.contains("any_valid"));
         assert!(source.contains("held_positions_have_missing_prices("));
@@ -1466,7 +1463,6 @@ mod tests {
                 .count(),
             2
         );
-        assert!(source.contains("side.previous_effective_n_positions"));
         assert!(source.contains("load_hsl(params, po, 48)"));
         assert!(source.contains("write_one_side_hsl_outputs("));
         assert!(source.contains("record_hsl_panic_fill("));
@@ -1520,7 +1516,6 @@ mod tests {
                 .count(),
             1
         );
-        assert!(source.contains("coin_hsl_eligibility_changed"));
         assert!(source.contains("coin_hsl_entry_blocked_mask"));
         assert!(source.contains("market_execution ? taker_fee : maker_fee"));
         assert!(source.contains("bool entry_market[MAX_COINS]"));

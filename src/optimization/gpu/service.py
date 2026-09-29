@@ -994,6 +994,11 @@ def _directional_coin_hsl_lookback_bars(
 
     if not hsl_enabled or str(signal_mode).strip().lower() != "coin":
         return 0
+    return _legacy_pnl_lookback_bars(backtest_params)
+
+
+def _legacy_pnl_lookback_bars(backtest_params: dict) -> int:
+    """Rust's finite fill-PnL lookback in candle bars; zero means all history."""
     lookback_days = float(backtest_params.get("pnls_max_lookback_days", -1.0))
     if lookback_days < 0.0:
         return 0
@@ -3489,6 +3494,18 @@ class MpsMulticoinProxy:
             "equity_balance_diff_enabled": self.equity_balance_diff_enabled,
             "entry_interval_enabled": self.entry_interval_enabled,
         }
+        if self.strategy_kind == "trailing_martingale":
+            # The payload includes effective per-coin flags after overrides.
+            # Numeric unstuck genes may vary, so retain history whenever an
+            # enabled side/coin can consume it, even if its base allowance is zero.
+            unstuck_enabled = any(
+                bool(item[side]["unstuck_enabled"])
+                for item in projected
+                for side in self.sides
+            )
+            common_runner_kwargs["unstuck_pnl_lookback_bars"] = (
+                _legacy_pnl_lookback_bars(backtest_params) if unstuck_enabled else 0
+            )
         if self.hsl_engine == "revised":
             common_runner_kwargs.update(hsl_engine="revised",
                 pnl_lookback_bars=_revised_hsl_lookback_bars(backtest_params, hsl_enabled=bool(hsl_enabled_sides)))
