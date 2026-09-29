@@ -23,7 +23,9 @@ since the latest release tag; these features may already be available when insta
   that become stale during loading. Reuse live RMS replay within a completed minute, invalidating
   results on candle repairs or gap evidence; cache-only ranking uses the latest complete
   contiguous window within its original source-age allowance, including before an internal gap.
-  Document configuration, benchmarks, effective cooldown inspection, and unchanged partial-fill semantics.
+  Report enabled unilateralness ranking totals from Rust diagnostics in the monitor.
+  Document all four scoring weights, configuration, benchmarks, effective cooldown inspection,
+  and unchanged partial-fill semantics.
 
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 

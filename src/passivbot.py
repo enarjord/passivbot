@@ -17391,6 +17391,7 @@ class Passivbot:
         self._orchestrator_ema_bundle_completed = False
         self._orchestrator_ema_bundle_symbols = set()
         self._orchestrator_forager_m1_log_range_emas = {}
+        self._monitor_runtime_forager_hints = {}
         self._orchestrator_signed_unilateralness = {}
         self._orchestrator_forager_signed_unilateralness = {}
         self._orchestrator_unilateralness_unavailable = {}
@@ -20175,6 +20176,7 @@ class Passivbot:
                 h1_log_range_emas=h1_log_range_emas,
                 idx_to_symbol=idx_to_symbol,
                 orders=orders,
+                diagnostics=diagnostics,
             )
 
         ideal_orders: dict[str, list] = {}
