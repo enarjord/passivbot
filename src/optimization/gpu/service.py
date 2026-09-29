@@ -13,6 +13,7 @@ import numpy as np
 from config.shared_bot import flatten_shared_bot_side
 from optimizer_overrides import unstuck_ema_spans_coupled
 from optimization.gpu.runtime import checkpoint_runtime, gpu_device, synchronize
+from optimization.gpu.autotune import proxy_batches
 from optimization.gpu.metric_registry import (
     BTC_INTRADAY_RISK_METRICS,
     ENTRY_INTERVAL_METRICS,
@@ -156,12 +157,16 @@ _GPU_PROFILE_RUNNER_TIMING_KEYS = (
 _GPU_DISPATCH_PROGRESS_INTERVAL_SECONDS = 30.0
 
 
-def _new_gpu_dispatch_progress(candidate_count: int, dispatch_batch_size: int):
-    if candidate_count <= dispatch_batch_size:
+def _new_gpu_dispatch_progress(
+    candidate_count: int, dispatch_batch_size: int, *, adaptive=False
+):
+    if candidate_count <= dispatch_batch_size and not adaptive:
         return None
     started = time.monotonic()
     return {
         "candidate_count": int(candidate_count),
+        "adaptive": adaptive,
+        "completed_chunks": 0,
         "dispatch_batch_size": int(dispatch_batch_size),
         "started": started,
         "last_log": started,
@@ -180,6 +185,7 @@ def _update_gpu_dispatch_progress(
 ) -> None:
     if progress is None:
         return
+    progress["completed_chunks"] += 1
     now = time.monotonic()
     elapsed = now - float(progress["started"])
     completed_candidates = min(
@@ -199,12 +205,16 @@ def _update_gpu_dispatch_progress(
         return
     rate = completed_candidates / max(elapsed, 1.0e-12)
     remaining = int(progress["candidate_count"]) - completed_candidates
+    chunk_label = (
+        str(progress["completed_chunks"])
+        if progress["adaptive"]
+        else f"{completed_chunks}/{progress['total_chunks']}"
+    )
     logging.info(
-        "GPU proxy dispatch progress | strategy=%s chunks=%d/%d "
+        "GPU proxy dispatch progress | strategy=%s chunks=%s "
         "candidates=%d/%d elapsed=%.1fs eta=%.1fs",
         strategy,
-        completed_chunks,
-        int(progress["total_chunks"]),
+        chunk_label,
         completed_candidates,
         int(progress["candidate_count"]),
         elapsed,
@@ -453,6 +463,7 @@ def _add_gpu_terminal_profile(
 
 
 def _finish_gpu_proxy_profile(profile: dict, started: float) -> dict:
+    profile["dispatch_chunk_count"] = len(profile["dispatch_chunk_wall_seconds"])
     profile["actual_dispatch_batch_sizes"] = list(
         profile["actual_dispatch_batch_sizes"]
     )
@@ -2378,14 +2389,17 @@ class MpsSingleCoinProxy:
         self.last_profile = {}
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
         progress = _new_gpu_dispatch_progress(
-            len(candidates), dispatch_batch_size
+            len(candidates),
+            dispatch_batch_size,
+            adaptive=getattr(self, "batch_tuner", None) is not None,
         )
-        for start in range(0, len(candidates), dispatch_batch_size):
+        for start, chunk in proxy_batches(
+            self, candidates, dispatch_batch_size, end_step=effective_end_step
+        ):
             chunk_profile_started = (
                 time.perf_counter() if profile is not None else 0.0
             )
             interrupt_check()
-            chunk = candidates[start : start + dispatch_batch_size]
             stage_started = (
                 time.perf_counter() if self.profile_enabled else 0.0
             )
@@ -3663,14 +3677,15 @@ class MpsMulticoinProxy:
         )
         interrupt_check = getattr(self, "interrupt_check", lambda: None)
         progress = _new_gpu_dispatch_progress(
-            len(candidates), dispatch_batch_size
+            len(candidates),
+            dispatch_batch_size,
+            adaptive=getattr(self, "batch_tuner", None) is not None,
         )
-        for start in range(0, len(candidates), dispatch_batch_size):
+        for start, chunk in proxy_batches(self, candidates, dispatch_batch_size):
             chunk_profile_started = (
                 time.perf_counter() if profile is not None else 0.0
             )
             interrupt_check()
-            chunk = candidates[start : start + dispatch_batch_size]
             stage_started = (
                 time.perf_counter() if self.profile_enabled else 0.0
             )

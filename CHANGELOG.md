@@ -6,6 +6,12 @@ since the latest release tag; these features may already be available when insta
 
 ## Unreleased
 
+- GPU optimization now tunes automatic candidate batch sizes during actual screening, using rolling
+  throughput evidence, bounded trials, memory headroom, and reusable local calibration records.
+  Numeric batch sizes remain fixed; `optimize.gpu.tuning_mode` supports `auto`, `refresh`, and `off`.
+  GPU population, batch, and dispatch-envelope settings accept `"auto"` alongside `null`.
+
+
 - Use configured BTC price sources for multi-exchange backtests and optimizations in both online and offline modes, retaining Binance priority when configured and Binance as the final fallback otherwise. This can change BTC-denominated results; offline runs no longer require unrelated Binance candles. Prepared caches are rebuilt for the new policy, and candidates lacking the full requested BTC history are skipped.
 
 - Record completed GPU optimizer CPU validations during the following GPU proxy pass and report exact progress immediately, while keeping resumable checkpoints at completed generation boundaries.
