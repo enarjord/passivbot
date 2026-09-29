@@ -3442,7 +3442,8 @@ async def test_missing_live_rms_does_not_authorize_unrelated_ema_omissions(monke
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("ranking", [False, True])
 @pytest.mark.parametrize("adverse", [False, True])
-async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, side, ranking, adverse):
+@pytest.mark.parametrize("approved", [False, True])
+async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, side, ranking, adverse, approved):
     import numpy as np
     from candlestick_manager import CANDLE_DTYPE
     from live import unilateralness
@@ -3451,6 +3452,8 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
     symbol = "BTC/USDT:USDT"
     bot = _BundleReproBot(symbol, "value")
     bot.is_pside_enabled = lambda pside: True
+    bot.is_approved = lambda pside, sym: approved
+    consumes_adverse = adverse and approved
     bot.is_forager_mode = lambda pside=None: ranking and pside in (None, side)
     bot.get_exchange_time = lambda: 21 * 60000
     original_bot_value, original_bp = bot.bot_value, bot.bp
@@ -3489,13 +3492,13 @@ async def test_live_bundle_loads_rms_only_for_possible_consumers(monkeypatch, si
         return rows
 
     bot.cm.get_candles = candles
-    if not ranking and not adverse:
+    if not ranking and not consumes_adverse:
         async def unexpected_load(*args, **kwargs):
             pytest.fail("unused score-only RMS must skip the loader entirely")
         monkeypatch.setattr(unilateralness, "load", unexpected_load)
     await Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
-    assert len(calls) == int(ranking or adverse)
-    if ranking or adverse:
+    assert len(calls) == int(ranking or consumes_adverse)
+    if ranking or consumes_adverse:
         assert bot._orchestrator_signed_unilateralness == {symbol: {1.0: 0.0}}
     else:
         assert bot._orchestrator_signed_unilateralness == {}

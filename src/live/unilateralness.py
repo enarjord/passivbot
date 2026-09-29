@@ -29,7 +29,7 @@ def scoring_enabled(bot, side, symbols):
 
 def adverse_enabled(bot, side, symbol):
     weights = bot.bp(side, "entry_cooldown_weights_minutes", symbol)
-    if weights["adverse_directionality"] <= 0:
+    if weights["adverse_directionality"] <= 0 or not bot.is_approved(side, symbol):
         return False
     return uses_adverse_rms({
         "entry_cooldown_weights_minutes": weights,

@@ -397,3 +397,49 @@ def test_rms_history_respects_side_specific_coin_eligibility(searched, dataset_k
     cfg["coin_overrides"]["ETH"]["bot"]["long"] = {"wallet_exposure_limit": 0.0}
     assert compute_backtest_warmup_minutes(cfg) == 0
     assert compute_optimizer_backtest_warmup_minutes(cfg) == 0
+
+
+@pytest.mark.parametrize("side", ["long", "short"])
+@pytest.mark.parametrize("searched", [False, True])
+@pytest.mark.parametrize("override_enabled", [False, True])
+@pytest.mark.parametrize("exact_dataset", [False, True])
+def test_rms_history_resolves_market_alias_policies(monkeypatch, side, searched, override_enabled, exact_dataset):
+    from backtest import _get_backtest_coin_override
+    from warmup_utils import compute_backtest_warmup_minutes
+
+    symbol = "BTC/USDT:USDT"
+    monkeypatch.setattr("utils._load_coin_to_symbol_map", lambda exchange: {
+        "BTC": [symbol], symbol: [symbol], "BTCUSDT": [symbol],
+    })
+    coin, override_key = (symbol, "BTC") if exact_dataset else ("BTC", "binance::BTCUSDT")
+    cfg = get_template_config()
+    cfg["live"].update(warmup_ratio=0.0, approved_coins={"long": [coin], "short": [coin]})
+    cfg["backtest"]["coins"] = {"binance": [coin]}
+    cfg["optimize"]["bounds"] = {}
+    for s in ("long", "short"):
+        cfg["bot"][s]["risk"].update(n_positions=1, total_wallet_exposure_limit=float(s == side))
+        cfg["optimize"]["bounds"].update({f"{s}_n_positions": [1.0], f"{s}_total_wallet_exposure_limit": [float(s == side)]})
+    cfg["bot"][side]["forager"]["unilateralness_ema_span_1m"] = 2.5
+    cfg["bot"][side]["entry_cooldown"].update(base_duration_minutes=0.0, max_duration_minutes=60.0)
+    cfg["bot"][side]["entry_cooldown"]["weights_minutes"]["adverse_directionality"] = float(not override_enabled)
+    if searched:
+        cfg["optimize"]["bounds"][f"{side}_entry_cooldown_weights_minutes_adverse_directionality"] = [0.0, 1.0]
+    patch = {"bot": {side: {"entry_cooldown": {
+        "weights_minutes": {"adverse_directionality": float(override_enabled)},
+        "max_duration_minutes": 60.0 if override_enabled else None,
+    }}}}
+    cfg["coin_overrides"] = {override_key: patch}
+    # The history budget must use the same policy as the actual payload resolver.
+    assert _get_backtest_coin_override(cfg, {}, "binance", coin) == patch
+    expected = 51 if override_enabled else 0
+    assert compute_backtest_warmup_minutes(cfg) == expected
+    assert compute_optimizer_backtest_warmup_minutes(cfg) == expected
+    assert compute_per_coin_warmup_minutes(cfg)[override_key] == expected
+    # An exact identifier on another venue must not shadow the inherited policy.
+    cfg["coin_overrides"] = {"bybit::BTCUSDT": patch}
+    assert _get_backtest_coin_override(cfg, {}, "binance", coin) == {}
+    assert compute_backtest_warmup_minutes(cfg) == (51 if searched or not override_enabled else 0)
+    # Sizing may precede metadata loading: retain both possible policies offline.
+    cfg["coin_overrides"] = {override_key: patch}
+    monkeypatch.setattr("utils._load_coin_to_symbol_map", lambda exchange: {})
+    assert compute_backtest_warmup_minutes(cfg) == 51

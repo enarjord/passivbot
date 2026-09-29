@@ -175,6 +175,7 @@ async def test_live_rms_uses_completed_contiguous_rows_and_replays(monkeypatch, 
     bot = SimpleNamespace(
         cm=CM(),
         is_forager_mode=lambda side: True,
+        is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda side: True,
         get_exchange_time=lambda: n * 60000 + 30000,
         bp=lambda side, key, symbol: {
@@ -539,6 +540,7 @@ async def test_live_rms_skips_dormant_side_spans(active_side):
         cm=SimpleNamespace(get_candles=candles),
         get_exchange_time=lambda: 21 * 60000,
         is_forager_mode=lambda side: True,
+        is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda side: side == active_side,
         bp=lambda side, key, symbol: {
             "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 10.0},
@@ -995,6 +997,7 @@ async def test_live_constant_clamp_skips_rms_fetch(base, floor, ceiling):
     }
     bot = SimpleNamespace(
         cm=SimpleNamespace(get_candles=candles), get_exchange_time=lambda: 60000,
+        is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda side: True, bp=lambda side,key,symbol: params[key],
         bot_value=lambda side,key: {"unilateralness": 0.0} if key=="forager_score_weights" else 60.0,
     )
@@ -1196,6 +1199,7 @@ async def test_rms_load_rollover_rechecks_all_symbols_and_recovers(side, age_min
     bot = SimpleNamespace(
         cm=SimpleNamespace(get_candles=candles),
         get_exchange_time=lambda: now,
+        is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda pside: pside == side,
         is_forager_mode=lambda pside: True,
         bot_value=lambda pside, key: {"unilateralness": 1.0} if key == "forager_score_weights" else 1.0,
@@ -1255,6 +1259,7 @@ async def test_live_rms_replay_cache_reuses_repairs_and_recovers(tmp_path, monke
     monkeypatch.setattr(pbr, "calc_signed_unilateralness", replay)
     bot = SimpleNamespace(
         cm=cm, get_exchange_time=lambda: now,
+        is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda pside: pside == side and enabled,
         is_forager_mode=lambda pside: True,
         bot_value=lambda pside, key: {"unilateralness": 1.0} if key == "forager_score_weights" else span,
@@ -1354,6 +1359,7 @@ async def test_stale_rms_ranking_cache_keeps_actual_age_and_refresh_policy():
     cm = SimpleNamespace(_ema_cache={}, get_candles=candles)
     bot = SimpleNamespace(
         cm=cm, get_exchange_time=lambda: now,
+        is_approved=lambda side, symbol: True,
         is_pside_enabled=lambda side: side == "long", is_forager_mode=lambda side: True,
         bot_value=lambda side, key: {"unilateralness": 1.0} if key == "forager_score_weights" else 1.0,
         bp=lambda side, key, symbol: {
@@ -1452,3 +1458,50 @@ def test_explicit_live_universe_uses_effective_coin_cooldowns(side):
     bot.config.pop("_coins_sources")
     bot.approved_coins_minus_ignored_coins = {}
     assert bot._max_configured_entry_cooldown_minutes() == 14400.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("side", ["long", "short"])
+async def test_live_adverse_rms_respects_side_approval_and_transitions(side):
+    from live.unilateralness import load, adverse_enabled
+    from candlestick_manager import CANDLE_DTYPE
+
+    other = "short" if side == "long" else "long"
+    spans = {side: 1.0, other: 100000.0}
+    approved = {side: {"BTC"}, other: {"ETH"}}
+    scoring = {"long": 0.0, "short": 0.0}
+    requests = []
+    rows = np.zeros(21, dtype=CANDLE_DTYPE)
+    rows["ts"] = np.arange(21) * 60000
+    rows["c"] = np.exp(np.arange(21) * .001)
+
+    async def candles(symbol, **kwargs):
+        requests.append((symbol, kwargs["start_ts"]))
+        return rows.copy()
+
+    bot = SimpleNamespace(
+        cm=SimpleNamespace(get_candles=candles, _ema_cache={}),
+        get_exchange_time=lambda: 21 * 60000,
+        is_pside_enabled=lambda s: True, is_forager_mode=lambda s: True,
+        is_approved=lambda s, symbol: symbol in approved[s],
+        bot_value=lambda s, key: {"unilateralness": scoring[s]} if key == "forager_score_weights" else spans[s],
+        bp=lambda s, key, symbol: {
+            "entry_cooldown_weights_minutes": {"exposure_ratio": 0.0, "adverse_directionality": 1.0},
+            "risk_entry_cooldown_minutes": 0.0, "entry_cooldown_min_duration_minutes": 0.0,
+            "entry_cooldown_max_duration_minutes": 60.0,
+        }[key],
+    )
+    assert adverse_enabled(bot, side, "BTC")
+    assert not adverse_enabled(bot, other, "BTC")
+    current, _, missing = await load(bot, ["BTC"], set())
+    assert requests == [("BTC", 0)] and not missing
+    assert current["BTC"][1.0] > .99
+    approved[other].add("BTC")
+    _, _, missing = await load(bot, ["BTC"], set())
+    assert requests[-1][1] == (20 - 2000000) * 60000
+    assert missing["BTC"]["current"] == [100000.0]
+    approved[other].remove("BTC")
+    # Independent Forager demand must still retain the otherwise ineligible span.
+    scoring[other] = 1.0
+    _, _, missing = await load(bot, ["BTC"], set())
+    assert missing["BTC"] == {"current": [], "forager": [100000.0]}

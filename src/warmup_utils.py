@@ -200,6 +200,69 @@ def _rms_warmup_minutes(params, pside, *, bounds=None, for_trade_activation=Fals
     return n_returns if for_trade_activation else n_returns + 1
 
 
+def _rms_policy_keys(config, eligible, overrides):
+    """Resolve selected markets to override keys without fetching market metadata.
+
+    Like the payload resolver, alias matching uses the venue's coin-to-symbol map,
+    never a lossy ticker comparison. Before metadata/venue selection is available,
+    retain all possible policies plus the default rather than underfetch history.
+    """
+    from backtest_universe import normalize_backtest_coin
+    from utils import (
+        coin_to_symbol, looks_like_exact_market_identifier,
+        MarketIdentifierExchangeMismatch, UnknownMarketIdentifier,
+    )
+
+    if eligible is None:
+        return {"__default__", *overrides}
+    coins = config.get("backtest", {}).get("coins", {})
+    exchanges = config.get("backtest", {}).get("exchanges", [])
+    policies = set()
+    for coin in eligible:
+        candidates = {
+            key for key in overrides if key != coin and (
+                looks_like_exact_market_identifier(key) or looks_like_exact_market_identifier(coin)
+            )
+        }
+        if not candidates:
+            policies.add(coin if coin in overrides else "__default__")
+            continue
+        venues = {
+            venue for venue, selected in coins.items()
+            if isinstance(selected, (list, tuple, set))
+            and coin in {normalize_backtest_coin(c) for c in selected}
+        } if isinstance(coins, dict) else set()
+        if not venues:
+            venues = set(exchanges)
+        if not venues or "combined" in venues:
+            policies.update({"__default__", *overrides})
+            continue
+        for venue in venues:
+            matches = {coin} if coin in overrides else set()
+            try:
+                target = coin_to_symbol(coin, venue, verbose=False)
+            except MarketIdentifierExchangeMismatch:
+                continue
+            except UnknownMarketIdentifier:
+                policies.update({"__default__", *overrides})
+                continue
+            unresolved = False
+            for key in candidates:
+                try:
+                    if coin_to_symbol(key, venue, verbose=False) == target:
+                        matches.add(key)
+                except MarketIdentifierExchangeMismatch:
+                    continue
+                except UnknownMarketIdentifier:
+                    # The dataset may be sized before this venue's metadata exists.
+                    unresolved = True
+            if unresolved:
+                policies.update({"__default__", *overrides})
+            else:
+                policies.update(matches or {"__default__"})
+    return policies
+
+
 def _rms_param_sets(config, bounds, *, param_sets=None):
     """Size RMS from eligible coin-side policies, retaining unresolved defaults."""
     from backtest_universe import normalize_backtest_coin
@@ -228,13 +291,10 @@ def _rms_param_sets(config, bounds, *, param_sets=None):
         else:
             by_side[side] = selected or None
     overrides = config.get("coin_overrides", {})
+    policies_by_side = {side: _rms_policy_keys(config, eligible, overrides) for side, eligible in by_side.items()}
     for coin, long, short, *_ in (param_sets if param_sets is not None else _iter_param_sets(config)):
         for side, params in (("long", long), ("short", short)):
-            eligible = by_side[side]
-            if eligible is not None and (
-                (coin == "__default__" and eligible.issubset(overrides))
-                or (coin != "__default__" and coin not in eligible)
-            ):
+            if coin not in policies_by_side[side]:
                 continue
             patch = flatten_shared_bot_side(overrides.get(coin, {}).get("bot", {}).get(side, {}))
             if patch.get("wallet_exposure_limit") == 0.0:
