@@ -437,3 +437,53 @@ def test_explicit_restart_argument_overrides_portfolio_file_choice():
     result = migrate(cfg, portfolio=portfolio, restart_policies={"portfolio": "always"})
     assert result["bot"]["hsl"]["restart_after_red_policy"] == "always"
     assert result["optimize"]["fixed_runtime_overrides"]["bot.hsl.restart_after_red_policy"] == "always"
+
+
+@pytest.mark.parametrize("spelling", ["Never", " never ", "Always", " always "])
+@pytest.mark.parametrize("fixed", [None, "always", "never"])
+def test_portfolio_choice_uses_canonical_spelling(spelling, fixed):
+    cfg = legacy("unified")
+    if fixed is not None:
+        cfg["optimize"]["fixed_runtime_overrides"] = {"bot.hsl.restart_after_red_policy": fixed}
+    portfolio = generated_template(get_template_config(), "unified")["bot"]["hsl"]
+    portfolio.update(enabled=True, restart_after_red_policy=spelling)
+    result = migrate(cfg, portfolio=portfolio)
+    assert result["bot"]["hsl"]["restart_after_red_policy"] == spelling.strip().lower()
+    if fixed is not None:
+        assert result["optimize"]["fixed_runtime_overrides"]["bot.hsl.restart_after_red_policy"] == spelling.strip().lower()
+
+
+@pytest.mark.parametrize("file_backed", [False, True])
+@pytest.mark.parametrize("coin", ["BTC", "BTCUSDT"])
+def test_scenario_dotted_path_uses_canonical_materialized_coin_shape(tmp_path, file_backed, coin):
+    from config import prepare_config
+    from config.overrides import parse_overrides
+    from suite_runner import apply_scenario_overrides
+    cfg = legacy()
+    cfg["bot"]["long"]["hsl"]["restart_after_red_policy"] = "always"
+    patch = {"bot": {"long": {"hsl": {"red_threshold": .2}}}}
+    if file_backed:
+        (tmp_path/"coin.json").write_text(json.dumps(patch))
+        patch = {"override_config_path": "coin.json"}
+    cfg["coin_overrides"] = {coin: patch}
+    scenario = {f"coin_overrides.{coin}.bot.long.hsl.red_threshold": .3}
+    cfg["backtest"]["scenarios"] = [{"label": "canonical", "overrides": scenario}]
+    source = deepcopy(cfg)
+    source["live"]["hsl_engine"] = "revised"
+    canonical = parse_overrides(prepare_config(source, target="canonical", runtime=None,
+        base_config_path=str(tmp_path/"source.json")), verbose=False)
+    apply_scenario_overrides(canonical, scenario)
+    result = migrate(cfg, base_config_path=str(tmp_path/"source.json"))
+    effective = deepcopy(result)
+    apply_scenario_overrides(effective, result["backtest"]["scenarios"][0]["overrides"])
+    assert effective["coin_overrides"] == canonical["coin_overrides"]
+    assert result["coin_overrides"][coin]["bot"]["long"]["hsl"]["red_threshold"] == .2
+
+
+def test_exact_symbol_override_is_not_collapsed_to_coin():
+    cfg = legacy()
+    cfg["coin_overrides"] = {"BTCUSDT": {"bot": {"long": {"hsl": {"red_threshold": .2}}}}}
+    cfg["backtest"]["scenarios"] = [{"label": "wrong-key", "overrides": {
+        "coin_overrides.BTC.bot.long.hsl.red_threshold": .3}}]
+    with pytest.raises(ValueError, match="missing coin_overrides.BTC"):
+        migrate(cfg, restart_policies={"long": "always"})

@@ -10,7 +10,7 @@ from config import prepare_config
 from config.hsl_revised import _mode, validate_parameter_path
 from config.load import load_input_config
 from config.optimize_bounds import flatten_optimize_bounds
-from config.overrides import parse_overrides
+from config.overrides import normalize_coin_override_keys, parse_overrides
 from config.param_paths import require_existing_config_path, resolve_bound_selectors
 from config_utils import strip_config_metadata
 from optimization.warmup import _finalize_optimizer_vector_config
@@ -61,6 +61,12 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         chosen_paths[(*path, "restart_after_red_policy")] = policy
     prepared = prepare_config(result, verbose=True, target="canonical", runtime=None,
                               base_config_path=base_config_path)
+    # Compare canonical choices, not accepted input spellings such as " Never ".
+    for path in chosen_paths:
+        value = prepared
+        for key in path:
+            value = value[key]
+        chosen_paths[path] = value
     # An explicit migration choice must also survive optimizer policy application.
     fixed = prepared.get("optimize", {}).get("fixed_runtime_overrides", {})
     for selector in fixed:
@@ -78,6 +84,9 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
     # Runtime's canonical override stage validates files as well as inline patches.
     # Materializing its result preserves file-then-inline precedence when output moves.
     scenario_base = deepcopy(prepared)
+    scenario_base["coin_overrides"] = normalize_coin_override_keys(
+        scenario_base["coin_overrides"], verbose=False
+    )
     prepared = parse_overrides(prepared, verbose=True)
     # Validate the actual optimizer policy on a copy. Fixed enablement can activate
     # a restart policy that was valid only while the base scope was disabled.
@@ -98,10 +107,28 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         scenarios, _ = build_scenarios(prepared["backtest"])
         for raw, scenario in zip(prepared["backtest"]["scenarios"], scenarios):
             try:
-                for path in scenario.overrides or {}:
-                    if require_existing_config_path(scenario_base, path)[0] == "optimize":
-                        raise ValueError("scenario optimizer controls are not applied; move them to top-level optimize")
                 effective = deepcopy(scenario_base)
+                # A dotted scenario path may address a leaf provided by a file.
+                # Seed only that addressed path from the already validated view;
+                # copying all materialized leaves would make the old file's values
+                # override a replacement scenario file.
+                for selector in scenario.overrides or {}:
+                    try:
+                        path = require_existing_config_path(prepared, selector)
+                    except KeyError:
+                        # Authored file paths remain valid in effective. Unknown
+                        # paths are diagnosed by the canonical application below.
+                        continue
+                    if path[0] != "coin_overrides":
+                        continue
+                    target, source = effective, prepared
+                    for key in path[:-1]:
+                        source = source[key]
+                        target = target.setdefault(key, {})
+                    target.setdefault(path[-1], deepcopy(source[path[-1]]))
+                for path in scenario.overrides or {}:
+                    if require_existing_config_path(effective, path)[0] == "optimize":
+                        raise ValueError("scenario optimizer controls are not applied; move them to top-level optimize")
                 apply_scenario_overrides(effective, scenario.overrides)
                 effective = parse_overrides(effective, verbose=False)
                 # Atomic coin mappings replace the base mapping, including {}.
