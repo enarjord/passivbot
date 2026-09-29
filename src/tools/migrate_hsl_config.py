@@ -7,14 +7,43 @@ from pathlib import Path
 import sys
 
 from config import prepare_config
-from config.hsl_revised import _mode, validate_parameter_path
+from config.hsl_revised import _mode, validate_parameter_path, validate_optimizer_metrics
 from config.load import load_input_config
 from config.optimize_bounds import flatten_optimize_bounds
-from config.overrides import parse_overrides
-from config.param_paths import require_existing_config_path, resolve_bound_selectors
+from config.overrides import normalize_coin_override_keys, parse_overrides
+from config.param_paths import require_existing_config_path, resolve_bound_selectors, resolve_dotted_config_path
+from config.scoring import extract_objective_specs, default_scoring_weights, objective_index_map, resolve_objective_basis
+from limit_utils import expand_limit_checks
 from config_utils import strip_config_metadata
 from optimization.warmup import _finalize_optimizer_vector_config
 from suite_runner import apply_scenario_overrides, build_scenarios
+
+
+def _validate_optimizer_inputs(candidate, authored, *, label=None, reducer_cfg=None):
+    """Reuse runtime metric selection and static GPU guards without hardware access."""
+    specs = extract_objective_specs(authored)
+    optimize = authored["optimize"]
+    checks = expand_limit_checks(
+        optimize.get("limits", []), default_scoring_weights(), penalty_weight=1e6,
+        objective_index_map=objective_index_map(specs), reducer_cfg=reducer_cfg,
+    )
+    if label is None:
+        metrics = [*(spec.metric for spec in specs), *(check["metric"] for check in checks)]
+    else:
+        default_scenario = optimize.get("objective_scenario")
+        default_scenario = str(default_scenario).strip() or None if default_scenario is not None else None
+        bases = [resolve_objective_basis(spec, default_scenario=default_scenario,
+                                         reducer_cfg=reducer_cfg) for spec in specs]
+        metrics = [
+            *(spec.metric for spec, basis in zip(specs, bases)
+              if basis.scenario is None or basis.scenario == label),
+            *(check["metric"] for check in checks
+              if check.get("scenario") is None or check["scenario"] == label),
+        ]
+    validate_optimizer_metrics(candidate, metrics)
+    if optimize.get("backend") == "gpu":
+        from optimization.backends.gpu_backend import _validate_revised_gpu_inputs
+        _validate_revised_gpu_inputs(candidate)
 
 
 def migrate(source, *, restart_policies=None, portfolio=None, base_config_path=""):
@@ -61,6 +90,12 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
         chosen_paths[(*path, "restart_after_red_policy")] = policy
     prepared = prepare_config(result, verbose=True, target="canonical", runtime=None,
                               base_config_path=base_config_path)
+    # Compare canonical choices, not accepted input spellings such as " Never ".
+    for path in chosen_paths:
+        value = prepared
+        for key in path:
+            value = value[key]
+        chosen_paths[path] = value
     # An explicit migration choice must also survive optimizer policy application.
     fixed = prepared.get("optimize", {}).get("fixed_runtime_overrides", {})
     for selector in fixed:
@@ -78,6 +113,9 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
     # Runtime's canonical override stage validates files as well as inline patches.
     # Materializing its result preserves file-then-inline precedence when output moves.
     scenario_base = deepcopy(prepared)
+    scenario_base["coin_overrides"] = normalize_coin_override_keys(
+        scenario_base["coin_overrides"], verbose=False
+    )
     prepared = parse_overrides(prepared, verbose=True)
     # Validate the actual optimizer policy on a copy. Fixed enablement can activate
     # a restart policy that was valid only while the base scope was disabled.
@@ -95,13 +133,32 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
                 "(including mirror_short_from_long) with the restart choices"
             )
     if prepared["backtest"].get("scenarios"):
-        scenarios, _ = build_scenarios(prepared["backtest"])
+        scenarios, reducer_cfg = build_scenarios(prepared["backtest"])
         for raw, scenario in zip(prepared["backtest"]["scenarios"], scenarios):
             try:
-                for path in scenario.overrides or {}:
-                    if require_existing_config_path(scenario_base, path)[0] == "optimize":
-                        raise ValueError("scenario optimizer controls are not applied; move them to top-level optimize")
                 effective = deepcopy(scenario_base)
+                # A dotted scenario path may address a leaf provided by a file.
+                # Seed only that addressed path from the already validated view;
+                # copying all materialized leaves would make the old file's values
+                # override a replacement scenario file.
+                for selector in scenario.overrides or {}:
+                    try:
+                        path = require_existing_config_path(prepared, selector)
+                    except KeyError:
+                        # Authored file paths remain valid in effective. Unknown
+                        # paths are diagnosed by the canonical application below.
+                        continue
+                    if path[0] != "coin_overrides":
+                        continue
+                    target, source = effective, prepared
+                    for key in path[:-1]:
+                        source = source[key]
+                        target = target.setdefault(key, {})
+                    target.setdefault(path[-1], deepcopy(source[path[-1]]))
+                for path in scenario.overrides or {}:
+                    resolved = resolve_dotted_config_path(effective, path)
+                    if resolved and resolved[0] == "optimize":
+                        raise ValueError("scenario optimizer controls are not applied; move them to top-level optimize")
                 apply_scenario_overrides(effective, scenario.overrides)
                 effective = parse_overrides(effective, verbose=False)
                 # Atomic coin mappings replace the base mapping, including {}.
@@ -115,11 +172,15 @@ def migrate(source, *, restart_policies=None, portfolio=None, base_config_path="
                     overrides["coin_overrides"] = effective["coin_overrides"]
                 optimized_scenario = deepcopy(optimized)
                 apply_scenario_overrides(optimized_scenario, overrides)
-                parse_overrides(optimized_scenario, verbose=False)
+                optimized_scenario = parse_overrides(optimized_scenario, verbose=False)
+                _validate_optimizer_inputs(optimized_scenario, prepared, label=scenario.label,
+                                           reducer_cfg=reducer_cfg)
                 if scenario.overrides is not None:
                     raw["overrides"] = overrides
             except (ValueError, TypeError, KeyError, OSError) as exc:
                 raise ValueError(f"backtest scenario {scenario.label!r}: {exc}") from exc
+    else:
+        _validate_optimizer_inputs(optimized, prepared)
     return strip_config_metadata(prepared)
 
 

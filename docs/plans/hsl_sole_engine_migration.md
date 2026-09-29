@@ -101,6 +101,7 @@ Each `optimize.fixed_params` selector must match active bounds; retired or unmat
 are rejected. Explicit restart choices, including the restart policy in a supplied portfolio
 file, also update matching `optimize.fixed_runtime_overrides`
 (including accepted path aliases), with a warning, so optimization cannot undo the choice.
+Choices use canonical policy spellings before comparison.
 Other fixed overrides and explicit per-coin policies are preserved. Migration rejects optimizer
 transformations such as `mirror_short_from_long` when they change an explicit restart choice;
 remove the conflicting transformation or supply compatible choices. Validation also applies
@@ -109,6 +110,10 @@ and coin patches; a policy valid only while disabled must not silently become ac
 Scenario policies are checked both against the base configuration and after optimizer finalization.
 Scenario-local `optimize` controls are rejected: parameter shape and fixed selectors are selected
 before scenarios run, so these controls must live in the top-level optimizer configuration.
+
+Scenario paths use canonical coin-key rules and may address fields supplied by override files;
+exact market identifiers remain distinct, and changing a scenario file retains authored inline
+precedence rather than importing values from the old file.
 
 File-backed coin overrides, including scenario-local mappings and dotted patches, are resolved
 relative to the caller-supplied input path (including a symlink directory) through the canonical

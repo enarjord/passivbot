@@ -11,7 +11,7 @@ since the latest release tag; these features may already be available when insta
   restart choices; re-backtest migrated configurations before use. The sole-engine
   removal draft remains incomplete and is not a deployment candidate.
 
-- Reject HSL configuration migration when optimizer mirroring would overwrite an explicitly chosen restart policy. Matching policies remain supported. Preserve the restart choice supplied by a unified portfolio policy file when reconciling fixed optimizer overrides.
+- Reject HSL configuration migration when optimizer mirroring would overwrite an explicitly chosen restart policy. Matching policies remain supported. Preserve canonically normalized restart choices supplied by unified portfolio policy files when reconciling fixed optimizer overrides, and support scenario paths into file-derived coin policy fields without changing file/inline precedence. Validate migrated optimizer metrics against effective scenario policies, retain ordered coin-mapping replacements, and reject unsupported GPU candle intervals before writing output.
 
 - Improve GPU optimizer parity with exact Rust: apply the same forager-weight
   normalization and bound quantization, refresh Trailing Martingale flat-coin rankings
