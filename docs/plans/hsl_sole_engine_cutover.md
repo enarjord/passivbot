@@ -45,3 +45,20 @@ This is not full-suite green, CPU/GPU performance qualification, disabled-HSL
 trace parity, live acceptance or approval of the remaining deletion. Old tests
 and documentation that explicitly require legacy behavior still need migration.
 The acceptance matrix in the parent plan applies to the final integrated tree.
+
+## Known integration failures in the current draft
+
+The broader preparation/config/override consumer suite passes 257 tests and fails
+three on this draft. The corresponding preparation branch passes all 260.
+
+- The suite selector-resolution test still exercises the removed
+  `no_restart_drawdown_threshold` field; its canonical-path coverage must move to
+  a supported field while retaining explicit rejection coverage for retired HSL.
+- Full template-based coin override files still include retired HSL defaults.
+  The template schema and generated/example configs must be migrated consistently
+  before the override-foundation and relative-path tests can pass unmodified in
+  purpose. Do not weaken retired-field rejection to make these fixtures load.
+
+These failures reinforce the schema/test obligations above. The earlier focused
+601-test and 367-test Rust results cover the preceding integrated caller slice,
+not completion of this broader migration.
